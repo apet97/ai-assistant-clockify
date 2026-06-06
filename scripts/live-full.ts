@@ -72,6 +72,35 @@ function record(action: string, status: Status, detail = ""): void {
   console.log(`  ${icon} ${status.padEnd(11)} ${action}${detail ? ` — ${detail}` : ""}`);
 }
 
+/**
+ * Per-area exerciser handle passed to each `runArea` block (API_COVERAGE_PLAN
+ * Phase 0, Task 0.8). Each feature-area phase adds a `runArea` function that
+ * exercises its actions through the real harness (read / safeWrite / risky /
+ * previewOnly), uses `call` for raw setup + self-cleanup, and `record`s its rows.
+ * Area runners must self-clean (create→delete round-trips) so the sweep stays 0.
+ */
+export interface LiveHarness {
+  ctx: ActionContext;
+  /** Random per-run suffix so AIASSIST_SMOKE_* names never collide. */
+  sfx: string;
+  /** Discovered live fixtures (default currency, a real expense category, etc.). */
+  fixtures: { currency: string; categoryId?: string; policyId?: string };
+  /** Raw REST (X-Api-Key) for setup + best-effort cleanup. */
+  call(method: string, path: string, body?: unknown, allow404?: boolean): Promise<unknown>;
+  read(actionName: string, args: unknown): Promise<any>;
+  safeWrite(actionName: string, args: unknown): Promise<any>;
+  risky(actionName: string, args: unknown): Promise<any>;
+  previewOnly(actionName: string, args: unknown): Promise<void>;
+  record(action: string, status: Status, detail?: string): void;
+}
+
+/**
+ * Registry of per-area exercisers. Phases push their `runArea` here (e.g.
+ * `AREA_RUNNERS.push(runProjects)`); `main` runs them all after the core flow.
+ * Empty in Phase 0 — structure only, no behaviour change.
+ */
+const AREA_RUNNERS: Array<(h: LiveHarness) => Promise<void>> = [];
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
 async function read(ctx: ActionContext, actionName: string, args: any): Promise<any> {
   try {
@@ -246,6 +275,20 @@ async function main(): Promise<void> {
     `  setup: currency=${currency} expenseCategory=${categoryId ? "yes" : "none"} timeOffPolicy=${policyId ? "yes" : "none"}\n`,
   );
 
+  // Exerciser handle for per-area runners (Task 0.8). Helpers are bound to ctx so
+  // area code reads `h.safeWrite("clockify_projects_create", {...})`.
+  const h: LiveHarness = {
+    ctx,
+    sfx,
+    fixtures: { currency, categoryId, policyId },
+    call,
+    record,
+    read: (actionName, args) => read(ctx, actionName, args),
+    safeWrite: (actionName, args) => safeWrite(ctx, actionName, args),
+    risky: (actionName, args) => risky(ctx, actionName, args),
+    previewOnly: (actionName, args) => previewOnly(ctx, actionName, args),
+  };
+
   const ids: {
     clientId?: string;
     projectId?: string;
@@ -399,6 +442,13 @@ async function main(): Promise<void> {
     if (ids.tagId) {
       const r = await risky(ctx, "clockify_delete_entity", { entityType: "tag", id: ids.tagId, name: names.tag });
       if (r) ids.tagId = undefined;
+    }
+
+    // ── PER-AREA RUNNERS (API_COVERAGE_PLAN phases register here) ───────────
+    // Each runner self-cleans; the sweep is the safety net. Empty in Phase 0.
+    if (AREA_RUNNERS.length > 0) console.log("\nAREA RUNNERS");
+    for (const runArea of AREA_RUNNERS) {
+      await runArea(h);
     }
   } finally {
     // ── BEST-EFFORT CLEANUP (raw REST) ─────────────────────────────────────
