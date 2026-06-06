@@ -37,6 +37,31 @@ describe("manifest", () => {
     expect(scopes.length).toBeGreaterThanOrEqual(20);
   });
 
+  it("requests every scope the API-coverage phases depend on (Phase 0 Task 0.6)", () => {
+    const manifest = buildManifest(BASE_URL);
+    const scopes = manifest.scopes ?? [];
+    // Each later phase needs read+write for its area; assert the manifest carries
+    // them so a phase isn't blocked at install time by a missing scope.
+    for (const scope of [
+      "CUSTOM_FIELDS_READ",
+      "CUSTOM_FIELDS_WRITE",
+      "APPROVAL_READ",
+      "APPROVAL_WRITE",
+      "SCHEDULING_READ",
+      "SCHEDULING_WRITE",
+      "TIME_OFF_READ",
+      "TIME_OFF_WRITE",
+      "EXPENSE_READ",
+      "EXPENSE_WRITE",
+      "INVOICE_READ",
+      "INVOICE_WRITE",
+      "REPORTS_READ",
+      "REPORTS_WRITE",
+    ]) {
+      expect(scopes).toContain(scope);
+    }
+  });
+
   it("builds a ClockifyAddon exposing the manifest via getManifest()", () => {
     const addon = buildAddon(BASE_URL);
     expect(addon.getManifest().name).toBe("AI Assistant");
