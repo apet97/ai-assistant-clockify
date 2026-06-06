@@ -216,7 +216,9 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     },
     async manageSchedule(input) {
       bump("manageSchedule");
-      return { id: input.id ?? nextId("schedule"), name: "schedule" };
+      void input.start;
+      void input.end;
+      return { id: nextId("schedule"), name: "schedule" };
     },
   };
 

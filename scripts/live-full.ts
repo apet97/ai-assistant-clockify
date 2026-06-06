@@ -167,6 +167,27 @@ async function risky(ctx: ActionContext, actionName: string, args: any): Promise
   return null;
 }
 
+// Preview-only by design: assert the preview is produced (proves the handler +
+// safety path, with NO mutation) without committing. Used where a live commit
+// would need setup we can't safely arrange on the sac workspace (a real pending
+// time-off request — GET /time-off/requests is 405) or has real side effects
+// (publishing a schedule notifies assignees). The adapter's request shape for
+// these is covered by the mocked-fetch unit tests instead.
+async function previewOnly(ctx: ActionContext, actionName: string, args: any): Promise<void> {
+  try {
+    const r: any = await executeAction({ actionName, args, context: ctx });
+    if (r.kind === "preview") {
+      record(actionName, "PREVIEW_OK", "preview produced; commit skipped by design");
+    } else if (r.kind === "receipt" && !r.receipt.ok) {
+      record(actionName, "FAIL", `expected preview, got error ${r.receipt.code}`);
+    } else {
+      record(actionName, "FAIL", `expected preview, got ${r.kind}`);
+    }
+  } catch (e) {
+    record(actionName, "FAIL", `preview threw: ${err(e)}`);
+  }
+}
+
 function summarize(receipt: any): string {
   const c = receipt.changed ?? {};
   const parts: string[] = [];
@@ -183,6 +204,7 @@ function err(e: unknown): string {
 
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
+  const ws = `/workspaces/${WORKSPACE_ID}`;
   const ctx: ActionContext = {
     workspaceId: WORKSPACE_ID as string,
     adminUserId: me.id,
@@ -203,6 +225,26 @@ async function main(): Promise<void> {
     webhook: `AIASSIST_SMOKE_wh_${sfx}`,
   };
   console.log(`User: ${me.name} (${me.id}) | workspace ${WORKSPACE_ID} | suffix ${sfx}\n`);
+
+  // Live fixtures discovered read-only so risky commits use values the workspace
+  // actually has (default currency, a real non-archived expense category, a
+  // time-off policy id for the preview).
+  const wsList = (await call("GET", "/workspaces")) as Array<{
+    id: string;
+    currencies?: Array<{ code: string; isDefault?: boolean }>;
+  }>;
+  const currency =
+    wsList.find((w) => w.id === WORKSPACE_ID)?.currencies?.find((c) => c.isDefault)?.code ?? "USD";
+  const catsResp = (await call("GET", `${ws}/expenses/categories`)) as
+    | { categories?: Array<{ id: string; archived?: boolean }> }
+    | Array<{ id: string; archived?: boolean }>;
+  const catList = Array.isArray(catsResp) ? catsResp : (catsResp.categories ?? []);
+  const categoryId = catList.find((c) => !c.archived)?.id;
+  const policies = (await call("GET", `${ws}/time-off/policies`)) as Array<{ id: string }>;
+  const policyId = (Array.isArray(policies) ? policies : [])[0]?.id;
+  console.log(
+    `  setup: currency=${currency} expenseCategory=${categoryId ? "yes" : "none"} timeOffPolicy=${policyId ? "yes" : "none"}\n`,
+  );
 
   const ids: {
     clientId?: string;
@@ -285,11 +327,12 @@ async function main(): Promise<void> {
     // permission change (no Clockify write; safe to commit fully)
     await risky(ctx, "assistant_update_permissions", { groups: { invoices: "read" } });
 
-    // webhook create then delete (self-cleaning) — TODO-verify endpoint
+    // webhook create then delete (self-cleaning) — needs webhookEvent + https url
     const wh = await risky(ctx, "clockify_manage_webhook", {
       operation: "create",
       name: names.webhook,
       url: "https://example.com/aiassist-smoke-hook",
+      webhookEvent: "NEW_TIME_ENTRY",
     });
     ids.webhookId = wh?.changed?.created?.[0]?.id;
     if (ids.webhookId) {
@@ -297,19 +340,21 @@ async function main(): Promise<void> {
       if (del) ids.webhookId = undefined; // deleted
     }
 
-    // invoice (TODO-verify, billing) — attempt; flag leftover (no adapter delete path)
+    // invoice create (billing) — capture id; a draft invoice is deletable, so it
+    // is removed in cleanup (full create→delete round-trip).
     if (ids.clientId) {
       const inv = await risky(ctx, "clockify_prepare_invoice", {
         clientId: ids.clientId,
         clientName: names.client,
         title: `AIASSIST_SMOKE_inv_${sfx}`,
+        currency,
       });
       ids.invoiceId = inv?.changed?.created?.[0]?.id;
     } else {
       record("clockify_prepare_invoice", "SKIP", "no client id");
     }
 
-    // unsupported-by-adapter risky actions (preview works, commit = unsupported)
+    // update_entity (project rename) — real fetch-then-merge PUT.
     if (ids.projectId) {
       await risky(ctx, "clockify_update_entity", {
         entityType: "project",
@@ -317,9 +362,33 @@ async function main(): Promise<void> {
         name: `${names.project}_renamed`,
       });
     }
-    await risky(ctx, "clockify_manage_expense", { operation: "create", name: `AIASSIST_SMOKE_exp_${sfx}`, amount: 1 });
-    await risky(ctx, "clockify_manage_time_off", { decision: "approve", requestId: "smoke-nonexistent" });
-    await risky(ctx, "clockify_manage_schedule", { operation: "publish" });
+
+    // expense create then delete (self-cleaning, multipart) — needs a category.
+    if (categoryId) {
+      const exp = await risky(ctx, "clockify_manage_expense", {
+        operation: "create",
+        name: `AIASSIST_SMOKE_exp_${sfx}`,
+        amount: 1,
+        date: new Date().toISOString().slice(0, 10),
+        categoryId,
+      });
+      const expId = exp?.changed?.created?.[0]?.id;
+      if (expId) await risky(ctx, "clockify_manage_expense", { operation: "delete", id: expId });
+    } else {
+      record("clockify_manage_expense", "SKIP", "no expense category available");
+    }
+
+    // time-off + schedule: preview-only by design (see previewOnly() rationale).
+    await previewOnly(ctx, "clockify_manage_time_off", {
+      decision: "approve",
+      requestId: "smoke-nonexistent",
+      policyId: policyId ?? "smoke-policy",
+    });
+    await previewOnly(ctx, "clockify_manage_schedule", {
+      operation: "publish",
+      start: "2030-01-01T00:00:00Z",
+      end: "2030-01-07T00:00:00Z",
+    });
 
     // delete_entity via confirm flow — doubles as cleanup AND tests the path
     console.log("\nDESTRUCTIVE (delete_entity — also cleanup)");
@@ -334,7 +403,6 @@ async function main(): Promise<void> {
   } finally {
     // ── BEST-EFFORT CLEANUP (raw REST) ─────────────────────────────────────
     console.log("\nCLEANUP");
-    const ws = `/workspaces/${WORKSPACE_ID}`;
     for (const id of ids.entryIds) {
       try {
         await call("DELETE", `${ws}/time-entries/${id}`, undefined, true);
@@ -359,10 +427,21 @@ async function main(): Promise<void> {
         console.warn(`  WARN webhook ${ids.webhookId}: ${err(e)}`);
       }
     }
-    if (ids.projectId) {
-      // Clockify usually requires archive before delete.
+    // Delete the invoice BEFORE its client (an active client referenced by an
+    // invoice cannot be removed cleanly).
+    if (ids.invoiceId) {
       try {
-        await call("PUT", `${ws}/projects/${ids.projectId}`, { archived: true }, true);
+        await call("DELETE", `${ws}/invoices/${ids.invoiceId}`, undefined, true);
+        console.log(`  deleted invoice ${ids.invoiceId}`);
+        ids.invoiceId = undefined;
+      } catch (e) {
+        console.warn(`  WARN invoice ${ids.invoiceId} leftover: ${err(e)}`);
+      }
+    }
+    if (ids.projectId) {
+      // Clockify requires archive (with the name) before delete.
+      try {
+        await call("PUT", `${ws}/projects/${ids.projectId}`, { name: `${names.project}_renamed`, archived: true }, true);
       } catch {
         /* ignore archive failure */
       }
@@ -374,8 +453,9 @@ async function main(): Promise<void> {
       }
     }
     if (ids.clientId) {
+      // Archiving a client requires its name in the body (else "Cannot delete an active client").
       try {
-        await call("PUT", `${ws}/clients/${ids.clientId}`, { archived: true }, true);
+        await call("PUT", `${ws}/clients/${ids.clientId}`, { name: names.client, archived: true }, true);
       } catch {
         /* ignore */
       }
@@ -385,9 +465,6 @@ async function main(): Promise<void> {
       } catch (e) {
         console.warn(`  WARN client ${ids.clientId} leftover: ${err(e)}`);
       }
-    }
-    if (ids.invoiceId) {
-      console.warn(`  NOTE invoice ${ids.invoiceId} created — no adapter delete path; verify/remove manually.`);
     }
   }
 

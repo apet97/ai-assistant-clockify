@@ -42,6 +42,29 @@ async function main(): Promise<void> {
   const ws = `/workspaces/${WS}`;
   let removed = 0;
 
+  // invoices FIRST (a client cannot be deleted while it has invoices). Live shape:
+  // {total, invoices:[{id, number, clientName, ...}]}. Match on number or client.
+  const invResp = (await call("GET", `${ws}/invoices?page-size=200`).catch(() => null)) as
+    | { invoices?: any[] }
+    | any[]
+    | null;
+  const invoices = Array.isArray(invResp) ? invResp : (invResp?.invoices ?? []);
+  for (const inv of invoices as any[]) {
+    if (inv?.number?.startsWith(PFX) || inv?.clientName?.startsWith(PFX)) {
+      await call("DELETE", `${ws}/invoices/${inv.id}`).catch((e) => console.warn(`  invoice ${inv.id}: ${e.message}`));
+      console.log(`  removed invoice ${inv.number ?? inv.id}`); removed++;
+    }
+  }
+  // expenses. Live shape: {expenses:{expenses:[{id, notes, ...}], count}, ...}.
+  const expResp = (await call("GET", `${ws}/expenses?page-size=200`).catch(() => null)) as any;
+  const expenses = Array.isArray(expResp) ? expResp : (expResp?.expenses?.expenses ?? []);
+  for (const e of expenses as any[]) {
+    if (typeof e?.notes === "string" && e.notes.startsWith(PFX)) {
+      await call("DELETE", `${ws}/expenses/${e.id}`).catch((err) => console.warn(`  expense ${e.id}: ${err.message}`));
+      console.log(`  removed expense ${e.notes}`); removed++;
+    }
+  }
+
   // tags
   for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
     if (t.name?.startsWith(PFX)) {
@@ -65,8 +88,10 @@ async function main(): Promise<void> {
       console.log(`  removed client ${c.name}`); removed++;
     }
   }
-  // webhooks
-  for (const w of ((await call("GET", `${ws}/webhooks`).catch(() => [])) ?? []) as any[]) {
+  // webhooks (envelope: {workspaceWebhookCount, webhooks:[...]})
+  const whResp = (await call("GET", `${ws}/webhooks`).catch(() => null)) as any;
+  const hooks = Array.isArray(whResp) ? whResp : (whResp?.webhooks ?? []);
+  for (const w of hooks as any[]) {
     if (typeof w?.name === "string" && w.name.startsWith(PFX)) {
       await call("DELETE", `${ws}/webhooks/${w.id}`).catch((e) => console.warn(`  webhook ${w.id}: ${e.message}`));
       console.log(`  removed webhook ${w.name}`); removed++;

@@ -226,7 +226,7 @@ describe("expanded risky actions (Phase 3)", () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
       actionName: "clockify_manage_time_off",
-      args: { decision: "approve", requestId: "r1" },
+      args: { decision: "approve", requestId: "r1", policyId: "pol-1" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
@@ -243,7 +243,7 @@ describe("expanded risky actions (Phase 3)", () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
       actionName: "clockify_manage_schedule",
-      args: { operation: "publish" },
+      args: { operation: "publish", start: "2030-01-01T00:00:00Z", end: "2030-01-07T00:00:00Z" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
@@ -254,6 +254,35 @@ describe("expanded risky actions (Phase 3)", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.manageSchedule).toBe(1);
+  });
+
+  it("manage_webhook update/delete without an id is rejected as invalid_args (no preview)", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_manage_webhook",
+      args: { operation: "delete" }, // missing id
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt") {
+      expect(result.receipt.ok).toBe(false);
+      if (!result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
+    }
+    expect(fake.counts.manageWebhook ?? 0).toBe(0);
+  });
+
+  it("manage_expense delete without an id is rejected as invalid_args (no preview)", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_manage_expense",
+      args: { operation: "delete" }, // missing id
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) {
+      expect(result.receipt.code).toBe("invalid_args");
+    }
+    expect(fake.counts.manageExpense ?? 0).toBe(0);
   });
 
   it("a new risky action re-checks policy at confirm time (expenses disabled after preview)", async () => {

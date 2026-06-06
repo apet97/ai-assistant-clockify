@@ -147,16 +147,26 @@ describe("rest workspace client", () => {
     expect(init.method).toBe("GET");
   });
 
-  it("lists webhooks, mapping id+name", async () => {
-    const f = vi.fn(async () => jsonResponse([{ id: "w1", name: "Deploy hook", url: "https://x" }]));
+  it("lists webhooks, unwrapping the live {workspaceWebhookCount, webhooks:[...]} envelope", async () => {
+    // Live shape (confirmed against the API): /webhooks returns an envelope, not an array.
+    const f = vi.fn(async () =>
+      jsonResponse({ workspaceWebhookCount: 1, webhooks: [{ id: "w1", name: "Deploy hook", url: "https://x" }] }),
+    );
     const hooks = await client(f as any).listWebhooks();
     expect(hooks).toEqual([{ id: "w1", name: "Deploy hook" }]);
     const [url] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks");
   });
 
-  it("lists expenses, unwrapping {expenses:[...]} and falling back notes→name", async () => {
-    const f = vi.fn(async () => jsonResponse({ expenses: [{ id: "x1", notes: "Taxi" }] }));
+  it("lists expenses, unwrapping the live {expenses:{expenses:[...],count}} envelope (notes→name)", async () => {
+    // Live shape (confirmed): /expenses double-nests under expenses.expenses; items use `notes`.
+    const f = vi.fn(async () =>
+      jsonResponse({
+        expenses: { expenses: [{ id: "x1", notes: "Taxi" }], count: 1 },
+        dailyTotals: [],
+        weeklyTotals: [],
+      }),
+    );
     const expenses = await client(f as any).listExpenses();
     expect(expenses).toEqual([{ id: "x1", name: "Taxi" }]);
     const [url] = (f as any).mock.calls[0];
@@ -168,23 +178,184 @@ describe("rest workspace client", () => {
     expect(await client(f as any).listExpenses()).toEqual([{ id: "x2", name: "Hotel" }]);
   });
 
-  it("updateTimeEntry PUTs only the provided fields and maps the result", async () => {
-    const f = vi.fn(async () =>
-      jsonResponse({
+  it("updateTimeEntry GET-then-PUTs, preserving start and merging caller fields", async () => {
+    // Clockify's PUT /time-entries/{id} REPLACES the entry and requires `start`;
+    // a sparse body 400s ("invalid value for field [start]"). The adapter must GET
+    // the current entry, flatten timeInterval.start/end to the top level, then PUT.
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "GET") {
+        return jsonResponse({
+          id: "e1",
+          description: "old",
+          projectId: "p1",
+          billable: true,
+          timeInterval: { start: "2026-06-01T00:00:00Z", end: "2026-06-01T01:00:00Z" },
+        });
+      }
+      return jsonResponse({
         id: "e1",
         description: "fixed",
-        timeInterval: { start: "2026-06-01T00:00:00Z", end: "2026-06-01T02:00:00Z" },
-      }),
-    );
-    const updated = await client(f as any).updateTimeEntry({
-      id: "e1",
-      description: "fixed",
-      tagIds: ["t1"],
+        timeInterval: { start: "2026-06-01T00:00:00Z", end: "2026-06-01T01:00:00Z" },
+      });
     });
+    const updated = await client(f as any).updateTimeEntry({ id: "e1", description: "fixed" });
     expect(updated).toMatchObject({ id: "e1", description: "fixed", start: "2026-06-01T00:00:00Z" });
+
+    const calls = (f as any).mock.calls;
+    expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
+    const [getUrl] = calls[0];
+    const [putUrl, putInit] = calls[1];
+    expect(getUrl).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-entries/e1");
+    expect(putUrl).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-entries/e1");
+    const putBody = JSON.parse(putInit.body);
+    expect(putBody.start).toBe("2026-06-01T00:00:00Z"); // preserved from GET (Clockify requires it)
+    expect(putBody.end).toBe("2026-06-01T01:00:00Z");
+    expect(putBody.description).toBe("fixed"); // caller override applied
+    expect(putBody.projectId).toBe("p1"); // unchanged field preserved
+  });
+
+  it("manageWebhook create POSTs webhookEvent + trigger source (defaults to workspace)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "w9", name: "Deploy" }));
+    const result = await client(f as any).manageWebhook!({
+      operation: "create",
+      name: "Deploy",
+      url: "https://example.com/hook",
+      webhookEvent: "NEW_TIME_ENTRY",
+    });
+    expect(result).toEqual({ id: "w9", name: "Deploy" });
     const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-entries/e1");
-    expect(init.method).toBe("PUT");
-    expect(JSON.parse(init.body)).toEqual({ description: "fixed", tagIds: ["t1"] });
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks");
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    expect(body.webhookEvent).toBe("NEW_TIME_ENTRY");
+    expect(body.url).toBe("https://example.com/hook");
+    expect(body.triggerSourceType).toBe("WORKSPACE_ID");
+    expect(body.triggerSource).toEqual(["ws-1"]); // defaulted to this workspace
+  });
+
+  it("manageWebhook delete issues DELETE and returns null", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    expect(await client(f as any).manageWebhook!({ operation: "delete", id: "w1" })).toBeNull();
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks/w1");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("createInvoice POSTs number/issuedDate/dueDate/currency", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "inv1", number: "INV-1" }));
+    const inv = await client(f as any).createInvoice!({
+      clientId: "c1",
+      number: "INV-1",
+      issuedDate: "2026-06-06",
+      dueDate: "2026-07-06",
+      currency: "GBP",
+    });
+    expect(inv).toEqual({ id: "inv1", name: "INV-1" });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      clientId: "c1",
+      number: "INV-1",
+      // date-only inputs are normalized to full ISO datetimes (Clockify rejects YYYY-MM-DD).
+      issuedDate: "2026-06-06T00:00:00Z",
+      dueDate: "2026-07-06T00:00:00Z",
+      currency: "GBP",
+    });
+  });
+
+  it("updateEntity GET-then-merge-PUTs for project", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "p1", name: "Old", color: "#fff", archived: false })
+        : jsonResponse({ id: "p1", name: "New Site" }),
+    );
+    const updated = await client(f as any).updateEntity!({
+      entityType: "project",
+      id: "p1",
+      fields: { name: "New Site" },
+    });
+    expect(updated).toEqual({ id: "p1", name: "New Site" });
+    const calls = (f as any).mock.calls;
+    expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
+    const putBody = JSON.parse(calls[1][1].body);
+    expect(putBody.name).toBe("New Site"); // caller override
+    expect(putBody.color).toBe("#fff"); // preserved from GET
+  });
+
+  it("updateEntity throws a clear error for task (needs projectId) and other unsupported types", async () => {
+    const f = vi.fn(async () => jsonResponse({}));
+    await expect(
+      client(f as any).updateEntity!({ entityType: "task", id: "t1", fields: { name: "x" } }),
+    ).rejects.toThrow(/task/);
+    expect((f as any).mock.calls.length).toBe(0);
+  });
+
+  it("manageExpense create sends multipart/form-data (no JSON content-type)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "x9", notes: "Taxi" }));
+    const result = await client(f as any).manageExpense!({
+      operation: "create",
+      name: "Taxi",
+      amount: 20,
+      date: "2026-06-06",
+      categoryId: "cat1",
+      userId: "u1",
+    });
+    expect(result).toEqual({ id: "x9", name: "Taxi" });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/expenses");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.headers["content-type"]).toBeUndefined(); // boundary set by fetch
+    const form = init.body as FormData;
+    expect(form.get("userId")).toBe("u1"); // Clockify requires the expense owner
+    expect(form.get("categoryId")).toBe("cat1");
+    expect(form.get("amount")).toBe("20");
+    expect(form.get("date")).toBe("2026-06-06T00:00:00Z"); // normalized to ISO datetime
+    expect(form.get("notes")).toBe("Taxi");
+  });
+
+  it("manageExpense delete issues a JSON DELETE and returns null", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    expect(await client(f as any).manageExpense!({ operation: "delete", id: "x1" })).toBeNull();
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/expenses/x1");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
+  });
+
+  it("manageTimeOff PATCHes the request under its policy", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "req1" }));
+    const r = await client(f as any).manageTimeOff!({
+      policyId: "pol1",
+      requestId: "req1",
+      decision: "approve",
+    });
+    expect(r).toEqual({ id: "req1", name: "approve" });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe(
+      "https://api.clockify.me/api/v1/workspaces/ws-1/time-off/policies/pol1/requests/req1",
+    );
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ statusType: "APPROVED" });
+  });
+
+  it("manageSchedule POSTs a publish date range", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "pub1" }));
+    const r = await client(f as any).manageSchedule!({
+      operation: "publish",
+      start: "2030-01-01T00:00:00Z",
+      end: "2030-01-07T00:00:00Z",
+    });
+    expect(r).toEqual({ id: "pub1", name: "schedule" });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe(
+      "https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/publish",
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      start: "2030-01-01T00:00:00Z",
+      end: "2030-01-07T00:00:00Z",
+    });
   });
 });

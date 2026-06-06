@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
@@ -11,6 +11,15 @@ import type { RiskLabel } from "../risk.js";
  * in `commit`, which the harness runs after a button confirmation. Permission
  * changes are not Clockify writes — they use a button save and no dry-run.
  */
+
+/** Today as YYYY-MM-DD using the injectable clock (deterministic in tests). */
+function todayYmd(ctx: ActionContext): string {
+  return (ctx.now ?? (() => new Date()))().toISOString().slice(0, 10);
+}
+/** Add whole days to a YYYY-MM-DD date, returning YYYY-MM-DD. */
+function addDaysYmd(ymd: string, days: number): string {
+  return new Date(Date.parse(`${ymd}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
 
 const DELETABLE_ENTITY_TYPES = [
   "project",
@@ -98,8 +107,18 @@ const prepareInvoice = defineAction({
     clientId: z.string().min(1),
     clientName: z.string().optional(),
     title: z.string().optional(),
+    // Clockify requires number/issuedDate/currency/dueDate; the handler fills
+    // sensible defaults (issuedDate=today, dueDate=+30d, currency=USD) when omitted.
+    number: z.string().optional(),
+    issuedDate: z.string().optional(), // YYYY-MM-DD
+    dueDate: z.string().optional(), // YYYY-MM-DD
+    currency: z.string().optional(), // ISO code, e.g. "USD"
   }),
   async handler(ctx, args) {
+    const issuedDate = args.issuedDate ?? todayYmd(ctx);
+    const dueDate = args.dueDate ?? addDaysYmd(issuedDate, 30);
+    const number = args.number ?? args.title ?? `INV-${issuedDate}`;
+    const currency = args.currency ?? "USD";
     return {
       kind: "preview",
       preview: {
@@ -107,7 +126,10 @@ const prepareInvoice = defineAction({
         featureGroup: "invoices",
         riskLabels: ["billing"],
         targets: [{ type: "client", id: args.clientId, name: args.clientName }],
-        expectedChanges: [`Create a draft invoice for ${args.clientName ?? args.clientId}`],
+        expectedChanges: [
+          `Create draft invoice ${number} for ${args.clientName ?? args.clientId}`,
+          `Issued ${issuedDate}, due ${dueDate}, ${currency}`,
+        ],
         reversibility: "You can delete the draft invoice afterward.",
         warnings: ["This creates a billing document."],
       },
@@ -115,12 +137,19 @@ const prepareInvoice = defineAction({
         actionName: "clockify_prepare_invoice",
         featureGroup: "invoices",
         risks: ["billing"],
-        payload: { clientId: args.clientId, title: args.title },
+        payload: { clientId: args.clientId, title: args.title, number, issuedDate, dueDate, currency },
       },
     };
   },
   async commit(ctx, operation) {
-    const payload = operation.payload as { clientId: string; title?: string };
+    const payload = operation.payload as {
+      clientId: string;
+      title?: string;
+      number?: string;
+      issuedDate?: string;
+      dueDate?: string;
+      currency?: string;
+    };
     if (!ctx.clockify.createInvoice) {
       return errorReceipt({
         action: "clockify_prepare_invoice",
@@ -131,6 +160,10 @@ const prepareInvoice = defineAction({
     const invoice = await ctx.clockify.createInvoice({
       clientId: payload.clientId,
       title: payload.title,
+      number: payload.number,
+      issuedDate: payload.issuedDate,
+      dueDate: payload.dueDate,
+      currency: payload.currency,
     });
     return successReceipt({
       action: "clockify_prepare_invoice",
@@ -146,12 +179,33 @@ const manageWebhook = defineAction({
   description: "Create, update, or delete a webhook. External side effect — previews first.",
   featureGroup: "webhooks",
   risks: ["external_side_effect"],
-  schema: z.object({
-    operation: z.enum(["create", "update", "delete"]),
-    id: z.string().optional(),
-    name: z.string().optional(),
-    url: z.string().optional(),
-  }),
+  schema: z
+    .object({
+      operation: z.enum(["create", "update", "delete"]),
+      id: z.string().optional(),
+      name: z.string().optional(),
+      url: z.string().optional(),
+      // Clockify create requires an event + an HTTPS url; trigger source defaults
+      // to the workspace in the adapter when omitted. NOTE: a webhook signing
+      // `authToken` is intentionally NOT accepted here — it is a secret, and the
+      // confirmation payload is persisted (pending_confirmations + audit log), so
+      // it must not flow through the model-facing action.
+      webhookEvent: z.string().optional(),
+      triggerSource: z.array(z.string()).optional(),
+      triggerSourceType: z.string().optional(),
+    })
+    .refine(
+      (v) =>
+        v.operation !== "create" ||
+        (typeof v.url === "string" &&
+          v.url.startsWith("https://") &&
+          typeof v.webhookEvent === "string" &&
+          v.webhookEvent.length > 0),
+      { message: "Creating a webhook requires an https url and a webhookEvent." },
+    )
+    .refine((v) => v.operation === "create" || (typeof v.id === "string" && v.id.length > 0), {
+      message: "Updating or deleting a webhook requires an id.",
+    }),
   async handler(ctx, args) {
     return {
       kind: "preview",
@@ -160,7 +214,9 @@ const manageWebhook = defineAction({
         featureGroup: "webhooks",
         riskLabels: ["external_side_effect"],
         targets: args.id ? [{ type: "webhook", id: args.id, name: args.name }] : [],
-        expectedChanges: [`${args.operation} a webhook${args.url ? ` → ${args.url}` : ""}`],
+        expectedChanges: [
+          `${args.operation} a webhook${args.webhookEvent ? ` for ${args.webhookEvent}` : ""}${args.url ? ` → ${args.url}` : ""}`,
+        ],
         reversibility: "Webhook changes affect external delivery immediately.",
         warnings: ["This changes outbound webhook delivery."],
       },
@@ -168,7 +224,15 @@ const manageWebhook = defineAction({
         actionName: "clockify_manage_webhook",
         featureGroup: "webhooks",
         risks: ["external_side_effect"],
-        payload: { operation: args.operation, id: args.id, name: args.name, url: args.url },
+        payload: {
+          operation: args.operation,
+          id: args.id,
+          name: args.name,
+          url: args.url,
+          webhookEvent: args.webhookEvent,
+          triggerSource: args.triggerSource,
+          triggerSourceType: args.triggerSourceType,
+        },
       },
     };
   },
@@ -178,6 +242,9 @@ const manageWebhook = defineAction({
       id?: string;
       name?: string;
       url?: string;
+      webhookEvent?: string;
+      triggerSource?: string[];
+      triggerSourceType?: string;
     };
     if (!ctx.clockify.manageWebhook) {
       return errorReceipt({
@@ -319,12 +386,19 @@ const manageExpense = defineAction({
     "Create, update, or delete an expense. Elevated/destructive — always previews and requires confirmation.",
   featureGroup: "expenses",
   risks: ["high_risk_write"],
-  schema: z.object({
-    operation: z.enum(["create", "update", "delete"]),
-    id: z.string().optional(),
-    name: z.string().optional(),
-    amount: z.number().optional(),
-  }),
+  schema: z
+    .object({
+      operation: z.enum(["create", "update", "delete"]),
+      id: z.string().optional(),
+      name: z.string().optional(), // maps to the expense `notes`
+      amount: z.number().optional(), // major currency units by default
+      date: z.string().optional(), // YYYY-MM-DD; required by Clockify on create
+      categoryId: z.string().optional(), // required by Clockify on create
+      userId: z.string().optional(), // owner; defaults to the caller on create
+    })
+    .refine((v) => v.operation === "create" || (typeof v.id === "string" && v.id.length > 0), {
+      message: "Updating or deleting an expense requires an id.",
+    }),
   async handler(ctx, args) {
     const destructive = args.operation === "delete";
     const riskLabels: RiskLabel[] = destructive ? ["destructive"] : ["high_risk_write"];
@@ -335,7 +409,9 @@ const manageExpense = defineAction({
         featureGroup: "expenses",
         riskLabels,
         targets: args.id ? [{ type: "expense", id: args.id, name: args.name }] : [],
-        expectedChanges: [`${args.operation} an expense${args.name ? ` "${args.name}"` : ""}`],
+        expectedChanges: [
+          `${args.operation} an expense${args.name ? ` "${args.name}"` : ""}${args.amount !== undefined ? ` (${args.amount})` : ""}`,
+        ],
         reversibility: destructive
           ? "Deleting an expense cannot be undone."
           : "You can edit or delete the expense afterward.",
@@ -347,7 +423,16 @@ const manageExpense = defineAction({
         actionName: "clockify_manage_expense",
         featureGroup: "expenses",
         risks: riskLabels,
-        payload: { operation: args.operation, id: args.id, name: args.name, amount: args.amount },
+        payload: {
+          operation: args.operation,
+          id: args.id,
+          name: args.name,
+          amount: args.amount,
+          date: args.date,
+          categoryId: args.categoryId,
+          // Clockify requires the expense owner on create; default to the caller.
+          userId: args.userId ?? ctx.adminUserId,
+        },
       },
     };
   },
@@ -357,6 +442,9 @@ const manageExpense = defineAction({
       id?: string;
       name?: string;
       amount?: number;
+      date?: string;
+      categoryId?: string;
+      userId?: string;
     };
     if (!ctx.clockify.manageExpense) {
       return errorReceipt({
@@ -391,6 +479,7 @@ const manageTimeOff = defineAction({
   schema: z.object({
     decision: z.enum(["approve", "deny"]),
     requestId: z.string().min(1),
+    policyId: z.string().min(1), // Clockify approves/denies under a specific policy
   }),
   async handler(ctx, args) {
     return {
@@ -400,7 +489,7 @@ const manageTimeOff = defineAction({
         featureGroup: "time_off_approvals",
         riskLabels: ["external_side_effect"],
         targets: [{ type: "time_off_request", id: args.requestId }],
-        expectedChanges: [`${args.decision} time-off request ${args.requestId}`],
+        expectedChanges: [`${args.decision} time-off request ${args.requestId} (policy ${args.policyId})`],
         reversibility: "Approval decisions notify the requester and may be hard to reverse.",
         warnings: ["This notifies the requester and changes their balance/schedule."],
       },
@@ -408,12 +497,16 @@ const manageTimeOff = defineAction({
         actionName: "clockify_manage_time_off",
         featureGroup: "time_off_approvals",
         risks: ["external_side_effect"],
-        payload: { requestId: args.requestId, decision: args.decision },
+        payload: { requestId: args.requestId, decision: args.decision, policyId: args.policyId },
       },
     };
   },
   async commit(ctx, operation) {
-    const payload = operation.payload as { requestId: string; decision: "approve" | "deny" };
+    const payload = operation.payload as {
+      requestId: string;
+      decision: "approve" | "deny";
+      policyId: string;
+    };
     if (!ctx.clockify.manageTimeOff) {
       return errorReceipt({
         action: "clockify_manage_time_off",
@@ -442,7 +535,9 @@ const manageSchedule = defineAction({
   risks: ["external_side_effect"],
   schema: z.object({
     operation: z.enum(["publish"]),
-    id: z.string().optional(),
+    // Publishing applies to a date range, not a single id.
+    start: z.string().min(1), // ISO date/datetime
+    end: z.string().min(1),
   }),
   async handler(ctx, args) {
     return {
@@ -451,8 +546,8 @@ const manageSchedule = defineAction({
         actionLabel: `${args.operation} schedule`,
         featureGroup: "scheduling",
         riskLabels: ["external_side_effect"],
-        targets: args.id ? [{ type: "schedule", id: args.id }] : [],
-        expectedChanges: [`${args.operation} the schedule`],
+        targets: [],
+        expectedChanges: [`${args.operation} the schedule for ${args.start} → ${args.end}`],
         reversibility: "Publishing notifies assignees; unpublishing may be required to revert.",
         warnings: ["Publishing a schedule notifies assignees."],
       },
@@ -460,12 +555,12 @@ const manageSchedule = defineAction({
         actionName: "clockify_manage_schedule",
         featureGroup: "scheduling",
         risks: ["external_side_effect"],
-        payload: { operation: args.operation, id: args.id },
+        payload: { operation: args.operation, start: args.start, end: args.end },
       },
     };
   },
   async commit(ctx, operation) {
-    const payload = operation.payload as { operation: "publish"; id?: string };
+    const payload = operation.payload as { operation: "publish"; start: string; end: string };
     if (!ctx.clockify.manageSchedule) {
       return errorReceipt({
         action: "clockify_manage_schedule",
