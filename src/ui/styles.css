@@ -1,0 +1,207 @@
+:root {
+  --bg: #0f1115;
+  --panel: #181b21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #9aa3b2;
+  --accent: #3b82f6;
+  --danger: #ef4444;
+  --ok: #22c55e;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+#app {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 100vh;
+}
+
+.app-header {
+  font-size: 16px;
+  font-weight: 600;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.hidden {
+  display: none !important;
+}
+
+.error {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid var(--danger);
+  color: #fecaca;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.permission-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+table.permissions {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+table.permissions td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+table.permissions td.group {
+  color: var(--muted);
+}
+
+select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+}
+
+.messages {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px;
+}
+
+.message {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  max-width: 80%;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--accent);
+  color: white;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.preview-card,
+.receipt {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.preview-card .reversibility {
+  color: var(--muted);
+}
+
+.receipt.ok strong {
+  color: var(--ok);
+}
+
+.receipt.error strong {
+  color: var(--danger);
+}
+
+.receipt .action {
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.details {
+  background: #0b0d11;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  cursor: pointer;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  padding: 7px 12px;
+  font-size: 13px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+button.secondary {
+  background: transparent;
+}
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  align-self: flex-start;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer-input {
+  flex: 1;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 9px 11px;
+  font-size: 14px;
+}

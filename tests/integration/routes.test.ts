@@ -1,0 +1,220 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import request from "supertest";
+import { testing } from "@apet97/clockify-addon-sdk";
+import { createApp } from "../../src/server.js";
+import { createSignatureParser } from "../../src/addon/verify.js";
+import { createStore, type Store } from "../../src/db/store.js";
+import type { AppConfig } from "../../src/config.js";
+import type { ModelClient } from "../../src/assistant/model-client.js";
+import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
+import type { Express } from "express";
+
+const ADDON_KEY = "ai-assistant";
+
+let keys: { privateKey: unknown; pem: string };
+let store: Store;
+let app: Express;
+let fake: FakeWorkspace;
+
+// Smart fake model: returns a delete action for "delete" messages, else an answer.
+const modelClient: ModelClient = {
+  async complete(messages) {
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const text = lastUser?.content ?? "";
+    if (text.toLowerCase().includes("delete")) {
+      return JSON.stringify({
+        kind: "actions",
+        text: "Here's what I'll do.",
+        actions: [
+          { name: "clockify_delete_entity", arguments: { entityType: "project", id: "p1", name: "Acme" } },
+        ],
+      });
+    }
+    return JSON.stringify({ kind: "answer", text: "Hello, admin." });
+  },
+};
+
+async function adminCookie(role = "ADMIN"): Promise<string> {
+  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+    workspaceId: "ws-1",
+    user: "admin-1",
+    workspaceRole: role,
+    backendUrl: "https://api.clockify.me",
+    addonId: "addon-1",
+  });
+  const res = await request(app).get("/component/assistant").query({ auth_token: token });
+  const setCookie = res.headers["set-cookie"];
+  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+}
+
+beforeAll(async () => {
+  keys = await testing.generateTestKeys();
+  const config: AppConfig = {
+    nodeEnv: "test",
+    port: 3999,
+    baseUrl: "https://example.com/ai-assistant",
+    clockifyAddonPublicKeyPem: keys.pem,
+    clockifyAddonKey: ADDON_KEY,
+    sessionSecret: "test-session-secret",
+    databasePath: ":memory:",
+    llmBaseUrl: "https://llm.example.com",
+    llmApiKey: "llm-key",
+    llmModel: "cheap-model",
+  };
+  store = createStore(":memory:", { encryptionKey: "test-key" });
+  store.saveInstallation({
+    workspaceId: "ws-1",
+    addonId: "addon-1",
+    addonUserId: "addon-user-1",
+    addonToken: "addon-token",
+  });
+  const parser = createSignatureParser(ADDON_KEY, keys.pem);
+  fake = createFakeWorkspace();
+  app = createApp({
+    config,
+    store,
+    parser,
+    modelClient,
+    clockifyForWorkspace: () => fake.client,
+  });
+});
+
+afterAll(() => store.close());
+
+describe("routes", () => {
+  it("GET /manifest returns the manifest", async () => {
+    const res = await request(app).get("/manifest");
+    expect(res.status).toBe(200);
+    expect(res.body.name).toBe("AI Assistant");
+    expect(res.body.components?.[0].path).toBe("/component/assistant");
+  });
+
+  it("component route rejects a non-admin role", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "member-1",
+      workspaceRole: "USER",
+    });
+    const res = await request(app).get("/component/assistant").query({ auth_token: token });
+    expect(res.status).toBe(403);
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
+  it("component route accepts an admin and sets a session cookie", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+    });
+    const res = await request(app).get("/component/assistant").query({ auth_token: token });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers["set-cookie"];
+    expect(Array.isArray(setCookie) && setCookie[0]).toContain("ai_assistant_session=");
+    expect(Array.isArray(setCookie) && setCookie[0]).toContain("HttpOnly");
+  });
+
+  it("chat route requires a session", async () => {
+    const res = await request(app).post("/api/chat/messages").send({ message: "hi" });
+    expect(res.status).toBe(401);
+  });
+
+  it("permissions route returns the default policy on first run", async () => {
+    const cookie = await adminCookie();
+    const res = await request(app).get("/api/permissions").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.firstRun).toBe(true);
+    expect(res.body.policy.groups.time_tracking).toBe("read_write");
+  });
+
+  it("confirm route requires an existing pending preview", async () => {
+    const cookie = await adminCookie();
+    const res = await request(app)
+      .post("/api/confirmations/does-not-exist/confirm")
+      .set("Cookie", cookie)
+      .send({ nonce: "whatever" });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe("not_found");
+  });
+
+  it("a risky chat message creates a preview that can be cancelled", async () => {
+    const cookie = await adminCookie();
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete project Acme" });
+    expect(chat.status).toBe(200);
+    const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
+    expect(preview).toBeDefined();
+    expect(preview.previewId).toBeTruthy();
+
+    const cancel = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/cancel`)
+      .set("Cookie", cookie)
+      .send({});
+    expect(cancel.status).toBe(200);
+    expect(cancel.body.status).toBe("cancelled");
+  });
+
+  it("two concurrent confirms execute the operation exactly once (one-use)", async () => {
+    const cookie = await adminCookie();
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete project Acme" });
+    const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
+    expect(preview?.previewId).toBeTruthy();
+
+    const before = fake.counts.deleteEntity ?? 0;
+    const [a, b] = await Promise.all([
+      request(app)
+        .post(`/api/confirmations/${preview.previewId}/confirm`)
+        .set("Cookie", cookie)
+        .send({ nonce: preview.nonce }),
+      request(app)
+        .post(`/api/confirmations/${preview.previewId}/confirm`)
+        .set("Cookie", cookie)
+        .send({ nonce: preview.nonce }),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    // exactly one succeeds (200); the other is rejected (not pending / already used)
+    expect(statuses[0]).toBe(200);
+    expect(statuses[1]).toBeGreaterThanOrEqual(400);
+    expect((fake.counts.deleteEntity ?? 0) - before).toBe(1);
+  });
+
+  it("a confirm denied by lowered policy does not consume the preview", async () => {
+    const cookie = await adminCookie();
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete project Acme" });
+    const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
+    expect(preview?.previewId).toBeTruthy();
+
+    // Lower the policy after the preview was issued.
+    const lowered = defaultAdminPolicy();
+    lowered.groups.work_structure = "off";
+    store.upsertAdminPolicy("ws-1", "admin-1", lowered);
+
+    const before = fake.counts.deleteEntity ?? 0;
+    const denied = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(denied.status).toBe(400);
+    expect(denied.body.code).toBe("policy_denied");
+    expect((fake.counts.deleteEntity ?? 0) - before).toBe(0);
+
+    // Re-enable and confirm the SAME preview — it was never consumed.
+    store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
+    const ok = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(ok.status).toBe(200);
+    expect(ok.body.ok).toBe(true);
+    expect((fake.counts.deleteEntity ?? 0) - before).toBe(1);
+  });
+});

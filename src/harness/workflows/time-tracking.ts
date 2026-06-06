@@ -1,0 +1,301 @@
+import { z } from "zod";
+import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import type { TimeEntrySummary } from "../../clockify/client.js";
+import { successReceipt } from "../receipts.js";
+import { matchByName } from "./resolve.js";
+
+/**
+ * Time-tracking read + safe-write workflows (SPEC "Safe Writes"): status, start
+ * timer, stop timer, log work, review day/week (reads), and fix entry (safe
+ * write). All execute immediately when policy allows; none are risky. Ambiguous
+ * project/task identity stops and asks the admin.
+ */
+
+function nowIso(ctx: ActionContext): string {
+  return (ctx.now ?? (() => new Date()))().toISOString();
+}
+
+/** Sum the durations (minutes) of entries that have ended. */
+function totalMinutes(entries: TimeEntrySummary[]): number {
+  let ms = 0;
+  for (const entry of entries) {
+    if (entry.end && entry.start) ms += Date.parse(entry.end) - Date.parse(entry.start);
+  }
+  return Math.round(ms / 60000);
+}
+
+const status = defineAction({
+  name: "clockify_status",
+  description: "Show the admin's currently running timer (if any).",
+  featureGroup: "time_tracking",
+  risks: ["read"],
+  schema: z.object({}).strip(),
+  async handler(ctx) {
+    const running = await ctx.clockify.getRunningTimeEntry(ctx.adminUserId);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_status",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { running: running ?? null },
+      }),
+    };
+  },
+});
+
+const startTimer = defineAction({
+  name: "clockify_start_timer",
+  description: "Start a new timer for the admin.",
+  featureGroup: "time_tracking",
+  risks: ["safe_write"],
+  schema: z.object({
+    description: z.string().optional(),
+    projectId: z.string().optional(),
+    taskId: z.string().optional(),
+    tagIds: z.array(z.string()).optional(),
+    billable: z.boolean().optional(),
+  }),
+  async handler(ctx, args) {
+    const entry = await ctx.clockify.startTimeEntry({
+      userId: ctx.adminUserId,
+      description: args.description,
+      projectId: args.projectId,
+      taskId: args.taskId,
+      tagIds: args.tagIds,
+      billable: args.billable,
+      start: nowIso(ctx),
+    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_start_timer",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+      }),
+    };
+  },
+});
+
+const stopTimer = defineAction({
+  name: "clockify_stop_timer",
+  description: "Stop the admin's currently running timer.",
+  featureGroup: "time_tracking",
+  risks: ["safe_write"],
+  schema: z.object({}).strip(),
+  async handler(ctx) {
+    const entry = await ctx.clockify.stopTimeEntry({
+      userId: ctx.adminUserId,
+      end: nowIso(ctx),
+    });
+    if (!entry) {
+      return {
+        kind: "receipt",
+        receipt: successReceipt({
+          action: "clockify_stop_timer",
+          warnings: [{ message: "No running timer to stop." }],
+        }),
+      };
+    }
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_stop_timer",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+      }),
+    };
+  },
+});
+
+const logWork = defineAction({
+  name: "clockify_log_work",
+  description: "Log a completed time entry. Resolves project/task by name.",
+  featureGroup: "time_tracking",
+  risks: ["safe_write"],
+  schema: z.object({
+    description: z.string().min(1),
+    start: z.string().min(1),
+    end: z.string().optional(),
+    projectId: z.string().optional(),
+    projectName: z.string().optional(),
+    taskName: z.string().optional(),
+    tagIds: z.array(z.string()).optional(),
+    billable: z.boolean().optional(),
+  }),
+  async handler(ctx, args) {
+    let projectId = args.projectId;
+
+    if (!projectId && args.projectName) {
+      const projects = await ctx.clockify.listProjects();
+      const match = matchByName(projects, args.projectName);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find an active project named "${args.projectName}". Which project should I log against, or should I create it first?`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several active projects are named "${args.projectName}". Which one?`,
+          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
+        };
+      }
+      projectId = match.entity.id;
+    }
+
+    let taskId: string | undefined;
+    if (args.taskName) {
+      if (!projectId) {
+        return {
+          kind: "clarify",
+          message: `To log against task "${args.taskName}" I need to know the project. Which project?`,
+        };
+      }
+      const tasks = await ctx.clockify.listTasks(projectId);
+      const match = matchByName(tasks, args.taskName);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find a task named "${args.taskName}" in that project.`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several tasks are named "${args.taskName}". Which one?`,
+          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
+        };
+      }
+      taskId = match.entity.id;
+    }
+
+    const entry = await ctx.clockify.createTimeEntry({
+      description: args.description,
+      projectId,
+      taskId,
+      tagIds: args.tagIds,
+      billable: args.billable,
+      start: args.start,
+      end: args.end,
+    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_log_work",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+      }),
+    };
+  },
+});
+
+const reviewDay = defineAction({
+  name: "clockify_review_day",
+  description: "Summarize a user's time entries for a single day (defaults to today and the caller).",
+  featureGroup: "time_tracking",
+  risks: ["read"],
+  schema: z.object({
+    date: z.string().optional(), // YYYY-MM-DD; defaults to today
+    userId: z.string().optional(),
+  }),
+  async handler(ctx, args) {
+    const date = args.date ?? nowIso(ctx).slice(0, 10);
+    const userId = args.userId ?? ctx.adminUserId;
+    const start = `${date}T00:00:00.000Z`;
+    // Exclusive end = next-day midnight (consistent with review_week's window).
+    const end = new Date(Date.parse(start) + 24 * 60 * 60 * 1000).toISOString();
+    const entries = await ctx.clockify.getEntries({ userId, start, end });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_review_day",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { date, userId, count: entries.length, totalMinutes: totalMinutes(entries), entries },
+      }),
+    };
+  },
+});
+
+const reviewWeek = defineAction({
+  name: "clockify_review_week",
+  description: "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller).",
+  featureGroup: "time_tracking",
+  risks: ["read"],
+  schema: z.object({
+    start: z.string().optional(), // YYYY-MM-DD; defaults to today
+    userId: z.string().optional(),
+  }),
+  async handler(ctx, args) {
+    const startDate = args.start ?? nowIso(ctx).slice(0, 10);
+    const userId = args.userId ?? ctx.adminUserId;
+    const start = `${startDate}T00:00:00.000Z`;
+    const end = new Date(Date.parse(start) + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const entries = await ctx.clockify.getEntries({ userId, start, end });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_review_week",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { start: startDate, end, userId, count: entries.length, totalMinutes: totalMinutes(entries), entries },
+      }),
+    };
+  },
+});
+
+const fixEntry = defineAction({
+  name: "clockify_fix_entry",
+  description: "Update fields of a known time entry (description, project, task, tags). Safe — the entry id is already resolved.",
+  featureGroup: "time_tracking",
+  risks: ["safe_write"],
+  schema: z
+    .object({
+      id: z.string().min(1),
+      description: z.string().optional(),
+      projectId: z.string().optional(),
+      taskId: z.string().optional(),
+      tagIds: z.array(z.string()).optional(),
+    })
+    .refine(
+      (v) =>
+        v.description !== undefined ||
+        v.projectId !== undefined ||
+        v.taskId !== undefined ||
+        v.tagIds !== undefined,
+      { message: "Provide at least one field to change." },
+    ),
+  async handler(ctx, args) {
+    const entry = await ctx.clockify.updateTimeEntry({
+      id: args.id,
+      description: args.description,
+      projectId: args.projectId,
+      taskId: args.taskId,
+      tagIds: args.tagIds,
+    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_fix_entry",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+      }),
+    };
+  },
+});
+
+export const TIME_TRACKING_ACTIONS: ActionDefinition[] = [
+  status,
+  startTimer,
+  stopTimer,
+  logWork,
+  reviewDay,
+  reviewWeek,
+  fixEntry,
+];
