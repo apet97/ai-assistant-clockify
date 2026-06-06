@@ -1,4 +1,15 @@
 import { createRequire } from "node:module";
+import type {
+  TimeEntryPort,
+  ProjectPort,
+  TaskPort,
+  ClientPort,
+  TagPort,
+  ExpensePort,
+  UserPort,
+  WebhookPort,
+  MiscRiskyPort,
+} from "./ports/index.js";
 
 /**
  * The single Clockify SDK entrypoint (backend rule: all Clockify client
@@ -13,11 +24,11 @@ import { createRequire } from "node:module";
  */
 
 /**
- * Workspace-client port: the narrow Clockify surface the harness workflows use.
- * Tests provide a fake implementing this; a future live adapter would wrap the
- * SDK's `Workspace` resource clients (tags/projects/tasks/clients/timeEntries)
- * onto these methods. Keeping the port here means handlers depend only on the
- * Clockify module, not on the SDK package directly.
+ * Shared entity summary shapes returned by the {@link WorkspaceClient} port.
+ * The port itself is composed from per-area sub-interfaces in `./ports/*` so
+ * each feature area owns its own method slice (decision D1 in
+ * `API_COVERAGE_PLAN.md`); these summary types stay here because every slice
+ * shares them.
  */
 export interface EntitySummary {
   id: string;
@@ -66,83 +77,37 @@ export interface CreateTimeEntryInput {
   end?: string;
 }
 
-export interface WorkspaceClient {
-  listTags(): Promise<EntitySummary[]>;
-  createTag(input: { name: string }): Promise<EntitySummary>;
-  listClients(): Promise<EntitySummary[]>;
-  createClient(input: { name: string }): Promise<EntitySummary>;
-  listProjects(): Promise<ProjectSummary[]>;
-  createProject(input: { name: string; clientId?: string }): Promise<ProjectSummary>;
-  listTasks(projectId: string): Promise<TaskSummary[]>;
-  createTask(input: { projectId: string; name: string }): Promise<TaskSummary>;
-  getRunningTimeEntry(userId: string): Promise<TimeEntrySummary | null>;
-  startTimeEntry(input: StartTimeEntryInput): Promise<TimeEntrySummary>;
-  stopTimeEntry(input: { userId: string; end: string }): Promise<TimeEntrySummary | null>;
-  createTimeEntry(input: CreateTimeEntryInput): Promise<TimeEntrySummary>;
-  /** Read/list coverage for the broader action catalog. */
-  getEntries(input: { userId: string; start?: string; end?: string }): Promise<TimeEntrySummary[]>;
-  listExpenses(): Promise<EntitySummary[]>;
-  listUsers(): Promise<EntitySummary[]>;
-  listWebhooks(): Promise<EntitySummary[]>;
-  /** Update known time-entry fields (safe write — entry id is already resolved). */
-  updateTimeEntry(input: {
-    id: string;
-    description?: string;
-    projectId?: string;
-    taskId?: string;
-    tagIds?: string[];
-  }): Promise<TimeEntrySummary>;
-  /** Risky-write methods (used only at confirm time, after button confirmation). */
-  deleteEntity?(input: { entityType: string; id: string }): Promise<void>;
-  createInvoice?(input: {
-    clientId: string;
-    title?: string;
-    /** Clockify requires number/issuedDate/currency/dueDate on invoice create. */
-    number?: string;
-    issuedDate?: string; // YYYY-MM-DD
-    dueDate?: string; // YYYY-MM-DD
-    currency?: string; // ISO code, e.g. "USD"
-  }): Promise<EntitySummary>;
-  manageWebhook?(input: {
-    operation: "create" | "update" | "delete";
-    id?: string;
-    name?: string;
-    url?: string;
-    /** Clockify requires webhookEvent + trigger source on create. */
-    webhookEvent?: string;
-    triggerSource?: string[];
-    triggerSourceType?: string;
-    authToken?: string;
-  }): Promise<EntitySummary | null>;
-  /** Generic entity update (risky — committed only after button confirmation). */
-  updateEntity?(input: {
-    entityType: string;
-    id: string;
-    fields?: Record<string, unknown>;
-  }): Promise<EntitySummary>;
-  /** Expense create/update/delete (risky — confirm-gated). Create is multipart. */
-  manageExpense?(input: {
-    operation: "create" | "update" | "delete";
-    id?: string;
-    name?: string;
-    amount?: number;
-    date?: string; // YYYY-MM-DD; required by Clockify on create
-    categoryId?: string; // required by Clockify on create
-    userId?: string; // required by Clockify on create (the expense's owner)
-  }): Promise<EntitySummary | null>;
-  /** Approve/deny a time-off request (risky external side effect — confirm-gated). */
-  manageTimeOff?(input: {
-    policyId: string; // Clockify approves/denies under a specific policy
-    requestId: string;
-    decision: "approve" | "deny";
-  }): Promise<EntitySummary | null>;
-  /** Publish a schedule for a date range (risky external side effect — confirm-gated). */
-  manageSchedule?(input: {
-    operation: "publish";
-    start?: string;
-    end?: string;
-  }): Promise<EntitySummary | null>;
-}
+/**
+ * Workspace-client port: the narrow Clockify surface the harness workflows use.
+ * Composed (decision D1) from per-area sub-interfaces — each feature area's
+ * method slice lives in `./ports/<area>.ts`. Call sites are unchanged
+ * (`ctx.clockify.listProjects()`); risky/commit-only methods stay optional. The
+ * test fake and the live REST adapter both implement this composed interface.
+ */
+export interface WorkspaceClient
+  extends TimeEntryPort,
+    ProjectPort,
+    TaskPort,
+    ClientPort,
+    TagPort,
+    ExpensePort,
+    UserPort,
+    WebhookPort,
+    MiscRiskyPort {}
+
+// Re-export the port slices so importers can depend on a single barrel
+// (`clockify/client.js`) for both the composed port and its pieces.
+export type {
+  TimeEntryPort,
+  ProjectPort,
+  TaskPort,
+  ClientPort,
+  TagPort,
+  ExpensePort,
+  UserPort,
+  WebhookPort,
+  MiscRiskyPort,
+} from "./ports/index.js";
 
 export interface ClockifyClientOptions {
   addonToken: string;
