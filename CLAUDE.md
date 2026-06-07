@@ -49,33 +49,45 @@ MCP-shaped action harness.
 
 ## Current Status
 
-V1 is implemented and verified, and **all existing catalog actions are now wired
-to live Clockify**.
+V1 is implemented and verified, and the **full Clockify REST surface parity
+effort (`slopbranch:API_COVERAGE_PLAN.md`, Phases 0–16) is COMPLETE** — ~115
+typed catalog actions across 16 feature areas and 3 API hosts, each routed
+through the existing safe/risky harness.
 
-- `npm run verify` is green (**156 tests**: type-check + Vitest + build).
-- The REST `WorkspaceClient` adapter (`src/clockify/rest-workspace.ts`) implements
-  the full port over the Clockify REST API and is wired into `server.ts` with
-  `X-Addon-Token` auth. There are **no remaining `// TODO verify` shims** — the
-  previously-stubbed paths (webhooks, expenses, time-entry update, invoices,
-  entity update, time-off, schedule) are implemented against the real API shapes.
+- `npm run verify` is green (**416 tests**: type-check + Vitest + build).
+- The REST `WorkspaceClient` adapter is composed from a multi-host core
+  (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
+  module per area (`src/clockify/rest/<area>.ts`), assembled in
+  `src/clockify/rest-workspace.ts`. Each area also has a port slice
+  (`src/clockify/ports/<area>.ts`) and a workflow module
+  (`src/harness/workflows/<area>.ts`). The generic `manage_*`/`prepare_*` actions
+  were superseded by typed per-area actions (invoices, expenses, time-off,
+  schedule, webhooks).
 - The exhaustive live exerciser drives every action through the **real harness**
   (preview→confirm→commit) against a sacrificial workspace:
-  `scripts/live-full.ts` → `PASS=28 PREVIEW_OK=2 FAIL=0`, and
-  `scripts/live-sweep.ts` → 0 leftovers. `manage_time_off` and `manage_schedule`
-  are **preview-only** in the live run by design (no GET-able pending request;
-  publishing has real assignee side effects); their request shapes are pinned by
-  mocked-fetch unit tests.
-- Live API facts worth knowing (encoded in code + tests): `GET /webhooks` and
-  `GET /expenses` return envelopes (`{webhooks:[…]}`, `{expenses:{expenses:[…]}}`),
-  not arrays; the time-entry `PUT` replaces and requires `start` (GET-then-PUT);
-  invoice `issuedDate`/`dueDate` and expense `date` need full ISO datetimes (not
-  `YYYY-MM-DD`); expense create is `multipart/form-data` and requires `userId`;
-  webhook create requires `webhookEvent` + an HTTPS url + a trigger source.
-- **Next big effort (not started):** full Clockify REST surface parity with the
-  Go reference `addons-me/goclmcp` (~156 ops) — see `slopbranch:API_COVERAGE_PLAN.md`.
-- **Gated/pending:** the production add-on-token path (`scripts/addon-smoke.ts`)
-  needs a captured installation token from the Clockify developer console
-  (Phase 5, human-gated).
+  `scripts/live-full.ts` → `PASS=115 PREVIEW_OK=28 FAIL=0 SKIP=4`, and
+  `scripts/live-sweep.ts` → 0 leftovers. Risky writes that need live preconditions
+  or have high blast radius (time-off/approvals/scheduling-publish/user role &
+  invite & deactivate) are **preview-only** in the live run by design; their
+  request shapes are pinned by mocked-fetch unit tests.
+- Live API facts worth knowing (encoded in code + tests): list endpoints often
+  return envelopes (`{webhooks:[…]}`, `{expenses:{expenses:[…]}}`, `{invoices:[…]}`,
+  `{total,requests:[…]}`) not arrays; several single-GETs 405 so the item is read
+  from the list (invoice items, custom fields, holidays, scheduling assignments,
+  approvals, groups); the time-entry/expense/holiday/scheduling PUTs replace and
+  need the full body; amounts are minor units on the wire for invoices/payments
+  but **major** for expenses; the webhook `authToken` secret is never accepted nor
+  returned; reports run on the reports host (`POST /reports/{summary|detailed|
+  weekly}`); audit search runs on the audit host (`POST /audit-log`).
+- **Pending (not blocking):** the production X-Addon-Token clearance for the
+  REPORTS + AUDIT hosts is unverified — no `LIVE_ADDON_TOKEN` in `.env`
+  (Phase-5 dev-console gated). Reports work live via the API key; audit
+  `POST /audit-log` + the experimental entity-changes feed 400 live (shapes pinned
+  by unit tests). Re-run `scripts/host-auth-spike.ts` once a token is captured. The
+  add-on-token install path (`scripts/addon-smoke.ts`) is also human-gated.
+- **Deferred:** Phase 17 (raw `clockify_api_get`/`api_request` fallback) — omitted
+  from V1 (letting the model propose arbitrary paths conflicts with "the harness
+  decides, not the model"); requires a safety review before ever building.
 
 ## Build, Test, Run
 

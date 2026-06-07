@@ -8,9 +8,12 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, 156 tests), and every existing
-catalog action is wired to live Clockify (`scripts/live-full.ts` → PASS=28,
-FAIL=0; `scripts/live-sweep.ts` → 0 leftovers).
+implemented and verified (`npm run verify` green, **416 tests**), and the **full
+Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
+catalog actions across 16 feature areas + 3 hosts, all live-verified
+(`scripts/live-full.ts` → PASS=115 FAIL=0; `scripts/live-sweep.ts` → 0 leftovers).
+Reports/audit add-on-token host clearance and Phase 17 (raw-API fallback) are the
+only pending/deferred items — see `CLAUDE.md` → Current Status.
 
 ## Non-negotiable invariants
 
@@ -83,7 +86,11 @@ npm run dev           # tsx src/server.ts (needs env)
 - Webhook create requires `webhookEvent` + HTTPS url + a trigger source
   (defaults to the workspace).
 
-## Next effort
+## Status: REST parity COMPLETE
+
+The full Clockify REST surface parity effort (Phases 0–16 of
+`slopbranch:API_COVERAGE_PLAN.md`) is done and merged to local `main`. Below is
+the original framing, kept for context.
 
 Full Clockify REST surface parity with `addons-me/goclmcp` (~156 ops), one
 feature area per branch — see `slopbranch:API_COVERAGE_PLAN.md`. The full design
