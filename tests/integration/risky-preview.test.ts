@@ -195,31 +195,31 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.updateEntity ?? 0).toBe(0);
   });
 
-  it("manage_expense (create) previews and only mutates after confirmation", async () => {
+  it("expenses_create previews and only mutates after confirmation", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
-      actionName: "clockify_manage_expense",
-      args: { operation: "create", name: "Taxi", amount: 20 },
+      actionName: "clockify_expenses_create",
+      args: { amount: 20, date: "2026-06-06", categoryId: "c1", notes: "Taxi" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(fake.counts.manageExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpense ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.manageExpense).toBe(1);
+    expect(fake.counts.createExpense).toBe(1);
   });
 
-  it("manage_expense (delete) previews as destructive", async () => {
+  it("expenses_delete previews as destructive", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
-      actionName: "clockify_manage_expense",
-      args: { operation: "delete", id: "x1" },
+      actionName: "clockify_expenses_delete",
+      args: { id: "x1" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.preview.riskLabels).toContain("destructive");
-    expect(fake.counts.manageExpense ?? 0).toBe(0);
+    expect(fake.counts.deleteExpense ?? 0).toBe(0);
   });
 
   it("manage_time_off (approve) is an external side effect requiring confirmation", async () => {
@@ -271,25 +271,25 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.manageWebhook ?? 0).toBe(0);
   });
 
-  it("manage_expense delete without an id is rejected as invalid_args (no preview)", async () => {
+  it("expenses_delete without an id is rejected as invalid_args (no preview)", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
-      actionName: "clockify_manage_expense",
-      args: { operation: "delete" }, // missing id
+      actionName: "clockify_expenses_delete",
+      args: {}, // missing id
       context: makeContext(fake),
     });
     expect(result.kind).toBe("receipt");
     if (result.kind === "receipt" && !result.receipt.ok) {
       expect(result.receipt.code).toBe("invalid_args");
     }
-    expect(fake.counts.manageExpense ?? 0).toBe(0);
+    expect(fake.counts.deleteExpense ?? 0).toBe(0);
   });
 
   it("a new risky action re-checks policy at confirm time (expenses disabled after preview)", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
-      actionName: "clockify_manage_expense",
-      args: { operation: "create", name: "Taxi" },
+      actionName: "clockify_expenses_create",
+      args: { amount: 20, date: "2026-06-06", categoryId: "c1", notes: "Taxi" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
@@ -298,6 +298,6 @@ describe("expanded risky actions (Phase 3)", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake, lowered), preview.operation);
     expect(receipt.ok).toBe(false);
     if (!receipt.ok) expect(receipt.code).toBe("policy_denied");
-    expect(fake.counts.manageExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpense ?? 0).toBe(0);
   });
 });

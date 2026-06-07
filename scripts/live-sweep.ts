@@ -64,6 +64,17 @@ async function main(): Promise<void> {
       console.log(`  removed expense ${e.notes}`); removed++;
     }
   }
+  // expense categories. Shape: {categories:[{id, name, archived}]} or a bare array.
+  // Clockify rejects deleting an active category, so archive (PATCH status) first.
+  const catResp = (await call("GET", `${ws}/expenses/categories`).catch(() => null)) as any;
+  const cats = Array.isArray(catResp) ? catResp : (catResp?.categories ?? []);
+  for (const c of cats as any[]) {
+    if (typeof c?.name === "string" && c.name.startsWith(PFX)) {
+      await call("PATCH", `${ws}/expenses/categories/${c.id}/status`, { archived: true }).catch(() => {});
+      await call("DELETE", `${ws}/expenses/categories/${c.id}`).catch((err) => console.warn(`  category ${c.id}: ${err.message}`));
+      console.log(`  removed expense category ${c.name}`); removed++;
+    }
+  }
 
   // time entries (user-scoped to the API key's own user; match description prefix)
   const me = (await call("GET", "/user").catch(() => null)) as { id?: string } | null;

@@ -38,7 +38,6 @@ describe("catalog", () => {
       "clockify_list_entities",
       "clockify_get_entity",
       "clockify_update_entity",
-      "clockify_manage_expense",
       "clockify_manage_time_off",
       "clockify_manage_schedule",
       "assistant_show_permissions",
@@ -70,6 +69,25 @@ describe("catalog", () => {
     ]) {
       expect(names).toContain(required);
     }
+  });
+
+  it("includes the typed expense actions (Phase 7)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_expenses_list",
+      "clockify_expenses_get",
+      "clockify_expenses_create",
+      "clockify_expenses_update",
+      "clockify_expenses_delete",
+      "clockify_expenses_categories_list",
+      "clockify_expenses_categories_create",
+      "clockify_expenses_categories_update",
+      "clockify_expenses_categories_delete",
+    ]) {
+      expect(names).toContain(required);
+    }
+    // the generic manage_expense was superseded by the typed expense actions
+    expect(names).not.toContain("clockify_manage_expense");
   });
 
   it("includes the typed invoice actions (Phase 6)", () => {

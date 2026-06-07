@@ -7,6 +7,7 @@ import { TASK_ACTIONS } from "./workflows/tasks.js";
 import { CLIENT_ACTIONS } from "./workflows/clients.js";
 import { TAG_ACTIONS } from "./workflows/tags.js";
 import { INVOICE_ACTIONS } from "./workflows/invoices.js";
+import { EXPENSE_ACTIONS } from "./workflows/expenses.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 
 /**
@@ -29,6 +30,7 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...CLIENT_ACTIONS,
   ...TAG_ACTIONS,
   ...INVOICE_ACTIONS,
+  ...EXPENSE_ACTIONS,
   ...ADMIN_ACTIONS,
 ];
 
