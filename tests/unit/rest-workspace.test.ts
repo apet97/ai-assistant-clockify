@@ -277,28 +277,7 @@ describe("rest workspace client", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("createInvoice POSTs number/issuedDate/dueDate/currency", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "inv1", number: "INV-1" }));
-    const inv = await client(f as any).createInvoice!({
-      clientId: "c1",
-      number: "INV-1",
-      issuedDate: "2026-06-06",
-      dueDate: "2026-07-06",
-      currency: "GBP",
-    });
-    expect(inv).toEqual({ id: "inv1", name: "INV-1" });
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({
-      clientId: "c1",
-      number: "INV-1",
-      // date-only inputs are normalized to full ISO datetimes (Clockify rejects YYYY-MM-DD).
-      issuedDate: "2026-06-06T00:00:00Z",
-      dueDate: "2026-07-06T00:00:00Z",
-      currency: "GBP",
-    });
-  });
+  // (invoice create is now typed in rest/invoices.ts — see tests/unit/rest-invoices.test.ts)
 
   it("updateEntity GET-then-merge-PUTs for project", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
