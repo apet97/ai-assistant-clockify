@@ -713,6 +713,62 @@ async function runHolidays(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runHolidays);
 
+/**
+ * Phase 10 — Scheduling. Reads (list/totals) are real; assignment
+ * create→get→update→delete is a real round-trip on a throwaway project (create is
+ * defensive — SKIP not FAIL if scheduling is not on the workspace plan). Publish
+ * is preview-only by design (notifies assignees). Self-cleaning.
+ */
+async function runScheduling(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: scheduling");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const start = "2030-06-01T00:00:00Z";
+  const end = "2030-06-05T00:00:00Z";
+  const projName = `AIASSIST_SMOKE_sproj_${h.sfx}`;
+  let projectId: string | undefined;
+  let assignmentId: string | undefined;
+  try {
+    await h.read("clockify_scheduling_assignments_list", { start, end });
+    await h.read("clockify_scheduling_project_totals", { start, end });
+    await h.read("clockify_scheduling_user_totals", { start, end });
+    await h.previewOnly("clockify_scheduling_publish", { start, end });
+    const proj = await h.safeWrite("clockify_projects_create", { name: projName, isPublic: true });
+    projectId = proj?.changed?.created?.[0]?.id;
+    if (projectId) {
+      try {
+        const r: any = await executeAction({
+          actionName: "clockify_scheduling_assignments_create",
+          args: { userId: h.ctx.adminUserId, projectId, start, end, hoursPerDay: 8 },
+          context: h.ctx,
+        });
+        if (r.kind === "receipt" && r.receipt.ok) {
+          assignmentId = r.receipt.changed?.created?.[0]?.id;
+          h.record("clockify_scheduling_assignments_create", "PASS", summarize(r.receipt));
+        } else {
+          h.record("clockify_scheduling_assignments_create", "SKIP", `rejected: ${r.receipt?.code ?? r.kind}`);
+        }
+      } catch (e) {
+        h.record("clockify_scheduling_assignments_create", "SKIP", `unavailable (plan?): ${err(e)}`);
+      }
+      if (assignmentId) {
+        await h.read("clockify_scheduling_assignments_get", { id: assignmentId });
+        await h.risky("clockify_scheduling_assignments_update", { id: assignmentId, hoursPerDay: 6, seriesUpdateOption: "ALL" });
+        const del = await h.risky("clockify_scheduling_assignments_delete", { id: assignmentId, seriesUpdateOption: "ALL" });
+        if (del) assignmentId = undefined;
+      }
+    }
+  } finally {
+    if (assignmentId) {
+      await h.call("DELETE", `${wsPath}/scheduling/assignments/recurring/${assignmentId}?seriesUpdateOption=ALL`, undefined, true).catch(() => {});
+    }
+    if (projectId) {
+      await h.call("PUT", `${wsPath}/projects/${projectId}`, { name: projName, archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/projects/${projectId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runScheduling);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({
@@ -905,13 +961,7 @@ async function main(): Promise<void> {
     // expenses are exercised by the dedicated runExpenses area runner below
     // (typed multipart create→reads→update→delete + category round-trip).
 
-    // time-off is exercised by runTimeOff (typed) below; schedule stays here
-    // (preview-only by design — publishing notifies assignees).
-    await previewOnly(ctx, "clockify_manage_schedule", {
-      operation: "publish",
-      start: "2030-01-01T00:00:00Z",
-      end: "2030-01-07T00:00:00Z",
-    });
+    // time-off + scheduling are exercised by runTimeOff / runScheduling (typed) below.
 
     // delete_entity via confirm flow — doubles as cleanup AND tests the path
     console.log("\nDESTRUCTIVE (delete_entity — also cleanup)");

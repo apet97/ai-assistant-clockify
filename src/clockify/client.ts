@@ -10,6 +10,7 @@ import type {
   CustomFieldPort,
   TimeOffPort,
   HolidayPort,
+  SchedulingPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
@@ -99,6 +100,7 @@ export interface WorkspaceClient
     CustomFieldPort,
     TimeOffPort,
     HolidayPort,
+    SchedulingPort,
     UserPort,
     WebhookPort,
     MiscRiskyPort {}
@@ -116,6 +118,7 @@ export type {
   CustomFieldPort,
   TimeOffPort,
   HolidayPort,
+  SchedulingPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,

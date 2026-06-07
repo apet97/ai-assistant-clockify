@@ -10,6 +10,7 @@ import { makeExpenseRest } from "./rest/expenses.js";
 import { makeCustomFieldRest } from "./rest/custom-fields.js";
 import { makeTimeOffRest } from "./rest/time-off.js";
 import { makeHolidayRest } from "./rest/holidays.js";
+import { makeSchedulingRest } from "./rest/scheduling.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -75,6 +76,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const customFieldRest = makeCustomFieldRest(core, opts.workspaceId);
   const timeOffRest = makeTimeOffRest(core, opts.workspaceId);
   const holidayRest = makeHolidayRest(core, opts.workspaceId);
+  const schedulingRest = makeSchedulingRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -89,6 +91,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...customFieldRest,
     ...timeOffRest,
     ...holidayRest,
+    ...schedulingRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;
@@ -177,16 +180,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       const merged = { ...current, ...(fields ?? {}) };
       const updated = (await call("PUT", path, merged)) as { id?: string; name?: string };
       return { id: updated.id ?? id, name: updated.name ?? id };
-    },
-    async manageSchedule({ start, end }) {
-      // Publish scheduled assignments for a date range. NOTE: exercised live as
-      // preview-only (publishing has real assignee-notification side effects), so
-      // the body is covered by the unit test, not a live round-trip.
-      const r = (await call("POST", `${ws}/scheduling/assignments/publish`, {
-        start,
-        end,
-      })) as { id?: string } | null;
-      return { id: r?.id ?? "published", name: "schedule" };
     },
   };
 }

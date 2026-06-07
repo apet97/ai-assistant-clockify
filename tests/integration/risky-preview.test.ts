@@ -239,21 +239,21 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.setTimeOffRequestStatus).toBe(1);
   });
 
-  it("manage_schedule (publish) is an external side effect requiring confirmation", async () => {
+  it("scheduling_publish is an external side effect requiring confirmation", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
-      actionName: "clockify_manage_schedule",
-      args: { operation: "publish", start: "2030-01-01T00:00:00Z", end: "2030-01-07T00:00:00Z" },
+      actionName: "clockify_scheduling_publish",
+      args: { start: "2030-01-01T00:00:00Z", end: "2030-01-07T00:00:00Z" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("external_side_effect");
     expect(preview.operation.featureGroup).toBe("scheduling");
-    expect(fake.counts.manageSchedule ?? 0).toBe(0);
+    expect(fake.counts.publishSchedule ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.manageSchedule).toBe(1);
+    expect(fake.counts.publishSchedule).toBe(1);
   });
 
   it("manage_webhook update/delete without an id is rejected as invalid_args (no preview)", async () => {
