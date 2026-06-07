@@ -1,0 +1,181 @@
+import { describe, expect, it, vi } from "vitest";
+import { createRestCore } from "../../src/clockify/rest/core.js";
+import { makeProjectRest } from "../../src/clockify/rest/projects.js";
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(status === 204 ? null : JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+const rest = (fetchImpl: typeof fetch) =>
+  makeProjectRest(
+    createRestCore({ apiBase: "https://api.clockify.me/api/v1", auth: { apiKey: "k" }, fetchImpl }),
+    "ws-1",
+  );
+
+describe("project rest", () => {
+  it("paginates projects until a short page and maps summaries", async () => {
+    const page1 = Array.from({ length: 200 }, (_, i) => ({ id: `p${i}`, name: `P${i}` }));
+    const f = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(page1))
+      .mockResolvedValueOnce(jsonResponse([{ id: "p200", name: "last", clientId: "c1", archived: false }]));
+    const projects = await rest(f as unknown as typeof fetch).listProjects();
+    expect(projects).toHaveLength(201);
+    expect(projects[200]).toEqual({ id: "p200", name: "last", clientId: "c1", archived: false });
+    expect((f as any).mock.calls[0][0]).toContain("page=1");
+    expect((f as any).mock.calls[0][0]).toContain("archived=false"); // default filter
+    expect((f as any).mock.calls[1][0]).toContain("page=2");
+  });
+
+  it("passes name + archived + clientIds filters through", async () => {
+    const f = vi.fn(async () => jsonResponse([]));
+    await rest(f as unknown as typeof fetch).listProjects({
+      name: "Web",
+      archived: true,
+      clientIds: ["c1", "c2"],
+    });
+    const url = (f as any).mock.calls[0][0] as string;
+    expect(url).toContain("name=Web");
+    expect(url).toContain("archived=true");
+    expect(url).toContain("clients=c1%2Cc2");
+  });
+
+  it("getProject returns the mapped project, or null on 404", async () => {
+    const hit = vi.fn(async () => jsonResponse({ id: "p1", name: "Site", clientId: "c1" }));
+    expect(await rest(hit as unknown as typeof fetch).getProject("p1")).toEqual({
+      id: "p1",
+      name: "Site",
+      clientId: "c1",
+      archived: undefined,
+    });
+    const miss = vi.fn(async () => jsonResponse({ message: "no" }, 404));
+    expect(await rest(miss as unknown as typeof fetch).getProject("pX")).toBeNull();
+  });
+
+  it("createProject POSTs only the provided fields", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "p9", name: "New", clientId: "c1" }));
+    const p = await rest(f as unknown as typeof fetch).createProject({
+      name: "New",
+      clientId: "c1",
+      billable: true,
+      color: "#abcdef",
+      isPublic: false,
+    });
+    expect(p).toEqual({ id: "p9", name: "New", clientId: "c1", archived: undefined });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      name: "New",
+      clientId: "c1",
+      billable: true,
+      color: "#abcdef",
+      isPublic: false,
+    });
+  });
+
+  it("updateProject GET-then-merge-PUTs (preserves unchanged fields, requires name)", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "p1", name: "Old", color: "#fff", archived: false })
+        : jsonResponse({ id: "p1", name: "New", color: "#fff", archived: false }),
+    );
+    const updated = await rest(f as unknown as typeof fetch).updateProject("p1", { name: "New" });
+    expect(updated).toEqual({ id: "p1", name: "New", clientId: undefined, archived: false });
+    const calls = (f as any).mock.calls;
+    expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
+    const putBody = JSON.parse(calls[1][1].body);
+    expect(putBody.name).toBe("New");
+    expect(putBody.color).toBe("#fff"); // preserved
+  });
+
+  it("archiveProject GET-then-PUTs archived:true", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "p1", name: "Site", archived: false })
+        : jsonResponse({ id: "p1", name: "Site", archived: true }),
+    );
+    const archived = await rest(f as unknown as typeof fetch).archiveProject("p1");
+    expect(archived.archived).toBe(true);
+    const putBody = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(putBody.archived).toBe(true);
+    expect(putBody.name).toBe("Site"); // Clockify requires name on the PUT
+  });
+
+  it("deleteProject archives THEN deletes", async () => {
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "GET") return jsonResponse({ id: "p1", name: "Site", archived: false });
+      if (init.method === "PUT") return jsonResponse({ id: "p1", name: "Site", archived: true });
+      return jsonResponse(null, 204); // DELETE
+    });
+    await rest(f as unknown as typeof fetch).deleteProject("p1");
+    const methods = (f as any).mock.calls.map((c: any) => c[1].method);
+    expect(methods).toEqual(["GET", "PUT", "DELETE"]); // archive (get+put) then delete
+    expect((f as any).mock.calls[2][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1");
+  });
+
+  it("createProjectFromTemplate POSTs to /projects/from-template", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "p2", name: "Cloned" }));
+    const p = await rest(f as unknown as typeof fetch).createProjectFromTemplate({
+      templateId: "t1",
+      name: "Cloned",
+    });
+    expect(p.id).toBe("p2");
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/from-template");
+    expect(JSON.parse(init.body)).toEqual({ templateId: "t1", name: "Cloned" });
+  });
+
+  it("updateProjectRate PUTs amount (minor units) to the hourly-rate endpoint", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateProjectRate({
+      projectId: "p1",
+      userId: "u1",
+      rateKind: "HOURLY",
+      amountMinor: 7500,
+      since: "2026-06-01T00:00:00Z",
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/users/u1/hourly-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 7500, since: "2026-06-01T00:00:00Z" });
+  });
+
+  it("updateProjectRate routes COST to the cost-rate endpoint", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateProjectRate({
+      projectId: "p1",
+      userId: "u1",
+      rateKind: "COST",
+      amountMinor: 5000,
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/users/u1/cost-rate");
+    expect(JSON.parse(init.body)).toEqual({ amount: 5000 });
+  });
+
+  it("updateProjectEstimate PATCHes /estimate (matches goclmcp)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "p1" }));
+    await rest(f as unknown as typeof fetch).updateProjectEstimate("p1", {
+      estimate: { type: "MANUAL", active: true },
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/estimate");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ estimate: { type: "MANUAL", active: true } });
+  });
+
+  it("updateProjectMemberships PATCHes /memberships (matches goclmcp)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "p1" }));
+    await rest(f as unknown as typeof fetch).updateProjectMemberships("p1", {
+      memberships: [{ userId: "u1", membershipStatus: "ACTIVE" }],
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/memberships");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body).memberships).toHaveLength(1);
+  });
+});
