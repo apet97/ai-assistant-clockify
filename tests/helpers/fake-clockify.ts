@@ -16,6 +16,12 @@ import type {
   ExpenseCategorySummary,
 } from "../../src/clockify/ports/expenses.js";
 import type { CustomFieldSummary } from "../../src/clockify/ports/custom-fields.js";
+import type {
+  TimeOffPolicySummary,
+  TimeOffRequestSummary,
+  TimeOffBalanceSummary,
+} from "../../src/clockify/ports/time-off.js";
+import type { HolidaySummary } from "../../src/clockify/ports/holidays.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -34,6 +40,10 @@ export interface FakeWorkspaceSeed {
   webhooks?: EntitySummary[];
   invoices?: InvoiceDetail[];
   customFields?: CustomFieldSummary[];
+  timeOffPolicies?: TimeOffPolicySummary[];
+  timeOffRequests?: TimeOffRequestSummary[];
+  timeOffBalances?: TimeOffBalanceSummary[];
+  holidays?: HolidaySummary[];
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
 }
@@ -55,6 +65,10 @@ export interface FakeWorkspace {
     invoices: InvoiceDetail[];
     invoicePayments: Record<string, InvoicePayment[]>;
     customFields: CustomFieldSummary[];
+    timeOffPolicies: TimeOffPolicySummary[];
+    timeOffRequests: TimeOffRequestSummary[];
+    timeOffBalances: TimeOffBalanceSummary[];
+    holidays: HolidaySummary[];
     deleted: Array<{ entityType: string; id: string }>;
   };
 }
@@ -80,6 +94,10 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),
     invoicePayments: {},
     customFields: [...(seed.customFields ?? [])],
+    timeOffPolicies: [...(seed.timeOffPolicies ?? [])],
+    timeOffRequests: [...(seed.timeOffRequests ?? [])],
+    timeOffBalances: [...(seed.timeOffBalances ?? [])],
+    holidays: [...(seed.holidays ?? [])],
     deleted: [],
   };
   const counts: Record<string, number> = {};
@@ -610,9 +628,125 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       const name = (input.fields?.name as string | undefined) ?? input.id;
       return { id: input.id, name };
     },
-    async manageTimeOff(input) {
-      bump("manageTimeOff");
-      return { id: input.requestId, name: input.decision };
+    async listTimeOffPolicies() {
+      bump("listTimeOffPolicies");
+      return state.timeOffPolicies;
+    },
+    async getTimeOffPolicy(id) {
+      bump("getTimeOffPolicy");
+      return state.timeOffPolicies.find((p) => p.id === id) ?? null;
+    },
+    async createTimeOffPolicy(input) {
+      bump("createTimeOffPolicy");
+      const policy: TimeOffPolicySummary = { id: nextId("pol"), name: input.name, status: "ACTIVE", timeUnit: "DAYS" };
+      state.timeOffPolicies.push(policy);
+      return { id: policy.id, name: policy.name };
+    },
+    async updateTimeOffPolicy(id, patch) {
+      bump("updateTimeOffPolicy");
+      const index = state.timeOffPolicies.findIndex((p) => p.id === id);
+      const base: TimeOffPolicySummary = index >= 0 ? state.timeOffPolicies[index] : { id, name: id };
+      const updated: TimeOffPolicySummary = { ...base, ...(patch.name !== undefined ? { name: patch.name } : {}) };
+      if (index >= 0) state.timeOffPolicies[index] = updated;
+      else state.timeOffPolicies.push(updated);
+      return { id, name: updated.name };
+    },
+    async archiveTimeOffPolicy(id, archived) {
+      bump("archiveTimeOffPolicy");
+      const policy = state.timeOffPolicies.find((p) => p.id === id);
+      if (policy) policy.status = archived ? "ARCHIVED" : "ACTIVE";
+    },
+    async listTimeOffRequests(filter) {
+      bump("listTimeOffRequests");
+      let rows = state.timeOffRequests;
+      if (filter?.status) rows = rows.filter((r) => r.status === filter.status);
+      if (filter?.userId) rows = rows.filter((r) => r.userId === filter.userId);
+      return rows;
+    },
+    async getTimeOffRequest(id) {
+      bump("getTimeOffRequest");
+      return state.timeOffRequests.find((r) => r.id === id) ?? null;
+    },
+    async createTimeOffRequest(policyId, input) {
+      bump("createTimeOffRequest");
+      const req: TimeOffRequestSummary = {
+        id: nextId("tor"),
+        policyId,
+        status: "PENDING",
+        note: input.note,
+        start: input.start,
+        end: input.end,
+      };
+      state.timeOffRequests.push(req);
+      return { id: req.id, name: req.id };
+    },
+    async deleteTimeOffRequest(policyId, requestId) {
+      bump("deleteTimeOffRequest");
+      void policyId;
+      state.timeOffRequests = state.timeOffRequests.filter((r) => r.id !== requestId);
+      state.deleted.push({ entityType: "time_off_request", id: requestId });
+    },
+    async setTimeOffRequestStatus(policyId, requestId, statusType, note) {
+      bump("setTimeOffRequestStatus");
+      void policyId;
+      void note;
+      const req = state.timeOffRequests.find((r) => r.id === requestId);
+      if (req) req.status = statusType;
+      return { id: requestId, name: statusType };
+    },
+    async getTimeOffBalance(userId) {
+      bump("getTimeOffBalance");
+      return state.timeOffBalances.map((b) => ({ ...b, userId }));
+    },
+    async updateTimeOffBalance(policyId, input) {
+      bump("updateTimeOffBalance");
+      void policyId;
+      void input;
+    },
+    async listHolidays() {
+      bump("listHolidays");
+      return state.holidays;
+    },
+    async getHoliday(id) {
+      bump("getHoliday");
+      return state.holidays.find((h) => h.id === id) ?? null;
+    },
+    async listHolidaysInPeriod(input) {
+      bump("listHolidaysInPeriod");
+      void input;
+      return state.holidays;
+    },
+    async createHoliday(input) {
+      bump("createHoliday");
+      const holiday: HolidaySummary = {
+        id: nextId("hol"),
+        name: input.name,
+        startDate: input.startDate,
+        endDate: input.endDate ?? input.startDate,
+        occursAnnually: input.occursAnnually,
+      };
+      state.holidays.push(holiday);
+      return { id: holiday.id, name: holiday.name };
+    },
+    async updateHoliday(id, patch) {
+      bump("updateHoliday");
+      const index = state.holidays.findIndex((h) => h.id === id);
+      const base: HolidaySummary = index >= 0 ? state.holidays[index] : { id, name: id };
+      const updated: HolidaySummary = {
+        ...base,
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.startDate !== undefined ? { startDate: patch.startDate } : {}),
+        ...(patch.endDate !== undefined ? { endDate: patch.endDate } : {}),
+        ...(patch.occursAnnually !== undefined ? { occursAnnually: patch.occursAnnually } : {}),
+      };
+      if (index >= 0) state.holidays[index] = updated;
+      else state.holidays.push(updated);
+      return { id, name: updated.name };
+    },
+    async deleteHoliday(id) {
+      bump("deleteHoliday");
+      state.holidays = state.holidays.filter((h) => h.id !== id);
+      state.deleted.push({ entityType: "holiday", id });
     },
     async manageSchedule(input) {
       bump("manageSchedule");

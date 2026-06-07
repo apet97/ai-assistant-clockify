@@ -9,6 +9,8 @@ import { TAG_ACTIONS } from "./workflows/tags.js";
 import { INVOICE_ACTIONS } from "./workflows/invoices.js";
 import { EXPENSE_ACTIONS } from "./workflows/expenses.js";
 import { CUSTOM_FIELD_ACTIONS } from "./workflows/custom-fields.js";
+import { TIME_OFF_ACTIONS } from "./workflows/time-off.js";
+import { HOLIDAY_ACTIONS } from "./workflows/holidays.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 
 /**
@@ -33,6 +35,8 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...INVOICE_ACTIONS,
   ...EXPENSE_ACTIONS,
   ...CUSTOM_FIELD_ACTIONS,
+  ...TIME_OFF_ACTIONS,
+  ...HOLIDAY_ACTIONS,
   ...ADMIN_ACTIONS,
 ];
 

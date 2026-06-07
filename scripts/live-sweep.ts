@@ -97,6 +97,14 @@ async function main(): Promise<void> {
       console.log(`  removed custom field ${cf.name}`); removed++;
     }
   }
+  // holidays (bare array; plain DELETE)
+  const holResp = (await call("GET", `${ws}/holidays`).catch(() => null)) as any;
+  for (const hol of (Array.isArray(holResp) ? holResp : (holResp?.holidays ?? [])) as any[]) {
+    if (typeof hol?.name === "string" && hol.name.startsWith(PFX)) {
+      await call("DELETE", `${ws}/holidays/${hol.id}`).catch((e) => console.warn(`  holiday ${hol.id}: ${e.message}`));
+      console.log(`  removed holiday ${hol.name}`); removed++;
+    }
+  }
   // tags
   for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
     if (t.name?.startsWith(PFX)) {

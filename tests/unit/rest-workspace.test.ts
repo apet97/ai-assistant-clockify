@@ -290,21 +290,7 @@ describe("rest workspace client", () => {
 
   // (expense create/update/delete are now typed in rest/expenses.ts — see tests/unit/rest-expenses.test.ts)
 
-  it("manageTimeOff PATCHes the request under its policy", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "req1" }));
-    const r = await client(f as any).manageTimeOff!({
-      policyId: "pol1",
-      requestId: "req1",
-      decision: "approve",
-    });
-    expect(r).toEqual({ id: "req1", name: "approve" });
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe(
-      "https://api.clockify.me/api/v1/workspaces/ws-1/time-off/policies/pol1/requests/req1",
-    );
-    expect(init.method).toBe("PATCH");
-    expect(JSON.parse(init.body)).toEqual({ statusType: "APPROVED" });
-  });
+  // (time-off approve/deny are now typed in rest/time-off.ts — see tests/unit/rest-time-off.test.ts)
 
   it("manageSchedule POSTs a publish date range", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "pub1" }));

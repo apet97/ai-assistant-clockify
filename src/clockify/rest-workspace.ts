@@ -8,6 +8,8 @@ import { makeTagRest } from "./rest/tags.js";
 import { makeInvoiceRest } from "./rest/invoices.js";
 import { makeExpenseRest } from "./rest/expenses.js";
 import { makeCustomFieldRest } from "./rest/custom-fields.js";
+import { makeTimeOffRest } from "./rest/time-off.js";
+import { makeHolidayRest } from "./rest/holidays.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -71,6 +73,8 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const invoiceRest = makeInvoiceRest(core, opts.workspaceId);
   const expenseRest = makeExpenseRest(core, opts.workspaceId);
   const customFieldRest = makeCustomFieldRest(core, opts.workspaceId);
+  const timeOffRest = makeTimeOffRest(core, opts.workspaceId);
+  const holidayRest = makeHolidayRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -83,6 +87,8 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...invoiceRest,
     ...expenseRest,
     ...customFieldRest,
+    ...timeOffRest,
+    ...holidayRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;
@@ -171,19 +177,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       const merged = { ...current, ...(fields ?? {}) };
       const updated = (await call("PUT", path, merged)) as { id?: string; name?: string };
       return { id: updated.id ?? id, name: updated.name ?? id };
-    },
-    async manageTimeOff({ policyId, requestId, decision }) {
-      // Approve/deny a time-off request under its policy. NOTE: exercised live as
-      // preview-only (the sac workspace has no GET-able pending request), so the
-      // exact status body is best-effort and covered by the unit test, not a live
-      // round-trip.
-      const statusType = decision === "approve" ? "APPROVED" : "REJECTED";
-      const r = (await call(
-        "PATCH",
-        `${ws}/time-off/policies/${policyId}/requests/${requestId}`,
-        { statusType },
-      )) as { id?: string } | null;
-      return { id: r?.id ?? requestId, name: decision };
     },
     async manageSchedule({ start, end }) {
       // Publish scheduled assignments for a date range. NOTE: exercised live as

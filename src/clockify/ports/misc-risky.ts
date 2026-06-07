@@ -28,12 +28,6 @@ export interface MiscRiskyPort {
     id: string;
     fields?: Record<string, unknown>;
   }): Promise<EntitySummary>;
-  /** Approve/deny a time-off request (risky external side effect — confirm-gated). */
-  manageTimeOff?(input: {
-    policyId: string; // Clockify approves/denies under a specific policy
-    requestId: string;
-    decision: "approve" | "deny";
-  }): Promise<EntitySummary | null>;
   /** Publish a schedule for a date range (risky external side effect — confirm-gated). */
   manageSchedule?(input: {
     operation: "publish";
