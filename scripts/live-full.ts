@@ -334,6 +334,43 @@ async function runEntries(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runEntries);
 
+/**
+ * Phase 3 — Tasks. Creates a project + task, lists/gets, updates, sets a rate
+ * (preview-only — billing), then deletes (mark-DONE-then-delete). Self-cleaning.
+ */
+async function runTasks(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: tasks");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const projName = `AIASSIST_SMOKE_tproj_${h.sfx}`;
+  let projectId: string | undefined;
+  try {
+    const proj = await h.safeWrite("clockify_projects_create", { name: projName, isPublic: true });
+    projectId = proj?.changed?.created?.[0]?.id;
+    if (!projectId) {
+      h.record("clockify_tasks_create", "SKIP", "no project to host the task");
+      return;
+    }
+    const created = await h.safeWrite("clockify_tasks_create", {
+      projectId,
+      name: `AIASSIST_SMOKE_task_${h.sfx}`,
+    });
+    const taskId = created?.changed?.created?.[0]?.id;
+    await h.read("clockify_tasks_list", { projectId });
+    if (taskId) {
+      await h.read("clockify_tasks_get", { projectId, id: taskId });
+      await h.risky("clockify_tasks_update", { projectId, id: taskId, name: `AIASSIST_SMOKE_task_${h.sfx}_v2` });
+      await h.previewOnly("clockify_tasks_rate_update", { projectId, taskId, rateKind: "HOURLY", amount: 40 });
+      await h.risky("clockify_tasks_delete", { projectId, id: taskId, name: "task" });
+    }
+  } finally {
+    if (projectId) {
+      await h.call("PUT", `${wsPath}/projects/${projectId}`, { name: projName, archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/projects/${projectId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runTasks);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
