@@ -575,6 +575,8 @@ async function runExpenses(h: LiveHarness): Promise<void> {
       await h.call("DELETE", `${wsPath}/expenses/${expenseId}`, undefined, true).catch(() => {});
     }
     if (categoryId) {
+      // Categories must be archived before delete (matches live-sweep).
+      await h.call("PATCH", `${wsPath}/expenses/categories/${categoryId}/status`, { archived: true }, true).catch(() => {});
       await h.call("DELETE", `${wsPath}/expenses/categories/${categoryId}`, undefined, true).catch(() => {});
     }
   }

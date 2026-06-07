@@ -54,7 +54,8 @@ function mapExpense(raw: any): ExpenseSummary {
   if (typeof raw.billable === "boolean") out.billable = raw.billable;
   if (raw.projectId !== undefined) out.projectId = raw.projectId;
   if (raw.taskId !== undefined) out.taskId = raw.taskId;
-  if (typeof raw.amount === "number") out.amount = raw.amount;
+  if (typeof raw.total === "number") out.total = raw.total; // MINOR units
+  if (typeof raw.quantity === "number") out.quantity = raw.quantity;
   return out;
 }
 

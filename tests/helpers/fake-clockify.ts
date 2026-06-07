@@ -370,7 +370,9 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
         date: input.date,
         categoryId: input.categoryId,
         billable: input.billable,
-        amount: input.amountMinor,
+        // The create amount is per-unit; the fake uses quantity 1, so total = amountMinor.
+        total: input.amountMinor,
+        quantity: 1,
       };
       state.expenses.push(expense);
       return { id: expense.id, name: expense.name };
@@ -386,7 +388,7 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
           ...(input.date !== undefined ? { date: input.date } : {}),
           ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
           ...(input.billable !== undefined ? { billable: input.billable } : {}),
-          ...(input.amountMinor !== undefined ? { amount: input.amountMinor } : {}),
+          ...(input.amountMinor !== undefined ? { total: input.amountMinor } : {}),
         };
         state.expenses[index] = updated;
         return { id, name: updated.name };

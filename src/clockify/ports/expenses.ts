@@ -8,8 +8,9 @@ export interface ExpenseFilter {
 
 /**
  * Compact expense view. `name` is the expense `notes` (expenses have no name),
- * falling back to the id. `amount` is passed through as Clockify returns it
- * (major currency units on this surface) — informational only.
+ * falling back to the id. Clockify returns the monetary value as `total` (MINOR
+ * units, = per-unit amount × quantity) and `quantity` — there is no `amount`
+ * field on read; both are informational.
  */
 export interface ExpenseSummary extends EntitySummary {
   notes?: string;
@@ -19,7 +20,9 @@ export interface ExpenseSummary extends EntitySummary {
   billable?: boolean;
   projectId?: string;
   taskId?: string;
-  amount?: number;
+  /** Monetary total in MINOR units (cents), as Clockify returns it. */
+  total?: number;
+  quantity?: number;
 }
 
 export interface ExpenseCategorySummary extends EntitySummary {
