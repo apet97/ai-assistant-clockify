@@ -401,6 +401,32 @@ async function runClients(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runClients);
 
+/**
+ * Phase 5 — Tags. Create → list → get → update → delete. Self-cleaning.
+ */
+async function runTags(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: tags");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_atag_${h.sfx}`;
+  let tagId: string | undefined;
+  try {
+    const created = await h.safeWrite("clockify_tags_create", { name });
+    tagId = created?.changed?.created?.[0]?.id;
+    await h.read("clockify_tags_list", { name: "AIASSIST_SMOKE_atag" });
+    if (tagId) {
+      await h.read("clockify_tags_get", { id: tagId });
+      await h.risky("clockify_tags_update", { id: tagId, name: `${name}_v2` });
+      const del = await h.risky("clockify_tags_delete", { id: tagId, name: `${name}_v2` });
+      if (del) tagId = undefined;
+    }
+  } finally {
+    if (tagId) {
+      await h.call("DELETE", `${wsPath}/tags/${tagId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runTags);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;

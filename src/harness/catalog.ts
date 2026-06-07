@@ -5,6 +5,7 @@ import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
 import { PROJECT_ACTIONS } from "./workflows/projects.js";
 import { TASK_ACTIONS } from "./workflows/tasks.js";
 import { CLIENT_ACTIONS } from "./workflows/clients.js";
+import { TAG_ACTIONS } from "./workflows/tags.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 
 /**
@@ -25,6 +26,7 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...PROJECT_ACTIONS,
   ...TASK_ACTIONS,
   ...CLIENT_ACTIONS,
+  ...TAG_ACTIONS,
   ...ADMIN_ACTIONS,
 ];
 

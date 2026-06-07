@@ -59,6 +59,19 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed tag actions (Phase 5)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_tags_list",
+      "clockify_tags_get",
+      "clockify_tags_create",
+      "clockify_tags_update",
+      "clockify_tags_delete",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed client actions (Phase 4)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [

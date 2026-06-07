@@ -1,9 +1,20 @@
 import type { EntitySummary } from "../client.js";
 
+/** List filter for tags (name / archived). */
+export interface TagFilter {
+  name?: string;
+  archived?: boolean;
+}
+
 /**
- * Tag slice of the {@link WorkspaceClient} port (goclmcp §2.5).
+ * Tag slice of the {@link WorkspaceClient} port (goclmcp §2.5). `updateTag` is
+ * fetch-then-merge (PUT replaces, requires `name`); tags delete with a plain
+ * DELETE (no archive step needed).
  */
 export interface TagPort {
-  listTags(): Promise<EntitySummary[]>;
+  listTags(filter?: TagFilter): Promise<EntitySummary[]>;
+  getTag(id: string): Promise<EntitySummary | null>;
   createTag(input: { name: string }): Promise<EntitySummary>;
+  updateTag(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
+  deleteTag(id: string): Promise<void>;
 }
