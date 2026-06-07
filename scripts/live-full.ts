@@ -866,6 +866,28 @@ async function runUsers(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runUsers);
 
+/**
+ * Phase 14 — Reports (multi-host). summary/detailed/weekly run real reads on the
+ * REPORTS host via the API key (Phase-0 spike confirmed the host is reachable).
+ * The production add-on-token clearance is unverified (no LIVE_ADDON_TOKEN) — these
+ * are recorded best-effort so a host-auth difference is SKIP, not a gate failure.
+ */
+async function runReports(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: reports");
+  const range = { dateRangeStart: "2026-06-01T00:00:00.000", dateRangeEnd: "2026-06-30T23:59:59.999" };
+  // The weekly report requires EXACTLY a 7-day range.
+  const week = { dateRangeStart: "2026-06-01T00:00:00.000", dateRangeEnd: "2026-06-07T23:59:59.999" };
+  for (const action of ["clockify_reports_summary", "clockify_reports_detailed", "clockify_reports_weekly"]) {
+    try {
+      const r: any = await executeAction({ actionName: action, args: action === "clockify_reports_weekly" ? week : range, context: h.ctx });
+      h.record(action, r.kind === "receipt" && r.receipt.ok ? "PASS" : "SKIP", r.receipt?.ok ? `bytes:${r.receipt.data?.bytes ?? "?"}` : `report unavailable: ${r.receipt?.code ?? r.kind}`);
+    } catch (e) {
+      h.record(action, "SKIP", `reports host: ${err(e)}`);
+    }
+  }
+}
+AREA_RUNNERS.push(runReports);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({

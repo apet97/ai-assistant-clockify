@@ -15,6 +15,7 @@ import { SCHEDULING_ACTIONS } from "./workflows/scheduling.js";
 import { APPROVAL_ACTIONS } from "./workflows/approvals.js";
 import { WEBHOOK_ACTIONS } from "./workflows/webhooks.js";
 import { USER_GROUP_ACTIONS } from "./workflows/users.js";
+import { REPORT_ACTIONS } from "./workflows/reports.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 
 /**
@@ -45,6 +46,7 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...APPROVAL_ACTIONS,
   ...WEBHOOK_ACTIONS,
   ...USER_GROUP_ACTIONS,
+  ...REPORT_ACTIONS,
   ...ADMIN_ACTIONS,
 ];
 

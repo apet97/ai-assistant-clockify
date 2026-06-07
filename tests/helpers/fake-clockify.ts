@@ -896,6 +896,18 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       void range;
       return { userId };
     },
+    async summaryReport(range, groups) {
+      bump("summaryReport");
+      return { type: "summary", range, groups: groups ?? ["PROJECT"], totals: [] };
+    },
+    async detailedReport(range) {
+      bump("detailedReport");
+      return { type: "detailed", range, timeentries: [] };
+    },
+    async weeklyReport(range) {
+      bump("weeklyReport");
+      return { type: "weekly", range };
+    },
     async listApprovals(filter) {
       bump("listApprovals");
       return filter?.status ? state.approvals.filter((a) => a.state === filter.status) : state.approvals;
