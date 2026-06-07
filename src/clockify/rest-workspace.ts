@@ -4,6 +4,7 @@ import { makeProjectRest } from "./rest/projects.js";
 import { makeTimeEntryRest } from "./rest/time-entries.js";
 import { makeTaskRest } from "./rest/tasks.js";
 import { makeClientRest } from "./rest/clients.js";
+import { makeTagRest } from "./rest/tags.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -69,6 +70,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);
   const taskRest = makeTaskRest(core, opts.workspaceId);
   const clientRest = makeClientRest(core, opts.workspaceId);
+  const tagRest = makeTagRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -77,18 +79,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...timeEntryRest,
     ...taskRest,
     ...clientRest,
-    async listTags() {
-      const rows = (await call("GET", `${ws}/tags?page-size=200&archived=false`)) as Array<{
-        id: string;
-        name: string;
-        archived?: boolean;
-      }>;
-      return rows.map((t): EntitySummary => ({ id: t.id, name: t.name, archived: t.archived }));
-    },
-    async createTag({ name }) {
-      const t = (await call("POST", `${ws}/tags`, { name })) as { id: string; name: string };
-      return { id: t.id, name: t.name };
-    },
+    ...tagRest,
     async listExpenses() {
       // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
       // weeklyTotals} — double-nested. Items use `notes` (no `name`). Tolerate a
@@ -131,8 +122,11 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         await clientRest.deleteClient(id); // archive-then-delete
         return;
       }
+      if (entityType === "tag") {
+        await tagRest.deleteTag(id);
+        return;
+      }
       const pathByType: Record<string, string> = {
-        tag: `${ws}/tags/${id}`,
         time_entry: `${ws}/time-entries/${id}`,
       };
       const path = pathByType[entityType];
