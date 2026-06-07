@@ -231,6 +231,57 @@ function err(e: unknown): string {
   return (e instanceof Error ? e.message : String(e)).slice(0, 160);
 }
 
+/**
+ * Phase 2 — Projects. Exercises the typed project actions through the real
+ * harness against the sacrificial workspace: create → list → get → update →
+ * archive → delete (self-cleaning). Rate/estimate/memberships are preview-only
+ * (rate has billing side effects; estimate/memberships need specific setup) —
+ * their request shapes are pinned by mocked-fetch unit tests.
+ */
+async function runProjects(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: projects");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_project_${h.sfx}`;
+  let projectId: string | undefined;
+  try {
+    const created = await h.safeWrite("clockify_projects_create", { name, isPublic: true });
+    projectId = created?.changed?.created?.[0]?.id;
+    await h.read("clockify_projects_list", { name: "AIASSIST_SMOKE_project" });
+    if (projectId) {
+      await h.read("clockify_projects_get", { id: projectId });
+      await h.risky("clockify_projects_update", { id: projectId, name: `${name}_renamed` });
+      // Preview-only (no live commit by design):
+      await h.previewOnly("clockify_projects_rate_update", {
+        projectId,
+        userId: h.ctx.adminUserId,
+        rateKind: "HOURLY",
+        amount: 50,
+      });
+      await h.previewOnly("clockify_projects_estimate_update", {
+        id: projectId,
+        fields: { timeEstimate: { active: true, estimate: "PT8H", type: "MANUAL" } },
+      });
+      await h.previewOnly("clockify_projects_memberships_update", {
+        id: projectId,
+        memberships: [{ userId: h.ctx.adminUserId, membershipStatus: "ACTIVE" }],
+      });
+      await h.risky("clockify_projects_archive", { id: projectId, name: `${name}_renamed` });
+      const del = await h.risky("clockify_projects_delete", { id: projectId, name: `${name}_renamed` });
+      if (del) projectId = undefined; // deleted; nothing to clean up
+    }
+    // No project-template fixture on the sacrificial workspace.
+    h.record("clockify_projects_from_template", "SKIP", "no template fixture on sac workspace");
+  } finally {
+    if (projectId) {
+      await h
+        .call("PUT", `${wsPath}/projects/${projectId}`, { name: `${name}_renamed`, archived: true }, true)
+        .catch(() => {});
+      await h.call("DELETE", `${wsPath}/projects/${projectId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runProjects);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
