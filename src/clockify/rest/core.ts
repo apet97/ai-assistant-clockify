@@ -46,6 +46,8 @@ export interface RestCore {
     path: string,
     fields: Record<string, string | Blob>,
   ): Promise<unknown>;
+  /** GET a binary body (e.g. an invoice/report export) as raw bytes + content type. */
+  getBinary(host: ClockifyHost, path: string): Promise<{ contentType: string; bytes: Uint8Array }>;
 }
 
 /** Page size used by `paginate`; Clockify's per-page cap for list endpoints. */
@@ -138,5 +140,18 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return call(host, "POST", path, form);
   }
 
-  return { call, paginate, getThenPut, postForm };
+  async function getBinary(
+    host: ClockifyHost,
+    path: string,
+  ): Promise<{ contentType: string; bytes: Uint8Array }> {
+    const res = await doFetch(`${hosts[host]}${path}`, { method: "GET", headers: { ...authHeader } });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Clockify GET ${path} -> ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
+  }
+
+  return { call, paginate, getThenPut, postForm, getBinary };
 }

@@ -427,6 +427,106 @@ async function runTags(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runTags);
 
+// Export is best-effort: PDF export can depend on the workspace plan, so a
+// non-ok response is recorded SKIP (not FAIL) rather than failing the gate.
+async function exportInvoiceBestEffort(h: LiveHarness, invoiceId: string): Promise<void> {
+  try {
+    const r: any = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: invoiceId },
+      context: h.ctx,
+    });
+    if (r.kind === "receipt" && r.receipt.ok) {
+      h.record("clockify_invoices_export", "PASS", `pdf ${r.receipt.data?.bytes ?? "?"}b`);
+    } else {
+      h.record("clockify_invoices_export", "SKIP", `export not available: ${r.receipt?.code ?? r.kind}`);
+    }
+  } catch (e) {
+    h.record("clockify_invoices_export", "SKIP", `export threw: ${err(e)}`);
+  }
+}
+
+/**
+ * Phase 6 — Invoices. Creates a client + invoice, exercises the reads
+ * (list/get/items_list/payments_list), updates the note (real clean-body PUT),
+ * then deletes the invoice (self-cleaning create→delete round-trip). Item /
+ * payment / import mutations are preview-only by design — a live commit needs a
+ * valid `itemType` from the workspace invoice settings, a payable invoice, and
+ * billable entries in range; their request shapes are pinned by mocked-fetch
+ * unit tests. Export is best-effort (plan-dependent). If the workspace plan
+ * rejects invoice creation, the area records SKIP and leaves no leftovers.
+ */
+async function runInvoices(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: invoices");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const issuedDate = new Date().toISOString();
+  const dueDate = new Date(Date.now() + 30 * 86_400_000).toISOString();
+  const clientName = `AIASSIST_SMOKE_iclient_${h.sfx}`;
+  const number = `AIASSIST_SMOKE_inv_${h.sfx}`;
+  let clientId: string | undefined;
+  let invoiceId: string | undefined;
+  try {
+    const client = await h.safeWrite("clockify_clients_create", { name: clientName });
+    clientId = client?.changed?.created?.[0]?.id;
+    if (!clientId) {
+      h.record("clockify_invoices_create", "SKIP", "no client to bill");
+      return;
+    }
+    const created = await h.risky("clockify_invoices_create", {
+      clientId,
+      clientName,
+      number,
+      issuedDate,
+      currency: h.fixtures.currency,
+      dueDate,
+    });
+    invoiceId = created?.changed?.created?.[0]?.id;
+    if (!invoiceId) {
+      // The workspace plan may reject invoice creation — SKIP, no leftovers.
+      h.record("clockify_invoices_get", "SKIP", "invoice not created (workspace plan?)");
+      return;
+    }
+    await h.read("clockify_invoices_list", {});
+    await h.read("clockify_invoices_get", { id: invoiceId });
+    await h.read("clockify_invoices_items_list", { id: invoiceId });
+    await h.read("clockify_invoices_payments_list", { id: invoiceId });
+    await exportInvoiceBestEffort(h, invoiceId);
+    // Real update: clean-body GET-then-PUT changing only the note.
+    await h.risky("clockify_invoices_update", { id: invoiceId, note: `AIASSIST_SMOKE note ${h.sfx}` });
+    // Sub-resource mutations: preview-only by design (see runInvoices doc).
+    await h.previewOnly("clockify_invoices_items_add", {
+      invoiceId,
+      itemType: "AIASSIST_SMOKE",
+      description: "smoke item",
+      quantity: 1,
+      unitPrice: 1,
+    });
+    await h.previewOnly("clockify_invoices_items_delete", { invoiceId, index: 0 });
+    await h.previewOnly("clockify_invoices_payments_create", {
+      invoiceId,
+      amount: 1,
+      paymentDate: issuedDate,
+    });
+    await h.previewOnly("clockify_invoices_payments_delete", { invoiceId, paymentId: "smoke-nonexistent" });
+    await h.previewOnly("clockify_invoices_import_time", {
+      invoiceId,
+      from: "2030-01-01T00:00:00Z",
+      to: "2030-01-07T00:00:00Z",
+    });
+    const del = await h.risky("clockify_invoices_delete", { id: invoiceId, number });
+    if (del) invoiceId = undefined;
+  } finally {
+    if (invoiceId) {
+      await h.call("DELETE", `${wsPath}/invoices/${invoiceId}`, undefined, true).catch(() => {});
+    }
+    if (clientId) {
+      await h.call("PUT", `${wsPath}/clients/${clientId}`, { name: clientName, archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/clients/${clientId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runInvoices);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
@@ -492,7 +592,6 @@ async function main(): Promise<void> {
     tagId?: string;
     entryIds: string[];
     webhookId?: string;
-    invoiceId?: string;
   } = { entryIds: [] };
 
   try {
@@ -579,19 +678,8 @@ async function main(): Promise<void> {
       if (del) ids.webhookId = undefined; // deleted
     }
 
-    // invoice create (billing) — capture id; a draft invoice is deletable, so it
-    // is removed in cleanup (full create→delete round-trip).
-    if (ids.clientId) {
-      const inv = await risky(ctx, "clockify_prepare_invoice", {
-        clientId: ids.clientId,
-        clientName: names.client,
-        title: `AIASSIST_SMOKE_inv_${sfx}`,
-        currency,
-      });
-      ids.invoiceId = inv?.changed?.created?.[0]?.id;
-    } else {
-      record("clockify_prepare_invoice", "SKIP", "no client id");
-    }
+    // invoices are exercised by the dedicated runInvoices area runner below
+    // (typed create→reads→update→delete round-trip, self-cleaning).
 
     // update_entity (project rename) — real fetch-then-merge PUT.
     if (ids.projectId) {
@@ -671,17 +759,6 @@ async function main(): Promise<void> {
         console.log(`  deleted leftover webhook ${ids.webhookId}`);
       } catch (e) {
         console.warn(`  WARN webhook ${ids.webhookId}: ${err(e)}`);
-      }
-    }
-    // Delete the invoice BEFORE its client (an active client referenced by an
-    // invoice cannot be removed cleanly).
-    if (ids.invoiceId) {
-      try {
-        await call("DELETE", `${ws}/invoices/${ids.invoiceId}`, undefined, true);
-        console.log(`  deleted invoice ${ids.invoiceId}`);
-        ids.invoiceId = undefined;
-      } catch (e) {
-        console.warn(`  WARN invoice ${ids.invoiceId} leftover: ${err(e)}`);
       }
     }
     if (ids.projectId) {

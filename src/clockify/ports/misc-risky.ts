@@ -2,23 +2,15 @@ import type { EntitySummary } from "../client.js";
 
 /**
  * Transitional slice holding the current GENERIC risky-write methods (delete /
- * invoice / webhook / entity-update / expense / time-off / schedule). Each is
- * optional (`?`) — they execute only at confirm time, after a button
- * confirmation. As each feature-area phase lands, its typed methods supersede
- * the matching generic method here, and the generic one is removed.
+ * webhook / entity-update / expense / time-off / schedule). Each is optional
+ * (`?`) — they execute only at confirm time, after a button confirmation. As
+ * each feature-area phase lands, its typed methods supersede the matching
+ * generic method here, and the generic one is removed. (Invoices were superseded
+ * by the typed `InvoicePort` in Phase 6.)
  */
 export interface MiscRiskyPort {
   /** Risky-write methods (used only at confirm time, after button confirmation). */
   deleteEntity?(input: { entityType: string; id: string }): Promise<void>;
-  createInvoice?(input: {
-    clientId: string;
-    title?: string;
-    /** Clockify requires number/issuedDate/currency/dueDate on invoice create. */
-    number?: string;
-    issuedDate?: string; // YYYY-MM-DD
-    dueDate?: string; // YYYY-MM-DD
-    currency?: string; // ISO code, e.g. "USD"
-  }): Promise<EntitySummary>;
   manageWebhook?(input: {
     operation: "create" | "update" | "delete";
     id?: string;

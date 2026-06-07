@@ -72,6 +72,29 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed invoice actions (Phase 6)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_invoices_list",
+      "clockify_invoices_get",
+      "clockify_invoices_create",
+      "clockify_invoices_update",
+      "clockify_invoices_delete",
+      "clockify_invoices_items_list",
+      "clockify_invoices_items_add",
+      "clockify_invoices_items_delete",
+      "clockify_invoices_payments_list",
+      "clockify_invoices_payments_create",
+      "clockify_invoices_payments_delete",
+      "clockify_invoices_import_time",
+      "clockify_invoices_export",
+    ]) {
+      expect(names).toContain(required);
+    }
+    // the generic prepare_invoice was superseded by clockify_invoices_create
+    expect(names).not.toContain("clockify_prepare_invoice");
+  });
+
   it("includes the typed client actions (Phase 4)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [

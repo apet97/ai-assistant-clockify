@@ -5,6 +5,12 @@ import type {
   TimeEntrySummary,
   WorkspaceClient,
 } from "../../src/clockify/client.js";
+import type {
+  InvoiceDetail,
+  InvoiceItem,
+  InvoicePayment,
+  InvoiceSummary,
+} from "../../src/clockify/ports/invoices.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -20,6 +26,7 @@ export interface FakeWorkspaceSeed {
   expenses?: EntitySummary[];
   users?: EntitySummary[];
   webhooks?: EntitySummary[];
+  invoices?: InvoiceDetail[];
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
 }
@@ -37,6 +44,8 @@ export interface FakeWorkspace {
     expenses: EntitySummary[];
     users: EntitySummary[];
     webhooks: EntitySummary[];
+    invoices: InvoiceDetail[];
+    invoicePayments: Record<string, InvoicePayment[]>;
     deleted: Array<{ entityType: string; id: string }>;
   };
 }
@@ -58,6 +67,8 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     expenses: [...(seed.expenses ?? [])],
     users: [...(seed.users ?? [])],
     webhooks: [...(seed.webhooks ?? [])],
+    invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),
+    invoicePayments: {},
     deleted: [],
   };
   const counts: Record<string, number> = {};
@@ -354,9 +365,105 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       }
       state.deleted.push(input);
     },
+    async listInvoices(filter) {
+      bump("listInvoices");
+      const rows = filter?.status
+        ? state.invoices.filter((i) => i.status === filter.status)
+        : state.invoices;
+      return rows.map((inv): InvoiceSummary => {
+        const { items: _items, ...summary } = inv;
+        void _items;
+        return summary;
+      });
+    },
+    async getInvoice(id) {
+      bump("getInvoice");
+      return state.invoices.find((i) => i.id === id) ?? null;
+    },
+    async listInvoiceItems(id) {
+      bump("listInvoiceItems");
+      return state.invoices.find((i) => i.id === id)?.items ?? [];
+    },
+    async listInvoicePayments(id) {
+      bump("listInvoicePayments");
+      return state.invoicePayments[id] ?? [];
+    },
+    async exportInvoice(id) {
+      bump("exportInvoice");
+      void id;
+      return { contentType: "application/pdf", bytes: 4, base64: "JVBERg==", truncated: false };
+    },
     async createInvoice(input) {
       bump("createInvoice");
-      return { id: nextId("invoice"), name: input.title ?? `Invoice for ${input.clientId}` };
+      const invoice: InvoiceDetail = {
+        id: nextId("invoice"),
+        number: input.number,
+        clientId: input.clientId,
+        currency: input.currency,
+        status: "UNSENT",
+        items: [],
+      };
+      state.invoices.push(invoice);
+      return { id: invoice.id, name: invoice.number ?? invoice.id };
+    },
+    async updateInvoice(id, { patch, status }) {
+      bump("updateInvoice");
+      const index = state.invoices.findIndex((i) => i.id === id);
+      if (index >= 0) {
+        const base = state.invoices[index];
+        state.invoices[index] = {
+          ...base,
+          ...(patch ?? {}),
+          ...(status ? { status } : {}),
+        } as InvoiceDetail;
+        return { id, name: state.invoices[index].number ?? id };
+      }
+      return { id, name: id };
+    },
+    async deleteInvoice(id) {
+      bump("deleteInvoice");
+      state.invoices = state.invoices.filter((i) => i.id !== id);
+      delete state.invoicePayments[id];
+      state.deleted.push({ entityType: "invoice", id });
+    },
+    async addInvoiceItem(id, item) {
+      bump("addInvoiceItem");
+      const invoice = state.invoices.find((i) => i.id === id);
+      if (invoice) {
+        const line: InvoiceItem = {
+          order: invoice.items.length,
+          description: item.description,
+          quantity: item.quantity,
+          unitPrice: item.unitPriceMinor,
+          itemType: item.itemType,
+        };
+        invoice.items.push(line);
+      }
+    },
+    async deleteInvoiceItem(id, index) {
+      bump("deleteInvoiceItem");
+      const invoice = state.invoices.find((i) => i.id === id);
+      if (invoice) invoice.items = invoice.items.filter((it) => it.order !== index);
+    },
+    async createInvoicePayment(id, payment) {
+      bump("createInvoicePayment");
+      const record: InvoicePayment = {
+        id: nextId("pay"),
+        amount: payment.amountMinor,
+        note: payment.note,
+        paymentDate: payment.paymentDate,
+      };
+      (state.invoicePayments[id] ??= []).push(record);
+      return record;
+    },
+    async deleteInvoicePayment(id, paymentId) {
+      bump("deleteInvoicePayment");
+      state.invoicePayments[id] = (state.invoicePayments[id] ?? []).filter((p) => p.id !== paymentId);
+    },
+    async importInvoiceTime(id, range) {
+      bump("importInvoiceTime");
+      void id;
+      void range;
     },
     async manageWebhook(input) {
       bump("manageWebhook");

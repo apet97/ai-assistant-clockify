@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
@@ -11,15 +11,6 @@ import type { RiskLabel } from "../risk.js";
  * in `commit`, which the harness runs after a button confirmation. Permission
  * changes are not Clockify writes — they use a button save and no dry-run.
  */
-
-/** Today as YYYY-MM-DD using the injectable clock (deterministic in tests). */
-function todayYmd(ctx: ActionContext): string {
-  return (ctx.now ?? (() => new Date()))().toISOString().slice(0, 10);
-}
-/** Add whole days to a YYYY-MM-DD date, returning YYYY-MM-DD. */
-function addDaysYmd(ymd: string, days: number): string {
-  return new Date(Date.parse(`${ymd}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
-}
 
 const DELETABLE_ENTITY_TYPES = [
   "project",
@@ -94,82 +85,6 @@ const deleteEntity = defineAction({
       entity: payload.entityType,
       ids: { workspaceId: ctx.workspaceId },
       changed: { deleted: [{ type: payload.entityType, id: payload.id, name: payload.name }] },
-    });
-  },
-});
-
-const prepareInvoice = defineAction({
-  name: "clockify_prepare_invoice",
-  description: "Prepare a draft invoice for a client. Billing action — previews first.",
-  featureGroup: "invoices",
-  risks: ["billing"],
-  schema: z.object({
-    clientId: z.string().min(1),
-    clientName: z.string().optional(),
-    title: z.string().optional(),
-    // Clockify requires number/issuedDate/currency/dueDate; the handler fills
-    // sensible defaults (issuedDate=today, dueDate=+30d, currency=USD) when omitted.
-    number: z.string().optional(),
-    issuedDate: z.string().optional(), // YYYY-MM-DD
-    dueDate: z.string().optional(), // YYYY-MM-DD
-    currency: z.string().optional(), // ISO code, e.g. "USD"
-  }),
-  async handler(ctx, args) {
-    const issuedDate = args.issuedDate ?? todayYmd(ctx);
-    const dueDate = args.dueDate ?? addDaysYmd(issuedDate, 30);
-    const number = args.number ?? args.title ?? `INV-${issuedDate}`;
-    const currency = args.currency ?? "USD";
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Prepare draft invoice",
-        featureGroup: "invoices",
-        riskLabels: ["billing"],
-        targets: [{ type: "client", id: args.clientId, name: args.clientName }],
-        expectedChanges: [
-          `Create draft invoice ${number} for ${args.clientName ?? args.clientId}`,
-          `Issued ${issuedDate}, due ${dueDate}, ${currency}`,
-        ],
-        reversibility: "You can delete the draft invoice afterward.",
-        warnings: ["This creates a billing document."],
-      },
-      operation: {
-        actionName: "clockify_prepare_invoice",
-        featureGroup: "invoices",
-        risks: ["billing"],
-        payload: { clientId: args.clientId, title: args.title, number, issuedDate, dueDate, currency },
-      },
-    };
-  },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
-      clientId: string;
-      title?: string;
-      number?: string;
-      issuedDate?: string;
-      dueDate?: string;
-      currency?: string;
-    };
-    if (!ctx.clockify.createInvoice) {
-      return errorReceipt({
-        action: "clockify_prepare_invoice",
-        code: "unsupported",
-        message: "Invoice creation is not supported by the configured Clockify client.",
-      });
-    }
-    const invoice = await ctx.clockify.createInvoice({
-      clientId: payload.clientId,
-      title: payload.title,
-      number: payload.number,
-      issuedDate: payload.issuedDate,
-      dueDate: payload.dueDate,
-      currency: payload.currency,
-    });
-    return successReceipt({
-      action: "clockify_prepare_invoice",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "invoice", id: invoice.id, name: invoice.name }] },
     });
   },
 });
@@ -599,7 +514,6 @@ const showPermissions = defineAction({
 
 export const ADMIN_ACTIONS: ActionDefinition[] = [
   deleteEntity,
-  prepareInvoice,
   manageWebhook,
   updatePermissions,
   updateEntity,

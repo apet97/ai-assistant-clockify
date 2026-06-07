@@ -5,6 +5,7 @@ import { makeTimeEntryRest } from "./rest/time-entries.js";
 import { makeTaskRest } from "./rest/tasks.js";
 import { makeClientRest } from "./rest/clients.js";
 import { makeTagRest } from "./rest/tags.js";
+import { makeInvoiceRest } from "./rest/invoices.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -71,6 +72,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const taskRest = makeTaskRest(core, opts.workspaceId);
   const clientRest = makeClientRest(core, opts.workspaceId);
   const tagRest = makeTagRest(core, opts.workspaceId);
+  const invoiceRest = makeInvoiceRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -80,6 +82,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...taskRest,
     ...clientRest,
     ...tagRest,
+    ...invoiceRest,
     async listExpenses() {
       // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
       // weeklyTotals} — double-nested. Items use `notes` (no `name`). Tolerate a
@@ -126,24 +129,16 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         await tagRest.deleteTag(id);
         return;
       }
+      if (entityType === "invoice") {
+        await invoiceRest.deleteInvoice(id);
+        return;
+      }
       const pathByType: Record<string, string> = {
         time_entry: `${ws}/time-entries/${id}`,
       };
       const path = pathByType[entityType];
       if (!path) throw new Error(`delete not supported for entity type: ${entityType}`);
       await call("DELETE", path);
-    },
-    async createInvoice({ clientId, title, number, issuedDate, dueDate, currency }) {
-      // Clockify create requires number/issuedDate/currency/dueDate alongside the
-      // client; the action handler fills defaults so a sparse call still works.
-      const inv = (await call("POST", `${ws}/invoices`, {
-        clientId,
-        number: number ?? title,
-        issuedDate: toClockifyDate(issuedDate),
-        dueDate: toClockifyDate(dueDate),
-        currency,
-      })) as { id: string; number?: string };
-      return { id: inv.id, name: inv.number ?? number ?? "invoice" };
     },
     async manageWebhook(input) {
       if (input.operation === "delete") {

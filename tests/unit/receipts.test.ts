@@ -50,7 +50,7 @@ describe("receipts", () => {
 
   it("error receipt preserves a provided recovery hint", () => {
     const receipt = errorReceipt({
-      action: "clockify_prepare_invoice",
+      action: "clockify_invoices_create",
       code: "policy_denied",
       message: "denied",
       recovery: { hint: "Ask me to enable billing writes.", retryable: true },

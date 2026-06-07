@@ -127,6 +127,30 @@ describe("rest core host routing + auth", () => {
     expect(putBody).toEqual({ id: "p1", name: "New", color: "#fff" }); // merged
   });
 
+  it("getBinary GETs raw bytes + content-type and throws on a non-ok status", async () => {
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+    const fetchImpl = vi.fn(
+      async () => new Response(pdf.buffer as ArrayBuffer, { status: 200, headers: { "content-type": "application/pdf" } }),
+    );
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const out = await core.getBinary("api", "/workspaces/ws-1/invoices/inv1/export?format=PDF");
+    expect(out.contentType).toBe("application/pdf");
+    expect(Array.from(out.bytes)).toEqual([0x25, 0x50, 0x44, 0x46]);
+    const [, init] = (fetchImpl as any).mock.calls[0];
+    expect(init.headers["X-Api-Key"]).toBe("k");
+
+    const bad = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () => res({ message: "boom" }, 500)) as unknown as typeof fetch,
+    });
+    await expect(bad.getBinary("api", "/x")).rejects.toThrow(/500/);
+  });
+
   it("postForm sends a FormData body without a JSON content-type", async () => {
     const fetchImpl = vi.fn(async () => res({ id: "x1" }));
     const core = createRestCore({
