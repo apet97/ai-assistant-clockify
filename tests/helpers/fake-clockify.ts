@@ -23,6 +23,7 @@ import type {
 } from "../../src/clockify/ports/time-off.js";
 import type { HolidaySummary } from "../../src/clockify/ports/holidays.js";
 import type { AssignmentSummary } from "../../src/clockify/ports/scheduling.js";
+import type { ApprovalSummary } from "../../src/clockify/ports/approvals.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -46,6 +47,7 @@ export interface FakeWorkspaceSeed {
   timeOffBalances?: TimeOffBalanceSummary[];
   holidays?: HolidaySummary[];
   assignments?: AssignmentSummary[];
+  approvals?: ApprovalSummary[];
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
 }
@@ -72,6 +74,7 @@ export interface FakeWorkspace {
     timeOffBalances: TimeOffBalanceSummary[];
     holidays: HolidaySummary[];
     assignments: AssignmentSummary[];
+    approvals: ApprovalSummary[];
     deleted: Array<{ entityType: string; id: string }>;
   };
 }
@@ -102,6 +105,7 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     timeOffBalances: [...(seed.timeOffBalances ?? [])],
     holidays: [...(seed.holidays ?? [])],
     assignments: [...(seed.assignments ?? [])],
+    approvals: [...(seed.approvals ?? [])],
     deleted: [],
   };
   const counts: Record<string, number> = {};
@@ -806,6 +810,33 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       bump("getUserScheduleTotals");
       void range;
       return { userId };
+    },
+    async listApprovals(filter) {
+      bump("listApprovals");
+      return filter?.status ? state.approvals.filter((a) => a.state === filter.status) : state.approvals;
+    },
+    async getApproval(id) {
+      bump("getApproval");
+      return state.approvals.find((a) => a.id === id) ?? null;
+    },
+    async submitApproval(input) {
+      bump("submitApproval");
+      const a: ApprovalSummary = { id: nextId("ap"), state: "PENDING", periodStart: input.periodStart };
+      state.approvals.push(a);
+      return { id: a.id, name: a.id };
+    },
+    async setApprovalState(id, st, note) {
+      bump("setApprovalState");
+      void note;
+      const a = state.approvals.find((x) => x.id === id);
+      if (a) a.state = st;
+      return { id, name: st };
+    },
+    async resubmitApproval(id, entryIds, note) {
+      bump("resubmitApproval");
+      void entryIds;
+      void note;
+      return { id, name: "resubmitted" };
     },
   };
 
