@@ -14,6 +14,7 @@ import type {
   ApprovalPort,
   ReportPort,
   AuditPort,
+  WorkspacePort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
@@ -107,6 +108,7 @@ export interface WorkspaceClient
     ApprovalPort,
     ReportPort,
     AuditPort,
+    WorkspacePort,
     UserPort,
     WebhookPort,
     MiscRiskyPort {}
@@ -128,6 +130,7 @@ export type {
   ApprovalPort,
   ReportPort,
   AuditPort,
+  WorkspacePort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
