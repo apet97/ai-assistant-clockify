@@ -1,7 +1,8 @@
-import type { WorkspaceClient, EntitySummary, TaskSummary } from "./client.js";
+import type { WorkspaceClient, EntitySummary } from "./client.js";
 import { createRestCore } from "./rest/core.js";
 import { makeProjectRest } from "./rest/projects.js";
 import { makeTimeEntryRest } from "./rest/time-entries.js";
+import { makeTaskRest } from "./rest/tasks.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -65,12 +66,14 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const core = createRestCore({ apiBase: base, auth: opts.auth, fetchImpl: opts.fetchImpl });
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);
+  const taskRest = makeTaskRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
     // not-yet-migrated areas.
     ...projectRest,
     ...timeEntryRest,
+    ...taskRest,
     async listTags() {
       const rows = (await call("GET", `${ws}/tags?page-size=200&archived=false`)) as Array<{
         id: string;
@@ -94,20 +97,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     async createClient({ name }) {
       const c = (await call("POST", `${ws}/clients`, { name })) as { id: string; name: string };
       return { id: c.id, name: c.name };
-    },
-    async listTasks(projectId) {
-      const rows = (await call(
-        "GET",
-        `${ws}/projects/${projectId}/tasks?page-size=200`,
-      )) as Array<{ id: string; name: string }>;
-      return rows.map((t): TaskSummary => ({ id: t.id, name: t.name, projectId }));
-    },
-    async createTask({ projectId, name }) {
-      const t = (await call("POST", `${ws}/projects/${projectId}/tasks`, { name })) as {
-        id: string;
-        name: string;
-      };
-      return { id: t.id, name: t.name, projectId };
     },
     async listExpenses() {
       // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
