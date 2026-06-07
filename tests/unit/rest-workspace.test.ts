@@ -174,14 +174,7 @@ describe("rest workspace client", () => {
     expect(parsed.searchParams.has("end")).toBe(false);
   });
 
-  it("lists users, mapping id+name", async () => {
-    const f = vi.fn(async () => jsonResponse([{ id: "u1", name: "Ada", email: "a@x.io" }]));
-    const users = await client(f as any).listUsers();
-    expect(users).toEqual([{ id: "u1", name: "Ada" }]);
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users");
-    expect(init.method).toBe("GET");
-  });
+  // (users + groups are now typed in rest/users.ts — see tests/unit/rest-users.test.ts)
 
   // (webhooks are now typed in rest/webhooks.ts — see tests/unit/rest-webhooks.test.ts)
 

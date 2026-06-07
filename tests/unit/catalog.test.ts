@@ -69,6 +69,25 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed user + group actions (Phase 13)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_users_list",
+      "clockify_users_invite",
+      "clockify_users_role_update",
+      "clockify_users_deactivate",
+      "clockify_groups_list",
+      "clockify_groups_get",
+      "clockify_groups_create",
+      "clockify_groups_update",
+      "clockify_groups_delete",
+      "clockify_groups_add_user",
+      "clockify_groups_remove_user",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed webhook actions (Phase 12)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [
