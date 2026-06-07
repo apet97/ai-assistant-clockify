@@ -231,10 +231,22 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       return mapEntry(e);
     },
     async deleteEntity({ entityType, id }) {
+      // Projects and clients cannot be deleted while active — Clockify rejects a
+      // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.
+      // The typed project module owns the project path; clients archive inline
+      // until the Clients phase adds a typed module.
+      if (entityType === "project") {
+        await projectRest.deleteProject(id); // archive-then-delete
+        return;
+      }
+      if (entityType === "client") {
+        const current = ((await call("GET", `${ws}/clients/${id}`)) ?? {}) as Record<string, unknown>;
+        await call("PUT", `${ws}/clients/${id}`, { ...current, archived: true });
+        await call("DELETE", `${ws}/clients/${id}`);
+        return;
+      }
       const pathByType: Record<string, string> = {
         tag: `${ws}/tags/${id}`,
-        project: `${ws}/projects/${id}`,
-        client: `${ws}/clients/${id}`,
         time_entry: `${ws}/time-entries/${id}`,
       };
       const path = pathByType[entityType];

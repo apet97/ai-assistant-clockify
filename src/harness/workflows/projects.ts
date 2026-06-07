@@ -354,9 +354,14 @@ const estimateUpdate = defineAction({
 const membershipsUpdate = defineAction({
   name: "clockify_projects_memberships_update",
   description:
-    "Replace a project's membership set (who can access/track it). Permission change — previews and requires confirmation.",
+    "Replace a project's membership set (who can access/track it). Elevated write — previews and requires confirmation.",
   featureGroup: "users_groups",
-  risks: ["permission_change"],
+  // NOTE: this is a real Clockify write, so it must be gated by the `users_groups`
+  // feature-group policy. The `permission_change` label is reserved for the
+  // assistant's OWN policy management (`assistant_update_permissions`), which the
+  // executor intentionally exempts from the Clockify feature-group gate; using it
+  // here would BYPASS that gate. `high_risk_write` keeps confirmation AND the gate.
+  risks: ["high_risk_write"],
   schema: z.object({
     id: z.string().min(1),
     memberships: z.array(z.record(z.string(), z.unknown())).min(1),
@@ -367,7 +372,7 @@ const membershipsUpdate = defineAction({
       preview: {
         actionLabel: "Update project memberships",
         featureGroup: "users_groups",
-        riskLabels: ["permission_change"],
+        riskLabels: ["high_risk_write"],
         targets: [{ type: "project", id: args.id }],
         expectedChanges: [`Replace membership set (${args.memberships.length} member(s))`],
         reversibility: "You can update memberships again to restore prior access.",
@@ -376,7 +381,7 @@ const membershipsUpdate = defineAction({
       operation: {
         actionName: "clockify_projects_memberships_update",
         featureGroup: "users_groups",
-        risks: ["permission_change"],
+        risks: ["high_risk_write"],
         payload: { id: args.id, memberships: args.memberships },
       },
     };

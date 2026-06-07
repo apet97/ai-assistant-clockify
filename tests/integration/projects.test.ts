@@ -204,7 +204,7 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.updateProjectEstimate).toBe(1);
   });
 
-  it("clockify_projects_memberships_update is a permission_change in users_groups", async () => {
+  it("clockify_projects_memberships_update is an elevated write gated by users_groups", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({
       actionName: "clockify_projects_memberships_update",
@@ -212,11 +212,41 @@ describe("project actions — risky writes (preview → commit)", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(preview.operation.risks).toContain("permission_change");
+    // Must NOT be `permission_change` — that label bypasses the Clockify policy
+    // gate (it is reserved for assistant self-permission management).
+    expect(preview.operation.risks).toContain("high_risk_write");
+    expect(preview.operation.risks).not.toContain("permission_change");
     expect(preview.operation.featureGroup).toBe("users_groups");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.updateProjectMemberships).toBe(1);
+  });
+
+  it("clockify_projects_memberships_update is policy-gated: users_groups=off blocks preview AND commit", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const off = defaultAdminPolicy();
+    off.groups.users_groups = "off";
+    // Preview is refused outright when users_groups write is disabled.
+    const denied = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { id: "p1", memberships: [{ userId: "u1", membershipStatus: "ACTIVE" }] },
+      context: makeContext(fake, off),
+    });
+    expect(denied.kind).toBe("receipt");
+    if (denied.kind === "receipt" && !denied.receipt.ok) {
+      expect(denied.receipt.code).toBe("policy_denied");
+    }
+    // And a commit built under full policy is re-checked and refused if lowered.
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { id: "p1", memberships: [{ userId: "u1", membershipStatus: "ACTIVE" }] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake, off), preview.operation);
+    expect(receipt.ok).toBe(false);
+    if (!receipt.ok) expect(receipt.code).toBe("policy_denied");
+    expect(fake.counts.updateProjectMemberships ?? 0).toBe(0);
   });
 
   it("a project update typed as 'yes' (no confirmation) never mutates", async () => {
