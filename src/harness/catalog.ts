@@ -12,6 +12,7 @@ import { CUSTOM_FIELD_ACTIONS } from "./workflows/custom-fields.js";
 import { TIME_OFF_ACTIONS } from "./workflows/time-off.js";
 import { HOLIDAY_ACTIONS } from "./workflows/holidays.js";
 import { SCHEDULING_ACTIONS } from "./workflows/scheduling.js";
+import { APPROVAL_ACTIONS } from "./workflows/approvals.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 
 /**
@@ -39,6 +40,7 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...TIME_OFF_ACTIONS,
   ...HOLIDAY_ACTIONS,
   ...SCHEDULING_ACTIONS,
+  ...APPROVAL_ACTIONS,
   ...ADMIN_ACTIONS,
 ];
 

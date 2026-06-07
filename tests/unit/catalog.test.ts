@@ -69,6 +69,21 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed approval actions (Phase 11)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_approvals_list",
+      "clockify_approvals_get",
+      "clockify_approvals_submit",
+      "clockify_approvals_approve",
+      "clockify_approvals_reject",
+      "clockify_approvals_withdraw",
+      "clockify_approvals_resubmit",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed scheduling actions (Phase 10)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [

@@ -769,6 +769,24 @@ async function runScheduling(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runScheduling);
 
+/**
+ * Phase 11 — Approvals. Reads (list per status) are real; submit/approve/reject/
+ * withdraw/resubmit are preview-only by design — a live commit needs a real
+ * submitted timesheet (approvals are a plan feature) and notifies the owner. The
+ * request shapes are pinned by mocked-fetch unit tests.
+ */
+async function runApprovals(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: approvals");
+  await h.read("clockify_approvals_list", {});
+  await h.read("clockify_approvals_list", { status: "PENDING" });
+  await h.previewOnly("clockify_approvals_submit", { periodStart: "2030-06-01" });
+  await h.previewOnly("clockify_approvals_approve", { id: "smoke-approval" });
+  await h.previewOnly("clockify_approvals_reject", { id: "smoke-approval", note: "smoke" });
+  await h.previewOnly("clockify_approvals_withdraw", { id: "smoke-approval" });
+  await h.previewOnly("clockify_approvals_resubmit", { id: "smoke-approval", entryIds: ["smoke-entry"] });
+}
+AREA_RUNNERS.push(runApprovals);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({

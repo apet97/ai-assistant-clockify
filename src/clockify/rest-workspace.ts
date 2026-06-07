@@ -11,6 +11,7 @@ import { makeCustomFieldRest } from "./rest/custom-fields.js";
 import { makeTimeOffRest } from "./rest/time-off.js";
 import { makeHolidayRest } from "./rest/holidays.js";
 import { makeSchedulingRest } from "./rest/scheduling.js";
+import { makeApprovalRest } from "./rest/approvals.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -77,6 +78,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const timeOffRest = makeTimeOffRest(core, opts.workspaceId);
   const holidayRest = makeHolidayRest(core, opts.workspaceId);
   const schedulingRest = makeSchedulingRest(core, opts.workspaceId);
+  const approvalRest = makeApprovalRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -92,6 +94,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...timeOffRest,
     ...holidayRest,
     ...schedulingRest,
+    ...approvalRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;
