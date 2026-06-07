@@ -59,6 +59,19 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed client actions (Phase 4)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_clients_list",
+      "clockify_clients_get",
+      "clockify_clients_create",
+      "clockify_clients_update",
+      "clockify_clients_delete",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed task actions (Phase 3)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [

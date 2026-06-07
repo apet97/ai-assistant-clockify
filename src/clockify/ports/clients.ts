@@ -1,9 +1,21 @@
 import type { EntitySummary } from "../client.js";
 
+/** List filter for clients (name / archived). */
+export interface ClientFilter {
+  name?: string;
+  archived?: boolean;
+}
+
 /**
- * Client slice of the {@link WorkspaceClient} port (goclmcp §2.4).
+ * Client slice of the {@link WorkspaceClient} port (goclmcp §2.4). `updateClient`
+ * is fetch-then-merge (PUT replaces, requires `name`); `deleteClient` archives
+ * then deletes (Clockify rejects deleting an active client, and rejects entirely
+ * if the client still has active projects — the error is surfaced).
  */
 export interface ClientPort {
-  listClients(): Promise<EntitySummary[]>;
+  listClients(filter?: ClientFilter): Promise<EntitySummary[]>;
+  getClient(id: string): Promise<EntitySummary | null>;
   createClient(input: { name: string }): Promise<EntitySummary>;
+  updateClient(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
+  deleteClient(id: string): Promise<void>;
 }

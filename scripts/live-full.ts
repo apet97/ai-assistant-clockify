@@ -371,6 +371,36 @@ async function runTasks(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runTasks);
 
+/**
+ * Phase 4 — Clients. Create → list → get → update → delete (archive-then-delete).
+ * Self-cleaning.
+ */
+async function runClients(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: clients");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  // Distinct from the core flow's AIASSIST_SMOKE_client_* (which still exists when
+  // area runners execute, before the core cleanup) to avoid a name collision.
+  const name = `AIASSIST_SMOKE_aclient_${h.sfx}`;
+  let clientId: string | undefined;
+  try {
+    const created = await h.safeWrite("clockify_clients_create", { name });
+    clientId = created?.changed?.created?.[0]?.id;
+    await h.read("clockify_clients_list", { name: "AIASSIST_SMOKE_aclient" });
+    if (clientId) {
+      await h.read("clockify_clients_get", { id: clientId });
+      await h.risky("clockify_clients_update", { id: clientId, name: `${name}_renamed` });
+      const del = await h.risky("clockify_clients_delete", { id: clientId, name: `${name}_renamed` });
+      if (del) clientId = undefined;
+    }
+  } finally {
+    if (clientId) {
+      await h.call("PUT", `${wsPath}/clients/${clientId}`, { name: `${name}_renamed`, archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/clients/${clientId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runClients);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
