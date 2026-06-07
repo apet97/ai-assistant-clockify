@@ -13,6 +13,7 @@ import type {
   SchedulingPort,
   ApprovalPort,
   ReportPort,
+  AuditPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
@@ -105,6 +106,7 @@ export interface WorkspaceClient
     SchedulingPort,
     ApprovalPort,
     ReportPort,
+    AuditPort,
     UserPort,
     WebhookPort,
     MiscRiskyPort {}
@@ -125,6 +127,7 @@ export type {
   SchedulingPort,
   ApprovalPort,
   ReportPort,
+  AuditPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
