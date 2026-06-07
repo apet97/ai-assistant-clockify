@@ -210,14 +210,24 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       state.timeEntries.push(entry);
       return entry;
     },
-    async getEntries({ start, end }) {
+    async getEntries({ start, end, projectId, taskId }) {
       bump("getEntries");
       // ISO-8601 UTC strings sort lexicographically, so range filtering works.
       return state.timeEntries.filter((e) => {
         if (start && e.start < start) return false;
         if (end && e.start >= end) return false;
+        if (projectId && e.projectId !== projectId) return false;
+        if (taskId && e.taskId !== taskId) return false;
         return true;
       });
+    },
+    async getEntry(id) {
+      bump("getEntry");
+      return state.timeEntries.find((e) => e.id === id) ?? null;
+    },
+    async markEntriesInvoiced(input) {
+      bump("markEntriesInvoiced");
+      void input;
     },
     async updateTimeEntry({ id, description, projectId, taskId, tagIds }) {
       bump("updateTimeEntry");

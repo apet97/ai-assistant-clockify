@@ -1,11 +1,7 @@
-import type {
-  WorkspaceClient,
-  EntitySummary,
-  TaskSummary,
-  TimeEntrySummary,
-} from "./client.js";
+import type { WorkspaceClient, EntitySummary, TaskSummary } from "./client.js";
 import { createRestCore } from "./rest/core.js";
 import { makeProjectRest } from "./rest/projects.js";
+import { makeTimeEntryRest } from "./rest/time-entries.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -25,33 +21,10 @@ export interface RestWorkspaceOptions {
   fetchImpl?: typeof fetch; // injectable for tests
 }
 
-interface ClockifyTimeEntry {
-  id: string;
-  description?: string;
-  projectId?: string;
-  taskId?: string;
-  tagIds?: string[];
-  billable?: boolean;
-  timeInterval?: { start: string; end?: string | null };
-}
-
 /** Clockify date fields want a full ISO datetime; normalize a YYYY-MM-DD input. */
 function toClockifyDate(d?: string): string | undefined {
   if (!d) return d;
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00Z` : d;
-}
-
-function mapEntry(e: ClockifyTimeEntry): TimeEntrySummary {
-  return {
-    id: e.id,
-    description: e.description,
-    projectId: e.projectId,
-    taskId: e.taskId,
-    tagIds: e.tagIds,
-    billable: e.billable,
-    start: e.timeInterval?.start ?? "",
-    end: e.timeInterval?.end ?? null,
-  };
 }
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
@@ -91,11 +64,13 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   // adapter's auth + base; areas are migrated off the inline `call` phase by phase.
   const core = createRestCore({ apiBase: base, auth: opts.auth, fetchImpl: opts.fetchImpl });
   const projectRest = makeProjectRest(core, opts.workspaceId);
+  const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);
 
   return {
-    // Projects: typed module (Phase 2). Spread first; the inline methods below
-    // cover the not-yet-migrated areas.
+    // Typed area modules (spread first); the inline methods below cover the
+    // not-yet-migrated areas.
     ...projectRest,
+    ...timeEntryRest,
     async listTags() {
       const rows = (await call("GET", `${ws}/tags?page-size=200&archived=false`)) as Array<{
         id: string;
@@ -134,55 +109,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       };
       return { id: t.id, name: t.name, projectId };
     },
-    async getRunningTimeEntry(userId) {
-      const rows = (await call(
-        "GET",
-        `${ws}/user/${userId}/time-entries?in-progress=true`,
-      )) as ClockifyTimeEntry[];
-      return rows.length ? mapEntry(rows[0]) : null;
-    },
-    async startTimeEntry(input) {
-      const e = (await call("POST", `${ws}/time-entries`, {
-        start: input.start,
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-      })) as ClockifyTimeEntry;
-      return mapEntry(e);
-    },
-    async stopTimeEntry({ userId, end }) {
-      const e = (await call(
-        "PATCH",
-        `${ws}/user/${userId}/time-entries`,
-        { end },
-        true,
-      )) as ClockifyTimeEntry | null;
-      return e ? mapEntry(e) : null;
-    },
-    async createTimeEntry(input) {
-      const e = (await call("POST", `${ws}/time-entries`, {
-        start: input.start,
-        end: input.end,
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-      })) as ClockifyTimeEntry;
-      return mapEntry(e);
-    },
-    async getEntries({ userId, start, end }) {
-      const params = new URLSearchParams({ "page-size": "200" });
-      if (start) params.set("start", start);
-      if (end) params.set("end", end);
-      const rows = (await call(
-        "GET",
-        `${ws}/user/${userId}/time-entries?${params.toString()}`,
-      )) as ClockifyTimeEntry[];
-      return rows.map(mapEntry);
-    },
     async listExpenses() {
       // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
       // weeklyTotals} — double-nested. Items use `notes` (no `name`). Tolerate a
@@ -211,24 +137,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         | { webhooks?: WebhookRow[] };
       const rows = Array.isArray(data) ? data : (data?.webhooks ?? []);
       return rows.map((w): EntitySummary => ({ id: w.id, name: w.name ?? w.id }));
-    },
-    async updateTimeEntry({ id, description, projectId, taskId, tagIds }) {
-      // Clockify's PUT /time-entries/{id} REPLACES the entry and REQUIRES `start`;
-      // a sparse body 400s ("invalid value for field [start]"). GET the current
-      // entry, flatten its timeInterval to the top-level shape PUT expects, then
-      // merge the caller's fields and PUT the full body.
-      const current = (await call("GET", `${ws}/time-entries/${id}`)) as ClockifyTimeEntry;
-      const body: Record<string, unknown> = {
-        start: current.timeInterval?.start,
-        end: current.timeInterval?.end ?? undefined,
-        description: description ?? current.description,
-        projectId: projectId ?? current.projectId,
-        taskId: taskId ?? current.taskId,
-        tagIds: tagIds ?? current.tagIds,
-        billable: current.billable,
-      };
-      const e = (await call("PUT", `${ws}/time-entries/${id}`, body)) as ClockifyTimeEntry;
-      return mapEntry(e);
     },
     async deleteEntity({ entityType, id }) {
       // Projects and clients cannot be deleted while active — Clockify rejects a
