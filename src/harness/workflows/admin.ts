@@ -88,101 +88,6 @@ const deleteEntity = defineAction({
   },
 });
 
-const manageWebhook = defineAction({
-  name: "clockify_manage_webhook",
-  description: "Create, update, or delete a webhook. External side effect — previews first.",
-  featureGroup: "webhooks",
-  risks: ["external_side_effect"],
-  schema: z
-    .object({
-      operation: z.enum(["create", "update", "delete"]),
-      id: z.string().optional(),
-      name: z.string().optional(),
-      url: z.string().optional(),
-      // Clockify create requires an event + an HTTPS url; trigger source defaults
-      // to the workspace in the adapter when omitted. NOTE: a webhook signing
-      // `authToken` is intentionally NOT accepted here — it is a secret, and the
-      // confirmation payload is persisted (pending_confirmations + audit log), so
-      // it must not flow through the model-facing action.
-      webhookEvent: z.string().optional(),
-      triggerSource: z.array(z.string()).optional(),
-      triggerSourceType: z.string().optional(),
-    })
-    .refine(
-      (v) =>
-        v.operation !== "create" ||
-        (typeof v.url === "string" &&
-          v.url.startsWith("https://") &&
-          typeof v.webhookEvent === "string" &&
-          v.webhookEvent.length > 0),
-      { message: "Creating a webhook requires an https url and a webhookEvent." },
-    )
-    .refine((v) => v.operation === "create" || (typeof v.id === "string" && v.id.length > 0), {
-      message: "Updating or deleting a webhook requires an id.",
-    }),
-  async handler(ctx, args) {
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: `${args.operation} webhook`,
-        featureGroup: "webhooks",
-        riskLabels: ["external_side_effect"],
-        targets: args.id ? [{ type: "webhook", id: args.id, name: args.name }] : [],
-        expectedChanges: [
-          `${args.operation} a webhook${args.webhookEvent ? ` for ${args.webhookEvent}` : ""}${args.url ? ` → ${args.url}` : ""}`,
-        ],
-        reversibility: "Webhook changes affect external delivery immediately.",
-        warnings: ["This changes outbound webhook delivery."],
-      },
-      operation: {
-        actionName: "clockify_manage_webhook",
-        featureGroup: "webhooks",
-        risks: ["external_side_effect"],
-        payload: {
-          operation: args.operation,
-          id: args.id,
-          name: args.name,
-          url: args.url,
-          webhookEvent: args.webhookEvent,
-          triggerSource: args.triggerSource,
-          triggerSourceType: args.triggerSourceType,
-        },
-      },
-    };
-  },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
-      operation: "create" | "update" | "delete";
-      id?: string;
-      name?: string;
-      url?: string;
-      webhookEvent?: string;
-      triggerSource?: string[];
-      triggerSourceType?: string;
-    };
-    if (!ctx.clockify.manageWebhook) {
-      return errorReceipt({
-        action: "clockify_manage_webhook",
-        code: "unsupported",
-        message: "Webhook management is not supported by the configured Clockify client.",
-      });
-    }
-    const result = await ctx.clockify.manageWebhook(payload);
-    const ref = result
-      ? [{ type: "webhook", id: result.id, name: result.name }]
-      : payload.id
-        ? [{ type: "webhook", id: payload.id, name: payload.name }]
-        : [];
-    const bucket = payload.operation === "delete" ? "deleted" : payload.operation === "create" ? "created" : "updated";
-    return successReceipt({
-      action: "clockify_manage_webhook",
-      entity: "webhook",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { [bucket]: ref },
-    });
-  },
-});
-
 const updatePermissions = defineAction({
   name: "assistant_update_permissions",
   description:
@@ -315,7 +220,6 @@ const showPermissions = defineAction({
 
 export const ADMIN_ACTIONS: ActionDefinition[] = [
   deleteEntity,
-  manageWebhook,
   updatePermissions,
   updateEntity,
   showPermissions,

@@ -787,6 +787,48 @@ async function runApprovals(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runApprovals);
 
+/**
+ * Phase 12 — Webhooks. Reads (list/events/logs) are real; create→get→logs→
+ * update→delete is a real round-trip (HTTPS url, NEW_TIME_ENTRY event),
+ * self-cleaning. The signing secret (authToken) is never set through the typed
+ * path. live-sweep already removes leftover AIASSIST_SMOKE_ webhooks.
+ */
+async function runWebhooks(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: webhooks");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_wh_${h.sfx}`;
+  let webhookId: string | undefined;
+  try {
+    await h.read("clockify_webhooks_list", {});
+    await h.read("clockify_webhooks_events", {});
+    const created = await h.risky("clockify_webhooks_create", {
+      name,
+      url: "https://example.com/aiassist-smoke-hook",
+      webhookEvent: "NEW_TIME_ENTRY",
+    });
+    webhookId = created?.changed?.created?.[0]?.id;
+    if (webhookId) {
+      await h.read("clockify_webhooks_get", { id: webhookId });
+      // logs: best-effort — GET /logs 405s on this workspace (goclmcp's documented
+      // shape, pinned by the unit test); record SKIP rather than failing the gate.
+      try {
+        const r: any = await executeAction({ actionName: "clockify_webhooks_logs", args: { id: webhookId }, context: h.ctx });
+        h.record("clockify_webhooks_logs", r.kind === "receipt" && r.receipt.ok ? "PASS" : "SKIP", r.receipt?.ok ? summarize(r.receipt) : `logs unavailable: ${r.receipt?.code ?? r.kind}`);
+      } catch (e) {
+        h.record("clockify_webhooks_logs", "SKIP", `logs endpoint not GETtable: ${err(e)}`);
+      }
+      await h.risky("clockify_webhooks_update", { id: webhookId, name: `${name}_v2` });
+      const del = await h.risky("clockify_webhooks_delete", { id: webhookId, name: `${name}_v2` });
+      if (del) webhookId = undefined;
+    }
+  } finally {
+    if (webhookId) {
+      await h.call("DELETE", `${wsPath}/webhooks/${webhookId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runWebhooks);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({
@@ -877,7 +919,6 @@ async function main(): Promise<void> {
     taskId?: string;
     tagId?: string;
     entryIds: string[];
-    webhookId?: string;
   } = { entryIds: [] };
 
   try {
@@ -951,18 +992,7 @@ async function main(): Promise<void> {
     // permission change (no Clockify write; safe to commit fully)
     await risky(ctx, "assistant_update_permissions", { groups: { invoices: "read" } });
 
-    // webhook create then delete (self-cleaning) — needs webhookEvent + https url
-    const wh = await risky(ctx, "clockify_manage_webhook", {
-      operation: "create",
-      name: names.webhook,
-      url: "https://example.com/aiassist-smoke-hook",
-      webhookEvent: "NEW_TIME_ENTRY",
-    });
-    ids.webhookId = wh?.changed?.created?.[0]?.id;
-    if (ids.webhookId) {
-      const del = await risky(ctx, "clockify_manage_webhook", { operation: "delete", id: ids.webhookId });
-      if (del) ids.webhookId = undefined; // deleted
-    }
+    // webhooks are exercised by the dedicated runWebhooks area runner below.
 
     // invoices are exercised by the dedicated runInvoices area runner below
     // (typed create→reads→update→delete round-trip, self-cleaning).
@@ -1015,14 +1045,6 @@ async function main(): Promise<void> {
         console.log(`  deleted leftover tag ${ids.tagId}`);
       } catch (e) {
         console.warn(`  WARN tag ${ids.tagId}: ${err(e)}`);
-      }
-    }
-    if (ids.webhookId) {
-      try {
-        await call("DELETE", `${ws}/webhooks/${ids.webhookId}`, undefined, true);
-        console.log(`  deleted leftover webhook ${ids.webhookId}`);
-      } catch (e) {
-        console.warn(`  WARN webhook ${ids.webhookId}: ${err(e)}`);
       }
     }
     if (ids.projectId) {

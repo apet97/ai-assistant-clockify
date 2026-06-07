@@ -11,17 +11,6 @@ import type { EntitySummary } from "../client.js";
 export interface MiscRiskyPort {
   /** Risky-write methods (used only at confirm time, after button confirmation). */
   deleteEntity?(input: { entityType: string; id: string }): Promise<void>;
-  manageWebhook?(input: {
-    operation: "create" | "update" | "delete";
-    id?: string;
-    name?: string;
-    url?: string;
-    /** Clockify requires webhookEvent + trigger source on create. */
-    webhookEvent?: string;
-    triggerSource?: string[];
-    triggerSourceType?: string;
-    authToken?: string;
-  }): Promise<EntitySummary | null>;
   /** Generic entity update (risky — committed only after button confirmation). */
   updateEntity?(input: {
     entityType: string;

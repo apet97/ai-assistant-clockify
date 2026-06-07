@@ -69,6 +69,22 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed webhook actions (Phase 12)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_webhooks_list",
+      "clockify_webhooks_get",
+      "clockify_webhooks_events",
+      "clockify_webhooks_logs",
+      "clockify_webhooks_create",
+      "clockify_webhooks_update",
+      "clockify_webhooks_delete",
+    ]) {
+      expect(names).toContain(required);
+    }
+    expect(names).not.toContain("clockify_manage_webhook");
+  });
+
   it("includes the typed approval actions (Phase 11)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [
