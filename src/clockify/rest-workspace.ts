@@ -1,10 +1,11 @@
 import type {
   WorkspaceClient,
   EntitySummary,
-  ProjectSummary,
   TaskSummary,
   TimeEntrySummary,
 } from "./client.js";
+import { createRestCore } from "./rest/core.js";
+import { makeProjectRest } from "./rest/projects.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -86,7 +87,15 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     return text ? JSON.parse(text) : null;
   }
 
+  // Per-area REST modules built on the multi-host core (D2). The core shares this
+  // adapter's auth + base; areas are migrated off the inline `call` phase by phase.
+  const core = createRestCore({ apiBase: base, auth: opts.auth, fetchImpl: opts.fetchImpl });
+  const projectRest = makeProjectRest(core, opts.workspaceId);
+
   return {
+    // Projects: typed module (Phase 2). Spread first; the inline methods below
+    // cover the not-yet-migrated areas.
+    ...projectRest,
     async listTags() {
       const rows = (await call("GET", `${ws}/tags?page-size=200&archived=false`)) as Array<{
         id: string;
@@ -110,27 +119,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     async createClient({ name }) {
       const c = (await call("POST", `${ws}/clients`, { name })) as { id: string; name: string };
       return { id: c.id, name: c.name };
-    },
-    async listProjects() {
-      const rows = (await call(
-        "GET",
-        `${ws}/projects?page-size=200&archived=false`,
-      )) as Array<{ id: string; name: string; clientId?: string; archived?: boolean }>;
-      return rows.map(
-        (p): ProjectSummary => ({
-          id: p.id,
-          name: p.name,
-          clientId: p.clientId,
-          archived: p.archived,
-        }),
-      );
-    },
-    async createProject({ name, clientId }) {
-      const p = (await call("POST", `${ws}/projects`, {
-        name,
-        ...(clientId ? { clientId } : {}),
-      })) as { id: string; name: string; clientId?: string };
-      return { id: p.id, name: p.name, clientId: p.clientId };
     },
     async listTasks(projectId) {
       const rows = (await call(
@@ -243,10 +231,22 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       return mapEntry(e);
     },
     async deleteEntity({ entityType, id }) {
+      // Projects and clients cannot be deleted while active — Clockify rejects a
+      // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.
+      // The typed project module owns the project path; clients archive inline
+      // until the Clients phase adds a typed module.
+      if (entityType === "project") {
+        await projectRest.deleteProject(id); // archive-then-delete
+        return;
+      }
+      if (entityType === "client") {
+        const current = ((await call("GET", `${ws}/clients/${id}`)) ?? {}) as Record<string, unknown>;
+        await call("PUT", `${ws}/clients/${id}`, { ...current, archived: true });
+        await call("DELETE", `${ws}/clients/${id}`);
+        return;
+      }
       const pathByType: Record<string, string> = {
         tag: `${ws}/tags/${id}`,
-        project: `${ws}/projects/${id}`,
-        client: `${ws}/clients/${id}`,
         time_entry: `${ws}/time-entries/${id}`,
       };
       const path = pathByType[entityType];

@@ -43,7 +43,7 @@ describe("rest workspace client", () => {
     expect(init.headers["X-Addon-Token"]).toBeUndefined();
   });
 
-  it("lists projects and maps clientId + archived", async () => {
+  it("lists projects (via the typed project module) and maps clientId + archived", async () => {
     const fetchImpl = vi.fn(async () =>
       jsonResponse([
         { id: "p1", name: "Website", clientId: "c1", archived: false },
@@ -56,10 +56,13 @@ describe("rest workspace client", () => {
       { id: "p1", name: "Website", clientId: "c1", archived: false },
       { id: "p2", name: "App", clientId: undefined, archived: undefined },
     ]);
+    // Project reads now paginate through the multi-host core (Phase 2 wiring).
     const [url, init] = (fetchImpl as any).mock.calls[0];
-    expect(url).toBe(
-      "https://api.clockify.me/api/v1/workspaces/ws-1/projects?page-size=200&archived=false",
-    );
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/projects");
+    expect(parsed.searchParams.get("archived")).toBe("false");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page-size")).toBe("200");
     expect(init.method).toBe("GET");
     expect(init.body).toBeUndefined();
   });
@@ -85,12 +88,45 @@ describe("rest workspace client", () => {
     ).toBeNull();
   });
 
-  it("deletes a tag", async () => {
+  it("deletes a tag with a single bare DELETE (no archive needed)", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await client(f as any).deleteEntity!({ entityType: "tag", id: "t1" });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["DELETE"]);
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/tags/t1");
     expect(init.method).toBe("DELETE");
+  });
+
+  it("deleteEntity archives a project BEFORE deleting (Clockify rejects deleting active projects)", async () => {
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "GET") return jsonResponse({ id: "p1", name: "Site", archived: false });
+      if (init.method === "PUT") return jsonResponse({ id: "p1", name: "Site", archived: true });
+      return jsonResponse(null, 204); // DELETE
+    });
+    await client(f as any).deleteEntity!({ entityType: "project", id: "p1" });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT", "DELETE"]);
+    const putBody = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(putBody.archived).toBe(true);
+    expect(putBody.name).toBe("Site");
+    expect((f as any).mock.calls[2][0]).toBe(
+      "https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1",
+    );
+  });
+
+  it("deleteEntity archives a client BEFORE deleting (active clients cannot be deleted)", async () => {
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "GET") return jsonResponse({ id: "c1", name: "Acme", archived: false });
+      if (init.method === "PUT") return jsonResponse({ id: "c1", name: "Acme", archived: true });
+      return jsonResponse(null, 204); // DELETE
+    });
+    await client(f as any).deleteEntity!({ entityType: "client", id: "c1" });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT", "DELETE"]);
+    const putBody = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(putBody.archived).toBe(true);
+    expect(putBody.name).toBe("Acme"); // Clockify requires the name on the archive PUT
+    expect((f as any).mock.calls[2][0]).toBe(
+      "https://api.clockify.me/api/v1/workspaces/ws-1/clients/c1",
+    );
   });
 
   it("throws a clear error for an unsupported delete entity type", async () => {
