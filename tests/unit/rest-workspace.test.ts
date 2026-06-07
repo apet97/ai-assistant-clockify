@@ -183,16 +183,7 @@ describe("rest workspace client", () => {
     expect(init.method).toBe("GET");
   });
 
-  it("lists webhooks, unwrapping the live {workspaceWebhookCount, webhooks:[...]} envelope", async () => {
-    // Live shape (confirmed against the API): /webhooks returns an envelope, not an array.
-    const f = vi.fn(async () =>
-      jsonResponse({ workspaceWebhookCount: 1, webhooks: [{ id: "w1", name: "Deploy hook", url: "https://x" }] }),
-    );
-    const hooks = await client(f as any).listWebhooks();
-    expect(hooks).toEqual([{ id: "w1", name: "Deploy hook" }]);
-    const [url] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks");
-  });
+  // (webhooks are now typed in rest/webhooks.ts — see tests/unit/rest-webhooks.test.ts)
 
   // (expenses are now typed in rest/expenses.ts — see tests/unit/rest-expenses.test.ts)
 
@@ -232,32 +223,7 @@ describe("rest workspace client", () => {
     expect(putBody.projectId).toBe("p1"); // unchanged field preserved
   });
 
-  it("manageWebhook create POSTs webhookEvent + trigger source (defaults to workspace)", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "w9", name: "Deploy" }));
-    const result = await client(f as any).manageWebhook!({
-      operation: "create",
-      name: "Deploy",
-      url: "https://example.com/hook",
-      webhookEvent: "NEW_TIME_ENTRY",
-    });
-    expect(result).toEqual({ id: "w9", name: "Deploy" });
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks");
-    expect(init.method).toBe("POST");
-    const body = JSON.parse(init.body);
-    expect(body.webhookEvent).toBe("NEW_TIME_ENTRY");
-    expect(body.url).toBe("https://example.com/hook");
-    expect(body.triggerSourceType).toBe("WORKSPACE_ID");
-    expect(body.triggerSource).toEqual(["ws-1"]); // defaulted to this workspace
-  });
 
-  it("manageWebhook delete issues DELETE and returns null", async () => {
-    const f = vi.fn(async () => jsonResponse(null, 204));
-    expect(await client(f as any).manageWebhook!({ operation: "delete", id: "w1" })).toBeNull();
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks/w1");
-    expect(init.method).toBe("DELETE");
-  });
 
   // (invoice create is now typed in rest/invoices.ts — see tests/unit/rest-invoices.test.ts)
 

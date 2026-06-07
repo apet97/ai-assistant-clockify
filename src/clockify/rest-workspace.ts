@@ -12,6 +12,7 @@ import { makeTimeOffRest } from "./rest/time-off.js";
 import { makeHolidayRest } from "./rest/holidays.js";
 import { makeSchedulingRest } from "./rest/scheduling.js";
 import { makeApprovalRest } from "./rest/approvals.js";
+import { makeWebhookRest } from "./rest/webhooks.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -79,6 +80,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const holidayRest = makeHolidayRest(core, opts.workspaceId);
   const schedulingRest = makeSchedulingRest(core, opts.workspaceId);
   const approvalRest = makeApprovalRest(core, opts.workspaceId);
+  const webhookRest = makeWebhookRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -95,6 +97,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...holidayRest,
     ...schedulingRest,
     ...approvalRest,
+    ...webhookRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;
@@ -102,16 +105,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         email?: string;
       }>;
       return rows.map((u): EntitySummary => ({ id: u.id, name: u.name ?? u.email ?? u.id }));
-    },
-    async listWebhooks() {
-      // Live shape: /webhooks returns {workspaceWebhookCount, webhooks:[...]} — an
-      // envelope, not a bare array. Tolerate a plain array too for safety.
-      type WebhookRow = { id: string; name?: string };
-      const data = (await call("GET", `${ws}/webhooks`)) as
-        | WebhookRow[]
-        | { webhooks?: WebhookRow[] };
-      const rows = Array.isArray(data) ? data : (data?.webhooks ?? []);
-      return rows.map((w): EntitySummary => ({ id: w.id, name: w.name ?? w.id }));
     },
     async deleteEntity({ entityType, id }) {
       // Projects and clients cannot be deleted while active — Clockify rejects a
@@ -138,34 +131,16 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         await expenseRest.deleteExpense(id);
         return;
       }
+      if (entityType === "webhook") {
+        await webhookRest.deleteWebhook(id);
+        return;
+      }
       const pathByType: Record<string, string> = {
         time_entry: `${ws}/time-entries/${id}`,
       };
       const path = pathByType[entityType];
       if (!path) throw new Error(`delete not supported for entity type: ${entityType}`);
       await call("DELETE", path);
-    },
-    async manageWebhook(input) {
-      if (input.operation === "delete") {
-        await call("DELETE", `${ws}/webhooks/${input.id}`);
-        return null;
-      }
-      // Create/update require webhookEvent + trigger source. For a workspace-scoped
-      // event, default the trigger source to this workspace (the only value the
-      // adapter can know); other shapes are passed through from the caller.
-      const body: Record<string, unknown> = {
-        name: input.name,
-        url: input.url,
-        webhookEvent: input.webhookEvent,
-        triggerSourceType: input.triggerSourceType ?? "WORKSPACE_ID",
-        triggerSource: input.triggerSource ?? [opts.workspaceId],
-        ...(input.authToken ? { authToken: input.authToken } : {}),
-      };
-      const method = input.operation === "create" ? "POST" : "PUT";
-      const path =
-        input.operation === "create" ? `${ws}/webhooks` : `${ws}/webhooks/${input.id}`;
-      const w = (await call(method, path, body)) as { id: string; name?: string };
-      return { id: w.id, name: w.name ?? "webhook" };
     },
     async updateEntity({ entityType, id, fields }) {
       // Fetch-then-merge PUT (Clockify replaces on PUT, so merge onto the current

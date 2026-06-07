@@ -256,11 +256,11 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.publishSchedule).toBe(1);
   });
 
-  it("manage_webhook update/delete without an id is rejected as invalid_args (no preview)", async () => {
+  it("webhooks_create without a url is rejected as invalid_args (no preview)", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
-      actionName: "clockify_manage_webhook",
-      args: { operation: "delete" }, // missing id
+      actionName: "clockify_webhooks_create",
+      args: { name: "Hook", webhookEvent: "NEW_TIME_ENTRY" }, // missing url
       context: makeContext(fake),
     });
     expect(result.kind).toBe("receipt");
@@ -268,7 +268,7 @@ describe("expanded risky actions (Phase 3)", () => {
       expect(result.receipt.ok).toBe(false);
       if (!result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
     }
-    expect(fake.counts.manageWebhook ?? 0).toBe(0);
+    expect(fake.counts.createWebhook ?? 0).toBe(0);
   });
 
   it("expenses_delete without an id is rejected as invalid_args (no preview)", async () => {

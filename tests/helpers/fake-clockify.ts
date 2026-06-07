@@ -24,6 +24,7 @@ import type {
 import type { HolidaySummary } from "../../src/clockify/ports/holidays.js";
 import type { AssignmentSummary } from "../../src/clockify/ports/scheduling.js";
 import type { ApprovalSummary } from "../../src/clockify/ports/approvals.js";
+import type { WebhookSummary } from "../../src/clockify/ports/webhooks.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -39,7 +40,7 @@ export interface FakeWorkspaceSeed {
   expenses?: ExpenseSummary[];
   expenseCategories?: ExpenseCategorySummary[];
   users?: EntitySummary[];
-  webhooks?: EntitySummary[];
+  webhooks?: WebhookSummary[];
   invoices?: InvoiceDetail[];
   customFields?: CustomFieldSummary[];
   timeOffPolicies?: TimeOffPolicySummary[];
@@ -65,7 +66,7 @@ export interface FakeWorkspace {
     expenses: ExpenseSummary[];
     expenseCategories: ExpenseCategorySummary[];
     users: EntitySummary[];
-    webhooks: EntitySummary[];
+    webhooks: WebhookSummary[];
     invoices: InvoiceDetail[];
     invoicePayments: Record<string, InvoicePayment[]>;
     customFields: CustomFieldSummary[];
@@ -519,6 +520,36 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       bump("listWebhooks");
       return state.webhooks;
     },
+    async getWebhook(id) {
+      bump("getWebhook");
+      return state.webhooks.find((w) => w.id === id) ?? null;
+    },
+    async createWebhook(input) {
+      bump("createWebhook");
+      const w: WebhookSummary = { id: nextId("webhook"), name: input.name, url: input.url, webhookEvent: input.webhookEvent };
+      state.webhooks.push(w);
+      return { id: w.id, name: w.name };
+    },
+    async updateWebhook(id, patch) {
+      bump("updateWebhook");
+      const w = state.webhooks.find((x) => x.id === id);
+      if (w && patch.name !== undefined) w.name = patch.name;
+      return { id, name: w?.name ?? id };
+    },
+    async deleteWebhook(id) {
+      bump("deleteWebhook");
+      state.webhooks = state.webhooks.filter((w) => w.id !== id);
+      state.deleted.push({ entityType: "webhook", id });
+    },
+    async listWebhookEvents() {
+      bump("listWebhookEvents");
+      return ["NEW_TIME_ENTRY", "TIMER_STOPPED"];
+    },
+    async listWebhookLogs(id) {
+      bump("listWebhookLogs");
+      void id;
+      return [];
+    },
     async deleteEntity(input) {
       bump("deleteEntity");
       if ((seed.failDeleteIds ?? []).includes(input.id)) {
@@ -625,11 +656,6 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       bump("importInvoiceTime");
       void id;
       void range;
-    },
-    async manageWebhook(input) {
-      bump("manageWebhook");
-      if (input.operation === "delete") return null;
-      return { id: input.id ?? nextId("webhook"), name: input.name ?? "webhook" };
     },
     async updateEntity(input) {
       bump("updateEntity");
