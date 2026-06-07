@@ -89,6 +89,14 @@ async function main(): Promise<void> {
       }
     }
   }
+  // custom fields (bare array; plain DELETE)
+  const cfResp = (await call("GET", `${ws}/custom-fields?page-size=500`).catch(() => null)) as any;
+  for (const cf of (Array.isArray(cfResp) ? cfResp : (cfResp?.customFields ?? [])) as any[]) {
+    if (typeof cf?.name === "string" && cf.name.startsWith(PFX)) {
+      await call("DELETE", `${ws}/custom-fields/${cf.id}`).catch((e) => console.warn(`  custom field ${cf.id}: ${e.message}`));
+      console.log(`  removed custom field ${cf.name}`); removed++;
+    }
+  }
   // tags
   for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
     if (t.name?.startsWith(PFX)) {

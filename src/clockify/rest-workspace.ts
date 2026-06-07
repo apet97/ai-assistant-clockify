@@ -7,6 +7,7 @@ import { makeClientRest } from "./rest/clients.js";
 import { makeTagRest } from "./rest/tags.js";
 import { makeInvoiceRest } from "./rest/invoices.js";
 import { makeExpenseRest } from "./rest/expenses.js";
+import { makeCustomFieldRest } from "./rest/custom-fields.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -69,6 +70,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const tagRest = makeTagRest(core, opts.workspaceId);
   const invoiceRest = makeInvoiceRest(core, opts.workspaceId);
   const expenseRest = makeExpenseRest(core, opts.workspaceId);
+  const customFieldRest = makeCustomFieldRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -80,6 +82,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...tagRest,
     ...invoiceRest,
     ...expenseRest,
+    ...customFieldRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;

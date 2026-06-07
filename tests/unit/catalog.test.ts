@@ -71,6 +71,21 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed custom-field actions (Phase 8)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_custom_fields_list",
+      "clockify_custom_fields_get",
+      "clockify_custom_fields_create",
+      "clockify_custom_fields_update",
+      "clockify_custom_fields_delete",
+      "clockify_custom_fields_set_value_project",
+      "clockify_custom_fields_set_value_entry",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed expense actions (Phase 7)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [
