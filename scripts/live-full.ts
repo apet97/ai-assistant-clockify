@@ -888,6 +888,29 @@ async function runReports(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runReports);
 
+/**
+ * Phase 15 — Audit (multi-host). audit_logs_search runs on the AUDIT host via the
+ * API key (Phase-0 spike confirmed the host is reachable); entity_changes_list on
+ * the primary host. Both reads, recorded best-effort — a host-auth difference is
+ * SKIP, not a gate failure. Add-on-token clearance is unverified (no LIVE_ADDON_TOKEN).
+ */
+async function runAudit(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: audit");
+  const cases: Array<[string, unknown]> = [
+    ["clockify_audit_logs_search", { actions: ["CREATE_PROJECT", "UPDATE_PROJECT", "DELETE_PROJECT"], start: "2026-06-01T00:00:00.000", end: "2026-06-30T23:59:59.999" }],
+    ["clockify_entity_changes_list", { changeType: "created" }],
+  ];
+  for (const [action, args] of cases) {
+    try {
+      const r: any = await executeAction({ actionName: action, args, context: h.ctx });
+      h.record(action, r.kind === "receipt" && r.receipt.ok ? "PASS" : "SKIP", r.receipt?.ok ? `count:${r.receipt.data?.count ?? "?"}` : `unavailable: ${r.receipt?.code ?? r.kind}`);
+    } catch (e) {
+      h.record(action, "SKIP", `audit host: ${err(e)}`);
+    }
+  }
+}
+AREA_RUNNERS.push(runAudit);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({

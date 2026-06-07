@@ -896,6 +896,14 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       void range;
       return { userId };
     },
+    async searchAuditLog(input) {
+      bump("searchAuditLog");
+      return [{ action: input.actions[0], start: input.start, end: input.end }];
+    },
+    async listEntityChanges(changeType) {
+      bump("listEntityChanges");
+      return [{ changeType }];
+    },
     async summaryReport(range, groups) {
       bump("summaryReport");
       return { type: "summary", range, groups: groups ?? ["PROJECT"], totals: [] };
