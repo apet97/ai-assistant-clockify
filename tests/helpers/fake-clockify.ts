@@ -896,6 +896,18 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       void range;
       return { userId };
     },
+    async getWorkspace() {
+      bump("getWorkspace");
+      return { id: "ws-1", name: "Fake Workspace", currencies: [{ code: "USD", isDefault: true }] };
+    },
+    async listTemplates() {
+      bump("listTemplates");
+      return state.projects.filter((p) => p.name.toLowerCase().includes("template"));
+    },
+    async getTemplate(id) {
+      bump("getTemplate");
+      return state.projects.find((p) => p.id === id) ?? null;
+    },
     async searchAuditLog(input) {
       bump("searchAuditLog");
       return [{ action: input.actions[0], start: input.start, end: input.end }];

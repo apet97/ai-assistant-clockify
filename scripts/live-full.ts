@@ -911,6 +911,21 @@ async function runAudit(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runAudit);
 
+/**
+ * Phase 16 — Workspace & Project Templates. All reads: workspace settings, the
+ * template list, and (if any template exists) one template by id. Self-contained,
+ * no cleanup needed.
+ */
+async function runWorkspace(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: workspace-templates");
+  await h.read("clockify_workspace_get", {});
+  const list = await h.read("clockify_templates_list", {});
+  const templateId = list?.data?.items?.[0]?.id;
+  if (templateId) await h.read("clockify_templates_get", { id: templateId });
+  else h.record("clockify_templates_get", "SKIP", "no template fixture on sac workspace");
+}
+AREA_RUNNERS.push(runWorkspace);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({

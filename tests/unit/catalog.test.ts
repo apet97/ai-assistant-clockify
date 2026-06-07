@@ -69,6 +69,13 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed workspace + template actions (Phase 16)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of ["clockify_workspace_get", "clockify_templates_list", "clockify_templates_get"]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed audit actions (Phase 15)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of ["clockify_audit_logs_search", "clockify_entity_changes_list"]) {

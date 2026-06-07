@@ -17,6 +17,7 @@ export type { SchedulingPort } from "./scheduling.js";
 export type { ApprovalPort } from "./approvals.js";
 export type { ReportPort } from "./reports.js";
 export type { AuditPort } from "./audit.js";
+export type { WorkspacePort } from "./workspace.js";
 export type { UserPort } from "./users.js";
 export type { WebhookPort } from "./webhooks.js";
 export type { MiscRiskyPort } from "./misc-risky.js";
