@@ -47,6 +47,18 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed time-entry actions (Phase 1)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_entries_list",
+      "clockify_entries_get",
+      "clockify_entries_delete",
+      "clockify_entries_mark_invoiced",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed project actions (Phase 2)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [
