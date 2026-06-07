@@ -85,6 +85,25 @@ describe("holiday rest", () => {
     expect(body.users).toEqual({ contains: "CONTAINS", ids: ["u1"], status: "ALL" }); // assignment reconstructed from userIds
   });
 
+  it("updateHoliday preserves an 'everyone' assignment (everyoneIncludingNew) with no userIds", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse([{ id: "h1", name: "Old", datePeriod: { startDate: "2026-12-25", endDate: "2026-12-25" }, everyoneIncludingNew: true }])
+        : jsonResponse({ id: "h1", name: "Renamed" }),
+    );
+    await rest(f as unknown as typeof fetch).updateHoliday("h1", { name: "Renamed" });
+    const body = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(body.everyoneIncludingNew).toBe(true); // valid assignment preserved
+    expect(body.users).toBeUndefined();
+  });
+
+  it("updateHoliday throws clearly when the existing holiday has no resolvable assignment", async () => {
+    const f = vi.fn(async () => jsonResponse([{ id: "h1", name: "Old", datePeriod: { startDate: "2026-12-25" }, everyoneIncludingNew: false }]));
+    await expect(rest(f as unknown as typeof fetch).updateHoliday("h1", { name: "Renamed" })).rejects.toThrow(/assignment/i);
+    // it must NOT PUT a body that Clockify would 400
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["GET"]);
+  });
+
   it("deleteHoliday DELETEs the holiday", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).deleteHoliday("h1");

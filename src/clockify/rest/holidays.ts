@@ -85,6 +85,13 @@ export function makeHolidayRest(core: RestCore, workspaceId: string): HolidayPor
       else if (existingUserIds.length) body.users = assignment(existingUserIds);
       if (patch.userGroupIds?.length) body.userGroups = assignment(patch.userGroupIds);
       else if (existingGroupIds.length) body.userGroups = assignment(existingGroupIds);
+      // A holiday can also be assigned to "everyone" (no userIds) — preserve that.
+      if (existing.everyoneIncludingNew !== undefined) body.everyoneIncludingNew = existing.everyoneIncludingNew;
+      if (!body.users && !body.userGroups && body.everyoneIncludingNew !== true) {
+        // Clockify rejects a holiday with no assignment; fail clearly instead of
+        // letting the full-replace PUT 400 on a dropped assignment.
+        throw new Error(`Cannot update holiday ${id}: no resolvable user/group assignment to preserve`);
+      }
       const h = (await core.call("api", "PUT", `${ws}/holidays/${id}`, body)) as { id?: string; name?: string };
       return { id: h?.id ?? id, name: h?.name ?? patch.name ?? id };
     },
