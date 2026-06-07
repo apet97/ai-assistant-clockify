@@ -7,6 +7,7 @@ import type {
   TagPort,
   InvoicePort,
   ExpensePort,
+  CustomFieldPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
@@ -93,6 +94,7 @@ export interface WorkspaceClient
     TagPort,
     InvoicePort,
     ExpensePort,
+    CustomFieldPort,
     UserPort,
     WebhookPort,
     MiscRiskyPort {}
@@ -107,6 +109,7 @@ export type {
   TagPort,
   InvoicePort,
   ExpensePort,
+  CustomFieldPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,

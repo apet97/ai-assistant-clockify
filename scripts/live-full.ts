@@ -583,6 +583,88 @@ async function runExpenses(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runExpenses);
 
+/**
+ * Phase 8 — Custom Fields. Lists (read), then creates→gets→updates→deletes a TXT
+ * field (self-cleaning). Custom fields are a plan-gated Clockify feature, so if
+ * create is rejected the area records SKIP and runs no dependents. Set-value on a
+ * project / time entry is preview-only by design — a live commit needs a
+ * project-or-entry-scoped VISIBLE field plus a matching target; the request
+ * shapes are pinned by mocked-fetch unit tests.
+ */
+async function runCustomFields(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: custom-fields");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_cf_${h.sfx}`;
+  let fieldId: string | undefined;
+  try {
+    await h.read("clockify_custom_fields_list", {});
+    // Create defensively: a plan without custom fields rejects this — record SKIP,
+    // not FAIL, and run no dependents.
+    let created: any = null;
+    try {
+      const r: any = await executeAction({
+        actionName: "clockify_custom_fields_create",
+        args: { name, fieldType: "TXT" },
+        context: h.ctx,
+      });
+      if (r.kind === "preview") {
+        const { commit } = await confirmAndCommit(h, r);
+        if (commit?.ok) {
+          created = commit;
+          h.record("clockify_custom_fields_create", "PASS", `preview→confirm→commit ok ${summarize(commit)}`);
+        } else {
+          h.record("clockify_custom_fields_create", "SKIP", `create rejected: ${commit?.code ?? "?"} ${commit?.message ?? ""}`.slice(0, 90));
+        }
+      }
+    } catch (e) {
+      h.record("clockify_custom_fields_create", "SKIP", `create unavailable (plan?): ${err(e)}`);
+    }
+    fieldId = created?.changed?.created?.[0]?.id;
+    if (fieldId) {
+      await h.read("clockify_custom_fields_get", { id: fieldId });
+      await h.risky("clockify_custom_fields_update", { id: fieldId, name: `${name}_v2` });
+    }
+    // Set-value is preview-only by design (needs a scoped field + target fixture).
+    await h.previewOnly("clockify_custom_fields_set_value_project", { projectId: "smoke-project", fieldId: fieldId ?? "smoke-field", value: "smoke" });
+    await h.previewOnly("clockify_custom_fields_set_value_entry", { entryId: "smoke-entry", fieldId: fieldId ?? "smoke-field", value: "smoke" });
+    if (fieldId) {
+      const del = await h.risky("clockify_custom_fields_delete", { id: fieldId, name: `${name}_v2` });
+      if (del) fieldId = undefined;
+    }
+  } finally {
+    if (fieldId) {
+      await h.call("DELETE", `${wsPath}/custom-fields/${fieldId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runCustomFields);
+
+/** Run the confirm→commit half of the risky flow for an already-produced preview. */
+async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
+  const pending = createPendingConfirmation({
+    sessionId: "smoke",
+    workspaceId: h.ctx.workspaceId,
+    adminUserId: h.ctx.adminUserId,
+    risk: preview.operation.risks,
+    preview: preview.preview,
+    operation: preview.operation,
+    sessionSecret: "smoke-secret",
+    now: new Date(),
+  });
+  const confirm = confirmPending({
+    record: pending.record,
+    sessionId: "smoke",
+    workspaceId: h.ctx.workspaceId,
+    adminUserId: h.ctx.adminUserId,
+    nonce: pending.nonce,
+    sessionSecret: "smoke-secret",
+    now: new Date(),
+  });
+  if (!confirm.ok) return { commit: { ok: false, code: confirm.code, message: "confirm gate failed" } };
+  const commit = await commitConfirmedOperation(h.ctx, preview.operation as ConfirmableOperation);
+  return { commit };
+}
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
