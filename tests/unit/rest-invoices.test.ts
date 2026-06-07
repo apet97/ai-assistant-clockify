@@ -139,13 +139,20 @@ describe("invoice rest", () => {
     }
   });
 
-  it("updateInvoice routes a status change through PATCH /status (no GET/PUT)", async () => {
-    const f = vi.fn(async () => jsonResponse(null, 204));
-    await rest(f as unknown as typeof fetch).updateInvoice("inv1", { status: "SENT" });
+  it("updateInvoice routes a status change through PATCH /status (GET for the number, never a PUT replace)", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET" ? jsonResponse({ id: "inv1", number: "INV-1" }) : jsonResponse(null, 204),
+    );
+    const out = await rest(f as unknown as typeof fetch).updateInvoice("inv1", { status: "SENT" });
+    // the receipt must carry the invoice NUMBER, not the raw id, for a status-only change
+    expect(out).toEqual({ id: "inv1", name: "INV-1" });
     const calls = (f as any).mock.calls;
-    expect(calls.map((c: any) => c[1].method)).toEqual(["PATCH"]);
-    expect(calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices/inv1/status");
-    expect(JSON.parse(calls[0][1].body)).toEqual({ invoiceStatus: "SENT" });
+    expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PATCH"]);
+    // crucially, a status-only change must NOT trigger the destructive PUT replace
+    expect(calls.map((c: any) => c[1].method)).not.toContain("PUT");
+    const patch = calls.find((c: any) => c[1].method === "PATCH");
+    expect(patch[0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices/inv1/status");
+    expect(JSON.parse(patch[1].body)).toEqual({ invoiceStatus: "SENT" });
   });
 
   it("deleteInvoice issues a DELETE", async () => {

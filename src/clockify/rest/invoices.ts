@@ -167,18 +167,24 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       return { id: inv.id, name: inv.number ?? input.number };
     },
     async updateInvoice(id, { patch, status }): Promise<EntitySummary> {
+      const hasPatch = !!patch && Object.keys(patch).length > 0;
       let number: string | undefined;
-      if (patch && Object.keys(patch).length > 0) {
+      // GET once when there is anything to do — it feeds BOTH the clean PUT body
+      // (field updates) and the receipt's invoice number (status-only changes).
+      if (hasPatch || status) {
         const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
-        const body: Record<string, unknown> = {};
-        for (const key of INVOICE_EDITABLE_FIELDS) {
-          if (existing[key] !== undefined) body[key] = existing[key];
+        number = existing.number as string | undefined;
+        if (hasPatch) {
+          const body: Record<string, unknown> = {};
+          for (const key of INVOICE_EDITABLE_FIELDS) {
+            if (existing[key] !== undefined) body[key] = existing[key];
+          }
+          Object.assign(body, patch);
+          if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
+          if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
+          const updated = (await core.call("api", "PUT", `${ws}/invoices/${id}`, body)) as { number?: string };
+          number = updated?.number ?? number;
         }
-        Object.assign(body, patch);
-        if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
-        if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
-        const updated = (await core.call("api", "PUT", `${ws}/invoices/${id}`, body)) as { number?: string };
-        number = updated?.number ?? (existing.number as string | undefined);
       }
       if (status) {
         await core.call("api", "PATCH", `${ws}/invoices/${id}/status`, { invoiceStatus: status });
