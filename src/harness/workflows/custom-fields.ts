@@ -163,7 +163,7 @@ const updateCustomField = defineAction({
         actionLabel: "Update custom field",
         featureGroup: CF,
         riskLabels: ["high_risk_write"],
-        targets: [{ type: "custom_field", id: args.id, name: args.name }],
+        targets: [{ type: "custom_field", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
         expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
         reversibility: "You can update the custom field again to revert most fields.",
         warnings: ["This changes a workspace custom field."],

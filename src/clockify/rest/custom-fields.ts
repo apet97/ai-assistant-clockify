@@ -95,8 +95,14 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
         return cf;
       });
       if (!found) merged.push({ customFieldId: fieldId, value });
+      const start = entry.timeInterval?.start;
+      if (!start) {
+        // The PUT replaces the entry and requires `start`; fail clearly rather than
+        // letting Clockify reject a body with a dropped (undefined) start.
+        throw new Error(`Cannot set custom field on time entry ${entryId}: could not resolve its start time`);
+      }
       const body: Record<string, unknown> = {
-        start: entry.timeInterval?.start,
+        start,
         end: entry.timeInterval?.end ?? undefined,
         description: entry.description,
         projectId: entry.projectId,

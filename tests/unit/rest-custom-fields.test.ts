@@ -126,6 +126,13 @@ describe("custom field rest", () => {
     ]);
   });
 
+  it("setEntryCustomFieldValue throws a clear error when the entry has no start (PUT requires it)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "e1", customFieldValues: [] })); // no timeInterval
+    await expect(rest(f as unknown as typeof fetch).setEntryCustomFieldValue("e1", "cf1", "x")).rejects.toThrow(/start/i);
+    // it must NOT issue a PUT with a missing start
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["GET"]);
+  });
+
   it("setEntryCustomFieldValue replaces an existing value for the same field id", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
