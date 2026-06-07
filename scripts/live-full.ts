@@ -639,6 +639,80 @@ async function runCustomFields(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runCustomFields);
 
+/**
+ * Phase 9 — Time Off. Reads are real (policies/requests/balance); policy
+ * create/update/archive, request create/delete, approve/deny, and balance update
+ * are PREVIEW-ONLY by design — policies cannot be hard-deleted (archive would
+ * leave a leftover), requests/approve/deny need a real pending request and notify
+ * people, and balance update mutates a user's accrual. Their request shapes are
+ * pinned by mocked-fetch unit tests.
+ */
+async function runTimeOff(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: time-off");
+  const policyId = h.fixtures.policyId;
+  await h.read("clockify_time_off_policies_list", {});
+  if (policyId) await h.read("clockify_time_off_policies_get", { id: policyId });
+  await h.read("clockify_time_off_requests_list", {});
+  await h.read("clockify_time_off_balance_get", {});
+  await h.previewOnly("clockify_time_off_policies_create", { name: `AIASSIST_SMOKE_pol_${h.sfx}`, daysPerYear: 20 });
+  if (policyId) {
+    await h.previewOnly("clockify_time_off_policies_update", { id: policyId, name: `AIASSIST_SMOKE_pol_${h.sfx}` });
+    await h.previewOnly("clockify_time_off_policies_archive", { id: policyId });
+    await h.previewOnly("clockify_time_off_requests_create", { policyId, start: "2030-01-01T00:00:00Z", end: "2030-01-03T00:00:00Z", days: 3 });
+    await h.previewOnly("clockify_time_off_requests_delete", { policyId, requestId: "smoke-request" });
+    await h.previewOnly("clockify_time_off_approve", { policyId, requestId: "smoke-request" });
+    await h.previewOnly("clockify_time_off_deny", { policyId, requestId: "smoke-request" });
+    await h.previewOnly("clockify_time_off_balance_update", { policyId, userIds: [h.ctx.adminUserId], value: 1 });
+  }
+}
+AREA_RUNNERS.push(runTimeOff);
+
+/**
+ * Phase 9 — Holidays. Reads are real; create→get→update→delete is a real
+ * round-trip (holidays are deletable, self-cleaning). Create is defensive
+ * (records SKIP, not FAIL, if the workspace rejects holidays) and is a safe
+ * write (no confirmation).
+ */
+async function runHolidays(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: holidays");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_hol_${h.sfx}`;
+  let holidayId: string | undefined;
+  try {
+    await h.read("clockify_holidays_list", {});
+    await h.read("clockify_holidays_in_period", { assignedTo: h.ctx.adminUserId, start: "2026-01-01", end: "2026-12-31" });
+    // safe_write create executes immediately; guard so a plan rejection is SKIP not FAIL.
+    let created: any = null;
+    try {
+      const r: any = await executeAction({
+        actionName: "clockify_holidays_create",
+        args: { name, startDate: "2030-07-01", userIds: [h.ctx.adminUserId] },
+        context: h.ctx,
+      });
+      if (r.kind === "receipt" && r.receipt.ok) {
+        created = r.receipt;
+        h.record("clockify_holidays_create", "PASS", summarize(r.receipt));
+      } else {
+        h.record("clockify_holidays_create", "SKIP", `create rejected: ${r.receipt?.code ?? r.kind}`);
+      }
+    } catch (e) {
+      h.record("clockify_holidays_create", "SKIP", `create unavailable (plan?): ${err(e)}`);
+    }
+    holidayId = created?.changed?.created?.[0]?.id;
+    if (holidayId) {
+      await h.read("clockify_holidays_get", { id: holidayId });
+      await h.safeWrite("clockify_holidays_update", { id: holidayId, name: `${name}_v2` });
+      const del = await h.risky("clockify_holidays_delete", { id: holidayId, name: `${name}_v2` });
+      if (del) holidayId = undefined;
+    }
+  } finally {
+    if (holidayId) {
+      await h.call("DELETE", `${wsPath}/holidays/${holidayId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runHolidays);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({
@@ -831,12 +905,8 @@ async function main(): Promise<void> {
     // expenses are exercised by the dedicated runExpenses area runner below
     // (typed multipart create→reads→update→delete + category round-trip).
 
-    // time-off + schedule: preview-only by design (see previewOnly() rationale).
-    await previewOnly(ctx, "clockify_manage_time_off", {
-      decision: "approve",
-      requestId: "smoke-nonexistent",
-      policyId: policyId ?? "smoke-policy",
-    });
+    // time-off is exercised by runTimeOff (typed) below; schedule stays here
+    // (preview-only by design — publishing notifies assignees).
     await previewOnly(ctx, "clockify_manage_schedule", {
       operation: "publish",
       start: "2030-01-01T00:00:00Z",

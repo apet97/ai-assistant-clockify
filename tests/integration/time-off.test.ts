@@ -1,0 +1,113 @@
+import { describe, expect, it } from "vitest";
+import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
+import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
+import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import type { ActionContext } from "../../src/harness/action.js";
+
+const NOW = new Date("2026-06-06T00:00:00.000Z");
+function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
+  return { workspaceId: "ws-1", adminUserId: "admin-1", policy, clockify: fake.client, now: () => NOW };
+}
+const seed = () => ({
+  timeOffPolicies: [{ id: "pol1", name: "PTO", status: "ACTIVE" }],
+  timeOffRequests: [{ id: "r1", policyId: "pol1", userId: "u1", status: "PENDING" }],
+  timeOffBalances: [{ policyId: "pol1", policyName: "PTO", balance: 15, used: 5, total: 20 }],
+});
+
+describe("time-off actions", () => {
+  it("policies_list is read-gated", async () => {
+    const fake = createFakeWorkspace(seed());
+    const ok = await executeAction({ actionName: "clockify_time_off_policies_list", args: {}, context: makeContext(fake) });
+    if (ok.kind === "receipt" && ok.receipt.ok) expect((ok.receipt.data as any).count).toBe(1);
+    else throw new Error("expected receipt");
+    const off = defaultAdminPolicy();
+    off.groups.time_off_approvals = "off";
+    const denied = await executeAction({ actionName: "clockify_time_off_policies_list", args: {}, context: makeContext(fake, off) });
+    if (denied.kind === "receipt" && !denied.receipt.ok) expect(denied.receipt.code).toBe("policy_denied");
+    else throw new Error("expected policy_denied");
+  });
+
+  it("policies_create previews high_risk_write, injects the admin as owner, commits", async () => {
+    const fake = createFakeWorkspace();
+    const preview = await executeAction({ actionName: "clockify_time_off_policies_create", args: { name: "AIASSIST_SMOKE_pol", daysPerYear: 20 }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("high_risk_write");
+    expect(fake.counts.createTimeOffPolicy ?? 0).toBe(0);
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.createTimeOffPolicy).toBe(1);
+  });
+
+  it("policies_update previews then updates", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_policies_update", args: { id: "pol1", name: "PTO 2" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("high_risk_write");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.state.timeOffPolicies[0].name).toBe("PTO 2");
+  });
+
+  it("policies_archive previews destructive then archives", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_policies_archive", args: { id: "pol1", name: "PTO" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("destructive");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.state.timeOffPolicies[0].status).toBe("ARCHIVED");
+  });
+
+  it("requests_list reads + requests_create previews external_side_effect then commits", async () => {
+    const fake = createFakeWorkspace(seed());
+    const list = await executeAction({ actionName: "clockify_time_off_requests_list", args: {}, context: makeContext(fake) });
+    if (list.kind === "receipt" && list.receipt.ok) expect((list.receipt.data as any).count).toBe(1);
+    else throw new Error("expected receipt");
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "pol1", start: "2026-07-01T00:00:00Z", end: "2026-07-03T00:00:00Z", days: 3, note: "vacay" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("external_side_effect");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.createTimeOffRequest).toBe(1);
+  });
+
+  it("approve / deny preview external_side_effect then set the request status", async () => {
+    const fake = createFakeWorkspace(seed());
+    const approve = await executeAction({ actionName: "clockify_time_off_approve", args: { policyId: "pol1", requestId: "r1" }, context: makeContext(fake) });
+    if (approve.kind !== "preview") throw new Error("expected a preview");
+    expect(approve.operation.risks).toContain("external_side_effect");
+    await commitConfirmedOperation(makeContext(fake), approve.operation);
+    expect(fake.state.timeOffRequests[0].status).toBe("APPROVED");
+
+    const deny = await executeAction({ actionName: "clockify_time_off_deny", args: { policyId: "pol1", requestId: "r1", note: "no" }, context: makeContext(fake) });
+    if (deny.kind !== "preview") throw new Error("expected a preview");
+    await commitConfirmedOperation(makeContext(fake), deny.operation);
+    expect(fake.state.timeOffRequests[0].status).toBe("REJECTED");
+  });
+
+  it("requests_delete previews destructive then deletes", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_requests_delete", args: { policyId: "pol1", requestId: "r1" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("destructive");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.counts.deleteTimeOffRequest).toBe(1);
+    expect(fake.state.timeOffRequests.find((r) => r.id === "r1")).toBeUndefined();
+  });
+
+  it("balance_get reads (defaults to the admin) + balance_update previews high_risk_write", async () => {
+    const fake = createFakeWorkspace(seed());
+    const get = await executeAction({ actionName: "clockify_time_off_balance_get", args: {}, context: makeContext(fake) });
+    if (get.kind === "receipt" && get.receipt.ok) expect((get.receipt.data as any).count).toBe(1);
+    else throw new Error("expected receipt");
+
+    const preview = await executeAction({ actionName: "clockify_time_off_balance_update", args: { policyId: "pol1", userIds: ["u1"], value: 5 }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("high_risk_write");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.updateTimeOffBalance).toBe(1);
+  });
+});

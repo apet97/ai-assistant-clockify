@@ -222,21 +222,21 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.deleteExpense ?? 0).toBe(0);
   });
 
-  it("manage_time_off (approve) is an external side effect requiring confirmation", async () => {
+  it("time_off_approve is an external side effect requiring confirmation", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
-      actionName: "clockify_manage_time_off",
-      args: { decision: "approve", requestId: "r1", policyId: "pol-1" },
+      actionName: "clockify_time_off_approve",
+      args: { requestId: "r1", policyId: "pol-1" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("external_side_effect");
     expect(preview.operation.featureGroup).toBe("time_off_approvals");
-    expect(fake.counts.manageTimeOff ?? 0).toBe(0);
+    expect(fake.counts.setTimeOffRequestStatus ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.manageTimeOff).toBe(1);
+    expect(fake.counts.setTimeOffRequestStatus).toBe(1);
   });
 
   it("manage_schedule (publish) is an external side effect requiring confirmation", async () => {

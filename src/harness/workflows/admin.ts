@@ -294,64 +294,6 @@ const updateEntity = defineAction({
   },
 });
 
-const manageTimeOff = defineAction({
-  name: "clockify_manage_time_off",
-  description:
-    "Approve or deny a time-off request. External side effect — always previews and requires confirmation.",
-  featureGroup: "time_off_approvals",
-  risks: ["external_side_effect"],
-  schema: z.object({
-    decision: z.enum(["approve", "deny"]),
-    requestId: z.string().min(1),
-    policyId: z.string().min(1), // Clockify approves/denies under a specific policy
-  }),
-  async handler(ctx, args) {
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: `${args.decision} time-off request`,
-        featureGroup: "time_off_approvals",
-        riskLabels: ["external_side_effect"],
-        targets: [{ type: "time_off_request", id: args.requestId }],
-        expectedChanges: [`${args.decision} time-off request ${args.requestId} (policy ${args.policyId})`],
-        reversibility: "Approval decisions notify the requester and may be hard to reverse.",
-        warnings: ["This notifies the requester and changes their balance/schedule."],
-      },
-      operation: {
-        actionName: "clockify_manage_time_off",
-        featureGroup: "time_off_approvals",
-        risks: ["external_side_effect"],
-        payload: { requestId: args.requestId, decision: args.decision, policyId: args.policyId },
-      },
-    };
-  },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
-      requestId: string;
-      decision: "approve" | "deny";
-      policyId: string;
-    };
-    if (!ctx.clockify.manageTimeOff) {
-      return errorReceipt({
-        action: "clockify_manage_time_off",
-        code: "unsupported",
-        message: "Time-off management is not supported by the configured Clockify client.",
-      });
-    }
-    const result = await ctx.clockify.manageTimeOff(payload);
-    return successReceipt({
-      action: "clockify_manage_time_off",
-      entity: "time_off_request",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: {
-        updated: result
-          ? [{ type: "time_off_request", id: result.id, name: result.name }]
-          : [{ type: "time_off_request", id: payload.requestId }],
-      },
-    });
-  },
-});
-
 const manageSchedule = defineAction({
   name: "clockify_manage_schedule",
   description: "Publish a schedule. External side effect — always previews and requires confirmation.",
@@ -426,7 +368,6 @@ export const ADMIN_ACTIONS: ActionDefinition[] = [
   manageWebhook,
   updatePermissions,
   updateEntity,
-  manageTimeOff,
   manageSchedule,
   showPermissions,
 ];

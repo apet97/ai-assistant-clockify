@@ -38,7 +38,6 @@ describe("catalog", () => {
       "clockify_list_entities",
       "clockify_get_entity",
       "clockify_update_entity",
-      "clockify_manage_time_off",
       "clockify_manage_schedule",
       "assistant_show_permissions",
     ]) {
@@ -69,6 +68,35 @@ describe("catalog", () => {
     ]) {
       expect(names).toContain(required);
     }
+  });
+
+  it("includes the typed time-off + holiday actions (Phase 9)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_time_off_policies_list",
+      "clockify_time_off_policies_get",
+      "clockify_time_off_policies_create",
+      "clockify_time_off_policies_update",
+      "clockify_time_off_policies_archive",
+      "clockify_time_off_requests_list",
+      "clockify_time_off_requests_get",
+      "clockify_time_off_requests_create",
+      "clockify_time_off_requests_delete",
+      "clockify_time_off_approve",
+      "clockify_time_off_deny",
+      "clockify_time_off_balance_get",
+      "clockify_time_off_balance_update",
+      "clockify_holidays_list",
+      "clockify_holidays_get",
+      "clockify_holidays_in_period",
+      "clockify_holidays_create",
+      "clockify_holidays_update",
+      "clockify_holidays_delete",
+    ]) {
+      expect(names).toContain(required);
+    }
+    // the generic manage_time_off was superseded by the typed approve/deny
+    expect(names).not.toContain("clockify_manage_time_off");
   });
 
   it("includes the typed custom-field actions (Phase 8)", () => {
