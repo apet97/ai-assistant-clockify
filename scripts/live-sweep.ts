@@ -65,6 +65,19 @@ async function main(): Promise<void> {
     }
   }
 
+  // time entries (user-scoped to the API key's own user; match description prefix)
+  const me = (await call("GET", "/user").catch(() => null)) as { id?: string } | null;
+  if (me?.id) {
+    const entries = ((await call("GET", `${ws}/user/${me.id}/time-entries?page-size=500`).catch(() => null)) ??
+      []) as any[];
+    for (const e of entries) {
+      if (typeof e?.description === "string" && e.description.startsWith(PFX)) {
+        await call("PATCH", `${ws}/time-entries/invoiced`, { timeEntryIds: [e.id], invoiced: false }).catch(() => {});
+        await call("DELETE", `${ws}/time-entries/${e.id}`).catch((err) => console.warn(`  entry ${e.id}: ${err.message}`));
+        console.log(`  removed time entry ${e.description}`); removed++;
+      }
+    }
+  }
   // tags
   for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
     if (t.name?.startsWith(PFX)) {

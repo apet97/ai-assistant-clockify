@@ -14,8 +14,16 @@ export interface TimeEntryPort {
   startTimeEntry(input: StartTimeEntryInput): Promise<TimeEntrySummary>;
   stopTimeEntry(input: { userId: string; end: string }): Promise<TimeEntrySummary | null>;
   createTimeEntry(input: CreateTimeEntryInput): Promise<TimeEntrySummary>;
-  /** Read/list coverage for the broader action catalog. */
-  getEntries(input: { userId: string; start?: string; end?: string }): Promise<TimeEntrySummary[]>;
+  /** Read/list coverage for the broader action catalog (paginated, user-scoped). */
+  getEntries(input: {
+    userId: string;
+    start?: string;
+    end?: string;
+    projectId?: string;
+    taskId?: string;
+  }): Promise<TimeEntrySummary[]>;
+  /** Fetch a single time entry by id. */
+  getEntry(id: string): Promise<TimeEntrySummary | null>;
   /** Update known time-entry fields (safe write — entry id is already resolved). */
   updateTimeEntry(input: {
     id: string;
@@ -24,4 +32,6 @@ export interface TimeEntryPort {
     taskId?: string;
     tagIds?: string[];
   }): Promise<TimeEntrySummary>;
+  /** Bulk mark/unmark entries as invoiced (billing — PATCH /time-entries/invoiced). */
+  markEntriesInvoiced(input: { ids: string[]; invoiced: boolean }): Promise<void>;
 }

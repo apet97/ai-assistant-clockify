@@ -282,6 +282,58 @@ async function runProjects(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runProjects);
 
+/**
+ * Phase 1 — Time Entries. Logs a self-named entry, lists/gets it, marks it
+ * invoiced and back (bulk+billing), then deletes it (self-cleaning).
+ */
+async function runEntries(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: time-entries");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const halfAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  // This sacrificial workspace forces a project on time entries — create one.
+  const projName = `AIASSIST_SMOKE_eproj_${h.sfx}`;
+  let projectId: string | undefined;
+  let entryId: string | undefined;
+  let invoiced = false;
+  try {
+    const proj = await h.safeWrite("clockify_projects_create", { name: projName, isPublic: true });
+    projectId = proj?.changed?.created?.[0]?.id;
+    const logged = await h.safeWrite("clockify_log_work", {
+      description: `AIASSIST_SMOKE_entry_${h.sfx}`,
+      start: hourAgo,
+      end: halfAgo,
+      billable: true,
+      projectId,
+    });
+    entryId = logged?.changed?.created?.[0]?.id;
+    await h.read("clockify_entries_list", { projectId });
+    if (entryId) {
+      await h.read("clockify_entries_get", { id: entryId });
+      const marked = await h.risky("clockify_entries_mark_invoiced", { ids: [entryId], invoiced: true });
+      if (marked) invoiced = true;
+      const unmarked = await h.risky("clockify_entries_mark_invoiced", { ids: [entryId], invoiced: false });
+      if (unmarked) invoiced = false;
+      const del = await h.risky("clockify_entries_delete", { id: entryId });
+      if (del) entryId = undefined;
+    }
+  } finally {
+    if (entryId) {
+      if (invoiced) {
+        await h
+          .call("PATCH", `${wsPath}/time-entries/invoiced`, { timeEntryIds: [entryId], invoiced: false }, true)
+          .catch(() => {});
+      }
+      await h.call("DELETE", `${wsPath}/time-entries/${entryId}`, undefined, true).catch(() => {});
+    }
+    if (projectId) {
+      await h.call("PUT", `${wsPath}/projects/${projectId}`, { name: projName, archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/projects/${projectId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runEntries);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;

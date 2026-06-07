@@ -1,5 +1,6 @@
 import type { ActionCatalogEntry, ActionDefinition } from "./action.js";
 import { TIME_TRACKING_ACTIONS } from "./workflows/time-tracking.js";
+import { ENTRY_ACTIONS } from "./workflows/entries.js";
 import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
 import { PROJECT_ACTIONS } from "./workflows/projects.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
@@ -17,6 +18,7 @@ export * from "./action.js";
 
 export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...TIME_TRACKING_ACTIONS,
+  ...ENTRY_ACTIONS,
   ...WORK_STRUCTURE_ACTIONS,
   ...PROJECT_ACTIONS,
   ...ADMIN_ACTIONS,
