@@ -47,6 +47,24 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed project actions (Phase 2)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_projects_list",
+      "clockify_projects_get",
+      "clockify_projects_create",
+      "clockify_projects_from_template",
+      "clockify_projects_update",
+      "clockify_projects_archive",
+      "clockify_projects_delete",
+      "clockify_projects_rate_update",
+      "clockify_projects_estimate_update",
+      "clockify_projects_memberships_update",
+    ]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("every confirmation-required action provides a commit() (so it cannot mutate without one)", () => {
     for (const action of ACTION_CATALOG) {
       if (requiresConfirmation(action.risks)) {
