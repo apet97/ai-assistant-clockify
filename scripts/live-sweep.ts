@@ -105,6 +105,14 @@ async function main(): Promise<void> {
       console.log(`  removed holiday ${hol.name}`); removed++;
     }
   }
+  // user groups (bare array; plain DELETE)
+  const grpResp = (await call("GET", `${ws}/user-groups?page-size=500`).catch(() => null)) as any;
+  for (const g of (Array.isArray(grpResp) ? grpResp : (grpResp?.userGroups ?? [])) as any[]) {
+    if (typeof g?.name === "string" && g.name.startsWith(PFX)) {
+      await call("DELETE", `${ws}/user-groups/${g.id}`).catch((e) => console.warn(`  group ${g.id}: ${e.message}`));
+      console.log(`  removed user group ${g.name}`); removed++;
+    }
+  }
   // tags
   for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
     if (t.name?.startsWith(PFX)) {

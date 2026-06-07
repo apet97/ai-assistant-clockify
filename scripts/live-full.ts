@@ -829,6 +829,43 @@ async function runWebhooks(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runWebhooks);
 
+/**
+ * Phase 13 — Users & Groups. Users list is real; invite/role/deactivate are
+ * PREVIEW-ONLY by design (high blast radius — they change access/permissions and
+ * may email). Groups do a real create→get→update→add-member→remove-member→delete
+ * round-trip (groups are deletable; the admin is the safe member), self-cleaning.
+ */
+async function runUsers(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: users-groups");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const name = `AIASSIST_SMOKE_grp_${h.sfx}`;
+  let groupId: string | undefined;
+  try {
+    await h.read("clockify_users_list", {});
+    await h.read("clockify_groups_list", {});
+    // High-blast-radius user writes: preview-only (never committed live).
+    await h.previewOnly("clockify_users_invite", { email: `aiassist_smoke_${h.sfx}@example.com` });
+    await h.previewOnly("clockify_users_role_update", { userId: h.ctx.adminUserId, role: "TEAM_MANAGER", entityId: "smoke-team" });
+    await h.previewOnly("clockify_users_deactivate", { userId: "smoke-user" });
+    // Groups: real round-trip (self-cleaning).
+    const created = await h.risky("clockify_groups_create", { name });
+    groupId = created?.changed?.created?.[0]?.id;
+    if (groupId) {
+      await h.read("clockify_groups_get", { id: groupId });
+      await h.risky("clockify_groups_update", { id: groupId, name: `${name}_v2` });
+      await h.risky("clockify_groups_add_user", { groupId, userId: h.ctx.adminUserId });
+      await h.risky("clockify_groups_remove_user", { groupId, userId: h.ctx.adminUserId });
+      const del = await h.risky("clockify_groups_delete", { id: groupId, name: `${name}_v2` });
+      if (del) groupId = undefined;
+    }
+  } finally {
+    if (groupId) {
+      await h.call("DELETE", `${wsPath}/user-groups/${groupId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runUsers);
+
 /** Run the confirm→commit half of the risky flow for an already-produced preview. */
 async function confirmAndCommit(h: LiveHarness, preview: any): Promise<{ commit: any }> {
   const pending = createPendingConfirmation({

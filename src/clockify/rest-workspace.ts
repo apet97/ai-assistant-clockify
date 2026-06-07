@@ -1,4 +1,4 @@
-import type { WorkspaceClient, EntitySummary } from "./client.js";
+import type { WorkspaceClient } from "./client.js";
 import { createRestCore } from "./rest/core.js";
 import { makeProjectRest } from "./rest/projects.js";
 import { makeTimeEntryRest } from "./rest/time-entries.js";
@@ -13,6 +13,7 @@ import { makeHolidayRest } from "./rest/holidays.js";
 import { makeSchedulingRest } from "./rest/scheduling.js";
 import { makeApprovalRest } from "./rest/approvals.js";
 import { makeWebhookRest } from "./rest/webhooks.js";
+import { makeUserRest } from "./rest/users.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -81,6 +82,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const schedulingRest = makeSchedulingRest(core, opts.workspaceId);
   const approvalRest = makeApprovalRest(core, opts.workspaceId);
   const webhookRest = makeWebhookRest(core, opts.workspaceId);
+  const userRest = makeUserRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -98,14 +100,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...schedulingRest,
     ...approvalRest,
     ...webhookRest,
-    async listUsers() {
-      const rows = (await call("GET", `${ws}/users`)) as Array<{
-        id: string;
-        name?: string;
-        email?: string;
-      }>;
-      return rows.map((u): EntitySummary => ({ id: u.id, name: u.name ?? u.email ?? u.id }));
-    },
+    ...userRest,
     async deleteEntity({ entityType, id }) {
       // Projects and clients cannot be deleted while active — Clockify rejects a
       // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.
