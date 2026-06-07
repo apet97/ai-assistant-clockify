@@ -868,9 +868,9 @@ AREA_RUNNERS.push(runUsers);
 
 /**
  * Phase 14 — Reports (multi-host). summary/detailed/weekly run real reads on the
- * REPORTS host via the API key (Phase-0 spike confirmed the host is reachable).
- * The production add-on-token clearance is unverified (no LIVE_ADDON_TOKEN) — these
- * are recorded best-effort so a host-auth difference is SKIP, not a gate failure.
+ * REPORTS host. The reports host accepts the production X-Addon-Token (and this dev
+ * run uses the API key — both authenticate against it). Recorded best-effort so a
+ * transient host difference is SKIP, not a gate failure.
  */
 async function runReports(h: LiveHarness): Promise<void> {
   console.log("\nAREA: reports");

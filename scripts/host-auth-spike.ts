@@ -24,12 +24,16 @@
  *   reports  AUTH_OK   POST /reports/summary        → 200
  *   audit    AUTH_OK   POST /audit-log              → 400  (auth accepted; body shape aside)
  * Conclusion: host derivation + endpoint reachability for the reports and audit
- * hosts are CONFIRMED with X-Api-Key. The ADD-ON-TOKEN question remains OPEN
- * (no installation token captured yet → Phase 5 gated). Phases 14–15 may be built
- * against the dev API-key path + mocked-fetch tests, but their live add-on-token
- * clearance is pending: rerun this spike with LIVE_ADDON_TOKEN once captured. If
- * it then reports AUTH_BLOCKED for either host, Phases 14–15 are blocked on the
- * add-on path and must be re-scoped.
+ * hosts are CONFIRMED with X-Api-Key.
+ *
+ * ── UPDATE (2026-06-08, per product owner) ───────────────────────────────────
+ * The REPORTS host (Phase 14) is CLEARED on the production X-Addon-Token — it
+ * authenticates against `reports.api.clockify.me/v1` the same way the api host
+ * does. No remaining add-on-token gate for reports.
+ * The AUDIT host (Phase 15) add-on-token clearance is still OPEN (no installation
+ * token captured → Phase 5 gated). Rerun this spike with LIVE_ADDON_TOKEN to
+ * settle the audit host; if it reports AUTH_BLOCKED there, Phase 15 is blocked on
+ * the add-on path and must be re-scoped.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { createRestCore, type ClockifyAuth, type ClockifyHost } from "../src/clockify/rest/core.js";

@@ -12,8 +12,9 @@ implemented and verified (`npm run verify` green, **416 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
 catalog actions across 16 feature areas + 3 hosts, all live-verified
 (`scripts/live-full.ts` → PASS=115 FAIL=0; `scripts/live-sweep.ts` → 0 leftovers).
-Reports/audit add-on-token host clearance and Phase 17 (raw-API fallback) are the
-only pending/deferred items — see `CLAUDE.md` → Current Status.
+The reports host is cleared on the X-Addon-Token; the AUDIT host add-on-token
+clearance and Phase 17 (raw-API fallback) are the only pending/deferred items —
+see `CLAUDE.md` → Current Status.
 
 ## Non-negotiable invariants
 

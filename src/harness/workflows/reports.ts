@@ -6,8 +6,9 @@ import { successReceipt } from "../receipts.js";
  * Typed report workflows (goclmcp §2.14). All reads on the REPORTS host. Reports
  * can be large, so the result is byte-capped: if the serialized JSON exceeds the
  * inline cap, it is omitted with an explicit `truncated` warning (no silent cap).
- * Gated by `reports`. NOTE: the production add-on-token clearance for the reports
- * host is unverified (no LIVE_ADDON_TOKEN); the API-key dev path is spike-confirmed.
+ * Gated by `reports`. The reports host authenticates with the production
+ * X-Addon-Token (same routing + auth header as the api host); the dev API key
+ * also works.
  */
 
 const REP = "reports" as const;

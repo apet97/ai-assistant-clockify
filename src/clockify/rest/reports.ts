@@ -14,8 +14,8 @@ function reportBody(range: ReportRange, extra: Record<string, unknown>): Record<
 /**
  * Typed report REST module (goclmcp §2.14). I/O only. Reports run on the REPORTS
  * host (`core.call("reports", …)` routes there); all are `POST` searches with a
- * JSON export body. The add-on-token clearance for the reports host is unverified
- * (no LIVE_ADDON_TOKEN) — the API-key dev path is spike-confirmed.
+ * JSON export body. The reports host accepts the production X-Addon-Token (same
+ * host routing + auth header as the api host); the dev API key also works.
  */
 export function makeReportRest(core: RestCore, workspaceId: string): ReportPort {
   const ws = `/workspaces/${workspaceId}`;

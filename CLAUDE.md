@@ -79,12 +79,16 @@ through the existing safe/risky harness.
   but **major** for expenses; the webhook `authToken` secret is never accepted nor
   returned; reports run on the reports host (`POST /reports/{summary|detailed|
   weekly}`); audit search runs on the audit host (`POST /audit-log`).
-- **Pending (not blocking):** the production X-Addon-Token clearance for the
-  REPORTS + AUDIT hosts is unverified — no `LIVE_ADDON_TOKEN` in `.env`
-  (Phase-5 dev-console gated). Reports work live via the API key; audit
-  `POST /audit-log` + the experimental entity-changes feed 400 live (shapes pinned
-  by unit tests). Re-run `scripts/host-auth-spike.ts` once a token is captured. The
-  add-on-token install path (`scripts/addon-smoke.ts`) is also human-gated.
+- **Reports host (Phase 14): cleared on the X-Addon-Token.** The reports host
+  (`reports.api.clockify.me/v1`) authenticates with the production add-on token —
+  the multi-host core sends it over the same host-routing + auth-header path as the
+  api host (the dev API key works too). No remaining gate for reports.
+- **Pending (not blocking) — AUDIT host only (Phase 15):** the production
+  X-Addon-Token clearance for the AUDIT host (`auditlog-api.api.clockify.me/v1`) is
+  still unconfirmed, and audit `POST /audit-log` + the experimental entity-changes
+  feed 400 live (shapes pinned by unit tests). Re-run `scripts/host-auth-spike.ts`
+  with a captured `LIVE_ADDON_TOKEN` to settle it. The add-on-token install path
+  (`scripts/addon-smoke.ts`) is also human-gated.
 - **Deferred:** Phase 17 (raw `clockify_api_get`/`api_request` fallback) — omitted
   from V1 (letting the model propose arbitrary paths conflicts with "the harness
   decides, not the model"); requires a safety review before ever building.
