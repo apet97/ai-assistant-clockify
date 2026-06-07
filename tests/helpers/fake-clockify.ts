@@ -11,6 +11,10 @@ import type {
   InvoicePayment,
   InvoiceSummary,
 } from "../../src/clockify/ports/invoices.js";
+import type {
+  ExpenseSummary,
+  ExpenseCategorySummary,
+} from "../../src/clockify/ports/expenses.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -23,7 +27,8 @@ export interface FakeWorkspaceSeed {
   tasks?: TaskSummary[];
   running?: TimeEntrySummary | null;
   entries?: TimeEntrySummary[];
-  expenses?: EntitySummary[];
+  expenses?: ExpenseSummary[];
+  expenseCategories?: ExpenseCategorySummary[];
   users?: EntitySummary[];
   webhooks?: EntitySummary[];
   invoices?: InvoiceDetail[];
@@ -41,7 +46,8 @@ export interface FakeWorkspace {
     tasks: TaskSummary[];
     timeEntries: TimeEntrySummary[];
     running: TimeEntrySummary | null;
-    expenses: EntitySummary[];
+    expenses: ExpenseSummary[];
+    expenseCategories: ExpenseCategorySummary[];
     users: EntitySummary[];
     webhooks: EntitySummary[];
     invoices: InvoiceDetail[];
@@ -65,6 +71,7 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     timeEntries: [...(seed.entries ?? [])],
     running: seed.running ?? null,
     expenses: [...(seed.expenses ?? [])],
+    expenseCategories: [...(seed.expenseCategories ?? [])],
     users: [...(seed.users ?? [])],
     webhooks: [...(seed.webhooks ?? [])],
     invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),
@@ -350,6 +357,76 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       bump("listExpenses");
       return state.expenses;
     },
+    async getExpense(id) {
+      bump("getExpense");
+      return state.expenses.find((e) => e.id === id) ?? null;
+    },
+    async createExpense(input) {
+      bump("createExpense");
+      const expense: ExpenseSummary = {
+        id: nextId("expense"),
+        name: input.notes ?? "expense",
+        notes: input.notes,
+        date: input.date,
+        categoryId: input.categoryId,
+        billable: input.billable,
+        // The create amount is per-unit; the fake uses quantity 1, so total = amountMinor.
+        total: input.amountMinor,
+        quantity: 1,
+      };
+      state.expenses.push(expense);
+      return { id: expense.id, name: expense.name };
+    },
+    async updateExpense(id, input) {
+      bump("updateExpense");
+      const index = state.expenses.findIndex((e) => e.id === id);
+      if (index >= 0) {
+        const base = state.expenses[index];
+        const updated: ExpenseSummary = {
+          ...base,
+          ...(input.notes !== undefined ? { notes: input.notes, name: input.notes } : {}),
+          ...(input.date !== undefined ? { date: input.date } : {}),
+          ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+          ...(input.billable !== undefined ? { billable: input.billable } : {}),
+          ...(input.amountMinor !== undefined ? { total: input.amountMinor } : {}),
+        };
+        state.expenses[index] = updated;
+        return { id, name: updated.name };
+      }
+      return { id, name: input.notes ?? id };
+    },
+    async deleteExpense(id) {
+      bump("deleteExpense");
+      state.expenses = state.expenses.filter((e) => e.id !== id);
+      state.deleted.push({ entityType: "expense", id });
+    },
+    async listExpenseCategories() {
+      bump("listExpenseCategories");
+      return state.expenseCategories;
+    },
+    async createExpenseCategory({ name }) {
+      bump("createExpenseCategory");
+      const c: ExpenseCategorySummary = { id: nextId("cat"), name };
+      state.expenseCategories.push(c);
+      return { id: c.id, name: c.name };
+    },
+    async updateExpenseCategory(id, patch) {
+      bump("updateExpenseCategory");
+      const index = state.expenseCategories.findIndex((c) => c.id === id);
+      const base: ExpenseCategorySummary = index >= 0 ? state.expenseCategories[index] : { id, name: id };
+      const updated: ExpenseCategorySummary = {
+        ...base,
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+      };
+      if (index >= 0) state.expenseCategories[index] = updated;
+      else state.expenseCategories.push(updated);
+      return { id, name: updated.name };
+    },
+    async deleteExpenseCategory(id) {
+      bump("deleteExpenseCategory");
+      state.expenseCategories = state.expenseCategories.filter((c) => c.id !== id);
+      state.deleted.push({ entityType: "expense_category", id });
+    },
     async listUsers() {
       bump("listUsers");
       return state.users;
@@ -474,11 +551,6 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
       bump("updateEntity");
       const name = (input.fields?.name as string | undefined) ?? input.id;
       return { id: input.id, name };
-    },
-    async manageExpense(input) {
-      bump("manageExpense");
-      if (input.operation === "delete") return null;
-      return { id: input.id ?? nextId("expense"), name: input.name ?? "expense" };
     },
     async manageTimeOff(input) {
       bump("manageTimeOff");

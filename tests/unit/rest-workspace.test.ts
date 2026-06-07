@@ -194,25 +194,7 @@ describe("rest workspace client", () => {
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/webhooks");
   });
 
-  it("lists expenses, unwrapping the live {expenses:{expenses:[...],count}} envelope (notes→name)", async () => {
-    // Live shape (confirmed): /expenses double-nests under expenses.expenses; items use `notes`.
-    const f = vi.fn(async () =>
-      jsonResponse({
-        expenses: { expenses: [{ id: "x1", notes: "Taxi" }], count: 1 },
-        dailyTotals: [],
-        weeklyTotals: [],
-      }),
-    );
-    const expenses = await client(f as any).listExpenses();
-    expect(expenses).toEqual([{ id: "x1", name: "Taxi" }]);
-    const [url] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/expenses");
-  });
-
-  it("lists expenses, also accepting a plain array", async () => {
-    const f = vi.fn(async () => jsonResponse([{ id: "x2", name: "Hotel" }]));
-    expect(await client(f as any).listExpenses()).toEqual([{ id: "x2", name: "Hotel" }]);
-  });
+  // (expenses are now typed in rest/expenses.ts — see tests/unit/rest-expenses.test.ts)
 
   it("updateTimeEntry GET-then-PUTs, preserving start and merging caller fields", async () => {
     // Clockify's PUT /time-entries/{id} REPLACES the entry and requires `start`;
@@ -306,38 +288,7 @@ describe("rest workspace client", () => {
     expect((f as any).mock.calls.length).toBe(0);
   });
 
-  it("manageExpense create sends multipart/form-data (no JSON content-type)", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "x9", notes: "Taxi" }));
-    const result = await client(f as any).manageExpense!({
-      operation: "create",
-      name: "Taxi",
-      amount: 20,
-      date: "2026-06-06",
-      categoryId: "cat1",
-      userId: "u1",
-    });
-    expect(result).toEqual({ id: "x9", name: "Taxi" });
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/expenses");
-    expect(init.method).toBe("POST");
-    expect(init.body).toBeInstanceOf(FormData);
-    expect(init.headers["content-type"]).toBeUndefined(); // boundary set by fetch
-    const form = init.body as FormData;
-    expect(form.get("userId")).toBe("u1"); // Clockify requires the expense owner
-    expect(form.get("categoryId")).toBe("cat1");
-    expect(form.get("amount")).toBe("20");
-    expect(form.get("date")).toBe("2026-06-06T00:00:00Z"); // normalized to ISO datetime
-    expect(form.get("notes")).toBe("Taxi");
-  });
-
-  it("manageExpense delete issues a JSON DELETE and returns null", async () => {
-    const f = vi.fn(async () => jsonResponse(null, 204));
-    expect(await client(f as any).manageExpense!({ operation: "delete", id: "x1" })).toBeNull();
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/expenses/x1");
-    expect(init.method).toBe("DELETE");
-    expect(init.body).toBeUndefined();
-  });
+  // (expense create/update/delete are now typed in rest/expenses.ts — see tests/unit/rest-expenses.test.ts)
 
   it("manageTimeOff PATCHes the request under its policy", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "req1" }));

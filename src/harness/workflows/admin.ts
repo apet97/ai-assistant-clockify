@@ -3,7 +3,6 @@ import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
-import type { RiskLabel } from "../risk.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -295,96 +294,6 @@ const updateEntity = defineAction({
   },
 });
 
-const manageExpense = defineAction({
-  name: "clockify_manage_expense",
-  description:
-    "Create, update, or delete an expense. Elevated/destructive — always previews and requires confirmation.",
-  featureGroup: "expenses",
-  risks: ["high_risk_write"],
-  schema: z
-    .object({
-      operation: z.enum(["create", "update", "delete"]),
-      id: z.string().optional(),
-      name: z.string().optional(), // maps to the expense `notes`
-      amount: z.number().optional(), // major currency units by default
-      date: z.string().optional(), // YYYY-MM-DD; required by Clockify on create
-      categoryId: z.string().optional(), // required by Clockify on create
-      userId: z.string().optional(), // owner; defaults to the caller on create
-    })
-    .refine((v) => v.operation === "create" || (typeof v.id === "string" && v.id.length > 0), {
-      message: "Updating or deleting an expense requires an id.",
-    }),
-  async handler(ctx, args) {
-    const destructive = args.operation === "delete";
-    const riskLabels: RiskLabel[] = destructive ? ["destructive"] : ["high_risk_write"];
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: `${args.operation} expense`,
-        featureGroup: "expenses",
-        riskLabels,
-        targets: args.id ? [{ type: "expense", id: args.id, name: args.name }] : [],
-        expectedChanges: [
-          `${args.operation} an expense${args.name ? ` "${args.name}"` : ""}${args.amount !== undefined ? ` (${args.amount})` : ""}`,
-        ],
-        reversibility: destructive
-          ? "Deleting an expense cannot be undone."
-          : "You can edit or delete the expense afterward.",
-        warnings: destructive
-          ? ["Deleting an expense is permanent."]
-          : ["This changes expense records."],
-      },
-      operation: {
-        actionName: "clockify_manage_expense",
-        featureGroup: "expenses",
-        risks: riskLabels,
-        payload: {
-          operation: args.operation,
-          id: args.id,
-          name: args.name,
-          amount: args.amount,
-          date: args.date,
-          categoryId: args.categoryId,
-          // Clockify requires the expense owner on create; default to the caller.
-          userId: args.userId ?? ctx.adminUserId,
-        },
-      },
-    };
-  },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
-      operation: "create" | "update" | "delete";
-      id?: string;
-      name?: string;
-      amount?: number;
-      date?: string;
-      categoryId?: string;
-      userId?: string;
-    };
-    if (!ctx.clockify.manageExpense) {
-      return errorReceipt({
-        action: "clockify_manage_expense",
-        code: "unsupported",
-        message: "Expense management is not supported by the configured Clockify client.",
-      });
-    }
-    const result = await ctx.clockify.manageExpense(payload);
-    const ref = result
-      ? [{ type: "expense", id: result.id, name: result.name }]
-      : payload.id
-        ? [{ type: "expense", id: payload.id, name: payload.name }]
-        : [];
-    const bucket =
-      payload.operation === "delete" ? "deleted" : payload.operation === "create" ? "created" : "updated";
-    return successReceipt({
-      action: "clockify_manage_expense",
-      entity: "expense",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { [bucket]: ref },
-    });
-  },
-});
-
 const manageTimeOff = defineAction({
   name: "clockify_manage_time_off",
   description:
@@ -517,7 +426,6 @@ export const ADMIN_ACTIONS: ActionDefinition[] = [
   manageWebhook,
   updatePermissions,
   updateEntity,
-  manageExpense,
   manageTimeOff,
   manageSchedule,
   showPermissions,

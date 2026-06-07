@@ -6,6 +6,7 @@ import { makeTaskRest } from "./rest/tasks.js";
 import { makeClientRest } from "./rest/clients.js";
 import { makeTagRest } from "./rest/tags.js";
 import { makeInvoiceRest } from "./rest/invoices.js";
+import { makeExpenseRest } from "./rest/expenses.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -23,12 +24,6 @@ export interface RestWorkspaceOptions {
   workspaceId: string;
   auth: ClockifyAuth;
   fetchImpl?: typeof fetch; // injectable for tests
-}
-
-/** Clockify date fields want a full ISO datetime; normalize a YYYY-MM-DD input. */
-function toClockifyDate(d?: string): string | undefined {
-  if (!d) return d;
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00Z` : d;
 }
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
@@ -73,6 +68,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const clientRest = makeClientRest(core, opts.workspaceId);
   const tagRest = makeTagRest(core, opts.workspaceId);
   const invoiceRest = makeInvoiceRest(core, opts.workspaceId);
+  const expenseRest = makeExpenseRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -83,17 +79,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...clientRest,
     ...tagRest,
     ...invoiceRest,
-    async listExpenses() {
-      // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
-      // weeklyTotals} — double-nested. Items use `notes` (no `name`). Tolerate a
-      // plain array too (older shape) for safety.
-      type ExpenseRow = { id: string; name?: string; notes?: string };
-      const data = (await call("GET", `${ws}/expenses`)) as
-        | ExpenseRow[]
-        | { expenses?: { expenses?: ExpenseRow[] } };
-      const rows = Array.isArray(data) ? data : (data?.expenses?.expenses ?? []);
-      return rows.map((e): EntitySummary => ({ id: e.id, name: e.name ?? e.notes ?? e.id }));
-    },
+    ...expenseRest,
     async listUsers() {
       const rows = (await call("GET", `${ws}/users`)) as Array<{
         id: string;
@@ -131,6 +117,10 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       }
       if (entityType === "invoice") {
         await invoiceRest.deleteInvoice(id);
+        return;
+      }
+      if (entityType === "expense") {
+        await expenseRest.deleteExpense(id);
         return;
       }
       const pathByType: Record<string, string> = {
@@ -178,25 +168,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       const merged = { ...current, ...(fields ?? {}) };
       const updated = (await call("PUT", path, merged)) as { id?: string; name?: string };
       return { id: updated.id ?? id, name: updated.name ?? id };
-    },
-    async manageExpense(input) {
-      if (input.operation === "delete") {
-        await call("DELETE", `${ws}/expenses/${input.id}`);
-        return null;
-      }
-      // Create/update are multipart/form-data (Clockify expects a form, optionally
-      // with a receipt file). `amount` is major currency units; `name` → `notes`.
-      const form = new FormData();
-      if (input.userId !== undefined) form.append("userId", input.userId);
-      if (input.categoryId !== undefined) form.append("categoryId", input.categoryId);
-      if (input.amount !== undefined) form.append("amount", String(input.amount));
-      if (input.date !== undefined) form.append("date", toClockifyDate(input.date) ?? input.date);
-      if (input.name !== undefined) form.append("notes", input.name);
-      const method = input.operation === "create" ? "POST" : "PUT";
-      const path =
-        input.operation === "create" ? `${ws}/expenses` : `${ws}/expenses/${input.id}`;
-      const e = (await call(method, path, form)) as { id: string; notes?: string };
-      return { id: e.id, name: e.notes ?? input.name ?? "expense" };
     },
     async manageTimeOff({ policyId, requestId, decision }) {
       // Approve/deny a time-off request under its policy. NOTE: exercised live as

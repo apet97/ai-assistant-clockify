@@ -527,6 +527,62 @@ async function runInvoices(h: LiveHarness): Promise<void> {
 }
 AREA_RUNNERS.push(runInvoices);
 
+/**
+ * Phase 7 — Expenses (multipart). Creates an expense against a real category
+ * (from fixtures), reads it (list/get), updates it (multipart PUT changeFields),
+ * then deletes it — a full create→delete round-trip. Separately exercises the
+ * category CRUD on a throwaway category (list/create/update/delete). All
+ * self-cleaning; if the workspace has no expense category, the expense path
+ * records SKIP and only the category round-trip runs.
+ */
+async function runExpenses(h: LiveHarness): Promise<void> {
+  console.log("\nAREA: expenses");
+  const wsPath = `/workspaces/${h.ctx.workspaceId}`;
+  const today = new Date().toISOString();
+  const notes = `AIASSIST_SMOKE_exp_${h.sfx}`;
+  let expenseId: string | undefined;
+  let categoryId: string | undefined;
+  try {
+    await h.read("clockify_expenses_categories_list", {});
+    if (h.fixtures.categoryId) {
+      const created = await h.risky("clockify_expenses_create", {
+        amount: 1,
+        date: today,
+        categoryId: h.fixtures.categoryId,
+        notes,
+      });
+      expenseId = created?.changed?.created?.[0]?.id;
+      await h.read("clockify_expenses_list", {});
+      if (expenseId) {
+        await h.read("clockify_expenses_get", { id: expenseId });
+        await h.risky("clockify_expenses_update", { id: expenseId, notes: `${notes}_v2` });
+        const del = await h.risky("clockify_expenses_delete", { id: expenseId, notes });
+        if (del) expenseId = undefined;
+      }
+    } else {
+      h.record("clockify_expenses_create", "SKIP", "no expense category fixture on sac workspace");
+    }
+    // Category round-trip on a throwaway (unused) category.
+    const cat = await h.risky("clockify_expenses_categories_create", { name: `AIASSIST_SMOKE_cat_${h.sfx}` });
+    categoryId = cat?.changed?.created?.[0]?.id;
+    if (categoryId) {
+      await h.risky("clockify_expenses_categories_update", { id: categoryId, name: `AIASSIST_SMOKE_cat_${h.sfx}_v2` });
+      const del = await h.risky("clockify_expenses_categories_delete", { id: categoryId, name: `AIASSIST_SMOKE_cat_${h.sfx}_v2` });
+      if (del) categoryId = undefined;
+    }
+  } finally {
+    if (expenseId) {
+      await h.call("DELETE", `${wsPath}/expenses/${expenseId}`, undefined, true).catch(() => {});
+    }
+    if (categoryId) {
+      // Categories must be archived before delete (matches live-sweep).
+      await h.call("PATCH", `${wsPath}/expenses/categories/${categoryId}/status`, { archived: true }, true).catch(() => {});
+      await h.call("DELETE", `${wsPath}/expenses/categories/${categoryId}`, undefined, true).catch(() => {});
+    }
+  }
+}
+AREA_RUNNERS.push(runExpenses);
+
 async function main(): Promise<void> {
   const me = (await call("GET", "/user")) as { id: string; name: string };
   const ws = `/workspaces/${WORKSPACE_ID}`;
@@ -690,20 +746,8 @@ async function main(): Promise<void> {
       });
     }
 
-    // expense create then delete (self-cleaning, multipart) — needs a category.
-    if (categoryId) {
-      const exp = await risky(ctx, "clockify_manage_expense", {
-        operation: "create",
-        name: `AIASSIST_SMOKE_exp_${sfx}`,
-        amount: 1,
-        date: new Date().toISOString().slice(0, 10),
-        categoryId,
-      });
-      const expId = exp?.changed?.created?.[0]?.id;
-      if (expId) await risky(ctx, "clockify_manage_expense", { operation: "delete", id: expId });
-    } else {
-      record("clockify_manage_expense", "SKIP", "no expense category available");
-    }
+    // expenses are exercised by the dedicated runExpenses area runner below
+    // (typed multipart create→reads→update→delete + category round-trip).
 
     // time-off + schedule: preview-only by design (see previewOnly() rationale).
     await previewOnly(ctx, "clockify_manage_time_off", {
