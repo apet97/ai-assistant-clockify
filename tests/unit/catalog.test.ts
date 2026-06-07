@@ -69,6 +69,13 @@ describe("catalog", () => {
     }
   });
 
+  it("includes the typed report actions (Phase 14)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of ["clockify_reports_summary", "clockify_reports_detailed", "clockify_reports_weekly"]) {
+      expect(names).toContain(required);
+    }
+  });
+
   it("includes the typed user + group actions (Phase 13)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
     for (const required of [

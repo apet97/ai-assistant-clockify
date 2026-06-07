@@ -15,6 +15,7 @@ export type { TimeOffPort } from "./time-off.js";
 export type { HolidayPort } from "./holidays.js";
 export type { SchedulingPort } from "./scheduling.js";
 export type { ApprovalPort } from "./approvals.js";
+export type { ReportPort } from "./reports.js";
 export type { UserPort } from "./users.js";
 export type { WebhookPort } from "./webhooks.js";
 export type { MiscRiskyPort } from "./misc-risky.js";

@@ -14,6 +14,7 @@ import { makeSchedulingRest } from "./rest/scheduling.js";
 import { makeApprovalRest } from "./rest/approvals.js";
 import { makeWebhookRest } from "./rest/webhooks.js";
 import { makeUserRest } from "./rest/users.js";
+import { makeReportRest } from "./rest/reports.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -83,6 +84,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const approvalRest = makeApprovalRest(core, opts.workspaceId);
   const webhookRest = makeWebhookRest(core, opts.workspaceId);
   const userRest = makeUserRest(core, opts.workspaceId);
+  const reportRest = makeReportRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -101,6 +103,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...approvalRest,
     ...webhookRest,
     ...userRest,
+    ...reportRest,
     async deleteEntity({ entityType, id }) {
       // Projects and clients cannot be deleted while active — Clockify rejects a
       // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.

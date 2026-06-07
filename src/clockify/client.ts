@@ -12,6 +12,7 @@ import type {
   HolidayPort,
   SchedulingPort,
   ApprovalPort,
+  ReportPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
@@ -103,6 +104,7 @@ export interface WorkspaceClient
     HolidayPort,
     SchedulingPort,
     ApprovalPort,
+    ReportPort,
     UserPort,
     WebhookPort,
     MiscRiskyPort {}
@@ -122,6 +124,7 @@ export type {
   HolidayPort,
   SchedulingPort,
   ApprovalPort,
+  ReportPort,
   UserPort,
   WebhookPort,
   MiscRiskyPort,
