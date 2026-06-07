@@ -18,7 +18,10 @@ export type FeatureGroup =
   | "time_off_approvals"
   | "scheduling"
   | "webhooks"
-  | "workspace_settings";
+  | "workspace_settings"
+  | "custom_fields"
+  | "approvals"
+  | "audit_log";
 
 export type PermissionLevel = "off" | "read" | "read_write";
 
@@ -33,6 +36,9 @@ export const FEATURE_GROUPS: FeatureGroup[] = [
   "scheduling",
   "webhooks",
   "workspace_settings",
+  "custom_fields",
+  "approvals",
+  "audit_log",
 ];
 
 export interface AdminPolicy {

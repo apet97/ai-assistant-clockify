@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { migrate } from "./schema.js";
 import { decryptSecret, encryptSecret } from "./encryption.js";
-import { adminPolicySchema, type AdminPolicy } from "../harness/permissions.js";
+import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
 import type { RiskLabel } from "../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt, ErrorReceipt } from "../harness/receipts.js";
@@ -167,7 +167,20 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         )
         .get(workspaceId, adminUserId) as { policy_json: string } | undefined;
       if (!row) return undefined;
-      return adminPolicySchema.parse(JSON.parse(row.policy_json));
+      // Back-compat migration: feature groups added after this policy was written
+      // are absent from the stored JSON, but `adminPolicySchema` is `.strict()`
+      // and requires every current group. Fill any missing key with the locked
+      // full-access default (`read_write`) before validating, preserving any
+      // non-default values the admin set on the groups that were stored.
+      const stored = JSON.parse(row.policy_json) as {
+        version?: number;
+        groups?: Record<string, unknown>;
+      };
+      const merged = {
+        version: stored.version ?? 1,
+        groups: { ...defaultAdminPolicy().groups, ...(stored.groups ?? {}) },
+      };
+      return adminPolicySchema.parse(merged);
     },
 
     upsertAdminPolicy(workspaceId, adminUserId, policy) {
