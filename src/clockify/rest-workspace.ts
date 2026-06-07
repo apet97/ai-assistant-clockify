@@ -3,6 +3,7 @@ import { createRestCore } from "./rest/core.js";
 import { makeProjectRest } from "./rest/projects.js";
 import { makeTimeEntryRest } from "./rest/time-entries.js";
 import { makeTaskRest } from "./rest/tasks.js";
+import { makeClientRest } from "./rest/clients.js";
 
 /**
  * Real Clockify REST adapter for the `WorkspaceClient` port. Does I/O only — it
@@ -67,6 +68,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);
   const taskRest = makeTaskRest(core, opts.workspaceId);
+  const clientRest = makeClientRest(core, opts.workspaceId);
 
   return {
     // Typed area modules (spread first); the inline methods below cover the
@@ -74,6 +76,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...projectRest,
     ...timeEntryRest,
     ...taskRest,
+    ...clientRest,
     async listTags() {
       const rows = (await call("GET", `${ws}/tags?page-size=200&archived=false`)) as Array<{
         id: string;
@@ -85,18 +88,6 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     async createTag({ name }) {
       const t = (await call("POST", `${ws}/tags`, { name })) as { id: string; name: string };
       return { id: t.id, name: t.name };
-    },
-    async listClients() {
-      const rows = (await call("GET", `${ws}/clients?page-size=200`)) as Array<{
-        id: string;
-        name: string;
-        archived?: boolean;
-      }>;
-      return rows.map((c): EntitySummary => ({ id: c.id, name: c.name, archived: c.archived }));
-    },
-    async createClient({ name }) {
-      const c = (await call("POST", `${ws}/clients`, { name })) as { id: string; name: string };
-      return { id: c.id, name: c.name };
     },
     async listExpenses() {
       // Live shape: /expenses returns {expenses:{expenses:[...],count}, dailyTotals,
@@ -137,9 +128,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         return;
       }
       if (entityType === "client") {
-        const current = ((await call("GET", `${ws}/clients/${id}`)) ?? {}) as Record<string, unknown>;
-        await call("PUT", `${ws}/clients/${id}`, { ...current, archived: true });
-        await call("DELETE", `${ws}/clients/${id}`);
+        await clientRest.deleteClient(id); // archive-then-delete
         return;
       }
       const pathByType: Record<string, string> = {
