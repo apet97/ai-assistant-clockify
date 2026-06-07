@@ -38,7 +38,6 @@ describe("catalog", () => {
       "clockify_list_entities",
       "clockify_get_entity",
       "clockify_update_entity",
-      "clockify_manage_schedule",
       "assistant_show_permissions",
     ]) {
       expect(names).toContain(required);
@@ -68,6 +67,23 @@ describe("catalog", () => {
     ]) {
       expect(names).toContain(required);
     }
+  });
+
+  it("includes the typed scheduling actions (Phase 10)", () => {
+    const names = ACTION_CATALOG.map((a) => a.name);
+    for (const required of [
+      "clockify_scheduling_assignments_list",
+      "clockify_scheduling_assignments_get",
+      "clockify_scheduling_assignments_create",
+      "clockify_scheduling_assignments_update",
+      "clockify_scheduling_assignments_delete",
+      "clockify_scheduling_publish",
+      "clockify_scheduling_project_totals",
+      "clockify_scheduling_user_totals",
+    ]) {
+      expect(names).toContain(required);
+    }
+    expect(names).not.toContain("clockify_manage_schedule");
   });
 
   it("includes the typed time-off + holiday actions (Phase 9)", () => {

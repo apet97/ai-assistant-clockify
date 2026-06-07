@@ -292,22 +292,5 @@ describe("rest workspace client", () => {
 
   // (time-off approve/deny are now typed in rest/time-off.ts — see tests/unit/rest-time-off.test.ts)
 
-  it("manageSchedule POSTs a publish date range", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "pub1" }));
-    const r = await client(f as any).manageSchedule!({
-      operation: "publish",
-      start: "2030-01-01T00:00:00Z",
-      end: "2030-01-07T00:00:00Z",
-    });
-    expect(r).toEqual({ id: "pub1", name: "schedule" });
-    const [url, init] = (f as any).mock.calls[0];
-    expect(url).toBe(
-      "https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/publish",
-    );
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({
-      start: "2030-01-01T00:00:00Z",
-      end: "2030-01-07T00:00:00Z",
-    });
-  });
+  // (scheduling publish is now typed in rest/scheduling.ts — see tests/unit/rest-scheduling.test.ts)
 });

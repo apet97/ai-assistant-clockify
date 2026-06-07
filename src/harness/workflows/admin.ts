@@ -294,56 +294,6 @@ const updateEntity = defineAction({
   },
 });
 
-const manageSchedule = defineAction({
-  name: "clockify_manage_schedule",
-  description: "Publish a schedule. External side effect — always previews and requires confirmation.",
-  featureGroup: "scheduling",
-  risks: ["external_side_effect"],
-  schema: z.object({
-    operation: z.enum(["publish"]),
-    // Publishing applies to a date range, not a single id.
-    start: z.string().min(1), // ISO date/datetime
-    end: z.string().min(1),
-  }),
-  async handler(ctx, args) {
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: `${args.operation} schedule`,
-        featureGroup: "scheduling",
-        riskLabels: ["external_side_effect"],
-        targets: [],
-        expectedChanges: [`${args.operation} the schedule for ${args.start} → ${args.end}`],
-        reversibility: "Publishing notifies assignees; unpublishing may be required to revert.",
-        warnings: ["Publishing a schedule notifies assignees."],
-      },
-      operation: {
-        actionName: "clockify_manage_schedule",
-        featureGroup: "scheduling",
-        risks: ["external_side_effect"],
-        payload: { operation: args.operation, start: args.start, end: args.end },
-      },
-    };
-  },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { operation: "publish"; start: string; end: string };
-    if (!ctx.clockify.manageSchedule) {
-      return errorReceipt({
-        action: "clockify_manage_schedule",
-        code: "unsupported",
-        message: "Schedule management is not supported by the configured Clockify client.",
-      });
-    }
-    const result = await ctx.clockify.manageSchedule(payload);
-    return successReceipt({
-      action: "clockify_manage_schedule",
-      entity: "schedule",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: result ? [{ type: "schedule", id: result.id, name: result.name }] : [] },
-    });
-  },
-});
-
 const showPermissions = defineAction({
   name: "assistant_show_permissions",
   description: "Show the caller's own assistant permissions for this workspace. Read-only.",
@@ -368,6 +318,5 @@ export const ADMIN_ACTIONS: ActionDefinition[] = [
   manageWebhook,
   updatePermissions,
   updateEntity,
-  manageSchedule,
   showPermissions,
 ];

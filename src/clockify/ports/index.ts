@@ -13,6 +13,7 @@ export type { ExpensePort } from "./expenses.js";
 export type { CustomFieldPort } from "./custom-fields.js";
 export type { TimeOffPort } from "./time-off.js";
 export type { HolidayPort } from "./holidays.js";
+export type { SchedulingPort } from "./scheduling.js";
 export type { UserPort } from "./users.js";
 export type { WebhookPort } from "./webhooks.js";
 export type { MiscRiskyPort } from "./misc-risky.js";

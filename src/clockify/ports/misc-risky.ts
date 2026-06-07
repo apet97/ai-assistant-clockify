@@ -28,10 +28,4 @@ export interface MiscRiskyPort {
     id: string;
     fields?: Record<string, unknown>;
   }): Promise<EntitySummary>;
-  /** Publish a schedule for a date range (risky external side effect — confirm-gated). */
-  manageSchedule?(input: {
-    operation: "publish";
-    start?: string;
-    end?: string;
-  }): Promise<EntitySummary | null>;
 }
