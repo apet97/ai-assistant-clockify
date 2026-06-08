@@ -26,4 +26,15 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("clockify_delete_entity");
     expect(prompt).toContain("time_tracking");
   });
+
+  it("nudges the planner to use create_work_package's startTimer for one-turn create-and-start", () => {
+    expect(prompt).toContain("startTimer");
+    expect(prompt).toContain("clockify_create_work_package");
+  });
+
+  it("nudges the planner to resolve an id (or pass a name) before an id-based delete", () => {
+    // Guidance so a delete never dead-ends on a missing id.
+    expect(prompt.toLowerCase()).toContain("id");
+    expect(prompt).toContain("clockify_tags_delete");
+  });
 });
