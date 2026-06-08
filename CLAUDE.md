@@ -202,6 +202,35 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
   omits the required `start`; and a tag *rename* sometimes makes the planner call
   `clockify_tags_list` instead of `clockify_tags_update` (narrates "renaming" but doesn't).
 
+## Known limitations & recommended next steps (honest state, 2026-06-09)
+
+Live dogfooding (see `scripts/live-chat-tour.ts`, `live-invoice-flow.ts`) hardened a lot
+of rough edges, but a few real limits remain. **None of them is fixed by swapping the
+LLM** — they are architecture/platform issues:
+
+- **The planner is sent action name/description/risk but NOT the input schemas**, so it
+  guesses argument shapes (flat `projectName`, `startTimer:true`, missing ids, omitted
+  required fields). We mitigate per-action with forgiving Zod (`z.preprocess`/unions),
+  server-side defaults (reports/audit ranges, invoice number/dates/currency), and
+  name→id resolution (tags/projects/clients). This is whack-a-mole. **Highest-leverage
+  next step:** feed the model a compact arg schema/example per action (or move to native
+  tool/function-calling) so correct args are the default, not a fallback.
+- **Invoice line items require a workspace-configured invoice item type** (Clockify →
+  Workspace settings → Invoices). There is **no API to list or create them**; a fresh
+  workspace has none, so amounts stay $0 until an admin sets one up in the UI (one-time).
+  The add-on now creates the invoice and returns an actionable warning instead of a
+  silent $0. Not a model or code bug — a Clockify platform constraint.
+- **Models narrate false completion.** Every backend tried (deepseek-v4-pro, gemini-cli)
+  sometimes says "Done/Confirmed" for a pending risky preview. The route now overrides
+  this deterministically (truthful previews) — the right fix, model-agnostic.
+- **Smaller open edges:** `clockify_log_work` can `invalid_args` when the planner omits
+  the required `start` (candidate: default/parse it); tag *rename* sometimes lists instead
+  of updating; `webhooks_list`/`workspace_get` 401 on the dev host (likely dev-only).
+- **Model choice:** not the bottleneck. `deepseek-v4-pro` (current) and the `gemini-cli`
+  backend behave similarly on the above; a swap won't change the schema-guessing or the
+  invoice-item-type limits. Switch backends via `LLM_PROVIDER` (see above) only for
+  cost/latency/quality preference, not to fix these.
+
 ## Build, Test, Run
 
 ```bash

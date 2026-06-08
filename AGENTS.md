@@ -46,6 +46,14 @@ flat `projectName`/bare strings, folded by a `z.preprocess`). (2) `clockify_tags
 accepts an exact `name` and resolves it to an id (no `invalid_args` dead-end). The
 planner prompt was reworded to match. See `CLAUDE.md` → Current Status.
 
+**Honest state / what's NOT a model problem (see `CLAUDE.md` → "Known limitations & next
+steps"):** the planner is never sent action input schemas, so it guesses arg shapes — we
+band-aid per action (forgiving Zod + server defaults + name→id). The real next step is
+feeding arg schemas/examples to the model (or native tool-calling), NOT swapping the LLM.
+Invoice amounts need a workspace-configured invoice item type (Clockify UI only, no API).
+Risky-action "Done/Confirmed" hallucinations are neutralized deterministically by the
+route (truthful previews). `deepseek-v4-pro` and `gemini-cli` behave alike here.
+
 Pending/deferred: the AUDIT host has **no token claim** (the URL claims are
 backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-only
 (`resolveClockifyAuditBase`); on dev/non-audit environments audit actions now return
