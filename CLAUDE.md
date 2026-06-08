@@ -146,6 +146,31 @@ npm run verify         # type-check + test + build (the gate)
 npm run dev            # tsx src/server.ts (needs env, see below)
 ```
 
+## Local dev hosting (tunnel)
+
+The embedded add-on must be reachable over HTTPS for Clockify to load it. For dev
+we use a **Cloudflare quick tunnel** to `:3001`. Its `*.trycloudflare.com` URL is
+**random per `cloudflared` start** (no Cloudflare account/domain needed, but the URL
+is not fixed). Manage the tunnel + server as one unit with `scripts/dev-tunnel.sh`:
+
+```bash
+scripts/dev-tunnel.sh up       # start tunnel+server, write BASE_URL into .env.server, print URL
+scripts/dev-tunnel.sh status   # tunnel URL, BASE_URL match, server health
+scripts/dev-tunnel.sh sync     # tunnel up but BASE_URL stale -> rewrite + restart server
+scripts/dev-tunnel.sh restart  # rotate the tunnel (NEW url) + resync
+scripts/dev-tunnel.sh down     # stop both
+```
+
+`up` is **idempotent**: a healthy managed tunnel is reused (URL does NOT rotate), so
+the URL stays fixed for the life of that `cloudflared` process. When the URL *does*
+change (first start, or after `restart`/a crash), the script rewrites `BASE_URL` and
+restarts the server automatically — but you must still **re-register the manifest URL
+in the dev console** (Clockify pins the component `baseUrl` at install time): open
+developer.clockify.me → workspace settings → Add-ons, paste `<url>/manifest` into
+"Insert link", and (uninstall then) INSTALL. A truly fixed URL needs the
+named-tunnel-on-a-domain route instead (Cloudflare zone + `cloudflared tunnel
+login`/`create`/`route dns`).
+
 ## Runtime & Known Constraints
 
 - **Node:** use Node 20+. On this machine only **Node 26** runs (the brew
