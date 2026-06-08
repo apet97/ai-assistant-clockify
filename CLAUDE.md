@@ -88,7 +88,7 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**447 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**461 tests**: type-check + Vitest + build).
 - The REST `WorkspaceClient` adapter is composed from a multi-host core
   (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
   module per area (`src/clockify/rest/<area>.ts`), assembled in
@@ -134,16 +134,24 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 - **Deferred:** Phase 17 (raw `clockify_api_get`/`api_request` fallback) — omitted
   from V1 (letting the model propose arbitrary paths conflicts with "the harness
   decides, not the model"); requires a safety review before ever building.
-- **Known live planner quirks (open — see `NEXT_SESSION_PROMPT.md`):** the embedded
-  chat was exercised live (reads, permissions, safe write, risky write→preview→
-  button-confirm, audit clean-error — all good). Two DeepSeek-planner gaps remain:
-  (1) **"create a project AND start a timer on it" in ONE turn starts a BARE timer**
-  (`entry.projectId` empty) — the planner can't reference the not-yet-created project
-  id same-turn; a follow-up turn (id in history) attaches it correctly. (2)
-  **`clockify_tags_delete` sometimes drops its `id`** → `invalid_args`, so no preview
-  fires; needs firmer planner guidance or name-resolution in the handler. Both are
-  planner/prompting issues, not harness bugs (the harness correctly rejects malformed
-  calls). Also: Clockify **reserves a project name even after archive-then-delete**.
+- **Live planner quirks RESOLVED + PROVEN live (2026-06-08):** the two known
+  DeepSeek-planner gaps are now smoothed end-to-end (`scripts/live-planner-quirks.ts`,
+  `PASS=9 FAIL=0`, self-cleaning + 0 leftovers):
+  (1) **"create a project AND start a timer on it" in ONE turn** no longer starts a
+  BARE timer. `clockify_create_work_package` gained an optional `startTimer` that
+  resolves/creates the project (and task) and starts the timer on that id
+  server-side (gated additionally by `time_tracking` write; skipped with a warning
+  when read-only). Crucially, live debug showed the planner emits `startTimer: true`
+  (boolean) and a flat `projectName` (not nested `project:{name}`), so the schema now
+  accepts a boolean OR options object and a `z.preprocess` folds bare-string entities
+  + flat `*Name` aliases into the canonical nested shape.
+  (2) **`clockify_tags_delete` dropping its `id`** no longer dead-ends at
+  `invalid_args`: the handler accepts an exact `name` and resolves it to an id
+  (list→`matchByName`, clarify on none/many), with the resolved id pinned into the
+  confirmable operation. The planner prompt was reworded to pass the name directly
+  (not list-first) and to use `create_work_package`+`startTimer` for one-turn
+  create+timer. Note: Clockify **reserves a project name even after archive-then-delete**
+  (so tests use unique `AIASSIST_SMOKE_*` names).
 
 ## Build, Test, Run
 
@@ -237,6 +245,11 @@ LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts   # needs LIVE_ADDON_TOKEN / LIVE
 # owner's member id, NOT the install token's `user` claim), or pass USER_TOKEN /
 # USER_TOKEN_FILE from the live iframe. PASS=16 against the dev sandbox.
 npx tsx --env-file=.env.server scripts/live-confirm-flow.ts
+
+# Planner-quirks proof: one-turn create-project+start-timer attaches the timer, and
+# delete-tag-by-name returns a preview->confirm. Same bootstrap as confirm-flow;
+# self-cleaning AIASSIST_SMOKE_* with a final 0-leftover sweep. PASS=9.
+npx tsx --env-file=.env.server scripts/live-planner-quirks.ts
 ```
 
 The add-on's own request path uses the REST `WorkspaceClient` adapter with the

@@ -8,7 +8,7 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **447 tests**), and the **full
+implemented and verified (`npm run verify` green, **461 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
 catalog actions across 16 feature areas + 3 hosts.
 
@@ -38,10 +38,13 @@ on a URL change, re-register the manifest in the dev console (restore the sessio
 `developer.marketplace.cake.com/test-accounts` → "Log in as" John Owner). **To
 continue/test in a fresh session, start from `NEXT_SESSION_PROMPT.md`.**
 
-**Open (planner quirks, not harness bugs):** (1) "create a project AND start a timer
-on it" in ONE turn starts a BARE timer (planner can't reference the new project id
-same-turn; a follow-up turn attaches it); (2) `clockify_tags_delete` sometimes drops
-its `id` → `invalid_args`. See `CLAUDE.md` → Current Status / `NEXT_SESSION_PROMPT.md`.
+**Planner quirks RESOLVED + proven live (`scripts/live-planner-quirks.ts`, PASS=9):**
+(1) one-turn "create a project AND start a timer on it" now attaches the timer —
+`clockify_create_work_package` gained `startTimer` (resolves the new project id
+server-side) and accepts the shapes the planner actually emits (`startTimer: true`,
+flat `projectName`/bare strings, folded by a `z.preprocess`). (2) `clockify_tags_delete`
+accepts an exact `name` and resolves it to an id (no `invalid_args` dead-end). The
+planner prompt was reworded to match. See `CLAUDE.md` → Current Status.
 
 Pending/deferred: the AUDIT host has **no token claim** (the URL claims are
 backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-only

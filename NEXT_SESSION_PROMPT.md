@@ -12,8 +12,9 @@ Continue the Clockify "AI Assistant" add-on. Repo:
 Read `CLAUDE.md` + `AGENTS.md` first, and recall the project memories
 (`clockify-addon-public-key-builtin`, `clockify-api-base-resolution`,
 `clockify-dev-console-login-and-reinstall`). V1 + full REST parity are COMPLETE;
-`npm run verify` is green at **447 tests**. The risky-write confirm flow and the
-audit-host fix are both done, committed, and proven live last session.
+`npm run verify` is green at **461 tests**. The risky-write confirm flow, the
+audit-host fix, AND the two live planner quirks are all done, committed, and proven
+live (the planner quirks via `scripts/live-planner-quirks.ts`, PASS=9).
 
 ## Bring the live environment up (do this first)
 
@@ -57,23 +58,29 @@ then POST messages (no secrets printed):
 Reads (list tags/projects), `assistant_show_permissions`, safe write
 (`clockify_tags_create`), risky write (`clockify_tags_delete` → preview →
 button-confirm), and the audit question returns the **clean** "Audit log is not
-available in this Clockify environment" error (not a crash).
+available in this Clockify environment" error (not a crash). PLUS (smoothed
+2026-06-08): one-turn **"create a project and start a timer on it"** attaches the
+timer to the new project (`clockify_create_work_package` + `startTimer`), and
+**"delete the tag named X"** resolves the name → preview → confirm. Re-smoke both
+with `npx tsx --env-file=.env.server scripts/live-planner-quirks.ts` (PASS=9).
 
-## TASKS — fix the two live planner quirks (TDD; keep `npm run verify` green)
+## TASKS — both live planner quirks are DONE (kept here for context)
 
-1. **One-turn "create a project AND start a timer on it" starts a BARE,
-   unattached timer** (`entry.projectId` empty). The planner runs one model call and
-   can't reference the not-yet-created project id in the same turn. Given the id in a
-   follow-up turn it attaches correctly. Fix one of:
-   - a planner-prompt nudge to sequence create → then start the timer in a follow-up
-     when the project doesn't exist yet, OR
-   - a combined workflow action (or extend `create_work_package`) that creates/reuses
-     the project and starts the timer on it in one harness step (resolves the id
-     server-side, no model id-juggling). Add a mocked-fetch test pinning the request
-     shape (timer carries the new `projectId`).
-2. **Tag delete sometimes loses its `id` arg** → `invalid_args: Required`, so no
-   preview fires. Tighten the catalog description / planner guidance so the model
-   reliably lists→resolves→passes `id` (or accept name + resolve in the handler).
+Resolved last session (TDD, `npm run verify` green at 461, proven live):
+
+1. **One-turn "create a project AND start a timer on it"** — extended
+   `clockify_create_work_package` with an optional `startTimer` that
+   creates/reuses the project (and task) and starts the timer on that id
+   server-side (gated by `time_tracking`; warns + skips when read-only). Live debug
+   showed the planner emits `startTimer: true` + a flat `projectName`, so the schema
+   accepts a boolean OR object and a `z.preprocess` folds bare-string/flat `*Name`
+   shapes into the nested form. Mocked-fetch test pins the timer carries the new id.
+2. **Tag delete losing its `id`** — `clockify_tags_delete` now accepts an exact
+   `name` and resolves it (list→`matchByName`, clarify on none/many), id pinned into
+   the operation. Planner prompt reworded to pass the name directly (not list-first).
+
+No open implementation tasks. If continuing: marketplace submission prep, or the
+deferred prod-AUDIT-host clearance (below).
 
 ## Known gotchas (encoded in memory)
 
