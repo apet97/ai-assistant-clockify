@@ -21,16 +21,21 @@ export function lifecycleRouter(deps: AppDeps): Router {
     if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
     const body = req.body ?? {};
+    // INSTALLED payload (Clockify): { addonId, authToken, workspaceId, asUser,
+    // apiUrl, addonUserId, webhooks }. Only the installation token + workspace
+    // are essential — capture the rest opportunistically. Requiring optional
+    // metadata (e.g. addonUserId) would reject otherwise-valid installs.
     const workspaceId = body.workspaceId ?? claims.workspaceId;
-    if (!workspaceId || !body.addonId || !body.authToken || !body.addonUserId) {
+    const addonToken = body.authToken;
+    if (!workspaceId || !addonToken) {
       return res.status(400).json({ ok: false, code: "invalid_payload" });
     }
 
     deps.store.saveInstallation({
       workspaceId,
-      addonId: body.addonId,
-      addonUserId: body.addonUserId,
-      addonToken: body.authToken,
+      addonId: body.addonId ?? claims.addonId ?? "",
+      addonUserId: body.addonUserId ?? "",
+      addonToken,
       apiUrl: body.apiUrl,
       backendUrl: claims.backendUrl,
       status: "active",

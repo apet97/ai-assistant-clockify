@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../../src/config.js";
+import { CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM } from "../../src/addon/clockify-public-key.js";
 
 const baseEnv = {
   PORT: "3001",
@@ -46,5 +47,16 @@ describe("loadConfig", () => {
 
   it("rejects missing required env", () => {
     expect(() => loadConfig({ PORT: "3001" })).toThrow();
+  });
+
+  it("defaults the Clockify public key to the built-in platform key", () => {
+    const { CLOCKIFY_ADDON_PUBLIC_KEY_PEM: _omit, ...withoutPem } = baseEnv;
+    const cfg = loadConfig({ NODE_ENV: "test", ...withoutPem });
+    expect(cfg.clockifyAddonPublicKeyPem).toBe(CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM);
+  });
+
+  it("lets the env override the built-in public key", () => {
+    const cfg = loadConfig({ NODE_ENV: "test", ...baseEnv });
+    expect(cfg.clockifyAddonPublicKeyPem).toBe("public-key");
   });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM } from "./addon/clockify-public-key.js";
 
 /**
  * Application configuration loaded and validated from environment variables
@@ -25,7 +26,7 @@ const envSchema = z.object({
   NODE_ENV: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive(),
   BASE_URL: z.string().min(1),
-  CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1),
+  CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
   CLOCKIFY_ADDON_KEY: z.string().min(1),
   SESSION_SECRET: z.string().min(1),
   DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
@@ -49,7 +50,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     nodeEnv,
     port: parsed.PORT,
     baseUrl: parsed.BASE_URL,
-    clockifyAddonPublicKeyPem: parsed.CLOCKIFY_ADDON_PUBLIC_KEY_PEM,
+    // Clockify signs every add-on token with one platform-wide key. Default to
+    // the built-in key so install/lifecycle verification works out of the box;
+    // the env var only overrides it for other Clockify environments/regions.
+    clockifyAddonPublicKeyPem:
+      parsed.CLOCKIFY_ADDON_PUBLIC_KEY_PEM ?? CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM,
     clockifyAddonKey: parsed.CLOCKIFY_ADDON_KEY,
     sessionSecret: parsed.SESSION_SECRET,
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
