@@ -11,6 +11,33 @@ function nowIso(ctx: ActionContext): string {
 }
 
 /**
+ * Fold the shapes the planner naturally emits into the canonical nested form
+ * before validation: a bare string for an entity (`project: "Apollo"`) and the
+ * flat `*Name` aliases (`projectName: "Apollo"`) both mean `{ name: ... }`. This
+ * keeps the "create a project and start a timer on it" one-turn request from
+ * dead-ending on a schema mismatch (the planner cannot be relied on to nest).
+ */
+function normalizeWorkPackageArgs(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const r: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  for (const key of ["tag", "client", "project", "task"]) {
+    if (typeof r[key] === "string" && (r[key] as string).trim()) r[key] = { name: (r[key] as string).trim() };
+  }
+  const aliases: Array<[flat: string, nested: string]> = [
+    ["tagName", "tag"],
+    ["projectName", "project"],
+    ["taskName", "task"],
+  ];
+  for (const [flat, nested] of aliases) {
+    if (r[nested] === undefined && typeof r[flat] === "string" && (r[flat] as string).trim()) {
+      r[nested] = { name: (r[flat] as string).trim() };
+    }
+    delete r[flat];
+  }
+  return r;
+}
+
+/**
  * Work-structure safe-write + read workflows (SPEC "Safe Writes" / reads).
  * `create_work_package` creates or reuses a client / project / task / tag by
  * name; `list_entities` and `get_entity` are reads that route the policy gate to
@@ -67,24 +94,32 @@ const createWorkPackage = defineAction({
     "Create or reuse a client, project, task, and/or tag by name in one step. Set `startTimer` to also start a timer on the created/reused project in the same step — use this for \"create a project and start a timer on it\" so the new project id is resolved server-side (do not emit a separate start-timer that references an id that does not exist yet).",
   featureGroup: "work_structure",
   risks: ["safe_write"],
-  schema: z
-    .object({
-      tag: z.object({ name: z.string().min(1) }).optional(),
-      client: z.object({ name: z.string().min(1) }).optional(),
-      project: z
-        .object({ name: z.string().min(1), clientName: z.string().optional() })
-        .optional(),
-      task: z.object({ name: z.string().min(1) }).optional(),
-      startTimer: z
-        .object({
-          description: z.string().optional(),
-          billable: z.boolean().optional(),
-        })
-        .optional(),
-    })
-    .refine((value) => value.tag || value.client || value.project || value.task, {
-      message: "Provide at least one of tag, client, project, or task.",
-    }),
+  schema: z.preprocess(
+    normalizeWorkPackageArgs,
+    z
+      .object({
+        tag: z.object({ name: z.string().min(1) }).optional(),
+        client: z.object({ name: z.string().min(1) }).optional(),
+        project: z
+          .object({ name: z.string().min(1), clientName: z.string().optional() })
+          .optional(),
+        task: z.object({ name: z.string().min(1) }).optional(),
+        // Accept either a bare `true` (the planner's natural shape) or an options
+        // object. `false`/absent means do not start a timer.
+        startTimer: z
+          .union([
+            z.boolean(),
+            z.object({
+              description: z.string().optional(),
+              billable: z.boolean().optional(),
+            }),
+          ])
+          .optional(),
+      })
+      .refine((value) => value.tag || value.client || value.project || value.task, {
+        message: "Provide at least one of tag, client, project, or task.",
+      }),
+  ),
   async handler(ctx, args) {
     const created: EntityRef[] = [];
     const reused: EntityRef[] = [];
@@ -160,6 +195,7 @@ const createWorkPackage = defineAction({
     // yet). Starting a timer is a `time_tracking` write, so it is gated by that
     // group independently of this action's `work_structure` gate.
     if (args.startTimer) {
+      const timerOpts = typeof args.startTimer === "object" ? args.startTimer : {};
       if (!projectId) {
         return {
           kind: "clarify",
@@ -176,10 +212,10 @@ const createWorkPackage = defineAction({
       } else {
         const entry = await ctx.clockify.startTimeEntry({
           userId: ctx.adminUserId,
-          description: args.startTimer.description,
+          description: timerOpts.description,
           projectId,
           taskId,
-          billable: args.startTimer.billable,
+          billable: timerOpts.billable,
           start: nowIso(ctx),
         });
         created.push({ type: "time_entry", id: entry.id, name: entry.description });

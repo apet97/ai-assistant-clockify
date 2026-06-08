@@ -86,6 +86,58 @@ describe("safe writes", () => {
     }
   });
 
+  it("create_work_package accepts a flat projectName (the planner's natural shape) and starts the timer", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { projectName: "Apollo", startTimer: true },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && result.receipt.ok) {
+      const projectRef = (result.receipt.changed?.created ?? []).find((e) => e.type === "project");
+      expect(projectRef).toBeDefined();
+      expect(fake.counts.createProject).toBe(1);
+      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.state.running?.projectId).toBe(projectRef?.id);
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
+  it("create_work_package accepts a bare-string project / tagName alias", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { project: "Apollo", tagName: "Deep Work" },
+      context: makeContext(fake),
+    });
+    if (result.kind === "receipt" && result.receipt.ok) {
+      const created = result.receipt.changed?.created ?? [];
+      expect(created.some((e) => e.type === "project")).toBe(true);
+      expect(created.some((e) => e.type === "tag")).toBe(true);
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
+  it("create_work_package accepts startTimer as a bare boolean (the planner's natural shape)", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { project: { name: "Apollo" }, startTimer: true },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && result.receipt.ok) {
+      const projectRef = (result.receipt.changed?.created ?? []).find((e) => e.type === "project");
+      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.state.running?.projectId).toBe(projectRef?.id);
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
   it("create_work_package with startTimer reuses an existing project and starts the timer on it", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme" }] });
     const result = await executeAction({
