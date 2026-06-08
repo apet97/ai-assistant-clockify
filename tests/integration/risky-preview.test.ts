@@ -164,6 +164,29 @@ describe("risky preview + confirmation", () => {
     // No Clockify calls at all — permission changes are not Clockify writes.
     expect(Object.keys(fake.counts)).toHaveLength(0);
   });
+
+  it("permission update accepts the flat {group: level} shape the planner emits", async () => {
+    const fake = createFakeWorkspace();
+    const flat = await executeAction({
+      actionName: "assistant_update_permissions",
+      args: { invoices: "read" },
+      context: makeContext(fake),
+    });
+    expect(flat.kind).toBe("preview");
+    if (flat.kind === "preview") {
+      expect((flat.operation.payload as { groups: Record<string, string> }).groups.invoices).toBe("read");
+    }
+
+    const groupLevel = await executeAction({
+      actionName: "assistant_update_permissions",
+      args: { group: "reports", level: "read" },
+      context: makeContext(fake),
+    });
+    expect(groupLevel.kind).toBe("preview");
+    if (groupLevel.kind === "preview") {
+      expect((groupLevel.operation.payload as { groups: Record<string, string> }).groups.reports).toBe("read");
+    }
+  });
 });
 
 describe("expanded risky actions (Phase 3)", () => {

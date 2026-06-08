@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { matchByName } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -209,19 +210,46 @@ const archiveProject = defineAction({
 const deleteProject = defineAction({
   name: "clockify_projects_delete",
   description:
-    "Delete a project (archives first, then deletes — Clockify rejects deleting an active project). Previews and requires confirmation.",
+    "Delete a project (archives first, then deletes — Clockify rejects deleting an active project). Pass the project id (preferred — list projects first to get it), or its exact name and the harness resolves it. Previews and requires confirmation.",
   featureGroup: PROJECT_GROUP,
   risks: ["destructive"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the project id or its exact name.",
+    }),
   async handler(ctx, args) {
+    let id = args.id;
+    let name = args.name;
+    // Resolve a name → id when no id was supplied, so a delete never dead-ends on
+    // a missing id. Ambiguous identity stops and asks (it never picks one).
+    if (!id) {
+      const projects = await ctx.clockify.listProjects();
+      const match = matchByName(projects, name as string);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find an active project named "${name}". List your projects and tell me which one to delete.`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several active projects are named "${name}". Which one should I delete?`,
+          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
+        };
+      }
+      id = match.entity.id;
+      name = match.entity.name;
+    }
     return {
       kind: "preview",
       preview: {
         actionLabel: "Delete project",
         featureGroup: PROJECT_GROUP,
         riskLabels: ["destructive"],
-        targets: [{ type: "project", id: args.id, name: args.name }],
-        expectedChanges: [`Delete project ${args.name ?? args.id} (and its tasks)`],
+        targets: [{ type: "project", id, name }],
+        expectedChanges: [`Delete project ${name ?? id} (and its tasks)`],
         reversibility: "This cannot be undone.",
         warnings: ["Deleting a project is permanent and removes its tasks."],
       },
@@ -229,7 +257,7 @@ const deleteProject = defineAction({
         actionName: "clockify_projects_delete",
         featureGroup: PROJECT_GROUP,
         risks: ["destructive"],
-        payload: { id: args.id, name: args.name },
+        payload: { id, name },
       },
     };
   },

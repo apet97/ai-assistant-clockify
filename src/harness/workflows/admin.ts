@@ -88,17 +88,40 @@ const deleteEntity = defineAction({
   },
 });
 
+/**
+ * Fold the shapes the planner emits into the canonical `{ groups: {...} }`:
+ * a single `{ group, level }`, or a flat `{ <featureGroup>: <level> }` map. This
+ * keeps "set my invoices permission to read-only" from dead-ending on a missing
+ * `groups` wrapper (the planner can't see the schema).
+ */
+function normalizePermissionArgs(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) return raw;
+  const r = raw as Record<string, unknown>;
+  if (r.groups && typeof r.groups === "object") return r;
+  if (typeof r.group === "string" && typeof r.level === "string") {
+    return { groups: { [r.group]: r.level } };
+  }
+  const groups: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if ((FEATURE_GROUPS as string[]).includes(k) && typeof v === "string") groups[k] = v;
+  }
+  return Object.keys(groups).length > 0 ? { groups } : r;
+}
+
 const updatePermissions = defineAction({
   name: "assistant_update_permissions",
   description:
     "Change the admin's own assistant permissions. Not a Clockify write; needs a button save, no Clockify dry-run.",
   featureGroup: "workspace_settings",
   risks: ["permission_change"],
-  schema: z.object({
-    groups: z
-      .record(z.enum(FEATURE_GROUPS as [FeatureGroup, ...FeatureGroup[]]), permissionLevelSchema)
-      .refine((g) => Object.keys(g).length > 0, { message: "Specify at least one group to change." }),
-  }),
+  schema: z.preprocess(
+    normalizePermissionArgs,
+    z.object({
+      groups: z
+        .record(z.enum(FEATURE_GROUPS as [FeatureGroup, ...FeatureGroup[]]), permissionLevelSchema)
+        .refine((g) => Object.keys(g).length > 0, { message: "Specify at least one group to change." }),
+    }),
+  ),
   async handler(ctx, args) {
     // Compute the diff for the preview without touching Clockify.
     const changes = Object.entries(args.groups).map(

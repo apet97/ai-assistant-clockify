@@ -160,6 +160,48 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(receipt.ok && receipt.changed?.deleted?.[0]).toMatchObject({ type: "project", id: "p1" });
   });
 
+  it("clockify_projects_delete resolves a project by name when no id is given, then deletes once", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const preview = await executeAction({
+      actionName: "clockify_projects_delete",
+      args: { name: "Website" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { id: string }).id).toBe("p1");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteProject).toBe(1);
+  });
+
+  it("clockify_projects_delete clarifies (not invalid_args) on no / ambiguous name match", async () => {
+    const none = await executeAction({
+      actionName: "clockify_projects_delete",
+      args: { name: "Nope" },
+      context: makeContext(createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] })),
+    });
+    expect(none.kind).toBe("clarify");
+
+    const ambig = await executeAction({
+      actionName: "clockify_projects_delete",
+      args: { name: "Dup" },
+      context: makeContext(createFakeWorkspace({ projects: [{ id: "a", name: "Dup" }, { id: "b", name: "Dup" }] })),
+    });
+    expect(ambig.kind).toBe("clarify");
+    if (ambig.kind === "clarify") expect(ambig.options?.length).toBe(2);
+  });
+
+  it("clockify_projects_delete rejects a call with neither id nor name", async () => {
+    const result = await executeAction({
+      actionName: "clockify_projects_delete",
+      args: {},
+      context: makeContext(createFakeWorkspace()),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
+    else throw new Error("expected an invalid_args error receipt");
+  });
+
   it("clockify_projects_rate_update converts major units to minor and commits once", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({
