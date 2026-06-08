@@ -1,4 +1,5 @@
 import type { ActionCatalogEntry, ActionDefinition } from "./action.js";
+import { summarizeArgs } from "./arg-summary.js";
 import { TIME_TRACKING_ACTIONS } from "./workflows/time-tracking.js";
 import { ENTRY_ACTIONS } from "./workflows/entries.js";
 import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
@@ -68,5 +69,6 @@ export function catalogForModel(): ActionCatalogEntry[] {
     description: action.description,
     featureGroup: action.featureGroup,
     risks: action.risks,
+    args: summarizeArgs(action.schema),
   }));
 }

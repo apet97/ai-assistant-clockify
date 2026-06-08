@@ -16,7 +16,7 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
   const actions = input.actionCatalog
     .map(
       (a) =>
-        `- ${a.name} (group: ${a.featureGroup}; risk: ${a.risks.join(", ")}): ${a.description}`,
+        `- ${a.name} (group: ${a.featureGroup}; risk: ${a.risks.join(", ")}) args{${a.args}}: ${a.description}`,
     )
     .join("\n");
 
@@ -35,6 +35,7 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
     "",
     "Rules:",
     "- Use only action names from the catalog below. Never invent action names.",
+    "- Each action lists its arguments as args{name: type; ...} (a trailing ? marks an optional argument). Use the exact argument names shown in args{…}; never invent argument names or nest/rename them.",
     "- If the target of a write is unclear or ambiguous, return kind \"clarify\" and ask the admin to choose. Never guess an identity for a write.",
     "- Risky actions (delete, billing, webhooks, permission changes, bulk) are previewed and require the admin's button confirmation; never claim a risky action is done.",
     "- Do not claim any change is complete until the harness returns a receipt.",

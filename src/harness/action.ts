@@ -69,6 +69,8 @@ export interface ActionCatalogEntry {
   description: string;
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
+  /** Terse argument signature (from the schema) so the model uses exact arg names. */
+  args: string;
 }
 
 /**

@@ -32,6 +32,23 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("clockify_create_work_package");
   });
 
+  it("renders each action's argument signature so the planner uses the exact arg names", () => {
+    // The argument contract is in the prompt (Phase 1B) — the model sees the
+    // exact arg names/types instead of inventing shapes.
+    expect(prompt).toContain("args{");
+    expect(prompt).toContain("args{name: string}"); // clockify_tags_create
+    expect(prompt).toContain("entityType: tag|project"); // enum values surfaced
+    // and a rule pins it down
+    expect(prompt).toContain("exact argument names");
+  });
+
+  it("the argument signatures introduce no secret-bearing field names", () => {
+    // The signatures come from the public arg schemas only — never tokens/headers.
+    expect(prompt).not.toContain("addonToken");
+    expect(prompt).not.toContain("sessionSecret");
+    expect(prompt).not.toContain("apiKey");
+  });
+
   it("tells the planner a delete can pass an exact name (the harness resolves it) without a list lookup first", () => {
     // Guidance so a delete never dead-ends on a missing id AND the model does not
     // burn a turn listing just to find an id (the harness resolves the name).

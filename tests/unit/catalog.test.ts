@@ -301,7 +301,7 @@ describe("catalog", () => {
     expect(getAction("does_not_exist")).toBeUndefined();
   });
 
-  it("catalogForModel exposes only name/description/featureGroup/risks (no schema or handler)", () => {
+  it("catalogForModel exposes name/description/featureGroup/risks/args (no schema or handler)", () => {
     const entries = catalogForModel();
     expect(entries.length).toBe(ACTION_CATALOG.length);
     for (const entry of entries) {
@@ -309,6 +309,9 @@ describe("catalog", () => {
       expect(entry).not.toHaveProperty("handler");
       expect(entry.name).toBeTruthy();
       expect(entry.risks.length).toBeGreaterThan(0);
+      // Phase 1B: a terse, non-empty argument signature derived from the schema.
+      expect(typeof entry.args).toBe("string");
+      expect(entry.args.length).toBeGreaterThan(0);
     }
   });
 });
