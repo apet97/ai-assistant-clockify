@@ -37,3 +37,38 @@ export function resolveClockifyReportsBase(installation: {
   const root = installation.reportsUrl.replace(/\/+$/, "");
   return root.endsWith("/v1") ? root : `${root}/v1`;
 }
+
+/**
+ * Resolve the AUDIT host base, or `undefined` when this environment has none.
+ *
+ * Unlike reports, Clockify publishes NO audit URL claim: the documented and
+ * live-observed token URL claims are exactly `backendUrl`, `reportsUrl`,
+ * `locationsUrl`, `screenshotsUrl` (+ `ptoUrl`) — see MARKETPLACE_OCS 08/09 and
+ * the decoded live install/user tokens. So there is nothing to capture; the
+ * audit host can only be derived.
+ *
+ * The audit log lives solely on the `auditlog-api.api.<tenant>` subdomain, which
+ * exists only where the API itself is served from the `api.<tenant>` subdomain
+ * (production / regional hosts). Dev, subdomain and path-based environments serve
+ * the API from a path (e.g. `https://developer.clockify.me/api`) and have no
+ * audit host. For those we return `undefined` so the REST core surfaces a clean
+ * "audit log not available in this environment" error instead of fetching a
+ * guessed `auditlog-api.api.developer.clockify.me` that does not resolve (the raw
+ * "fetch failed" the dev environment used to produce).
+ */
+export function resolveClockifyAuditBase(installation: {
+  apiUrl?: string;
+  backendUrl?: string;
+}): string | undefined {
+  const root = installation.apiUrl ?? installation.backendUrl;
+  if (!root) return undefined;
+  let url: URL;
+  try {
+    url = new URL(root);
+  } catch {
+    return undefined;
+  }
+  if (!url.host.startsWith("api.")) return undefined;
+  const tenant = url.host.slice("api.".length);
+  return `${url.protocol}//auditlog-api.api.${tenant}/v1`;
+}

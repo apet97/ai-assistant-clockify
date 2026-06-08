@@ -37,6 +37,32 @@ describe("rest core host routing + auth", () => {
     expect(init.headers["X-Addon-Token"]).toBeUndefined();
   });
 
+  it("surfaces a clean error (and never fetches) when the audit host is unavailable on a dev/path host", async () => {
+    const fetchImpl = vi.fn(async () => res({ ok: true }));
+    const core = createRestCore({
+      apiBase: "https://developer.clockify.me/api/v1", // dev: no audit subdomain exists
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.call("audit", "POST", "/workspaces/ws-1/audit-log", {})).rejects.toThrow(
+      /audit log is not available/i,
+    );
+    expect(fetchImpl).not.toHaveBeenCalled(); // a guessed host must never be hit (no "fetch failed")
+  });
+
+  it("uses an explicit auditBase when provided (overrides derivation)", async () => {
+    const fetchImpl = vi.fn(async () => res([]));
+    const core = createRestCore({
+      apiBase: "https://developer.clockify.me/api/v1",
+      auditBase: "https://auditlog-api.api.clockify.me/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await core.call("audit", "POST", "/workspaces/ws-1/audit-log", {});
+    const [url] = (fetchImpl as any).mock.calls[0];
+    expect(url).toBe("https://auditlog-api.api.clockify.me/v1/workspaces/ws-1/audit-log");
+  });
+
   it("derives sibling hosts from a non-default api base (never hardcodes the tenant)", async () => {
     const fetchImpl = vi.fn(async () => res({ ok: true }));
     const core = createRestCore({

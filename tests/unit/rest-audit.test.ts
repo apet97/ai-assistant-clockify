@@ -36,4 +36,19 @@ describe("audit rest (multi-host)", () => {
     const [url] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/entities/created");
   });
+
+  it("searchAuditLog surfaces a clean error (not 'fetch failed') when no audit host exists (dev)", async () => {
+    // The dev/path host (developer.clockify.me/api) publishes no audit host, so the
+    // action that the workflow calls must fail with an explained message and must
+    // never fetch a guessed, non-resolving host.
+    const f = vi.fn(async () => jsonResponse([]));
+    const devRest = makeAuditRest(
+      createRestCore({ apiBase: "https://developer.clockify.me/api/v1", auth: { addonToken: "tok" }, fetchImpl: f as unknown as typeof fetch }),
+      "ws-1",
+    );
+    await expect(devRest.searchAuditLog({ actions: ["CREATE_TAG"], start: "s", end: "e" })).rejects.toThrow(
+      /audit log is not available/i,
+    );
+    expect(f).not.toHaveBeenCalled();
+  });
 });

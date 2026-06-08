@@ -7,7 +7,11 @@ import { loadConfig } from "./config.js";
 import { createStore, type Installation } from "./db/store.js";
 import type { WorkspaceClient } from "./clockify/client.js";
 import { createRestWorkspaceClient } from "./clockify/rest-workspace.js";
-import { resolveClockifyApiBase, resolveClockifyReportsBase } from "./clockify/api-base.js";
+import {
+  resolveClockifyApiBase,
+  resolveClockifyAuditBase,
+  resolveClockifyReportsBase,
+} from "./clockify/api-base.js";
 import { createModelClient } from "./assistant/model-client.js";
 import { apiRouter } from "./routes/api.js";
 import { componentRouter } from "./routes/component.js";
@@ -56,6 +60,7 @@ function liveClockifyForWorkspace(installation: Installation): WorkspaceClient {
   return createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
     reportsBase: resolveClockifyReportsBase(installation),
+    auditBase: resolveClockifyAuditBase(installation),
     workspaceId: installation.workspaceId,
     auth: { addonToken: installation.addonToken },
   });
