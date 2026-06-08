@@ -88,7 +88,29 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**479 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**517 tests**: type-check + Vitest + build).
+- **Planner eval harness + arg contract in the prompt (Phase 1, 2026-06-09).**
+  Quality is now a number. `scripts/eval-planner.ts` drives the **real planner**
+  (planning only, no Clockify writes) over a tagged corpus (`scripts/eval/cases.ts`,
+  ~42 cases) and scores each plan with a pure scorer (`src/eval/score.ts`),
+  reporting **pass-rate AND a consistency metric** (`--repeat=N` → % of runs that
+  produce the identical action+arg-keys — outcome determinism, not token-level).
+  `--no-args` runs an A/B baseline with the arg contract off; results write to
+  `eval-results/<ts>.json` (gitignored). Run:
+  `npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3`.
+  **1B — the argument contract is now in the system prompt:** each action renders
+  as `- <name> (group; risk) args{<sig>}: <desc>` where `<sig>` is a terse Zod-
+  derived signature (`src/harness/arg-summary.ts`, e.g. `clientName?: string;
+  items?: object[]`), plus a rule to use those exact arg names. **Measured on
+  deepseek-v4-pro (repeat=3): baseline (arg contract OFF) 85.7% pass / 86.5%
+  consistency → with the contract 90.5% pass / 90.5% consistency (+4.8pp /
+  +4.0pp).** Biggest wins are exactly the arg-shape/action-disambiguation class
+  (reports_weekly/detailed stop collapsing to review_week/clarify;
+  update_permissions consistently uses the `groups` key; compose uses canonical
+  `project`). Prompt grows ~+1.9k tokens (cacheable). The durable version is
+  Phase 2 (native tool-calling); the meter now judges it. The model is still sent
+  only the catalog + policy — no tokens/secrets/headers; signatures read the
+  schema, not values.
 - **Truthful previews (safety, 2026-06-08):** the model sometimes narrated "Done!/
   Confirmed" in its reply for a risky action the harness actually returned as a *pending
   preview* — so the chat bubble claimed success above an un-clicked Confirm button, and
@@ -208,13 +230,15 @@ Live dogfooding (see `scripts/live-chat-tour.ts`, `live-invoice-flow.ts`) harden
 of rough edges, but a few real limits remain. **None of them is fixed by swapping the
 LLM** — they are architecture/platform issues:
 
-- **The planner is sent action name/description/risk but NOT the input schemas**, so it
-  guesses argument shapes (flat `projectName`, `startTimer:true`, missing ids, omitted
-  required fields). We mitigate per-action with forgiving Zod (`z.preprocess`/unions),
+- **(Phase 1B done) The planner is now sent a terse arg signature per action**, not just
+  name/description/risk — so it stops guessing argument shapes (flat `projectName`,
+  `startTimer:true`, missing ids, omitted required fields) as often. We still keep the
+  per-action mitigations as defense in depth: forgiving Zod (`z.preprocess`/unions),
   server-side defaults (reports/audit ranges, invoice number/dates/currency), and
-  name→id resolution (tags/projects/clients). This is whack-a-mole. **Highest-leverage
-  next step:** feed the model a compact arg schema/example per action (or move to native
-  tool/function-calling) so correct args are the default, not a fallback.
+  name→id resolution (tags/projects/clients). Measured improvement on deepseek-v4-pro:
+  85.7%→90.5% pass, 86.5%→90.5% consistency (see Current Status). **Durable next step
+  (Phase 2):** native tool/function-calling with real JSON schemas the provider
+  validates, so correct args are enforced, not just prompted — the eval now judges it.
 - **Invoice line items require a workspace-configured invoice item type** (Clockify →
   Workspace settings → Invoices). There is **no API to list or create them**; a fresh
   workspace has none, so amounts stay $0 until an admin sets one up in the UI (one-time).
@@ -313,6 +337,12 @@ LIVE_CLOCKIFY=1 npx tsx scripts/live-smoke.ts
 
 # Live model round-trip (planner only; sends the model only catalog + policy).
 npx tsx scripts/chat-smoke.ts            # needs LLM_BASE_URL / LLM_API_KEY / LLM_MODEL
+
+# Planner eval (the meter): score the real planner over scripts/eval/cases.ts.
+# Planning only — NO Clockify writes. Reports pass-rate + consistency; writes
+# eval-results/<ts>.json (gitignored). --no-args is the arg-contract-OFF A/B baseline.
+npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3
+npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3 --no-args   # baseline
 
 # Production add-on-token path (needs a captured installation token).
 LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts   # needs LIVE_ADDON_TOKEN / LIVE_BACKEND_URL

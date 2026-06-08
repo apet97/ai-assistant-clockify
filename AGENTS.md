@@ -8,9 +8,17 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **479 tests**), and the **full
+implemented and verified (`npm run verify` green, **517 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
 catalog actions across 16 feature areas + 3 hosts.
+
+**Planner eval + arg contract (Phase 1, 2026-06-09):** quality is now a measured
+number. `scripts/eval-planner.ts` scores the real planner over `scripts/eval/cases.ts`
+(pure scorer `src/eval/score.ts`) and reports pass-rate **plus a consistency metric**
+(`--repeat=N`). The argument contract is now in the prompt (`src/harness/arg-summary.ts`
+→ `args{sig}` per action). Measured win on deepseek-v4-pro (repeat=3): 85.7%→90.5% pass,
+86.5%→90.5% consistency. Durable next step is Phase 2 (native tool-calling). See
+`CLAUDE.md` → Current Status + `NEXT_SESSION_PLAN.md`.
 
 **Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev
 workspace and driven through the embedded chat — sidebar component → DeepSeek →
