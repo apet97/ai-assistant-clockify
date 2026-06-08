@@ -88,7 +88,7 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**461 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**467 tests**: type-check + Vitest + build).
 - The REST `WorkspaceClient` adapter is composed from a multi-host core
   (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
   module per area (`src/clockify/rest/<area>.ts`), assembled in
@@ -152,6 +152,21 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
   (not list-first) and to use `create_work_package`+`startTimer` for one-turn
   create+timer. Note: Clockify **reserves a project name even after archive-then-delete**
   (so tests use unique `AIASSIST_SMOKE_*` names).
+- **Broad live "dogfood" tour smoothed more arg-shape edges (`scripts/live-chat-tour.ts`,
+  37 turns / 25–28 actions per run):** the same "planner can't see the schema, so it
+  omits/flattens required args" class showed up in more places, all now fixed (defaults
+  + input normalization only — no host/auth changes): **reports** default the date range
+  to the last 7 days (weekly especially used to `invalid_args`); **audit search** defaults
+  actions + range (so on dev it returns the clean "not available" message, not
+  `invalid_args`); **`clockify_projects_delete`** resolves by name like tags;
+  **`assistant_update_permissions`** accepts the flat `{invoices:"read"}` / `{group,level}`
+  shape. Verified live: delete-project-by-name and set-permission now preview→confirm
+  end-to-end. **Still open (not regressions):** `webhooks_list` + `workspace_get`
+  (`GET /workspaces`) return **401 "API is not accessible"** with the add-on token on the
+  **dev host** (likely a dev-environment access limit; may differ in prod — left as-is to
+  avoid changing prod behavior); `clockify_log_work` can `invalid_args` when the planner
+  omits the required `start`; and a tag *rename* sometimes makes the planner call
+  `clockify_tags_list` instead of `clockify_tags_update` (narrates "renaming" but doesn't).
 
 ## Build, Test, Run
 
@@ -250,6 +265,12 @@ npx tsx --env-file=.env.server scripts/live-confirm-flow.ts
 # delete-tag-by-name returns a preview->confirm. Same bootstrap as confirm-flow;
 # self-cleaning AIASSIST_SMOKE_* with a final 0-leftover sweep. PASS=9.
 npx tsx --env-file=.env.server scripts/live-planner-quirks.ts
+
+# Broad multi-feature "dogfood" tour: ~37 turns across every area in one flowing
+# conversation; prints a per-turn trace + a rough-edge summary. Read-heavy,
+# self-cleaning (only confirms its own AIASSIST_SMOKE_* previews + permission
+# toggles, restored at the end). Use it to find planner/harness rough edges.
+npx tsx --env-file=.env.server scripts/live-chat-tour.ts
 ```
 
 The add-on's own request path uses the REST `WorkspaceClient` adapter with the
