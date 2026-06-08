@@ -1,5 +1,9 @@
 # Next-session kickoff — AI Assistant add-on (live testing)
 
+> **Planning the next build?** See `NEXT_SESSION_PLAN.md` for the phased implementation
+> plan (Phase 1 = planner eval harness + arg-schema-in-prompt) and the "perfect state"
+> vision. This file is the live-environment kickoff; that file is the forward plan.
+
 Copy the block below into a fresh Claude Code session to continue testing the
 **live** Clockify "AI Assistant" add-on. Runtime values (tunnel URL especially)
 are **ephemeral** — verify them first; the prompt tells you how to bring the
