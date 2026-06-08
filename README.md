@@ -89,15 +89,21 @@ npm run verify           # type-check + test + build (the gate)
 npm run dev              # tsx src/server.ts (needs .env)
 ```
 
-`GET /manifest` serves the admin-only Clockify add-on manifest.
+`GET /manifest` serves the admin-only Clockify add-on manifest — a **sidebar**
+component (`/component/assistant`) plus an add-on icon at `/icon.svg`. It installs
+and runs end-to-end on real Clockify workspaces (verified on a dev workspace:
+install → sidebar → chat → action → receipt).
 
 ### Environment
 
 See [`.env.example`](./.env.example) for the full list. Key variables: `PORT`,
-`BASE_URL`, `CLOCKIFY_ADDON_KEY`, `CLOCKIFY_ADDON_PUBLIC_KEY_PEM`,
-`SESSION_SECRET`, `DATA_ENCRYPTION_KEY` (32-byte key for token encryption),
-`DATABASE_PATH`, and `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` for the
-OpenAI-compatible model endpoint.
+`BASE_URL`, `CLOCKIFY_ADDON_KEY`, `SESSION_SECRET`, `DATA_ENCRYPTION_KEY`
+(32-byte key for token encryption), `DATABASE_PATH`, and `LLM_BASE_URL` /
+`LLM_API_KEY` / `LLM_MODEL` for the OpenAI-compatible model endpoint.
+`CLOCKIFY_ADDON_PUBLIC_KEY_PEM` is **optional** — Clockify's fixed platform
+token-signing key is built in; only set it to target a non-production Clockify
+environment. The Clockify API/reports hosts are read from the install token (never
+hardcoded), so the add-on works across dev/regional environments unchanged.
 
 ## Live testing (opt-in)
 

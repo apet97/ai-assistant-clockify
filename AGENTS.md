@@ -8,13 +8,25 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **416 tests**), and the **full
+implemented and verified (`npm run verify` green, **440 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
-catalog actions across 16 feature areas + 3 hosts, all live-verified
-(`scripts/live-full.ts` → PASS=115 FAIL=0; `scripts/live-sweep.ts` → 0 leftovers).
-The reports host is cleared on the X-Addon-Token; the AUDIT host add-on-token
-clearance and Phase 17 (raw-API fallback) are the only pending/deferred items —
-see `CLAUDE.md` → Current Status.
+catalog actions across 16 feature areas + 3 hosts.
+
+**Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev
+workspace and driven through the embedded chat — sidebar component → DeepSeek →
+harness → Clockify dev host (`X-Addon-Token`) → receipt (created a tag, fetched a
+detailed report). Key facts that made it work, all in `CLAUDE.md`:
+- The token-signing **public key is one fixed platform key**, embedded as the
+  built-in default (`src/addon/clockify-public-key.ts`); the env var is optional.
+- The component is a **`sidebar`** entry with an `iconPath` (`/icon.svg`).
+- **Call hosts from the install context**, never hardcoded: api = `apiUrl`+`/v1`,
+  reports = `reportsUrl` claim+`/v1` (`src/clockify/api-base.ts`, captured at
+  component load). The lifecycle token omits these claims; the user token has them.
+- Session cookie is `SameSite=None; Secure; Partitioned` (cross-site iframe).
+- The chat route guards async errors → failed action = error receipt, no crash.
+
+Pending/deferred: the AUDIT host is still derived (no claim captured → may fail on
+dev); Phase 17 (raw-API fallback) is deferred. See `CLAUDE.md` → Current Status.
 
 ## Non-negotiable invariants
 

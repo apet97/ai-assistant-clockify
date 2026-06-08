@@ -54,7 +54,27 @@ effort (`slopbranch:API_COVERAGE_PLAN.md`, Phases 0–16) is COMPLETE** — ~115
 typed catalog actions across 16 feature areas and 3 API hosts, each routed
 through the existing safe/risky harness.
 
-- `npm run verify` is green (**416 tests**: type-check + Vitest + build).
+**Live end-to-end PROVEN (2026-06-08):** the add-on was registered + installed on
+a sacrificial Clockify dev workspace and driven through the real embedded chat —
+install → **sidebar** component → DeepSeek planner → harness → Clockify REST
+(dev host, `X-Addon-Token`) → receipt. A tag was created and a detailed report
+fetched live. Getting there fixed several real defects (see the auth/host + cookie
+notes under "Runtime & Known Constraints"):
+  - **Install verification:** the Clockify add-on token-signing **public key is one
+    fixed platform key** (published at `{apiUrl}/api/auth/public-key`), now embedded
+    as the built-in default (`src/addon/clockify-public-key.ts`); `CLOCKIFY_ADDON_PUBLIC_KEY_PEM`
+    is optional. `/lifecycle/installed` requires only `authToken`+`workspaceId`.
+  - **UI surface:** the component is a **`sidebar`** entry (not an activity tab) and
+    ships an `iconPath` (`/icon.svg`) — a sidebar with no icon doesn't render.
+  - **Host resolution:** call the host from the install context, not hardcoded —
+    `apiUrl`+`/v1` for the api host, the `reportsUrl` claim+`/v1` for reports
+    (`src/clockify/api-base.ts`; captured at component load into `installations.reports_url`).
+  - **Embedded session:** the session cookie is `SameSite=None; Secure; Partitioned`
+    (required inside Clockify's cross-site iframe).
+  - **Resilience:** the chat route guards async errors → a failed action returns an
+    error receipt instead of crashing the process.
+
+- `npm run verify` is green (**440 tests**: type-check + Vitest + build).
 - The REST `WorkspaceClient` adapter is composed from a multi-host core
   (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
   module per area (`src/clockify/rest/<area>.ts`), assembled in
@@ -119,6 +139,17 @@ npm run dev            # tsx src/server.ts (needs env, see below)
 - **Auth model:** the add-on authenticates with the installation **add-on token**
   (`X-Addon-Token`), never an API key. `createWorkspaceClockifyClient` must never
   pass `apiKey` (enforced by test).
+- **Token verification key (install fix):** inbound Clockify add-on JWTs (the
+  component `auth_token` and the `x-addon-lifecycle-token`) are RS256-signed by
+  Clockify with **one platform-wide public key**, published at
+  `{apiUrl}/api/auth/public-key` — it is **not** a per-add-on/dev-console key. It
+  is embedded as the built-in default in `src/addon/clockify-public-key.ts`
+  (SPKI sha256 `0cebc449…`, pinned by `tests/unit/clockify-public-key.test.ts`),
+  so install/lifecycle verification works out of the box. `CLOCKIFY_ADDON_PUBLIC_KEY_PEM`
+  is now **optional** and only overrides the key for non-prod Clockify
+  environments/regions. `/lifecycle/installed` requires only `authToken` +
+  `workspaceId` (addonId falls back to the token claims; `addonUserId` optional),
+  matching the real INSTALLED payload — covered by `tests/integration/lifecycle.test.ts`.
 
 ## Live Testing (opt-in, sacrificial workspace only)
 
