@@ -10,3 +10,6 @@ data/
 # Local session / editor state (never publish)
 .remember/
 .DS_Store
+
+# Planner eval output (trend tracking, local only)
+eval-results/

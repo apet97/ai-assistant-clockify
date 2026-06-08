@@ -12,8 +12,7 @@ import {
   resolveClockifyAuditBase,
   resolveClockifyReportsBase,
 } from "./clockify/api-base.js";
-import { createModelClient } from "./assistant/model-client.js";
-import { createGeminiCliModelClient } from "./assistant/gemini-cli-client.js";
+import { selectModelClient } from "./assistant/select-model-client.js";
 import { apiRouter } from "./routes/api.js";
 import { componentRouter } from "./routes/component.js";
 import { lifecycleRouter } from "./routes/lifecycle.js";
@@ -71,14 +70,7 @@ export function start(): void {
   const config = loadConfig();
   const store = createStore(config.databasePath, { encryptionKey: config.dataEncryptionKey });
   const parser = createSignatureParser(config.clockifyAddonKey, config.clockifyAddonPublicKeyPem);
-  const modelClient =
-    config.llmProvider === "gemini-cli"
-      ? createGeminiCliModelClient({ model: config.geminiModel })
-      : createModelClient({
-          baseUrl: config.llmBaseUrl as string,
-          apiKey: config.llmApiKey as string,
-          model: config.llmModel as string,
-        });
+  const modelClient = selectModelClient(config);
 
   const app = createApp({
     config,
