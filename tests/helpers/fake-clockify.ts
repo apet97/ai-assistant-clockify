@@ -53,6 +53,8 @@ export interface FakeWorkspaceSeed {
   approvals?: ApprovalSummary[];
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
+  /** addInvoiceItem throws (simulates a workspace with no matching invoice item type). */
+  failAddInvoiceItem?: boolean;
 }
 
 export interface FakeWorkspace {
@@ -679,6 +681,9 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     },
     async addInvoiceItem(id, item) {
       bump("addInvoiceItem");
+      if (seed.failAddInvoiceItem) {
+        throw new Error(`Invoice item type with name ${String(item.itemType)} not found.`);
+      }
       const invoice = state.invoices.find((i) => i.id === id);
       if (invoice) {
         const line: InvoiceItem = {

@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { successReceipt, type Warning } from "../receipts.js";
+import { matchByName } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -21,6 +22,11 @@ const invoiceStatusSchema = z.enum(["UNSENT", "SENT", "PAID", "PARTIALLY_PAID", 
 /** Resolve a major/minor amount to the integer minor units (cents) Clockify wants. */
 function toMinor(amount: number, unit: "major" | "minor"): number {
   return unit === "minor" ? Math.round(amount) : Math.round(amount * 100);
+}
+
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+function nowDate(ctx: ActionContext): Date {
+  return (ctx.now ?? (() => new Date()))();
 }
 
 const listInvoices = defineAction({
@@ -131,62 +137,165 @@ const exportInvoice = defineAction({
   },
 });
 
+/** A line item the planner can attach when creating the invoice. */
+const invoiceItemSchema = z.object({
+  description: z.string().optional(),
+  quantity: z.number().positive().optional(),
+  amount: z.number().nonnegative().optional(),
+  /** `major` (e.g. 100.00) is converted ×100 to the minor units Clockify wants. */
+  amountUnit: z.enum(["major", "minor"]).default("major"),
+  itemType: z.string().min(1).optional(),
+  applyTaxes: z.enum(["TAX1", "TAX2", "TAX1TAX2", "NONE"]).optional(),
+});
+
 const createInvoice = defineAction({
   name: "clockify_invoices_create",
   description:
-    "Create an invoice for a client. Billing action — previews and requires confirmation. Requires number, issuedDate, currency, and dueDate.",
+    "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `number`, `issuedDate`, `dueDate`, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Billing action — previews and requires confirmation.",
   featureGroup: INV,
   risks: ["billing"],
-  schema: z.object({
-    clientId: z.string().min(1),
-    clientName: z.string().optional(),
-    number: z.string().min(1),
-    issuedDate: z.string().min(1), // full ISO or YYYY-MM-DD
-    currency: z.string().min(1),
-    dueDate: z.string().min(1), // full ISO or YYYY-MM-DD
-    note: z.string().optional(),
-    subject: z.string().optional(),
-  }),
+  schema: z
+    .object({
+      clientId: z.string().min(1).optional(),
+      clientName: z.string().min(1).optional(),
+      number: z.string().min(1).optional(),
+      issuedDate: z.string().min(1).optional(), // full ISO or YYYY-MM-DD
+      currency: z.string().min(1).optional(),
+      dueDate: z.string().min(1).optional(), // full ISO or YYYY-MM-DD
+      note: z.string().optional(),
+      subject: z.string().optional(),
+      items: z.array(invoiceItemSchema).optional(),
+    })
+    .refine((v) => v.clientId !== undefined || v.clientName !== undefined, {
+      message: "Provide the client id or its exact name.",
+    }),
   async handler(ctx, args) {
+    // Resolve the client by name when no id was supplied — the planner has just
+    // created/named the client and should not be asked for its id.
+    let clientId = args.clientId;
+    let clientName = args.clientName;
+    if (!clientId) {
+      const clients = await ctx.clockify.listClients();
+      const match = matchByName(clients, clientName as string);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find an active client named "${clientName}". List your clients and tell me which one, or create it first.`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several active clients are named "${clientName}". Which one?`,
+          options: match.matches.map((c) => ({ id: c.id, label: c.name })),
+        };
+      }
+      clientId = match.entity.id;
+      clientName = match.entity.name;
+    }
+
+    // Default the required fields the planner usually omits.
+    const now = nowDate(ctx);
+    const stamp = now.toISOString().replace(/[^0-9]/g, "").slice(0, 14);
+    const number = args.number ?? `INV-${stamp}`;
+    const issuedDate = args.issuedDate ?? now.toISOString();
+    const dueDate = args.dueDate ?? new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
+    const currency = args.currency ?? "USD";
+
     const input = {
-      clientId: args.clientId,
-      number: args.number,
-      issuedDate: args.issuedDate,
-      currency: args.currency,
-      dueDate: args.dueDate,
+      clientId,
+      number,
+      issuedDate,
+      currency,
+      dueDate,
       ...(args.note !== undefined ? { note: args.note } : {}),
       ...(args.subject !== undefined ? { subject: args.subject } : {}),
     };
+
+    // Build the line items (amounts converted to minor units now, so commit never
+    // re-derives them). itemType defaults to MANUAL ("add an item manually").
+    const items = (args.items ?? []).map((it) => ({
+      itemType: it.itemType ?? "NEW DEFAULT",
+      ...(it.description !== undefined ? { description: it.description } : {}),
+      ...(it.quantity !== undefined ? { quantity: it.quantity } : {}),
+      ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
+      ...(it.applyTaxes !== undefined ? { applyTaxes: it.applyTaxes } : {}),
+    }));
+
+    const defaulted = [
+      args.number === undefined ? "number" : null,
+      args.issuedDate === undefined ? "issued date" : null,
+      args.dueDate === undefined ? "due date" : null,
+      args.currency === undefined ? `currency (${currency})` : null,
+    ].filter(Boolean);
+
+    const expectedChanges = [
+      `Create invoice ${number} for ${clientName ?? clientId}`,
+      `Issued ${issuedDate.slice(0, 10)}, due ${dueDate.slice(0, 10)}, ${currency}`,
+      ...items.map(
+        (it) =>
+          `Add item${it.description ? ` "${it.description}"` : ""}` +
+          `${it.quantity !== undefined ? ` ×${it.quantity}` : ""}` +
+          `${it.unitPriceMinor !== undefined ? ` @ ${(it.unitPriceMinor / 100).toFixed(2)} ${currency}` : ""}`,
+      ),
+    ];
+
     return {
       kind: "preview",
       preview: {
         actionLabel: "Create invoice",
         featureGroup: INV,
         riskLabels: ["billing"],
-        targets: [{ type: "client", id: args.clientId, name: args.clientName }],
-        expectedChanges: [
-          `Create invoice ${args.number} for ${args.clientName ?? args.clientId}`,
-          `Issued ${args.issuedDate}, due ${args.dueDate}, ${args.currency}`,
-        ],
+        targets: [{ type: "client", id: clientId, name: clientName }],
+        expectedChanges,
         reversibility: "You can delete the invoice afterward.",
-        warnings: ["This creates a billing document."],
+        warnings: [
+          "This creates a billing document.",
+          ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
+        ],
       },
       operation: {
         actionName: "clockify_invoices_create",
         featureGroup: INV,
         risks: ["billing"],
-        payload: { input },
+        payload: { input, items },
       },
     };
   },
   async commit(ctx, operation) {
-    const { input } = operation.payload as { input: Parameters<typeof ctx.clockify.createInvoice>[0] };
+    const { input, items } = operation.payload as {
+      input: Parameters<typeof ctx.clockify.createInvoice>[0];
+      items?: Array<Parameters<typeof ctx.clockify.addInvoiceItem>[1]>;
+    };
     const invoice = await ctx.clockify.createInvoice(input);
+    // Add the line items onto the just-created invoice. A failed item is reported
+    // (partial failure is never hidden), not silently dropped — the invoice exists.
+    const warnings: Warning[] = [];
+    let added = 0;
+    for (const item of items ?? []) {
+      try {
+        await ctx.clockify.addInvoiceItem(invoice.id, item);
+        added += 1;
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : "error";
+        // Invoice item types are workspace-configured named entities; a fresh
+        // workspace may have none. Make that actionable instead of a raw 404.
+        const actionable = /item type/i.test(raw)
+          ? "this workspace has no matching invoice item type. Configure invoice item types in Clockify (Workspace settings → Invoices), or tell me an existing item type name."
+          : raw.slice(0, 120);
+        warnings.push({
+          code: "item_not_added",
+          message: `Line item${item.description ? ` "${item.description}"` : ""} could not be added: ${actionable}`,
+        });
+      }
+    }
     return successReceipt({
       action: "clockify_invoices_create",
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId },
       changed: { created: [{ type: "invoice", id: invoice.id, name: invoice.name }] },
+      data: items && items.length ? { itemsRequested: items.length, itemsAdded: added } : undefined,
+      warnings: warnings.length ? warnings : undefined,
     });
   },
 });
@@ -305,12 +414,12 @@ const deleteInvoice = defineAction({
 const addInvoiceItem = defineAction({
   name: "clockify_invoices_items_add",
   description:
-    "Add a line item to an invoice. Billing action — previews and requires confirmation. `itemType` is required.",
+    "Add a line item to an invoice. Billing action — previews and requires confirmation. `itemType` must name an invoice item type configured in the workspace (defaults to \"NEW DEFAULT\").",
   featureGroup: INV,
   risks: ["billing"],
   schema: z.object({
     invoiceId: z.string().min(1),
-    itemType: z.string().min(1),
+    itemType: z.string().min(1).optional(),
     description: z.string().optional(),
     quantity: z.number().positive().optional(),
     unitPrice: z.number().nonnegative().optional(),
@@ -320,7 +429,7 @@ const addInvoiceItem = defineAction({
   }),
   async handler(ctx, args) {
     const item: Record<string, unknown> = {
-      itemType: args.itemType,
+      itemType: args.itemType ?? "NEW DEFAULT",
       ...(args.description !== undefined ? { description: args.description } : {}),
       ...(args.quantity !== undefined ? { quantity: args.quantity } : {}),
       ...(args.unitPrice !== undefined ? { unitPriceMinor: toMinor(args.unitPrice, args.unitPriceUnit) } : {}),

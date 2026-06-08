@@ -84,6 +84,87 @@ describe("invoice actions", () => {
     expect(fake.state.invoices.find((i) => i.number === "AIASSIST_SMOKE_inv")).toBeDefined();
   });
 
+  it("clockify_invoices_create resolves the client by name and defaults number/dates/currency", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "asdqwe123" }, // no id, no number/dates/currency — the planner's natural shape
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const input = (preview.operation.payload as { input: Record<string, string> }).input;
+    expect(input.clientId).toBe("c-asd");
+    expect(input.number).toBeTruthy();
+    expect(input.issuedDate).toBeTruthy();
+    expect(input.dueDate).toBeTruthy();
+    expect(input.currency).toBeTruthy();
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(1);
+  });
+
+  it("clockify_invoices_create adds inline items in the same step (resolves the new invoice id server-side)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "asdqwe123", items: [{ description: "charge", quantity: 1, amount: 100 }] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.addInvoiceItem).toBe(1);
+    // The created invoice carries the item, converted to minor units (100.00 -> 10000),
+    // with Clockify's default item type when the caller didn't name one.
+    const inv = fake.state.invoices[fake.state.invoices.length - 1];
+    expect(inv.items).toHaveLength(1);
+    expect(inv.items[0]).toMatchObject({ description: "charge", quantity: 1, unitPrice: 10000, itemType: "NEW DEFAULT" });
+  });
+
+  it("clockify_invoices_create still creates the invoice and warns actionably when the item can't be added", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }], failAddInvoiceItem: true });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "asdqwe123", items: [{ description: "charge", quantity: 1, amount: 100 }] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true); // the invoice itself was created
+    expect(receipt.ok && receipt.changed?.created?.[0]?.type).toBe("invoice");
+    const warnings = (receipt.ok && receipt.warnings) || [];
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings.some((w) => /item type/i.test(w.message))).toBe(true);
+  });
+
+  it("clockify_invoices_create clarifies (not punt) when the client name matches none / many", async () => {
+    const none = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "ghost" },
+      context: makeContext(createFakeWorkspace({ clients: [{ id: "c1", name: "asdqwe123" }] })),
+    });
+    expect(none.kind).toBe("clarify");
+    const many = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "Dup" },
+      context: makeContext(createFakeWorkspace({ clients: [{ id: "a", name: "Dup" }, { id: "b", name: "Dup" }] })),
+    });
+    expect(many.kind).toBe("clarify");
+    if (many.kind === "clarify") expect(many.options?.length).toBe(2);
+  });
+
+  it("clockify_invoices_create rejects a call with neither clientId nor clientName", async () => {
+    const result = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { number: "X" },
+      context: makeContext(createFakeWorkspace()),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
+    else throw new Error("expected invalid_args");
+  });
+
   it("clockify_invoices_update previews then updates (note via PUT)", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
