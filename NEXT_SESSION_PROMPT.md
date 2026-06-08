@@ -23,7 +23,10 @@ live (the planner quirks via `scripts/live-planner-quirks.ts`, PASS=9).
    - Healthy + `BASE matches yes` → you're good; note the printed tunnel URL.
    - Down or `BASE matches NO` → run `scripts/dev-tunnel.sh up` (starts/reuses the
      quick tunnel, writes `BASE_URL` into `.env.server`, restarts the server, prints
-     the URL). DeepSeek is wired via `.env.server` `LLM_*` (api.deepseek.com).
+     the URL). Planner backend is selectable via `.env.server` `LLM_PROVIDER`:
+     `http` (DeepSeek, api.deepseek.com, via `LLM_*`) or `gemini-cli` (the
+     authenticated `gemini` CLI, no key; optional `GEMINI_MODEL`). Currently set to
+     `gemini-cli` — switch back with `LLM_PROVIDER=http`.
    - Last session's URL was `https://jimmy-excluding-trans-garmin.trycloudflare.com`
      — **assume it has rotated**; `up`/`status` prints the current one.
 2. **If the tunnel URL changed, re-register the manifest** (Clockify pins the

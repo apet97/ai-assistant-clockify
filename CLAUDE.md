@@ -88,7 +88,18 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**467 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**473 tests**: type-check + Vitest + build).
+- **Planner backend is selectable (`LLM_PROVIDER`).** Default `http` = the
+  OpenAI-compatible client (`createModelClient`; DeepSeek via `LLM_BASE_URL`/
+  `LLM_API_KEY`/`LLM_MODEL`). Set `LLM_PROVIDER=gemini-cli` to instead drive the
+  planner through the **authenticated `gemini` CLI** (`src/assistant/gemini-cli-client.ts`,
+  no API key — it runs `gemini -o json -p <prompt>` and reads the envelope's
+  `.response`; optional `GEMINI_MODEL` pins a model, else the CLI router picks).
+  The gemini provider needs no `LLM_BASE_URL`/`LLM_API_KEY`. It is **dev-only**:
+  each chat turn spawns the CLI, so it is slower than the HTTP path. Proven live —
+  the embedded chat (reads, safe write, risky write→preview→confirm) ran end-to-end
+  on Gemini (`scripts/live-planner-quirks.ts`, PASS=9). Switch back with
+  `LLM_PROVIDER=http` (or remove the line).
 - The REST `WorkspaceClient` adapter is composed from a multi-host core
   (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
   module per area (`src/clockify/rest/<area>.ts`), assembled in
