@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -16,7 +16,24 @@ const REP = "reports" as const;
 /** Largest report carried inline in a receipt (serialized JSON bytes). */
 const REPORT_MAX_BYTES = 200_000;
 
-const rangeSchema = z.object({ dateRangeStart: z.string().min(1), dateRangeEnd: z.string().min(1) });
+// The date range is optional: the planner often omits it (it can't see the
+// schema), so default to the last 7 days through now rather than dead-ending on
+// `invalid_args`. An explicit range still wins.
+const rangeSchema = z.object({
+  dateRangeStart: z.string().min(1).optional(),
+  dateRangeEnd: z.string().min(1).optional(),
+});
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+function resolveRange(
+  ctx: ActionContext,
+  args: { dateRangeStart?: string; dateRangeEnd?: string },
+): { dateRangeStart: string; dateRangeEnd: string } {
+  const end = args.dateRangeEnd ?? (ctx.now ?? (() => new Date()))().toISOString();
+  const start = args.dateRangeStart ?? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString();
+  return { dateRangeStart: start, dateRangeEnd: end };
+}
 
 /** Cap a report payload; returns {data} or {bytes, truncated} + a warning flag. */
 function capReport(data: unknown): { data?: unknown; bytes: number; truncated: boolean } {
@@ -44,7 +61,7 @@ const summary = defineAction({
   risks: ["read"],
   schema: rangeSchema.extend({ groups: z.array(z.enum(["PROJECT", "CLIENT", "TASK", "TAG", "USER", "DATE"])).optional() }),
   async handler(ctx, args) {
-    const data = await ctx.clockify.summaryReport({ dateRangeStart: args.dateRangeStart, dateRangeEnd: args.dateRangeEnd }, args.groups);
+    const data = await ctx.clockify.summaryReport(resolveRange(ctx, args), args.groups);
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_summary", ctx.workspaceId, data) };
   },
 });
@@ -56,7 +73,7 @@ const detailed = defineAction({
   risks: ["read"],
   schema: rangeSchema,
   async handler(ctx, args) {
-    const data = await ctx.clockify.detailedReport(args);
+    const data = await ctx.clockify.detailedReport(resolveRange(ctx, args));
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_detailed", ctx.workspaceId, data) };
   },
 });
@@ -68,7 +85,7 @@ const weekly = defineAction({
   risks: ["read"],
   schema: rangeSchema,
   async handler(ctx, args) {
-    const data = await ctx.clockify.weeklyReport(args);
+    const data = await ctx.clockify.weeklyReport(resolveRange(ctx, args));
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_weekly", ctx.workspaceId, data) };
   },
 });

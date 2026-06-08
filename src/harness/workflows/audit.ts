@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -30,19 +30,33 @@ function capRows(rows: unknown[]): { data?: unknown[]; count: number; bytes: num
     : { data: rows, count: rows.length, bytes, truncated: false };
 }
 
+/** Every audit action in the enum — the default when the planner names none. */
+const ALL_AUDIT_ACTIONS = auditAction.options;
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
 const search = defineAction({
   name: "clockify_audit_logs_search",
-  description: "Search the workspace audit log for create/update/delete actions in a date range (≤31 days).",
+  description: "Search the workspace audit log for create/update/delete actions in a date range (≤31 days). Defaults to all tracked actions over the last 7 days when not specified.",
   featureGroup: AUD,
   risks: ["read"],
+  // actions/start/end are optional: the planner often omits them (it can't see the
+  // schema), so default to all actions over the last 7 days rather than dead-ending
+  // on `invalid_args`. A provided (but empty) actions list is still rejected.
   schema: z.object({
-    actions: z.array(auditAction).min(1),
-    start: z.string().min(1),
-    end: z.string().min(1),
+    actions: z.array(auditAction).min(1).optional(),
+    start: z.string().min(1).optional(),
+    end: z.string().min(1).optional(),
     page: z.number().int().positive().optional(),
   }),
-  async handler(ctx, args) {
-    const rows = await ctx.clockify.searchAuditLog(args);
+  async handler(ctx: ActionContext, args) {
+    const end = args.end ?? (ctx.now ?? (() => new Date()))().toISOString();
+    const start = args.start ?? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString();
+    const rows = await ctx.clockify.searchAuditLog({
+      actions: args.actions ?? ALL_AUDIT_ACTIONS,
+      start,
+      end,
+      page: args.page,
+    });
     const capped = capRows(rows);
     return {
       kind: "receipt",

@@ -28,6 +28,23 @@ describe("report actions", () => {
     else throw new Error("expected policy_denied");
   });
 
+  it("reports default the date range when the planner omits it (summary/detailed/weekly)", async () => {
+    const fake = createFakeWorkspace();
+    const s = await executeAction({ actionName: "clockify_reports_summary", args: {}, context: makeContext(fake) });
+    if (s.kind === "receipt" && s.receipt.ok) {
+      const r = (s.receipt.data as any).report.range;
+      expect(r.dateRangeStart).toBeTruthy();
+      expect(r.dateRangeEnd).toBeTruthy();
+    } else throw new Error("expected receipt");
+    const w = await executeAction({ actionName: "clockify_reports_weekly", args: {}, context: makeContext(fake) });
+    expect(w.kind === "receipt" && w.receipt.ok).toBe(true);
+    const d2 = await executeAction({ actionName: "clockify_reports_detailed", args: {}, context: makeContext(fake) });
+    expect(d2.kind === "receipt" && d2.receipt.ok).toBe(true);
+    expect(fake.counts.summaryReport).toBe(1);
+    expect(fake.counts.weeklyReport).toBe(1);
+    expect(fake.counts.detailedReport).toBe(1);
+  });
+
   it("reports_detailed + reports_weekly read", async () => {
     const fake = createFakeWorkspace();
     const d = await executeAction({ actionName: "clockify_reports_detailed", args: range, context: makeContext(fake) });

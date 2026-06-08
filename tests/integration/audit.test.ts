@@ -33,6 +33,13 @@ describe("audit actions", () => {
     else throw new Error("expected invalid_args");
   });
 
+  it("audit_logs_search defaults actions + date range when the planner omits them (reaches the search)", async () => {
+    const fake = createFakeWorkspace();
+    const r = await executeAction({ actionName: "clockify_audit_logs_search", args: {}, context: makeContext(fake) });
+    expect(r.kind === "receipt" && r.receipt.ok).toBe(true);
+    expect(fake.counts.searchAuditLog).toBe(1);
+  });
+
   it("entity_changes_list reads the change feed", async () => {
     const fake = createFakeWorkspace();
     const r = await executeAction({ actionName: "clockify_entity_changes_list", args: { changeType: "created" }, context: makeContext(fake) });
