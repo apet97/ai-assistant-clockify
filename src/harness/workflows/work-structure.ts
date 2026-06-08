@@ -1,10 +1,14 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition, type ActionResult } from "../action.js";
 import type { EntitySummary } from "../../clockify/client.js";
-import type { FeatureGroup } from "../permissions.js";
-import type { EntityRef } from "../receipts.js";
+import { canWrite, type FeatureGroup } from "../permissions.js";
+import type { EntityRef, Warning } from "../receipts.js";
 import { successReceipt } from "../receipts.js";
 import { matchByName } from "./resolve.js";
+
+function nowIso(ctx: ActionContext): string {
+  return (ctx.now ?? (() => new Date()))().toISOString();
+}
 
 /**
  * Work-structure safe-write + read workflows (SPEC "Safe Writes" / reads).
@@ -59,7 +63,8 @@ async function listByType(
 
 const createWorkPackage = defineAction({
   name: "clockify_create_work_package",
-  description: "Create or reuse a client, project, task, and/or tag by name in one step.",
+  description:
+    "Create or reuse a client, project, task, and/or tag by name in one step. Set `startTimer` to also start a timer on the created/reused project in the same step — use this for \"create a project and start a timer on it\" so the new project id is resolved server-side (do not emit a separate start-timer that references an id that does not exist yet).",
   featureGroup: "work_structure",
   risks: ["safe_write"],
   schema: z
@@ -70,6 +75,12 @@ const createWorkPackage = defineAction({
         .object({ name: z.string().min(1), clientName: z.string().optional() })
         .optional(),
       task: z.object({ name: z.string().min(1) }).optional(),
+      startTimer: z
+        .object({
+          description: z.string().optional(),
+          billable: z.boolean().optional(),
+        })
+        .optional(),
     })
     .refine((value) => value.tag || value.client || value.project || value.task, {
       message: "Provide at least one of tag, client, project, or task.",
@@ -77,6 +88,7 @@ const createWorkPackage = defineAction({
   async handler(ctx, args) {
     const created: EntityRef[] = [];
     const reused: EntityRef[] = [];
+    const warnings: Warning[] = [];
 
     if (args.tag) {
       const tags = await ctx.clockify.listTags();
@@ -120,6 +132,7 @@ const createWorkPackage = defineAction({
       }
     }
 
+    let taskId: string | undefined;
     if (args.task) {
       if (!projectId) {
         return {
@@ -130,12 +143,46 @@ const createWorkPackage = defineAction({
       const tasks = await ctx.clockify.listTasks(projectId);
       const match = matchByName(tasks, args.task.name);
       if (match.kind === "one") {
+        taskId = match.entity.id;
         reused.push({ type: "task", id: match.entity.id, name: match.entity.name });
       } else if (match.kind === "many") {
         return ambiguous("task", args.task.name, match.matches);
       } else {
         const task = await ctx.clockify.createTask({ projectId, name: args.task.name });
+        taskId = task.id;
         created.push({ type: "task", id: task.id, name: task.name });
+      }
+    }
+
+    // Optionally start a timer on the just-created/reused project in the same step
+    // (SPEC: "the harness decides, not the model" — the new project id is resolved
+    // server-side, so the planner never has to reference an id that does not exist
+    // yet). Starting a timer is a `time_tracking` write, so it is gated by that
+    // group independently of this action's `work_structure` gate.
+    if (args.startTimer) {
+      if (!projectId) {
+        return {
+          kind: "clarify",
+          message:
+            "To start a timer I need a project. Add a project to create or reuse, or start the timer separately.",
+        };
+      }
+      if (!canWrite(ctx.policy, "time_tracking")) {
+        warnings.push({
+          code: "policy_denied",
+          message:
+            "Timer not started: write access to time_tracking is disabled in your assistant permissions.",
+        });
+      } else {
+        const entry = await ctx.clockify.startTimeEntry({
+          userId: ctx.adminUserId,
+          description: args.startTimer.description,
+          projectId,
+          taskId,
+          billable: args.startTimer.billable,
+          start: nowIso(ctx),
+        });
+        created.push({ type: "time_entry", id: entry.id, name: entry.description });
       }
     }
 
@@ -146,6 +193,7 @@ const createWorkPackage = defineAction({
         entity: "work_package",
         ids: { workspaceId: ctx.workspaceId },
         changed: { created, reused },
+        warnings,
       }),
     };
   },

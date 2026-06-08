@@ -65,6 +65,72 @@ describe("safe writes", () => {
     expect(fake.counts.createClient ?? 0).toBe(0); // reused, not created
   });
 
+  it("create_work_package with startTimer creates the project and starts a timer carrying its id", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { project: { name: "Apollo" }, startTimer: { description: "kickoff" } },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && result.receipt.ok) {
+      const created = result.receipt.changed?.created ?? [];
+      const projectRef = created.find((e) => e.type === "project");
+      expect(projectRef).toBeDefined();
+      expect(created.some((e) => e.type === "time_entry")).toBe(true);
+      // The timer must carry the just-created project's id (resolved server-side).
+      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.state.running?.projectId).toBe(projectRef?.id);
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
+  it("create_work_package with startTimer reuses an existing project and starts the timer on it", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme" }] });
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { project: { name: "Acme" }, startTimer: {} },
+      context: makeContext(fake),
+    });
+    if (result.kind === "receipt" && result.receipt.ok) {
+      expect(fake.counts.createProject ?? 0).toBe(0); // reused, not created
+      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.state.running?.projectId).toBe("p-acme");
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
+  it("create_work_package with startTimer but no project asks to clarify and starts nothing", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { tag: { name: "Deep Work" }, startTimer: {} },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.startTimeEntry ?? 0).toBe(0);
+  });
+
+  it("create_work_package with startTimer skips the timer (with a warning) when time_tracking is read-only", async () => {
+    const fake = createFakeWorkspace();
+    const policy = defaultAdminPolicy();
+    policy.groups.time_tracking = "read";
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { project: { name: "Apollo" }, startTimer: {} },
+      context: makeContext(fake, policy),
+    });
+    if (result.kind === "receipt" && result.receipt.ok) {
+      expect(fake.counts.createProject).toBe(1); // project still created (work_structure allowed)
+      expect(fake.counts.startTimeEntry ?? 0).toBe(0); // timer skipped
+      expect((result.receipt.warnings ?? []).some((w) => /timer/i.test(w.message))).toBe(true);
+    } else {
+      throw new Error("expected a success receipt");
+    }
+  });
+
   it("an ambiguous write target asks a clarifying question and does not write", async () => {
     const fake = createFakeWorkspace({
       projects: [
