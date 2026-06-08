@@ -69,12 +69,26 @@ notes under "Runtime & Known Constraints"):
   - **Host resolution:** call the host from the install context, not hardcoded —
     `apiUrl`+`/v1` for the api host, the `reportsUrl` claim+`/v1` for reports
     (`src/clockify/api-base.ts`; captured at component load into `installations.reports_url`).
+    The audit host has **no claim** (the only URL claims are
+    backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl) and is derived prod-only
+    (`resolveClockifyAuditBase`) — see the AUDIT note below.
   - **Embedded session:** the session cookie is `SameSite=None; Secure; Partitioned`
     (required inside Clockify's cross-site iframe).
   - **Resilience:** the chat route guards async errors → a failed action returns an
     error receipt instead of crashing the process.
 
-- `npm run verify` is green (**440 tests**: type-check + Vitest + build).
+**Risky-write confirm flow PROVEN live (2026-06-08):** `scripts/live-confirm-flow.ts`
+drove the never-before-browser-verified button-confirm safety mechanism over HTTP
+against the real server + DeepSeek + dev host (`PASS=16 FAIL=0`): a risky prompt
+returns a dry-run preview and executes nothing; typed "yes" never executes; a wrong
+nonce is rejected; a nonce is bound to its own preview (cross-batch confirm rejected
+— this is what scopes `Confirm all`); the correct button nonce executes exactly once
+and the tag is really gone; the one-use nonce cannot be replayed; **policy is
+re-checked at confirm time** (lowering a group after preview → `policy_denied`).
+Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
+`tests/integration/risky-preview.test.ts`.
+
+- `npm run verify` is green (**447 tests**: type-check + Vitest + build).
 - The REST `WorkspaceClient` adapter is composed from a multi-host core
   (`src/clockify/rest/core.ts`: api / reports / audit hosts) plus one typed REST
   module per area (`src/clockify/rest/<area>.ts`), assembled in
@@ -103,12 +117,20 @@ notes under "Runtime & Known Constraints"):
   (`reports.api.clockify.me/v1`) authenticates with the production add-on token —
   the multi-host core sends it over the same host-routing + auth-header path as the
   api host (the dev API key works too). No remaining gate for reports.
-- **Pending (not blocking) — AUDIT host only (Phase 15):** the production
-  X-Addon-Token clearance for the AUDIT host (`auditlog-api.api.clockify.me/v1`) is
-  still unconfirmed, and audit `POST /audit-log` + the experimental entity-changes
-  feed 400 live (shapes pinned by unit tests). Re-run `scripts/host-auth-spike.ts`
-  with a captured `LIVE_ADDON_TOKEN` to settle it. The add-on-token install path
-  (`scripts/addon-smoke.ts`) is also human-gated.
+- **AUDIT host (Phase 15) — resolved for non-prod; prod clearance still unconfirmed.**
+  Clockify publishes **no audit URL claim** (confirmed by the docs *and* by decoding
+  the live install + user tokens: the only URL claims are
+  backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl). The audit log lives only
+  on the `auditlog-api.api.<tenant>` subdomain of `api.<tenant>` (prod/regional)
+  hosts, so it is derived prod-only by `resolveClockifyAuditBase`; on the dev/path
+  host (`developer.clockify.me/api`) there is no audit host, and the core now returns
+  a clean **"Audit log is not available in this Clockify environment"** error receipt
+  instead of the old raw `fetch failed` (verified live — server stays up). What
+  remains unconfirmed is the production X-Addon-Token **clearance** for the audit host
+  when it *does* exist: `POST /audit-log` + the experimental entity-changes feed 400'd
+  on the earlier spike (shapes pinned by unit tests). Re-run `scripts/host-auth-spike.ts`
+  with a captured prod `LIVE_ADDON_TOKEN` to settle that. The add-on-token install
+  path (`scripts/addon-smoke.ts`) is also human-gated.
 - **Deferred:** Phase 17 (raw `clockify_api_get`/`api_request` fallback) — omitted
   from V1 (letting the model propose arbitrary paths conflicts with "the harness
   decides, not the model"); requires a safety review before ever building.
@@ -173,6 +195,13 @@ npx tsx scripts/chat-smoke.ts            # needs LLM_BASE_URL / LLM_API_KEY / LL
 
 # Production add-on-token path (needs a captured installation token).
 LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts   # needs LIVE_ADDON_TOKEN / LIVE_BACKEND_URL
+
+# Risky-write confirm flow, proven over HTTP against the running add-on (needs an
+# active install in the store + a live tunnel/server + DeepSeek). It mints a user
+# token via the installation->user token exchange (OWNER_USER_ID = the workspace
+# owner's member id, NOT the install token's `user` claim), or pass USER_TOKEN /
+# USER_TOKEN_FILE from the live iframe. PASS=16 against the dev sandbox.
+npx tsx --env-file=.env.server scripts/live-confirm-flow.ts
 ```
 
 The add-on's own request path uses the REST `WorkspaceClient` adapter with the

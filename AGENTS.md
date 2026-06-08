@@ -8,7 +8,7 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **440 tests**), and the **full
+implemented and verified (`npm run verify` green, **447 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
 catalog actions across 16 feature areas + 3 hosts.
 
@@ -25,8 +25,17 @@ detailed report). Key facts that made it work, all in `CLAUDE.md`:
 - Session cookie is `SameSite=None; Secure; Partitioned` (cross-site iframe).
 - The chat route guards async errors → failed action = error receipt, no crash.
 
-Pending/deferred: the AUDIT host is still derived (no claim captured → may fail on
-dev); Phase 17 (raw-API fallback) is deferred. See `CLAUDE.md` → Current Status.
+The risky-write **button-confirm safety flow is now also proven live** over HTTP
+(`scripts/live-confirm-flow.ts`, `PASS=16`): preview-not-execute, typed-"yes"
+no-op, wrong/cross-batch/replayed nonce rejected, one-shot execute, policy
+re-checked at confirm.
+
+Pending/deferred: the AUDIT host has **no token claim** (the URL claims are
+backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-only
+(`resolveClockifyAuditBase`); on dev/non-audit environments audit actions now return
+a clean "audit log not available" error receipt instead of `fetch failed`. The prod
+audit-host X-Addon-Token clearance is still unconfirmed. Phase 17 (raw-API fallback)
+is deferred. See `CLAUDE.md` → Current Status.
 
 ## Non-negotiable invariants
 
