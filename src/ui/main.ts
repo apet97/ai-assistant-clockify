@@ -107,7 +107,13 @@ interface PreviewResult {
 }
 interface ReceiptResult {
   kind: "receipt";
-  receipt: { ok: boolean; action: string; message?: string; changed?: unknown };
+  receipt: {
+    ok: boolean;
+    action: string;
+    message?: string;
+    changed?: unknown;
+    warnings?: Array<{ code?: string; message: string }>;
+  };
 }
 interface ClarifyResult {
   kind: "clarify";
@@ -189,9 +195,16 @@ function mount(root: HTMLElement, api: ChatApi): void {
   }
 
   function renderReceipt(result: ReceiptResult): HTMLElement {
-    const card = el("div", `receipt ${result.receipt.ok ? "ok" : "error"}`);
-    card.appendChild(el("strong", undefined, result.receipt.ok ? "Done" : "Failed"));
+    const warnings = result.receipt.warnings ?? [];
+    // "Done with caveats" when the action succeeded but something was skipped
+    // (e.g. an invoice was created but a line item couldn't be added) — never
+    // present a partial result as a clean success.
+    const status = result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
+    const card = el("div", `receipt ${result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
+    card.appendChild(el("strong", undefined, status));
     card.appendChild(el("span", "action", result.receipt.action));
+    // Surface warnings inline (not buried in Details) so the user sees them.
+    for (const w of warnings) card.appendChild(el("p", "warning", w.message));
     const details = el("pre", "details hidden", JSON.stringify(result.receipt, null, 2));
     const toggle = el("button", "link", "Details") as HTMLButtonElement;
     toggle.addEventListener("click", () => details.classList.toggle("hidden"));

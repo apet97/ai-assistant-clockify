@@ -140,6 +140,16 @@ select {
   color: var(--danger);
 }
 
+.receipt.warn strong {
+  color: var(--warn, #e0a000);
+}
+
+.receipt .warning {
+  margin: 0;
+  color: var(--warn, #e0a000);
+  font-size: 12px;
+}
+
 .receipt .action {
   color: var(--muted);
   margin-left: 6px;
