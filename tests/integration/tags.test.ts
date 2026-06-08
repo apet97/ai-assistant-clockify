@@ -60,4 +60,39 @@ describe("tag actions", () => {
     expect(fake.counts.deleteTag).toBe(1);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
+
+  it("clockify_tags_delete resolves a tag by name when no id is given, then deletes once", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_tags_delete", args: { name: "Deep Work" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // The resolved id must be pinned into the operation payload, not left to chat.
+    expect((preview.operation.payload as { id: string }).id).toBe("t1");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
+  });
+
+  it("clockify_tags_delete asks to clarify (not invalid_args) when the name matches no tag", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({ actionName: "clockify_tags_delete", args: { name: "Nope" }, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
+  it("clockify_tags_delete asks to clarify with options when the name is ambiguous", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "Focus" }, { id: "t2", name: "Focus" }] });
+    const result = await executeAction({ actionName: "clockify_tags_delete", args: { name: "Focus" }, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.length).toBe(2);
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
+  it("clockify_tags_delete rejects a call with neither id nor name", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({ actionName: "clockify_tags_delete", args: {}, context: makeContext(fake) });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
+    else throw new Error("expected an invalid_args error receipt");
+  });
 });

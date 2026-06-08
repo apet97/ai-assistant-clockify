@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { matchByName } from "./resolve.js";
 
 /**
  * Typed tag workflows (goclmcp §2.5). Reads + create execute immediately;
@@ -122,19 +123,47 @@ const updateTag = defineAction({
 
 const deleteTag = defineAction({
   name: "clockify_tags_delete",
-  description: "Delete a tag. Previews and requires confirmation.",
+  description:
+    "Delete a tag. Pass the tag's id (preferred — list tags first to get it), or its exact name and the harness resolves it to an id. Previews and requires confirmation.",
   featureGroup: WORK,
   risks: ["destructive"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the tag id or its exact name.",
+    }),
   async handler(ctx, args) {
+    let id = args.id;
+    let name = args.name;
+    // Resolve a name → id when no id was supplied, so a delete never dead-ends on
+    // a missing id. Ambiguous identity stops and asks (it never picks one).
+    if (!id) {
+      const tags = await ctx.clockify.listTags();
+      const match = matchByName(tags, name as string);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find an active tag named "${name}". List your tags and tell me which one to delete.`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several active tags are named "${name}". Which one should I delete?`,
+          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
+        };
+      }
+      id = match.entity.id;
+      name = match.entity.name;
+    }
     return {
       kind: "preview",
       preview: {
         actionLabel: "Delete tag",
         featureGroup: WORK,
         riskLabels: ["destructive"],
-        targets: [{ type: "tag", id: args.id, name: args.name }],
-        expectedChanges: [`Delete tag ${args.name ?? args.id}`],
+        targets: [{ type: "tag", id, name }],
+        expectedChanges: [`Delete tag ${name ?? id}`],
         reversibility: "This cannot be undone.",
         warnings: ["Deleting a tag is permanent and removes it from tagged entries."],
       },
@@ -142,7 +171,7 @@ const deleteTag = defineAction({
         actionName: "clockify_tags_delete",
         featureGroup: WORK,
         risks: ["destructive"],
-        payload: { id: args.id, name: args.name },
+        payload: { id, name },
       },
     };
   },
