@@ -22,13 +22,13 @@ MCP-shaped action harness.
 ## Branch layout
 
 - **`main` (this branch, curated):** source under `src/`, tests under `tests/`,
-  live scripts under `scripts/`, `README.md`, and this file + `AGENTS.md`.
+  live scripts under `scripts/`, `README.md`, `NEXT_SESSION_PROMPT.md` (the live
+  test/continue kickoff — start a new session from there), and this file + `AGENTS.md`.
 - **`slopbranch`:** the full design-doc set and project skills/agents
   (`PRD.md`, `SPEC.md`, `TECH_STACK.md`, `ARCHITECTURE.md`, `DATA_MODEL.md`,
   `SAFETY_AND_PERMISSIONS.md`, `IMPLEMENTATION_PLAN*.md`, `TESTING_AND_ACCEPTANCE.md`,
-  `API_COVERAGE_PLAN.md`, `NEXT_SESSION_PROMPT.md`, `REFERENCES.md`, `.claude/`).
-  Read those there (`git show slopbranch:SPEC.md`, etc.) when you need the
-  contracts behind the code.
+  `API_COVERAGE_PLAN.md`, `REFERENCES.md`, `.claude/`). Read those there
+  (`git show slopbranch:SPEC.md`, etc.) when you need the contracts behind the code.
 
 ## Engineering Rules
 
@@ -134,6 +134,16 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 - **Deferred:** Phase 17 (raw `clockify_api_get`/`api_request` fallback) — omitted
   from V1 (letting the model propose arbitrary paths conflicts with "the harness
   decides, not the model"); requires a safety review before ever building.
+- **Known live planner quirks (open — see `NEXT_SESSION_PROMPT.md`):** the embedded
+  chat was exercised live (reads, permissions, safe write, risky write→preview→
+  button-confirm, audit clean-error — all good). Two DeepSeek-planner gaps remain:
+  (1) **"create a project AND start a timer on it" in ONE turn starts a BARE timer**
+  (`entry.projectId` empty) — the planner can't reference the not-yet-created project
+  id same-turn; a follow-up turn (id in history) attaches it correctly. (2)
+  **`clockify_tags_delete` sometimes drops its `id`** → `invalid_args`, so no preview
+  fires; needs firmer planner guidance or name-resolution in the handler. Both are
+  planner/prompting issues, not harness bugs (the harness correctly rejects malformed
+  calls). Also: Clockify **reserves a project name even after archive-then-delete**.
 
 ## Build, Test, Run
 

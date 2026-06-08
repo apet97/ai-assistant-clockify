@@ -28,7 +28,20 @@ detailed report). Key facts that made it work, all in `CLAUDE.md`:
 The risky-write **button-confirm safety flow is now also proven live** over HTTP
 (`scripts/live-confirm-flow.ts`, `PASS=16`): preview-not-execute, typed-"yes"
 no-op, wrong/cross-batch/replayed nonce rejected, one-shot execute, policy
-re-checked at confirm.
+re-checked at confirm. The embedded chat was also exercised live (reads,
+permissions, safe write, risky write, audit clean-error — all good).
+
+**Live dev hosting:** `scripts/dev-tunnel.sh {up|status|sync|restart|down}` manages
+the Cloudflare quick tunnel + server as one unit (writes `BASE_URL`, restarts the
+server; `up` is idempotent). The quick-tunnel URL is random per `cloudflared` start —
+on a URL change, re-register the manifest in the dev console (restore the session via
+`developer.marketplace.cake.com/test-accounts` → "Log in as" John Owner). **To
+continue/test in a fresh session, start from `NEXT_SESSION_PROMPT.md`.**
+
+**Open (planner quirks, not harness bugs):** (1) "create a project AND start a timer
+on it" in ONE turn starts a BARE timer (planner can't reference the new project id
+same-turn; a follow-up turn attaches it); (2) `clockify_tags_delete` sometimes drops
+its `id` → `invalid_args`. See `CLAUDE.md` → Current Status / `NEXT_SESSION_PROMPT.md`.
 
 Pending/deferred: the AUDIT host has **no token claim** (the URL claims are
 backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-only
