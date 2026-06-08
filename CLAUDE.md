@@ -88,7 +88,20 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**473 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**478 tests**: type-check + Vitest + build).
+- **Invoice creation smoothed (2026-06-08):** `clockify_invoices_create` used to punt
+  for a client id (it only displayed `clientName`) and required number/dates/currency,
+  and there was no way to add a line item to the not-yet-created invoice. Now it
+  **resolves the client by name** (clarify on none/ambiguous), **defaults**
+  number/issuedDate(+today)/dueDate(+30d)/currency(USD) — shown in the preview — and
+  accepts inline **`items`** (description/quantity/amount) added onto the new invoice in
+  the same preview→confirm step. **Invoice item types are workspace-configured named
+  entities** (Clockify → Workspace settings → Invoices); a fresh workspace has NONE
+  (`MANUAL`/`NEW DEFAULT`/etc. all 404 `"Invoice item type with name X not found"`, and
+  there's no API to list/create them), so a failed item add no longer dumps a raw 404 —
+  the invoice is still created and the receipt carries an **actionable warning**.
+  `itemType` defaults to `"NEW DEFAULT"` and is overridable. Proven live
+  (`scripts/live-invoice-flow.ts`).
 - **Planner backend is selectable (`LLM_PROVIDER`).** Default `http` = the
   OpenAI-compatible client (`createModelClient`; DeepSeek via `LLM_BASE_URL`/
   `LLM_API_KEY`/`LLM_MODEL`). Set `LLM_PROVIDER=gemini-cli` to instead drive the
