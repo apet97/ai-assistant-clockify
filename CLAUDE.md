@@ -88,7 +88,17 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**478 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**479 tests**: type-check + Vitest + build).
+- **Truthful previews (safety, 2026-06-08):** the model sometimes narrated "Done!/
+  Confirmed" in its reply for a risky action the harness actually returned as a *pending
+  preview* — so the chat bubble claimed success above an un-clicked Confirm button, and
+  that false claim was stored in history (convincing the model on later turns the action
+  had happened). The chat route now **deterministically replaces** the reply text with a
+  truthful "review and click Confirm — nothing has been changed yet" whenever previews
+  are pending, and stores THAT (not the model's claim). Only the button confirm executes.
+  The UI also renders receipt **warnings inline** and shows "Done — with notes" for a
+  partial success (e.g. invoice created but the line item couldn't be added), so a
+  partial result is never shown as a clean success.
 - **Invoice creation smoothed (2026-06-08):** `clockify_invoices_create` used to punt
   for a client id (it only displayed `clientName`) and required number/dates/currency,
   and there was no way to add a line item to the not-yet-created invoice. Now it
