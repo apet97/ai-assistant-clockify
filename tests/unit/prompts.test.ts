@@ -32,9 +32,11 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("clockify_create_work_package");
   });
 
-  it("nudges the planner to resolve an id (or pass a name) before an id-based delete", () => {
-    // Guidance so a delete never dead-ends on a missing id.
-    expect(prompt.toLowerCase()).toContain("id");
+  it("tells the planner a delete can pass an exact name (the harness resolves it) without a list lookup first", () => {
+    // Guidance so a delete never dead-ends on a missing id AND the model does not
+    // burn a turn listing just to find an id (the harness resolves the name).
     expect(prompt).toContain("clockify_tags_delete");
+    expect(prompt).toContain("harness resolves");
+    expect(prompt).not.toContain("first call the matching");
   });
 });
