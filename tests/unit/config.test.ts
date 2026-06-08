@@ -59,4 +59,18 @@ describe("loadConfig", () => {
     const cfg = loadConfig({ NODE_ENV: "test", ...baseEnv });
     expect(cfg.clockifyAddonPublicKeyPem).toBe("public-key");
   });
+
+  it("defaults the LLM provider to http and keeps requiring the LLM_* envs", () => {
+    const cfg = loadConfig({ NODE_ENV: "test", ...baseEnv });
+    expect(cfg.llmProvider).toBe("http");
+    const { LLM_API_KEY: _k, ...withoutKey } = baseEnv;
+    expect(() => loadConfig({ NODE_ENV: "test", ...withoutKey })).toThrow();
+  });
+
+  it("allows the gemini-cli provider without an LLM base url or api key", () => {
+    const { LLM_BASE_URL: _b, LLM_API_KEY: _k, LLM_MODEL: _m, ...minimal } = baseEnv;
+    const cfg = loadConfig({ NODE_ENV: "test", ...minimal, LLM_PROVIDER: "gemini-cli", GEMINI_MODEL: "gemini-2.5-flash" });
+    expect(cfg.llmProvider).toBe("gemini-cli");
+    expect(cfg.geminiModel).toBe("gemini-2.5-flash");
+  });
 });

@@ -17,24 +17,43 @@ export interface AppConfig {
   sessionSecret: string;
   dataEncryptionKey?: string;
   databasePath: string;
-  llmBaseUrl: string;
-  llmApiKey: string;
-  llmModel: string;
+  /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
+  llmProvider: "http" | "gemini-cli";
+  llmBaseUrl?: string;
+  llmApiKey?: string;
+  llmModel?: string;
+  /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
+  geminiModel?: string;
 }
 
-const envSchema = z.object({
-  NODE_ENV: z.string().min(1).optional(),
-  PORT: z.coerce.number().int().positive(),
-  BASE_URL: z.string().min(1),
-  CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
-  CLOCKIFY_ADDON_KEY: z.string().min(1),
-  SESSION_SECRET: z.string().min(1),
-  DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
-  DATABASE_PATH: z.string().min(1),
-  LLM_BASE_URL: z.string().min(1),
-  LLM_API_KEY: z.string().min(1),
-  LLM_MODEL: z.string().min(1),
-});
+const envSchema = z
+  .object({
+    NODE_ENV: z.string().min(1).optional(),
+    PORT: z.coerce.number().int().positive(),
+    BASE_URL: z.string().min(1),
+    CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
+    CLOCKIFY_ADDON_KEY: z.string().min(1),
+    SESSION_SECRET: z.string().min(1),
+    DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
+    DATABASE_PATH: z.string().min(1),
+    // The HTTP provider needs base/key/model; the gemini-cli provider needs none
+    // (it uses the authenticated CLI), so these are optional here and enforced
+    // below only for the http provider.
+    LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
+    LLM_BASE_URL: z.string().min(1).optional(),
+    LLM_API_KEY: z.string().min(1).optional(),
+    LLM_MODEL: z.string().min(1).optional(),
+    GEMINI_MODEL: z.string().min(1).optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.LLM_PROVIDER === "http") {
+      for (const key of ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"] as const) {
+        if (!v[key]) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${key} is required when LLM_PROVIDER=http`, path: [key] });
+        }
+      }
+    }
+  });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
@@ -59,8 +78,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     sessionSecret: parsed.SESSION_SECRET,
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
     databasePath: parsed.DATABASE_PATH,
+    llmProvider: parsed.LLM_PROVIDER,
     llmBaseUrl: parsed.LLM_BASE_URL,
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
+    geminiModel: parsed.GEMINI_MODEL,
   };
 }

@@ -61,6 +61,7 @@ beforeAll(async () => {
     llmBaseUrl: "https://llm.example.com",
     llmApiKey: "llm-key",
     llmModel: "cheap-model",
+    llmProvider: "http",
   };
   store = createStore(":memory:", { encryptionKey: "test-key" });
   store.saveInstallation({
