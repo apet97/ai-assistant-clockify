@@ -22,6 +22,7 @@ export interface InstallationInput {
   addonToken: string;
   apiUrl?: string;
   backendUrl?: string;
+  reportsUrl?: string;
   status?: InstallationStatus;
   installedByUserId?: string;
 }
@@ -33,10 +34,18 @@ export interface Installation {
   addonToken: string;
   apiUrl?: string;
   backendUrl?: string;
+  reportsUrl?: string;
   status: InstallationStatus;
   installedByUserId?: string;
   installedAt: string;
   updatedAt: string;
+}
+
+/** Environment URLs refreshed from the latest verified token (component load). */
+export interface InstallationEnv {
+  apiUrl?: string;
+  backendUrl?: string;
+  reportsUrl?: string;
 }
 
 export interface ChatSession {
@@ -92,6 +101,8 @@ export interface Store {
   upsertAdminPolicy(workspaceId: string, adminUserId: string, policy: AdminPolicy): void;
   saveInstallation(input: InstallationInput): void;
   getInstallation(workspaceId: string): Installation | undefined;
+  /** Refresh environment URLs from the latest token; only provided fields change. */
+  updateInstallationEnv(workspaceId: string, env: InstallationEnv): void;
   setInstallationStatus(workspaceId: string, status: InstallationStatus): void;
 
   createSession(input: NewSessionInput): ChatSession;
@@ -123,6 +134,7 @@ interface InstallationRow {
   addon_token_ciphertext: string;
   api_url: string | null;
   backend_url: string | null;
+  reports_url: string | null;
   status: InstallationStatus;
   installed_by_user_id: string | null;
   installed_at: string;
@@ -199,14 +211,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       db.prepare(
         `INSERT INTO installations (
            workspace_id, addon_id, addon_user_id, addon_token_ciphertext,
-           api_url, backend_url, status, installed_by_user_id, installed_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           api_url, backend_url, reports_url, status, installed_by_user_id, installed_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(workspace_id) DO UPDATE SET
            addon_id = excluded.addon_id,
            addon_user_id = excluded.addon_user_id,
            addon_token_ciphertext = excluded.addon_token_ciphertext,
            api_url = excluded.api_url,
            backend_url = excluded.backend_url,
+           reports_url = COALESCE(excluded.reports_url, installations.reports_url),
            status = excluded.status,
            installed_by_user_id = excluded.installed_by_user_id,
            updated_at = excluded.updated_at`,
@@ -217,10 +230,28 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         sealToken(input.addonToken),
         input.apiUrl ?? null,
         input.backendUrl ?? null,
+        input.reportsUrl ?? null,
         input.status ?? "active",
         input.installedByUserId ?? null,
         timestamp,
         timestamp,
+      );
+    },
+
+    updateInstallationEnv(workspaceId, env) {
+      db.prepare(
+        `UPDATE installations SET
+           api_url = COALESCE(?, api_url),
+           backend_url = COALESCE(?, backend_url),
+           reports_url = COALESCE(?, reports_url),
+           updated_at = ?
+         WHERE workspace_id = ?`,
+      ).run(
+        env.apiUrl ?? null,
+        env.backendUrl ?? null,
+        env.reportsUrl ?? null,
+        nowIso(),
+        workspaceId,
       );
     },
 
@@ -236,6 +267,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         addonToken: openToken(row.addon_token_ciphertext),
         apiUrl: row.api_url ?? undefined,
         backendUrl: row.backend_url ?? undefined,
+        reportsUrl: row.reports_url ?? undefined,
         status: row.status,
         installedByUserId: row.installed_by_user_id ?? undefined,
         installedAt: row.installed_at,

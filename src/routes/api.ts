@@ -167,22 +167,60 @@ export function apiRouter(deps: AppDeps): Router {
       .filter((m) => m.role !== "system")
       .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
 
-    const plan = await planConversation({
-      modelClient: deps.modelClient,
-      messages,
-      actionCatalog: catalogForModel(),
-      policy,
-    });
+    let plan;
+    try {
+      plan = await planConversation({
+        modelClient: deps.modelClient,
+        messages,
+        actionCatalog: catalogForModel(),
+        policy,
+      });
+    } catch {
+      // A model/transport failure must never crash the server. Surface a calm,
+      // non-leaking message and let the admin retry.
+      const message = "The assistant is temporarily unavailable. Please try again.";
+      deps.store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        role: "assistant",
+        content: message,
+        payload: { kind: "error" },
+      });
+      return res.status(502).json({ ok: false, code: "model_unavailable", message });
+    }
 
     const results: unknown[] = [];
     if (plan.kind === "actions" && plan.actions) {
       const ctx = actionContext(claims.workspaceId, claims.adminUserId, installation);
       for (const proposed of plan.actions) {
-        const outcome = await executeAction({
-          actionName: proposed.name,
-          args: proposed.arguments,
-          context: ctx,
-        });
+        let outcome;
+        try {
+          outcome = await executeAction({
+            actionName: proposed.name,
+            args: proposed.arguments,
+            context: ctx,
+          });
+        } catch (err) {
+          // A safe write that throws (e.g. the Clockify API rejects it) returns an
+          // error receipt — it must not take down the process (Express 4 does not
+          // catch async throws). The message carries no token/secret.
+          const receipt = errorReceipt({
+            action: proposed.name,
+            code: "action_failed",
+            message: err instanceof Error ? err.message.slice(0, 200) : "The action could not be completed.",
+          });
+          deps.store.addAuditEvent({
+            workspaceId: claims.workspaceId,
+            adminUserId: claims.adminUserId,
+            sessionId: claims.sessionId,
+            actionName: proposed.name,
+            risk: getAction(proposed.name)?.risks ?? [],
+            receipt,
+          });
+          results.push({ kind: "receipt", receipt });
+          continue;
+        }
         if (outcome.kind === "receipt") {
           deps.store.addAuditEvent({
             workspaceId: claims.workspaceId,

@@ -47,6 +47,16 @@ export function componentRouter(deps: AppDeps): Router {
       return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
     }
 
+    // Refresh environment hosts from the freshest token. The install/lifecycle
+    // token often omits backendUrl/reportsUrl, so the user token loaded here is
+    // the reliable source of which Clockify hosts to call (api + reports differ
+    // by environment — see resolveClockify*Base). Only present fields change.
+    deps.store.updateInstallationEnv(workspaceId, {
+      apiUrl: claims.backendUrl,
+      backendUrl: claims.backendUrl,
+      reportsUrl: claims.reportsUrl,
+    });
+
     const session = deps.store.createSession({ workspaceId, adminUserId });
     const sessionClaims: SessionClaims = {
       sessionId: session.id,

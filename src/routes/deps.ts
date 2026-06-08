@@ -42,10 +42,18 @@ export function buildSessionCookie(value: string, secure: boolean): string {
     `${SESSION_COOKIE}=${value}`,
     "HttpOnly",
     "Path=/",
-    "SameSite=Lax",
     `Max-Age=${8 * 60 * 60}`,
   ];
-  if (secure) attributes.push("Secure");
+  if (secure) {
+    // The component renders inside Clockify's cross-site iframe, so the session
+    // cookie must be SameSite=None + Secure to be SENT on the same-origin chat
+    // API calls the iframe makes. Partitioned (CHIPS) keeps it working under
+    // third-party-cookie blocking. Lax would silently drop the cookie there.
+    attributes.push("SameSite=None", "Secure", "Partitioned");
+  } else {
+    // Local http dev/tests: browsers reject SameSite=None without Secure.
+    attributes.push("SameSite=Lax");
+  }
   return attributes.join("; ");
 }
 

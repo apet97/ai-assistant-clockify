@@ -10,13 +10,21 @@ describe("manifest", () => {
     expect(JSON.stringify(manifest)).toContain("AI Assistant");
   });
 
-  it("exposes a single admin-only component at /component/assistant", () => {
+  it("exposes a single admin-only sidebar component at /component/assistant", () => {
     const manifest = buildManifest(BASE_URL);
     expect(manifest.components).toBeDefined();
     const component = manifest.components?.[0];
+    expect(component?.type).toBe("sidebar");
     expect(component?.path).toBe("/component/assistant");
     expect(component?.accessLevel).toBe("ADMINS");
     expect(component?.label).toBe("AI Assistant");
+    // Clockify's sidebar is an icon rail — the nav entry needs an icon to render.
+    expect(component?.iconPath).toBe("/icon.svg");
+  });
+
+  it("declares a top-level add-on icon (sidebar nav entry renders from it)", () => {
+    const manifest = buildManifest(BASE_URL);
+    expect(manifest.iconPath).toBe("/icon.svg");
   });
 
   it("declares the install/status/delete lifecycle endpoints", () => {

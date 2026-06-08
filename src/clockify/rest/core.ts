@@ -18,6 +18,12 @@ export type ClockifyHost = "api" | "reports" | "audit";
 export interface RestCoreOptions {
   /** Verified backend base, e.g. https://api.clockify.me/api/v1 */
   apiBase: string;
+  /** Explicit reports host base from the token `reportsUrl` claim (+ /v1). The
+   *  reports host is NOT derivable from the api host across environments, so when
+   *  present this overrides the derived value. */
+  reportsBase?: string;
+  /** Explicit audit host base, when known. */
+  auditBase?: string;
   auth: ClockifyAuth;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
@@ -67,7 +73,14 @@ function hostsFor(apiBase: string): Record<ClockifyHost, string> {
 }
 
 export function createRestCore(opts: RestCoreOptions): RestCore {
-  const hosts = hostsFor(opts.apiBase);
+  const derived = hostsFor(opts.apiBase);
+  // The reports/audit hosts vary by environment (prod subdomain vs dev path), so
+  // an explicit base from the token claim wins over the derived prod default.
+  const hosts: Record<ClockifyHost, string> = {
+    api: derived.api,
+    reports: opts.reportsBase ?? derived.reports,
+    audit: opts.auditBase ?? derived.audit,
+  };
   const doFetch = opts.fetchImpl ?? fetch;
   const authHeader: Record<string, string> =
     "addonToken" in opts.auth

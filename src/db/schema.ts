@@ -13,6 +13,7 @@ export const SCHEMA_STATEMENTS: string[] = [
     addon_token_ciphertext TEXT NOT NULL,
     api_url TEXT,
     backend_url TEXT,
+    reports_url TEXT,
     status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'deleted')),
     installed_by_user_id TEXT,
     installed_at TEXT NOT NULL,
@@ -86,5 +87,20 @@ export function migrate(db: Database.Database): void {
   db.pragma("foreign_keys = ON");
   for (const statement of SCHEMA_STATEMENTS) {
     db.prepare(statement).run();
+  }
+  // Additive column for DBs created before reports-host capture. ALTER ADD COLUMN
+  // throws if it already exists, so add only when missing.
+  addColumnIfMissing(db, "installations", "reports_url", "TEXT");
+}
+
+function addColumnIfMissing(
+  db: Database.Database,
+  table: string,
+  column: string,
+  type: string,
+): void {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === column)) {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
   }
 }

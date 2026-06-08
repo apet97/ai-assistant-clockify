@@ -31,6 +31,10 @@ export type ClockifyAuth = { addonToken: string } | { apiKey: string };
 
 export interface RestWorkspaceOptions {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
+  /** Explicit reports host base from the token `reportsUrl` claim (+ /v1). */
+  reportsBase?: string;
+  /** Explicit audit host base, when known. */
+  auditBase?: string;
   workspaceId: string;
   auth: ClockifyAuth;
   fetchImpl?: typeof fetch; // injectable for tests
@@ -71,7 +75,13 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
 
   // Per-area REST modules built on the multi-host core (D2). The core shares this
   // adapter's auth + base; areas are migrated off the inline `call` phase by phase.
-  const core = createRestCore({ apiBase: base, auth: opts.auth, fetchImpl: opts.fetchImpl });
+  const core = createRestCore({
+    apiBase: base,
+    reportsBase: opts.reportsBase,
+    auditBase: opts.auditBase,
+    auth: opts.auth,
+    fetchImpl: opts.fetchImpl,
+  });
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);
   const taskRest = makeTaskRest(core, opts.workspaceId);

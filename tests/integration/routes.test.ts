@@ -88,6 +88,17 @@ describe("routes", () => {
     expect(res.status).toBe(200);
     expect(res.body.name).toBe("AI Assistant");
     expect(res.body.components?.[0].path).toBe("/component/assistant");
+    expect(res.body.components?.[0].type).toBe("sidebar");
+    expect(res.body.iconPath).toBe("/icon.svg");
+  });
+
+  it("GET /icon.svg serves the sidebar icon", async () => {
+    const res = await request(app).get("/icon.svg");
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("image/svg+xml");
+    // supertest buffers non-text bodies into res.body (a Buffer), not res.text.
+    const body = res.text || (Buffer.isBuffer(res.body) ? res.body.toString("utf8") : "");
+    expect(body).toContain("<svg");
   });
 
   it("component route rejects a non-admin role", async () => {
@@ -112,6 +123,8 @@ describe("routes", () => {
     const setCookie = res.headers["set-cookie"];
     expect(Array.isArray(setCookie) && setCookie[0]).toContain("ai_assistant_session=");
     expect(Array.isArray(setCookie) && setCookie[0]).toContain("HttpOnly");
+    // Cross-site iframe: cookie must be SameSite=None over HTTPS or the chat 401s.
+    expect(Array.isArray(setCookie) && setCookie[0]).toContain("SameSite=None");
   });
 
   it("chat route requires a session", async () => {

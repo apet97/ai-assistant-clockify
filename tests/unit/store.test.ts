@@ -155,4 +155,24 @@ describe("store", () => {
     expect(inst?.addonToken).toBe("token-b");
     expect(inst?.status).toBe("inactive");
   });
+
+  it("captures the reports host via updateInstallationEnv without touching the token", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "secret-token",
+      apiUrl: "https://developer.clockify.me/api",
+    });
+    // The lifecycle/install token omitted reportsUrl; the component-load user
+    // token supplies it. Only provided fields change; the token is untouched.
+    store.updateInstallationEnv("ws-1", {
+      reportsUrl: "https://developer.clockify.me/report",
+    });
+    const inst = store.getInstallation("ws-1");
+    expect(inst?.reportsUrl).toBe("https://developer.clockify.me/report");
+    expect(inst?.apiUrl).toBe("https://developer.clockify.me/api");
+    expect(inst?.addonToken).toBe("secret-token");
+  });
 });
