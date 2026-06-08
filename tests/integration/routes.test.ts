@@ -24,8 +24,10 @@ const modelClient: ModelClient = {
     const text = lastUser?.content ?? "";
     if (text.toLowerCase().includes("delete")) {
       return JSON.stringify({
+        // The model optimistically (and falsely) claims it already executed — the
+        // route must NOT surface this for a pending preview.
         kind: "actions",
-        text: "Here's what I'll do.",
+        text: "Done! I've deleted the project and confirmed it.",
         actions: [
           { name: "clockify_delete_entity", arguments: { entityType: "project", id: "p1", name: "Acme" } },
         ],
@@ -149,6 +151,23 @@ describe("routes", () => {
       .send({ nonce: "whatever" });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("not_found");
+  });
+
+  it("a pending preview never reports the risky action as done — reply text is truthful", async () => {
+    const cookie = await adminCookie();
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete project Acme" });
+    expect(chat.status).toBe(200);
+    expect(chat.body.results.some((r: { kind: string }) => r.kind === "preview")).toBe(true);
+    const reply = String(chat.body.reply?.text ?? "");
+    // The model lied ("Done!… confirmed"); the route must replace that with a truthful,
+    // action-not-yet-applied instruction.
+    expect(reply).not.toMatch(/\bdone\b/i);
+    expect(reply).not.toMatch(/\bconfirmed\b/i);
+    expect(reply).toMatch(/confirm/i); // tells the user to click Confirm
+    expect(reply).toMatch(/not|nothing|yet/i); // makes clear nothing has changed
   });
 
   it("a risky chat message creates a preview that can be cancelled", async () => {

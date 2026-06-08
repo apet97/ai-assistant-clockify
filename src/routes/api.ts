@@ -256,16 +256,32 @@ export function apiRouter(deps: AppDeps): Router {
       }
     }
 
+    // SAFETY (SPEC "never claim a risky action is done"): a risky action only
+    // executes on a button confirmation, never on the model's say-so. The model
+    // sometimes narrates a false "Done!/Confirmed" for a pending preview, so when
+    // the harness returned previews we REPLACE the model's text with a truthful,
+    // not-yet-applied instruction — and store THAT (not the false claim) so the
+    // model's own history can't convince it the action already happened.
+    const pendingPreviews = results.filter(
+      (r): r is { kind: "preview" } => (r as { kind?: string }).kind === "preview",
+    ).length;
+    const replyText =
+      pendingPreviews > 0
+        ? pendingPreviews > 1
+          ? `I've prepared ${pendingPreviews} changes — review them below and click "Confirm all" to apply. Nothing has been changed yet.`
+          : `Review the change below and click "Confirm" to apply it. Nothing has been changed yet.`
+        : plan.text;
+
     deps.store.addMessage({
       sessionId: claims.sessionId,
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       role: "assistant",
-      content: plan.text,
+      content: replyText,
       payload: { kind: plan.kind, results },
     });
 
-    return res.json({ ok: true, reply: { kind: plan.kind, text: plan.text }, results });
+    return res.json({ ok: true, reply: { kind: plan.kind, text: replyText }, results });
   });
 
   router.post("/confirmations/:id/confirm", async (req, res) => {
