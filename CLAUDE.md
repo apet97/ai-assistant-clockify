@@ -88,7 +88,21 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**549 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**559 tests**: type-check + Vitest + build).
+- **Atomic multi-step composition (Phase 3, 2026-06-09).** `src/harness/compose.ts`
+  → `runComposition(steps)` is the **intent layer**: an ordered list of steps with
+  transactional semantics in one place (so handlers + future curated actions don't
+  each re-implement them). A **required** step that errors rolls back every entity
+  created so far (undos run in REVERSE via `deleteEntity`) → **no orphans**; a
+  **best-effort** step (`required:false`) that errors warns and continues; a step may
+  **stop** with a clarify/preview (not a failure — prior creates are kept, matching
+  the old behavior). Only CREATED entities get an undo; reused entities are never
+  rolled back. `clockify_create_work_package` is re-expressed on it (client/project/
+  task = required, timer = best-effort) — behavior parity held by the existing 8
+  safe-write tests; 4 new tests pin rollback/reuse/best-effort-timer. **Not touched:**
+  the risky `invoices_create + items` commit path (an item-add failure shouldn't roll
+  back a valid invoice — that's idempotency/undo, Phase 5); the core is ready to
+  compose it later.
 - **Native tool-calling is now the default planner mode (Phase 2, 2026-06-09).**
   The model calls **typed tools** whose arguments the provider validates against a
   JSON schema generated from the SAME Zod schema the harness validates with

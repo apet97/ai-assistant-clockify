@@ -8,7 +8,7 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **549 tests**), and the **full
+implemented and verified (`npm run verify` green, **559 tests**), and the **full
 Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
 catalog actions across 16 feature areas + 3 hosts.
 
@@ -117,8 +117,9 @@ npm run dev           # tsx src/server.ts (needs env)
   one repair retry).
 - `src/harness/` — the safety boundary: `action.ts` (contracts + `defineAction`),
   `actions.ts` (executor + confirm/batch commit), `catalog.ts`, `permissions.ts`,
-  `risk.ts`, `receipts.ts`, `confirmations.ts`, `workflows/*` (time-tracking,
-  work-structure, admin/risky, resolve).
+  `risk.ts`, `receipts.ts`, `confirmations.ts`, `tools.ts` (Zod→JSON-schema tools for
+  native tool-calling), `arg-summary.ts`, `compose.ts` (atomic multi-step / rollback),
+  `workflows/*` (time-tracking, work-structure, admin/risky, resolve).
 - `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts`, shared `deps.ts`.
   `src/server.ts` — `createApp(deps)` + `start()`.
 - `src/ui/` — vanilla TS chat UI. `tests/` — unit + integration (fakes via
