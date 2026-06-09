@@ -91,14 +91,19 @@ describe("time-off rest", () => {
     expect(body.users).toEqual(["u1"]);
   });
 
-  it("getTimeOffRequest GETs one, or null on 404", async () => {
-    const hit = vi.fn(async () => jsonResponse({ id: "r1", policyId: "pol1" }));
+  it("getTimeOffRequest POST-searches /time-off/requests and finds the id (the single GET is not a real route — live 404s 'No static resource' even for an existing id)", async () => {
+    const hit = vi.fn(async () =>
+      jsonResponse({ count: 2, requests: [{ id: "r0", policyId: "pol1" }, { id: "r1", policyId: "pol1" }] }),
+    );
     expect(await rest(hit as unknown as typeof fetch).getTimeOffRequest("r1")).toMatchObject({ id: "r1" });
-    const miss = vi.fn(async () => jsonResponse({ message: "no" }, 404));
+    const [url, init] = (hit as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-off/requests");
+    expect(init.method).toBe("POST");
+    const miss = vi.fn(async () => jsonResponse({ count: 0, requests: [] }));
     expect(await rest(miss as unknown as typeof fetch).getTimeOffRequest("rX")).toBeNull();
   });
 
-  it("createTimeOffRequest POSTs the timeOffPeriod under the policy", async () => {
+  it("createTimeOffRequest POSTs the timeOffPeriod under the policy with BARE dates (live: instants are tolerated but YYYY-MM-DD is the documented shape)", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "r9" }));
     await rest(f as unknown as typeof fetch).createTimeOffRequest("pol1", {
       start: "2026-06-10T00:00:00Z",
@@ -110,9 +115,19 @@ describe("time-off rest", () => {
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-off/policies/pol1/requests");
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body);
-    expect(body.timeOffPeriod.period).toEqual({ start: "2026-06-10T00:00:00Z", end: "2026-06-12T00:00:00Z", days: 2 });
+    expect(body.timeOffPeriod.period).toEqual({ start: "2026-06-10", end: "2026-06-12", days: 2 });
     expect(body.timeOffPeriod.isHalfDay).toBe(false);
     expect(body.note).toBe("vacation");
+  });
+
+  it("createTimeOffRequest defaults the REQUIRED `days` from the period span when omitted (live: create 400s 'Value for number of days is not allowed' without it)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "r9" }));
+    await rest(f as unknown as typeof fetch).createTimeOffRequest("pol1", {
+      start: "2026-09-14",
+      end: "2026-09-16",
+    });
+    const body = JSON.parse((f as any).mock.calls[0][1].body);
+    expect(body.timeOffPeriod.period).toEqual({ start: "2026-09-14", end: "2026-09-16", days: 3 });
   });
 
   it("deleteTimeOffRequest DELETEs under the policy", async () => {
@@ -123,13 +138,13 @@ describe("time-off rest", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("setTimeOffRequestStatus PATCHes statusType + note", async () => {
+  it("setTimeOffRequestStatus PATCHes {status, note} (the wire field is `status`, NOT `statusType` — spec + goclmcp)", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "r1" }));
     await rest(f as unknown as typeof fetch).setTimeOffRequestStatus("pol1", "r1", "APPROVED", "ok");
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-off/policies/pol1/requests/r1");
     expect(init.method).toBe("PATCH");
-    expect(JSON.parse(init.body)).toEqual({ statusType: "APPROVED", note: "ok" });
+    expect(JSON.parse(init.body)).toEqual({ status: "APPROVED", note: "ok" });
   });
 
   it("getTimeOffBalance GETs the user balance and unwraps {balances:[…]}", async () => {

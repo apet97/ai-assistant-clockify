@@ -12,6 +12,23 @@ function filter(ids: string[]): Record<string, unknown> {
   return { contains: "CONTAINS", ids, status: "ACTIVE" };
 }
 
+/** The time-off period wants bare `YYYY-MM-DD` dates (the spec's documented shape). */
+function toBareDate(d: string): string {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  const parsed = new Date(d);
+  return Number.isNaN(parsed.getTime()) ? d : parsed.toISOString().slice(0, 10);
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Inclusive calendar-day span between two bare dates (start === end → 1). */
+function inclusiveDays(start: string, end: string): number | undefined {
+  const a = Date.parse(`${start}T00:00:00Z`);
+  const b = Date.parse(`${end}T00:00:00Z`);
+  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return undefined;
+  return Math.round((b - a) / DAY_MS) + 1;
+}
+
 function mapPolicy(raw: any): TimeOffPolicySummary {
   const out: TimeOffPolicySummary = { id: raw.id, name: raw.name };
   if (raw.status !== undefined) out.status = raw.status;
@@ -44,9 +61,13 @@ function mapBalance(raw: any, userId: string): TimeOffBalanceSummary {
 
 /**
  * Typed time-off REST module (goclmcp §2.9 — policies, requests, balances). I/O
- * only. Shapes pinned by the unit tests: request LIST is a POST search
- * (`{count, requests:[]}`); policy update is GET-then-PUT (merge into the
- * existing policy); archive + approve/deny + balance update are PATCH; the
+ * only. Shapes pinned by the unit tests + the 2026-06-10 live probe: request
+ * LIST and the single get are the POST search (`{count, requests:[]}` — the
+ * single-GET route does not exist; it 404s "No static resource" even for a real
+ * id); request create wants bare `YYYY-MM-DD` dates and REQUIRES `days` (400
+ * "Value for number of days is not allowed" without it); approve/deny PATCH
+ * carries `{status, note?}` (NOT `statusType`); policy update is GET-then-PUT
+ * (merge into the existing policy); archive + balance update are PATCH; the
  * balance update path is `/time-off/balance/policy/{policyId}`.
  */
 export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPort {
@@ -119,16 +140,28 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       return rows.map(mapRequest);
     },
     async getTimeOffRequest(id) {
-      const raw = await core.call("api", "GET", `${ws}/time-off/requests/${id}`, undefined, true);
+      // There is no real single-GET route (live: 404 "No static resource" even
+      // for an existing id) — find the request through the POST search instead.
+      const env = (await core.call("api", "POST", `${ws}/time-off/requests`, { page: 1, pageSize: 200 })) as
+        | { requests?: any[] }
+        | any[]
+        | null;
+      const rows = Array.isArray(env) ? env : (env?.requests ?? []);
+      const raw = rows.find((r: any) => r.id === id);
       return raw ? mapRequest(raw) : null;
     },
     async createTimeOffRequest(policyId, input): Promise<EntitySummary> {
+      const start = toBareDate(input.start);
+      const end = toBareDate(input.end);
+      // `days` is REQUIRED on the wire (live: 400 without it); default the
+      // inclusive span and let Clockify apply its own working-day validation.
+      const days = input.days ?? inclusiveDays(start, end);
       const body: Record<string, unknown> = {
         timeOffPeriod: {
           period: {
-            start: input.start,
-            end: input.end,
-            ...(input.days !== undefined ? { days: input.days } : {}),
+            start,
+            end,
+            ...(days !== undefined ? { days } : {}),
           },
           isHalfDay: input.halfDay ?? false,
           halfDayPeriod: "NOT_DEFINED",
@@ -143,8 +176,9 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       await core.call("api", "DELETE", `${ws}/time-off/policies/${policyId}/requests/${requestId}`);
     },
     async setTimeOffRequestStatus(policyId, requestId, statusType, note): Promise<EntitySummary> {
+      // The wire field is `status` (spec + goclmcp); `statusType` only appears in responses.
       const r = (await core.call("api", "PATCH", `${ws}/time-off/policies/${policyId}/requests/${requestId}`, {
-        statusType,
+        status: statusType,
         ...(note !== undefined ? { note } : {}),
       })) as { id?: string } | null;
       return { id: r?.id ?? requestId, name: statusType };
