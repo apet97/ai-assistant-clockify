@@ -4,7 +4,7 @@ import type { EntitySummary } from "../../clockify/client.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { runComposition, type CompositionStep } from "../compose.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, suggestOptions } from "./resolve.js";
 
 function nowIso(ctx: ActionContext): string {
   return (ctx.now ?? (() => new Date()))().toISOString();
@@ -175,13 +175,18 @@ const createWorkPackage = defineAction({
         required: true,
         run: async () => {
           if (project.clientName) {
-            const cmatch = matchByName(await ctx.clockify.listClients(), project.clientName);
+            const clients = await ctx.clockify.listClients();
+            const cmatch = matchByName(clients, project.clientName);
             if (cmatch.kind === "none") {
+              const options = suggestOptions(clients, project.clientName);
               return {
                 kind: "stop",
                 result: {
                   kind: "clarify",
-                  message: `I couldn't find an active client named "${project.clientName}". Should I create it, or which existing client did you mean?`,
+                  message: options.length
+                    ? `I couldn't find an active client named "${project.clientName}". Did you mean one of these, or should I create it?`
+                    : `I couldn't find an active client named "${project.clientName}". Should I create it?`,
+                  options: options.length ? options : undefined,
                 },
               };
             }

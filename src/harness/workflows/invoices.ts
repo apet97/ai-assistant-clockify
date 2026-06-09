@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt, type Warning } from "../receipts.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, suggestOptions } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -178,9 +178,13 @@ const createInvoice = defineAction({
       const clients = await ctx.clockify.listClients();
       const match = matchByName(clients, clientName as string);
       if (match.kind === "none") {
+        const options = suggestOptions(clients, clientName as string);
         return {
           kind: "clarify",
-          message: `I couldn't find an active client named "${clientName}". List your clients and tell me which one, or create it first.`,
+          message: options.length
+            ? `I couldn't find an active client named "${clientName}". Did you mean one of these, or should I create it?`
+            : `There are no active clients named "${clientName}". Want me to create it first?`,
+          options: options.length ? options : undefined,
         };
       }
       if (match.kind === "many") {
@@ -251,6 +255,15 @@ const createInvoice = defineAction({
         reversibility: "You can delete the invoice afterward.",
         warnings: [
           "This creates a billing document.",
+          // Phase 4 — surface the platform constraint in the PREVIEW, not after
+          // confirm: line items need a workspace-configured invoice item type (there
+          // is no API to list/create them), and a fresh workspace has none, so a $0
+          // outcome is never a surprise.
+          ...(items.length
+            ? [
+                "Line items require a workspace-configured invoice item type (Clockify → Workspace settings → Invoices). If none is configured, the line item(s) will be skipped and the invoice total will be $0.",
+              ]
+            : []),
           ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
         ],
       },

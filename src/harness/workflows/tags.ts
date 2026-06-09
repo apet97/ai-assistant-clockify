@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, suggestOptions } from "./resolve.js";
 
 /**
  * Typed tag workflows (goclmcp §2.5). Reads + create execute immediately;
@@ -141,9 +141,13 @@ const deleteTag = defineAction({
       const tags = await ctx.clockify.listTags();
       const match = matchByName(tags, name as string);
       if (match.kind === "none") {
+        const options = suggestOptions(tags, name as string);
         return {
           kind: "clarify",
-          message: `I couldn't find an active tag named "${name}". List your tags and tell me which one to delete.`,
+          message: options.length
+            ? `I couldn't find an active tag named "${name}". Did you mean one of these?`
+            : `There are no active tags named "${name}" to delete.`,
+          options: options.length ? options : undefined,
         };
       }
       if (match.kind === "many") {

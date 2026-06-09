@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, suggestOptions } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -227,9 +227,13 @@ const deleteProject = defineAction({
       const projects = await ctx.clockify.listProjects();
       const match = matchByName(projects, name as string);
       if (match.kind === "none") {
+        const options = suggestOptions(projects, name as string);
         return {
           kind: "clarify",
-          message: `I couldn't find an active project named "${name}". List your projects and tell me which one to delete.`,
+          message: options.length
+            ? `I couldn't find an active project named "${name}". Did you mean one of these?`
+            : `There are no active projects named "${name}" to delete.`,
+          options: options.length ? options : undefined,
         };
       }
       if (match.kind === "many") {
