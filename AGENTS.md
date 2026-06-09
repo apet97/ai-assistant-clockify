@@ -3,25 +3,39 @@
 Agent quick-reference. Read `CLAUDE.md` first; it is the source of truth. This
 file is the short map.
 
+> **Taking over?** Read the **Handoff note at the top of `CLAUDE.md`** first — it
+> summarizes exactly where this stands and what (only human-gated items) remains.
+
 ## What this is
 
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **618 tests**), and the **full
-Clockify REST surface parity effort (Phases 0–16) is COMPLETE** — ~115 typed
-catalog actions across 16 feature areas + 3 hosts.
+implemented and verified (`npm run verify` green, **618 tests**), the **full
+Clockify REST surface parity effort (Phases 0–16) is COMPLETE** (~115 typed catalog
+actions across 16 feature areas + 3 hosts), AND the **"trust lives in the code"
+roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is COMPLETE for everything buildable
+in-repo.** What remains is human-gated (hosting, prod security review, prod
+AUDIT-host clearance) — see CLAUDE.md → Handoff.
 
-**Planner eval + native tool-calling (Phases 1–2, 2026-06-09):** quality is now a
-measured number. `scripts/eval-planner.ts` scores the real planner over
-`scripts/eval/cases.ts` (pure scorer `src/eval/score.ts`) and reports pass-rate **plus
-a consistency metric** (`--repeat=N`). **Phase 2 made native tool-calling the default**
-(`LLM_MODE=tool`): the model calls typed tools whose args the provider validates against
-JSON schemas generated from the Zod schemas (`src/harness/tools.ts`, `zod-to-json-schema`),
-killing the arg-shape-guessing class. The harness still re-validates every call (Zod +
-risk/policy) — provider validation is convenience, not the trust boundary; risky still
-preview→confirm. Measured on deepseek-v4-pro (repeat=3): tool-calling **95.2% pass / 92.9%
-consistency** vs JSON 88.9% / 91.3%. JSON is the fallback (and automatic for `gemini-cli`).
+**The trust roadmap, one line each (detail in `CLAUDE.md` → Current Status):**
+- **P1** planner **eval harness** (`scripts/eval-planner.ts`, pure `src/eval/score.ts`,
+  pass-rate + a consistency metric) + the arg contract in the prompt (`arg-summary.ts`).
+- **P2** native **tool-calling is the default** (`LLM_MODE=tool`, `tools.ts`,
+  `zod-to-json-schema`): the provider validates args, killing the arg-shape class
+  (95.2% pass vs 88.9% JSON, deepseek-v4-pro). The harness still re-validates (Zod +
+  risk/policy is the trust boundary); risky still preview→confirm. JSON is the fallback
+  (and automatic for `gemini-cli`, which has no tool support).
+- **P3** atomic multi-step **composition** (`compose.ts`) — no orphans.
+- **P4** grounding: invoice **$0 caveat in the preview**; clarifies offer grounded
+  options (`resolve.suggestOptions`).
+- **P5** **idempotency** (`idempotency.ts`, no duplicate invoices) + **undo**
+  (`undo.ts`, `POST /api/undo/:id`, UI button).
+- **P6** **curated intent actions** (`workflows/curated.ts`: `clockify_period_report`,
+  `clockify_onboard_user`) — adopted 12/12 in the eval.
+- **P7 (in-repo)** **metrics** (`GET /api/metrics`, `src/metrics/`), **UI a11y** +
+  responsive status, and **NDJSON streaming** of harness progress (`POST /api/chat/stream`,
+  shared `executeChatTurn`).
 See `CLAUDE.md` → Current Status + `NEXT_SESSION_PLAN.md`.
 
 **Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev

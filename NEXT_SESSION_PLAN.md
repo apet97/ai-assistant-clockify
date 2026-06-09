@@ -2,23 +2,37 @@
 
 > Companion to `NEXT_SESSION_PROMPT.md` (the live-test kickoff). That file tells you how
 > to bring the environment up and drive the chat. **This file is the forward plan.**
-> Read `CLAUDE.md` → "Known limitations & recommended next steps" first; this expands it
-> into executable phases.
+> Read `CLAUDE.md` → Handoff note first.
 
-## Where we are (2026-06-09)
+## ✅ STATUS (2026-06-09): Phases 1–7 are COMPLETE for everything buildable in-repo.
 
-V1 + full Clockify REST parity are complete and verified (`npm run verify` = 479 tests).
-Heavy live dogfooding hardened many planner rough edges (forgiving schemas, server-side
-defaults, name→id resolution, truthful previews). What remains is **structural**, and a
-model swap does not fix it:
+The whole plan below was executed — Phase 1 (eval meter + arg contract) → Phase 2
+(native tool-calling, 95.2% pass) → Phase 3 (atomic composition) → Phase 4 (grounding)
+→ Phase 5 (idempotency + undo) → Phase 6 (curated actions) → Phase 7 (metrics + UI a11y
++ NDJSON streaming). `npm run verify` is green at **618 tests** (was 479 when this plan
+was written), all committed/pushed to `main`. The structural problems below were the
+*motivation*; they are now solved (see `CLAUDE.md` → Current Status for the per-phase
+detail and measured results). **The only remaining work is human-gated** — stable
+hosting, prod security review + token rotation, and prod AUDIT-host clearance (needs a
+captured prod token). The phase descriptions are kept below as the historical record /
+in case a phase wants a second pass.
 
-1. The planner is shown action `name/description/risk` but **not the input schemas**, so
-   it guesses argument shapes. We band-aid per action — whack-a-mole.
-2. Multi-step intents ("invoice this client and add an item") are special-cased, not
-   general.
-3. The model can narrate false completion; we now override that deterministically, but
-   the model is still doing jobs it's bad at (knowing shapes, knowing state).
-4. Some limits are Clockify-platform (invoice item types are UI-only; dev-host 401s).
+## Where we were (2026-06-09, before this roadmap) — kept for context
+
+V1 + full Clockify REST parity were complete (`npm run verify` = 479 tests). Heavy live
+dogfooding had hardened many planner rough edges (forgiving schemas, server-side defaults,
+name→id resolution, truthful previews). What remained was **structural** — and is what
+Phases 1–7 above fixed:
+
+1. (FIXED, P1–P2) The planner was shown action `name/description/risk` but **not the input
+   schemas**, so it guessed argument shapes; we band-aided per action. → Native
+   tool-calling validates args against generated JSON schemas; arg-shape class eliminated.
+2. (FIXED, P3/P6) Multi-step intents were special-cased. → The `compose.ts` layer
+   generalizes atomic multi-step; curated actions bundle sub-ops into one preview.
+3. (FIXED, P1/P2) The model could narrate false completion. → Still overridden
+   deterministically (truthful previews); the harness owns shapes/state via tool schemas.
+4. (Platform, unchanged) Some limits are Clockify-platform (invoice item types are UI-only
+   — now surfaced in the preview; dev-host 401s).
 
 ## North star (the boundary that drives everything)
 
@@ -40,7 +54,7 @@ model narrow and replaceable. Then "which model" becomes a tuning knob, not a ri
 
 ---
 
-# Phase 1 — NEXT SESSION: make quality measurable, then stop the guessing
+# ✅ Phase 1 (DONE) — make quality measurable, then stop the guessing
 
 **Theme:** you cannot fix "it works badly" without a number. Build the meter, read the
 baseline, then give the model the contract and watch the number move. Fully offline-
@@ -127,7 +141,7 @@ backend — a fast win we can measure against 1A's baseline.
 
 ---
 
-# Phase 2 — Native tool-calling + JSON schemas (kill the class at the root)
+# ✅ Phase 2 (DONE) — Native tool-calling + JSON schemas (kill the class at the root)
 
 **Goal:** the model calls typed tools whose arguments the provider validates against a
 real JSON schema; free-form JSON becomes a fallback only.
@@ -151,7 +165,7 @@ arg-shape failures ≈ eliminated; verify green.
 
 ---
 
-# Phase 3 — Server-side intent resolution & atomic multi-step
+# ✅ Phase 3 (DONE) — Server-side intent resolution & atomic multi-step
 
 **Goal:** generalize the "resolve by name → fill defaults → compose steps" pattern so
 multi-step intents are one previewed, atomic transaction — not ad-hoc combined actions.
@@ -168,7 +182,7 @@ multi-step intents are one previewed, atomic transaction — not ad-hoc combined
 
 ---
 
-# Phase 4 — Grounding & early constraint surfacing
+# ✅ Phase 4 (DONE) — Grounding & early constraint surfacing
 
 **Goal:** read the world before acting; never punt vaguely; warn about platform limits in
 the **preview**, before the user confirms.
@@ -186,7 +200,7 @@ the **preview**, before the user confirms.
 
 ---
 
-# Phase 5 — Transactions, idempotency, undo
+# ✅ Phase 5 (DONE) — Transactions, idempotency, undo
 
 **Goal:** repeated confirms/re-previews never create duplicates; the last reversible
 action can be undone.
@@ -202,7 +216,7 @@ action can be undone.
 
 ---
 
-# Phase 6 — Curated, intent-shaped actions
+# ✅ Phase 6 (DONE) — Curated, intent-shaped actions
 
 **Goal:** shrink the model's decision space from ~115 primitives to the handful of admin
 jobs-to-be-done, with primitives still available for power use.
@@ -215,7 +229,7 @@ jobs-to-be-done, with primitives still available for power use.
 
 ---
 
-# Phase 7 — Operational hardening / launch readiness
+# ◑ Phase 7 (in-repo slices DONE: metrics, UI a11y, NDJSON streaming; rest human-gated) — Operational hardening / launch readiness
 
 **Goal:** the unglamorous things that make "public" responsible. Worthless before 1–6 are
 solid; essential after.

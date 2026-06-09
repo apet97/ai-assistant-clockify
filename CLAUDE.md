@@ -2,6 +2,48 @@
 
 Read this first in every Claude Code session.
 
+## Handoff note (start here if you're taking over) — 2026-06-09
+
+**Where this stands:** V1 + the full Clockify REST parity effort are complete, AND the
+entire **"trust lives in the code" roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is
+delivered** for everything buildable in-repo. `npm run verify` is green at **618 tests**
+(type-check + Vitest + build); everything is committed and pushed to `main`. Across this
+arc the suite went 479 → 618.
+
+**What got built (all on `main`, each TDD'd, see "Current Status" for detail):**
+- **Phase 1** — a planner **eval harness** (`scripts/eval-planner.ts`, pure scorer
+  `src/eval/score.ts`) that reports pass-rate **and** a consistency metric; the argument
+  contract in the prompt (`src/harness/arg-summary.ts`).
+- **Phase 2** — **native tool-calling is the default** (`LLM_MODE=tool`,
+  `zod-to-json-schema`, `src/harness/tools.ts`): the provider validates args; the
+  arg-shape-guessing class is eliminated. Measured 95.2% pass vs 88.9% JSON.
+- **Phase 3** — atomic multi-step **composition** (`src/harness/compose.ts`): no orphans.
+- **Phase 4** — grounding: invoice **$0 caveat surfaced in the preview**; clarifies offer
+  grounded options (`resolve.suggestOptions`).
+- **Phase 5** — **idempotency** (`src/harness/idempotency.ts`, no duplicate invoices) +
+  **undo** (`src/harness/undo.ts`, `POST /api/undo/:id`, UI button).
+- **Phase 6** — **curated intent actions** (`src/harness/workflows/curated.ts`:
+  `clockify_period_report`, `clockify_onboard_user`); adopted 12/12 in the eval.
+- **Phase 7 (in-repo slices)** — operational **metrics** (`GET /api/metrics`,
+  `src/metrics/metrics.ts`), **UI a11y** + a responsive "working" status, and
+  **NDJSON streaming** of the harness's progress (`POST /api/chat/stream`).
+
+**What remains is NOT code you can write alone — it needs the human's decisions / live
+credentials:**
+1. **Stable hosting** — the dev tunnel URL rotates; a named-tunnel-on-a-domain (Cloudflare
+   zone) or a real deploy is an infra/account decision (user declined the zone for now).
+2. **Prod security review + token rotation.**
+3. **Prod AUDIT-host `X-Addon-Token` clearance** — needs a captured prod token; run
+   `scripts/host-auth-spike.ts` with a `LIVE_ADDON_TOKEN` to settle it (dev cleanly
+   reports "audit log not available", so this is prod-only).
+
+**To CONTINUE the build:** there's no buildable phase left — the roadmap is done. Good next
+work is either the human-gated items above (with the user) or net-new product scope. **To
+LIVE-TEST / dogfood:** start from `NEXT_SESSION_PROMPT.md` (it tells you how to bring the
+tunnel + install back up). The forward plan + "perfect state" vision live in
+`NEXT_SESSION_PLAN.md`. Keep the discipline: failing test first, `npm run verify` green,
+focused commits, no new deps without the user's OK, never print/commit tokens.
+
 ## Product Contract
 
 AI Assistant is a Clockify add-on with an admin-only chat UI and an internal
@@ -49,10 +91,13 @@ MCP-shaped action harness.
 
 ## Current Status
 
-V1 is implemented and verified, and the **full Clockify REST surface parity
+V1 is implemented and verified; the **full Clockify REST surface parity
 effort (`slopbranch:API_COVERAGE_PLAN.md`, Phases 0–16) is COMPLETE** — ~115
 typed catalog actions across 16 feature areas and 3 API hosts, each routed
-through the existing safe/risky harness.
+through the existing safe/risky harness — and the **"trust lives in the code"
+roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is COMPLETE for everything buildable
+in-repo** (see the Handoff note at the top). The per-phase detail follows below;
+the headline is in the Handoff note. `npm run verify` = **618 tests**.
 
 **Live end-to-end PROVEN (2026-06-08):** the add-on was registered + installed on
 a sacrificial Clockify dev workspace and driven through the real embedded chat —
@@ -347,11 +392,15 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
   omits the required `start`; and a tag *rename* sometimes makes the planner call
   `clockify_tags_list` instead of `clockify_tags_update` (narrates "renaming" but doesn't).
 
-## Known limitations & recommended next steps (honest state, 2026-06-09)
+## Known limitations & honest state (2026-06-09, post-roadmap)
 
-Live dogfooding (see `scripts/live-chat-tour.ts`, `live-invoice-flow.ts`) hardened a lot
-of rough edges, but a few real limits remain. **None of them is fixed by swapping the
-LLM** — they are architecture/platform issues:
+Most of the architectural limits that motivated Phases 1–7 are now **resolved**: the
+arg-shape-guessing class is eliminated by native tool-calling (Phase 2); multi-step
+intents are atomic (Phase 3); duplicate invoices are impossible (Phase 5a); the last
+action is undoable (Phase 5b); platform constraints surface in the preview (Phase 4); and
+the model reaches for curated jobs (Phase 6). What remains below is either a **Clockify
+platform constraint** or a **human-gated launch item** (hosting, prod security/clearance)
+— **none is fixed by swapping the LLM**:
 
 - **(Phase 1B done) The planner is now sent a terse arg signature per action**, not just
   name/description/risk — so it stops guessing argument shapes (flat `projectName`,
@@ -387,6 +436,13 @@ LLM** — they are architecture/platform issues:
   backend behave similarly on the above; a swap won't change the schema-guessing or the
   invoice-item-type limits. Switch backends via `LLM_PROVIDER` (see above) only for
   cost/latency/quality preference, not to fix these.
+- **Human-gated launch items (the only "open work", all outside the codebase):**
+  (1) **stable hosting** — the dev quick-tunnel URL rotates; a named-tunnel-on-a-domain
+  (Cloudflare zone) or a real deploy is an infra decision; (2) **prod security review +
+  token rotation**; (3) **prod AUDIT-host `X-Addon-Token` clearance** — run
+  `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN` to settle it (dev
+  cleanly reports "audit log not available", so it's prod-only). These need the user's
+  decisions/credentials, not more code.
 
 ## Build, Test, Run
 

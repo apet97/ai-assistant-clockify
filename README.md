@@ -34,7 +34,8 @@ Clockify (admin component)
         ▼
 Express backend ── session (signed cookie) ── SQLite (policy, installs, confirmations)
         │
-        ├─ assistant/   model client + prompt builder + validated planner (JSON, 1 repair retry)
+        ├─ assistant/   model client + prompt builder + planner (native tool-calling by
+        │               default; provider-validated args; JSON + 1 repair as fallback)
         │
         └─ harness/     the safety boundary:
                         catalog · permissions · risk · receipts · confirmations
@@ -45,6 +46,31 @@ The model only ever sees the action catalog and the current policy. A proposed
 plan is schema-validated, permission-checked, and risk-classified. Safe actions
 run and return a receipt; risky actions return a preview that the UI confirms
 with a button.
+
+### Beyond the basics
+
+The harness pushes every correctness decision into deterministic code so the model
+stays a thin, replaceable translator:
+
+- **Native tool-calling** (default): each action is a typed tool whose arguments the
+  provider validates against a JSON Schema generated from the same Zod schema the
+  harness validates with — so the model stops inventing argument shapes. The Zod +
+  risk/policy gate is still the trust boundary (provider validation is convenience).
+- **Atomic multi-step composition** — a multi-entity request either completes or rolls
+  back what it created; no orphans.
+- **Idempotency** — re-confirming the same intent can't create a duplicate (e.g. a
+  second invoice).
+- **Undo** — the last reversible action (a creation) can be undone with one click.
+- **Constraint surfacing** — known platform limits (e.g. an invoice needing a configured
+  item type) are shown *in the preview*, so a surprising outcome never happens after
+  confirm; clarifications offer concrete options, never "give me the ID".
+- **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
+  reaches for instead of scrambling ~115 primitives.
+- **Operational metrics** (`GET /api/metrics`) and a **planner eval harness**
+  (`scripts/eval-planner.ts`) that scores the planner's accuracy *and* run-to-run
+  consistency over a real corpus.
+- **Streaming** — `POST /api/chat/stream` streams the harness's results as they execute
+  (never the model's narration, which would conflict with the safety override).
 
 ## Tech stack
 
@@ -60,12 +86,15 @@ src/
   auth/                admin role check, signed session cookie
   addon/               manifest + Clockify token verification
   clockify/            WorkspaceClient port + REST adapter (X-Addon-Token)
-  assistant/           model client, prompt builder, validated planner
-  harness/             action contracts, executor, catalog, permissions,
-                       risk, receipts, confirmations, workflows/*
-  routes/              lifecycle, component, api, shared deps
+  assistant/           model client, prompt/tool builder, planner (tool-calling + JSON)
+  harness/             action contracts, executor, catalog, permissions, risk,
+                       receipts, confirmations, tools, arg-summary, compose,
+                       idempotency, undo, workflows/*
+  eval/                pure planner scorer (the meter)
+  metrics/             operational metrics aggregation
+  routes/              lifecycle, component, api (+ chat/stream, undo, metrics)
   server.ts            createApp(deps) + start()
-  ui/                  vanilla TS chat UI
+  ui/                  vanilla TS chat UI (a11y + streaming)
 tests/                 unit + integration (fakes only, no network)
 scripts/               opt-in live smokes (sacrificial workspace)
 ```
