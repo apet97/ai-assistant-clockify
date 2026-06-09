@@ -88,7 +88,22 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**608 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**611 tests**: type-check + Vitest + build).
+- **UI accessibility + responsive status (Phase 7 slice, 2026-06-09).** The embedded
+  chat got a WAI-ARIA pass: an `<h1>` header; the message log is `role="log"
+  aria-live="polite"` (new turns are announced); errors are `role="alert"`, the
+  working status `role="status"`; the composer input and every permission `<select>`
+  have accessible names; receipt/preview cards are labelled groups (Details toggle has
+  `aria-expanded`, Undo is labelled); CSS adds a visible `:focus-visible` ring and
+  honors `prefers-reduced-motion`. Responsiveness: the send flow is the testable
+  `submitMessage(api, msg, hooks)` orchestrator — it announces "Assistant is working…"
+  BEFORE the request and always clears it (even on error), disables Send + sets
+  `aria-busy`, guards double-submit, and returns focus to the input. **Note on
+  streaming:** token-streaming the *model's narration* conflicts with the
+  truthful-preview safety override (a streamed "Done!" could leak before the route
+  replaces it for a pending risky preview), so we stream a *status* + the *truthful*
+  result, not model tokens. Safety-compatible SSE streaming of per-result receipts is
+  a possible follow-up.
 - **Operational metrics (Phase 7 slice, 2026-06-09).** "Is the assistant working?"
   derived from data already recorded (every action is audited with its receipt;
   every risky preview is a pending-confirmation row with a status). `GET /api/metrics`
