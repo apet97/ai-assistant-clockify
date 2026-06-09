@@ -72,6 +72,7 @@ export function apiRouter(deps: AppDeps): Router {
       policy: loadPolicy(workspaceId, adminUserId),
       clockify: deps.clockifyForWorkspace(installation),
       now,
+      savePolicy: (policy) => deps.store.upsertAdminPolicy(workspaceId, adminUserId, policy),
     };
   }
 
@@ -426,37 +427,30 @@ export function apiRouter(deps: AppDeps): Router {
     if (!deps.store.markConfirmationUsed(record.id)) {
       return res.status(409).json({ ok: false, code: "already_used", message: "This preview was already used." });
     }
+    // ALL confirmed operations go through the SAME commit path. The action's own
+    // `commit` does the work; for a permission change that commit persists the
+    // new policy itself via the `savePolicy` capability the context carries
+    // (`commitConfirmedOperation` correctly skips the Clockify feature gate for
+    // `permission_change`, matching the pre-check above).
     let receipt;
-    if (operation.risks.includes("permission_change")) {
-      const groups = (operation.payload as { groups: Record<string, never> }).groups;
-      const base = loadPolicy(claims.workspaceId, claims.adminUserId);
-      const nextPolicy = applyPolicyPatch(base, { groups });
-      deps.store.upsertAdminPolicy(claims.workspaceId, claims.adminUserId, nextPolicy);
-      receipt = successReceipt({
+    const installation = deps.store.getInstallation(claims.workspaceId);
+    if (!installation || installation.status !== "active") {
+      receipt = errorReceipt({
         action: operation.actionName,
-        entity: "assistant_policy",
-        data: { policy: nextPolicy },
+        code: "not_installed",
+        message: "The add-on is not active for this workspace.",
       });
     } else {
-      const installation = deps.store.getInstallation(claims.workspaceId);
-      if (!installation || installation.status !== "active") {
-        receipt = errorReceipt({
-          action: operation.actionName,
-          code: "not_installed",
-          message: "The add-on is not active for this workspace.",
-        });
-      } else {
-        // A store-backed idempotency ledger (10-min window) so re-confirming the
-        // same intent (e.g. the same invoice) can't create a duplicate.
-        const idempotency: IdempotencyLedger = {
-          lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
-          record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
-        };
-        receipt = await commitConfirmedOperation(
-          { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },
-          operation,
-        );
-      }
+      // A store-backed idempotency ledger (10-min window) so re-confirming the
+      // same intent (e.g. the same invoice) can't create a duplicate.
+      const idempotency: IdempotencyLedger = {
+        lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
+        record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+      };
+      receipt = await commitConfirmedOperation(
+        { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },
+        operation,
+      );
     }
 
     deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);

@@ -19,6 +19,11 @@ export interface ActionContext {
   now?: () => Date;
   /** Optional idempotency ledger; when present, confirmed commits dedupe by intent. */
   idempotency?: IdempotencyLedger;
+  /**
+   * Persist the admin's assistant policy; provided by the route which owns the
+   * store, so the permission action's commit can be self-contained.
+   */
+  savePolicy?(policy: AdminPolicy): void;
 }
 
 /**
@@ -167,6 +172,13 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
         }
       : {}),
     async handler(ctx, args): Promise<ActionResult> {
+      // The effective feature group for the preview card AND the stored operation
+      // is the per-args resolved group when `resolveFeatureGroup` is supplied
+      // (e.g. delete_entity maps entityType → group). This MUST match the group
+      // the policy gate used in `executeAction` so the confirm-time re-check
+      // (`commitConfirmedOperation`/the route, both keyed on `operation.featureGroup`)
+      // gates on the same group — never the static `def.group`.
+      const group = def.resolveFeatureGroup ? def.resolveFeatureGroup(args) : def.group;
       const r = await def.preview(ctx, args);
       if ("clarify" in r) {
         return { kind: "clarify", message: r.clarify, options: r.options };
@@ -175,7 +187,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
         kind: "preview",
         preview: {
           actionLabel: r.actionLabel,
-          featureGroup: def.group,
+          featureGroup: group,
           riskLabels: def.risks,
           targets: r.targets,
           expectedChanges: r.expectedChanges,
@@ -184,7 +196,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
         },
         operation: {
           actionName: def.name,
-          featureGroup: def.group,
+          featureGroup: group,
           risks: def.risks,
           payload: r.payload,
         },

@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import {
+  defineReadAction,
+  defineRiskyAction,
+  type ActionDefinition,
+} from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
@@ -37,10 +41,10 @@ const ENTITY_GROUP: Record<(typeof DELETABLE_ENTITY_TYPES)[number], FeatureGroup
   group: "users_groups",
 };
 
-const deleteEntity = defineAction({
+const deleteEntity = defineRiskyAction({
   name: "clockify_delete_entity",
   description: "Delete a Clockify entity. Always previews first and requires confirmation.",
-  featureGroup: "work_structure",
+  group: "work_structure",
   risks: ["destructive"],
   schema: z.object({
     entityType: z.enum(DELETABLE_ENTITY_TYPES),
@@ -48,29 +52,18 @@ const deleteEntity = defineAction({
     name: z.string().optional(),
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
-  async handler(ctx, args) {
-    const group = ENTITY_GROUP[args.entityType];
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: `Delete ${args.entityType}`,
-        featureGroup: group,
-        riskLabels: ["destructive"],
-        targets: [{ type: args.entityType, id: args.id, name: args.name }],
-        expectedChanges: [`Delete ${args.entityType} ${args.name ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: [`Deleting a ${args.entityType} is permanent.`],
-      },
-      operation: {
-        actionName: "clockify_delete_entity",
-        featureGroup: group,
-        risks: ["destructive"],
-        payload: { entityType: args.entityType, id: args.id, name: args.name },
-      },
+      actionLabel: `Delete ${args.entityType}`,
+      targets: [{ type: args.entityType, id: args.id, name: args.name }],
+      expectedChanges: [`Delete ${args.entityType} ${args.name ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: [`Deleting a ${args.entityType} is permanent.`],
+      payload: { entityType: args.entityType, id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { entityType: string; id: string; name?: string };
+  async commit(ctx, payload) {
+    const { entityType, id, name } = payload as { entityType: string; id: string; name?: string };
     if (!ctx.clockify.deleteEntity) {
       return errorReceipt({
         action: "clockify_delete_entity",
@@ -78,12 +71,12 @@ const deleteEntity = defineAction({
         message: "Delete is not supported by the configured Clockify client.",
       });
     }
-    await ctx.clockify.deleteEntity({ entityType: payload.entityType, id: payload.id });
+    await ctx.clockify.deleteEntity({ entityType, id });
     return successReceipt({
       action: "clockify_delete_entity",
-      entity: payload.entityType,
+      entity: entityType,
       ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: payload.entityType, id: payload.id, name: payload.name }] },
+      changed: { deleted: [{ type: entityType, id, name }] },
     });
   },
 });
@@ -108,11 +101,11 @@ function normalizePermissionArgs(raw: unknown): unknown {
   return Object.keys(groups).length > 0 ? { groups } : r;
 }
 
-const updatePermissions = defineAction({
+const updatePermissions = defineRiskyAction({
   name: "assistant_update_permissions",
   description:
     "Change the admin's OWN assistant access to a feature group — set a group to off, read, or read_write. Use this whenever the admin asks to grant/raise/lower/remove their own access, e.g. 'give me full (read_write) access to reports', 'set invoices to read-only', or 'turn off webhooks'. Not a Clockify write; needs a button save, no Clockify dry-run.",
-  featureGroup: "workspace_settings",
+  group: "workspace_settings",
   risks: ["permission_change"],
   schema: z.preprocess(
     normalizePermissionArgs,
@@ -122,35 +115,28 @@ const updatePermissions = defineAction({
         .refine((g) => Object.keys(g).length > 0, { message: "Specify at least one group to change." }),
     }),
   ),
-  async handler(ctx, args) {
+  async preview(ctx, args) {
     // Compute the diff for the preview without touching Clockify.
     const changes = Object.entries(args.groups).map(
       ([group, level]) => `${group}: ${ctx.policy.groups[group as FeatureGroup]} → ${level}`,
     );
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Update assistant permissions",
-        featureGroup: "workspace_settings",
-        riskLabels: ["permission_change"],
-        targets: [],
-        expectedChanges: changes,
-        reversibility: "You can change your permissions again at any time.",
-        warnings: [],
-      },
-      operation: {
-        actionName: "assistant_update_permissions",
-        featureGroup: "workspace_settings",
-        risks: ["permission_change"],
-        payload: { groups: args.groups },
-      },
+      actionLabel: "Update assistant permissions",
+      targets: [],
+      expectedChanges: changes,
+      reversibility: "You can change your permissions again at any time.",
+      warnings: [],
+      payload: { groups: args.groups },
     };
   },
-  async commit(ctx, operation) {
-    // Applies the patch and returns the new policy. Persistence is the route's
-    // responsibility (it owns the store); this keeps policy math in one place.
-    const payload = operation.payload as { groups: Partial<Record<FeatureGroup, never>> };
-    const nextPolicy = applyPolicyPatch(ctx.policy, { groups: payload.groups });
+  async commit(ctx, payload) {
+    // Applies the patch and persists it via the capability the route injects
+    // (`savePolicy`, which owns the store), so the permission commit is
+    // self-contained and routes through `commitConfirmedOperation` like every
+    // other risky action. The returned receipt matches the prior shape.
+    const { groups } = payload as { groups: Partial<Record<FeatureGroup, never>> };
+    const nextPolicy = applyPolicyPatch(ctx.policy, { groups });
+    ctx.savePolicy?.(nextPolicy);
     return successReceipt({
       action: "assistant_update_permissions",
       entity: "assistant_policy",
@@ -160,11 +146,11 @@ const updatePermissions = defineAction({
   },
 });
 
-const updateEntity = defineAction({
+const updateEntity = defineRiskyAction({
   name: "clockify_update_entity",
   description:
     "Update an entity's fields (rename, reassign, change role/billing). Elevated write — always previews and requires confirmation.",
-  featureGroup: "work_structure",
+  group: "work_structure",
   risks: ["high_risk_write"],
   schema: z.object({
     entityType: z.enum(DELETABLE_ENTITY_TYPES),
@@ -173,30 +159,19 @@ const updateEntity = defineAction({
     fields: z.record(z.string(), z.unknown()).optional(),
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
-  async handler(ctx, args) {
-    const group = ENTITY_GROUP[args.entityType];
+  async preview(_ctx, args) {
     const fields = { ...(args.name ? { name: args.name } : {}), ...(args.fields ?? {}) };
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: `Update ${args.entityType}`,
-        featureGroup: group,
-        riskLabels: ["high_risk_write"],
-        targets: [{ type: args.entityType, id: args.id, name: args.name }],
-        expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
-        reversibility: "You can update the entity again to revert most fields.",
-        warnings: ["Updating an entity changes live workspace data."],
-      },
-      operation: {
-        actionName: "clockify_update_entity",
-        featureGroup: group,
-        risks: ["high_risk_write"],
-        payload: { entityType: args.entityType, id: args.id, fields },
-      },
+      actionLabel: `Update ${args.entityType}`,
+      targets: [{ type: args.entityType, id: args.id, name: args.name }],
+      expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
+      reversibility: "You can update the entity again to revert most fields.",
+      warnings: ["Updating an entity changes live workspace data."],
+      payload: { entityType: args.entityType, id: args.id, fields },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
+  async commit(ctx, payload) {
+    const { entityType, id, fields } = payload as {
       entityType: string;
       id: string;
       fields?: Record<string, unknown>;
@@ -208,36 +183,28 @@ const updateEntity = defineAction({
         message: "Entity update is not supported by the configured Clockify client.",
       });
     }
-    const updated = await ctx.clockify.updateEntity({
-      entityType: payload.entityType,
-      id: payload.id,
-      fields: payload.fields,
-    });
+    const updated = await ctx.clockify.updateEntity({ entityType, id, fields });
     return successReceipt({
       action: "clockify_update_entity",
-      entity: payload.entityType,
+      entity: entityType,
       ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: payload.entityType, id: updated.id, name: updated.name }] },
+      changed: { updated: [{ type: entityType, id: updated.id, name: updated.name }] },
     });
   },
 });
 
-const showPermissions = defineAction({
+const showPermissions = defineReadAction({
   name: "assistant_show_permissions",
   description: "Show the caller's own assistant permissions for this workspace. Read-only.",
-  featureGroup: "workspace_settings",
-  risks: ["read"],
+  group: "workspace_settings",
   schema: z.object({}).strip(),
   async handler(ctx) {
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "assistant_show_permissions",
-        entity: "assistant_policy",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { policy: ctx.policy },
-      }),
-    };
+    return successReceipt({
+      action: "assistant_show_permissions",
+      entity: "assistant_policy",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { policy: ctx.policy },
+    });
   },
 });
 
