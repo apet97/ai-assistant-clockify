@@ -120,6 +120,10 @@ export interface Store {
   cancelConfirmation(id: string): boolean;
   setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
 
+  /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
+  recordIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
+  lookupIdempotency(key: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
+
   addAuditEvent(input: AuditEventInput): void;
 
   tables(): string[];
@@ -455,6 +459,20 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         JSON.stringify(input.receipt),
         nowIso(),
       );
+    },
+
+    recordIdempotency(key, receipt, committedAtEpochMs) {
+      db.prepare(
+        `INSERT INTO idempotency_keys (key, receipt_json, committed_at) VALUES (?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET receipt_json = excluded.receipt_json, committed_at = excluded.committed_at`,
+      ).run(key, JSON.stringify(receipt), committedAtEpochMs);
+    },
+
+    lookupIdempotency(key, notBeforeEpochMs) {
+      const row = db
+        .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ? AND committed_at >= ?")
+        .get(key, notBeforeEpochMs) as { receipt_json: string } | undefined;
+      return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
     },
 
     tables() {

@@ -5,6 +5,7 @@ import {
   executeAction,
 } from "../harness/actions.js";
 import type { ActionContext, ConfirmableOperation } from "../harness/action.js";
+import type { IdempotencyLedger } from "../harness/idempotency.js";
 import { catalogForModel, getAction } from "../harness/catalog.js";
 import {
   FEATURE_GROUPS,
@@ -37,6 +38,9 @@ const groupsPatchSchema = z
 
 const chatBodySchema = z.object({ message: z.string().min(1) });
 const confirmBodySchema = z.object({ nonce: z.string().min(1) });
+
+/** Idempotency window: re-confirming the same intent within this is deduped. */
+const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
 
 export function apiRouter(deps: AppDeps): Router {
   const router = Router();
@@ -353,8 +357,14 @@ export function apiRouter(deps: AppDeps): Router {
           message: "The add-on is not active for this workspace.",
         });
       } else {
+        // A store-backed idempotency ledger (10-min window) so re-confirming the
+        // same intent (e.g. the same invoice) can't create a duplicate.
+        const idempotency: IdempotencyLedger = {
+          lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
+          record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+        };
         receipt = await commitConfirmedOperation(
-          actionContext(claims.workspaceId, claims.adminUserId, installation),
+          { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },
           operation,
         );
       }

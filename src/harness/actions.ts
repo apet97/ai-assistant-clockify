@@ -4,6 +4,7 @@ import { canRead, canWrite } from "./permissions.js";
 import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
+import { idempotencyScopeKey, markReplayed } from "./idempotency.js";
 
 /**
  * Action executor — the safety boundary (ARCHITECTURE "The model can propose.
@@ -130,8 +131,20 @@ export async function commitConfirmedOperation(
     }
   }
 
+  // Idempotency (opt-in per action): if this exact intent was committed within the
+  // window, return the prior receipt rather than mutating again (no duplicate).
+  const semantic = action.idempotencyKey?.(operation);
+  let scopedKey: string | undefined;
+  if (semantic && ctx.idempotency) {
+    scopedKey = idempotencyScopeKey(ctx.workspaceId, ctx.adminUserId, operation, semantic);
+    const prior = ctx.idempotency.lookup(scopedKey);
+    if (prior) return markReplayed(prior);
+  }
+
   try {
-    return await action.commit(ctx, operation);
+    const receipt = await action.commit(ctx, operation);
+    if (receipt.ok && scopedKey && ctx.idempotency) ctx.idempotency.record(scopedKey, receipt);
+    return receipt;
   } catch (error) {
     return errorReceipt({
       action: operation.actionName,

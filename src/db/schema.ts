@@ -80,6 +80,11 @@ export const SCHEMA_STATEMENTS: string[] = [
     ON pending_confirmations(workspace_id, admin_user_id, status, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_admin_created
     ON audit_events(workspace_id, admin_user_id, created_at)`,
+  `CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key TEXT PRIMARY KEY,
+    receipt_json TEXT NOT NULL,
+    committed_at INTEGER NOT NULL
+  )`,
 ];
 
 export function migrate(db: Database.Database): void {

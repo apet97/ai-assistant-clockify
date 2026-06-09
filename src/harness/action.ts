@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type { AdminPolicy, FeatureGroup } from "./permissions.js";
 import type { RiskLabel } from "./risk.js";
 import type { EntityRef, ErrorReceipt, SuccessReceipt } from "./receipts.js";
+import type { IdempotencyLedger } from "./idempotency.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 
 /**
@@ -17,6 +18,8 @@ export interface ActionContext {
   clockify: WorkspaceClient;
   /** Injectable clock for deterministic timestamps in tests. */
   now?: () => Date;
+  /** Optional idempotency ledger; when present, confirmed commits dedupe by intent. */
+  idempotency?: IdempotencyLedger;
 }
 
 export interface ClarifyOption {
@@ -61,6 +64,10 @@ export interface ActionDefinition {
   handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
   /** Executes the stored operation after confirmation (risky actions only). */
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
+  /** Opt into idempotent commits: return the operation's SEMANTIC identity (e.g.
+   *  client + items), excluding volatile defaults, so a repeated confirm of the
+   *  same intent returns the prior receipt instead of creating a duplicate. */
+  idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }
 
 /** Model-visible catalog entry — no schema/handler, never any secret. */
@@ -86,6 +93,7 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
+  idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }): ActionDefinition {
   return def as unknown as ActionDefinition;
 }

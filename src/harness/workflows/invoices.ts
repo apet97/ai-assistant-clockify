@@ -298,6 +298,22 @@ const createInvoice = defineAction({
       warnings: warnings.length ? warnings : undefined,
     });
   },
+  // Dedupe by the invoice's SEMANTIC identity (client + items + currency + notes),
+  // excluding the auto-generated number/issuedDate/dueDate — so confirming the same
+  // "invoice qwen for 1000" twice within the window can't create a second invoice.
+  idempotencyKey(operation) {
+    const { input, items } = operation.payload as {
+      input: { clientId?: string; currency?: string; note?: string; subject?: string };
+      items?: unknown;
+    };
+    return JSON.stringify({
+      clientId: input.clientId,
+      currency: input.currency,
+      note: input.note,
+      subject: input.subject,
+      items,
+    });
+  },
 });
 
 const updateInvoice = defineAction({
