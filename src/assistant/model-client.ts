@@ -18,6 +18,13 @@ export interface ModelMessage {
    * message answers. Serialized to OpenAI `tool_call_id`.
    */
   toolCallId?: string;
+  /**
+   * Thinking-mode reasoning attached to an assistant turn (DeepSeek
+   * `reasoning_content`). The provider REQUIRES it passed back verbatim when the
+   * turn re-enters the transcript (a continuation that drops it is rejected with
+   * a 400), so the loop must carry it. Never shown to the user.
+   */
+  reasoningContent?: string;
 }
 
 /** A provider-validated tool the model may call (native function-calling). */
@@ -44,6 +51,8 @@ export interface ToolCall {
 export interface ToolCompletion {
   text: string;
   toolCalls: ToolCall[];
+  /** Thinking-mode reasoning to thread back on continuation (see ModelMessage). */
+  reasoningContent?: string;
 }
 
 export interface ModelClient {
@@ -73,7 +82,9 @@ interface RawToolCall {
 }
 
 interface ChatCompletionResponse {
-  choices?: Array<{ message?: { content?: string | null; tool_calls?: RawToolCall[] } }>;
+  choices?: Array<{
+    message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: RawToolCall[] };
+  }>;
 }
 
 function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
@@ -115,12 +126,18 @@ function toWireMessage(message: ModelMessage): Record<string, unknown> {
     return {
       role: "assistant",
       content: message.content || null,
+      // Thinking mode: the provider rejects a continuation that drops the turn's
+      // reasoning, so it is echoed back verbatim whenever we captured one.
+      ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
       tool_calls: message.toolCalls.map((call) => ({
         id: call.id,
         type: "function",
         function: { name: call.name, arguments: JSON.stringify(call.arguments) },
       })),
     };
+  }
+  if (message.role === "assistant" && message.reasoningContent) {
+    return { role: "assistant", content: message.content, reasoning_content: message.reasoningContent };
   }
   return { role: message.role, content: message.content };
 }
@@ -181,6 +198,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
       return {
         text: message?.content ?? "",
         toolCalls: parseToolCalls(message?.tool_calls ?? []),
+        ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
       };
     },
   };

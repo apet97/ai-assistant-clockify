@@ -134,6 +134,24 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
     expect(interrupt.transcript.some((m) => m.role === "tool" && m.toolCallId === "a2")).toBe(false);
   });
 
+  it("carries the model's reasoningContent into the transcript (thinking-mode continuations must not drop it)", async () => {
+    const model = scriptedToolModel([
+      {
+        text: "",
+        reasoningContent: "urgent first, then stale",
+        toolCalls: [{ id: "r1", name: "clockify_clients_delete", arguments: { name: "qwen" } }],
+      },
+    ]);
+    const runAction = vi.fn(async (): Promise<ActionResult> => previewResult());
+
+    const result = await runAgentTurn({ modelClient: model, messages: userTurn("delete qwen"), tools: NO_TOOLS, runAction });
+
+    expect(result.kind).toBe("interrupt");
+    const interrupt = result as Extract<AgentTurnResult, { kind: "interrupt" }>;
+    const assistant = interrupt.transcript.find((m) => m.role === "assistant" && m.toolCalls);
+    expect(assistant?.reasoningContent).toBe("urgent first, then stale");
+  });
+
   it("respects maxSteps and returns a truthful exhausted result", async () => {
     const model = scriptedToolModel([
       { text: "", toolCalls: [{ id: "x", name: "clockify_clients_list", arguments: {} }] },

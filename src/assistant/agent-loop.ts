@@ -17,7 +17,7 @@
  */
 import type { ActionResult, ClarifyOption, ConfirmableOperation, PreviewCard } from "../harness/action.js";
 import type { SuccessReceipt, ErrorReceipt } from "../harness/receipts.js";
-import type { ModelClient, ModelMessage, ToolCall, ToolDefinition } from "./model-client.js";
+import type { ModelClient, ModelMessage, ToolCall, ToolCompletion, ToolDefinition } from "./model-client.js";
 
 /** Max model round-trips per turn before we stop and answer truthfully. */
 export const DEFAULT_MAX_STEPS = 6;
@@ -59,8 +59,15 @@ export interface RunAgentTurnInput {
   maxToolCallsPerStep?: number;
 }
 
-function assistantToolCallTurn(text: string, calls: ToolCall[]): ModelMessage {
-  return { role: "assistant", content: text ?? "", toolCalls: calls };
+function assistantToolCallTurn(completion: ToolCompletion, calls: ToolCall[]): ModelMessage {
+  return {
+    role: "assistant",
+    content: completion.text ?? "",
+    toolCalls: calls,
+    // Thinking-mode reasoning must survive into the transcript (and the persisted
+    // suspension): the provider rejects a continuation that drops it.
+    ...(completion.reasoningContent ? { reasoningContent: completion.reasoningContent } : {}),
+  };
 }
 
 function toolResultTurn(toolCallId: string, receipt: SuccessReceipt | ErrorReceipt): ModelMessage {
@@ -102,7 +109,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       if (result.kind === "preview") {
         // Risky write → suspend at the FIRST risky. The risky call's tool reply is
         // filled in on resume after the user confirms; nothing is committed here.
-        transcript.push(assistantToolCallTurn(completion.text, honored), ...toolResults);
+        transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
         return { kind: "interrupt", call, preview: result.preview, operation: result.operation, transcript };
       }
 
@@ -111,7 +118,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       if (result.kind === "clarify") {
         // Ask the user; the next user message continues via normal chat history
         // (this transcript is not persisted/resumed).
-        transcript.push(assistantToolCallTurn(completion.text, honored), ...toolResults);
+        transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
         return { kind: "clarify", message: result.message, options: result.options, transcript };
       }
 
@@ -119,7 +126,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
       toolResults.push(toolResultTurn(call.id, result.receipt));
     }
 
-    transcript.push(assistantToolCallTurn(completion.text, honored), ...toolResults);
+    transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
   }
 
   return { kind: "exhausted", text: EXHAUSTED_TEXT, transcript };

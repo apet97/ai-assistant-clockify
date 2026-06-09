@@ -23,6 +23,10 @@ const modelMessageSchema = z.object({
     .array(z.object({ id: z.string().min(1), name: z.string().min(1), arguments: z.record(z.string(), z.unknown()) }))
     .optional(),
   toolCallId: z.string().optional(),
+  // Thinking-mode reasoning must survive the suspension round-trip — the
+  // provider requires it back verbatim on resume (rejecting it here would
+  // silently disable resume for any turn the model "thought" on).
+  reasoningContent: z.string().optional(),
 });
 
 const agentStateSchema = z.object({

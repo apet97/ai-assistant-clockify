@@ -16,6 +16,9 @@ const state: AgentState = {
     {
       role: "assistant",
       content: "",
+      // Thinking-mode reasoning must survive the persistence round-trip — the
+      // provider requires it back verbatim on resume.
+      reasoningContent: "the user wants the urgent tag gone",
       toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }],
     },
   ],

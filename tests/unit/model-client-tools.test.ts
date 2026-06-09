@@ -132,6 +132,44 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
     });
   });
 
+  it("captures reasoning_content and passes it back verbatim (DeepSeek thinking-mode contract)", async () => {
+    const payload = {
+      choices: [
+        {
+          message: {
+            content: null,
+            reasoning_content: "I should delete urgent first.",
+            tool_calls: [{ id: "c1", function: { name: "clockify_tags_delete", arguments: '{"name":"urgent"}' } }],
+          },
+        },
+      ],
+    };
+    const result = await client(payload).completeWithTools!([{ role: "user", content: "delete both tags" }], tools);
+    expect(result.reasoningContent).toBe("I should delete urgent first.");
+
+    // The provider 400s a thinking-mode continuation that DROPS reasoning_content,
+    // so the assistant turn must serialize it back verbatim.
+    const captured: { body?: string } = {};
+    const transcript: ModelMessage[] = [
+      { role: "user", content: "delete both tags" },
+      {
+        role: "assistant",
+        content: "",
+        reasoningContent: "I should delete urgent first.",
+        toolCalls: [{ id: "c1", name: "clockify_tags_delete", arguments: { name: "urgent" } }],
+      },
+      { role: "tool", toolCallId: "c1", content: '{"ok":true}' },
+    ];
+    await client({ choices: [{ message: { content: "done", tool_calls: [] } }] }, true, captured).completeWithTools!(
+      transcript,
+      tools,
+    );
+    const body = JSON.parse(captured.body ?? "{}");
+    expect(body.messages[1].reasoning_content).toBe("I should delete urgent first.");
+    // Turns without reasoningContent stay byte-identical (no key emitted).
+    expect("reasoning_content" in body.messages[0]).toBe(false);
+  });
+
   it("complete() still serializes plain messages identically (json mode unaffected)", async () => {
     const captured: { body?: string } = {};
     const payload = { choices: [{ message: { content: "{}" } }] };
