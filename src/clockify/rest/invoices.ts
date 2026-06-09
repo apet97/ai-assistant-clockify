@@ -31,7 +31,9 @@ const EXPORT_MAX_BYTES = 1_000_000;
  * subtotal, taxAmount, …). So the update rebuilds a clean body from this
  * whitelist of existing values, then merges the caller's patch. Status changes
  * go through a separate `PATCH /status` (never the PUT body). Mirrors goclmcp
- * `invoiceUpdateBodyFromExisting`.
+ * `invoiceUpdateBodyFromExisting` EXCEPT for tax/discount — see
+ * {@link INVOICE_PERCENT_FIELDS}; goclmcp copies the `*Percent` names from the
+ * GET, which never exist there, and inherits the silent-zeroing bug.
  */
 const INVOICE_EDITABLE_FIELDS = [
   "clientId",
@@ -45,11 +47,22 @@ const INVOICE_EDITABLE_FIELDS = [
   "number",
   "subject",
   "taxType",
-  "discountPercent",
-  "tax2Percent",
-  "taxPercent",
   "visibleZeroFields",
 ] as const;
+
+/**
+ * Tax/discount are asymmetric on the wire (live-probed 2026-06-10): the GET
+ * returns them as `discount`/`tax`/`tax2`, ×100-scaled ints (PUT
+ * discountPercent=10 reads back as discount=1000), while the PUT body wants
+ * `discountPercent`/`taxPercent`/`tax2Percent` as plain percents. Copying the
+ * `*Percent` names from the GET silently ZEROED tax/discount on every field
+ * update — so map name AND scale here.
+ */
+const INVOICE_PERCENT_FIELDS: ReadonlyArray<readonly [getKey: string, putKey: string]> = [
+  ["discount", "discountPercent"],
+  ["tax", "taxPercent"],
+  ["tax2", "tax2Percent"],
+];
 
 function mapSummary(raw: any): InvoiceSummary {
   const out: InvoiceSummary = { id: raw.id };
@@ -85,7 +98,10 @@ function mapPayment(raw: any): InvoicePayment {
   else if (raw._id !== undefined) out.id = raw._id;
   if (raw.amount !== undefined) out.amount = raw.amount;
   if (raw.note !== undefined) out.note = raw.note;
-  if (raw.paymentDate !== undefined) out.paymentDate = raw.paymentDate;
+  // The wire field in the payments LIST is `date` (probed); `paymentDate` only
+  // appears in the request body. Accept both.
+  const date = raw.paymentDate ?? raw.date;
+  if (date !== undefined) out.paymentDate = date;
   return out;
 }
 
@@ -99,6 +115,16 @@ function mapPayment(raw: any): InvoicePayment {
  */
 export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePort {
   const ws = `/workspaces/${workspaceId}`;
+
+  // Live shape (probed): a bare array of {id, amount, date, note, author}.
+  // The envelope keys are a defensive fallback only.
+  async function listPaymentsRaw(id: string): Promise<any[]> {
+    const env = (await core.call("api", "GET", `${ws}/invoices/${id}/payments`)) as
+      | { payments?: any[]; items?: any[]; data?: any[] }
+      | any[]
+      | null;
+    return Array.isArray(env) ? env : (env?.payments ?? env?.items ?? env?.data ?? []);
+  }
 
   return {
     async listInvoices(filter) {
@@ -128,12 +154,7 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       return Array.isArray(items) ? items.map(mapItem) : [];
     },
     async listInvoicePayments(id) {
-      const env = (await core.call("api", "GET", `${ws}/invoices/${id}/payments`)) as
-        | { payments?: any[]; items?: any[]; data?: any[] }
-        | any[]
-        | null;
-      const rows = Array.isArray(env) ? env : (env?.payments ?? env?.items ?? env?.data ?? []);
-      return rows.map(mapPayment);
+      return (await listPaymentsRaw(id)).map(mapPayment);
     },
     async exportInvoice(id, format = "PDF") {
       const fmt = format.toUpperCase();
@@ -179,6 +200,10 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
           for (const key of INVOICE_EDITABLE_FIELDS) {
             if (existing[key] !== undefined) body[key] = existing[key];
           }
+          for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
+            const value = existing[getKey];
+            if (typeof value === "number") body[putKey] = value / 100;
+          }
           Object.assign(body, patch);
           if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
           if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
@@ -208,12 +233,18 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       await core.call("api", "DELETE", `${ws}/invoices/${id}/items/${index}`);
     },
     async createInvoicePayment(id, payment): Promise<InvoicePayment> {
+      // The POST response is the updated INVOICE document, not the payment
+      // (live-probed) — mapping it as a payment put the invoice's id/amount in
+      // the receipt. Diff the payments list around the POST to return the
+      // genuinely new payment instead.
+      const before = new Set((await listPaymentsRaw(id)).map((p: any) => p.id ?? p._id));
       const body: Record<string, unknown> = {
         amount: payment.amountMinor,
         paymentDate: toClockifyDate(payment.paymentDate),
         ...(payment.note !== undefined ? { note: payment.note } : {}),
       };
-      const created = (await core.call("api", "POST", `${ws}/invoices/${id}/payments`, body)) as any;
+      await core.call("api", "POST", `${ws}/invoices/${id}/payments`, body);
+      const created = (await listPaymentsRaw(id)).find((p: any) => !before.has(p.id ?? p._id));
       return created ? mapPayment(created) : {};
     },
     async deleteInvoicePayment(id, paymentId) {

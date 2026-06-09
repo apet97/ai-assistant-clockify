@@ -257,8 +257,10 @@ const createInvoice = defineRiskyAction({
       if (!resolved.ok) return itemTypeClarify(resolved.options);
       items.push({
         itemType: resolved.itemType,
-        ...(it.description !== undefined ? { description: it.description } : {}),
-        ...(it.quantity !== undefined ? { quantity: it.quantity } : {}),
+        // Clockify REQUIRES description + quantity on the items POST (live: 400
+        // "Description is required."); default them visibly in the preview.
+        description: it.description ?? resolved.itemType,
+        quantity: it.quantity ?? 1,
         ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
         ...(it.applyTaxes !== undefined ? { applyTaxes: it.applyTaxes } : {}),
       });
@@ -474,8 +476,10 @@ const addInvoiceItem = defineRiskyAction({
     const itemType = resolved.itemType;
     const item: Record<string, unknown> = {
       itemType,
-      ...(args.description !== undefined ? { description: args.description } : {}),
-      ...(args.quantity !== undefined ? { quantity: args.quantity } : {}),
+      // Clockify REQUIRES description + quantity on the items POST (live: 400
+      // "Description is required."); default them visibly in the preview.
+      description: args.description ?? itemType,
+      quantity: args.quantity ?? 1,
       ...(args.unitPrice !== undefined ? { unitPriceMinor: toMinor(args.unitPrice, args.unitPriceUnit) } : {}),
       ...(args.applyTaxes !== undefined ? { applyTaxes: args.applyTaxes } : {}),
     };

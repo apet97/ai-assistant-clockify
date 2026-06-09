@@ -230,6 +230,33 @@ describe("invoice actions", () => {
     expect((preview.operation.payload as { item: { itemType: string } }).item.itemType).toBe("Consulting");
   });
 
+  it("items_add defaults the wire-REQUIRED description (to the item type) and quantity (to 1) — live: POST /items 400s 'Description is required.' without one", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv9", unitPrice: 100 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const item = (preview.operation.payload as { item: Record<string, unknown> }).item;
+    expect(item.description).toBe("Consulting");
+    expect(item.quantity).toBe(1);
+  });
+
+  it("create-with-items defaults each item's description and quantity the same way", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "ratta", items: [{ amount: 1000 }] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const items = (preview.operation.payload as { items: Array<Record<string, unknown>> }).items;
+    expect(items[0].description).toBe("Consulting");
+    expect(items[0].quantity).toBe(1);
+    expect(items[0].unitPriceMinor).toBe(100000);
+  });
+
   it("items_add resolves a requested type case-insensitively to the workspace's canonical name", async () => {
     const fake = createFakeWorkspace(typedSeed());
     const preview = await executeAction({
