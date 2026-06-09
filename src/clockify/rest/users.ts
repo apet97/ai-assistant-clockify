@@ -18,7 +18,8 @@ function mapGroup(raw: any): GroupSummary {
 /**
  * Typed user & group REST module (goclmcp §2.13). I/O only. Shapes pinned by the
  * unit tests: invite is `POST /users?send-email={bool}`; role is
- * `PUT /users/{id}/roles {entityId,role}`; deactivate is `PUT /users/{id}
+ * `POST /users/{id}/roles {entityId,role}` (the route has no PUT — spec +
+ * goclmcp, which live-pinned the POST); deactivate is `PUT /users/{id}
  * {status:INACTIVE}`; groups live under `/user-groups` (single GET is a
  * list-scan), members under `…/{id}/users`.
  */
@@ -36,7 +37,7 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       return { id: u?.id ?? email, name: u?.name ?? email };
     },
     async updateUserRole(userId, role, entityId): Promise<EntitySummary> {
-      await core.call("api", "PUT", `${ws}/users/${userId}/roles`, { entityId, role });
+      await core.call("api", "POST", `${ws}/users/${userId}/roles`, { entityId, role });
       return { id: userId, name: role };
     },
     async deactivateUser(userId): Promise<EntitySummary> {

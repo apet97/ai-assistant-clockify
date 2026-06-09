@@ -26,12 +26,12 @@ describe("user & group rest", () => {
     expect(JSON.parse(init.body)).toEqual({ email: "new@x.com" });
   });
 
-  it("updateUserRole PUTs /users/{id}/roles with {entityId, role}", async () => {
+  it("updateUserRole POSTs /users/{id}/roles with {entityId, role} (the route has no PUT — spec + goclmcp pin POST)", async () => {
     const f = vi.fn(async () => jsonResponse({}));
     await rest(f as unknown as typeof fetch).updateUserRole("u1", "TEAM_MANAGER", "team1");
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/roles");
-    expect(init.method).toBe("PUT");
+    expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ entityId: "team1", role: "TEAM_MANAGER" });
   });
 
