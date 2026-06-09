@@ -88,7 +88,22 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**589 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**599 tests**: type-check + Vitest + build).
+- **Curated intent actions (Phase 6, 2026-06-09).** High-level "jobs to be done"
+  (`src/harness/workflows/curated.ts`) so the model reaches for one clear verb
+  instead of scrambling ~115 primitives, with the harness owning what the model is
+  bad at. `clockify_period_report` (read) resolves a **period keyword**
+  (today/yesterday/this_week/last_week/this_month/last_month/last_7_days/last_30_days/
+  this_quarter/last_quarter/this_year/last_year) → a UTC date range server-side via
+  `ctx.now`, then runs the summary/detailed/weekly report (the model never computes
+  calendar dates). `clockify_onboard_user` (risky) bundles invite + group-adds into
+  **one preview**, committed atomically via the composition layer (invite required,
+  group adds best-effort). Primitives remain for power use. **Measured (deepseek-v4-pro,
+  tool mode, repeat=3): curated cases 12/12 adopted** — the model picks the curated
+  job over primitives; the `defaults` report cases were widened to accept
+  `period_report` (equally valid — calibration, not a regression). Further curated
+  jobs (invoice_client, set_up_project, audit_changes, and a permissions job to close
+  the `permissions/full` action-selection gap) follow the same pattern.
 - **Grounding & early constraint surfacing (Phase 4, 2026-06-09).** Read the world
   before acting; never punt vaguely; warn about platform limits in the **preview**,
   before confirm. (1) `clockify_invoices_create` now adds the invoice-item-type caveat
