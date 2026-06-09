@@ -42,36 +42,7 @@ export interface RestWorkspaceOptions {
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
   const base = opts.baseUrl.replace(/\/$/, "");
-  const doFetch = opts.fetchImpl ?? fetch;
-  const authHeader: Record<string, string> =
-    "addonToken" in opts.auth
-      ? { "X-Addon-Token": opts.auth.addonToken }
-      : { "X-Api-Key": opts.auth.apiKey };
   const ws = `/workspaces/${opts.workspaceId}`;
-
-  async function call(
-    method: string,
-    path: string,
-    body?: unknown,
-    allow404 = false,
-  ): Promise<unknown> {
-    // multipart/form-data bodies (expenses) must NOT carry a JSON content-type —
-    // fetch/undici sets the multipart boundary itself when the body is a FormData.
-    const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-    const res = await doFetch(`${base}${path}`, {
-      method,
-      headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
-      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-    });
-    if (res.status === 404 && allow404) return null;
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
-    }
-    if (res.status === 204) return null;
-    const text = await res.text();
-    return text ? JSON.parse(text) : null;
-  }
 
   // Per-area REST modules built on the multi-host core (D2). The core shares this
   // adapter's auth + base; areas are migrated off the inline `call` phase by phase.
@@ -154,7 +125,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       };
       const path = pathByType[entityType];
       if (!path) throw new Error(`delete not supported for entity type: ${entityType}`);
-      await call("DELETE", path);
+      await core.call("api", "DELETE", path);
     },
     async updateEntity({ entityType, id, fields }) {
       // Fetch-then-merge PUT (Clockify replaces on PUT, so merge onto the current
@@ -168,9 +139,9 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
       };
       const path = pathByType[entityType];
       if (!path) throw new Error(`update not supported for entity type: ${entityType}`);
-      const current = ((await call("GET", path)) ?? {}) as Record<string, unknown>;
+      const current = ((await core.call("api", "GET", path)) ?? {}) as Record<string, unknown>;
       const merged = { ...current, ...(fields ?? {}) };
-      const updated = (await call("PUT", path, merged)) as { id?: string; name?: string };
+      const updated = (await core.call("api", "PUT", path, merged)) as { id?: string; name?: string };
       return { id: updated.id ?? id, name: updated.name ?? id };
     },
   };
