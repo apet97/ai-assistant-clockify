@@ -5,13 +5,14 @@ import {
   type ChatResult,
   type PolicyShape,
   type PreviewResult,
+  type StreamEvent,
 } from "./shared.js";
 
 // Re-export the shared UI primitives from the leaf `./shared.js` so the
 // public/test import surface (`featureGroupRows` et al. from `./main.js`) is
 // unchanged. They live in the leaf so `render.ts` can use them without importing
 // from main (which imports render's builders) — that would be a circular dep.
-export { featureGroupRows, settleConfirmOutcome } from "./shared.js";
+export { featureGroupRows, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
 export type {
   PreviewRef,
   PolicyShape,
@@ -22,6 +23,8 @@ export type {
   ChatResult,
   ConfirmResponse,
   ConfirmHooks,
+  ConfirmStreamApi,
+  StreamEvent,
 } from "./shared.js";
 
 /**
@@ -43,6 +46,8 @@ export interface ChatApi {
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
   confirmPreview(previewId: string, nonce: string): Promise<unknown>;
+  /** Streaming single confirm: the receipt arrives first, then the resume streams. */
+  confirmStream(ref: { previewId: string; nonce: string }, onEvent: (event: StreamEvent) => void): Promise<void>;
   cancelPreview(previewId: string): Promise<unknown>;
   undo(id: string): Promise<unknown>;
 }
@@ -51,6 +56,7 @@ export function createController(api: ChatApi): ChatController {
   return {
     send: (message) => api.sendMessage(message),
     confirm: (ref) => api.confirmPreview(ref.previewId, ref.nonce),
+    confirmStream: (ref, onEvent) => api.confirmStream(ref, onEvent),
     confirmAll: (refs) => Promise.all(refs.map((r) => api.confirmPreview(r.previewId, r.nonce))),
     cancel: (previewId) => api.cancelPreview(previewId),
     undo: (id) => api.undo(id),
@@ -103,15 +109,6 @@ export async function submitMessage(api: ChatApiLike, message: string, hooks: Co
 
 // --- NDJSON streaming (POST /api/chat/stream) ------------------------------
 
-/** One event from the streaming chat endpoint. */
-export interface StreamEvent {
-  type: "result" | "reply" | "error" | "done" | string;
-  result?: ChatResult;
-  kind?: string;
-  text?: string;
-  code?: string;
-  message?: string;
-}
 
 export interface StreamingApi {
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -216,6 +213,35 @@ export function createFetchApi(): ChatApi {
         method: "POST",
         body: JSON.stringify({ nonce }),
       }),
+    confirmStream: async (ref, onEvent) => {
+      const res = await fetch(`/api/confirmations/${encodeURIComponent(ref.previewId)}/confirm?stream=1`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ nonce: ref.nonce }),
+      });
+      if (!res.ok || !res.body) {
+        // A non-OK confirm is a JSON error (validation/policy/expired) — surface it.
+        let message = "Confirmation failed.";
+        try {
+          const body = (await res.json()) as { message?: string };
+          if (body?.message) message = body.message;
+        } catch {
+          /* keep the default */
+        }
+        onEvent({ type: "error", message });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const feed = createNdjsonParser(onEvent);
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        feed(decoder.decode(value, { stream: true }));
+      }
+      feed(decoder.decode());
+    },
     cancelPreview: (previewId) =>
       json(`/api/confirmations/${encodeURIComponent(previewId)}/cancel`, {
         method: "POST",

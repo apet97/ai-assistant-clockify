@@ -13,8 +13,10 @@
 import {
   featureGroupRows,
   settleConfirmOutcome,
+  submitConfirmStream,
   type ChatController,
   type ChatResult,
+  type ConfirmHooks,
   type ConfirmResponse,
   type PolicyShape,
   type PreviewRef,
@@ -153,25 +155,32 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   const actions = el("div", "buttons");
   const refs: PreviewRef[] = previews.map((p) => ({ previewId: p.previewId, nonce: p.nonce }));
   const confirmButton = el("button", "primary", batch ? "Confirm all" : "Confirm") as HTMLButtonElement;
+  const confirmHooks: ConfirmHooks = {
+    onAssistant: (text) => appendMessage("assistant", text),
+    onResults: renderResults,
+    onError: showError,
+  };
   confirmButton.addEventListener("click", async () => {
     confirmButton.disabled = true;
-    try {
-      // The server's JSON is settled TRUTHFULLY: a failed confirm shows its
-      // message (never "Confirmed."), and a resumed agentic turn renders its
-      // follow-up receipts / chained preview / truthful reply.
-      const responses = batch
-        ? ((await controller.confirmAll(refs)) as ConfirmResponse[])
-        : [(await controller.confirm(refs[0])) as ConfirmResponse];
-      card.remove();
-      settleConfirmOutcome(responses, {
-        onAssistant: (text) => appendMessage("assistant", text),
-        onResults: renderResults,
-        onError: showError,
-      });
-    } catch {
-      showError("Confirmation failed.");
-      confirmButton.disabled = false;
+    if (batch) {
+      // Batch ("Confirm all") is single-turn only (agentic mode interrupts at the
+      // first risky write, so it never produces a batch) — plain JSON, settled
+      // truthfully: a failed confirm shows its message, never "Confirmed."
+      try {
+        const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
+        card.remove();
+        settleConfirmOutcome(responses, confirmHooks);
+      } catch {
+        showError("Confirmation failed.");
+        confirmButton.disabled = false;
+      }
+      return;
     }
+    // Single confirm STREAMS: the committed receipt renders immediately (the
+    // button never feels dead), then the durable resume streams its continuation
+    // — receipts, a chained preview, and the truthful reply — as it runs.
+    card.remove();
+    await submitConfirmStream(controller, refs[0], confirmHooks);
   });
   const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel") as HTMLButtonElement;
   cancelButton.addEventListener("click", async () => {

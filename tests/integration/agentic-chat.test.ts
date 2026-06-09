@@ -220,6 +220,136 @@ function parseEvents(body: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+describe("streaming confirm — receipt instant, resume streamed (no blocking the button)", () => {
+  it("emits the committed receipt FIRST, then resume results, then the reply, then done", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "cl1", name: "qwen" }] });
+    const { app, model, cookie } = await makeApp(
+      [
+        {
+          text: "",
+          toolCalls: [
+            {
+              id: "r1",
+              name: "clockify_invoices_create",
+              arguments: { clientName: "qwen", items: [{ description: "Consulting", quantity: 1, amount: 1000 }] },
+            },
+          ],
+        },
+        { text: "The invoice for qwen is created.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for qwen for 1000" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+    const callsAfterChat = (model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const res = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("x-ndjson");
+    const events = parseEvents(res.text);
+    // The committed receipt is the FIRST event (instant feedback) — before any
+    // resume model call blocks.
+    expect(events[0].type).toBe("receipt");
+    expect((events[0] as { receipt: { ok: boolean; action: string } }).receipt).toMatchObject({ ok: true, action: "clockify_invoices_create" });
+    // Then the resume runs and a truthful reply + done close the stream.
+    const replyIdx = events.findIndex((e) => e.type === "reply");
+    expect(replyIdx).toBeGreaterThan(0);
+    expect((events[replyIdx] as { text: string }).text).toContain("qwen");
+    expect(events[events.length - 1].type).toBe("done");
+    // The invoice committed exactly once; the resume only re-planned (1 model call).
+    expect(fake.counts.createInvoice).toBe(1);
+    expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat + 1);
+  });
+
+  it("streams a CHAINED preview from the resumed loop as a result event (next Confirm appears)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }, { id: "t2", name: "stale" }] });
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "", toolCalls: [{ id: "r2", name: "clockify_tags_delete", arguments: { name: "stale" } }] },
+        { text: "Both gone.", toolCalls: [] },
+      ],
+      fake,
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete urgent and stale" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+
+    const res = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    const events = parseEvents(res.text);
+    expect(events[0].type).toBe("receipt"); // first delete committed
+    const chained = events.find((e) => e.type === "result" && (e.result as ResultItem).kind === "preview");
+    expect(chained).toBeDefined();
+    expect((chained!.result as ResultItem).previewId).toBeTruthy();
+    expect(fake.counts.deleteTag).toBe(1); // only the confirmed one; the chained is still pending
+  });
+
+  it("legacy single-turn preview streams just the receipt + done (no resume model call)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+      { agentic: false },
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete urgent" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+
+    const res = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    const events = parseEvents(res.text);
+    expect(events[0].type).toBe("receipt");
+    expect(events.some((e) => e.type === "reply")).toBe(false);
+    expect(events[events.length - 1].type).toBe("done");
+    expect(model.completeWithTools).toHaveBeenCalledTimes(1); // only the chat turn, no resume
+    expect(fake.counts.deleteTag).toBe(1);
+  });
+
+  it("a policy lowered after the preview denies a streaming confirm cleanly as JSON (nonce not burned)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie, store } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "Gone.", toolCalls: [] },
+      ],
+      fake,
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete urgent" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+    const lowered = defaultAdminPolicy();
+    lowered.groups.work_structure = "read";
+    store.upsertAdminPolicy("ws-1", "admin-1", lowered);
+
+    const denied = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(denied.status).toBe(400);
+    expect(denied.headers["content-type"]).toContain("application/json");
+    expect(denied.body.code).toBe("policy_denied");
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+
+    // Same nonce works after restore (it was never burned).
+    store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
+    const ok = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(parseEvents(ok.text)[0].type).toBe("receipt");
+    expect(fake.counts.deleteTag).toBe(1);
+  });
+});
+
 describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => {
   it("streams each loop step as a result event, then the truthful reply, then done", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });

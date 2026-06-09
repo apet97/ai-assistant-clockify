@@ -234,6 +234,152 @@ export function apiRouter(deps: AppDeps): Router {
     });
   }
 
+  /**
+   * Run the durable resume (Phase 3) for a confirmed risky write: feed the
+   * committed receipt back as the risky call's tool result and let the loop finish
+   * the task. The resumed loop can only emit receipts/clarifies or chain ANOTHER
+   * pending preview — it goes through `runAction` (`executeAction`), NEVER a commit,
+   * so it cannot re-execute the original (or any) risky write inline. `onResult`
+   * streams each continuation result as it is produced; omit it to collect them.
+   * Returns undefined when there's nothing to resume (no/invalid agent state,
+   * agentic off, or the backend can't tool-call) — the caller then behaves as
+   * pre-Phase-3.
+   */
+  async function runResume(
+    claims: Claims,
+    installation: Installation | undefined,
+    agentState: AgentState | undefined,
+    receipt: SuccessReceipt | ErrorReceipt,
+    onResult?: (result: unknown) => void,
+  ): Promise<{ replyKind: string; replyText: string; results: unknown[] } | undefined> {
+    if (
+      !agentState ||
+      !installation ||
+      installation.status !== "active" ||
+      !deps.config.llmAgentic ||
+      deps.config.llmMode === "json" ||
+      typeof deps.modelClient.completeWithTools !== "function"
+    ) {
+      return undefined;
+    }
+    const m = createTurnMachinery(claims, installation, onResult);
+    let turn: AgentTurnResult | undefined;
+    try {
+      turn = await runAgentTurn({
+        modelClient: deps.modelClient,
+        messages: resumeMessages(agentState, receipt),
+        tools: toolsForModel(),
+        runAction: m.runAction,
+        onStep: m.onStep,
+      });
+    } catch {
+      // The commit already happened and its receipt is returned regardless; a
+      // model failure here only loses the follow-up narration.
+      return undefined;
+    }
+    const { replyKind, baseText } = settleAgentTurn(m, turn);
+    const replyText = truthfulReplyText(m.results, baseText);
+    persistAssistantReply(claims, replyKind, replyText, m.results);
+    return { replyKind, replyText, results: m.results };
+  }
+
+  /**
+   * Validate + commit a confirmed risky write through the single choke point.
+   * Returns the structured error (with its HTTP status) when validation/policy/
+   * the one-use claim rejects — BEFORE any commit, so a denied confirm never
+   * burns the nonce — or the committed receipt + undo + (valid) agent state for
+   * the resume. Mirrors the exact ordering the safety review verified.
+   */
+  async function commitConfirmation(
+    claims: Claims,
+    record: NonNullable<ReturnType<typeof deps.store.getPendingConfirmation>>,
+    nonce: string,
+  ): Promise<
+    | { ok: false; status: number; body: { ok: false; code: string; message: string } }
+    | {
+        ok: true;
+        receipt: SuccessReceipt | ErrorReceipt;
+        undoId: string | undefined;
+        agentState: AgentState | undefined;
+        installation: Installation | undefined;
+      }
+  > {
+    const validation = confirmPending({
+      record,
+      sessionId: claims.sessionId,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      nonce,
+      sessionSecret: deps.config.sessionSecret,
+      now: now(),
+    });
+    if (!validation.ok) {
+      return { ok: false, status: 400, body: { ok: false, code: validation.code, message: validation.message } };
+    }
+
+    const operation = record.operation as ConfirmableOperation;
+
+    // Re-check current policy BEFORE consuming the one-use preview, so a policy
+    // that was lowered after the preview denies cleanly without burning it
+    // (commitConfirmedOperation re-checks again as defense in depth).
+    if (!operation.risks.includes("permission_change")) {
+      const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
+      if (!canWrite(policy, operation.featureGroup)) {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            ok: false,
+            code: "policy_denied",
+            message: `Write access to ${operation.featureGroup} is disabled in your assistant permissions.`,
+          },
+        };
+      }
+    }
+
+    // Atomic one-use claim: only the caller that transitions pending → used wins.
+    if (!deps.store.markConfirmationUsed(record.id)) {
+      return { ok: false, status: 409, body: { ok: false, code: "already_used", message: "This preview was already used." } };
+    }
+
+    // ALL confirmed operations go through the SAME commit path. The action's own
+    // `commit` does the work; for a permission change that commit persists the new
+    // policy itself via the `savePolicy` capability the context carries.
+    let receipt: SuccessReceipt | ErrorReceipt;
+    const installation = deps.store.getInstallation(claims.workspaceId);
+    if (!installation || installation.status !== "active") {
+      receipt = errorReceipt({
+        action: operation.actionName,
+        code: "not_installed",
+        message: "The add-on is not active for this workspace.",
+      });
+    } else {
+      // A store-backed idempotency ledger (10-min window) so re-confirming the
+      // same intent (e.g. the same invoice) can't create a duplicate.
+      const idempotency: IdempotencyLedger = {
+        lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
+        record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+      };
+      receipt = await commitConfirmedOperation(
+        { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },
+        operation,
+      );
+    }
+
+    deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);
+    deps.store.addAuditEvent({
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      sessionId: claims.sessionId,
+      actionName: operation.actionName,
+      risk: operation.risks,
+      receipt,
+    });
+    const undoId = recordUndoIfReversible(claims, receipt);
+    const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
+    return { ok: true, receipt, undoId, agentState, installation };
+  }
+
   router.get("/me", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;
@@ -493,119 +639,47 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
     }
 
-    const validation = confirmPending({
-      record,
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      nonce: parsed.data.nonce,
-      sessionSecret: deps.config.sessionSecret,
-      now: now(),
-    });
-    if (!validation.ok) {
-      return res.status(400).json({ ok: false, code: validation.code, message: validation.message });
+    const committed = await commitConfirmation(claims, record, parsed.data.nonce);
+    if (!committed.ok) {
+      // Validation/policy/the one-use claim rejected BEFORE any commit — always
+      // JSON (the stream is never opened), and a denied confirm never burns the nonce.
+      return res.status(committed.status).json(committed.body);
     }
+    const { receipt, undoId, agentState, installation } = committed;
 
-    const operation = record.operation as ConfirmableOperation;
-
-    // Re-check current policy BEFORE consuming the one-use preview, so a policy
-    // that was lowered after the preview denies cleanly without burning it
-    // (commitConfirmedOperation re-checks again as defense in depth).
-    if (!operation.risks.includes("permission_change")) {
-      const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
-      if (!canWrite(policy, operation.featureGroup)) {
-        return res.status(400).json({
-          ok: false,
-          code: "policy_denied",
-          message: `Write access to ${operation.featureGroup} is disabled in your assistant permissions.`,
-        });
-      }
-    }
-
-    // Atomic one-use claim: only the caller that transitions pending → used wins.
-    if (!deps.store.markConfirmationUsed(record.id)) {
-      return res.status(409).json({ ok: false, code: "already_used", message: "This preview was already used." });
-    }
-    // ALL confirmed operations go through the SAME commit path. The action's own
-    // `commit` does the work; for a permission change that commit persists the
-    // new policy itself via the `savePolicy` capability the context carries
-    // (`commitConfirmedOperation` correctly skips the Clockify feature gate for
-    // `permission_change`, matching the pre-check above).
-    let receipt;
-    const installation = deps.store.getInstallation(claims.workspaceId);
-    if (!installation || installation.status !== "active") {
-      receipt = errorReceipt({
-        action: operation.actionName,
-        code: "not_installed",
-        message: "The add-on is not active for this workspace.",
-      });
-    } else {
-      // A store-backed idempotency ledger (10-min window) so re-confirming the
-      // same intent (e.g. the same invoice) can't create a duplicate.
-      const idempotency: IdempotencyLedger = {
-        lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
-        record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+    // Streaming confirm (?stream=1, used by the embedded UI): the committed
+    // receipt flushes IMMEDIATELY so the button is responsive, then the durable
+    // resume streams its continuation as it runs. The continuous stream also keeps
+    // the connection alive, so a slow multi-step resume can't surface as a tunnel
+    // timeout / "Confirmation failed" the way one blocking JSON response could. The
+    // JSON path (no ?stream) is unchanged for scripts/tests.
+    if (req.query.stream === "1") {
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no");
+      const write = (event: unknown): void => {
+        res.write(`${JSON.stringify(event)}\n`);
       };
-      receipt = await commitConfirmedOperation(
-        { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },
-        operation,
-      );
-    }
-
-    deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);
-    deps.store.addAuditEvent({
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      sessionId: claims.sessionId,
-      actionName: operation.actionName,
-      risk: operation.risks,
-      receipt,
-    });
-    const undoId = recordUndoIfReversible(claims, receipt);
-
-    // Durable resume (Phase 3): if this preview suspended an agentic turn, feed
-    // the committed receipt back as the risky call's tool result and let the
-    // loop finish the task. The resumed loop can only emit receipts/clarifies or
-    // chain ANOTHER pending preview — never commit a risky write inline. Legacy
-    // rows (no agent state) return exactly as before.
-    let resume: { reply: { kind: string; text: string }; results: unknown[] } | undefined;
-    const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
-    if (
-      agentState &&
-      deps.config.llmAgentic &&
-      deps.config.llmMode !== "json" &&
-      typeof deps.modelClient.completeWithTools === "function" &&
-      installation &&
-      installation.status === "active"
-    ) {
-      const m = createTurnMachinery(claims, installation);
-      let turn: AgentTurnResult | undefined;
+      write({ type: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
       try {
-        turn = await runAgentTurn({
-          modelClient: deps.modelClient,
-          messages: resumeMessages(agentState, receipt),
-          tools: toolsForModel(),
-          runAction: m.runAction,
-          onStep: m.onStep,
-        });
+        const resumed = await runResume(claims, installation, agentState, receipt, (result) =>
+          write({ type: "result", result }),
+        );
+        if (resumed) write({ type: "reply", kind: resumed.replyKind, text: resumed.replyText });
       } catch {
-        // The commit already happened and its receipt is returned below either
-        // way; a model failure here only loses the follow-up narration.
-        turn = undefined;
+        write({ type: "error", code: "resume_error", message: "The follow-up couldn't complete, but your change was applied." });
       }
-      if (turn) {
-        const { replyKind, baseText } = settleAgentTurn(m, turn);
-        const replyText = truthfulReplyText(m.results, baseText);
-        persistAssistantReply(claims, replyKind, replyText, m.results);
-        resume = { reply: { kind: replyKind, text: replyText }, results: m.results };
-      }
+      write({ type: "done" });
+      return res.end();
     }
 
+    // JSON path: collect the resume into the response (unchanged behavior).
+    const resumed = await runResume(claims, installation, agentState, receipt);
     return res.status(receipt.ok ? 200 : 400).json({
       ok: receipt.ok,
       receipt,
       ...(undoId ? { undo: { id: undoId } } : {}),
-      ...(resume ? { resume } : {}),
+      ...(resumed ? { resume: { reply: { kind: resumed.replyKind, text: resumed.replyText }, results: resumed.results } } : {}),
     });
   });
 

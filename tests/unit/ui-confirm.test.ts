@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { settleConfirmOutcome, type ConfirmHooks, type ConfirmResponse } from "../../src/ui/main.js";
+import {
+  settleConfirmOutcome,
+  submitConfirmStream,
+  type ConfirmHooks,
+  type ConfirmResponse,
+  type ConfirmStreamApi,
+  type StreamEvent,
+} from "../../src/ui/main.js";
 
 /**
  * Phase 4: settle confirm responses TRUTHFULLY. A failed confirm must never
@@ -91,5 +98,74 @@ describe("settleConfirmOutcome (truthful confirm flow)", () => {
     const committed = settleConfirmOutcome([okReceipt, okReceipt], hooks);
     expect(committed).toBe(2);
     expect(events).toEqual(["assistant:Batch confirmed."]);
+  });
+});
+
+function streamApi(events: StreamEvent[]): ConfirmStreamApi {
+  return {
+    confirmStream: async (_ref, onEvent) => {
+      for (const e of events) onEvent(e);
+    },
+  };
+}
+
+describe("submitConfirmStream (streaming single confirm)", () => {
+  it("renders the committed receipt FIRST (instant), then resume results, then the reply", async () => {
+    const { hooks, events } = recorder();
+    await submitConfirmStream(
+      streamApi([
+        { type: "receipt", receipt: { ok: true, action: "clockify_invoices_create" }, undo: { id: "u1" } },
+        { type: "result", result: { kind: "receipt", receipt: { ok: true, action: "clockify_clients_list" } } },
+        { type: "reply", kind: "answer", text: "The invoice for qwen is created." },
+        { type: "done" },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      hooks,
+    );
+    // The receipt is the first thing rendered — the button never feels dead.
+    expect(events[0]).toBe("results:receipt");
+    expect(events).toContain("results:receipt");
+    expect(events).toContain("assistant:The invoice for qwen is created.");
+    // It must NOT fall back to the generic "Confirmed." text.
+    expect(events).not.toContain("assistant:Confirmed.");
+  });
+
+  it("buffers a chained preview and flushes it at the reply (its Confirm button appears)", async () => {
+    const { hooks, events } = recorder();
+    await submitConfirmStream(
+      streamApi([
+        { type: "receipt", receipt: { ok: true, action: "clockify_tags_delete" } },
+        { type: "result", result: { kind: "preview", previewId: "p2", nonce: "n2", preview: { actionLabel: "Delete tag", expectedChanges: [], reversibility: "", warnings: [] } } },
+        { type: "reply", kind: "actions", text: 'Review the change below and click "Confirm" to apply it. Nothing has been changed yet.' },
+        { type: "done" },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      hooks,
+    );
+    expect(events[0]).toBe("results:receipt");
+    expect(events).toContain("results:preview");
+    expect(events.some((e) => e.includes("Nothing has been changed yet"))).toBe(true);
+  });
+
+  it("surfaces a resume error but keeps the already-rendered receipt (the change still applied)", async () => {
+    const { hooks, events } = recorder();
+    await submitConfirmStream(
+      streamApi([
+        { type: "receipt", receipt: { ok: true, action: "clockify_tags_delete" } },
+        { type: "error", code: "resume_error", message: "The follow-up couldn't complete, but your change was applied." },
+        { type: "done" },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      hooks,
+    );
+    expect(events[0]).toBe("results:receipt");
+    expect(events).toContain("error:The follow-up couldn't complete, but your change was applied.");
+  });
+
+  it("surfaces a transport failure (never silently drops the click)", async () => {
+    const { hooks, events } = recorder();
+    const failing: ConfirmStreamApi = { confirmStream: async () => { throw new Error("network"); } };
+    await submitConfirmStream(failing, { previewId: "p1", nonce: "n1" }, hooks);
+    expect(events.some((e) => e.startsWith("error:"))).toBe(true);
   });
 });

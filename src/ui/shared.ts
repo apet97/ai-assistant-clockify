@@ -20,6 +20,8 @@ export interface PolicyShape {
 export interface ChatController {
   send(message: string): Promise<unknown>;
   confirm(ref: PreviewRef): Promise<unknown>;
+  /** Streaming single confirm: the committed receipt arrives first, then the resume streams. */
+  confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
   confirmAll(refs: PreviewRef[]): Promise<unknown[]>;
   cancel(previewId: string): Promise<unknown>;
   undo(id: string): Promise<unknown>;
@@ -66,6 +68,57 @@ export interface ConfirmHooks {
   onAssistant(text: string): void;
   onResults(results: ChatResult[]): void;
   onError(message: string): void;
+}
+
+/** One event from a streaming chat OR confirm endpoint (NDJSON, one per line). */
+export interface StreamEvent {
+  type: "result" | "reply" | "error" | "done" | "receipt" | string;
+  result?: ChatResult;
+  /** Only on a confirm stream's first `receipt` event: the committed receipt + undo handle. */
+  receipt?: ReceiptResult["receipt"];
+  undo?: { id: string };
+  kind?: string;
+  text?: string;
+  code?: string;
+  message?: string;
+}
+
+export interface ConfirmStreamApi {
+  confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
+}
+
+/**
+ * Settle a STREAMED single confirm. The committed receipt arrives FIRST and is
+ * rendered immediately, so the Confirm button never feels dead while a multi-step
+ * resume runs (and the live stream keeps the connection alive, so a slow resume
+ * can't surface as a "Confirmation failed" timeout). Resume receipts/clarifies
+ * render as they arrive; a chained preview is buffered and flushed at the reply so
+ * its single Confirm card stays intact. Never falls back to the generic "Confirmed."
+ */
+export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef, hooks: ConfirmHooks): Promise<void> {
+  const pendingPreviews: ChatResult[] = [];
+  const flush = (): void => {
+    if (pendingPreviews.length > 0) hooks.onResults(pendingPreviews.splice(0));
+  };
+  try {
+    await api.confirmStream(ref, (event) => {
+      if (event.type === "receipt" && event.receipt) {
+        hooks.onResults([{ kind: "receipt", receipt: event.receipt, ...(event.undo ? { undo: event.undo } : {}) } as ReceiptResult]);
+      } else if (event.type === "result" && event.result) {
+        if (event.result.kind === "preview") pendingPreviews.push(event.result);
+        else hooks.onResults([event.result]);
+      } else if (event.type === "reply") {
+        flush();
+        if (event.text) hooks.onAssistant(event.text);
+      } else if (event.type === "error") {
+        hooks.onError(typeof event.message === "string" ? event.message : "The follow-up couldn't complete.");
+      }
+    });
+  } catch {
+    hooks.onError("Confirmation failed.");
+  } finally {
+    flush();
+  }
 }
 
 /**

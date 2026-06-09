@@ -28,6 +28,11 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("confirmPreview");
       return { ok: true };
     },
+    async confirmStream(_ref, onEvent) {
+      bump("confirmStream");
+      onEvent({ type: "receipt", receipt: { ok: true, action: "x" } });
+      onEvent({ type: "done" });
+    },
     async cancelPreview() {
       bump("cancelPreview");
       return { ok: true };
