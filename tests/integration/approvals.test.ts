@@ -40,6 +40,37 @@ describe("approval actions", () => {
     expect(fake.counts.submitApproval).toBe(1);
   });
 
+  it("normalizes a bare date periodStart to a full ISO UTC instant (the Clockify 400-format bug)", async () => {
+    const fake = createFakeWorkspace();
+    const preview = await executeAction({ actionName: "clockify_approvals_submit", args: { periodStart: "2026-06-01" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // Clockify rejects a bare date; the pinned payload must be a full ISO instant ending in Z.
+    const pinned = (preview.operation.payload as { periodStart: string }).periodStart;
+    expect(pinned).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+    expect(pinned).toBe("2026-06-01T00:00:00Z");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.state.approvals.at(-1)?.periodStart).toBe("2026-06-01T00:00:00Z");
+  });
+
+  it("resolves a relative week server-side from ctx.now so the model never guesses a date", async () => {
+    // NOW is Sat 2026-06-06; the Monday of this week is 2026-06-01.
+    const fake = createFakeWorkspace();
+    const thisWeek = await executeAction({ actionName: "clockify_approvals_submit", args: { week: "this_week" }, context: makeContext(fake) });
+    if (thisWeek.kind !== "preview") throw new Error("expected a preview");
+    expect((thisWeek.operation.payload as { periodStart: string }).periodStart).toBe("2026-06-01T00:00:00Z");
+
+    const lastWeek = await executeAction({ actionName: "clockify_approvals_submit", args: { week: "last_week" }, context: makeContext(fake) });
+    if (lastWeek.kind !== "preview") throw new Error("expected a preview");
+    expect((lastWeek.operation.payload as { periodStart: string }).periodStart).toBe("2026-05-25T00:00:00Z");
+  });
+
+  it("clarifies (not invalid_args) when neither a week nor a periodStart is given", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({ actionName: "clockify_approvals_submit", args: {}, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.submitApproval ?? 0).toBe(0);
+  });
+
   it("approve / reject preview external_side_effect then set state", async () => {
     const fake = createFakeWorkspace(seed());
     const approve = await executeAction({ actionName: "clockify_approvals_approve", args: { id: "ap1" }, context: makeContext(fake) });
