@@ -88,7 +88,18 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**565 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**578 tests**: type-check + Vitest + build).
+- **Undo the last reversible action (Phase 5b, 2026-06-09).** A successful action
+  that CREATED entities now carries a one-use `undo: { id }` handle (chat safe-write
+  + confirm commit paths); `POST /api/undo/:id` reverses it by deleting the created
+  entities (`src/harness/undo.ts` → `reverseCreation`, read from
+  `receipt.changed.created`, in REVERSE order: task→project→client). It re-checks
+  write policy BEFORE consuming the one-use record (a lowered policy denies without
+  burning it), then atomically claims (`markUndone`) and reverses; partial failure is
+  a warning. Deletes/field-updates are out of scope (can't un-delete; restoring a
+  field needs before-state we don't capture), and users/groups are deliberately NOT
+  reversible. Store: `undo_records` table. UI: an **Undo** button on reversible
+  receipts (flips to "Undone").
 - **Idempotent confirmed commits (Phase 5a, 2026-06-09).** Re-confirming the SAME
   intent (issuing "invoice qwen for 1000" three times, or confirming a re-issued
   preview) no longer creates duplicates (the empty-`qwen`-invoice problem).
@@ -101,9 +112,8 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
   of the same request still dedupe). Ledger is store-backed (`idempotency_keys` table,
   10-min window via `src/harness/idempotency.ts` + `src/routes/api.ts`); only
   SUCCESSFUL commits are recorded (a failed attempt stays retryable); ledger-gated so
-  every existing commit path is byte-identical without a ledger. **Deferred — undo
-  (Phase 5b):** reversing the last action (reversal map + before-state capture +
-  one-use undo route + UI affordance) is its own chunk.
+  every existing commit path is byte-identical without a ledger. (Undo of the last
+  action is **Phase 5b**, done — see above.)
 - **Atomic multi-step composition (Phase 3, 2026-06-09).** `src/harness/compose.ts`
   → `runComposition(steps)` is the **intent layer**: an ordered list of steps with
   transactional semantics in one place (so handlers + future curated actions don't
