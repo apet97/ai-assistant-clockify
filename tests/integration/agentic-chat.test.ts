@@ -459,6 +459,28 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(fake.counts.deleteTag).toBe(1);
   });
 
+  it("never persists a secret in the suspended transcript (agent_state_json tripwire)", async () => {
+    // The transcript is stored PLAINTEXT — safe only because it's provably
+    // secret-free (system prompt = policy only; receipts carry no token). This
+    // tripwire fails loudly if a future change ever leaks the install token or
+    // session secret into the persisted state.
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie, store } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+    const record = store.getPendingConfirmation(previews[0].previewId as string);
+    const serialized = JSON.stringify(record?.agentState ?? null);
+
+    expect(record?.agentState).toBeDefined(); // the turn really suspended
+    expect(serialized).not.toContain("addon-token"); // the install token
+    expect(serialized).not.toContain("test-session-secret"); // the session secret
+    expect(serialized).not.toContain("llm-key"); // the model API key
+  });
+
   it("keeps the committed receipt when the model fails during resume (commit is never lost)", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const failing: ModelClient = {
