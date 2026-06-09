@@ -20,8 +20,9 @@ export interface ArgMatcher {
 }
 
 export interface ExpectSpec {
-  /** Expected plan kind ("answer" | "actions" | "clarify"). */
-  kind?: ModelPlan["kind"];
+  /** Expected plan kind, or a set of acceptable kinds (answer|clarify are the same
+   *  user-facing "no action" outcome — tool mode can't emit a distinct "clarify"). */
+  kind?: ModelPlan["kind"] | ModelPlan["kind"][];
   /** Exactly this action name must appear among the proposed actions. */
   action?: string;
   /** At least one proposed action's name must be in this set. */
@@ -67,8 +68,11 @@ export function scoreCase(plan: ModelPlan, expect: ExpectSpec, ctx: ScoreContext
   const reasons: string[] = [];
   const actions = plan.actions ?? [];
 
-  if (expect.kind && plan.kind !== expect.kind) {
-    reasons.push(`kind: expected "${expect.kind}", got "${plan.kind}"`);
+  if (expect.kind) {
+    const allowed = Array.isArray(expect.kind) ? expect.kind : [expect.kind];
+    if (!allowed.includes(plan.kind)) {
+      reasons.push(`kind: expected "${allowed.join("|")}", got "${plan.kind}"`);
+    }
   }
 
   // Resolve which proposed action the arg matchers apply to.

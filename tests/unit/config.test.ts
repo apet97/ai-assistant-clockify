@@ -30,6 +30,12 @@ describe("loadConfig", () => {
     expect(cfg.llmModel).toBe("cheap-model");
   });
 
+  it("defaults llmMode to tool and honors LLM_MODE=json", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).llmMode).toBe("tool");
+    expect(loadConfig({ ...base, LLM_MODE: "json" }).llmMode).toBe("json");
+  });
+
   it("rejects production without data encryption key", () => {
     expect(() =>
       loadConfig({

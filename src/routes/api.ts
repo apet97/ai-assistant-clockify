@@ -174,6 +174,9 @@ export function apiRouter(deps: AppDeps): Router {
         messages,
         actionCatalog: catalogForModel(),
         policy,
+        // Native tool-calling by default (provider validates args); LLM_MODE=json
+        // forces the JSON + repair path. The harness re-validates either way.
+        useTools: deps.config.llmMode !== "json",
       });
     } catch {
       // A model/transport failure must never crash the server. Surface a calm,

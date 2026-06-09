@@ -19,6 +19,9 @@ export interface AppConfig {
   databasePath: string;
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
   llmProvider: "http" | "gemini-cli";
+  /** Planner mode: "tool" (native function-calling, default) or "json" (JSON + repair).
+   *  Tool mode only applies when the backend supports it (the http client does). */
+  llmMode?: "tool" | "json";
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;
@@ -40,6 +43,7 @@ const envSchema = z
     // (it uses the authenticated CLI), so these are optional here and enforced
     // below only for the http provider.
     LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
+    LLM_MODE: z.enum(["tool", "json"]).default("tool"),
     LLM_BASE_URL: z.string().min(1).optional(),
     LLM_API_KEY: z.string().min(1).optional(),
     LLM_MODEL: z.string().min(1).optional(),
@@ -79,6 +83,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
     databasePath: parsed.DATABASE_PATH,
     llmProvider: parsed.LLM_PROVIDER,
+    llmMode: parsed.LLM_MODE,
     llmBaseUrl: parsed.LLM_BASE_URL,
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,

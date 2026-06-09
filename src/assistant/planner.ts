@@ -1,8 +1,9 @@
 import { z } from "zod";
 import type { ActionCatalogEntry } from "../harness/action.js";
 import type { AdminPolicy } from "../harness/permissions.js";
-import type { ModelClient, ModelMessage } from "./model-client.js";
-import { buildRepairMessage, buildSystemPrompt } from "./prompts.js";
+import { toolsForModel } from "../harness/tools.js";
+import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.js";
+import { buildRepairMessage, buildSystemPrompt, buildToolSystemPrompt } from "./prompts.js";
 
 /**
  * Validated planning flow (SPEC "Chat Flow" steps 5–7). The model output must be
@@ -44,6 +45,10 @@ export interface PlanConversationInput {
   messages: ModelMessage[];
   actionCatalog: ActionCatalogEntry[];
   policy: AdminPolicy;
+  /** Prefer native tool-calling when the client supports it (default true). */
+  useTools?: boolean;
+  /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
+  tools?: ToolDefinition[];
 }
 
 type ParseResult =
@@ -70,6 +75,37 @@ function parsePlan(raw: string): ParseResult {
 }
 
 export async function planConversation(input: PlanConversationInput): Promise<ModelPlan> {
+  const canUseTools = typeof input.modelClient.completeWithTools === "function";
+  if ((input.useTools ?? true) && canUseTools) {
+    return planWithTools(input);
+  }
+  return planWithJson(input);
+}
+
+/**
+ * Native tool-calling path: the provider validates the model's arguments against
+ * each tool's JSON schema before they reach us. Tool calls map straight to
+ * proposed actions; a text-only reply is an answer/clarification. The harness
+ * still re-validates and gates every proposed action (Zod + risk/policy).
+ */
+async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
+  const system = buildToolSystemPrompt({ policy: input.policy });
+  const messages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
+  const tools = input.tools ?? toolsForModel();
+  const completion = await input.modelClient.completeWithTools!(messages, tools);
+
+  if (completion.toolCalls.length > 0) {
+    return {
+      kind: "actions",
+      text: completion.text ?? "",
+      actions: completion.toolCalls.map((call) => ({ name: call.name, arguments: call.arguments })),
+    };
+  }
+  return { kind: "answer", text: completion.text ?? "" };
+}
+
+/** Validated JSON-mode path (the original flow; one repair retry). */
+async function planWithJson(input: PlanConversationInput): Promise<ModelPlan> {
   const system = buildSystemPrompt({
     actionCatalog: input.actionCatalog,
     policy: input.policy,

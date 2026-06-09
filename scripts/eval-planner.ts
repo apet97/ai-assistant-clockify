@@ -34,12 +34,14 @@ interface Flags {
   only?: string;
   concurrency: number;
   /** A/B baseline: blank every action's arg signature so the model sees no arg
-   *  contract (≈ pre-1B). Isolates the effect of the arg signatures themselves. */
+   *  contract (≈ pre-1B). Only affects JSON mode (tool mode carries schemas). */
   noArgs: boolean;
+  /** Force the JSON + repair path instead of native tool-calling (Phase 2 A/B). */
+  jsonMode: boolean;
 }
 
 function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { repeat: 1, concurrency: 6, noArgs: false };
+  const flags: Flags = { repeat: 1, concurrency: 6, noArgs: false, jsonMode: false };
   for (const arg of argv) {
     const repeat = arg.match(/^--repeat=(\d+)$/);
     const only = arg.match(/^--only=(.+)$/);
@@ -48,6 +50,7 @@ function parseFlags(argv: string[]): Flags {
     else if (only) flags.only = only[1];
     else if (conc) flags.concurrency = Math.max(1, Number(conc[1]));
     else if (arg === "--no-args") flags.noArgs = true;
+    else if (arg === "--json-mode") flags.jsonMode = true;
   }
   return flags;
 }
@@ -157,10 +160,11 @@ async function main(): Promise<void> {
   const systemPrompt = buildSystemPrompt({ actionCatalog, policy });
   const promptTokensEst = Math.round(systemPrompt.length / 4);
 
+  const planMode = flags.jsonMode ? "json" : "tool-calling";
   console.log(
-    `Running planner eval: provider=${selection.llmProvider} model=${modelLabel} ` +
+    `Running planner eval: provider=${selection.llmProvider} model=${modelLabel} mode=${planMode} ` +
       `cases=${cases.length} repeat=${flags.repeat} concurrency=${flags.concurrency}` +
-      `${flags.noArgs ? " [--no-args BASELINE: arg contract OFF]" : " [arg contract ON]"}`,
+      `${flags.jsonMode && flags.noArgs ? " [--no-args: arg contract OFF]" : ""}`,
   );
   console.log(`System prompt: ${systemPrompt.length} chars (~${promptTokensEst} tokens)\n`);
 
@@ -173,7 +177,7 @@ async function main(): Promise<void> {
     const messages = [...(c.history ?? []), { role: "user" as const, content: c.message }];
     let plan: ModelPlan;
     try {
-      plan = await planConversation({ modelClient, messages, actionCatalog, policy });
+      plan = await planConversation({ modelClient, messages, actionCatalog, policy, useTools: !flags.jsonMode });
     } catch (err) {
       plan = { kind: "clarify", text: `eval-error: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -253,7 +257,8 @@ async function main(): Promise<void> {
         timestamp: new Date().toISOString(),
         provider: selection.llmProvider,
         model: modelLabel,
-        argContract: flags.noArgs ? "off" : "on",
+        planMode,
+        argContract: flags.jsonMode && flags.noArgs ? "off" : "on",
         repeat: flags.repeat,
         only: flags.only ?? null,
         systemPromptChars: systemPrompt.length,

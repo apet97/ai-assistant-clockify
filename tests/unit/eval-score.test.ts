@@ -38,6 +38,15 @@ describe("scoreCase", () => {
     expect(scoreCase(answer, { kind: "clarify" }).pass).toBe(false);
   });
 
+  it("accepts a set of kinds (answer|clarify are equivalent no-action outcomes)", () => {
+    const answer: ModelPlan = { kind: "answer", text: "Which client?" };
+    const clarify: ModelPlan = { kind: "clarify", text: "Which client?" };
+    const actions = actionsPlan([{ name: "clockify_invoices_create" }]);
+    expect(scoreCase(answer, { kind: ["answer", "clarify"] }).pass).toBe(true);
+    expect(scoreCase(clarify, { kind: ["answer", "clarify"] }).pass).toBe(true);
+    expect(scoreCase(actions, { kind: ["answer", "clarify"] }).pass).toBe(false);
+  });
+
   it("checks that required arg keys are present on the matched action", () => {
     const plan = actionsPlan([{ name: "clockify_invoices_create", arguments: { clientName: "qwen" } }]);
     expect(scoreCase(plan, { action: "clockify_invoices_create", args: { present: ["clientName"] } }).pass).toBe(true);
