@@ -50,6 +50,29 @@ body {
   font-size: 13px;
 }
 
+/* The "Assistant is working…" live-region status (responsiveness + a11y). */
+.status {
+  padding: 6px 10px;
+  font-size: 13px;
+  font-style: italic;
+  color: #9ca3af;
+}
+
+/* A clearly visible keyboard-focus indicator (WCAG 2.4.7). */
+:focus-visible {
+  outline: 2px solid #60a5fa;
+  outline-offset: 2px;
+}
+
+/* Honor users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .permission-panel {
   display: flex;
   flex-direction: column;

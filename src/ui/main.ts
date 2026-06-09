@@ -57,6 +57,66 @@ export function featureGroupRows(policy: PolicyShape): Array<{ group: string; le
   return Object.entries(policy.groups).map(([group, level]) => ({ group, level }));
 }
 
+// ---------------------------------------------------------------------------
+// Chat response shapes + the responsive send flow (testable core).
+// ---------------------------------------------------------------------------
+
+export interface PreviewResult {
+  kind: "preview";
+  previewId: string;
+  nonce: string;
+  preview: { actionLabel: string; expectedChanges: string[]; reversibility: string; warnings: string[] };
+}
+export interface ReceiptResult {
+  kind: "receipt";
+  receipt: { ok: boolean; action: string; message?: string; changed?: unknown; warnings?: Array<{ code?: string; message: string }> };
+  /** Present when the action can be reversed (a one-use undo handle). */
+  undo?: { id: string };
+}
+export interface ClarifyResult {
+  kind: "clarify";
+  message: string;
+  options?: Array<{ id: string; label: string }>;
+}
+export type ChatResult = PreviewResult | ReceiptResult | ClarifyResult;
+export interface ChatResponse {
+  ok: boolean;
+  reply: { kind: string; text: string };
+  results: ChatResult[];
+}
+
+/** Minimal API surface the send flow needs (so it's trivial to test). */
+export interface ChatApiLike {
+  sendMessage(message: string): Promise<unknown>;
+}
+
+/**
+ * Hooks the DOM (or a test) plugs into the send flow. `onWorking(true)` fires
+ * BEFORE the request so the UI can announce "Assistant is working…" immediately
+ * (responsiveness) and is ALWAYS cleared afterward (even on error). The assistant
+ * bubble is only appended when the (truthful) reply text is non-empty — in
+ * tool-mode the model often returns no text, and the results speak for themselves.
+ */
+export interface ComposerHooks {
+  onWorking(working: boolean): void;
+  onAssistant(text: string): void;
+  onResults(results: ChatResult[]): void;
+  onError(message: string): void;
+}
+
+export async function submitMessage(api: ChatApiLike, message: string, hooks: ComposerHooks): Promise<void> {
+  hooks.onWorking(true);
+  try {
+    const response = (await api.sendMessage(message)) as ChatResponse;
+    if (response.reply?.text) hooks.onAssistant(response.reply.text);
+    hooks.onResults(response.results ?? []);
+  } catch {
+    hooks.onError("Message failed to send.");
+  } finally {
+    hooks.onWorking(false);
+  }
+}
+
 /** Real fetch-backed API client (same-origin; the session cookie authenticates). */
 export function createFetchApi(): ChatApi {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
@@ -98,40 +158,6 @@ interface PermissionsResponse {
   policy: PolicyShape;
   firstRun: boolean;
 }
-interface PreviewResult {
-  kind: "preview";
-  previewId: string;
-  nonce: string;
-  preview: {
-    actionLabel: string;
-    expectedChanges: string[];
-    reversibility: string;
-    warnings: string[];
-  };
-}
-interface ReceiptResult {
-  kind: "receipt";
-  receipt: {
-    ok: boolean;
-    action: string;
-    message?: string;
-    changed?: unknown;
-    warnings?: Array<{ code?: string; message: string }>;
-  };
-  /** Present when the action can be reversed (a one-use undo handle). */
-  undo?: { id: string };
-}
-interface ClarifyResult {
-  kind: "clarify";
-  message: string;
-  options?: Array<{ id: string; label: string }>;
-}
-type ChatResult = PreviewResult | ReceiptResult | ClarifyResult;
-interface ChatResponse {
-  ok: boolean;
-  reply: { kind: string; text: string };
-  results: ChatResult[];
-}
 
 function el(tag: string, className?: string, text?: string): HTMLElement {
   const node = document.createElement(tag);
@@ -143,13 +169,28 @@ function el(tag: string, className?: string, text?: string): HTMLElement {
 function mount(root: HTMLElement, api: ChatApi): void {
   const controller = createController(api);
   root.replaceChildren();
-  root.appendChild(el("header", "app-header", "AI Assistant"));
+  const header = el("header", "app-header");
+  header.appendChild(el("h1", undefined, "AI Assistant"));
+  root.appendChild(header);
 
   const setup = el("section", "setup hidden");
+  setup.setAttribute("aria-label", "Set up assistant permissions");
   const chat = el("section", "chat hidden");
+  chat.setAttribute("aria-label", "Assistant chat");
+  // The message log is a live region so a screen reader announces new turns.
   const messages = el("div", "messages");
+  messages.setAttribute("role", "log");
+  messages.setAttribute("aria-live", "polite");
+  messages.setAttribute("aria-relevant", "additions");
+  messages.setAttribute("aria-label", "Conversation");
+  // Errors are assertive; the working status is polite (announced as it changes).
   const errorBar = el("div", "error hidden");
+  errorBar.setAttribute("role", "alert");
+  const statusBar = el("div", "status hidden");
+  statusBar.setAttribute("role", "status");
+  statusBar.setAttribute("aria-live", "polite");
   root.appendChild(errorBar);
+  root.appendChild(statusBar);
   root.appendChild(setup);
   root.appendChild(chat);
 
@@ -158,7 +199,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
     errorBar.classList.remove("hidden");
   }
   function clearError(): void {
+    errorBar.textContent = "";
     errorBar.classList.add("hidden");
+  }
+  function setWorking(working: boolean): void {
+    statusBar.textContent = working ? "Assistant is working…" : "";
+    statusBar.classList.toggle("hidden", !working);
   }
 
   function appendMessage(role: string, text: string): void {
@@ -171,12 +217,15 @@ function mount(root: HTMLElement, api: ChatApi): void {
     onSave: (groups: Record<string, string>) => void,
   ): HTMLElement {
     const table = el("table", "permissions");
+    table.setAttribute("aria-label", "Assistant permissions by feature group");
     const selections: Record<string, string> = {};
     for (const { group, level } of featureGroupRows(policy)) {
       selections[group] = level;
       const row = el("tr");
       row.appendChild(el("td", "group", group));
       const select = document.createElement("select");
+      // Each control names its own group so a screen reader reads them in context.
+      select.setAttribute("aria-label", `Permission level for ${group}`);
       for (const option of PERMISSION_LEVELS) {
         const opt = document.createElement("option");
         opt.value = option;
@@ -207,6 +256,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
     // present a partial result as a clean success.
     const status = result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
     const card = el("div", `receipt ${result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", `${status}: ${result.receipt.action}`);
     card.appendChild(el("strong", undefined, status));
     card.appendChild(el("span", "action", result.receipt.action));
     // Surface warnings inline (not buried in Details) so the user sees them.
@@ -215,6 +266,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     if (result.receipt.ok && result.undo) {
       const undoId = result.undo.id;
       const undoButton = el("button", "link undo", "Undo") as HTMLButtonElement;
+      undoButton.setAttribute("aria-label", `Undo ${result.receipt.action}`);
       undoButton.addEventListener("click", async () => {
         undoButton.disabled = true;
         try {
@@ -236,7 +288,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
     }
     const details = el("pre", "details hidden", JSON.stringify(result.receipt, null, 2));
     const toggle = el("button", "link", "Details") as HTMLButtonElement;
-    toggle.addEventListener("click", () => details.classList.toggle("hidden"));
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.addEventListener("click", () => {
+      const open = details.classList.toggle("hidden") === false;
+      toggle.setAttribute("aria-expanded", String(open));
+    });
     card.appendChild(toggle);
     card.appendChild(details);
     return card;
@@ -245,6 +301,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
   function renderPreview(previews: PreviewResult[]): HTMLElement {
     const batch = previews.length > 1;
     const card = el("div", "preview-card");
+    card.setAttribute("role", "group");
+    card.setAttribute("aria-label", batch ? `${previews.length} changes awaiting confirmation` : "Change awaiting confirmation");
     for (const preview of previews) {
       const block = el("div", "preview");
       block.appendChild(el("strong", undefined, preview.preview.actionLabel));
@@ -297,29 +355,40 @@ function mount(root: HTMLElement, api: ChatApi): void {
     chat.replaceChildren();
     chat.appendChild(messages);
     const form = el("form", "composer") as HTMLFormElement;
+    form.setAttribute("aria-label", "Send a message to the assistant");
     const input = el("input", "composer-input") as HTMLInputElement;
     input.placeholder = "Ask the assistant…";
+    input.setAttribute("aria-label", "Message");
     const send = el("button", "primary", "Send") as HTMLButtonElement;
+    send.type = "submit";
     form.appendChild(input);
     form.appendChild(send);
+    let busy = false;
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
+      if (busy) return; // a one-at-a-time guard (Enter while working can't double-submit)
       const text = input.value.trim();
       if (!text) return;
       // Typed text always goes to chat — never to a confirmation endpoint.
       appendMessage("user", text);
       input.value = "";
       clearError();
-      try {
-        const response = (await controller.send(text)) as ChatResponse;
-        if (response.reply?.text) appendMessage("assistant", response.reply.text);
-        renderResults(response.results ?? []);
-      } catch {
-        showError("Message failed to send.");
-      }
+      await submitMessage(api, text, {
+        onWorking: (working) => {
+          busy = working;
+          setWorking(working); // announces "Assistant is working…" to screen readers
+          send.disabled = working;
+          form.setAttribute("aria-busy", String(working));
+          if (!working) input.focus(); // return focus to the composer after the turn
+        },
+        onAssistant: (assistantText) => appendMessage("assistant", assistantText),
+        onResults: (results) => renderResults(results),
+        onError: (message) => showError(message),
+      });
     });
     chat.appendChild(form);
     chat.classList.remove("hidden");
+    input.focus();
   }
 
   async function init(): Promise<void> {
