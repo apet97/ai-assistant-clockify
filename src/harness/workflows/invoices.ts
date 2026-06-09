@@ -217,7 +217,7 @@ const createInvoice = defineAction({
     };
 
     // Build the line items (amounts converted to minor units now, so commit never
-    // re-derives them). itemType defaults to MANUAL ("add an item manually").
+    // re-derives them). itemType defaults to "NEW DEFAULT".
     const items = (args.items ?? []).map((it) => ({
       itemType: it.itemType ?? "NEW DEFAULT",
       ...(it.description !== undefined ? { description: it.description } : {}),
