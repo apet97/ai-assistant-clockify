@@ -88,7 +88,7 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**517 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**524 tests**: type-check + Vitest + build).
 - **Planner eval harness + arg contract in the prompt (Phase 1, 2026-06-09).**
   Quality is now a number. `scripts/eval-planner.ts` drives the **real planner**
   (planning only, no Clockify writes) over a tagged corpus (`scripts/eval/cases.ts`,
@@ -247,9 +247,15 @@ LLM** — they are architecture/platform issues:
 - **Models narrate false completion.** Every backend tried (deepseek-v4-pro, gemini-cli)
   sometimes says "Done/Confirmed" for a pending risky preview. The route now overrides
   this deterministically (truthful previews) — the right fix, model-agnostic.
-- **Smaller open edges:** `clockify_log_work` can `invalid_args` when the planner omits
-  the required `start` (candidate: default/parse it); tag *rename* sometimes lists instead
-  of updating; `webhooks_list`/`workspace_get` 401 on the dev host (likely dev-only).
+- **Smaller open edges:** ~~`clockify_log_work` can `invalid_args` when the planner omits
+  the required `start`~~ **FIXED (2026-06-09):** `log_work` now takes a duration
+  (`durationHours`/`durationMinutes`) + a **relative** day (`date: today/yesterday`/`dayOffset`)
+  and the harness anchors start/end server-side (`ctx.now` does the date math — the model
+  doesn't know the calendar date); fired ~33%→75% (repeat=8). `assistant_update_permissions`
+  now advertises its levels + phrasings so "give me full access to reports" maps to it
+  (0%→37.5%; a fuller fix is the curated-action layer, Phase 6). Still open: tag *rename*
+  sometimes lists instead of updating; `webhooks_list`/`workspace_get` 401 on the dev host
+  (likely dev-only).
 - **Model choice:** not the bottleneck. `deepseek-v4-pro` (current) and the `gemini-cli`
   backend behave similarly on the above; a swap won't change the schema-guessing or the
   invoice-item-type limits. Switch backends via `LLM_PROVIDER` (see above) only for
