@@ -88,7 +88,22 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**559 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**565 tests**: type-check + Vitest + build).
+- **Idempotent confirmed commits (Phase 5a, 2026-06-09).** Re-confirming the SAME
+  intent (issuing "invoice qwen for 1000" three times, or confirming a re-issued
+  preview) no longer creates duplicates (the empty-`qwen`-invoice problem).
+  `commitConfirmedOperation` (the single choke point for every risky commit, single
+  + batch) looks up a workspace/admin/action-scoped **intent hash** after the policy
+  gate and returns the prior receipt (annotated `idempotent_replay`) instead of
+  mutating. Opt-in per action: `ActionDefinition.idempotencyKey(operation)` returns
+  the SEMANTIC identity; `clockify_invoices_create` uses client + items + currency +
+  notes, **excluding** the auto-generated number/issuedDate/dueDate (so two previews
+  of the same request still dedupe). Ledger is store-backed (`idempotency_keys` table,
+  10-min window via `src/harness/idempotency.ts` + `src/routes/api.ts`); only
+  SUCCESSFUL commits are recorded (a failed attempt stays retryable); ledger-gated so
+  every existing commit path is byte-identical without a ledger. **Deferred — undo
+  (Phase 5b):** reversing the last action (reversal map + before-state capture +
+  one-use undo route + UI affordance) is its own chunk.
 - **Atomic multi-step composition (Phase 3, 2026-06-09).** `src/harness/compose.ts`
   → `runComposition(steps)` is the **intent layer**: an ordered list of steps with
   transactional semantics in one place (so handlers + future curated actions don't
