@@ -153,9 +153,18 @@ export interface Store {
   listActionOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): ActionOutcome[];
   listConfirmationOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
 
+  close(): void;
+}
+
+/**
+ * Test-only extension of {@link Store}. The concrete object returned by
+ * `createStore` implements these too, but they are intentionally absent from
+ * the production-facing `Store` interface so that only tests reach for them.
+ * Cast a `createStore(...)` result to `TestStore` when an assertion needs them.
+ */
+export interface TestStore extends Store {
   tables(): string[];
   rawAddonTokenForTest(workspaceId: string): string | undefined;
-  close(): void;
 }
 
 interface InstallationRow {
@@ -202,7 +211,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const openToken = (value: string): string =>
     encryptionKey ? decryptSecret(value, encryptionKey) : value;
 
-  return {
+  // Built as TestStore (the concrete object implements the test-only methods),
+  // returned as the narrower Store so production callers never see them.
+  const store: TestStore = {
     getAdminPolicy(workspaceId, adminUserId) {
       const row = db
         .prepare(
@@ -600,4 +611,6 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       db.close();
     },
   };
+
+  return store;
 }

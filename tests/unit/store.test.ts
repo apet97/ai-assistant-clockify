@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
-import { createStore } from "../../src/db/store.js";
+import { createStore, type TestStore } from "../../src/db/store.js";
 import {
   FEATURE_GROUPS,
   adminPolicySchema,
@@ -25,7 +25,7 @@ afterEach(() => {
 
 describe("store", () => {
   it("creates schema", () => {
-    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY }) as TestStore;
     const tables = store.tables();
     for (const t of [
       "installations",
@@ -70,7 +70,7 @@ describe("store", () => {
   });
 
   it("upserts and loads installation, encrypting the token at rest", () => {
-    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY }) as TestStore;
     store.saveInstallation({
       workspaceId: "ws-1",
       addonId: "addon-1",
