@@ -117,6 +117,19 @@ describe("time-entry rest", () => {
     expect(putBody.start).toBe("2026-06-01T00:00:00Z");
     expect(putBody.description).toBe("fixed");
     expect(putBody.projectId).toBe("p1"); // preserved
+    expect(putBody.billable).toBe(true); // preserved when not provided
+  });
+
+  it("updateTimeEntry can flip billable (caller value wins over the preserved one)", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "e1", billable: false, timeInterval: { start: "2026-06-01T00:00:00Z" } })
+        : jsonResponse({ id: "e1", billable: true, timeInterval: { start: "2026-06-01T00:00:00Z" } }),
+    );
+    const updated = await rest(f as unknown as typeof fetch).updateTimeEntry({ id: "e1", billable: true });
+    expect(updated.billable).toBe(true);
+    const putBody = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(putBody.billable).toBe(true);
   });
 
   it("markEntriesInvoiced PATCHes /time-entries/invoiced with timeEntryIds + invoiced", async () => {

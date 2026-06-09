@@ -206,15 +206,27 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.updateEntity).toBe(1);
   });
 
-  it("update_entity routes role/billing changes to high_risk and previews", async () => {
+  it("update_entity CLARIFIES at preview for entity types its adapter can't update — never preview-then-fail-at-commit (live: a confirmed time_entry update died with 'update not supported')", async () => {
+    const fake = createFakeWorkspace({ entries: [{ id: "e1", start: "2026-06-01T09:00:00Z" }] });
+    const result = await executeAction({
+      actionName: "clockify_update_entity",
+      args: { entityType: "time_entry", id: "e1", fields: { billable: true } },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("clockify_fix_entry");
+    expect(fake.counts.updateEntity ?? 0).toBe(0);
+  });
+
+  it("update_entity redirects a user-role change to the typed role action at preview (the generic commit never supported users)", async () => {
     const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Ada" }] });
-    const preview = await executeAction({
+    const result = await executeAction({
       actionName: "clockify_update_entity",
       args: { entityType: "user", id: "u1", fields: { role: "ADMIN" } },
       context: makeContext(fake),
     });
-    if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(preview.operation.featureGroup).toBe("users_groups");
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("clockify_users_role_update");
     expect(fake.counts.updateEntity ?? 0).toBe(0);
   });
 

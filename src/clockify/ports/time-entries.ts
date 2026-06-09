@@ -31,6 +31,7 @@ export interface TimeEntryPort {
     projectId?: string;
     taskId?: string;
     tagIds?: string[];
+    billable?: boolean;
   }): Promise<TimeEntrySummary>;
   /** Bulk mark/unmark entries as invoiced (billing — PATCH /time-entries/invoiced). */
   markEntriesInvoiced(input: { ids: string[]; invoiced: boolean }): Promise<void>;

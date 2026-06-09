@@ -302,6 +302,20 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     expect(fake.counts.updateTimeEntry).toBe(1);
   });
 
+  it("fix_entry can flip an entry's billable flag (live ask: 'update the billability' had no supported path)", async () => {
+    const fake = createFakeWorkspace({
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work", billable: false }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", billable: true },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) throw new Error("expected success");
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.billable).toBe(true);
+  });
+
   it("fix_entry is blocked when time_tracking is read-only", async () => {
     const fake = createFakeWorkspace({ entries: [{ id: "e1", start: "x", description: "old" }] });
     const policy = defaultAdminPolicy();

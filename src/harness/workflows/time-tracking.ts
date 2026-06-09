@@ -307,7 +307,8 @@ const reviewWeek = defineAction({
 
 const fixEntry = defineAction({
   name: "clockify_fix_entry",
-  description: "Update fields of a known time entry (description, project, task, tags). Safe — the entry id is already resolved.",
+  description:
+    "Update fields of a known time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Safe — the entry id is already resolved.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z
@@ -317,13 +318,15 @@ const fixEntry = defineAction({
       projectId: z.string().optional(),
       taskId: z.string().optional(),
       tagIds: z.array(z.string()).optional(),
+      billable: z.boolean().optional(),
     })
     .refine(
       (v) =>
         v.description !== undefined ||
         v.projectId !== undefined ||
         v.taskId !== undefined ||
-        v.tagIds !== undefined,
+        v.tagIds !== undefined ||
+        v.billable !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async handler(ctx, args) {
@@ -333,6 +336,7 @@ const fixEntry = defineAction({
       projectId: args.projectId,
       taskId: args.taskId,
       tagIds: args.tagIds,
+      billable: args.billable,
     });
     return {
       kind: "receipt",

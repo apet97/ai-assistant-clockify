@@ -146,10 +146,28 @@ const updatePermissions = defineRiskyAction({
   },
 });
 
+/**
+ * Entity types the generic update can actually write — mirrors the adapter's
+ * `updateEntity` path table. Every OTHER type has a typed per-area action; the
+ * preview redirects there instead of letting a doomed operation reach the
+ * Confirm button (live: a confirmed time_entry update died at commit with
+ * "update not supported" — a previewed action must never fail that way).
+ */
+const GENERIC_UPDATE_TYPES = new Set(["project", "client", "tag"]);
+const TYPED_UPDATE_ACTION: Partial<Record<(typeof DELETABLE_ENTITY_TYPES)[number], string>> = {
+  task: "clockify_tasks_update",
+  time_entry: "clockify_fix_entry (supports description/project/task/tags/billable)",
+  invoice: "clockify_invoices_update",
+  expense: "clockify_expenses_update",
+  webhook: "clockify_webhooks_update",
+  user: "clockify_users_role_update (role) or clockify_users_deactivate",
+  group: "clockify_groups_update",
+};
+
 const updateEntity = defineRiskyAction({
   name: "clockify_update_entity",
   description:
-    "Update an entity's fields (rename, reassign, change role/billing). Elevated write — always previews and requires confirmation.",
+    "Update simple fields of a project, client, or tag (rename etc.). For every other type use its typed action instead (tasks_update, fix_entry for time entries, invoices_update, expenses_update, webhooks_update, users_role_update, groups_update). Elevated write — always previews and requires confirmation.",
   group: "work_structure",
   risks: ["high_risk_write"],
   schema: z.object({
@@ -160,6 +178,12 @@ const updateEntity = defineRiskyAction({
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
   async preview(_ctx, args) {
+    if (!GENERIC_UPDATE_TYPES.has(args.entityType)) {
+      const typed = TYPED_UPDATE_ACTION[args.entityType];
+      return {
+        clarify: `The generic update can't change a ${args.entityType} — use ${typed ?? "the matching typed action"} instead.`,
+      };
+    }
     const fields = { ...(args.name ? { name: args.name } : {}), ...(args.fields ?? {}) };
     return {
       actionLabel: `Update ${args.entityType}`,

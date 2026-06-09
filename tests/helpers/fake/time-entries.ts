@@ -73,7 +73,7 @@ export function makeFakeTimeEntries({ state, bump, nextId }: FakeContext): Pick<
       bump("markEntriesInvoiced");
       void input;
     },
-    async updateTimeEntry({ id, description, projectId, taskId, tagIds }) {
+    async updateTimeEntry({ id, description, projectId, taskId, tagIds, billable }) {
       bump("updateTimeEntry");
       const index = state.timeEntries.findIndex((e) => e.id === id);
       const base: TimeEntrySummary =
@@ -84,6 +84,7 @@ export function makeFakeTimeEntries({ state, bump, nextId }: FakeContext): Pick<
         projectId: projectId ?? base.projectId,
         taskId: taskId ?? base.taskId,
         tagIds: tagIds ?? base.tagIds,
+        billable: billable ?? base.billable,
       };
       if (index >= 0) state.timeEntries[index] = updated;
       else state.timeEntries.push(updated);

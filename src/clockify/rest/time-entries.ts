@@ -96,7 +96,7 @@ export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntr
       )) as ClockifyTimeEntry | null;
       return e ? mapEntry(e) : null;
     },
-    async updateTimeEntry({ id, description, projectId, taskId, tagIds }) {
+    async updateTimeEntry({ id, description, projectId, taskId, tagIds, billable }) {
       // Clockify's PUT /time-entries/{id} REPLACES the entry and REQUIRES `start`;
       // a sparse body 400s. GET the current entry, flatten timeInterval to the
       // top-level shape PUT expects, merge the caller's fields, then PUT.
@@ -108,7 +108,7 @@ export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntr
         projectId: projectId ?? current.projectId,
         taskId: taskId ?? current.taskId,
         tagIds: tagIds ?? current.tagIds,
-        billable: current.billable,
+        billable: billable ?? current.billable,
       };
       const e = (await core.call("api", "PUT", `${ws}/time-entries/${id}`, body)) as ClockifyTimeEntry;
       return mapEntry(e);
