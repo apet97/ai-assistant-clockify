@@ -32,11 +32,11 @@ export function makeFakeApprovals({ state, bump, nextId }: FakeContext): Pick<
       if (a) a.state = st;
       return { id, name: st };
     },
-    async resubmitApproval(id, entryIds, note) {
+    async resubmitApproval(input) {
       bump("resubmitApproval");
-      void entryIds;
-      void note;
-      return { id, name: "resubmitted" };
+      const a = state.approvals.find((x) => x.periodStart === input.periodStart);
+      if (a) a.state = "PENDING";
+      return { id: a?.id ?? "approval", name: "resubmitted" };
     },
   };
 }

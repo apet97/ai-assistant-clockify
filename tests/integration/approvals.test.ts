@@ -96,9 +96,12 @@ describe("approval actions", () => {
     await commitConfirmedOperation(makeContext(fake), withdraw.operation);
     expect(fake.counts.setApprovalState).toBe(1);
 
-    const resubmit = await executeAction({ actionName: "clockify_approvals_resubmit", args: { id: "ap1", entryIds: ["e1"] }, context: makeContext(fake) });
+    const resubmit = await executeAction({ actionName: "clockify_approvals_resubmit", args: { week: "this_week" }, context: makeContext(fake) });
     if (resubmit.kind !== "preview") throw new Error("expected a preview");
     expect(resubmit.operation.risks).toEqual(expect.arrayContaining(["bulk", "external_side_effect"]));
+    // the wire payload is the same {period, periodStart} body as submit
+    expect(resubmit.operation.payload).toMatchObject({ period: "WEEKLY" });
+    expect((resubmit.operation.payload as { periodStart: string }).periodStart).toMatch(/T00:00:00Z$/);
     const receipt = await commitConfirmedOperation(makeContext(fake), resubmit.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.resubmitApproval).toBe(1);

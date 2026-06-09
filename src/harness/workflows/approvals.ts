@@ -158,23 +158,44 @@ const withdraw = defineRiskyAction({
 
 const resubmit = defineRiskyAction({
   name: "clockify_approvals_resubmit",
-  description: "Resubmit time entries for an active approval period. Bulk external side effect — previews and requires confirmation.",
+  description:
+    "Resubmit the caller's rejected/withdrawn entries for ONE approval period. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` date (YYYY-MM-DD) — do NOT guess a calendar date. Bulk external side effect — previews and requires confirmation.",
   group: AP,
   risks: ["bulk", "external_side_effect"],
-  schema: z.object({ id: z.string().min(1), entryIds: z.array(z.string().min(1)).min(1), note: z.string().optional() }),
-  async preview(_ctx, args) {
+  // The real endpoint takes the same {period, periodStart} body as submit (the
+  // old {id, entryIds} shape never existed upstream — spec + goclmcp).
+  schema: z.object({
+    period: z.string().default("WEEKLY"),
+    /** Relative week — the harness resolves the period start server-side from `now`. */
+    week: z.enum(["this_week", "last_week"]).optional(),
+    /** Explicit period start (date or instant); normalized to the ISO UTC instant Clockify requires. */
+    periodStart: z.string().min(1).optional(),
+  }),
+  async preview(ctx, args) {
+    const now = (ctx.now ?? (() => new Date()))();
+    const periodStart = args.week
+      ? weekStartInstant(now, args.week)
+      : args.periodStart
+        ? normalizeInstant(args.periodStart)
+        : undefined;
+    if (!periodStart) {
+      return {
+        clarify:
+          'Which period should I resubmit? Tell me a week ("this week" or "last week") or a start date like 2026-06-01. I resubmit one period per request.',
+      };
+    }
     return {
       actionLabel: "Resubmit entries for approval",
-      targets: [{ type: "approval", id: args.id }],
-      expectedChanges: [`Resubmit ${args.entryIds.length} entries for approval ${args.id}`],
+      targets: [],
+      expectedChanges: [`Resubmit ${args.period} entries starting ${periodStart} for approval`],
       reversibility: "You can withdraw afterward.",
       warnings: ["This resubmits entries and notifies approvers."],
-      payload: { id: args.id, entryIds: args.entryIds, note: args.note },
+      payload: { period: args.period, periodStart },
     };
   },
   async commit(ctx, payload) {
-    const { id, entryIds, note } = payload as { id: string; entryIds: string[]; note?: string };
-    const result = await ctx.clockify.resubmitApproval(id, entryIds, note);
+    const typed = payload as { period: string; periodStart: string };
+    const result = await ctx.clockify.resubmitApproval(typed);
     return successReceipt({ action: "clockify_approvals_resubmit", entity: "approval", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "approval", id: result.id }] } });
   },
 });

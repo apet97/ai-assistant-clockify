@@ -783,7 +783,7 @@ async function runApprovals(h: LiveHarness): Promise<void> {
   await h.previewOnly("clockify_approvals_approve", { id: "smoke-approval" });
   await h.previewOnly("clockify_approvals_reject", { id: "smoke-approval", note: "smoke" });
   await h.previewOnly("clockify_approvals_withdraw", { id: "smoke-approval" });
-  await h.previewOnly("clockify_approvals_resubmit", { id: "smoke-approval", entryIds: ["smoke-entry"] });
+  await h.previewOnly("clockify_approvals_resubmit", { week: "this_week" });
 }
 AREA_RUNNERS.push(runApprovals);
 
