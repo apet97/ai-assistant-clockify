@@ -85,6 +85,17 @@ export const SCHEMA_STATEMENTS: string[] = [
     receipt_json TEXT NOT NULL,
     committed_at INTEGER NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS undo_records (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    action_name TEXT NOT NULL,
+    reversal_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('available', 'undone')),
+    created_at TEXT NOT NULL,
+    undone_at TEXT
+  )`,
 ];
 
 export function migrate(db: Database.Database): void {

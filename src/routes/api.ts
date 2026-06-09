@@ -6,6 +6,7 @@ import {
 } from "../harness/actions.js";
 import type { ActionContext, ConfirmableOperation } from "../harness/action.js";
 import type { IdempotencyLedger } from "../harness/idempotency.js";
+import { reverseCreation, reversibleCreations, firstDeniedGroup } from "../harness/undo.js";
 import { catalogForModel, getAction } from "../harness/catalog.js";
 import {
   FEATURE_GROUPS,
@@ -20,7 +21,7 @@ import {
   confirmPending,
   createPendingConfirmation,
 } from "../harness/confirmations.js";
-import { errorReceipt, successReceipt } from "../harness/receipts.js";
+import { errorReceipt, successReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import type { ModelMessage } from "../assistant/model-client.js";
 import { planConversation } from "../assistant/planner.js";
 import type { Installation } from "../db/store.js";
@@ -71,6 +72,23 @@ export function apiRouter(deps: AppDeps): Router {
       clockify: deps.clockifyForWorkspace(installation),
       now,
     };
+  }
+
+  /** Record a one-use undo for a successful reversible creation; return its id. */
+  function recordUndoIfReversible(
+    claims: { sessionId: string; workspaceId: string; adminUserId: string },
+    receipt: SuccessReceipt | ErrorReceipt,
+  ): string | undefined {
+    if (!receipt.ok) return undefined;
+    const reversal = reversibleCreations(receipt);
+    if (reversal.length === 0) return undefined;
+    return deps.store.recordUndoable({
+      sessionId: claims.sessionId,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      actionName: receipt.action,
+      reversal,
+    });
   }
 
   router.get("/me", (req, res) => {
@@ -237,7 +255,8 @@ export function apiRouter(deps: AppDeps): Router {
             risk: getAction(proposed.name)?.risks ?? [],
             receipt: outcome.receipt,
           });
-          results.push({ kind: "receipt", receipt: outcome.receipt });
+          const undoId = recordUndoIfReversible(claims, outcome.receipt);
+          results.push({ kind: "receipt", receipt: outcome.receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
         } else if (outcome.kind === "clarify") {
           results.push({ kind: "clarify", message: outcome.message, options: outcome.options });
         } else {
@@ -377,6 +396,56 @@ export function apiRouter(deps: AppDeps): Router {
       sessionId: claims.sessionId,
       actionName: operation.actionName,
       risk: operation.risks,
+      receipt,
+    });
+    const undoId = recordUndoIfReversible(claims, receipt);
+    return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
+  });
+
+  // Undo the last reversible action (Phase 5b): delete the entities it created.
+  router.post("/undo/:id", async (req, res) => {
+    const claims = requireSession(req, res);
+    if (!claims) return;
+
+    const record = deps.store.getUndoRecord(req.params.id);
+    if (!record || record.workspaceId !== claims.workspaceId || record.adminUserId !== claims.adminUserId) {
+      return res.status(404).json({ ok: false, code: "not_found", message: "No such undoable action." });
+    }
+    if (record.status !== "available") {
+      return res.status(409).json({ ok: false, code: "already_undone", message: "This action was already undone." });
+    }
+
+    // Re-check write policy BEFORE consuming the one-use record, so a lowered policy
+    // denies cleanly without burning it (reverseCreation re-checks as defense in depth).
+    const denied = firstDeniedGroup(loadPolicy(claims.workspaceId, claims.adminUserId), record.reversal);
+    if (denied) {
+      return res.status(400).json({
+        ok: false,
+        code: "policy_denied",
+        message: `Undo needs write access to ${denied}, which is disabled in your assistant permissions.`,
+      });
+    }
+
+    const installation = deps.store.getInstallation(claims.workspaceId);
+    if (!installation || installation.status !== "active") {
+      return res.status(400).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
+    }
+
+    // Atomic one-use claim: only the caller that flips available → undone reverses.
+    if (!deps.store.markUndone(record.id)) {
+      return res.status(409).json({ ok: false, code: "already_undone", message: "This action was already undone." });
+    }
+
+    const receipt = await reverseCreation(
+      actionContext(claims.workspaceId, claims.adminUserId, installation),
+      record.reversal,
+    );
+    deps.store.addAuditEvent({
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      sessionId: claims.sessionId,
+      actionName: "undo",
+      risk: ["destructive"],
       receipt,
     });
     return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });

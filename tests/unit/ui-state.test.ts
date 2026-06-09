@@ -28,6 +28,10 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("cancelPreview");
       return { ok: true };
     },
+    async undo() {
+      bump("undo");
+      return { ok: true };
+    },
   };
 }
 
@@ -65,6 +69,12 @@ describe("ui controller", () => {
     await createController(api).send("yes");
     expect(api.calls.sendMessage).toBe(1);
     expect(api.calls.confirmPreview ?? 0).toBe(0);
+  });
+
+  it("undo calls the undo endpoint", async () => {
+    const api = fakeApi();
+    await createController(api).undo("u1");
+    expect(api.calls.undo).toBe(1);
   });
 
   it("the permission panel renders every feature group", () => {

@@ -28,6 +28,7 @@ export interface ChatApi {
   sendMessage(message: string): Promise<unknown>;
   confirmPreview(previewId: string, nonce: string): Promise<unknown>;
   cancelPreview(previewId: string): Promise<unknown>;
+  undo(id: string): Promise<unknown>;
 }
 
 export interface ChatController {
@@ -35,6 +36,7 @@ export interface ChatController {
   confirm(ref: PreviewRef): Promise<unknown>;
   confirmAll(refs: PreviewRef[]): Promise<unknown[]>;
   cancel(previewId: string): Promise<unknown>;
+  undo(id: string): Promise<unknown>;
   savePermissions(groups: Record<string, string>): Promise<unknown>;
   getPermissions(): Promise<unknown>;
 }
@@ -45,6 +47,7 @@ export function createController(api: ChatApi): ChatController {
     confirm: (ref) => api.confirmPreview(ref.previewId, ref.nonce),
     confirmAll: (refs) => Promise.all(refs.map((r) => api.confirmPreview(r.previewId, r.nonce))),
     cancel: (previewId) => api.cancelPreview(previewId),
+    undo: (id) => api.undo(id),
     savePermissions: (groups) => api.savePermissions(groups),
     getPermissions: () => api.getPermissions(),
   };
@@ -80,6 +83,7 @@ export function createFetchApi(): ChatApi {
         method: "POST",
         body: JSON.stringify({}),
       }),
+    undo: (id) => json(`/api/undo/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({}) }),
   };
 }
 
@@ -114,6 +118,8 @@ interface ReceiptResult {
     changed?: unknown;
     warnings?: Array<{ code?: string; message: string }>;
   };
+  /** Present when the action can be reversed (a one-use undo handle). */
+  undo?: { id: string };
 }
 interface ClarifyResult {
   kind: "clarify";
@@ -205,6 +211,29 @@ function mount(root: HTMLElement, api: ChatApi): void {
     card.appendChild(el("span", "action", result.receipt.action));
     // Surface warnings inline (not buried in Details) so the user sees them.
     for (const w of warnings) card.appendChild(el("p", "warning", w.message));
+    // One-click undo for a reversible creation (deletes what was just created).
+    if (result.receipt.ok && result.undo) {
+      const undoId = result.undo.id;
+      const undoButton = el("button", "link undo", "Undo") as HTMLButtonElement;
+      undoButton.addEventListener("click", async () => {
+        undoButton.disabled = true;
+        try {
+          const res = (await controller.undo(undoId)) as { ok?: boolean };
+          if (res?.ok) {
+            undoButton.textContent = "Undone";
+          } else {
+            undoButton.textContent = "Undo";
+            undoButton.disabled = false;
+            showError("Undo failed.");
+          }
+        } catch {
+          undoButton.textContent = "Undo";
+          undoButton.disabled = false;
+          showError("Undo failed.");
+        }
+      });
+      card.appendChild(undoButton);
+    }
     const details = el("pre", "details hidden", JSON.stringify(result.receipt, null, 2));
     const toggle = el("button", "link", "Details") as HTMLButtonElement;
     toggle.addEventListener("click", () => details.classList.toggle("hidden"));

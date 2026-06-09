@@ -5,7 +5,7 @@ import { decryptSecret, encryptSecret } from "./encryption.js";
 import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
 import type { RiskLabel } from "../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
-import type { SuccessReceipt, ErrorReceipt } from "../harness/receipts.js";
+import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../harness/receipts.js";
 
 /**
  * The single SQLite access module (backend rule: all DB access goes through
@@ -89,6 +89,21 @@ export interface AuditEventInput {
   receipt: SuccessReceipt | ErrorReceipt | Record<string, unknown>;
 }
 
+export interface UndoRecordInput {
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  actionName: string;
+  reversal: EntityRef[];
+}
+
+export interface UndoRecord extends UndoRecordInput {
+  id: string;
+  status: "available" | "undone";
+  createdAt: string;
+  undoneAt?: string;
+}
+
 export interface StoreOptions {
   encryptionKey?: string;
   now?: () => Date;
@@ -123,6 +138,12 @@ export interface Store {
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
   lookupIdempotency(key: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
+
+  /** Undo ledger (Phase 5b): a reversible action and its one-use status. */
+  recordUndoable(input: UndoRecordInput): string;
+  getUndoRecord(id: string): UndoRecord | undefined;
+  /** Atomically transition available → undone. Returns true only for the winner. */
+  markUndone(id: string): boolean;
 
   addAuditEvent(input: AuditEventInput): void;
 
@@ -473,6 +494,58 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ? AND committed_at >= ?")
         .get(key, notBeforeEpochMs) as { receipt_json: string } | undefined;
       return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
+    },
+
+    recordUndoable(input) {
+      const id = randomUUID();
+      db.prepare(
+        `INSERT INTO undo_records (id, session_id, workspace_id, admin_user_id, action_name, reversal_json, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 'available', ?)`,
+      ).run(
+        id,
+        input.sessionId,
+        input.workspaceId,
+        input.adminUserId,
+        input.actionName,
+        JSON.stringify(input.reversal),
+        nowIso(),
+      );
+      return id;
+    },
+
+    getUndoRecord(id) {
+      const row = db.prepare("SELECT * FROM undo_records WHERE id = ?").get(id) as
+        | {
+            id: string;
+            session_id: string;
+            workspace_id: string;
+            admin_user_id: string;
+            action_name: string;
+            reversal_json: string;
+            status: "available" | "undone";
+            created_at: string;
+            undone_at: string | null;
+          }
+        | undefined;
+      if (!row) return undefined;
+      return {
+        id: row.id,
+        sessionId: row.session_id,
+        workspaceId: row.workspace_id,
+        adminUserId: row.admin_user_id,
+        actionName: row.action_name,
+        reversal: JSON.parse(row.reversal_json) as EntityRef[],
+        status: row.status,
+        createdAt: row.created_at,
+        undoneAt: row.undone_at ?? undefined,
+      };
+    },
+
+    markUndone(id) {
+      const info = db
+        .prepare("UPDATE undo_records SET status = 'undone', undone_at = ? WHERE id = ? AND status = 'available'")
+        .run(nowIso(), id);
+      return info.changes > 0;
     },
 
     tables() {
