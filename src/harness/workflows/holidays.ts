@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import {
+  defineAction,
+  defineReadAction,
+  defineRiskyAction,
+  type ActionDefinition,
+} from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -12,63 +17,51 @@ import { successReceipt } from "../receipts.js";
 
 const TOA = "time_off_approvals" as const;
 
-const listHolidays = defineAction({
+const listHolidays = defineReadAction({
   name: "clockify_holidays_list",
   description: "List the workspace holidays.",
-  featureGroup: TOA,
-  risks: ["read"],
+  group: TOA,
   schema: z.object({}),
   async handler(ctx) {
     const items = await ctx.clockify.listHolidays();
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_holidays_list",
-        entity: "holiday",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_holidays_list",
+      entity: "holiday",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { count: items.length, items },
+    });
   },
 });
 
-const getHoliday = defineAction({
+const getHoliday = defineReadAction({
   name: "clockify_holidays_get",
   description: "Fetch a single holiday by id.",
-  featureGroup: TOA,
-  risks: ["read"],
+  group: TOA,
   schema: z.object({ id: z.string().min(1) }),
   async handler(ctx, args) {
     const entity = await ctx.clockify.getHoliday(args.id);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_holidays_get",
-        entity: "holiday",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { entity },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_holidays_get",
+      entity: "holiday",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { entity },
+    });
   },
 });
 
-const listInPeriod = defineAction({
+const listInPeriod = defineReadAction({
   name: "clockify_holidays_in_period",
   description: "List holidays assigned to a user across a date period.",
-  featureGroup: TOA,
-  risks: ["read"],
+  group: TOA,
   schema: z.object({ assignedTo: z.string().min(1), start: z.string().min(1), end: z.string().min(1) }),
   async handler(ctx, args) {
     const items = await ctx.clockify.listHolidaysInPeriod(args);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_holidays_in_period",
-        entity: "holiday",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_holidays_in_period",
+      entity: "holiday",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { count: items.length, items },
+    });
   },
 });
 
@@ -144,40 +137,30 @@ const updateHoliday = defineAction({
   },
 });
 
-const deleteHoliday = defineAction({
+const deleteHoliday = defineRiskyAction({
   name: "clockify_holidays_delete",
   description: "Delete a workspace holiday. Destructive — previews and requires confirmation.",
-  featureGroup: TOA,
+  group: TOA,
   risks: ["destructive"],
   schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Delete holiday",
-        featureGroup: TOA,
-        riskLabels: ["destructive"],
-        targets: [{ type: "holiday", id: args.id, name: args.name }],
-        expectedChanges: [`Delete holiday ${args.name ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: ["Deleting a holiday affects everyone assigned to it."],
-      },
-      operation: {
-        actionName: "clockify_holidays_delete",
-        featureGroup: TOA,
-        risks: ["destructive"],
-        payload: { id: args.id, name: args.name },
-      },
+      actionLabel: "Delete holiday",
+      targets: [{ type: "holiday", id: args.id, name: args.name }],
+      expectedChanges: [`Delete holiday ${args.name ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: ["Deleting a holiday affects everyone assigned to it."],
+      payload: { id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; name?: string };
-    await ctx.clockify.deleteHoliday(payload.id);
+  async commit(ctx, payload) {
+    const { id, name } = payload as { id: string; name?: string };
+    await ctx.clockify.deleteHoliday(id);
     return successReceipt({
       action: "clockify_holidays_delete",
       entity: "holiday",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "holiday", id: payload.id, name: payload.name }] },
+      changed: { deleted: [{ type: "holiday", id, name }] },
     });
   },
 });

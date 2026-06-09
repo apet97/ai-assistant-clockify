@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -32,70 +32,58 @@ interface StoredExpense {
   taskId?: string;
 }
 
-const listExpenses = defineAction({
+const listExpenses = defineReadAction({
   name: "clockify_expenses_list",
   description: "List expenses (optional start/end date range).",
-  featureGroup: EXP,
-  risks: ["read"],
+  group: EXP,
   schema: z.object({ start: z.string().optional(), end: z.string().optional() }),
   async handler(ctx, args) {
     const items = await ctx.clockify.listExpenses(args);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_expenses_list",
-        entity: "expense",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_expenses_list",
+      entity: "expense",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { count: items.length, items },
+    });
   },
 });
 
-const getExpense = defineAction({
+const getExpense = defineReadAction({
   name: "clockify_expenses_get",
   description: "Fetch a single expense by id.",
-  featureGroup: EXP,
-  risks: ["read"],
+  group: EXP,
   schema: z.object({ id: z.string().min(1) }),
   async handler(ctx, args) {
     const entity = await ctx.clockify.getExpense(args.id);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_expenses_get",
-        entity: "expense",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { entity },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_expenses_get",
+      entity: "expense",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { entity },
+    });
   },
 });
 
-const listExpenseCategories = defineAction({
+const listExpenseCategories = defineReadAction({
   name: "clockify_expenses_categories_list",
   description: "List expense categories.",
-  featureGroup: EXP,
-  risks: ["read"],
+  group: EXP,
   schema: z.object({}),
   async handler(ctx) {
     const items = await ctx.clockify.listExpenseCategories();
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_expenses_categories_list",
-        entity: "expense_category",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_expenses_categories_list",
+      entity: "expense_category",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { count: items.length, items },
+    });
   },
 });
 
-const createExpense = defineAction({
+const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
   description: "Create an expense. Billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["billing"],
   schema: z.object({
     amount: z.number().positive(),
@@ -108,7 +96,7 @@ const createExpense = defineAction({
     projectId: z.string().optional(),
     taskId: z.string().optional(),
   }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     const input: StoredExpense = {
       amountMinor: toMinor(args.amount, args.amountUnit),
       date: args.date,
@@ -119,28 +107,18 @@ const createExpense = defineAction({
       ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
     };
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Create expense",
-        featureGroup: EXP,
-        riskLabels: ["billing"],
-        targets: [],
-        expectedChanges: [
-          `Create an expense of ${input.amountMinor} (minor units) in category ${args.categoryId}${args.notes ? ` — "${args.notes}"` : ""}`,
-        ],
-        reversibility: "You can edit or delete the expense afterward.",
-        warnings: ["This creates an expense record."],
-      },
-      operation: {
-        actionName: "clockify_expenses_create",
-        featureGroup: EXP,
-        risks: ["billing"],
-        payload: { input },
-      },
+      actionLabel: "Create expense",
+      targets: [],
+      expectedChanges: [
+        `Create an expense of ${input.amountMinor} (minor units) in category ${args.categoryId}${args.notes ? ` — "${args.notes}"` : ""}`,
+      ],
+      reversibility: "You can edit or delete the expense afterward.",
+      warnings: ["This creates an expense record."],
+      payload: { input },
     };
   },
-  async commit(ctx, operation) {
-    const { input } = operation.payload as { input: StoredExpense };
+  async commit(ctx, payload) {
+    const { input } = payload as { input: StoredExpense };
     // The expense owner is the admin making the change — never model-supplied.
     const expense = await ctx.clockify.createExpense({ ...input, userId: ctx.adminUserId });
     return successReceipt({
@@ -163,10 +141,10 @@ const UPDATE_FIELD_TOKEN: Record<string, string> = {
   taskId: "TASK",
 };
 
-const updateExpense = defineAction({
+const updateExpense = defineRiskyAction({
   name: "clockify_expenses_update",
   description: "Update an expense. Billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["billing"],
   schema: z
     .object({
@@ -191,7 +169,7 @@ const updateExpense = defineAction({
         v.taskId !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     const values: Record<string, unknown> = {
       ...(args.amount !== undefined ? { amountMinor: toMinor(args.amount, args.amountUnit) } : {}),
       ...(args.date !== undefined ? { date: args.date } : {}),
@@ -207,33 +185,23 @@ const updateExpense = defineAction({
       .filter((k) => args[k] !== undefined)
       .map((k) => UPDATE_FIELD_TOKEN[k]);
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Update expense",
-        featureGroup: EXP,
-        riskLabels: ["billing"],
-        targets: [{ type: "expense", id: args.id }],
-        expectedChanges: changeFields.map((t) => `set ${t}`),
-        reversibility: "You can update the expense again to revert most fields.",
-        warnings: ["Updating an expense changes an expense record."],
-      },
-      operation: {
-        actionName: "clockify_expenses_update",
-        featureGroup: EXP,
-        risks: ["billing"],
-        payload: { id: args.id, changeFields, values },
-      },
+      actionLabel: "Update expense",
+      targets: [{ type: "expense", id: args.id }],
+      expectedChanges: changeFields.map((t) => `set ${t}`),
+      reversibility: "You can update the expense again to revert most fields.",
+      warnings: ["Updating an expense changes an expense record."],
+      payload: { id: args.id, changeFields, values },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
+  async commit(ctx, payload) {
+    const { id, changeFields, values } = payload as {
       id: string;
       changeFields: string[];
       values: Record<string, unknown>;
     };
-    const updated = await ctx.clockify.updateExpense(payload.id, {
-      changeFields: payload.changeFields,
-      ...payload.values,
+    const updated = await ctx.clockify.updateExpense(id, {
+      changeFields,
+      ...values,
       userId: ctx.adminUserId, // fallback owner if the existing expense lacks one
     });
     return successReceipt({
@@ -245,73 +213,53 @@ const updateExpense = defineAction({
   },
 });
 
-const deleteExpense = defineAction({
+const deleteExpense = defineRiskyAction({
   name: "clockify_expenses_delete",
   description: "Delete an expense. Destructive billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["destructive", "billing"],
   schema: z.object({ id: z.string().min(1), notes: z.string().optional() }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Delete expense",
-        featureGroup: EXP,
-        riskLabels: ["destructive", "billing"],
-        targets: [{ type: "expense", id: args.id, name: args.notes }],
-        expectedChanges: [`Delete expense ${args.notes ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: ["Deleting an expense is permanent."],
-      },
-      operation: {
-        actionName: "clockify_expenses_delete",
-        featureGroup: EXP,
-        risks: ["destructive", "billing"],
-        payload: { id: args.id, notes: args.notes },
-      },
+      actionLabel: "Delete expense",
+      targets: [{ type: "expense", id: args.id, name: args.notes }],
+      expectedChanges: [`Delete expense ${args.notes ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: ["Deleting an expense is permanent."],
+      payload: { id: args.id, notes: args.notes },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; notes?: string };
-    await ctx.clockify.deleteExpense(payload.id);
+  async commit(ctx, payload) {
+    const { id, notes } = payload as { id: string; notes?: string };
+    await ctx.clockify.deleteExpense(id);
     return successReceipt({
       action: "clockify_expenses_delete",
       entity: "expense",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "expense", id: payload.id, name: payload.notes }] },
+      changed: { deleted: [{ type: "expense", id, name: notes }] },
     });
   },
 });
 
-const createExpenseCategory = defineAction({
+const createExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_create",
   description: "Create an expense category. Billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["billing"],
   schema: z.object({ name: z.string().min(1) }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Create expense category",
-        featureGroup: EXP,
-        riskLabels: ["billing"],
-        targets: [],
-        expectedChanges: [`Create expense category "${args.name}"`],
-        reversibility: "You can rename or delete the category afterward.",
-        warnings: ["This adds an expense category to the workspace."],
-      },
-      operation: {
-        actionName: "clockify_expenses_categories_create",
-        featureGroup: EXP,
-        risks: ["billing"],
-        payload: { name: args.name },
-      },
+      actionLabel: "Create expense category",
+      targets: [],
+      expectedChanges: [`Create expense category "${args.name}"`],
+      reversibility: "You can rename or delete the category afterward.",
+      warnings: ["This adds an expense category to the workspace."],
+      payload: { name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { name: string };
-    const category = await ctx.clockify.createExpenseCategory({ name: payload.name });
+  async commit(ctx, payload) {
+    const { name } = payload as { name: string };
+    const category = await ctx.clockify.createExpenseCategory({ name });
     return successReceipt({
       action: "clockify_expenses_categories_create",
       entity: "expense_category",
@@ -321,35 +269,25 @@ const createExpenseCategory = defineAction({
   },
 });
 
-const updateExpenseCategory = defineAction({
+const updateExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_update",
   description: "Rename an expense category. Billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["billing"],
   schema: z.object({ id: z.string().min(1), name: z.string().min(1) }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Update expense category",
-        featureGroup: EXP,
-        riskLabels: ["billing"],
-        targets: [{ type: "expense_category", id: args.id, name: args.name }],
-        expectedChanges: [`Rename expense category to "${args.name}"`],
-        reversibility: "You can rename the category again to revert.",
-        warnings: ["This changes a workspace expense category."],
-      },
-      operation: {
-        actionName: "clockify_expenses_categories_update",
-        featureGroup: EXP,
-        risks: ["billing"],
-        payload: { id: args.id, name: args.name },
-      },
+      actionLabel: "Update expense category",
+      targets: [{ type: "expense_category", id: args.id, name: args.name }],
+      expectedChanges: [`Rename expense category to "${args.name}"`],
+      reversibility: "You can rename the category again to revert.",
+      warnings: ["This changes a workspace expense category."],
+      payload: { id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; name: string };
-    const category = await ctx.clockify.updateExpenseCategory(payload.id, { name: payload.name });
+  async commit(ctx, payload) {
+    const { id, name } = payload as { id: string; name: string };
+    const category = await ctx.clockify.updateExpenseCategory(id, { name });
     return successReceipt({
       action: "clockify_expenses_categories_update",
       entity: "expense_category",
@@ -359,41 +297,31 @@ const updateExpenseCategory = defineAction({
   },
 });
 
-const deleteExpenseCategory = defineAction({
+const deleteExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_delete",
   description:
     "Delete an expense category. Destructive billing action — previews and requires confirmation.",
-  featureGroup: EXP,
+  group: EXP,
   risks: ["destructive", "billing"],
   schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Delete expense category",
-        featureGroup: EXP,
-        riskLabels: ["destructive", "billing"],
-        targets: [{ type: "expense_category", id: args.id, name: args.name }],
-        expectedChanges: [`Delete expense category ${args.name ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: ["Deleting an expense category is permanent."],
-      },
-      operation: {
-        actionName: "clockify_expenses_categories_delete",
-        featureGroup: EXP,
-        risks: ["destructive", "billing"],
-        payload: { id: args.id, name: args.name },
-      },
+      actionLabel: "Delete expense category",
+      targets: [{ type: "expense_category", id: args.id, name: args.name }],
+      expectedChanges: [`Delete expense category ${args.name ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: ["Deleting an expense category is permanent."],
+      payload: { id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; name?: string };
-    await ctx.clockify.deleteExpenseCategory(payload.id);
+  async commit(ctx, payload) {
+    const { id, name } = payload as { id: string; name?: string };
+    await ctx.clockify.deleteExpenseCategory(id);
     return successReceipt({
       action: "clockify_expenses_categories_delete",
       entity: "expense_category",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "expense_category", id: payload.id, name: payload.name }] },
+      changed: { deleted: [{ type: "expense_category", id, name }] },
     });
   },
 });

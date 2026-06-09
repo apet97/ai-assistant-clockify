@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import {
+  defineAction,
+  defineReadAction,
+  defineRiskyAction,
+  type ActionDefinition,
+} from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -10,43 +15,35 @@ import { successReceipt } from "../receipts.js";
 
 const WORK = "work_structure" as const;
 
-const listTasks = defineAction({
+const listTasks = defineReadAction({
   name: "clockify_tasks_list",
   description: "List tasks under a project (optional name filter).",
-  featureGroup: WORK,
-  risks: ["read"],
+  group: WORK,
   schema: z.object({ projectId: z.string().min(1), name: z.string().optional() }),
   async handler(ctx, args) {
     const items = await ctx.clockify.listTasks(args.projectId, { name: args.name });
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_tasks_list",
-        entity: "task",
-        ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_tasks_list",
+      entity: "task",
+      ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
+      data: { count: items.length, items },
+    });
   },
 });
 
-const getTask = defineAction({
+const getTask = defineReadAction({
   name: "clockify_tasks_get",
   description: "Fetch a single task by id within a project.",
-  featureGroup: WORK,
-  risks: ["read"],
+  group: WORK,
   schema: z.object({ projectId: z.string().min(1), id: z.string().min(1) }),
   async handler(ctx, args) {
     const entity = await ctx.clockify.getTask(args.projectId, args.id);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_tasks_get",
-        entity: "task",
-        ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
-        data: { entity },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_tasks_get",
+      entity: "task",
+      ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
+      data: { entity },
+    });
   },
 });
 
@@ -70,11 +67,11 @@ const createTask = defineAction({
   },
 });
 
-const updateTask = defineAction({
+const updateTask = defineRiskyAction({
   name: "clockify_tasks_update",
   description:
     "Update a task (rename, reassign, status, estimate). Elevated write — previews and requires confirmation.",
-  featureGroup: WORK,
+  group: WORK,
   risks: ["high_risk_write"],
   schema: z
     .object({
@@ -88,7 +85,7 @@ const updateTask = defineAction({
     .refine((v) => v.name !== undefined || v.status !== undefined || v.assigneeIds !== undefined || v.fields !== undefined, {
       message: "Provide at least one field to change.",
     }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
@@ -96,80 +93,60 @@ const updateTask = defineAction({
       ...(args.fields ?? {}),
     };
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Update task",
-        featureGroup: WORK,
-        riskLabels: ["high_risk_write"],
-        targets: [{ type: "task", id: args.id, name: args.name }],
-        expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
-        reversibility: "You can update the task again to revert most fields.",
-        warnings: ["Updating a task changes live workspace data."],
-      },
-      operation: {
-        actionName: "clockify_tasks_update",
-        featureGroup: WORK,
-        risks: ["high_risk_write"],
-        payload: { projectId: args.projectId, id: args.id, patch },
-      },
+      actionLabel: "Update task",
+      targets: [{ type: "task", id: args.id, name: args.name }],
+      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      reversibility: "You can update the task again to revert most fields.",
+      warnings: ["Updating a task changes live workspace data."],
+      payload: { projectId: args.projectId, id: args.id, patch },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { projectId: string; id: string; patch: Record<string, unknown> };
-    const updated = await ctx.clockify.updateTask(payload.projectId, payload.id, payload.patch);
+  async commit(ctx, payload) {
+    const { projectId, id, patch } = payload as { projectId: string; id: string; patch: Record<string, unknown> };
+    const updated = await ctx.clockify.updateTask(projectId, id, patch);
     return successReceipt({
       action: "clockify_tasks_update",
       entity: "task",
-      ids: { workspaceId: ctx.workspaceId, projectId: payload.projectId },
+      ids: { workspaceId: ctx.workspaceId, projectId },
       changed: { updated: [{ type: "task", id: updated.id, name: updated.name }] },
     });
   },
 });
 
-const deleteTask = defineAction({
+const deleteTask = defineRiskyAction({
   name: "clockify_tasks_delete",
   description:
     "Delete a task (marks it DONE first, then deletes). Previews and requires confirmation.",
-  featureGroup: WORK,
+  group: WORK,
   risks: ["destructive"],
   schema: z.object({ projectId: z.string().min(1), id: z.string().min(1), name: z.string().optional() }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Delete task",
-        featureGroup: WORK,
-        riskLabels: ["destructive"],
-        targets: [{ type: "task", id: args.id, name: args.name }],
-        expectedChanges: [`Delete task ${args.name ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: ["Deleting a task is permanent."],
-      },
-      operation: {
-        actionName: "clockify_tasks_delete",
-        featureGroup: WORK,
-        risks: ["destructive"],
-        payload: { projectId: args.projectId, id: args.id, name: args.name },
-      },
+      actionLabel: "Delete task",
+      targets: [{ type: "task", id: args.id, name: args.name }],
+      expectedChanges: [`Delete task ${args.name ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: ["Deleting a task is permanent."],
+      payload: { projectId: args.projectId, id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { projectId: string; id: string; name?: string };
-    await ctx.clockify.deleteTask(payload.projectId, payload.id);
+  async commit(ctx, payload) {
+    const { projectId, id, name } = payload as { projectId: string; id: string; name?: string };
+    await ctx.clockify.deleteTask(projectId, id);
     return successReceipt({
       action: "clockify_tasks_delete",
       entity: "task",
-      ids: { workspaceId: ctx.workspaceId, projectId: payload.projectId },
-      changed: { deleted: [{ type: "task", id: payload.id, name: payload.name }] },
+      ids: { workspaceId: ctx.workspaceId, projectId },
+      changed: { deleted: [{ type: "task", id, name }] },
     });
   },
 });
 
-const rateUpdate = defineAction({
+const rateUpdate = defineRiskyAction({
   name: "clockify_tasks_rate_update",
   description:
     "Set a task's billable hourly or cost rate. Billing action — previews and requires confirmation.",
-  featureGroup: "invoices",
+  group: "invoices",
   risks: ["billing"],
   schema: z.object({
     projectId: z.string().min(1),
@@ -179,47 +156,37 @@ const rateUpdate = defineAction({
     amountUnit: z.enum(["major", "minor"]).default("major"),
     since: z.string().optional(),
   }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     const amountMinor = args.amountUnit === "minor" ? Math.round(args.amount) : Math.round(args.amount * 100);
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: `Set task ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-        featureGroup: "invoices",
-        riskLabels: ["billing"],
-        targets: [{ type: "task", id: args.taskId }],
-        expectedChanges: [`Set ${args.rateKind} rate to ${amountMinor} (minor units)`],
-        reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
-        warnings: ["This changes the billable amount of future entries on the task."],
-      },
-      operation: {
-        actionName: "clockify_tasks_rate_update",
-        featureGroup: "invoices",
-        risks: ["billing"],
-        payload: {
-          projectId: args.projectId,
-          taskId: args.taskId,
-          rateKind: args.rateKind,
-          amountMinor,
-          since: args.since,
-        },
+      actionLabel: `Set task ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
+      targets: [{ type: "task", id: args.taskId }],
+      expectedChanges: [`Set ${args.rateKind} rate to ${amountMinor} (minor units)`],
+      reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
+      warnings: ["This changes the billable amount of future entries on the task."],
+      payload: {
+        projectId: args.projectId,
+        taskId: args.taskId,
+        rateKind: args.rateKind,
+        amountMinor,
+        since: args.since,
       },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as {
+  async commit(ctx, payload) {
+    const typed = payload as {
       projectId: string;
       taskId: string;
       rateKind: "HOURLY" | "COST";
       amountMinor: number;
       since?: string;
     };
-    await ctx.clockify.updateTaskRate(payload);
+    await ctx.clockify.updateTaskRate(typed);
     return successReceipt({
       action: "clockify_tasks_rate_update",
       entity: "task",
-      ids: { workspaceId: ctx.workspaceId, projectId: payload.projectId },
-      changed: { updated: [{ type: "task", id: payload.taskId }] },
+      ids: { workspaceId: ctx.workspaceId, projectId: typed.projectId },
+      changed: { updated: [{ type: "task", id: typed.taskId }] },
     });
   },
 });

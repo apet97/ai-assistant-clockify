@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { defineAction, type ActionDefinition } from "../action.js";
+import {
+  defineAction,
+  defineReadAction,
+  defineRiskyAction,
+  type ActionDefinition,
+} from "../action.js";
 import { successReceipt } from "../receipts.js";
 
 /**
@@ -11,43 +16,35 @@ import { successReceipt } from "../receipts.js";
 
 const WORK = "work_structure" as const;
 
-const listClients = defineAction({
+const listClients = defineReadAction({
   name: "clockify_clients_list",
   description: "List clients (optional name / archived filter).",
-  featureGroup: WORK,
-  risks: ["read"],
+  group: WORK,
   schema: z.object({ name: z.string().optional(), archived: z.boolean().optional() }),
   async handler(ctx, args) {
     const items = await ctx.clockify.listClients(args);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_clients_list",
-        entity: "client",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_clients_list",
+      entity: "client",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { count: items.length, items },
+    });
   },
 });
 
-const getClient = defineAction({
+const getClient = defineReadAction({
   name: "clockify_clients_get",
   description: "Fetch a single client by id.",
-  featureGroup: WORK,
-  risks: ["read"],
+  group: WORK,
   schema: z.object({ id: z.string().min(1) }),
   async handler(ctx, args) {
     const entity = await ctx.clockify.getClient(args.id);
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_clients_get",
-        entity: "client",
-        ids: { workspaceId: ctx.workspaceId },
-        data: { entity },
-      }),
-    };
+    return successReceipt({
+      action: "clockify_clients_get",
+      entity: "client",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { entity },
+    });
   },
 });
 
@@ -71,11 +68,11 @@ const createClient = defineAction({
   },
 });
 
-const updateClient = defineAction({
+const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   description:
     "Update a client (rename, note, archived). Elevated write — previews and requires confirmation.",
-  featureGroup: WORK,
+  group: WORK,
   risks: ["high_risk_write"],
   schema: z
     .object({
@@ -87,34 +84,24 @@ const updateClient = defineAction({
     .refine((v) => v.name !== undefined || v.archived !== undefined || v.fields !== undefined, {
       message: "Provide at least one field to change.",
     }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
       ...(args.fields ?? {}),
     };
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Update client",
-        featureGroup: WORK,
-        riskLabels: ["high_risk_write"],
-        targets: [{ type: "client", id: args.id, name: args.name }],
-        expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
-        reversibility: "You can update the client again to revert most fields.",
-        warnings: ["Updating a client changes live workspace data."],
-      },
-      operation: {
-        actionName: "clockify_clients_update",
-        featureGroup: WORK,
-        risks: ["high_risk_write"],
-        payload: { id: args.id, patch },
-      },
+      actionLabel: "Update client",
+      targets: [{ type: "client", id: args.id, name: args.name }],
+      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      reversibility: "You can update the client again to revert most fields.",
+      warnings: ["Updating a client changes live workspace data."],
+      payload: { id: args.id, patch },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; patch: Record<string, unknown> };
-    const updated = await ctx.clockify.updateClient(payload.id, payload.patch);
+  async commit(ctx, payload) {
+    const { id, patch } = payload as { id: string; patch: Record<string, unknown> };
+    const updated = await ctx.clockify.updateClient(id, patch);
     return successReceipt({
       action: "clockify_clients_update",
       entity: "client",
@@ -124,44 +111,34 @@ const updateClient = defineAction({
   },
 });
 
-const deleteClient = defineAction({
+const deleteClient = defineRiskyAction({
   name: "clockify_clients_delete",
   description:
     "Delete a client (archives first, then deletes). Fails if the client still has active projects. Previews and requires confirmation.",
-  featureGroup: WORK,
+  group: WORK,
   risks: ["destructive"],
   schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async handler(ctx, args) {
+  async preview(_ctx, args) {
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Delete client",
-        featureGroup: WORK,
-        riskLabels: ["destructive"],
-        targets: [{ type: "client", id: args.id, name: args.name }],
-        expectedChanges: [`Delete client ${args.name ?? args.id}`],
-        reversibility: "This cannot be undone.",
-        warnings: [
-          "Deleting a client is permanent.",
-          "Clockify rejects this if the client still has active projects.",
-        ],
-      },
-      operation: {
-        actionName: "clockify_clients_delete",
-        featureGroup: WORK,
-        risks: ["destructive"],
-        payload: { id: args.id, name: args.name },
-      },
+      actionLabel: "Delete client",
+      targets: [{ type: "client", id: args.id, name: args.name }],
+      expectedChanges: [`Delete client ${args.name ?? args.id}`],
+      reversibility: "This cannot be undone.",
+      warnings: [
+        "Deleting a client is permanent.",
+        "Clockify rejects this if the client still has active projects.",
+      ],
+      payload: { id: args.id, name: args.name },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { id: string; name?: string };
-    await ctx.clockify.deleteClient(payload.id);
+  async commit(ctx, payload) {
+    const { id, name } = payload as { id: string; name?: string };
+    await ctx.clockify.deleteClient(id);
     return successReceipt({
       action: "clockify_clients_delete",
       entity: "client",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "client", id: payload.id, name: payload.name }] },
+      changed: { deleted: [{ type: "client", id, name }] },
     });
   },
 });
