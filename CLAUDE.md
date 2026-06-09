@@ -88,7 +88,20 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**611 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**618 tests**: type-check + Vitest + build).
+- **NDJSON streaming of the harness's progress (Phase 7 slice, 2026-06-09).**
+  `POST /api/chat/stream` streams the HARNESS's progress — `{type:"result",result}`
+  per harness result as it executes, then `{type:"reply",kind,text}` (the *truthful*
+  reply), then `{type:"done"}` (`{type:"error"}` on model failure) — **never the
+  model's tokens** (which would conflict with the truthful-preview override). The
+  shared `executeChatTurn(claims, installation, message, onResult?)` is the single
+  copy of the turn's safety logic; the JSON `POST /api/chat/messages` route is now a
+  thin wrapper over it (behavior identical). UI: `createNdjsonParser` (stateful line
+  parser, tested) + `submitStreaming` (receipts render as they arrive; previews are
+  **batched** and flushed at the reply so "Confirm all" stays one card; tested) +
+  `createFetchApi.streamMessage`; the composer streams (`submitMessage` is the
+  non-stream fallback). The dominant model-call latency is unchanged, but multi-action
+  turns disclose progressively.
 - **UI accessibility + responsive status (Phase 7 slice, 2026-06-09).** The embedded
   chat got a WAI-ARIA pass: an `<h1>` header; the message log is `role="log"
   aria-live="polite"` (new turns are announced); errors are `role="alert"`, the
@@ -102,8 +115,8 @@ Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
   streaming:** token-streaming the *model's narration* conflicts with the
   truthful-preview safety override (a streamed "Done!" could leak before the route
   replaces it for a pending risky preview), so we stream a *status* + the *truthful*
-  result, not model tokens. Safety-compatible SSE streaming of per-result receipts is
-  a possible follow-up.
+  result, not model tokens. (The safety-compatible NDJSON streaming of per-result
+  receipts is now built — see the streaming bullet above.)
 - **Operational metrics (Phase 7 slice, 2026-06-09).** "Is the assistant working?"
   derived from data already recorded (every action is audited with its receipt;
   every risky preview is a pending-confirmation row with a status). `GET /api/metrics`
