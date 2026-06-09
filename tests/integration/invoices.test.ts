@@ -204,7 +204,72 @@ describe("invoice actions", () => {
     expect(fake.state.invoices.find((i) => i.id === "inv1")).toBeUndefined();
   });
 
-  it("clockify_invoices_items_add converts major unit price to minor in the payload", async () => {
+  // Live-verified API facts (probed via X-Api-Key): invoice `itemType` must be a
+  // workspace-CONFIGURED NAME (not an enum/id); names vary per workspace; there is
+  // NO list/create API — but names ARE stored on existing line items, so the
+  // harness discovers the valid ones instead of blindly sending "NEW DEFAULT".
+  const typedSeed = () => ({
+    clients: [{ id: "c9", name: "ratta" }],
+    invoices: [
+      { id: "inv9", number: "INV-9", clientId: "c9", currency: "USD" as const, status: "UNSENT" as const,
+        items: [{ order: 0, description: "x", quantity: 1, unitPrice: 1000, itemType: "Consulting" }] },
+      { id: "inv10", number: "INV-10", clientId: "c9", currency: "USD" as const, status: "UNSENT" as const,
+        items: [{ order: 0, description: "y", quantity: 1, unitPrice: 1000, itemType: "Travel" }] },
+    ],
+  });
+
+  it("items_add defaults to a DISCOVERED item type, not the per-workspace-specific 'NEW DEFAULT'", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv9", description: "charge", quantity: 1, unitPrice: 100 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // A real, valid type from the workspace — never the hardcoded "NEW DEFAULT".
+    expect((preview.operation.payload as { item: { itemType: string } }).item.itemType).toBe("Consulting");
+  });
+
+  it("items_add resolves a requested type case-insensitively to the workspace's canonical name", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv9", itemType: "travel", description: "charge", quantity: 1, unitPrice: 100 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { item: { itemType: string } }).item.itemType).toBe("Travel");
+  });
+
+  it("items_add CLARIFIES with the real item-type list when the requested type isn't configured (no raw 404)", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv9", itemType: "service", description: "charge", quantity: 1, unitPrice: 100 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") {
+      expect(result.message).toContain("Consulting");
+      expect(result.message).toContain("Travel");
+      expect(result.options?.map((o) => o.label)).toEqual(expect.arrayContaining(["Consulting", "Travel"]));
+    }
+    expect(fake.counts.addInvoiceItem ?? 0).toBe(0);
+  });
+
+  it("create CLARIFIES with the real item types instead of creating a doomed $0 invoice for a bad type", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientName: "ratta", items: [{ description: "CHARGE", quantity: 1, amount: 1000, itemType: "service" }] },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("Consulting");
+    expect(fake.counts.createInvoice ?? 0).toBe(0); // nothing created — no orphan $0 invoice
+  });
+
+  it("items_add converts major unit price to minor in the payload", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
       actionName: "clockify_invoices_items_add",

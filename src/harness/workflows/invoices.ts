@@ -34,6 +34,53 @@ function nowDate(ctx: ActionContext): Date {
   return (ctx.now ?? (() => new Date()))();
 }
 
+/**
+ * Invoice item types are workspace-CONFIGURED NAMES (live-verified via the REST
+ * API: `itemType` must match a configured name — not an enum or id — and the
+ * names vary per workspace; "NEW DEFAULT" only happens to be one workspace's
+ * default). Clockify exposes NO endpoint to list or create them, but every line
+ * item stores its `itemType` name, so we DISCOVER the valid names from the
+ * workspace's existing invoices (bounded scan) rather than blindly sending a
+ * guess. Returns the distinct configured names (empty on a workspace that has
+ * never had an invoice line item).
+ */
+const MAX_INVOICES_SCANNED_FOR_TYPES = 12;
+async function discoverItemTypes(ctx: ActionContext): Promise<string[]> {
+  const invoices = await ctx.clockify.listInvoices();
+  const names = new Set<string>();
+  for (const inv of invoices.slice(0, MAX_INVOICES_SCANNED_FOR_TYPES)) {
+    const items = await ctx.clockify.listInvoiceItems(inv.id);
+    for (const it of items) if (it.itemType) names.add(it.itemType);
+  }
+  return [...names];
+}
+
+type ItemTypeResolution =
+  | { ok: true; itemType: string }
+  | { ok: false; options: string[] };
+
+/**
+ * Resolve a requested (or omitted) item type against the workspace's discovered
+ * types: a case-insensitive match yields the canonical name; an unknown request
+ * when types DO exist asks the admin to choose (never a raw 404); an omitted type
+ * defaults to the first configured one. When NOTHING is discoverable (a fresh
+ * workspace), fall back to the requested value or "NEW DEFAULT" and let the
+ * commit-time warning surface the platform constraint.
+ */
+function resolveItemType(discovered: string[], requested?: string): ItemTypeResolution {
+  if (discovered.length === 0) return { ok: true, itemType: requested ?? "NEW DEFAULT" };
+  if (!requested) return { ok: true, itemType: discovered[0] };
+  const match = discovered.find((d) => d.toLowerCase() === requested.toLowerCase());
+  return match ? { ok: true, itemType: match } : { ok: false, options: discovered };
+}
+
+function itemTypeClarify(options: string[]): { clarify: string; options: { id: string; label: string }[] } {
+  return {
+    clarify: `This workspace's invoice item types are: ${options.join(", ")}. Which should I use? (There's no API to add new ones — create them in Clockify → Workspace settings → Invoices.)`,
+    options: options.map((t) => ({ id: t, label: t })),
+  };
+}
+
 const listInvoices = defineReadAction({
   name: "clockify_invoices_list",
   description: "List invoices (optional live status filter).",
@@ -200,14 +247,22 @@ const createInvoice = defineRiskyAction({
     };
 
     // Build the line items (amounts converted to minor units now, so commit never
-    // re-derives them). itemType defaults to "NEW DEFAULT".
-    const items = (args.items ?? []).map((it) => ({
-      itemType: it.itemType ?? "NEW DEFAULT",
-      ...(it.description !== undefined ? { description: it.description } : {}),
-      ...(it.quantity !== undefined ? { quantity: it.quantity } : {}),
-      ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
-      ...(it.applyTaxes !== undefined ? { applyTaxes: it.applyTaxes } : {}),
-    }));
+    // re-derives them). Resolve each item's type against the workspace's actual
+    // configured types — if a named type isn't configured (and some ARE), clarify
+    // with the real list instead of creating a doomed $0 invoice.
+    const discovered = args.items?.length ? await discoverItemTypes(ctx) : [];
+    const items: Array<{ itemType: string; description?: string; quantity?: number; unitPriceMinor?: number; applyTaxes?: string }> = [];
+    for (const it of args.items ?? []) {
+      const resolved = resolveItemType(discovered, it.itemType);
+      if (!resolved.ok) return itemTypeClarify(resolved.options);
+      items.push({
+        itemType: resolved.itemType,
+        ...(it.description !== undefined ? { description: it.description } : {}),
+        ...(it.quantity !== undefined ? { quantity: it.quantity } : {}),
+        ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
+        ...(it.applyTaxes !== undefined ? { applyTaxes: it.applyTaxes } : {}),
+      });
+    }
 
     const defaulted = [
       args.number === undefined ? "number" : null,
@@ -396,7 +451,7 @@ const deleteInvoice = defineRiskyAction({
 const addInvoiceItem = defineRiskyAction({
   name: "clockify_invoices_items_add",
   description:
-    "Add a line item to an invoice. Billing action — previews and requires confirmation. `itemType` must name an invoice item type configured in the workspace (defaults to \"NEW DEFAULT\").",
+    "Add a line item to an invoice. Billing action — previews and requires confirmation. `itemType` names a workspace-configured invoice item type; pass the one the admin asked for (e.g. \"service\") — the harness checks it against the workspace's actual types and, if it isn't configured, asks the admin to pick from the real list (it never guesses).",
   group: INV,
   risks: ["billing"],
   schema: z.object({
@@ -409,9 +464,15 @@ const addInvoiceItem = defineRiskyAction({
     unitPriceUnit: z.enum(["major", "minor"]).default("major"),
     applyTaxes: z.enum(["TAX1", "TAX2", "TAX1TAX2", "NONE"]).optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    // Resolve the item type against the workspace's actual configured types
+    // (discovered from existing line items) — never a blind "NEW DEFAULT".
+    const discovered = await discoverItemTypes(ctx);
+    const resolved = resolveItemType(discovered, args.itemType);
+    if (!resolved.ok) return itemTypeClarify(resolved.options);
+    const itemType = resolved.itemType;
     const item: Record<string, unknown> = {
-      itemType: args.itemType ?? "NEW DEFAULT",
+      itemType,
       ...(args.description !== undefined ? { description: args.description } : {}),
       ...(args.quantity !== undefined ? { quantity: args.quantity } : {}),
       ...(args.unitPrice !== undefined ? { unitPriceMinor: toMinor(args.unitPrice, args.unitPriceUnit) } : {}),
@@ -420,7 +481,7 @@ const addInvoiceItem = defineRiskyAction({
     return {
       actionLabel: "Add invoice item",
       targets: [{ type: "invoice", id: args.invoiceId }],
-      expectedChanges: [`Add ${args.itemType} item${args.description ? ` "${args.description}"` : ""}`],
+      expectedChanges: [`Add ${itemType} item${args.description ? ` "${args.description}"` : ""}`],
       reversibility: "You can delete the line item afterward.",
       warnings: ["This changes a live billing document."],
       payload: { invoiceId: args.invoiceId, item },
