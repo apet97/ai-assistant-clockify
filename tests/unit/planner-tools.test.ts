@@ -31,7 +31,7 @@ describe("planConversation — tool-calling branch", () => {
   it("maps tool calls to an actions plan when the client supports tools", async () => {
     const model = toolModel({
       text: "",
-      toolCalls: [{ name: "clockify_start_timer", arguments: { description: "Deep Work" } }],
+      toolCalls: [{ id: "c1", name: "clockify_start_timer", arguments: { description: "Deep Work" } }],
     });
     const plan = await planConversation(input(model));
     expect(plan.kind).toBe("actions");
@@ -49,14 +49,14 @@ describe("planConversation — tool-calling branch", () => {
 
   it("passes the generated tool catalog to the client", async () => {
     const spy: { tools?: ToolDefinition[] } = {};
-    const model = toolModel({ text: "", toolCalls: [{ name: "clockify_status", arguments: {} }] }, spy);
+    const model = toolModel({ text: "", toolCalls: [{ id: "c1", name: "clockify_status", arguments: {} }] }, spy);
     await planConversation(input(model));
     expect((spy.tools ?? []).some((t) => t.name === "clockify_status")).toBe(true);
     expect((spy.tools ?? []).length).toBeGreaterThan(50);
   });
 
   it("falls back to JSON mode when useTools is false, even if the client supports tools", async () => {
-    const model = toolModel({ text: "", toolCalls: [{ name: "clockify_status", arguments: {} }] });
+    const model = toolModel({ text: "", toolCalls: [{ id: "c1", name: "clockify_status", arguments: {} }] });
     (model.complete as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
       JSON.stringify({ kind: "answer", text: "hello" }),
     );

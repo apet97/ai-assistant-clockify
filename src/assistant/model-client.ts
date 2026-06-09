@@ -5,8 +5,19 @@
  * header to the LLM endpoint — never inside the prompt/messages, and never logged.
  */
 export interface ModelMessage {
-  role: "system" | "user" | "assistant";
+  role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /**
+   * Present on an assistant turn that invoked tools (an agentic-loop continuation).
+   * Serialized to OpenAI `tool_calls`; the model needs to see its own prior calls
+   * to make sense of the tool results that follow.
+   */
+  toolCalls?: ToolCall[];
+  /**
+   * Present on a `role: "tool"` message — the id of the assistant tool call this
+   * message answers. Serialized to OpenAI `tool_call_id`.
+   */
+  toolCallId?: string;
 }
 
 /** A provider-validated tool the model may call (native function-calling). */
@@ -19,6 +30,12 @@ export interface ToolDefinition {
 
 /** One tool the model chose to call, with its (provider-validated) arguments. */
 export interface ToolCall {
+  /**
+   * The provider's tool-call id (synthesized as `call_<index>` if the provider
+   * omits it). Load-bearing for the agentic loop: a tool-result message must be
+   * keyed back to the call it answers via this id.
+   */
+  id: string;
   name: string;
   arguments: Record<string, unknown>;
 }
@@ -51,6 +68,7 @@ export interface ModelClientConfig {
 }
 
 interface RawToolCall {
+  id?: string;
   function?: { name?: string; arguments?: string };
 }
 
@@ -60,9 +78,9 @@ interface ChatCompletionResponse {
 
 function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
   const calls: ToolCall[] = [];
-  for (const call of rawCalls) {
+  rawCalls.forEach((call, index) => {
     const name = call?.function?.name;
-    if (!name) continue;
+    if (!name) return;
     let args: Record<string, unknown> = {};
     const raw = call?.function?.arguments;
     if (typeof raw === "string" && raw.trim()) {
@@ -73,9 +91,38 @@ function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
         args = {};
       }
     }
-    calls.push({ name, arguments: args });
-  }
+    // Most OpenAI-compatible providers return an id; synthesize a stable one if not,
+    // so the loop can always correlate a tool result back to its call.
+    const id = typeof call.id === "string" && call.id ? call.id : `call_${index}`;
+    calls.push({ id, name, arguments: args });
+  });
   return calls;
+}
+
+/**
+ * Map an internal {@link ModelMessage} to the OpenAI chat-completion wire shape.
+ * Plain system/user/assistant turns pass through as `{ role, content }` (byte-identical
+ * to the previous verbatim serialization). The loop's two extra shapes are mapped:
+ *   - an assistant turn carrying tool calls → `{ role, content, tool_calls: [...] }`
+ *     (arguments are re-stringified, since the wire format expects a JSON string), and
+ *   - a tool-result turn → `{ role: "tool", tool_call_id, content }`.
+ */
+function toWireMessage(message: ModelMessage): Record<string, unknown> {
+  if (message.role === "tool") {
+    return { role: "tool", tool_call_id: message.toolCallId, content: message.content };
+  }
+  if (message.role === "assistant" && message.toolCalls && message.toolCalls.length > 0) {
+    return {
+      role: "assistant",
+      content: message.content || null,
+      tool_calls: message.toolCalls.map((call) => ({
+        id: call.id,
+        type: "function",
+        function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+      })),
+    };
+  }
+  return { role: message.role, content: message.content };
 }
 
 export function createModelClient(config: ModelClientConfig): ModelClient {
@@ -92,7 +139,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         },
         body: JSON.stringify({
           model: config.model,
-          messages,
+          messages: messages.map(toWireMessage),
           temperature: 0,
           response_format: { type: "json_object" },
         }),
@@ -115,7 +162,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         },
         body: JSON.stringify({
           model: config.model,
-          messages,
+          messages: messages.map(toWireMessage),
           temperature: 0,
           tools: tools.map((tool) => ({
             type: "function",
