@@ -11,7 +11,11 @@ file is the short map.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **683 tests**, 0 circular deps. Done + on `main`:
+verify` is green at **694 tests**, 0 circular deps. Done + on `main`:
+- **Ground-truth adapter audit (2026-06-10)** — 9 confirmed-wrong wire shapes
+  fixed (invoice update zeroing tax/discount; approvals wrapper + resubmit body;
+  time-off status field/days/dead single-GET; users role POST; tags
+  rename-by-name) — `CLAUDE.md` → top handoff note.
 - **Full Clockify REST parity** (~115 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;

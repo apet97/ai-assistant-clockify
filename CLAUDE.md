@@ -2,7 +2,49 @@
 
 Read this first in every Claude Code session.
 
-## Handoff note (start here if you're taking over) — 2026-06-09 (agentic loop)
+## Handoff note — 2026-06-10 (ground-truth adapter audit)
+
+A systematic audit of the adapter's Clockify-API assumptions (spec diff vs
+`docs.clockify.me/openapi.json` + goclmcp/clockify-ts-sdk cross-check + self-cleaning
+live probes on the sacrificial workspace) found and fixed **9 confirmed-wrong wire
+shapes**, each pinned by a test that failed first. `npm run verify` = **694 tests**,
+0 cycles, sweep clean. The bug pattern was exactly the predicted one: mocked-fetch
+tests asserting the code's own invented fixture back at itself, concentrated in the
+**preview-only** actions live-full never commits. Fixed (one commit per area):
+
+- **Invoices (`b0de7d1`)** — the big one: GET returns tax/discount as
+  `discount`/`tax`/`tax2` (×100-scaled ints) but the PUT wants
+  `discountPercent`/`taxPercent`/`tax2Percent`, so EVERY field update silently
+  ZEROED the invoice's tax/discount (proven live, fix re-proven live;
+  **goclmcp shares this bug** — we deliberately diverged). Payments list is a bare
+  array with a `date` field (not `paymentDate`); the payments POST response is the
+  INVOICE document (receipt used to carry the invoice id as the payment id — now
+  list-diffed); items POST requires description+quantity (defaulted visibly in the
+  preview).
+- **Approvals (`a1bc1e7`)** — the list returns WRAPPERS
+  (`{approvalRequest:{id,status:{state},dateRange,owner},…totals}`); the old mapping
+  read the flat top level → undefined ids/object states. Resubmit takes the SAME
+  `{period, periodStart}` body as submit (`{approvalId, entryIds}` never existed
+  upstream); the action now mirrors submit's `week`/`periodStart` resolution.
+- **Time-off (`1b0d8d1`)** — approve/deny PATCH field is `status` (not `statusType`);
+  request create REQUIRES `period.days` (defaulted from the span) and takes bare
+  `YYYY-MM-DD` dates; `GET /time-off/requests/{id}` is NOT a real route (404 "No
+  static resource" even for an existing id) → get goes through the POST search.
+- **Users (`a6938ec`)** — role change is **POST** `/users/{id}/roles` (no PUT route).
+- **Hardening (`bdda999`, `0e1201a`)** — `agent_state_json` size cap (256KB, drop →
+  no-resume fallback, never truncate); integration pin that a model exception
+  mid-resume never loses the committed receipt; **tags rename-by-name**
+  (`tags_update` now resolves `currentName` server-side like delete — the "planner
+  lists instead of renaming" quirk was structural: update REQUIRED an id).
+
+Verified-RIGHT (no change needed, now live-confirmed): expense amounts (minor on
+read / major on write — the spec's `double` example is misleading), the
+double-nested expenses envelope, `{invoices,total}` + `{webhooks}` envelopes,
+items delete-by-`order`, `paymentDate` request field, `page-size=200` honored,
+`name` filters are contains+case-insensitive (client-side exact `matchByName` is
+the right design), custom-fields single-GET truly absent.
+
+## Handoff note (prior) — 2026-06-09 (agentic loop)
 
 **Where this stands:** the **durable approval-gated agentic loop is SHIPPED and is now
 the default** (`LLM_AGENTIC` defaults ON; `=0` is the instant rollback). This was the one
@@ -537,9 +579,11 @@ platform constraint** or a **human-gated launch item** (hosting, prod security/c
   and the harness anchors start/end server-side (`ctx.now` does the date math — the model
   doesn't know the calendar date); fired ~33%→75% (repeat=8). `assistant_update_permissions`
   now advertises its levels + phrasings so "give me full access to reports" maps to it
-  (0%→37.5%; a fuller fix is the curated-action layer, Phase 6). Still open: tag *rename*
-  sometimes lists instead of updating; `webhooks_list`/`workspace_get` 401 on the dev host
-  (likely dev-only).
+  (0%→37.5%; a fuller fix is the curated-action layer, Phase 6). ~~Tag *rename* sometimes
+  lists instead of updating~~ **FIXED (2026-06-10):** the cause was structural —
+  `tags_update` REQUIRED an id, so the model couldn't rename by name; it now resolves
+  `currentName` server-side (the delete-by-name pattern) + the prompt names the rename
+  case. Still open: `webhooks_list`/`workspace_get` 401 on the dev host (likely dev-only).
 - **Model choice:** not the bottleneck. `deepseek-v4-pro` (current) and the `gemini-cli`
   backend behave similarly on the above; a swap won't change the schema-guessing or the
   invoice-item-type limits. Switch backends via `LLM_PROVIDER` (see above) only for
