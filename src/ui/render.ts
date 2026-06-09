@@ -12,7 +12,10 @@
 
 import {
   featureGroupRows,
+  settleConfirmOutcome,
   type ChatController,
+  type ChatResult,
+  type ConfirmResponse,
   type PolicyShape,
   type PreviewRef,
   type PreviewResult,
@@ -126,10 +129,12 @@ export interface PreviewDeps {
   controller: ChatController;
   showError: (message: string) => void;
   appendMessage: (role: string, text: string) => void;
+  /** Render follow-up results from a resumed agentic turn (receipts, even a CHAINED preview). */
+  renderResults: (results: ChatResult[]) => void;
 }
 
 export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
-  const { controller, showError, appendMessage } = deps;
+  const { controller, showError, appendMessage, renderResults } = deps;
   const batch = previews.length > 1;
   const card = el("div", "preview-card");
   card.setAttribute("role", "group");
@@ -151,10 +156,18 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   confirmButton.addEventListener("click", async () => {
     confirmButton.disabled = true;
     try {
-      if (batch) await controller.confirmAll(refs);
-      else await controller.confirm(refs[0]);
+      // The server's JSON is settled TRUTHFULLY: a failed confirm shows its
+      // message (never "Confirmed."), and a resumed agentic turn renders its
+      // follow-up receipts / chained preview / truthful reply.
+      const responses = batch
+        ? ((await controller.confirmAll(refs)) as ConfirmResponse[])
+        : [(await controller.confirm(refs[0])) as ConfirmResponse];
       card.remove();
-      appendMessage("assistant", batch ? "Batch confirmed." : "Confirmed.");
+      settleConfirmOutcome(responses, {
+        onAssistant: (text) => appendMessage("assistant", text),
+        onResults: renderResults,
+        onError: showError,
+      });
     } catch {
       showError("Confirmation failed.");
       confirmButton.disabled = false;

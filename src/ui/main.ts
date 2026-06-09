@@ -2,17 +2,27 @@ import "./styles.css";
 import { el, renderPermissionTable, renderPreview, renderReceipt } from "./render.js";
 import {
   type ChatController,
+  type ChatResult,
   type PolicyShape,
   type PreviewResult,
-  type ReceiptResult,
 } from "./shared.js";
 
 // Re-export the shared UI primitives from the leaf `./shared.js` so the
 // public/test import surface (`featureGroupRows` et al. from `./main.js`) is
 // unchanged. They live in the leaf so `render.ts` can use them without importing
 // from main (which imports render's builders) — that would be a circular dep.
-export { featureGroupRows } from "./shared.js";
-export type { PreviewRef, PolicyShape, ChatController, PreviewResult, ReceiptResult } from "./shared.js";
+export { featureGroupRows, settleConfirmOutcome } from "./shared.js";
+export type {
+  PreviewRef,
+  PolicyShape,
+  ChatController,
+  PreviewResult,
+  ReceiptResult,
+  ClarifyResult,
+  ChatResult,
+  ConfirmResponse,
+  ConfirmHooks,
+} from "./shared.js";
 
 /**
  * Vanilla TS chat UI (frontend rules: no framework). The testable core is the
@@ -53,12 +63,6 @@ export function createController(api: ChatApi): ChatController {
 // Chat response shapes + the responsive send flow (testable core).
 // ---------------------------------------------------------------------------
 
-export interface ClarifyResult {
-  kind: "clarify";
-  message: string;
-  options?: Array<{ id: string; label: string }>;
-}
-export type ChatResult = PreviewResult | ReceiptResult | ClarifyResult;
 export interface ChatResponse {
   ok: boolean;
   reply: { kind: string; text: string };
@@ -280,7 +284,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
   function renderResults(results: ChatResult[]): void {
     const previews = results.filter((r): r is PreviewResult => r.kind === "preview");
     if (previews.length > 0)
-      messages.appendChild(renderPreview(previews, { controller, showError, appendMessage }));
+      messages.appendChild(renderPreview(previews, { controller, showError, appendMessage, renderResults }));
     for (const result of results) {
       if (result.kind === "receipt") messages.appendChild(renderReceipt(result, { controller, showError }));
       else if (result.kind === "clarify") appendMessage("assistant", result.message);

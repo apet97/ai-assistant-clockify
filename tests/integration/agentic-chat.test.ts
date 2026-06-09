@@ -7,6 +7,7 @@ import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
+import { DEFAULT_MAX_STEPS, EXHAUSTED_TEXT } from "../../src/assistant/agent-loop.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
@@ -210,6 +211,77 @@ type ResultItem = { kind: string; previewId?: string; nonce?: string; receipt?: 
 function previewsOf(results: ResultItem[]): ResultItem[] {
   return results.filter((r) => r.kind === "preview");
 }
+
+function parseEvents(body: string): Array<Record<string, unknown>> {
+  return body
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => {
+  it("streams each loop step as a result event, then the truthful reply, then done", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_list", arguments: {} }] },
+        { text: "Deleting it.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+      ],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "clean up the urgent tag" });
+    expect(res.status).toBe(200);
+    const events = parseEvents(res.text);
+    const kinds = events.map((e) => (e.type === "result" ? `result:${(e.result as ResultItem).kind}` : e.type));
+    expect(kinds).toEqual(["result:receipt", "result:preview", "reply", "done"]);
+    const reply = events.find((e) => e.type === "reply") as { text: string };
+    expect(reply.text).toContain("Nothing has been changed yet");
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
+  it("answers truthfully when the step budget is exhausted", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "x", name: "clockify_tags_list", arguments: {} }] }],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "loop forever" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.reply.kind).toBe("answer");
+    expect(res.body.reply.text).toBe(EXHAUSTED_TEXT);
+    expect(model.completeWithTools).toHaveBeenCalledTimes(DEFAULT_MAX_STEPS);
+    expect((res.body.results as ResultItem[]).every((r) => r.kind === "receipt")).toBe(true);
+  });
+
+  it("feeds a mid-loop action failure back to the model as an error receipt and continues", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_does_not_exist", arguments: {} }] },
+        { text: "That tool isn't available; nothing was changed.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "do the impossible" });
+
+    expect(res.status).toBe(200);
+    const results = res.body.results as ResultItem[];
+    expect(results).toHaveLength(1);
+    expect(results[0].kind).toBe("receipt");
+    expect(results[0].receipt?.ok).toBe(false);
+    // The error receipt was fed back, and the model answered truthfully.
+    const second = model.calls[1].messages;
+    const toolMsg = second[second.length - 1];
+    expect(toolMsg.role).toBe("tool");
+    expect(toolMsg.content).toContain('"ok":false');
+    expect(res.body.reply.text).toBe("That tool isn't available; nothing was changed.");
+  });
+});
 
 describe("durable resume after the button-confirm (Phase 3)", () => {
   it("completes the headline flow: list clients → invoice preview → confirm → resumed truthful summary", async () => {
