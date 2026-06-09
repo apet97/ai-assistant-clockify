@@ -2,8 +2,8 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition, type ActionResult } from "../action.js";
 import type { EntitySummary } from "../../clockify/client.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
-import type { EntityRef, Warning } from "../receipts.js";
-import { successReceipt } from "../receipts.js";
+import { successReceipt, errorReceipt } from "../receipts.js";
+import { runComposition, type CompositionStep } from "../compose.js";
 import { matchByName } from "./resolve.js";
 
 function nowIso(ctx: ActionContext): string {
@@ -121,105 +121,175 @@ const createWorkPackage = defineAction({
       }),
   ),
   async handler(ctx, args) {
-    const created: EntityRef[] = [];
-    const reused: EntityRef[] = [];
-    const warnings: Warning[] = [];
+    // Each entity is a composition STEP. A required step that fails rolls back the
+    // entities this op already created (no orphan client/project when a later step
+    // errors); the timer is best-effort (a failure warns, never rolls back); an
+    // ambiguous name STOPS with a clarify (not a failure — prior creates are kept,
+    // matching the pre-composition behavior). `runComposition` owns these semantics.
+    const del = ctx.clockify.deleteEntity?.bind(ctx.clockify);
+    const undoFor = (entityType: string, id: string): (() => Promise<void>) | undefined =>
+      del ? () => del({ entityType, id }) : undefined;
+
+    // Shared, forward-flowing ids (client → project → task → timer).
+    const ids: { clientId?: string; projectId?: string; taskId?: string } = {};
+    const steps: CompositionStep[] = [];
 
     if (args.tag) {
-      const tags = await ctx.clockify.listTags();
-      const match = matchByName(tags, args.tag.name);
-      if (match.kind === "one") {
-        reused.push({ type: "tag", id: match.entity.id, name: match.entity.name });
-      } else if (match.kind === "many") {
-        return ambiguous("tag", args.tag.name, match.matches);
-      } else {
-        const tag = await ctx.clockify.createTag({ name: args.tag.name });
-        created.push({ type: "tag", id: tag.id, name: tag.name });
-      }
+      const tag = args.tag;
+      steps.push({
+        label: "tag",
+        required: true,
+        run: async () => {
+          const match = matchByName(await ctx.clockify.listTags(), tag.name);
+          if (match.kind === "one") return { kind: "done", reused: [{ type: "tag", id: match.entity.id, name: match.entity.name }] };
+          if (match.kind === "many") return { kind: "stop", result: ambiguous("tag", tag.name, match.matches) };
+          const created = await ctx.clockify.createTag({ name: tag.name });
+          return { kind: "done", created: [{ type: "tag", id: created.id, name: created.name }], undo: undoFor("tag", created.id) };
+        },
+      });
     }
 
-    let clientId: string | undefined;
     if (args.client) {
-      const resolved = await resolveOrCreateClient(ctx, args.client.name, created, reused);
-      if (resolved.kind === "clarify") return resolved.result;
-      clientId = resolved.id;
+      const client = args.client;
+      steps.push({
+        label: "client",
+        required: true,
+        run: async () => {
+          const match = matchByName(await ctx.clockify.listClients(), client.name);
+          if (match.kind === "one") {
+            ids.clientId = match.entity.id;
+            return { kind: "done", reused: [{ type: "client", id: match.entity.id, name: match.entity.name }] };
+          }
+          if (match.kind === "many") return { kind: "stop", result: ambiguous("client", client.name, match.matches) };
+          const created = await ctx.clockify.createClient({ name: client.name });
+          ids.clientId = created.id;
+          return { kind: "done", created: [{ type: "client", id: created.id, name: created.name }], undo: undoFor("client", created.id) };
+        },
+      });
     }
 
-    let projectId: string | undefined;
     if (args.project) {
-      if (args.project.clientName) {
-        const resolved = await resolveExistingClient(ctx, args.project.clientName);
-        if (resolved.kind === "clarify") return resolved.result;
-        clientId = resolved.id;
-      }
-      const projects = await ctx.clockify.listProjects();
-      const candidates = clientId ? projects.filter((p) => p.clientId === clientId) : projects;
-      const match = matchByName(candidates, args.project.name);
-      if (match.kind === "one") {
-        projectId = match.entity.id;
-        reused.push({ type: "project", id: match.entity.id, name: match.entity.name });
-      } else if (match.kind === "many") {
-        return ambiguous("project", args.project.name, match.matches);
-      } else {
-        const project = await ctx.clockify.createProject({ name: args.project.name, clientId });
-        projectId = project.id;
-        created.push({ type: "project", id: project.id, name: project.name });
-      }
+      const project = args.project;
+      steps.push({
+        label: "project",
+        required: true,
+        run: async () => {
+          if (project.clientName) {
+            const cmatch = matchByName(await ctx.clockify.listClients(), project.clientName);
+            if (cmatch.kind === "none") {
+              return {
+                kind: "stop",
+                result: {
+                  kind: "clarify",
+                  message: `I couldn't find an active client named "${project.clientName}". Should I create it, or which existing client did you mean?`,
+                },
+              };
+            }
+            if (cmatch.kind === "many") return { kind: "stop", result: ambiguous("client", project.clientName, cmatch.matches) };
+            ids.clientId = cmatch.entity.id;
+          }
+          const projects = await ctx.clockify.listProjects();
+          const candidates = ids.clientId ? projects.filter((p) => p.clientId === ids.clientId) : projects;
+          const match = matchByName(candidates, project.name);
+          if (match.kind === "one") {
+            ids.projectId = match.entity.id;
+            return { kind: "done", reused: [{ type: "project", id: match.entity.id, name: match.entity.name }] };
+          }
+          if (match.kind === "many") return { kind: "stop", result: ambiguous("project", project.name, match.matches) };
+          const created = await ctx.clockify.createProject({ name: project.name, clientId: ids.clientId });
+          ids.projectId = created.id;
+          return { kind: "done", created: [{ type: "project", id: created.id, name: created.name }], undo: undoFor("project", created.id) };
+        },
+      });
     }
 
-    let taskId: string | undefined;
     if (args.task) {
-      if (!projectId) {
-        return {
-          kind: "clarify",
-          message: `To create task "${args.task.name}" I need a project. Which project should it belong to?`,
-        };
-      }
-      const tasks = await ctx.clockify.listTasks(projectId);
-      const match = matchByName(tasks, args.task.name);
-      if (match.kind === "one") {
-        taskId = match.entity.id;
-        reused.push({ type: "task", id: match.entity.id, name: match.entity.name });
-      } else if (match.kind === "many") {
-        return ambiguous("task", args.task.name, match.matches);
-      } else {
-        const task = await ctx.clockify.createTask({ projectId, name: args.task.name });
-        taskId = task.id;
-        created.push({ type: "task", id: task.id, name: task.name });
-      }
+      const task = args.task;
+      steps.push({
+        label: "task",
+        required: true,
+        run: async () => {
+          if (!ids.projectId) {
+            return {
+              kind: "stop",
+              result: {
+                kind: "clarify",
+                message: `To create task "${task.name}" I need a project. Which project should it belong to?`,
+              },
+            };
+          }
+          const match = matchByName(await ctx.clockify.listTasks(ids.projectId), task.name);
+          if (match.kind === "one") {
+            ids.taskId = match.entity.id;
+            return { kind: "done", reused: [{ type: "task", id: match.entity.id, name: match.entity.name }] };
+          }
+          if (match.kind === "many") return { kind: "stop", result: ambiguous("task", task.name, match.matches) };
+          const created = await ctx.clockify.createTask({ projectId: ids.projectId, name: task.name });
+          ids.taskId = created.id;
+          return { kind: "done", created: [{ type: "task", id: created.id, name: created.name }], undo: undoFor("task", created.id) };
+        },
+      });
     }
 
-    // Optionally start a timer on the just-created/reused project in the same step
-    // (SPEC: "the harness decides, not the model" — the new project id is resolved
-    // server-side, so the planner never has to reference an id that does not exist
-    // yet). Starting a timer is a `time_tracking` write, so it is gated by that
-    // group independently of this action's `work_structure` gate.
     if (args.startTimer) {
       const timerOpts = typeof args.startTimer === "object" ? args.startTimer : {};
-      if (!projectId) {
-        return {
-          kind: "clarify",
-          message:
-            "To start a timer I need a project. Add a project to create or reuse, or start the timer separately.",
-        };
-      }
-      if (!canWrite(ctx.policy, "time_tracking")) {
-        warnings.push({
-          code: "policy_denied",
-          message:
-            "Timer not started: write access to time_tracking is disabled in your assistant permissions.",
-        });
-      } else {
-        const entry = await ctx.clockify.startTimeEntry({
-          userId: ctx.adminUserId,
-          description: timerOpts.description,
-          projectId,
-          taskId,
-          billable: timerOpts.billable,
-          start: nowIso(ctx),
-        });
-        created.push({ type: "time_entry", id: entry.id, name: entry.description });
-      }
+      steps.push({
+        // Best-effort: a timer failure warns but never rolls back the work that was
+        // successfully created. Starting a timer is a `time_tracking` write, gated
+        // by that group independently of this action's `work_structure` gate.
+        label: "timer",
+        required: false,
+        run: async () => {
+          if (!ids.projectId) {
+            return {
+              kind: "stop",
+              result: {
+                kind: "clarify",
+                message:
+                  "To start a timer I need a project. Add a project to create or reuse, or start the timer separately.",
+              },
+            };
+          }
+          if (!canWrite(ctx.policy, "time_tracking")) {
+            return {
+              kind: "done",
+              warnings: [
+                {
+                  code: "policy_denied",
+                  message:
+                    "Timer not started: write access to time_tracking is disabled in your assistant permissions.",
+                },
+              ],
+            };
+          }
+          const entry = await ctx.clockify.startTimeEntry({
+            userId: ctx.adminUserId,
+            description: timerOpts.description,
+            projectId: ids.projectId,
+            taskId: ids.taskId,
+            billable: timerOpts.billable,
+            start: nowIso(ctx),
+          });
+          return { kind: "done", created: [{ type: "time_entry", id: entry.id, name: entry.description }], undo: undoFor("time_entry", entry.id) };
+        },
+      });
+    }
+
+    const outcome = await runComposition(steps);
+    if (outcome.status.kind === "stopped") return outcome.status.result;
+    if (outcome.status.kind === "failed") {
+      const rolled = outcome.status.rolledBack.length
+        ? ` Rolled back: ${outcome.status.rolledBack.map((r) => `${r.type} ${r.name ?? r.id}`).join(", ")}.`
+        : "";
+      return {
+        kind: "receipt",
+        receipt: errorReceipt({
+          action: "clockify_create_work_package",
+          code: "composition_failed",
+          message: `Couldn't complete the request: the ${outcome.status.label} step failed (${outcome.status.message}).${rolled}`,
+          recovery: { hint: "Nothing partial was left behind; adjust the request and try again.", retryable: true },
+        }),
+      };
     }
 
     return {
@@ -228,8 +298,8 @@ const createWorkPackage = defineAction({
         action: "clockify_create_work_package",
         entity: "work_package",
         ids: { workspaceId: ctx.workspaceId },
-        changed: { created, reused },
-        warnings,
+        changed: { created: outcome.created, reused: outcome.reused },
+        warnings: outcome.warnings,
       }),
     };
   },
@@ -245,45 +315,6 @@ function ambiguous(
     message: `Several ${type}s are named "${name}". Which one?`,
     options: matches.map((m) => ({ id: m.id, label: m.name })),
   };
-}
-
-async function resolveExistingClient(
-  ctx: ActionContext,
-  name: string,
-): Promise<{ kind: "id"; id: string } | { kind: "clarify"; result: ActionResult }> {
-  const clients = await ctx.clockify.listClients();
-  const match = matchByName(clients, name);
-  if (match.kind === "one") return { kind: "id", id: match.entity.id };
-  if (match.kind === "many") {
-    return { kind: "clarify", result: ambiguous("client", name, match.matches) };
-  }
-  return {
-    kind: "clarify",
-    result: {
-      kind: "clarify",
-      message: `I couldn't find an active client named "${name}". Should I create it, or which existing client did you mean?`,
-    },
-  };
-}
-
-async function resolveOrCreateClient(
-  ctx: ActionContext,
-  name: string,
-  created: EntityRef[],
-  reused: EntityRef[],
-): Promise<{ kind: "id"; id: string } | { kind: "clarify"; result: ActionResult }> {
-  const clients = await ctx.clockify.listClients();
-  const match = matchByName(clients, name);
-  if (match.kind === "one") {
-    reused.push({ type: "client", id: match.entity.id, name: match.entity.name });
-    return { kind: "id", id: match.entity.id };
-  }
-  if (match.kind === "many") {
-    return { kind: "clarify", result: ambiguous("client", name, match.matches) };
-  }
-  const client = await ctx.clockify.createClient({ name });
-  created.push({ type: "client", id: client.id, name: client.name });
-  return { kind: "id", id: client.id };
 }
 
 const listEntities = defineAction({
