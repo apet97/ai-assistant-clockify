@@ -6,9 +6,10 @@ Read this first in every Claude Code session.
 
 **Where this stands:** V1 + the full Clockify REST parity effort are complete, AND the
 entire **"trust lives in the code" roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is
-delivered** for everything buildable in-repo. `npm run verify` is green at **618 tests**
+delivered** for everything buildable in-repo. `npm run verify` is green at **624 tests**
 (type-check + Vitest + build); everything is committed and pushed to `main`. Across this
-arc the suite went 479 → 618.
+arc the suite went 479 → 618, then a thermo-nuclear codebase-review refactor took it to
+**624** (see "Structural refactor" below).
 
 **What got built (all on `main`, each TDD'd, see "Current Status" for detail):**
 - **Phase 1** — a planner **eval harness** (`scripts/eval-planner.ts`, pure scorer
@@ -27,6 +28,27 @@ arc the suite went 479 → 618.
 - **Phase 7 (in-repo slices)** — operational **metrics** (`GET /api/metrics`,
   `src/metrics/metrics.ts`), **UI a11y** + a responsive "working" status, and
   **NDJSON streaming** of the harness's progress (`POST /api/chat/stream`).
+
+**Structural refactor (thermo-nuclear codebase review, 2026-06-09).** A maintainability
+pass on the existing code (net ≈−650 lines, **17 → 0 circular dependencies**, 618 → 624
+tests), each step `npm run verify`-green:
+- **Action builders** (`src/harness/action.ts`): `defineRiskyAction` / `defineReadAction`
+  collapse the per-action scaffold — `featureGroup`/`risks`/`actionName` had been restated
+  3–4× across 64 risky blocks. All 18 workflow files migrated; the builder derives
+  `operation.featureGroup` from `resolveFeatureGroup` so the confirm-time gate keys on the
+  correct per-entity group. (Typing rationale is in the action-builder design memory.)
+- **Type-only import cycles eliminated (17 → 0)**: shared Clockify summary shapes →
+  leaf `src/clockify/types.ts`; `IdempotencyLedger` → `action.ts`; shared UI types →
+  `src/ui/shared.ts`. **Keep `npx madge --circular --extensions ts --ts-config tsconfig.json
+  src` at 0.**
+- **Permission confirms unified**: `ActionContext.savePolicy` lets the permission action's
+  `commit` self-persist, so `/confirmations/:id/confirm` routes EVERY op through the single
+  `commitConfirmedOperation` choke point (the inline permission special-case is gone; the
+  `permission_change` gate-skip is unchanged).
+- **Less surface**: the vestigial SDK-wrapper factory is deleted (`createRestWorkspaceClient`
+  is the only client path); `rest-workspace.ts` has one HTTP path (`core.call`); `store.ts`
+  test-only methods moved to a `TestStore` type; the 966-line `fake-clockify.ts` split into
+  per-area `tests/helpers/fake/*`; `mount()` render builders extracted to `src/ui/render.ts`.
 
 **What remains is NOT code you can write alone — it needs the human's decisions / live
 credentials:**
@@ -97,7 +119,7 @@ typed catalog actions across 16 feature areas and 3 API hosts, each routed
 through the existing safe/risky harness — and the **"trust lives in the code"
 roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is COMPLETE for everything buildable
 in-repo** (see the Handoff note at the top). The per-phase detail follows below;
-the headline is in the Handoff note. `npm run verify` = **618 tests**.
+the headline is in the Handoff note. `npm run verify` = **624 tests**.
 
 **Live end-to-end PROVEN (2026-06-08):** the add-on was registered + installed on
 a sacrificial Clockify dev workspace and driven through the real embedded chat —
@@ -133,7 +155,7 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**618 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**624 tests**: type-check + Vitest + build).
 - **NDJSON streaming of the harness's progress (Phase 7 slice, 2026-06-09).**
   `POST /api/chat/stream` streams the HARNESS's progress — `{type:"result",result}`
   per harness result as it executes, then `{type:"reply",kind,text}` (the *truthful*
