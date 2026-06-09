@@ -110,3 +110,111 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
 }): ActionDefinition {
   return def as unknown as ActionDefinition;
 }
+
+/**
+ * The success shape a {@link defineRiskyAction} preview callback returns to ask
+ * for a dry-run preview. `payload` is the exact operation payload that
+ * {@link defineRiskyAction.commit} will later receive.
+ */
+export interface RiskyPreviewResult {
+  actionLabel: string;
+  targets: EntityRef[];
+  expectedChanges: string[];
+  reversibility: string;
+  warnings?: string[];
+  payload: Record<string, unknown>;
+}
+
+/** The alternative a preview callback returns to stop and ask for clarification. */
+export interface RiskyClarifyResult {
+  clarify: string;
+  options?: ClarifyOption[];
+}
+
+/**
+ * Build a risky (preview → button-confirm → commit) action without re-stating
+ * the action's identity three times. The preview callback returns the
+ * preview-specific fields plus the operation `payload`; everything derived from
+ * the action's identity (featureGroup, riskLabels, actionName) is filled in from
+ * `group`/`risks`/`name` so it can never drift. Emits exactly the same
+ * ActionResult / ConfirmableOperation shape as the hand-rolled scaffold.
+ */
+export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
+  name: string;
+  description: string;
+  group: FeatureGroup;
+  risks: RiskLabel[];
+  schema: S;
+  resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
+  idempotencyKey?(payload: Record<string, unknown>): string | undefined;
+  preview(
+    ctx: ActionContext,
+    args: z.infer<S>,
+  ): Promise<RiskyPreviewResult | RiskyClarifyResult>;
+  commit(ctx: ActionContext, payload: Record<string, unknown>): Promise<SuccessReceipt | ErrorReceipt>;
+}): ActionDefinition {
+  return defineAction({
+    name: def.name,
+    description: def.description,
+    featureGroup: def.group,
+    risks: def.risks,
+    schema: def.schema,
+    ...(def.resolveFeatureGroup ? { resolveFeatureGroup: def.resolveFeatureGroup } : {}),
+    ...(def.idempotencyKey
+      ? {
+          idempotencyKey: (operation: ConfirmableOperation) =>
+            def.idempotencyKey!(operation.payload),
+        }
+      : {}),
+    async handler(ctx, args): Promise<ActionResult> {
+      const r = await def.preview(ctx, args);
+      if ("clarify" in r) {
+        return { kind: "clarify", message: r.clarify, options: r.options };
+      }
+      return {
+        kind: "preview",
+        preview: {
+          actionLabel: r.actionLabel,
+          featureGroup: def.group,
+          riskLabels: def.risks,
+          targets: r.targets,
+          expectedChanges: r.expectedChanges,
+          reversibility: r.reversibility,
+          warnings: r.warnings ?? [],
+        },
+        operation: {
+          actionName: def.name,
+          featureGroup: def.group,
+          risks: def.risks,
+          payload: r.payload,
+        },
+      };
+    },
+    commit(ctx, operation) {
+      return def.commit(ctx, operation.payload);
+    },
+  });
+}
+
+/**
+ * Build an immediate read action (risk `["read"]`). The handler returns the
+ * receipt directly; the builder wraps it in `{ kind: "receipt" }`.
+ */
+export function defineReadAction<S extends z.ZodTypeAny>(def: {
+  name: string;
+  description: string;
+  group: FeatureGroup;
+  schema: S;
+  handler(ctx: ActionContext, args: z.infer<S>): Promise<SuccessReceipt | ErrorReceipt>;
+}): ActionDefinition {
+  return defineAction({
+    name: def.name,
+    description: def.description,
+    featureGroup: def.group,
+    risks: ["read"],
+    schema: def.schema,
+    async handler(ctx, args): Promise<ActionResult> {
+      return { kind: "receipt", receipt: await def.handler(ctx, args) };
+    },
+  });
+}
