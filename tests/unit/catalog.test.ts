@@ -296,6 +296,15 @@ describe("catalog", () => {
     }
   });
 
+  it("assistant_update_permissions advertises its levels + access phrasing so 'give me access' maps to it", () => {
+    // The planner returned a plain answer for "give me full read-write access to
+    // reports" because the action did not advertise that intent or its values.
+    const desc = getAction("assistant_update_permissions")?.description ?? "";
+    expect(desc).toContain("read_write");
+    expect(desc).toContain("off");
+    expect(desc.toLowerCase()).toContain("access");
+  });
+
   it("getAction returns the definition or undefined", () => {
     expect(getAction("clockify_status")?.name).toBe("clockify_status");
     expect(getAction("does_not_exist")).toBeUndefined();

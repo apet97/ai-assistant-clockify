@@ -110,15 +110,83 @@ const stopTimer = defineAction({
   },
 });
 
+function addDays(isoDay: string, days: number): string {
+  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve the entry's day (YYYY-MM-DD) server-side. The model knows "yesterday"
+ * but not the calendar date (its own clock is unreliable), so it accepts a
+ * relative word (`today`/`yesterday`/`tomorrow`) or a numeric `dayOffset`
+ * (0=today, -1=yesterday) and the harness — which has `ctx.now` — does the math.
+ * A literal `YYYY-MM-DD` still wins; absent everything, today.
+ */
+function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string {
+  const today = nowIso(ctx).slice(0, 10);
+  if (args.dayOffset !== undefined) return addDays(today, args.dayOffset);
+  const raw = args.date?.trim().toLowerCase();
+  if (!raw) return today;
+  if (raw === "today") return today;
+  if (raw === "yesterday") return addDays(today, -1);
+  if (raw === "tomorrow") return addDays(today, 1);
+  return args.date!.slice(0, 10);
+}
+
+/**
+ * Resolve a completed-entry start/end from the shapes the planner naturally emits
+ * ("log 2 hours on Apollo yesterday"). The model reliably gives a duration and a
+ * relative day but is unsure of the clock time (and the absolute date), so it used
+ * to dead-end on the required `start` and clarify instead of acting. The harness
+ * owns this: given a `duration` (+ optional relative `date`/`dayOffset`) it anchors
+ * a deterministic 09:00 start on the resolved day and computes the end. An explicit
+ * `start` still wins. With neither a start nor a duration there is nothing to log,
+ * so it asks one precise question.
+ */
+function resolveLogTimes(
+  ctx: ActionContext,
+  args: {
+    start?: string;
+    end?: string;
+    date?: string;
+    dayOffset?: number;
+    durationMinutes?: number;
+    durationHours?: number;
+  },
+): { kind: "ok"; start: string; end?: string } | { kind: "clarify"; message: string } {
+  const durationMinutes =
+    args.durationMinutes ?? (args.durationHours !== undefined ? args.durationHours * 60 : undefined);
+  const addMinutes = (iso: string, minutes: number): string =>
+    new Date(Date.parse(iso) + minutes * 60_000).toISOString();
+
+  if (args.start) {
+    const end = args.end ?? (durationMinutes !== undefined ? addMinutes(args.start, durationMinutes) : undefined);
+    return { kind: "ok", start: args.start, end };
+  }
+  if (durationMinutes === undefined) {
+    return {
+      kind: "clarify",
+      message: "How long was it (e.g. 2 hours), or what start and end times should I use?",
+    };
+  }
+  const start = `${resolveDay(ctx, args)}T09:00:00.000Z`;
+  const end = args.end ?? addMinutes(start, durationMinutes);
+  return { kind: "ok", start, end };
+}
+
 const logWork = defineAction({
   name: "clockify_log_work",
-  description: "Log a completed time entry. Resolves project/task by name.",
+  description:
+    "Log a completed time entry. Resolves project/task by name. Give either an explicit `start` (+ `end`), or a `duration` (`durationHours`/`durationMinutes`) with the day — and you do NOT need to know the calendar date: pass `date` as `today`/`yesterday`/`tomorrow` (or YYYY-MM-DD), or `dayOffset` (0=today, -1=yesterday), and the harness anchors the start/end. Use this for \"log 2 hours on Apollo yesterday\" instead of asking for a clock time or date.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z.object({
     description: z.string().min(1),
-    start: z.string().min(1),
+    start: z.string().optional(),
     end: z.string().optional(),
+    date: z.string().optional(),
+    dayOffset: z.number().int().optional(),
+    durationMinutes: z.number().positive().optional(),
+    durationHours: z.number().positive().optional(),
     projectId: z.string().optional(),
     projectName: z.string().optional(),
     taskName: z.string().optional(),
@@ -126,6 +194,11 @@ const logWork = defineAction({
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
+    const times = resolveLogTimes(ctx, args);
+    if (times.kind === "clarify") {
+      return { kind: "clarify", message: times.message };
+    }
+
     let projectId = args.projectId;
 
     if (!projectId && args.projectName) {
@@ -179,8 +252,8 @@ const logWork = defineAction({
       taskId,
       tagIds: args.tagIds,
       billable: args.billable,
-      start: args.start,
-      end: args.end,
+      start: times.start,
+      end: times.end,
     });
     return {
       kind: "receipt",

@@ -213,14 +213,15 @@ export const EVAL_CASES: EvalCase[] = [
   {
     id: "defaults/audit_deletions",
     area: "defaults",
+    // Both the audit-log search and the entity-changes feed are valid audit reads.
     message: "search the audit log for deletions",
-    expect: { anyAction: ["clockify_audit_logs_search"] },
+    expect: { anyAction: ["clockify_audit_logs_search", "clockify_entity_changes_list"] },
   },
   {
     id: "defaults/audit_month",
     area: "defaults",
     message: "what changed in the audit log this month?",
-    expect: { anyAction: ["clockify_audit_logs_search"] },
+    expect: { anyAction: ["clockify_audit_logs_search", "clockify_entity_changes_list"] },
   },
 
   // ---- billing -----------------------------------------------------------

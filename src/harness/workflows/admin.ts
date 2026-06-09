@@ -111,7 +111,7 @@ function normalizePermissionArgs(raw: unknown): unknown {
 const updatePermissions = defineAction({
   name: "assistant_update_permissions",
   description:
-    "Change the admin's own assistant permissions. Not a Clockify write; needs a button save, no Clockify dry-run.",
+    "Change the admin's OWN assistant access to a feature group — set a group to off, read, or read_write. Use this whenever the admin asks to grant/raise/lower/remove their own access, e.g. 'give me full (read_write) access to reports', 'set invoices to read-only', or 'turn off webhooks'. Not a Clockify write; needs a button save, no Clockify dry-run.",
   featureGroup: "workspace_settings",
   risks: ["permission_change"],
   schema: z.preprocess(
