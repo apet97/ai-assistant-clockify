@@ -76,7 +76,7 @@ function resolveItemType(discovered: string[], requested?: string): ItemTypeReso
 
 function itemTypeClarify(options: string[]): { clarify: string; options: { id: string; label: string }[] } {
   return {
-    clarify: `This workspace's invoice item types are: ${options.join(", ")}. Which should I use? (There's no API to add new ones — create them in Clockify → Workspace settings → Invoices.)`,
+    clarify: `This workspace's invoice item types are: ${options.join(", ")}. Which should I use? (I can't create a new type via the API — add a line item once in the Clockify invoice editor and it auto-creates a type I can then reuse.)`,
     options: options.map((t) => ({ id: t, label: t })),
   };
 }
@@ -290,12 +290,12 @@ const createInvoice = defineRiskyAction({
       warnings: [
         "This creates a billing document.",
         // Phase 4 — surface the platform constraint in the PREVIEW, not after
-        // confirm: line items need a workspace-configured invoice item type (there
-        // is no API to list/create them), and a fresh workspace has none, so a $0
-        // outcome is never a surprise.
-        ...(items.length
+        // confirm. Only when the workspace has NO discoverable item type (none has
+        // ever been auto-created by a manual line item) will the item(s) be skipped
+        // → a $0 total. When types WERE discovered, the items apply, so no caveat.
+        ...(items.length && discovered.length === 0
           ? [
-              "Line items require a workspace-configured invoice item type (Clockify → Workspace settings → Invoices). If none is configured, the line item(s) will be skipped and the invoice total will be $0.",
+              "This workspace has no invoice item type yet, so the line item(s) can't be added and the total will be $0. Add one line item manually in the Clockify invoice editor once — it auto-creates a type — and I can add items here from then on.",
             ]
           : []),
         ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
@@ -319,10 +319,11 @@ const createInvoice = defineRiskyAction({
         added += 1;
       } catch (error) {
         const raw = error instanceof Error ? error.message : "error";
-        // Invoice item types are workspace-configured named entities; a fresh
-        // workspace may have none. Make that actionable instead of a raw 404.
+        // Invoice item types are auto-created when a line item is added in the
+        // Clockify UI; a workspace that's never had one has none. Make that
+        // actionable instead of a raw 404 (there's no "settings" screen for them).
         const actionable = /item type/i.test(raw)
-          ? "this workspace has no matching invoice item type. Configure invoice item types in Clockify (Workspace settings → Invoices), or tell me an existing item type name."
+          ? "this workspace has no matching invoice item type. Add a line item once in the Clockify invoice editor (it auto-creates a type), or tell me an existing item type name."
           : raw.slice(0, 120);
         warnings.push({
           code: "item_not_added",
