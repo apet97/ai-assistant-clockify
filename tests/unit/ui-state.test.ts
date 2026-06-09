@@ -20,6 +20,10 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("sendMessage");
       return { ok: true, reply: { kind: "answer", text: "" }, results: [] };
     },
+    async streamMessage(_message: string, onEvent: (event: { type: string }) => void) {
+      bump("streamMessage");
+      onEvent({ type: "done" });
+    },
     async confirmPreview() {
       bump("confirmPreview");
       return { ok: true };

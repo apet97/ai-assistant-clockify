@@ -26,6 +26,8 @@ export interface ChatApi {
   getPermissions(): Promise<unknown>;
   savePermissions(groups: Record<string, string>): Promise<unknown>;
   sendMessage(message: string): Promise<unknown>;
+  /** Streaming send: harness results arrive incrementally, then the truthful reply. */
+  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
   confirmPreview(previewId: string, nonce: string): Promise<unknown>;
   cancelPreview(previewId: string): Promise<unknown>;
   undo(id: string): Promise<unknown>;
@@ -117,6 +119,79 @@ export async function submitMessage(api: ChatApiLike, message: string, hooks: Co
   }
 }
 
+// --- NDJSON streaming (POST /api/chat/stream) ------------------------------
+
+/** One event from the streaming chat endpoint. */
+export interface StreamEvent {
+  type: "result" | "reply" | "error" | "done" | string;
+  result?: ChatResult;
+  kind?: string;
+  text?: string;
+  code?: string;
+  message?: string;
+}
+
+export interface StreamingApi {
+  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
+}
+
+/**
+ * A stateful NDJSON line parser: feed it response-body chunks (which can split a
+ * line anywhere) and it calls `onEvent` once per COMPLETE line, buffering the
+ * partial remainder. Malformed lines are skipped (never throws).
+ */
+export function createNdjsonParser(onEvent: (event: StreamEvent) => void): (chunk: string) => void {
+  let buffer = "";
+  return (chunk: string): void => {
+    buffer += chunk;
+    let nl = buffer.indexOf("\n");
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (line) {
+        try {
+          onEvent(JSON.parse(line) as StreamEvent);
+        } catch {
+          /* skip a malformed line */
+        }
+      }
+      nl = buffer.indexOf("\n");
+    }
+  };
+}
+
+/**
+ * The streaming send flow. Receipts/clarifies render as they stream in; PREVIEWS
+ * are buffered and flushed together (so a batch keeps its single "Confirm all"
+ * card) when the truthful reply arrives. Same responsiveness contract as
+ * `submitMessage`: working is announced before and always cleared after.
+ */
+export async function submitStreaming(api: StreamingApi, message: string, hooks: ComposerHooks): Promise<void> {
+  hooks.onWorking(true);
+  const pendingPreviews: ChatResult[] = [];
+  const flushPreviews = (): void => {
+    if (pendingPreviews.length > 0) hooks.onResults(pendingPreviews.splice(0));
+  };
+  try {
+    await api.streamMessage(message, (event) => {
+      if (event.type === "result" && event.result) {
+        if (event.result.kind === "preview") pendingPreviews.push(event.result);
+        else hooks.onResults([event.result]);
+      } else if (event.type === "reply") {
+        flushPreviews();
+        if (event.text) hooks.onAssistant(event.text);
+      } else if (event.type === "error") {
+        hooks.onError(typeof event.message === "string" ? event.message : "Message failed.");
+      }
+    });
+  } catch {
+    hooks.onError("Message failed to send.");
+  } finally {
+    flushPreviews(); // flush any previews if the stream ended without a reply
+    hooks.onWorking(false);
+  }
+}
+
 /** Real fetch-backed API client (same-origin; the session cookie authenticates). */
 export function createFetchApi(): ChatApi {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
@@ -133,6 +208,27 @@ export function createFetchApi(): ChatApi {
       json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
     sendMessage: (message) =>
       json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
+    streamMessage: async (message, onEvent) => {
+      const res = await fetch("/api/chat/stream", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok || !res.body) {
+        onEvent({ type: "error", message: "The assistant is temporarily unavailable. Please try again." });
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      const feed = createNdjsonParser(onEvent);
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        feed(decoder.decode(value, { stream: true }));
+      }
+      feed(decoder.decode()); // flush any trailing bytes
+    },
     confirmPreview: (previewId, nonce) =>
       json(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
         method: "POST",
@@ -373,7 +469,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
       appendMessage("user", text);
       input.value = "";
       clearError();
-      await submitMessage(api, text, {
+      // Streaming: harness results render as they arrive, then the truthful reply.
+      await submitStreaming(api, text, {
         onWorking: (working) => {
           busy = working;
           setWorking(working); // announces "Assistant is working…" to screen readers

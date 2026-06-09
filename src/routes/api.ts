@@ -175,25 +175,27 @@ export function apiRouter(deps: AppDeps): Router {
     return res.json({ ok: true, receipt, policy: next });
   });
 
-  router.post("/chat/messages", async (req, res) => {
-    const claims = requireSession(req, res);
-    if (!claims) return;
-    const parsed = chatBodySchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(400).json({ ok: false, code: "invalid_args", message: "A message is required." });
-    }
+  // Shared chat-turn logic for both the JSON route and the streaming route, so the
+  // safety logic (model-error handling, per-result audit + undo capture, the
+  // truthful-preview text override, history persistence) lives in ONE place and the
+  // two transports can't drift. `onResult` is called as each result is produced
+  // (the streaming route writes it immediately); the JSON route ignores it.
+  type ChatTurnOutcome =
+    | { ok: true; replyKind: string; replyText: string; results: unknown[] }
+    | { ok: false; code: string; message: string };
 
-    const installation = deps.store.getInstallation(claims.workspaceId);
-    if (!installation || installation.status !== "active") {
-      return res.status(409).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
-    }
-
+  async function executeChatTurn(
+    claims: { sessionId: string; workspaceId: string; adminUserId: string },
+    installation: Installation,
+    message: string,
+    onResult?: (result: unknown) => void,
+  ): Promise<ChatTurnOutcome> {
     deps.store.addMessage({
       sessionId: claims.sessionId,
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       role: "user",
-      content: parsed.data.message,
+      content: message,
     });
 
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
@@ -216,29 +218,30 @@ export function apiRouter(deps: AppDeps): Router {
     } catch {
       // A model/transport failure must never crash the server. Surface a calm,
       // non-leaking message and let the admin retry.
-      const message = "The assistant is temporarily unavailable. Please try again.";
+      const errorText = "The assistant is temporarily unavailable. Please try again.";
       deps.store.addMessage({
         sessionId: claims.sessionId,
         workspaceId: claims.workspaceId,
         adminUserId: claims.adminUserId,
         role: "assistant",
-        content: message,
+        content: errorText,
         payload: { kind: "error" },
       });
-      return res.status(502).json({ ok: false, code: "model_unavailable", message });
+      return { ok: false, code: "model_unavailable", message: errorText };
     }
 
     const results: unknown[] = [];
+    const emit = (result: unknown): void => {
+      results.push(result);
+      onResult?.(result);
+    };
+
     if (plan.kind === "actions" && plan.actions) {
       const ctx = actionContext(claims.workspaceId, claims.adminUserId, installation);
       for (const proposed of plan.actions) {
         let outcome;
         try {
-          outcome = await executeAction({
-            actionName: proposed.name,
-            args: proposed.arguments,
-            context: ctx,
-          });
+          outcome = await executeAction({ actionName: proposed.name, args: proposed.arguments, context: ctx });
         } catch (err) {
           // A safe write that throws (e.g. the Clockify API rejects it) returns an
           // error receipt — it must not take down the process (Express 4 does not
@@ -256,7 +259,7 @@ export function apiRouter(deps: AppDeps): Router {
             risk: getAction(proposed.name)?.risks ?? [],
             receipt,
           });
-          results.push({ kind: "receipt", receipt });
+          emit({ kind: "receipt", receipt });
           continue;
         }
         if (outcome.kind === "receipt") {
@@ -269,9 +272,9 @@ export function apiRouter(deps: AppDeps): Router {
             receipt: outcome.receipt,
           });
           const undoId = recordUndoIfReversible(claims, outcome.receipt);
-          results.push({ kind: "receipt", receipt: outcome.receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
+          emit({ kind: "receipt", receipt: outcome.receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
         } else if (outcome.kind === "clarify") {
-          results.push({ kind: "clarify", message: outcome.message, options: outcome.options });
+          emit({ kind: "clarify", message: outcome.message, options: outcome.options });
         } else {
           const created = createPendingConfirmation({
             sessionId: claims.sessionId,
@@ -284,7 +287,7 @@ export function apiRouter(deps: AppDeps): Router {
             now: now(),
           });
           deps.store.savePendingConfirmation(created.record);
-          results.push({
+          emit({
             kind: "preview",
             previewId: created.previewId,
             nonce: created.nonce,
@@ -300,7 +303,9 @@ export function apiRouter(deps: AppDeps): Router {
     // sometimes narrates a false "Done!/Confirmed" for a pending preview, so when
     // the harness returned previews we REPLACE the model's text with a truthful,
     // not-yet-applied instruction — and store THAT (not the false claim) so the
-    // model's own history can't convince it the action already happened.
+    // model's own history can't convince it the action already happened. The
+    // streaming route emits this replyText AFTER the results, for the same reason:
+    // the truthful text isn't known until execution finishes.
     const pendingPreviews = results.filter(
       (r): r is { kind: "preview" } => (r as { kind?: string }).kind === "preview",
     ).length;
@@ -320,7 +325,59 @@ export function apiRouter(deps: AppDeps): Router {
       payload: { kind: plan.kind, results },
     });
 
-    return res.json({ ok: true, reply: { kind: plan.kind, text: replyText }, results });
+    return { ok: true, replyKind: plan.kind, replyText, results };
+  }
+
+  function chatPreconditions(req: Request, res: Response):
+    | { claims: { sessionId: string; workspaceId: string; adminUserId: string }; installation: Installation; message: string }
+    | undefined {
+    const claims = requireSession(req, res);
+    if (!claims) return undefined;
+    const parsed = chatBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ ok: false, code: "invalid_args", message: "A message is required." });
+      return undefined;
+    }
+    const installation = deps.store.getInstallation(claims.workspaceId);
+    if (!installation || installation.status !== "active") {
+      res.status(409).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
+      return undefined;
+    }
+    return { claims, installation, message: parsed.data.message };
+  }
+
+  router.post("/chat/messages", async (req, res) => {
+    const pre = chatPreconditions(req, res);
+    if (!pre) return;
+    const turn = await executeChatTurn(pre.claims, pre.installation, pre.message);
+    if (!turn.ok) return res.status(502).json({ ok: false, code: turn.code, message: turn.message });
+    return res.json({ ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results });
+  });
+
+  // Streaming variant (NDJSON): the SAME turn, but each harness result is written
+  // as it is produced, then the truthful reply, then `done`. This streams the
+  // harness's progress (receipts/clarifies/previews) — never the model's tokens,
+  // which would conflict with the truthful-preview override.
+  router.post("/chat/stream", async (req, res) => {
+    const pre = chatPreconditions(req, res);
+    if (!pre) return;
+    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
+    const write = (event: unknown): void => {
+      res.write(`${JSON.stringify(event)}\n`);
+    };
+    try {
+      const turn = await executeChatTurn(pre.claims, pre.installation, pre.message, (result) =>
+        write({ type: "result", result }),
+      );
+      if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
+      else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
+    } catch {
+      write({ type: "error", code: "stream_error", message: "Something went wrong." });
+    }
+    write({ type: "done" });
+    res.end();
   });
 
   router.post("/confirmations/:id/confirm", async (req, res) => {
