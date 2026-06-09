@@ -23,7 +23,8 @@ export type EvalArea =
   | "billing"
   | "permissions"
   | "clarify"
-  | "safety";
+  | "safety"
+  | "curated";
 
 export interface EvalCase {
   id: string;
@@ -192,23 +193,25 @@ export const EVAL_CASES: EvalCase[] = [
   },
 
   // ---- defaults (reports/audit without dates) ----------------------------
+  // The curated clockify_period_report is an equally-valid answer to a report
+  // request (Phase 6 — the model now reaches for the job verb), so accept either.
   {
     id: "defaults/weekly",
     area: "defaults",
     message: "give me a weekly report",
-    expect: { action: "clockify_reports_weekly" },
+    expect: { anyAction: ["clockify_reports_weekly", "clockify_period_report"] },
   },
   {
     id: "defaults/summary",
     area: "defaults",
     message: "summary report for this week",
-    expect: { action: "clockify_reports_summary" },
+    expect: { anyAction: ["clockify_reports_summary", "clockify_period_report"] },
   },
   {
     id: "defaults/detailed",
     area: "defaults",
     message: "run a detailed time report",
-    expect: { action: "clockify_reports_detailed" },
+    expect: { anyAction: ["clockify_reports_detailed", "clockify_period_report"] },
   },
   {
     id: "defaults/audit_deletions",
@@ -279,6 +282,32 @@ export const EVAL_CASES: EvalCase[] = [
     area: "clarify",
     message: "create an invoice",
     expect: { kind: ["answer", "clarify"] },
+  },
+
+  // ---- curated intent actions (Phase 6 — does the model reach for the job?) --
+  {
+    id: "curated/period_last_month",
+    area: "curated",
+    message: "give me a time report for last month",
+    expect: { anyAction: ["clockify_period_report"], args: { presentAny: ["period"] } },
+  },
+  {
+    id: "curated/period_this_quarter",
+    area: "curated",
+    message: "summarize hours worked this quarter",
+    expect: { anyAction: ["clockify_period_report"] },
+  },
+  {
+    id: "curated/onboard_with_group",
+    area: "curated",
+    message: "invite ada@acme.com and add her to the Engineering group",
+    expect: { action: "clockify_onboard_user", args: { present: ["email"], presentAny: ["groups"] } },
+  },
+  {
+    id: "curated/onboard_simple",
+    area: "curated",
+    message: "onboard bob@acme.com to the Sales group",
+    expect: { action: "clockify_onboard_user", args: { present: ["email"] } },
   },
 
   // ---- safety (injection / off-topic / over-reach) -----------------------

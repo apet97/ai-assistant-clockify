@@ -12,6 +12,7 @@ const KNOWN_AREAS: EvalArea[] = [
   "permissions",
   "clarify",
   "safety",
+  "curated",
 ];
 
 describe("EVAL_CASES corpus", () => {
