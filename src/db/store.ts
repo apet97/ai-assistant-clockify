@@ -6,6 +6,7 @@ import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harn
 import type { RiskLabel } from "../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../harness/receipts.js";
+import type { ActionOutcome } from "../metrics/metrics.js";
 
 /**
  * The single SQLite access module (backend rule: all DB access goes through
@@ -146,6 +147,11 @@ export interface Store {
   markUndone(id: string): boolean;
 
   addAuditEvent(input: AuditEventInput): void;
+
+  /** Operational metrics (Phase 7): audited action outcomes + confirmation
+   *  statuses, scoped to a workspace + admin, optionally since an ISO timestamp. */
+  listActionOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): ActionOutcome[];
+  listConfirmationOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
 
   tables(): string[];
   rawAddonTokenForTest(workspaceId: string): string | undefined;
@@ -480,6 +486,34 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         JSON.stringify(input.receipt),
         nowIso(),
       );
+    },
+
+    listActionOutcomes(workspaceId, adminUserId, sinceIso) {
+      const rows = db
+        .prepare(
+          `SELECT action_name, receipt_json FROM audit_events
+           WHERE workspace_id = ? AND admin_user_id = ? AND (? IS NULL OR created_at >= ?)`,
+        )
+        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{
+        action_name: string;
+        receipt_json: string;
+      }>;
+      return rows.map((row) => {
+        const receipt = JSON.parse(row.receipt_json) as { ok?: boolean; code?: string };
+        const outcome: ActionOutcome = { actionName: row.action_name, ok: receipt.ok === true };
+        if (!outcome.ok && typeof receipt.code === "string") outcome.code = receipt.code;
+        return outcome;
+      });
+    },
+
+    listConfirmationOutcomes(workspaceId, adminUserId, sinceIso) {
+      const rows = db
+        .prepare(
+          `SELECT status FROM pending_confirmations
+           WHERE workspace_id = ? AND admin_user_id = ? AND (? IS NULL OR created_at >= ?)`,
+        )
+        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{ status: string }>;
+      return rows.map((row) => row.status);
     },
 
     recordIdempotency(key, receipt, committedAtEpochMs) {

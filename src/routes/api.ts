@@ -7,6 +7,7 @@ import {
 import type { ActionContext, ConfirmableOperation } from "../harness/action.js";
 import type { IdempotencyLedger } from "../harness/idempotency.js";
 import { reverseCreation, reversibleCreations, firstDeniedGroup } from "../harness/undo.js";
+import { buildMetrics } from "../metrics/metrics.js";
 import { catalogForModel, getAction } from "../harness/catalog.js";
 import {
   FEATURE_GROUPS,
@@ -100,6 +101,18 @@ export function apiRouter(deps: AppDeps): Router {
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
     });
+  });
+
+  // Operational metrics (Phase 7): per-action success/failure, error taxonomy, and
+  // confirm/cancel/expire rates — scoped to the caller's own actions (privacy).
+  // Optional ?since=<ISO> windows the report.
+  router.get("/metrics", (req, res) => {
+    const claims = requireSession(req, res);
+    if (!claims) return;
+    const since = typeof req.query.since === "string" ? req.query.since : undefined;
+    const outcomes = deps.store.listActionOutcomes(claims.workspaceId, claims.adminUserId, since);
+    const confirmations = deps.store.listConfirmationOutcomes(claims.workspaceId, claims.adminUserId, since);
+    res.json({ ok: true, metrics: buildMetrics(outcomes, confirmations, now().toISOString()) });
   });
 
   router.get("/permissions", (req, res) => {
