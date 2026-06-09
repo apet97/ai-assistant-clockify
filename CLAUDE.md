@@ -88,7 +88,18 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**599 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**608 tests**: type-check + Vitest + build).
+- **Operational metrics (Phase 7 slice, 2026-06-09).** "Is the assistant working?"
+  derived from data already recorded (every action is audited with its receipt;
+  every risky preview is a pending-confirmation row with a status). `GET /api/metrics`
+  (session-gated, scoped to the caller's OWN actions for privacy; optional `?since=<ISO>`)
+  returns per-action success/failure (busiest first), an **error taxonomy** (counts by
+  code), and **confirm/cancel/expire/pending** rates. Pure aggregation in
+  `src/metrics/metrics.ts` (`buildMetrics`), fed by `store.listActionOutcomes` +
+  `listConfirmationOutcomes`. `scripts/eval-trend.ts` summarizes the timestamped
+  `eval-results/*.json` into a pass-rate/consistency trend over time. (Remaining
+  Phase 7 — stable hosting, prod security review, token rotation, prod AUDIT-host
+  clearance — needs live credentials / infra decisions and is human-gated.)
 - **Curated intent actions (Phase 6, 2026-06-09).** High-level "jobs to be done"
   (`src/harness/workflows/curated.ts`) so the model reaches for one clear verb
   instead of scrambling ~115 primitives, with the harness owning what the model is
