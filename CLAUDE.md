@@ -2,7 +2,50 @@
 
 Read this first in every Claude Code session.
 
-## Handoff note (start here if you're taking over) — 2026-06-09
+## Handoff note (start here if you're taking over) — 2026-06-09 (agentic loop)
+
+**Where this stands:** the **durable approval-gated agentic loop is SHIPPED and is now
+the default** (`LLM_AGENTIC` defaults ON; `=0` is the instant rollback). This was the one
+remaining architectural gap — the chat planner was single-turn and could not read-then-act
+(e.g. *list clients → create an invoice for "qwen"*). It now can. `npm run verify` is green
+at **668 tests** (type-check + Vitest + build), 0 circular deps; everything is committed +
+pushed to `main`. Built TDD, Phases 2b→5, each `npm run verify`-green with a focused commit:
+
+- **The loop** (`src/assistant/agent-loop.ts`, wired in `da76cfc`): reads + safe writes
+  auto-chain (their receipts are fed back to the model and it re-plans); the FIRST risky
+  write **interrupts** into the existing preview→button-confirm flow. `runAgentConversation`
+  (`src/assistant/planner.ts`) is the entry; `createTurnMachinery` in `src/routes/api.ts`
+  is the single copy of the audit+undo receipt emitter / preview creator / harness
+  `runAction` shared by the agentic + single-turn branches.
+- **Durable resume** (`b244884`): on a risky interrupt the suspended transcript is persisted
+  to a new additive `pending_confirmations.agent_state_json` column (`addColumnIfMissing`;
+  NULL rows behave exactly as before). `POST /confirmations/:id/confirm` — after the
+  UNCHANGED nonce / policy-recheck / one-use-claim / `commitConfirmedOperation` pipeline —
+  feeds the committed receipt back as the risky call's tool result and re-enters the loop
+  (`src/assistant/agent-state.ts`, Zod-validated; malformed → no resume). The resumed loop
+  can chain ANOTHER preview, never commit inline.
+- **DeepSeek `reasoning_content` contract (`c45bfdc`):** v4 thinking mode returns
+  `reasoning_content` and REQUIRES it back verbatim on continuation (400 otherwise). The
+  eval caught this. `ModelMessage`/`ToolCompletion` carry `reasoningContent`, threaded
+  through the loop + the persisted state + `toWireMessage`; turns without it serialize
+  byte-identically.
+- **Proof:** `scripts/eval-agentic.ts` (real model + real harness vs fake) measured
+  **agentic 90.5% vs single-turn 57.1% task completion** (deepseek-v4-pro, repeat=3;
+  read-then-act 0/9→8/9; **0 safety violations**). A 3-subagent adversarial safety review
+  found **every invariant HELD, 0 BROKEN**. `scripts/live-agentic-flow.ts` proved it on a
+  **real Clockify host + real DeepSeek + real commit + resume, PASS=10 FAIL=0** (the
+  "create an invoice for qwen" acceptance flow, minus the literal browser-iframe click).
+- **Rollback:** `LLM_AGENTIC=0` → byte-identical single-turn (pinned by test). The live dev
+  server was restarted (tunnel URL unchanged) so the embedded install runs the loop now.
+
+The only remaining manual step is the human's literal browser-iframe acceptance click; the
+over-HTTP path (incl. resume) is covered by `tests/integration/agentic-chat.test.ts` and the
+over-model/over-host substance by the live script. Plan/status:
+`/Users/15x/Downloads/ai-assistant-agentic-loop-GOAL.md`.
+
+---
+
+## Earlier handoff note — 2026-06-09 (trust-lives-in-the-code roadmap)
 
 **Where this stands:** V1 + the full Clockify REST parity effort are complete, AND the
 entire **"trust lives in the code" roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is
@@ -564,6 +607,18 @@ LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts   # needs LIVE_ADDON_TOKEN / LIVE
 # owner's member id, NOT the install token's `user` claim), or pass USER_TOKEN /
 # USER_TOKEN_FILE from the live iframe. PASS=16 against the dev sandbox.
 npx tsx --env-file=.env.server scripts/live-confirm-flow.ts
+
+# Agentic loop, proven against the REAL model + REAL Clockify host (the GOAL
+# acceptance test, minus the browser-iframe click): runs runAgentTurn with the
+# real DeepSeek backend + real REST adapter, simulating the button-confirm through
+# the real commitConfirmedOperation + durable resume. Self-cleaning. PASS=10.
+LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-agentic-flow.ts
+
+# Agentic task-completion eval (the meter for the loop): real model + real harness
+# vs the fake workspace, scoring TERMINAL outcomes; --single-turn is the pre-loop
+# baseline. deepseek-v4-pro repeat=3: agentic 90.5% vs single-turn 57.1%.
+npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3
+npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3 --single-turn
 
 # Planner-quirks proof: one-turn create-project+start-timer attaches the timer, and
 # delete-tag-by-name returns a preview->confirm. Same bootstrap as confirm-flow;
