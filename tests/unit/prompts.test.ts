@@ -87,6 +87,11 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt.toLowerCase()).toContain("do not just describe");
   });
 
+  it("names the rename case explicitly (the live planner habitually LISTS tags instead of calling tags_update)", () => {
+    expect(prompt).toContain("clockify_tags_update");
+    expect(prompt.toLowerCase()).toContain("rename");
+  });
+
   it("carries no secret-bearing field names", () => {
     expect(prompt).not.toContain("addonToken");
     expect(prompt).not.toContain("SESSION_SECRET");

@@ -50,6 +50,32 @@ describe("tag actions", () => {
     expect(fake.counts.updateTag).toBe(1);
   });
 
+  it("clockify_tags_update RENAMES by currentName — resolves it to the id server-side (the planner habitually listed instead because update used to require an id)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_tags_update",
+      args: { currentName: "deep work", name: "Focus" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // the resolved id is pinned into the confirmable operation
+    expect(preview.operation.payload).toMatchObject({ id: "t1", patch: { name: "Focus" } });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.tags[0].name).toBe("Focus");
+  });
+
+  it("clockify_tags_update clarifies (never guesses) when the currentName matches nothing", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_tags_update",
+      args: { currentName: "nope", name: "Focus" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTag ?? 0).toBe(0);
+  });
+
   it("clockify_tags_delete previews destructive then deletes once", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_tags_delete", args: { id: "t1", name: "Deep Work" }, context: makeContext(fake) });

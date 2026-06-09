@@ -70,30 +70,60 @@ const createTag = defineAction({
 const updateTag = defineRiskyAction({
   name: "clockify_tags_update",
   description:
-    "Update a tag (rename, archived). Elevated write — previews and requires confirmation.",
+    "Update a tag (rename, archived). Pass the tag's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
     .object({
-      id: z.string().min(1),
+      id: z.string().min(1).optional(),
+      /** The tag's existing name, resolved to an id server-side (rename-by-name). */
+      currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       archived: z.boolean().optional(),
+    })
+    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
+      message: "Provide the tag id or its exact currentName.",
     })
     .refine((v) => v.name !== undefined || v.archived !== undefined, {
       message: "Provide at least one field to change.",
     }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    let id = args.id;
+    let targetName = args.currentName;
+    // Resolve currentName → id (the delete-by-name pattern) so a rename never
+    // dead-ends on a missing id. Ambiguous identity stops and asks.
+    if (!id) {
+      const tags = await ctx.clockify.listTags();
+      const match = matchByName(tags, args.currentName as string);
+      if (match.kind === "none") {
+        const options = suggestOptions(tags, args.currentName as string);
+        return {
+          clarify: options.length
+            ? `I couldn't find an active tag named "${args.currentName}". Did you mean one of these?`
+            : `There are no active tags named "${args.currentName}" to update.`,
+          options: options.length ? options : undefined,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          clarify: `Several active tags are named "${args.currentName}". Which one should I update?`,
+          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
+        };
+      }
+      id = match.entity.id;
+      targetName = match.entity.name;
+    }
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
     };
     return {
       actionLabel: "Update tag",
-      targets: [{ type: "tag", id: args.id, name: args.name }],
+      targets: [{ type: "tag", id, name: targetName ?? args.name }],
       expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
       reversibility: "You can update the tag again to revert most fields.",
       warnings: ["Updating a tag changes live workspace data."],
-      payload: { id: args.id, patch },
+      payload: { id, patch },
     };
   },
   async commit(ctx, payload) {
