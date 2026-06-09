@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, resolveRelativeDay } from "./resolve.js";
 
 /**
  * Time-tracking read + safe-write workflows (SPEC "Safe Writes"): status, start
@@ -110,26 +110,9 @@ const stopTimer = defineAction({
   },
 });
 
-function addDays(isoDay: string, days: number): string {
-  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
-}
-
-/**
- * Resolve the entry's day (YYYY-MM-DD) server-side. The model knows "yesterday"
- * but not the calendar date (its own clock is unreliable), so it accepts a
- * relative word (`today`/`yesterday`/`tomorrow`) or a numeric `dayOffset`
- * (0=today, -1=yesterday) and the harness — which has `ctx.now` — does the math.
- * A literal `YYYY-MM-DD` still wins; absent everything, today.
- */
+/** Resolve the entry's day (YYYY-MM-DD) server-side — shared {@link resolveRelativeDay}. */
 function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string {
-  const today = nowIso(ctx).slice(0, 10);
-  if (args.dayOffset !== undefined) return addDays(today, args.dayOffset);
-  const raw = args.date?.trim().toLowerCase();
-  if (!raw) return today;
-  if (raw === "today") return today;
-  if (raw === "yesterday") return addDays(today, -1);
-  if (raw === "tomorrow") return addDays(today, 1);
-  return args.date!.slice(0, 10);
+  return resolveRelativeDay((ctx.now ?? (() => new Date()))(), args);
 }
 
 /**

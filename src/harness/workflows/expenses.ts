@@ -1,6 +1,12 @@
 import { z } from "zod";
-import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
+import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveRelativeDay } from "./resolve.js";
+
+/** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date. */
+function resolveDate(ctx: ActionContext, date?: string): string {
+  return resolveRelativeDay((ctx.now ?? (() => new Date()))(), { date });
+}
 
 /**
  * Typed expense workflows (goclmcp §2.7). Reads (list/get/categories_list)
@@ -82,24 +88,28 @@ const listExpenseCategories = defineReadAction({
 
 const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
-  description: "Create an expense. Billing action — previews and requires confirmation.",
+  description:
+    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
   schema: z.object({
     amount: z.number().positive(),
     /** `major` (e.g. 125.00) is converted ×100 to the minor units stored in the payload. */
     amountUnit: z.enum(["major", "minor"]).default("major"),
-    date: z.string().min(1), // full ISO or YYYY-MM-DD
+    /** YYYY-MM-DD, full ISO, or relative today/yesterday/tomorrow; defaults to today. */
+    date: z.string().min(1).optional(),
     categoryId: z.string().min(1),
     notes: z.string().optional(),
     billable: z.boolean().optional(),
     projectId: z.string().optional(),
     taskId: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
     const input: StoredExpense = {
       amountMinor: toMinor(args.amount, args.amountUnit),
-      date: args.date,
+      // Live: the model sent the literal string "today" to the wire (400) —
+      // the harness resolves relative dates and defaults to today.
+      date: resolveDate(ctx, args.date),
       categoryId: args.categoryId,
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
@@ -169,10 +179,10 @@ const updateExpense = defineRiskyAction({
         v.taskId !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
     const values: Record<string, unknown> = {
       ...(args.amount !== undefined ? { amountMinor: toMinor(args.amount, args.amountUnit) } : {}),
-      ...(args.date !== undefined ? { date: args.date } : {}),
+      ...(args.date !== undefined ? { date: resolveDate(ctx, args.date) } : {}),
       ...(args.categoryId !== undefined ? { categoryId: args.categoryId } : {}),
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),

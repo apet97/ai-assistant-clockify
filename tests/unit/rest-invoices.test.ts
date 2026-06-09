@@ -44,14 +44,17 @@ describe("invoice rest", () => {
     expect(parsed.searchParams.get("statuses")).toBe("PAID");
   });
 
-  it("getInvoice returns the detail with embedded items, or null on 404", async () => {
+  it("getInvoice returns the detail with embedded items normalized to MINOR units, or null on 404", async () => {
+    // Live wire relation (probed 2026-06-10): item `unitPrice` is minor×100
+    // (hundredths of a cent) while `amount` is plain minor —
+    // amount = unitPrice × quantity / 100. The mapped item is all-minor.
     const hit = vi.fn(async () =>
       jsonResponse({
         id: "inv1",
         number: "INV-1",
         currency: "GBP",
         status: "UNSENT",
-        items: [{ order: 0, description: "Work", quantity: 2, unitPrice: 5000, amount: 10000, itemType: "TIME" }],
+        items: [{ order: 0, description: "Work", quantity: 2, unitPrice: 500000, amount: 10000, itemType: "TIME" }],
       }),
     );
     expect(await rest(hit as unknown as typeof fetch).getInvoice("inv1")).toEqual({
@@ -191,13 +194,13 @@ describe("invoice rest", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("addInvoiceItem POSTs the item with applyTaxes NONE default and required itemType", async () => {
+  it("addInvoiceItem POSTs unitPrice in the wire's minor×100 scale (live-probed: sending plain minor made a $1000 item bill as $10)", async () => {
     const f = vi.fn(async () => jsonResponse({ order: 1 }));
     await rest(f as unknown as typeof fetch).addInvoiceItem("inv1", {
       itemType: "NEW DEFAULT",
       description: "Consulting",
       quantity: 3,
-      unitPriceMinor: 12500,
+      unitPriceMinor: 12500, // $125.00/unit
     });
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices/inv1/items");
@@ -205,7 +208,7 @@ describe("invoice rest", () => {
     expect(JSON.parse(init.body)).toEqual({
       description: "Consulting",
       quantity: 3,
-      unitPrice: 12500,
+      unitPrice: 1250000, // minor × 100 — Clockify computes amount = unitPrice·q/100
       applyTaxes: "NONE",
       itemType: "NEW DEFAULT",
     });

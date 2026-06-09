@@ -59,6 +59,42 @@ describe("expense actions", () => {
     expect(fake.state.expenses.find((e) => e.notes === "AIASSIST_SMOKE_exp")).toBeDefined();
   });
 
+  it("clockify_expenses_create resolves a RELATIVE date server-side (live: the model sent the literal string 'today' to the wire → Clockify 400)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 12, date: "today", categoryId: "c1", notes: "12 miles" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // ctx.now is 2026-06-06 — the harness does the calendar math, never the model
+    expect((preview.operation.payload as any).input.date).toBe("2026-06-06");
+  });
+
+  it("clockify_expenses_create defaults an omitted date to today", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 12, categoryId: "c1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).input.date).toBe("2026-06-06");
+  });
+
+  it("clockify_expenses_update resolves a relative date the same way", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_expenses_update",
+      args: { id: "x1", date: "yesterday" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const payload = preview.operation.payload as any;
+    expect(payload.changeFields).toEqual(expect.arrayContaining(["DATE"]));
+    expect(payload.values.date).toBe("2026-06-05");
+  });
+
   it("clockify_expenses_update derives changeFields from the provided fields", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

@@ -76,12 +76,21 @@ function mapSummary(raw: any): InvoiceSummary {
   return out;
 }
 
+/**
+ * Item money scales are MIXED on the wire (live-probed 2026-06-10): `unitPrice`
+ * is minor×100 (hundredths of a cent) while `amount` is plain minor —
+ * Clockify computes amount = unitPrice × quantity / 100. Sending plain minor
+ * unitPrice billed a $1000 item as $10. Map reads back to all-minor.
+ */
+const UNIT_PRICE_WIRE_SCALE = 100;
+
 function mapItem(raw: any): InvoiceItem {
   const out: InvoiceItem = {};
   if (raw.order !== undefined) out.order = raw.order;
   if (raw.description !== undefined) out.description = raw.description;
   if (raw.quantity !== undefined) out.quantity = raw.quantity;
-  if (raw.unitPrice !== undefined) out.unitPrice = raw.unitPrice;
+  if (typeof raw.unitPrice === "number") out.unitPrice = Math.round(raw.unitPrice / UNIT_PRICE_WIRE_SCALE);
+  else if (raw.unitPrice !== undefined) out.unitPrice = raw.unitPrice;
   if (raw.amount !== undefined) out.amount = raw.amount;
   if (raw.itemType !== undefined) out.itemType = raw.itemType;
   return out;
@@ -223,7 +232,8 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       const body: Record<string, unknown> = {
         ...(item.description !== undefined ? { description: item.description } : {}),
         ...(item.quantity !== undefined ? { quantity: item.quantity } : {}),
-        ...(item.unitPriceMinor !== undefined ? { unitPrice: item.unitPriceMinor } : {}),
+        // minor → the wire's minor×100 scale (see UNIT_PRICE_WIRE_SCALE).
+        ...(item.unitPriceMinor !== undefined ? { unitPrice: item.unitPriceMinor * UNIT_PRICE_WIRE_SCALE } : {}),
         applyTaxes: item.applyTaxes ?? "NONE",
         itemType: item.itemType,
       };

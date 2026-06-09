@@ -42,3 +42,26 @@ export function matchByName<T extends { name: string; archived?: boolean }>(
   if (matches.length === 1) return { kind: "one", entity: matches[0] };
   return { kind: "many", matches };
 }
+
+function addDays(isoDay: string, days: number): string {
+  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Resolve a day (YYYY-MM-DD) server-side. The model knows "yesterday" but not
+ * the calendar date (its own clock is unreliable — live it sent the literal
+ * string "today" to the wire), so this accepts a relative word
+ * (`today`/`yesterday`/`tomorrow`) or a numeric `dayOffset` (0=today,
+ * -1=yesterday) and the harness — which has `ctx.now` — does the math. A
+ * literal `YYYY-MM-DD…` still wins; absent everything, today.
+ */
+export function resolveRelativeDay(now: Date, args: { date?: string; dayOffset?: number }): string {
+  const today = now.toISOString().slice(0, 10);
+  if (args.dayOffset !== undefined) return addDays(today, args.dayOffset);
+  const raw = args.date?.trim().toLowerCase();
+  if (!raw) return today;
+  if (raw === "today") return today;
+  if (raw === "yesterday") return addDays(today, -1);
+  if (raw === "tomorrow") return addDays(today, 1);
+  return args.date!.slice(0, 10);
+}
