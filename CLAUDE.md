@@ -43,6 +43,49 @@ over-HTTP path (incl. resume) is covered by `tests/integration/agentic-chat.test
 over-model/over-host substance by the live script. Plan/status:
 `/Users/15x/Downloads/ai-assistant-agentic-loop-GOAL.md`.
 
+**Post-flip live fixes (2026-06-10, dogfooding found these — all fixed + verified, `npm run
+verify` now = 683 tests):**
+- **Streaming confirm (`1a60305`):** the resume ran synchronously *inside* the confirm
+  request (multiple live model calls) → the Confirm button blocked 7.5s+ and a slow resume
+  timed out as "Confirmation failed" even though the write committed. Now `POST
+  /confirmations/:id/confirm?stream=1` (the embedded UI uses it) flushes the committed
+  receipt as the FIRST NDJSON event (~+520ms) then streams the resume; the JSON path is
+  unchanged for scripts/tests. UI: `submitConfirmStream` in `src/ui/shared.ts`.
+- **Approvals periodStart (`784a085`):** `clockify_approvals_submit` sent a bare date;
+  Clockify needs a full ISO UTC instant. Now takes a relative `week` ('this_week'/'last_week')
+  resolved server-side from `ctx.now`, or normalizes an explicit date. Live-verified.
+- **Invoice item types (`f4632b8`, `fd269e6`):** types are **per-workspace configured NAMES**
+  with NO list/create API — but they're auto-created when a line item is added in the Clockify
+  invoice editor, and every stored line item carries its `itemType` name. So the harness now
+  **discovers** valid names from existing invoices (`discoverItemTypes`) and resolves the
+  requested/omitted type against them (canonical match / clarify-with-real-list / first-as-
+  default), instead of blindly sending "NEW DEFAULT". Wired into `items_add` + `create` inline
+  items. See the verification discipline below — this whole class of bug came from trusting the
+  code's API assumptions instead of the real API.
+
+---
+
+## Ground truth & verification discipline (READ THIS)
+
+This codebase was built fast ("vibecoded") and **its assumptions about the Clockify API have
+repeatedly been wrong** — invoice item types, date/instant formats, list-vs-envelope shapes,
+which host serves what. Every such bug was found by hitting the **real API**, not by reading
+the code. So, before trusting or extending any Clockify-touching code:
+
+1. **The OpenAPI spec is ground truth:** `https://docs.clockify.me/openapi.json` (live, 200).
+   Check the real request/response shape there before believing a comment or a Zod schema.
+2. **Sibling references** (read-only — do **not** modify): `../goclmcp` (Go MCP over the same
+   API; `docs/openapi`, `scripts/gen-clockify-openapi`) and `../clockify-ts-sdk` (a typed TS
+   SDK + CLI + MCP). When the addon's adapter and these disagree, the addon is usually the one
+   that's wrong.
+3. **Verify live, don't assume:** the opt-in scripts hit a sacrificial workspace via API key
+   **or** the install's `X-Addon-Token`. For anything new or surprising, write a throwaway
+   probe (delete it after) — that's how the item-type/format truths above were settled. The
+   per-workspace, no-list-API nature of invoice item types was only knowable by probing ~30
+   workspaces live.
+4. **TDD against the verified shape:** once the real shape is known, pin it with a failing
+   test first, then the fix. Never "fix" a live-API bug without a test reproducing it.
+
 ---
 
 ## Earlier handoff note — 2026-06-09 (trust-lives-in-the-code roadmap)

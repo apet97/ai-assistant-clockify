@@ -10,33 +10,27 @@ file is the short map.
 
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
-validates policy/schema/risk and executes; the backend owns all state. V1 is
-implemented and verified (`npm run verify` green, **618 tests**), the **full
-Clockify REST surface parity effort (Phases 0–16) is COMPLETE** (~115 typed catalog
-actions across 16 feature areas + 3 hosts), AND the **"trust lives in the code"
-roadmap (`NEXT_SESSION_PLAN.md`, Phases 1–7) is COMPLETE for everything buildable
-in-repo.** What remains is human-gated (hosting, prod security review, prod
-AUDIT-host clearance) — see CLAUDE.md → Handoff.
+validates policy/schema/risk and executes; the backend owns all state. `npm run
+verify` is green at **683 tests**, 0 circular deps. Done + on `main`:
+- **Full Clockify REST parity** (~115 typed catalog actions, 16 areas, 3 hosts).
+- **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
+  atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
+  NDJSON streaming) — `CLAUDE.md` → Current Status.
+- **Durable approval-gated agentic loop, default ON** (`LLM_AGENTIC`, `=0` rolls
+  back): reads + safe-writes auto-chain; a risky write interrupts → button-confirm →
+  durable **resume** across the HTTP round-trip (the confirm streams the resume so the
+  button never blocks). Eval: 90.5% multi-step task completion vs 57.1% single-turn.
+  `src/assistant/agent-loop.ts` + `agent-state.ts`; `CLAUDE.md` → top handoff note.
 
-**The trust roadmap, one line each (detail in `CLAUDE.md` → Current Status):**
-- **P1** planner **eval harness** (`scripts/eval-planner.ts`, pure `src/eval/score.ts`,
-  pass-rate + a consistency metric) + the arg contract in the prompt (`arg-summary.ts`).
-- **P2** native **tool-calling is the default** (`LLM_MODE=tool`, `tools.ts`,
-  `zod-to-json-schema`): the provider validates args, killing the arg-shape class
-  (95.2% pass vs 88.9% JSON, deepseek-v4-pro). The harness still re-validates (Zod +
-  risk/policy is the trust boundary); risky still preview→confirm. JSON is the fallback
-  (and automatic for `gemini-cli`, which has no tool support).
-- **P3** atomic multi-step **composition** (`compose.ts`) — no orphans.
-- **P4** grounding: invoice **$0 caveat in the preview**; clarifies offer grounded
-  options (`resolve.suggestOptions`).
-- **P5** **idempotency** (`idempotency.ts`, no duplicate invoices) + **undo**
-  (`undo.ts`, `POST /api/undo/:id`, UI button).
-- **P6** **curated intent actions** (`workflows/curated.ts`: `clockify_period_report`,
-  `clockify_onboard_user`) — adopted 12/12 in the eval.
-- **P7 (in-repo)** **metrics** (`GET /api/metrics`, `src/metrics/`), **UI a11y** +
-  responsive status, and **NDJSON streaming** of harness progress (`POST /api/chat/stream`,
-  shared `executeChatTurn`).
-See `CLAUDE.md` → Current Status + `NEXT_SESSION_PLAN.md`.
+**Ground truth, not the code:** this codebase was built fast and its Clockify-API
+assumptions have repeatedly been WRONG (invoice item types, instant formats, host
+routing). Before trusting/extending any Clockify code, verify against the **OpenAPI
+spec** (`https://docs.clockify.me/openapi.json`), the read-only sibling refs
+(`../goclmcp`, `../clockify-ts-sdk`), and a **live probe** on a sacrificial workspace.
+See `CLAUDE.md` → "Ground truth & verification discipline."
+
+What remains is human-gated (stable hosting, prod security review, prod AUDIT-host
+clearance) — `CLAUDE.md` → Handoff.
 
 **Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev
 workspace and driven through the embedded chat — sidebar component → DeepSeek →
