@@ -88,7 +88,26 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**524 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**549 tests**: type-check + Vitest + build).
+- **Native tool-calling is now the default planner mode (Phase 2, 2026-06-09).**
+  The model calls **typed tools** whose arguments the provider validates against a
+  JSON schema generated from the SAME Zod schema the harness validates with
+  (`src/harness/tools.ts` → `toolsForModel()`, via the new `zod-to-json-schema`
+  dep). Free-form JSON is now the **fallback** (`LLM_MODE=json`, and automatically
+  for the `gemini-cli` backend, which has no `completeWithTools`). `planConversation`
+  branches on `useTools` + client support; **defense in depth is unchanged** — every
+  tool-call argument still passes through the action's Zod schema + the risk/policy
+  gate before executing (provider validation is convenience, never the trust
+  boundary), and risky writes still preview → button-confirm. The tool system prompt
+  (`buildToolSystemPrompt`) drops the JSON-shape instruction + the redundant catalog
+  listing (the tools carry the schemas) but **keeps the action-selection nudges**
+  (delete-by-name-don't-list, create+`startTimer`, act-don't-just-describe) and all
+  safety invariants — trimming those first regressed name-resolution, and the meter
+  caught it. **Measured (deepseek-v4-pro, repeat=3): tool-calling 95.2% pass / 92.9%
+  consistency vs JSON 88.9% / 91.3% (+6.3pp pass, +5 stable-pass).** The arg-shape
+  class is **eliminated** (name-resolution + billing args now solid); remaining misses
+  are action *selection* (`permissions/full` intent recognition → Phase 6) or noise.
+  A/B with `scripts/eval-planner.ts --json-mode`.
 - **Planner eval harness + arg contract in the prompt (Phase 1, 2026-06-09).**
   Quality is now a number. `scripts/eval-planner.ts` drives the **real planner**
   (planning only, no Clockify writes) over a tagged corpus (`scripts/eval/cases.ts`,
@@ -235,10 +254,13 @@ LLM** — they are architecture/platform issues:
   `startTimer:true`, missing ids, omitted required fields) as often. We still keep the
   per-action mitigations as defense in depth: forgiving Zod (`z.preprocess`/unions),
   server-side defaults (reports/audit ranges, invoice number/dates/currency), and
-  name→id resolution (tags/projects/clients). Measured improvement on deepseek-v4-pro:
-  85.7%→90.5% pass, 86.5%→90.5% consistency (see Current Status). **Durable next step
-  (Phase 2):** native tool/function-calling with real JSON schemas the provider
-  validates, so correct args are enforced, not just prompted — the eval now judges it.
+  name→id resolution (tags/projects/clients). **(Phase 2 done, 2026-06-09)** native
+  tool/function-calling is now the **default** (`LLM_MODE=tool`): the provider validates
+  args against JSON schemas generated from the Zod schemas, so the arg-shape class is
+  **eliminated** (tool-calling 95.2% pass vs JSON 88.9% on deepseek-v4-pro). The Zod +
+  risk/policy gate still re-validates every call. What remains is **action selection**
+  (e.g. `permissions/full` intent recognition) — that's a curated-intent-action job
+  (Phase 6), not an arg-shape problem.
 - **Invoice line items require a workspace-configured invoice item type** (Clockify →
   Workspace settings → Invoices). There is **no API to list or create them**; a fresh
   workspace has none, so amounts stay $0 until an admin sets one up in the UI (one-time).
