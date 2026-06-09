@@ -22,8 +22,9 @@ export interface AppConfig {
   /** Planner mode: "tool" (native function-calling, default) or "json" (JSON + repair).
    *  Tool mode only applies when the backend supports it (the http client does). */
   llmMode?: "tool" | "json";
-  /** Agentic loop (Phase 2b): when true, the chat turn runs the durable tool-loop
-   *  (read-then-act). Default OFF = the single-turn planner, byte-identical. */
+  /** Agentic loop: when true, the chat turn runs the durable tool-loop
+   *  (read-then-act + resume across the confirm round-trip). Default ON after the
+   *  live acceptance proof; set LLM_AGENTIC=0 to roll back to single-turn. */
   llmAgentic?: boolean;
   llmBaseUrl?: string;
   llmApiKey?: string;
@@ -47,7 +48,9 @@ const envSchema = z
     // below only for the http provider.
     LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
     LLM_MODE: z.enum(["tool", "json"]).default("tool"),
-    LLM_AGENTIC: z.enum(["0", "1"]).default("0"),
+    // Default ON: the durable agentic loop is the proven default (live PASS=10,
+    // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
+    LLM_AGENTIC: z.enum(["0", "1"]).default("1"),
     LLM_BASE_URL: z.string().min(1).optional(),
     LLM_API_KEY: z.string().min(1).optional(),
     LLM_MODEL: z.string().min(1).optional(),
