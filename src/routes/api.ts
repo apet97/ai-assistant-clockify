@@ -24,7 +24,7 @@ import {
 } from "../harness/confirmations.js";
 import { errorReceipt, successReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
-import { parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
+import { capAgentState, parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
 import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { toolsForModel } from "../harness/tools.js";
@@ -195,10 +195,16 @@ export function apiRouter(deps: AppDeps): Router {
   /** Map a finished agent turn onto the result stream: an interrupt becomes a pending preview. */
   function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { replyKind: string; baseText: string } {
     if (turn.kind === "interrupt") {
-      m.emitPreviewFor(turn.preview, turn.operation, {
-        transcript: turn.transcript,
-        call: { id: turn.call.id, name: turn.call.name },
-      });
+      // capAgentState drops (never truncates) an oversized suspension — the
+      // confirm still commits, it just won't resume (the pre-agentic behavior).
+      m.emitPreviewFor(
+        turn.preview,
+        turn.operation,
+        capAgentState({
+          transcript: turn.transcript,
+          call: { id: turn.call.id, name: turn.call.name },
+        }),
+      );
       // The truthful-preview override supplies the reply text for a pending preview.
       return { replyKind: "actions", baseText: "" };
     }

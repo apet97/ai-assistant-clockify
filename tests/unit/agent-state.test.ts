@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAgentState, resumeMessages, type AgentState } from "../../src/assistant/agent-state.js";
+import { capAgentState, parseAgentState, resumeMessages, type AgentState } from "../../src/assistant/agent-state.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 import { createStore } from "../../src/db/store.js";
@@ -44,6 +44,18 @@ describe("agent-state (durable agentic suspension)", () => {
     expect(last.toolCallId).toBe("r1");
     expect(last.content).toContain("clockify_tags_delete");
     expect(last.content).toContain('"ok":true');
+  });
+
+  it("capAgentState passes a normal state through and drops an oversized one (no-resume is the safe fallback; truncating would corrupt tool-call pairing)", () => {
+    expect(capAgentState(state)).toEqual(state);
+    const huge: AgentState = {
+      transcript: [
+        ...state.transcript,
+        { role: "tool", toolCallId: "r1", content: "x".repeat(300_000) },
+      ],
+      call: state.call,
+    };
+    expect(capAgentState(huge)).toBeUndefined();
   });
 
   it("round-trips agentState through the pending_confirmations store; rows without it stay undefined", () => {

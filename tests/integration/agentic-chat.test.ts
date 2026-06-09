@@ -292,6 +292,42 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     expect(fake.counts.deleteTag).toBe(1); // only the confirmed one; the chained is still pending
   });
 
+  it("a model EXCEPTION mid-resume never loses the committed receipt: the stream still opens with it and closes cleanly", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    let modelCalls = 0;
+    const script = scriptedToolModel([
+      { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+    ]);
+    const throwingOnResume: ModelClient = {
+      complete: script.complete,
+      completeWithTools: async (messages, tools) => {
+        modelCalls += 1;
+        if (modelCalls > 1) throw new Error("model unavailable"); // the resume call
+        return script.completeWithTools!(messages, tools);
+      },
+    };
+    const { app, cookie } = await makeApp([], fake, { modelClient: throwingOnResume });
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+
+    const res = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(res.status).toBe(200);
+    const events = parseEvents(res.text);
+    // The committed receipt was flushed BEFORE the failing resume model call…
+    expect(events[0].type).toBe("receipt");
+    expect((events[0] as { receipt: { ok: boolean } }).receipt.ok).toBe(true);
+    // …and the stream closes cleanly (a swallowed model failure loses only the
+    // follow-up narration — never the commit).
+    expect(events[events.length - 1].type).toBe("done");
+    expect(fake.counts.deleteTag).toBe(1);
+    expect(modelCalls).toBe(2);
+  });
+
   it("legacy single-turn preview streams just the receipt + done (no resume model call)", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, model, cookie } = await makeApp(

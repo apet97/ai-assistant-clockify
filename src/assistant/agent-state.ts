@@ -44,6 +44,23 @@ export function parseAgentState(value: unknown): AgentState | undefined {
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * Ceiling on the persisted suspension. Chained resumes accumulate the
+ * transcript in `agent_state_json`, and nothing else bounds it — a runaway
+ * model emitting huge tool args could grow rows without limit (a DoS class,
+ * not a security gap). Roomy: a heavy turn with several receipts is tens of KB.
+ */
+const MAX_AGENT_STATE_BYTES = 256 * 1024;
+
+/**
+ * Drop (never truncate) a state too large to persist: removing messages would
+ * corrupt the tool-call pairing the provider validates, while dropping the
+ * whole state falls back to the established no-resume confirm path.
+ */
+export function capAgentState(state: AgentState): AgentState | undefined {
+  return Buffer.byteLength(JSON.stringify(state), "utf8") <= MAX_AGENT_STATE_BYTES ? state : undefined;
+}
+
 /** The resumed transcript: the suspension plus the committed receipt as the risky call's tool result. */
 export function resumeMessages(state: AgentState, receipt: SuccessReceipt | ErrorReceipt): ModelMessage[] {
   return [...state.transcript, { role: "tool", toolCallId: state.call.id, content: JSON.stringify(receipt) }];
