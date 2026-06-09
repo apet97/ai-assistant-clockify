@@ -1,5 +1,5 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 import type { HolidayPort, HolidaySummary } from "../ports/holidays.js";
 
 /** Holiday assignment filter (users / user groups). */

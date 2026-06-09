@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 export interface UserSummary extends EntitySummary {
   email?: string;

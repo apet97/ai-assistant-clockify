@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /**
  * Transitional slice holding the current GENERIC risky-write methods (delete /

@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { TagPort } from "../ports/tags.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /**
  * Typed tag REST module (goclmcp §2.5). `updateTag` is GET-then-merge-PUT (PUT

@@ -1,4 +1,4 @@
-import type { ProjectSummary } from "../client.js";
+import type { ProjectSummary } from "../types.js";
 
 /** List filter for projects (goclmcp §2.2 — name/archived/clients). */
 export interface ProjectFilter {

@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { TimeEntryPort } from "../ports/time-entries.js";
-import type { TimeEntrySummary } from "../client.js";
+import type { TimeEntrySummary } from "../types.js";
 
 /**
  * Typed time-entry REST module (goclmcp §2.1). I/O only. Entries are user-scoped

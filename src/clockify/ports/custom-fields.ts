@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /** Clockify custom-field types (case-sensitive on the wire). */
 export type CustomFieldType =

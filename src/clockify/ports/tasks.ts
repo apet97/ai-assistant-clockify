@@ -1,4 +1,4 @@
-import type { TaskSummary } from "../client.js";
+import type { TaskSummary } from "../types.js";
 
 /** List filter for tasks (name / active state). */
 export interface TaskFilter {

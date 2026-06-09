@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { ClientPort } from "../ports/clients.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /**
  * Typed client REST module (goclmcp §2.4). `updateClient` is GET-then-merge-PUT

@@ -2,7 +2,7 @@ import type {
   TimeEntrySummary,
   StartTimeEntryInput,
   CreateTimeEntryInput,
-} from "../client.js";
+} from "../types.js";
 
 /**
  * Time-entry slice of the {@link WorkspaceClient} port (goclmcp §2.1). Composed

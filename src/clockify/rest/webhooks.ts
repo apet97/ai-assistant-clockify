@@ -1,5 +1,5 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 import type { WebhookPort, WebhookSummary } from "../ports/webhooks.js";
 
 /**

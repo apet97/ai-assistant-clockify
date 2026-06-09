@@ -2,7 +2,6 @@ import type { z } from "zod";
 import type { AdminPolicy, FeatureGroup } from "./permissions.js";
 import type { RiskLabel } from "./risk.js";
 import type { EntityRef, ErrorReceipt, SuccessReceipt } from "./receipts.js";
-import type { IdempotencyLedger } from "./idempotency.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 
 /**
@@ -20,6 +19,20 @@ export interface ActionContext {
   now?: () => Date;
   /** Optional idempotency ledger; when present, confirmed commits dedupe by intent. */
   idempotency?: IdempotencyLedger;
+}
+
+/**
+ * Idempotency ledger for confirmed (risky) commits (Phase 5): a scoped
+ * key → success-receipt store with a time window. Defined here (next to
+ * {@link ActionContext}, which references it) rather than in `./idempotency.js`
+ * so the dependency runs only idempotency.ts → action.ts — no type cycle. Only
+ * SUCCESSFUL commits are recorded, so a failed attempt can still be retried.
+ */
+export interface IdempotencyLedger {
+  /** Prior success receipt for this scoped key within the window, else undefined. */
+  lookup(scopedKey: string): SuccessReceipt | undefined;
+  /** Record a successful commit under this scoped key. */
+  record(scopedKey: string, receipt: SuccessReceipt): void;
 }
 
 export interface ClarifyOption {

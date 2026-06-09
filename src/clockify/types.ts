@@ -1,0 +1,59 @@
+/**
+ * Dependency-free shared-shapes module. It has NO imports, so it is a leaf in the
+ * module graph: it breaks the `clockify/client.ts <-> clockify/ports/*` cycle that
+ * arose when every port slice imported these summary types back from `client.ts`
+ * while `client.ts` imported the ports barrel. Both the port slices and the REST
+ * adapter now import these shapes from here instead of from `client.ts`.
+ *
+ * Shared entity summary shapes returned by the {@link WorkspaceClient} port. The
+ * port is composed from per-area sub-interfaces in `./ports/*` so each feature
+ * area owns its own method slice (decision D1 in `API_COVERAGE_PLAN.md`); these
+ * summary types live here because every slice shares them.
+ */
+
+export interface EntitySummary {
+  id: string;
+  name: string;
+  archived?: boolean;
+}
+
+export interface ProjectSummary extends EntitySummary {
+  clientId?: string;
+}
+
+export interface TaskSummary {
+  id: string;
+  name: string;
+  projectId: string;
+}
+
+export interface TimeEntrySummary {
+  id: string;
+  description?: string;
+  projectId?: string;
+  taskId?: string;
+  tagIds?: string[];
+  billable?: boolean;
+  start: string;
+  end?: string | null;
+}
+
+export interface StartTimeEntryInput {
+  userId: string;
+  description?: string;
+  projectId?: string;
+  taskId?: string;
+  tagIds?: string[];
+  billable?: boolean;
+  start: string;
+}
+
+export interface CreateTimeEntryInput {
+  description?: string;
+  projectId?: string;
+  taskId?: string;
+  tagIds?: string[];
+  billable?: boolean;
+  start: string;
+  end?: string;
+}

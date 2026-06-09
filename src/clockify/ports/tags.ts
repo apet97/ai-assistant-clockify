@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /** List filter for tags (name / archived). */
 export interface TagFilter {

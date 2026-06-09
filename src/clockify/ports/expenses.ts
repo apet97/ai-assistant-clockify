@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /** List filter for expenses (date range, full ISO or YYYY-MM-DD). */
 export interface ExpenseFilter {

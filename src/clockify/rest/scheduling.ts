@@ -1,5 +1,5 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 import type { SchedulingPort, AssignmentSummary } from "../ports/scheduling.js";
 
 function mapAssignment(raw: any): AssignmentSummary {

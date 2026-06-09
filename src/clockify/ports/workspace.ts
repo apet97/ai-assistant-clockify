@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /**
  * Workspace & project-template slice of the {@link WorkspaceClient} port (goclmcp

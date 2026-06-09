@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /**
  * Webhook view. NEVER carries `authToken` (the HMAC signing secret) — the REST

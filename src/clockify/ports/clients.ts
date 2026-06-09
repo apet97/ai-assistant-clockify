@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 /** List filter for clients (name / archived). */
 export interface ClientFilter {

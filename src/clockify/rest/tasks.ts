@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { TaskPort } from "../ports/tasks.js";
-import type { TaskSummary } from "../client.js";
+import type { TaskSummary } from "../types.js";
 
 /**
  * Typed task REST module (goclmcp §2.3). Tasks are nested under a project.

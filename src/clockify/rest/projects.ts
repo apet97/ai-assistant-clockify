@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { ProjectPort } from "../ports/projects.js";
-import type { ProjectSummary } from "../client.js";
+import type { ProjectSummary } from "../types.js";
 
 /**
  * Typed project REST module (goclmcp §2.2). I/O only — risk/policy/confirmation

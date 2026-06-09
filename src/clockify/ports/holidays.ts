@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 
 export interface HolidaySummary extends EntitySummary {
   startDate?: string;

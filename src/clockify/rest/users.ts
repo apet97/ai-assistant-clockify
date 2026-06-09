@@ -1,5 +1,5 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 import type { UserPort, UserSummary, GroupSummary } from "../ports/users.js";
 
 function mapUser(raw: any): UserSummary {

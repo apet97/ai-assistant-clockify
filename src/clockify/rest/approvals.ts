@@ -1,5 +1,5 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../client.js";
+import type { EntitySummary } from "../types.js";
 import type { ApprovalPort, ApprovalSummary } from "../ports/approvals.js";
 
 function mapApproval(raw: any): ApprovalSummary {
