@@ -196,6 +196,7 @@ interface PendingRow {
   created_at: string;
   used_at: string | null;
   result_json: string | null;
+  agent_state_json: string | null;
 }
 
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
@@ -414,8 +415,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       db.prepare(
         `INSERT INTO pending_confirmations (
            id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
-           operation_json, operation_hash, nonce_hash, expires_at, created_at, used_at, result_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           operation_json, operation_hash, nonce_hash, expires_at, created_at, used_at, result_json,
+           agent_state_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
         record.sessionId,
@@ -431,6 +433,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         record.createdAt,
         record.usedAt ?? null,
         record.result === undefined ? null : JSON.stringify(record.result),
+        record.agentState === undefined ? null : JSON.stringify(record.agentState),
       );
     },
 
@@ -454,6 +457,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         createdAt: row.created_at,
         usedAt: row.used_at ?? undefined,
         result: row.result_json ? JSON.parse(row.result_json) : undefined,
+        agentState: row.agent_state_json ? JSON.parse(row.agent_state_json) : undefined,
       };
     },
 

@@ -36,6 +36,13 @@ export interface PendingConfirmationRecord {
   createdAt: string;
   usedAt?: string;
   result?: unknown;
+  /**
+   * Suspended agentic-turn state (Phase 3): the loop transcript + the risky tool
+   * call this preview answers, validated/consumed by the assistant layer
+   * (`parseAgentState`). Absent for single-turn previews — those confirm exactly
+   * as before.
+   */
+  agentState?: unknown;
 }
 
 export interface CreateConfirmationInput {
@@ -51,6 +58,8 @@ export interface CreateConfirmationInput {
   /** Injectable for deterministic tests. */
   id?: string;
   nonce?: string;
+  /** Suspended agentic-turn state to persist with the preview (Phase 3). */
+  agentState?: unknown;
 }
 
 export interface CreatedConfirmation {
@@ -151,6 +160,7 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
     nonceHash: hashNonce(nonce, id, operationHash, input.sessionSecret),
     expiresAt,
     createdAt: now.toISOString(),
+    agentState: input.agentState,
   };
 
   return { record, previewId: id, nonce, expiresAt };

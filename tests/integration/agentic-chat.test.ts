@@ -7,6 +7,7 @@ import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
 
@@ -27,6 +28,7 @@ interface TestApp {
   app: Express;
   model: ScriptedToolModel;
   cookie: string;
+  store: Store;
 }
 
 async function makeApp(
@@ -70,7 +72,7 @@ async function makeApp(
   const res = await request(app).get("/component/assistant").query({ auth_token: token });
   const setCookie = res.headers["set-cookie"];
   const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
-  return { app, model, cookie };
+  return { app, model, cookie, store };
 }
 
 describe("agentic chat turn (LLM_AGENTIC=1)", () => {
@@ -200,5 +202,213 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     // One model call, the read executed, and no second turn ever happens.
     expect(model.completeWithTools).toHaveBeenCalledTimes(1);
     expect(fake.counts.createTag ?? 0).toBe(0);
+  });
+});
+
+type ResultItem = { kind: string; previewId?: string; nonce?: string; receipt?: { ok: boolean; action: string } };
+
+function previewsOf(results: ResultItem[]): ResultItem[] {
+  return results.filter((r) => r.kind === "preview");
+}
+
+describe("durable resume after the button-confirm (Phase 3)", () => {
+  it("completes the headline flow: list clients → invoice preview → confirm → resumed truthful summary", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "cl1", name: "qwen" }] });
+    const { app, model, cookie, store } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_clients_list", arguments: {} }] },
+        {
+          text: "",
+          toolCalls: [
+            {
+              id: "r1",
+              name: "clockify_invoices_create",
+              arguments: { clientName: "qwen", items: [{ description: "Consulting", quantity: 1, amount: 1000 }] },
+            },
+          ],
+        },
+        { text: "Created the invoice for qwen for $1,000.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for qwen for 1000" });
+    expect(chat.status).toBe(200);
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+    expect(previews).toHaveLength(1);
+    expect(fake.counts.createInvoice ?? 0).toBe(0);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(1);
+    // The loop resumed: the model saw the COMMITTED receipt as the risky call's tool result...
+    const resumeCall = model.calls[2];
+    const toolMsg = resumeCall.messages[resumeCall.messages.length - 1];
+    expect(toolMsg.role).toBe("tool");
+    expect(toolMsg.toolCallId).toBe("r1");
+    expect(toolMsg.content).toContain('"ok":true');
+    // ...and the truthful final summary came back and was persisted to history.
+    expect(confirm.body.resume.reply.kind).toBe("answer");
+    expect(confirm.body.resume.reply.text).toContain("qwen");
+    const record = store.getPendingConfirmation(previews[0].previewId as string);
+    const history = store.getRecentMessages(record!.sessionId, 10);
+    expect(history.some((m) => m.role === "assistant" && m.content.includes("qwen"))).toBe(true);
+  });
+
+  it("chains a second interrupt: the resumed loop may return another preview, confirmable in turn", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }, { id: "t2", name: "stale" }] });
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "", toolCalls: [{ id: "r2", name: "clockify_tags_delete", arguments: { name: "stale" } }] },
+        { text: "Both tags are deleted.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent and stale tags" });
+    const first = previewsOf(chat.body.results as ResultItem[]);
+    expect(first).toHaveLength(1);
+
+    const confirm1 = await request(app)
+      .post(`/api/confirmations/${first[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: first[0].nonce });
+    expect(confirm1.status).toBe(200);
+    // The resume hit the SECOND risky write → another preview, with a truthful reply.
+    const second = previewsOf(confirm1.body.resume.results as ResultItem[]);
+    expect(second).toHaveLength(1);
+    expect(confirm1.body.resume.reply.text).toContain("Nothing has been changed yet");
+    expect(fake.counts.deleteTag).toBe(1);
+
+    const confirm2 = await request(app)
+      .post(`/api/confirmations/${second[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: second[0].nonce });
+    expect(confirm2.status).toBe(200);
+    expect(confirm2.body.resume.reply.text).toBe("Both tags are deleted.");
+    expect(fake.counts.deleteTag).toBe(2);
+    expect(fake.state.tags).toHaveLength(0);
+  });
+
+  it("re-checks policy at confirm time: a lowered policy denies cleanly WITHOUT burning the nonce or resuming", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie, store } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "The urgent tag is gone.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+    const callsAfterChat = (model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const lowered = defaultAdminPolicy();
+    lowered.groups.work_structure = "read";
+    store.upsertAdminPolicy("ws-1", "admin-1", lowered);
+
+    const denied = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+    expect(denied.status).toBe(400);
+    expect(denied.body.code).toBe("policy_denied");
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    // No resume happened on the denial.
+    expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
+
+    // Restore the policy: the SAME nonce still works (it was never burned) and the loop resumes.
+    store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
+    const confirm = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.resume.reply.text).toBe("The urgent tag is gone.");
+    expect(fake.counts.deleteTag).toBe(1);
+  });
+
+  it("rejects a replayed confirm after a resumed commit (one-use nonce holds; no second resume)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "Done.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+    expect(confirm.status).toBe(200);
+    const callsAfterResume = (model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const replay = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+    expect(replay.status).toBe(400);
+    expect(fake.counts.deleteTag).toBe(1);
+    expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterResume);
+  });
+
+  it("confirms a legacy single-turn preview exactly as today (no resume key)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+      { agentic: false },
+    );
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+    expect(previews).toHaveLength(1);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(confirm.body.resume).toBeUndefined();
+    expect(model.completeWithTools).toHaveBeenCalledTimes(1);
+    expect(fake.counts.deleteTag).toBe(1);
+  });
+
+  it("keeps the committed receipt when the model fails during resume (commit is never lost)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const failing: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi
+        .fn()
+        .mockResolvedValueOnce({ text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] })
+        .mockRejectedValue(new Error("model down")),
+    };
+    const { app, cookie } = await makeApp([], fake, { modelClient: failing });
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const previews = previewsOf(chat.body.results as ResultItem[]);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${previews[0].previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: previews[0].nonce });
+
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(confirm.body.resume).toBeUndefined();
+    expect(fake.counts.deleteTag).toBe(1);
   });
 });

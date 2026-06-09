@@ -62,6 +62,7 @@ export const SCHEMA_STATEMENTS: string[] = [
     created_at TEXT NOT NULL,
     used_at TEXT,
     result_json TEXT,
+    agent_state_json TEXT,
     FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
   )`,
   `CREATE TABLE IF NOT EXISTS audit_events (
@@ -107,6 +108,9 @@ export function migrate(db: Database.Database): void {
   // Additive column for DBs created before reports-host capture. ALTER ADD COLUMN
   // throws if it already exists, so add only when missing.
   addColumnIfMissing(db, "installations", "reports_url", "TEXT");
+  // Additive column for DBs created before the durable agentic resume (Phase 3):
+  // a NULL agent_state_json row confirms exactly as before.
+  addColumnIfMissing(db, "pending_confirmations", "agent_state_json", "TEXT");
 }
 
 function addColumnIfMissing(
