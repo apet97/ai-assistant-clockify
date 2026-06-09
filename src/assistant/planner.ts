@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ActionCatalogEntry } from "../harness/action.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import { toolsForModel } from "../harness/tools.js";
+import { runAgentTurn, type AgentTurnResult, type RunAgentTurnInput } from "./agent-loop.js";
 import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.js";
 import { buildRepairMessage, buildSystemPrompt, buildToolSystemPrompt } from "./prompts.js";
 
@@ -72,6 +73,32 @@ function parsePlan(raw: string): ParseResult {
     return { ok: false, error: result.error.issues.map((i) => i.message).join("; ") };
   }
   return { ok: true, plan: result.data };
+}
+
+export interface AgentConversationInput
+  extends Pick<RunAgentTurnInput, "modelClient" | "messages" | "runAction" | "onStep" | "maxSteps"> {
+  policy: AdminPolicy;
+  /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
+  tools?: ToolDefinition[];
+}
+
+/**
+ * Agentic planning entry (Phase 2b): the durable tool-loop with the SAME tool
+ * system prompt as single-turn tool planning — the model is still sent only the
+ * security framing, safety rules, and the admin's permissions, never secrets.
+ * The caller supplies `runAction` (the harness trust boundary) and persists/
+ * resumes the returned transcript on an interrupt.
+ */
+export async function runAgentConversation(input: AgentConversationInput): Promise<AgentTurnResult> {
+  const system = buildToolSystemPrompt({ policy: input.policy });
+  return runAgentTurn({
+    modelClient: input.modelClient,
+    messages: [{ role: "system", content: system }, ...input.messages],
+    tools: input.tools ?? toolsForModel(),
+    runAction: input.runAction,
+    onStep: input.onStep,
+    maxSteps: input.maxSteps,
+  });
 }
 
 export async function planConversation(input: PlanConversationInput): Promise<ModelPlan> {

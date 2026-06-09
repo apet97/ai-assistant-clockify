@@ -36,6 +36,13 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, LLM_MODE: "json" }).llmMode).toBe("json");
   });
 
+  it("defaults llmAgentic OFF and honors LLM_AGENTIC=1", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).llmAgentic).toBe(false);
+    expect(loadConfig({ ...base, LLM_AGENTIC: "1" }).llmAgentic).toBe(true);
+    expect(loadConfig({ ...base, LLM_AGENTIC: "0" }).llmAgentic).toBe(false);
+  });
+
   it("rejects production without data encryption key", () => {
     expect(() =>
       loadConfig({

@@ -4,7 +4,7 @@ import {
   commitConfirmedOperation,
   executeAction,
 } from "../harness/actions.js";
-import type { ActionContext, ConfirmableOperation } from "../harness/action.js";
+import type { ActionContext, ActionResult, ConfirmableOperation, PreviewCard } from "../harness/action.js";
 import type { IdempotencyLedger } from "../harness/idempotency.js";
 import { reverseCreation, reversibleCreations, firstDeniedGroup } from "../harness/undo.js";
 import { buildMetrics } from "../metrics/metrics.js";
@@ -23,8 +23,9 @@ import {
   createPendingConfirmation,
 } from "../harness/confirmations.js";
 import { errorReceipt, successReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
-import type { ModelMessage } from "../assistant/model-client.js";
-import { planConversation } from "../assistant/planner.js";
+import type { AgentTurnResult } from "../assistant/agent-loop.js";
+import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
+import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import type { Installation } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
 
@@ -205,20 +206,15 @@ export function apiRouter(deps: AppDeps): Router {
       .filter((m) => m.role !== "system")
       .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
 
-    let plan;
-    try {
-      plan = await planConversation({
-        modelClient: deps.modelClient,
-        messages,
-        actionCatalog: catalogForModel(),
-        policy,
-        // Native tool-calling by default (provider validates args); LLM_MODE=json
-        // forces the JSON + repair path. The harness re-validates either way.
-        useTools: deps.config.llmMode !== "json",
-      });
-    } catch {
-      // A model/transport failure must never crash the server. Surface a calm,
-      // non-leaking message and let the admin retry.
+    const results: unknown[] = [];
+    const emit = (result: unknown): void => {
+      results.push(result);
+      onResult?.(result);
+    };
+
+    // A model/transport failure must never crash the server. Surface a calm,
+    // non-leaking message and let the admin retry.
+    const modelUnavailable = (): ChatTurnOutcome => {
       const errorText = "The assistant is temporarily unavailable. Please try again.";
       deps.store.addMessage({
         sessionId: claims.sessionId,
@@ -229,74 +225,148 @@ export function apiRouter(deps: AppDeps): Router {
         payload: { kind: "error" },
       });
       return { ok: false, code: "model_unavailable", message: errorText };
-    }
-
-    const results: unknown[] = [];
-    const emit = (result: unknown): void => {
-      results.push(result);
-      onResult?.(result);
     };
 
-    if (plan.kind === "actions" && plan.actions) {
+    // Every executed action — success or error, single-turn or agentic — is
+    // audited under the catalog's risk labels and offered an undo if reversible.
+    const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt): void => {
+      deps.store.addAuditEvent({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        actionName,
+        risk: getAction(actionName)?.risks ?? [],
+        receipt,
+      });
+      const undoId = recordUndoIfReversible(claims, receipt);
+      emit({ kind: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
+    };
+
+    // A risky write NEVER executes here: it becomes a pending confirmation that
+    // only the button-confirm route can commit (same machinery in both branches).
+    const emitPreviewFor = (preview: PreviewCard, operation: ConfirmableOperation): void => {
+      const created = createPendingConfirmation({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        risk: operation.risks,
+        preview,
+        operation,
+        sessionSecret: deps.config.sessionSecret,
+        now: now(),
+      });
+      deps.store.savePendingConfirmation(created.record);
+      emit({
+        kind: "preview",
+        previewId: created.previewId,
+        nonce: created.nonce,
+        expiresAt: created.expiresAt,
+        preview,
+      });
+    };
+
+    const useTools = deps.config.llmMode !== "json";
+    let replyKind: string;
+    let baseText: string;
+
+    if (deps.config.llmAgentic && useTools && typeof deps.modelClient.completeWithTools === "function") {
+      // Agentic turn (LLM_AGENTIC=1): the durable tool-loop. Reads + safe writes
+      // auto-chain with their receipts fed back to the model; the FIRST risky
+      // write interrupts into the same preview→button-confirm flow as the
+      // single-turn path (no resume yet — the confirm route commits as today).
       const ctx = actionContext(claims.workspaceId, claims.adminUserId, installation);
-      for (const proposed of plan.actions) {
-        let outcome;
+      const runAction = async (call: ToolCall): Promise<ActionResult> => {
         try {
-          outcome = await executeAction({ actionName: proposed.name, args: proposed.arguments, context: ctx });
+          return await executeAction({ actionName: call.name, args: call.arguments, context: ctx });
         } catch (err) {
-          // A safe write that throws (e.g. the Clockify API rejects it) returns an
-          // error receipt — it must not take down the process (Express 4 does not
-          // catch async throws). The message carries no token/secret.
-          const receipt = errorReceipt({
-            action: proposed.name,
-            code: "action_failed",
-            message: err instanceof Error ? err.message.slice(0, 200) : "The action could not be completed.",
-          });
-          deps.store.addAuditEvent({
-            workspaceId: claims.workspaceId,
-            adminUserId: claims.adminUserId,
-            sessionId: claims.sessionId,
-            actionName: proposed.name,
-            risk: getAction(proposed.name)?.risks ?? [],
-            receipt,
-          });
-          emit({ kind: "receipt", receipt });
-          continue;
+          // Same containment as the single-turn path: an action that throws
+          // becomes an error receipt (also fed back to the model), never a crash.
+          return {
+            kind: "receipt",
+            receipt: errorReceipt({
+              action: call.name,
+              code: "action_failed",
+              message: err instanceof Error ? err.message.slice(0, 200) : "The action could not be completed.",
+            }),
+          };
         }
-        if (outcome.kind === "receipt") {
-          deps.store.addAuditEvent({
-            workspaceId: claims.workspaceId,
-            adminUserId: claims.adminUserId,
-            sessionId: claims.sessionId,
-            actionName: proposed.name,
-            risk: getAction(proposed.name)?.risks ?? [],
-            receipt: outcome.receipt,
-          });
-          const undoId = recordUndoIfReversible(claims, outcome.receipt);
-          emit({ kind: "receipt", receipt: outcome.receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
-        } else if (outcome.kind === "clarify") {
-          emit({ kind: "clarify", message: outcome.message, options: outcome.options });
-        } else {
-          const created = createPendingConfirmation({
-            sessionId: claims.sessionId,
-            workspaceId: claims.workspaceId,
-            adminUserId: claims.adminUserId,
-            risk: outcome.operation.risks,
-            preview: outcome.preview,
-            operation: outcome.operation,
-            sessionSecret: deps.config.sessionSecret,
-            now: now(),
-          });
-          deps.store.savePendingConfirmation(created.record);
-          emit({
-            kind: "preview",
-            previewId: created.previewId,
-            nonce: created.nonce,
-            expiresAt: created.expiresAt,
-            preview: outcome.preview,
-          });
+      };
+
+      let turn: AgentTurnResult;
+      try {
+        turn = await runAgentConversation({
+          modelClient: deps.modelClient,
+          messages,
+          policy,
+          runAction,
+          onStep: ({ call, result }) => {
+            if (result.kind === "receipt") auditAndEmitReceipt(call.name, result.receipt);
+            else if (result.kind === "clarify") emit({ kind: "clarify", message: result.message, options: result.options });
+          },
+        });
+      } catch {
+        return modelUnavailable();
+      }
+
+      if (turn.kind === "interrupt") {
+        emitPreviewFor(turn.preview, turn.operation);
+        replyKind = "actions";
+        baseText = ""; // the truthful-preview override below supplies the reply
+      } else if (turn.kind === "clarify") {
+        replyKind = "clarify";
+        baseText = turn.message;
+      } else {
+        // "final" and "exhausted" both carry truthful text from the loop.
+        replyKind = "answer";
+        baseText = turn.text;
+      }
+    } else {
+      let plan;
+      try {
+        plan = await planConversation({
+          modelClient: deps.modelClient,
+          messages,
+          actionCatalog: catalogForModel(),
+          policy,
+          // Native tool-calling by default (provider validates args); LLM_MODE=json
+          // forces the JSON + repair path. The harness re-validates either way.
+          useTools,
+        });
+      } catch {
+        return modelUnavailable();
+      }
+
+      if (plan.kind === "actions" && plan.actions) {
+        const ctx = actionContext(claims.workspaceId, claims.adminUserId, installation);
+        for (const proposed of plan.actions) {
+          let outcome;
+          try {
+            outcome = await executeAction({ actionName: proposed.name, args: proposed.arguments, context: ctx });
+          } catch (err) {
+            // A safe write that throws (e.g. the Clockify API rejects it) returns an
+            // error receipt — it must not take down the process (Express 4 does not
+            // catch async throws). The message carries no token/secret.
+            auditAndEmitReceipt(
+              proposed.name,
+              errorReceipt({
+                action: proposed.name,
+                code: "action_failed",
+                message: err instanceof Error ? err.message.slice(0, 200) : "The action could not be completed.",
+              }),
+            );
+            continue;
+          }
+          if (outcome.kind === "receipt") {
+            auditAndEmitReceipt(proposed.name, outcome.receipt);
+          } else if (outcome.kind === "clarify") {
+            emit({ kind: "clarify", message: outcome.message, options: outcome.options });
+          } else {
+            emitPreviewFor(outcome.preview, outcome.operation);
+          }
         }
       }
+      replyKind = plan.kind;
+      baseText = plan.text;
     }
 
     // SAFETY (SPEC "never claim a risky action is done"): a risky action only
@@ -315,7 +385,7 @@ export function apiRouter(deps: AppDeps): Router {
         ? pendingPreviews > 1
           ? `I've prepared ${pendingPreviews} changes — review them below and click "Confirm all" to apply. Nothing has been changed yet.`
           : `Review the change below and click "Confirm" to apply it. Nothing has been changed yet.`
-        : plan.text;
+        : baseText;
 
     deps.store.addMessage({
       sessionId: claims.sessionId,
@@ -323,10 +393,10 @@ export function apiRouter(deps: AppDeps): Router {
       adminUserId: claims.adminUserId,
       role: "assistant",
       content: replyText,
-      payload: { kind: plan.kind, results },
+      payload: { kind: replyKind, results },
     });
 
-    return { ok: true, replyKind: plan.kind, replyText, results };
+    return { ok: true, replyKind, replyText, results };
   }
 
   function chatPreconditions(req: Request, res: Response):

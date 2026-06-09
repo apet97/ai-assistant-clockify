@@ -22,6 +22,9 @@ export interface AppConfig {
   /** Planner mode: "tool" (native function-calling, default) or "json" (JSON + repair).
    *  Tool mode only applies when the backend supports it (the http client does). */
   llmMode?: "tool" | "json";
+  /** Agentic loop (Phase 2b): when true, the chat turn runs the durable tool-loop
+   *  (read-then-act). Default OFF = the single-turn planner, byte-identical. */
+  llmAgentic?: boolean;
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;
@@ -44,6 +47,7 @@ const envSchema = z
     // below only for the http provider.
     LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
     LLM_MODE: z.enum(["tool", "json"]).default("tool"),
+    LLM_AGENTIC: z.enum(["0", "1"]).default("0"),
     LLM_BASE_URL: z.string().min(1).optional(),
     LLM_API_KEY: z.string().min(1).optional(),
     LLM_MODEL: z.string().min(1).optional(),
@@ -84,6 +88,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     databasePath: parsed.DATABASE_PATH,
     llmProvider: parsed.LLM_PROVIDER,
     llmMode: parsed.LLM_MODE,
+    llmAgentic: parsed.LLM_AGENTIC === "1",
     llmBaseUrl: parsed.LLM_BASE_URL,
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,

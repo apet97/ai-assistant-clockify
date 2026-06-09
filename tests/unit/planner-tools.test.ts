@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { planConversation } from "../../src/assistant/planner.js";
+import { planConversation, runAgentConversation } from "../../src/assistant/planner.js";
 import type { ModelClient, ToolCompletion, ToolDefinition } from "../../src/assistant/model-client.js";
+import type { ActionResult } from "../../src/harness/action.js";
+import { successReceipt } from "../../src/harness/receipts.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
+import { scriptedToolModel } from "../helpers/scripted-model.js";
 
 function toolModel(completion: ToolCompletion, spy?: { tools?: ToolDefinition[]; sawComplete?: boolean }): ModelClient {
   return {
@@ -74,5 +77,36 @@ describe("planConversation — tool-calling branch", () => {
     const plan = await planConversation(input(jsonOnly));
     expect(plan.kind).toBe("answer");
     expect(jsonOnly.complete).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runAgentConversation — the agentic planning entry", () => {
+  it("prepends the tool system prompt and drives runAgentTurn to a final answer", async () => {
+    const model = scriptedToolModel([
+      { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_list", arguments: {} }] },
+      { text: "You have 1 tag: urgent.", toolCalls: [] },
+    ]);
+    const runAction = vi.fn(async (): Promise<ActionResult> => ({
+      kind: "receipt",
+      receipt: successReceipt({ action: "clockify_tags_list", data: { items: [{ id: "t1", name: "urgent" }] } }),
+    }));
+
+    const result = await runAgentConversation({
+      modelClient: model,
+      messages: [{ role: "user", content: "how many tags do I have?" }],
+      policy: defaultAdminPolicy(),
+      runAction,
+    });
+
+    expect(result.kind).toBe("final");
+    // The system prompt is the tool prompt (security framing + permissions), prepended once.
+    const first = model.calls[0].messages[0];
+    expect(first.role).toBe("system");
+    expect(first.content).toContain("You are an assistant embedded in Clockify");
+    expect(model.calls[1].messages.filter((m) => m.role === "system")).toHaveLength(1);
+    // The real tool catalog is passed by default.
+    expect(model.calls[0].tools.some((t) => t.name === "clockify_tags_list")).toBe(true);
+    // The read's receipt was fed back to the model on the second call.
+    expect(model.calls[1].messages.some((m) => m.role === "tool" && m.toolCallId === "c1")).toBe(true);
   });
 });
