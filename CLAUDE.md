@@ -88,7 +88,18 @@ re-checked at confirm time** (lowering a group after preview → `policy_denied`
 Expiry (5-min TTL) stays covered by `tests/unit/confirmations.test.ts` +
 `tests/integration/risky-preview.test.ts`.
 
-- `npm run verify` is green (**578 tests**: type-check + Vitest + build).
+- `npm run verify` is green (**589 tests**: type-check + Vitest + build).
+- **Grounding & early constraint surfacing (Phase 4, 2026-06-09).** Read the world
+  before acting; never punt vaguely; warn about platform limits in the **preview**,
+  before confirm. (1) `clockify_invoices_create` now adds the invoice-item-type caveat
+  to the **preview card** whenever the invoice has line items (a $0 outcome is no
+  longer a confirm-time surprise — there's no API to list/create item types, so it's a
+  surfaced known constraint). (2) Name-not-found clarifies are **specific** — they
+  offer "did you mean one of these?" options built from the candidates already fetched
+  during resolution (`resolve.suggestOptions`: prefers names containing the query,
+  falls back to all active, excludes archived, capped at 12), never "go list them
+  yourself." Applied to invoices_create's client, projects_delete, tags_delete, and
+  create_work_package's project `clientName`. No extra Clockify calls.
 - **Undo the last reversible action (Phase 5b, 2026-06-09).** A successful action
   that CREATED entities now carries a one-use `undo: { id }` handle (chat safe-write
   + confirm commit paths); `POST /api/undo/:id` reverses it by deleting the created
@@ -303,8 +314,9 @@ LLM** — they are architecture/platform issues:
 - **Invoice line items require a workspace-configured invoice item type** (Clockify →
   Workspace settings → Invoices). There is **no API to list or create them**; a fresh
   workspace has none, so amounts stay $0 until an admin sets one up in the UI (one-time).
-  The add-on now creates the invoice and returns an actionable warning instead of a
-  silent $0. Not a model or code bug — a Clockify platform constraint.
+  The add-on now warns about this **in the preview** (Phase 4) so the $0 outcome is
+  surfaced before confirm, and still returns an actionable warning on the receipt
+  instead of a silent $0. Not a model or code bug — a Clockify platform constraint.
 - **Models narrate false completion.** Every backend tried (deepseek-v4-pro, gemini-cli)
   sometimes says "Done/Confirmed" for a pending risky preview. The route now overrides
   this deterministically (truthful previews) — the right fix, model-agnostic.
