@@ -119,6 +119,12 @@ describe("expense rest", () => {
     expect(form.get("categoryId")).toBe("c1");
   });
 
+  it("listExpenseCategories passes the spec's archived filter (default wire behavior is ACTIVE-ONLY)", async () => {
+    const f = vi.fn(async () => jsonResponse([]));
+    await rest(f as unknown as typeof fetch).listExpenseCategories({ archived: true });
+    expect((f as any).mock.calls[0][0]).toContain("archived=true");
+  });
+
   it("setExpenseCategoryArchived PATCHes the spec's /categories/{id}/status route", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).setExpenseCategoryArchived("c1", true);

@@ -223,6 +223,33 @@ describe("expense actions", () => {
     expect(fake.state.expenseCategories[0].archived).toBe(false);
   });
 
+  it("categories_delete resolves a NAME in the id slot — incl. an ARCHIVED category (live regression: 'delete category RGCAT' sent the NAME to the wire → 400)", async () => {
+    const fake = createFakeWorkspace({
+      expenseCategories: [{ id: "c9", name: "AIASSIST_LOOP_RGCAT", archived: true }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_expenses_categories_delete",
+      args: { id: "AIASSIST_LOOP_RGCAT" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("c9");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.expenseCategories.find((c) => c.id === "c9")).toBeUndefined();
+  });
+
+  it("categories_delete clarifies on an unknown name instead of a doomed commit", async () => {
+    const fake = createFakeWorkspace({ expenseCategories: [{ id: "c1", name: "Travel" }] });
+    const result = await executeAction({
+      actionName: "clockify_expenses_categories_delete",
+      args: { name: "NO_SUCH_CATEGORY" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.deleteExpenseCategory ?? 0).toBe(0);
+  });
+
   it("clockify_expenses_categories_delete previews destructive+billing then deletes", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_expenses_categories_delete", args: { id: "c1", name: "Travel" }, context: makeContext(fake) });

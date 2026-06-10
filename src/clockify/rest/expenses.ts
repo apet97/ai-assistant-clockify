@@ -164,8 +164,11 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
     async deleteExpense(id) {
       await core.call("api", "DELETE", `${ws}/expenses/${id}`);
     },
-    async listExpenseCategories() {
-      const data = (await core.call("api", "GET", `${ws}/expenses/categories`)) as
+    async listExpenseCategories(filter) {
+      // The spec's archived param DEFAULTS to false (active-only) — name
+      // resolution for deletes must be able to ask for the archived set.
+      const qs = filter?.archived === undefined ? "" : `?archived=${filter.archived}`;
+      const data = (await core.call("api", "GET", `${ws}/expenses/categories${qs}`)) as
         | { categories?: any[] }
         | any[]
         | null;

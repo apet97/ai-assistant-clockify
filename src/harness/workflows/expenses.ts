@@ -366,18 +366,33 @@ const updateExpenseCategory = defineRiskyAction({
 const deleteExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_delete",
   description:
-    "Delete an expense category. Destructive billing action — previews and requires confirmation.",
+    "Delete an expense category. Pass the category id, or its exact `name` and the harness resolves it. Destructive billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["destructive", "billing"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the category id or its exact name.",
+    }),
+  async preview(ctx, args) {
+    // Resolve a name (or a name in the id slot) — live, "delete category X"
+    // sent the NAME to the status PATCH and 400'd after the admin confirmed.
+    // Deleting an ARCHIVED category is valid (delete archives first anyway).
+    const resolved = await resolveEntityRef(args, {
+      noun: "expense category",
+      verb: "delete",
+      list: (filter) => ctx.clockify.listExpenseCategories(filter),
+      includeArchived: true,
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete expense category",
-      targets: [{ type: "expense_category", id: args.id, name: args.name }],
-      expectedChanges: [`Delete expense category ${args.name ?? args.id}`],
+      targets: [{ type: "expense_category", id: resolved.id, name }],
+      expectedChanges: [`Delete expense category ${name ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an expense category is permanent."],
-      payload: { id: args.id, name: args.name },
+      payload: { id: resolved.id, name },
     };
   },
   async commit(ctx, payload) {

@@ -66,9 +66,10 @@ export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
       state.expenses = state.expenses.filter((e) => e.id !== id);
       state.deleted.push({ entityType: "expense", id });
     },
-    async listExpenseCategories() {
+    async listExpenseCategories(filter) {
       bump("listExpenseCategories");
-      return state.expenseCategories;
+      if (filter?.archived === undefined) return state.expenseCategories;
+      return state.expenseCategories.filter((c) => Boolean(c.archived) === filter.archived);
     },
     async createExpenseCategory({ name }) {
       bump("createExpenseCategory");

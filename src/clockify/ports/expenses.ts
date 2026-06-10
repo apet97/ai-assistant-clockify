@@ -71,7 +71,7 @@ export interface ExpensePort {
   createExpense(input: CreateExpenseInput): Promise<EntitySummary>;
   updateExpense(id: string, input: UpdateExpenseInput): Promise<EntitySummary>;
   deleteExpense(id: string): Promise<void>;
-  listExpenseCategories(): Promise<ExpenseCategorySummary[]>;
+  listExpenseCategories(filter?: { archived?: boolean }): Promise<ExpenseCategorySummary[]>;
   createExpenseCategory(input: { name: string }): Promise<EntitySummary>;
   updateExpenseCategory(id: string, patch: { name?: string }): Promise<EntitySummary>;
   /** PATCH /expenses/categories/{id}/status — the spec's archive/unarchive route. */
