@@ -374,7 +374,7 @@ const estimateUpdate = defineRiskyAction({
 const membershipsUpdate = defineRiskyAction({
   name: "clockify_projects_memberships_update",
   description:
-    "Replace a project's membership set (who can access/track it). Elevated write — previews and requires confirmation.",
+    'Update who can access/track a project. To ADD members, pass `addUserIds` — use "me" for the requesting admin (the harness knows who is asking; never ask the admin who they are) — and the harness merges them into the current membership set. Passing `memberships` REPLACES the whole set. Pass the project `id` or its exact `name`. Elevated write — previews and requires confirmation.',
   group: "users_groups",
   // NOTE: this is a real Clockify write, so it must be gated by the `users_groups`
   // feature-group policy. The `permission_change` label is reserved for the
@@ -382,18 +382,48 @@ const membershipsUpdate = defineRiskyAction({
   // executor intentionally exempts from the Clockify feature-group gate; using it
   // here would BYPASS that gate. `high_risk_write` keeps confirmation AND the gate.
   risks: ["high_risk_write"],
-  schema: z.object({
-    id: z.string().min(1),
-    memberships: z.array(z.record(z.string(), z.unknown())).min(1),
-  }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      memberships: z.array(z.record(z.string(), z.unknown())).min(1).optional(),
+      /** User ids to ADD (merged into the current set); "me" = the requesting admin. */
+      addUserIds: z.array(z.string().min(1)).min(1).optional(),
+    })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the project id or its exact name.",
+    })
+    .refine((v) => v.memberships !== undefined || v.addUserIds !== undefined, {
+      message: "Provide memberships to replace, or addUserIds to add.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(
+      { id: args.id, name: args.name },
+      { noun: "project", verb: "update", list: (filter) => ctx.clockify.listProjects(filter) },
+    );
+    if (!resolved.ok) return resolved.clarify;
+    let memberships = args.memberships ?? [];
+    let change: string;
+    if (args.addUserIds) {
+      // The memberships PATCH REPLACES the set, so an "add" merges into the
+      // CURRENT records ("me" = the caller — live item 058 asked "which user
+      // are you?" instead of knowing).
+      const current = await ctx.clockify.getProjectMemberships(resolved.id);
+      const requested = args.addUserIds.map((u) => (u.trim().toLowerCase() === "me" ? ctx.adminUserId : u));
+      const have = new Set(current.map((m) => String(m.userId)));
+      const additions = [...new Set(requested)].filter((u) => !have.has(u));
+      memberships = [...current, ...additions.map((userId) => ({ userId }))];
+      change = `Add ${additions.length} member(s) (${current.length} existing kept)`;
+    } else {
+      change = `Replace membership set (${memberships.length} member(s))`;
+    }
     return {
       actionLabel: "Update project memberships",
-      targets: [{ type: "project", id: args.id }],
-      expectedChanges: [`Replace membership set (${args.memberships.length} member(s))`],
+      targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
+      expectedChanges: [change],
       reversibility: "You can update memberships again to restore prior access.",
-      warnings: ["This replaces who can access and track time on the project."],
-      payload: { id: args.id, memberships: args.memberships },
+      warnings: ["This changes who can access and track time on the project."],
+      payload: { id: resolved.id, memberships },
     };
   },
   async commit(ctx, payload) {

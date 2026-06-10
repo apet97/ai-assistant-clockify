@@ -45,4 +45,10 @@ export interface ProjectPort {
   updateProjectRate(input: UpdateProjectRateInput): Promise<void>;
   updateProjectEstimate(id: string, patch: Record<string, unknown>): Promise<void>;
   updateProjectMemberships(id: string, patch: Record<string, unknown>): Promise<void>;
+  /**
+   * Read the project's current membership records (the spec's ProjectDtoV1
+   * carries them on GET). The memberships PATCH REPLACES the whole set, so an
+   * "add" must merge into this (live item 058).
+   */
+  getProjectMemberships(projectId: string): Promise<Array<Record<string, unknown>>>;
 }

@@ -47,6 +47,8 @@ export interface FakeWorkspaceSeed {
   holidays?: HolidaySummary[];
   assignments?: AssignmentSummary[];
   approvals?: ApprovalSummary[];
+  /** Per-project membership records (mirrors ProjectDtoV1.memberships). */
+  projectMemberships?: Record<string, Array<Record<string, unknown>>>;
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
   /** addInvoiceItem throws (simulates a workspace with no matching invoice item type). */
@@ -75,6 +77,7 @@ export interface FakeState {
   holidays: HolidaySummary[];
   assignments: AssignmentSummary[];
   approvals: ApprovalSummary[];
+  projectMemberships: Record<string, Array<Record<string, unknown>>>;
   deleted: Array<{ entityType: string; id: string }>;
 }
 
@@ -121,6 +124,9 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
     holidays: [...(seed.holidays ?? [])],
     assignments: [...(seed.assignments ?? [])],
     approvals: [...(seed.approvals ?? [])],
+    projectMemberships: Object.fromEntries(
+      Object.entries(seed.projectMemberships ?? {}).map(([id, rows]) => [id, [...rows]]),
+    ),
     deleted: [],
   };
 }

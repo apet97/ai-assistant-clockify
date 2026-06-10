@@ -75,5 +75,11 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       // PATCH, per the goclmcp reference. Replaces the membership set.
       await core.call("api", "PATCH", `${ws}/projects/${id}/memberships`, patch);
     },
+    async getProjectMemberships(projectId) {
+      const p = (await core.call("api", "GET", `${ws}/projects/${projectId}`, undefined, true)) as
+        | { memberships?: Array<Record<string, unknown>> }
+        | null;
+      return p?.memberships ?? [];
+    },
   };
 }

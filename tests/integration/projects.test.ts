@@ -293,6 +293,44 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.updateProjectMemberships).toBe(1);
   });
 
+  it("memberships_update ADDS the requesting admin via addUserIds:['me'] — merged into the CURRENT set, never replacing it (live item 058: 'add me' asked 'which user are you?')", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      projectMemberships: { p1: [{ userId: "u-existing" }] },
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { name: "Website", addUserIds: ["me"] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const payload = preview.operation.payload as { id: string; memberships: Array<{ userId: string }> };
+    expect(payload.id).toBe("p1");
+    expect(payload.memberships.map((m) => m.userId).sort()).toEqual(["admin-1", "u-existing"]);
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect((fake.state.projectMemberships.p1 ?? []).map((m) => String(m.userId)).sort()).toEqual([
+      "admin-1",
+      "u-existing",
+    ]);
+  });
+
+  it("memberships_update addUserIds is idempotent for an already-member user", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      projectMemberships: { p1: [{ userId: "admin-1" }] },
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { id: "p1", addUserIds: ["me"] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const payload = preview.operation.payload as { memberships: Array<{ userId: string }> };
+    expect(payload.memberships).toHaveLength(1);
+  });
+
   it("clockify_projects_memberships_update is policy-gated: users_groups=off blocks preview AND commit", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const off = defaultAdminPolicy();

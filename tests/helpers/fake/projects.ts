@@ -13,6 +13,7 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
   | "updateProjectRate"
   | "updateProjectEstimate"
   | "updateProjectMemberships"
+  | "getProjectMemberships"
 > {
   return {
     async listProjects(filter) {
@@ -85,8 +86,12 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
     },
     async updateProjectMemberships(id, patch) {
       bump("updateProjectMemberships");
-      void id;
-      void patch;
+      const rows = (patch as { memberships?: Array<Record<string, unknown>> }).memberships;
+      if (rows) state.projectMemberships[id] = [...rows];
+    },
+    async getProjectMemberships(projectId) {
+      bump("getProjectMemberships");
+      return [...(state.projectMemberships[projectId] ?? [])];
     },
   };
 }
