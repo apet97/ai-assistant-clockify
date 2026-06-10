@@ -213,6 +213,13 @@ export const REPORT_PERIODS = [
   "last_quarter",
   "this_year",
   "last_year",
+  // Forward periods (live item 321): natural for scheduling/time-off ranges
+  // ("schedule me next week", "assignments next month") — they used to
+  // dead-end in an honest clarify.
+  "next_week",
+  "next_month",
+  "next_quarter",
+  "next_year",
 ] as const;
 export type ReportPeriod = (typeof REPORT_PERIODS)[number];
 
@@ -278,6 +285,30 @@ export function resolvePeriod(now: Date, period: ReportPeriod): { dateRangeStart
       return range(startOf(y, 0, 1), now);
     case "last_year":
       return range(startOf(y - 1, 0, 1), endOf(y - 1, 11, 31));
+    case "next_week": {
+      const ws = new Date(Date.UTC(y, m, d) + (7 - dow) * DAY_MS);
+      const we = new Date(ws.getTime() + 6 * DAY_MS);
+      return range(
+        startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()),
+        endOf(we.getUTCFullYear(), we.getUTCMonth(), we.getUTCDate()),
+      );
+    }
+    case "next_month": {
+      const yy = m === 11 ? y + 1 : y;
+      const mm = m === 11 ? 0 : m + 1;
+      return range(startOf(yy, mm, 1), endOf(yy, mm, lastDayOf(yy, mm)));
+    }
+    case "next_quarter": {
+      let qm = qStart + 3;
+      let qy = y;
+      if (qm > 11) {
+        qm -= 12;
+        qy += 1;
+      }
+      return range(startOf(qy, qm, 1), endOf(qy, qm + 2, lastDayOf(qy, qm + 2)));
+    }
+    case "next_year":
+      return range(startOf(y + 1, 0, 1), endOf(y + 1, 11, 31));
   }
 }
 

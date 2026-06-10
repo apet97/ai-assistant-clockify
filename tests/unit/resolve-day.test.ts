@@ -60,6 +60,14 @@ describe("resolveInstant", () => {
     expect(resolveInstant(NOW, "2026-06-01Tbanana", "start")).toBeUndefined();
   });
 
+  it("resolves FORWARD period keywords — 'next week'/'next month' (live item 321: a scheduling range of 'next month' dead-ended in a clarify)", () => {
+    // NOW = Wednesday 2026-06-10; this week's Monday is 06-08 → next week = 06-15..06-21.
+    expect(resolveInstant(NOW, "next week", "start")).toBe("2026-06-15T00:00:00.000Z");
+    expect(resolveInstant(NOW, "next week", "end")).toBe("2026-06-21T23:59:59.999Z");
+    expect(resolveInstant(NOW, "next month", "start")).toBe("2026-07-01T00:00:00.000Z");
+    expect(resolveInstant(NOW, "next month", "end")).toBe("2026-07-31T23:59:59.999Z");
+  });
+
   it("accepts the period keywords the planner emits as date values (live: entries_list got start='last_7_days' twice)", () => {
     // Edge semantics: a period maps to its own start/end instant.
     expect(resolveInstant(NOW, "last_7_days", "start")).toBe(

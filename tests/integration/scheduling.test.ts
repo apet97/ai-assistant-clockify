@@ -116,6 +116,28 @@ describe("scheduling date normalization (live-loop FIX 2: invalid start/end)", (
     expect(fake.counts.listAssignments ?? 0).toBe(1);
   });
 
+  it("assignments_list and publish resolve the FORWARD range 'next month' (live item 321)", async () => {
+    const fake = createFakeWorkspace();
+    const list = await executeAction({
+      actionName: "clockify_scheduling_assignments_list",
+      args: { start: "next month", end: "next month" },
+      context: makeContext(fake),
+    });
+    expect(list.kind).toBe("receipt");
+
+    // NOW = 2026-06-06 → next month = the full July 2026 window.
+    const publish = await executeAction({
+      actionName: "clockify_scheduling_publish",
+      args: { start: "next month", end: "next month" },
+      context: makeContext(fake),
+    });
+    if (publish.kind !== "preview") throw new Error(`expected a preview, got ${publish.kind}`);
+    expect(publish.operation.payload).toMatchObject({
+      start: "2026-07-01T00:00:00.000Z",
+      end: "2026-07-31T23:59:59.999Z",
+    });
+  });
+
   it("publish + totals resolve relative ranges too", async () => {
     const fake = createFakeWorkspace();
     const publish = await executeAction({
