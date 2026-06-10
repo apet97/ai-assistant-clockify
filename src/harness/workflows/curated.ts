@@ -107,7 +107,11 @@ const onboardUser = defineAction({
           ...groups.map((g) => `Add ${args.email} to group "${g}"`),
         ],
         reversibility: "An invited user can be deactivated; group membership can be removed.",
-        warnings: ["This sends a real invitation."],
+        warnings: [
+          args.sendEmail === false
+            ? "The user is added without an invitation email."
+            : "This sends a real invitation.",
+        ],
       },
       operation: {
         actionName: "clockify_onboard_user",

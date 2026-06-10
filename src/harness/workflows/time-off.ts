@@ -150,7 +150,11 @@ const archivePolicy = defineRiskyAction({
       targets: [{ type: "time_off_policy", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
       expectedChanges: [`${args.archived ? "Archive" : "Unarchive"} policy ${args.name ?? args.id}`],
       reversibility: "You can unarchive the policy to restore it.",
-      warnings: ["Archiving a policy stops new requests against it."],
+      warnings: [
+        args.archived
+          ? "Archiving a policy stops new requests against it."
+          : "Unarchiving re-enables new requests against this policy.",
+      ],
       payload: { id: args.id, name: args.name, archived: args.archived },
     };
   },

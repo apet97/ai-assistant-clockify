@@ -56,6 +56,19 @@ describe("time-off actions", () => {
     expect(fake.state.timeOffPolicies[0].status).toBe("ARCHIVED");
   });
 
+  it("policies_archive with archived=false previews an UNARCHIVE truthfully (no 'archiving stops requests' warning)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_time_off_policies_archive",
+      args: { id: "pol1", name: "PTO", archived: false },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const warnings = (preview.preview.warnings ?? []).join(" ");
+    expect(warnings).not.toMatch(/archiving a policy stops/i);
+    expect(warnings).toMatch(/re-enables new requests/i);
+  });
+
   it("requests_list reads + requests_create previews external_side_effect then commits", async () => {
     const fake = createFakeWorkspace(seed());
     const list = await executeAction({ actionName: "clockify_time_off_requests_list", args: {}, context: makeContext(fake) });

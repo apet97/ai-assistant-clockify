@@ -74,6 +74,19 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     if (receipt.ok) expect((receipt.changed?.created ?? []).some((e) => e.type === "user")).toBe(true);
   });
 
+  it("sendEmail=false previews truthfully: no 'sends a real invitation' warning", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_onboard_user",
+      args: { email: "ada@example.com", sendEmail: false },
+      context: ctx(fake),
+    });
+    if (result.kind !== "preview") throw new Error("expected a preview");
+    const warnings = (result.preview.warnings ?? []).join(" ");
+    expect(warnings).not.toMatch(/sends a real invitation/i);
+    expect(warnings).toMatch(/without an invitation email/i);
+  });
+
   it("a missing group is a warning — the user is still invited (best-effort group adds)", async () => {
     const fake = createFakeWorkspace(); // no groups configured
     const preview = await executeAction({
