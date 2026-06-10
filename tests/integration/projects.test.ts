@@ -309,3 +309,78 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.deleteProject ?? 0).toBe(0);
   });
 });
+
+describe("project actions — name→id resolution at preview time (live-loop FIX 1)", () => {
+  const seed = () => ({ projects: [{ id: "p1", name: "Website" }, { id: "p2", name: "App" }] });
+
+  it("clockify_projects_update renames by currentName — the resolved id is pinned into the operation", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "website", name: "Website v2" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ id: "p1", patch: { name: "Website v2" } });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.projects[0].name).toBe("Website v2");
+  });
+
+  it("clockify_projects_update resolves a NAME passed in the id slot (the audit-log failure shape)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { id: "Website", billable: true },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ id: "p1" });
+  });
+
+  it("clockify_projects_update clarifies (never previews a doomed commit) on an unknown name", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Webside", name: "X" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateProject ?? 0).toBe(0);
+  });
+
+  it("clockify_projects_archive resolves by name and pins the id", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_projects_archive",
+      args: { name: "App" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ id: "p2" });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.archiveProject).toBe(1);
+  });
+
+  it("clockify_projects_get fetches by name when no id is given", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_projects_get",
+      args: { name: "Website" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).entity).toMatchObject({ id: "p1" });
+  });
+
+  it("clockify_projects_get clarifies on an unknown name instead of a raw 400", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_projects_get",
+      args: { name: "Webside" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+});

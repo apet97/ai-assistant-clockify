@@ -231,7 +231,8 @@ describe("expanded risky actions (Phase 3)", () => {
   });
 
   it("expenses_create previews and only mutates after confirmation", async () => {
-    const fake = createFakeWorkspace();
+    // The category must exist — an unknown category now clarifies at preview (FIX 1).
+    const fake = createFakeWorkspace({ expenseCategories: [{ id: "c1", name: "Travel" }] });
     const preview = await executeAction({
       actionName: "clockify_expenses_create",
       args: { amount: 20, date: "2026-06-06", categoryId: "c1", notes: "Taxi" },
@@ -321,7 +322,7 @@ describe("expanded risky actions (Phase 3)", () => {
   });
 
   it("a new risky action re-checks policy at confirm time (expenses disabled after preview)", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ expenseCategories: [{ id: "c1", name: "Travel" }] });
     const preview = await executeAction({
       actionName: "clockify_expenses_create",
       args: { amount: 20, date: "2026-06-06", categoryId: "c1", notes: "Taxi" },

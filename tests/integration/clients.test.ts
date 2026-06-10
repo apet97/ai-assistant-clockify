@@ -50,6 +50,67 @@ describe("client actions", () => {
     expect(fake.counts.updateClient).toBe(1);
   });
 
+  it("clockify_clients_update renames by currentName — the resolved id is pinned into the operation", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { currentName: "acme", name: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ id: "c1", patch: { name: "Acme Corp" } });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.clients[0].name).toBe("Acme Corp");
+  });
+
+  it("clockify_clients_update clarifies (never previews a doomed commit) on an unknown name", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { currentName: "Acme Inc", name: "X" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateClient ?? 0).toBe(0);
+  });
+
+  it("clockify_clients_delete resolves a client by name (or a name in the id slot) and pins the id", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_clients_delete",
+      args: { name: "Acme" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { id: string }).id).toBe("c1");
+
+    const inIdSlot = await executeAction({
+      actionName: "clockify_clients_delete",
+      args: { id: "Acme" },
+      context: makeContext(fake),
+    });
+    if (inIdSlot.kind !== "preview") throw new Error("expected a preview");
+    expect((inIdSlot.operation.payload as { id: string }).id).toBe("c1");
+  });
+
+  it("clockify_clients_delete clarifies on no / ambiguous name match", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }, { id: "c2", name: "Acme" }] });
+    const ambiguous = await executeAction({
+      actionName: "clockify_clients_delete",
+      args: { name: "Acme" },
+      context: makeContext(fake),
+    });
+    expect(ambiguous.kind).toBe("clarify");
+    const none = await executeAction({
+      actionName: "clockify_clients_delete",
+      args: { name: "Nope" },
+      context: makeContext(fake),
+    });
+    expect(none.kind).toBe("clarify");
+    expect(fake.counts.deleteClient ?? 0).toBe(0);
+  });
+
   it("clockify_clients_delete previews destructive then archive-then-deletes once", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_clients_delete", args: { id: "c1", name: "Acme" }, context: makeContext(fake) });

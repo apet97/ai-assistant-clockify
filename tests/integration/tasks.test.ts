@@ -109,3 +109,66 @@ describe("task actions", () => {
     expect(fake.counts.updateTaskRate).toBe(1);
   });
 });
+
+describe("task actions — name→id resolution at preview time (live-loop FIX 1)", () => {
+  it("clockify_tasks_update resolves projectName + currentName and pins both ids", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_tasks_update",
+      args: { projectName: "Website", currentName: "design", name: "Design v2" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1" });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.tasks[0].name).toBe("Design v2");
+  });
+
+  it("clockify_tasks_update resolves NAMES passed in the id slots (the audit-log failure shape)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_tasks_update",
+      args: { projectId: "Website", id: "Design", status: "DONE" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1" });
+  });
+
+  it("clockify_tasks_update clarifies on an unknown task name (never previews a doomed commit)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_tasks_update",
+      args: { projectName: "Website", currentName: "Dezign", name: "X" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTask ?? 0).toBe(0);
+  });
+
+  it("clockify_tasks_delete resolves project + task by name and deletes once on commit", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_tasks_delete",
+      args: { projectName: "Website", name: "Design" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1" });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteTask).toBe(1);
+  });
+
+  it("clockify_tasks_delete clarifies when the project name itself is unknown", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_tasks_delete",
+      args: { projectName: "Webside", name: "Design" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.deleteTask ?? 0).toBe(0);
+  });
+});

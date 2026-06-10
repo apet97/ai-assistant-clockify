@@ -3,9 +3,12 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
+  type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -14,6 +17,33 @@ import { successReceipt } from "../receipts.js";
  */
 
 const WORK = "work_structure" as const;
+
+/**
+ * Tasks are project-scoped, so a symbolic reference resolves in two steps:
+ * project (by id or name) first, then the task within it. Either step can stop
+ * with a clarify — an unresolved reference must never reach a confirmable
+ * operation (the live loop confirmed previews whose commits then 400'd).
+ */
+async function resolveTaskRef(
+  ctx: ActionContext,
+  refs: { projectId?: string; projectName?: string; id?: string; name?: string },
+  verb: string,
+): Promise<
+  | { ok: true; projectId: string; id: string; name?: string }
+  | { ok: false; clarify: RiskyClarifyResult }
+> {
+  const project = await resolveEntityRef(
+    { id: refs.projectId, name: refs.projectName },
+    { noun: "project", verb, list: () => ctx.clockify.listProjects() },
+  );
+  if (!project.ok) return project;
+  const task = await resolveEntityRef(
+    { id: refs.id, name: refs.name },
+    { noun: "task", verb, list: () => ctx.clockify.listTasks(project.id) },
+  );
+  if (!task.ok) return task;
+  return { ok: true, projectId: project.id, id: task.id, name: task.name ?? refs.name };
+}
 
 const listTasks = defineReadAction({
   name: "clockify_tasks_list",
@@ -70,22 +100,38 @@ const createTask = defineAction({
 const updateTask = defineRiskyAction({
   name: "clockify_tasks_update",
   description:
-    "Update a task (rename, reassign, status, estimate). Elevated write — previews and requires confirmation.",
+    "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
     .object({
-      projectId: z.string().min(1),
-      id: z.string().min(1),
+      projectId: z.string().min(1).optional(),
+      /** The task's project name, resolved to an id server-side. */
+      projectName: z.string().min(1).optional(),
+      id: z.string().min(1).optional(),
+      /** The task's existing name, resolved to an id server-side (rename-by-name). */
+      currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       status: z.string().optional(),
       assigneeIds: z.array(z.string()).optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })
+    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
+      message: "Provide the project id or its exact projectName.",
+    })
+    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
+      message: "Provide the task id or its exact currentName.",
+    })
     .refine((v) => v.name !== undefined || v.status !== undefined || v.assigneeIds !== undefined || v.fields !== undefined, {
       message: "Provide at least one field to change.",
     }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const resolved = await resolveTaskRef(
+      ctx,
+      { projectId: args.projectId, projectName: args.projectName, id: args.id, name: args.currentName },
+      "update",
+    );
+    if (!resolved.ok) return resolved.clarify;
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
@@ -94,11 +140,11 @@ const updateTask = defineRiskyAction({
     };
     return {
       actionLabel: "Update task",
-      targets: [{ type: "task", id: args.id, name: args.name }],
+      targets: [{ type: "task", id: resolved.id, name: resolved.name ?? args.name }],
       expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
       reversibility: "You can update the task again to revert most fields.",
       warnings: ["Updating a task changes live workspace data."],
-      payload: { projectId: args.projectId, id: args.id, patch },
+      payload: { projectId: resolved.projectId, id: resolved.id, patch },
     };
   },
   async commit(ctx, payload) {
@@ -116,18 +162,37 @@ const updateTask = defineRiskyAction({
 const deleteTask = defineRiskyAction({
   name: "clockify_tasks_delete",
   description:
-    "Delete a task (marks it DONE first, then deletes). Previews and requires confirmation.",
+    "Delete a task (marks it DONE first, then deletes). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `name`) — the harness resolves names server-side. Previews and requires confirmation.",
   group: WORK,
   risks: ["destructive"],
-  schema: z.object({ projectId: z.string().min(1), id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({
+      projectId: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+    })
+    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
+      message: "Provide the project id or its exact projectName.",
+    })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the task id or its exact name.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveTaskRef(
+      ctx,
+      { projectId: args.projectId, projectName: args.projectName, id: args.id, name: args.name },
+      "delete",
+    );
+    if (!resolved.ok) return resolved.clarify;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete task",
-      targets: [{ type: "task", id: args.id, name: args.name }],
-      expectedChanges: [`Delete task ${args.name ?? args.id}`],
+      targets: [{ type: "task", id: resolved.id, name }],
+      expectedChanges: [`Delete task ${name ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting a task is permanent."],
-      payload: { projectId: args.projectId, id: args.id, name: args.name },
+      payload: { projectId: resolved.projectId, id: resolved.id, name },
     };
   },
   async commit(ctx, payload) {

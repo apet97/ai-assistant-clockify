@@ -1,4 +1,4 @@
-import type { ClarifyOption } from "../action.js";
+import type { ClarifyOption, RiskyClarifyResult } from "../action.js";
 
 /**
  * Deterministic name → entity resolution shared by workflows. Writes must stop
@@ -41,6 +41,67 @@ export function matchByName<T extends { name: string; archived?: boolean }>(
   if (matches.length === 0) return { kind: "none" };
   if (matches.length === 1) return { kind: "one", entity: matches[0] };
   return { kind: "many", matches };
+}
+
+/**
+ * Clockify entity ids are 24-hex Mongo ObjectIds. The planner habitually puts a
+ * NAME (or an invoice number) in the id slot — the live loop showed
+ * `GET /projects/AIASSIST_LOOP_P4` 400ing after the admin had already confirmed.
+ * Anything that doesn't look like a real id must be resolved, never sent.
+ */
+export function looksLikeClockifyId(value: string): boolean {
+  return /^[0-9a-f]{24}$/i.test(value.trim());
+}
+
+export type ResolveEntityResult<T> =
+  | { ok: true; id: string; name?: string; entity?: T }
+  | { ok: false; clarify: RiskyClarifyResult };
+
+/**
+ * Resolve a possibly-symbolic entity reference to a real id at PREVIEW time, so
+ * an identity mistake becomes a clarify — never a confirmed-then-failed commit.
+ *
+ * - A 24-hex `id` is trusted as-is (no extra list call on the happy path).
+ * - A non-hex `id` is checked against the listed ids first (fakes/tests use
+ *   short ids), then treated as a name.
+ * - A `name` resolves via {@link matchByName}; none/many stop and ask, with
+ *   grounded "did you mean?" options.
+ */
+export async function resolveEntityRef<T extends { id: string; name: string; archived?: boolean }>(
+  ref: { id?: string; name?: string },
+  opts: { noun: string; verb: string; list: () => Promise<T[]> },
+): Promise<ResolveEntityResult<T>> {
+  const rawId = ref.id?.trim();
+  if (rawId && looksLikeClockifyId(rawId)) return { ok: true, id: rawId, name: ref.name };
+  const query = (ref.name ?? rawId ?? "").trim();
+  const items = await opts.list();
+  if (rawId) {
+    const exact = items.find((item) => item.id === rawId);
+    if (exact) return { ok: true, id: exact.id, name: exact.name, entity: exact };
+  }
+  const match = matchByName(items, query);
+  if (match.kind === "one") {
+    return { ok: true, id: match.entity.id, name: match.entity.name, entity: match.entity };
+  }
+  if (match.kind === "many") {
+    return {
+      ok: false,
+      clarify: {
+        clarify: `More than one active ${opts.noun} is named "${query}". Which one should I ${opts.verb}?`,
+        options: match.matches.map((m) => ({ id: m.id, label: m.name })),
+      },
+    };
+  }
+  const options = suggestOptions(items, query);
+  return {
+    ok: false,
+    clarify: {
+      clarify: options.length
+        ? `I couldn't find an active ${opts.noun} named "${query}". Did you mean one of these?`
+        : `There is no active ${opts.noun} named "${query}" to ${opts.verb}.`,
+      options: options.length ? options : undefined,
+    },
+  };
 }
 
 function addDays(isoDay: string, days: number): string {

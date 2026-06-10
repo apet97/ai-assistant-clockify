@@ -87,4 +87,29 @@ describe("user & group actions", () => {
     await commitConfirmedOperation(makeContext(fake), del.operation);
     expect(fake.state.groups.find((g) => g.id === gid)).toBeUndefined();
   });
+
+  it("clockify_groups_delete resolves a group by name when no id is given (live-loop FIX 1)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_groups_delete",
+      args: { name: "Devs" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { id: string }).id).toBe("g1");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.groups.find((g) => g.id === "g1")).toBeUndefined();
+  });
+
+  it("clockify_groups_delete clarifies on an unknown name instead of invalid_args", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_groups_delete",
+      args: { name: "Designers" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.deleteGroup ?? 0).toBe(0);
+  });
 });

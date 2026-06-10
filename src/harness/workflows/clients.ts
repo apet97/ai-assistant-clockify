@@ -6,6 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed client workflows (goclmcp §2.4). Reads + create execute immediately;
@@ -71,20 +72,30 @@ const createClient = defineAction({
 const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   description:
-    "Update a client (rename, note, archived). Elevated write — previews and requires confirmation.",
+    "Update a client (rename, note, archived). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
     .object({
-      id: z.string().min(1),
+      id: z.string().min(1).optional(),
+      /** The client's existing name, resolved to an id server-side (rename-by-name). */
+      currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       archived: z.boolean().optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })
+    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
+      message: "Provide the client id or its exact currentName.",
+    })
     .refine((v) => v.name !== undefined || v.archived !== undefined || v.fields !== undefined, {
       message: "Provide at least one field to change.",
     }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(
+      { id: args.id, name: args.currentName },
+      { noun: "client", verb: "update", list: () => ctx.clockify.listClients() },
+    );
+    if (!resolved.ok) return resolved.clarify;
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
@@ -92,11 +103,11 @@ const updateClient = defineRiskyAction({
     };
     return {
       actionLabel: "Update client",
-      targets: [{ type: "client", id: args.id, name: args.name }],
+      targets: [{ type: "client", id: resolved.id, name: resolved.name ?? args.name }],
       expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
       reversibility: "You can update the client again to revert most fields.",
       warnings: ["Updating a client changes live workspace data."],
-      payload: { id: args.id, patch },
+      payload: { id: resolved.id, patch },
     };
   },
   async commit(ctx, payload) {
@@ -114,21 +125,32 @@ const updateClient = defineRiskyAction({
 const deleteClient = defineRiskyAction({
   name: "clockify_clients_delete",
   description:
-    "Delete a client (archives first, then deletes). Fails if the client still has active projects. Previews and requires confirmation.",
+    "Delete a client (archives first, then deletes). Pass the client id, or its exact `name` and the harness resolves it. Fails if the client still has active projects. Previews and requires confirmation.",
   group: WORK,
   risks: ["destructive"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the client id or its exact name.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(args, {
+      noun: "client",
+      verb: "delete",
+      list: () => ctx.clockify.listClients(),
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete client",
-      targets: [{ type: "client", id: args.id, name: args.name }],
-      expectedChanges: [`Delete client ${args.name ?? args.id}`],
+      targets: [{ type: "client", id: resolved.id, name }],
+      expectedChanges: [`Delete client ${name ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: [
         "Deleting a client is permanent.",
         "Clockify rejects this if the client still has active projects.",
       ],
-      payload: { id: args.id, name: args.name },
+      payload: { id: resolved.id, name },
     };
   },
   async commit(ctx, payload) {

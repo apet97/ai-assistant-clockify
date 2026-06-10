@@ -373,3 +373,139 @@ describe("invoice actions", () => {
     expect(fake.counts.importInvoiceTime).toBe(1);
   });
 });
+
+describe("invoice actions — number→id resolution at preview time (live-loop FIX 1: every invoice call used the NUMBER)", () => {
+  it("clockify_invoices_get fetches by `number`, and by a number passed in the id slot", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byNumber = await executeAction({
+      actionName: "clockify_invoices_get",
+      args: { number: "INV-1" },
+      context: makeContext(fake),
+    });
+    if (byNumber.kind !== "receipt" || !byNumber.receipt.ok) throw new Error("expected a success receipt");
+    expect((byNumber.receipt.data as any).entity).toMatchObject({ id: "inv1" });
+
+    const inIdSlot = await executeAction({
+      actionName: "clockify_invoices_get",
+      args: { id: "INV-1" },
+      context: makeContext(fake),
+    });
+    if (inIdSlot.kind !== "receipt" || !inIdSlot.receipt.ok) throw new Error("expected a success receipt");
+    expect((inIdSlot.receipt.data as any).entity).toMatchObject({ id: "inv1" });
+  });
+
+  it("clockify_invoices_get clarifies on an unknown number instead of a raw 400", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_get",
+      args: { id: "INV-20260610021808" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+
+  it("clockify_invoices_update resolves a NUMBER in the id slot and pins the real id", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "INV-1", note: "Net 30" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ id: "inv1" });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+  });
+
+  it("clockify_invoices_delete deletes by `number` alone", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_delete",
+      args: { number: "INV-1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { id: string }).id).toBe("inv1");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteInvoice).toBe(1);
+  });
+
+  it("items_list / payments_list / export resolve a number in the id slot", async () => {
+    const fake = createFakeWorkspace(seed());
+    const items = await executeAction({
+      actionName: "clockify_invoices_items_list",
+      args: { id: "INV-1" },
+      context: makeContext(fake),
+    });
+    if (items.kind !== "receipt" || !items.receipt.ok) throw new Error("expected items receipt");
+    expect((items.receipt.data as any).count).toBe(1);
+
+    const payments = await executeAction({
+      actionName: "clockify_invoices_payments_list",
+      args: { id: "INV-1" },
+      context: makeContext(fake),
+    });
+    expect(payments.kind).toBe("receipt");
+
+    const exported = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "INV-1" },
+      context: makeContext(fake),
+    });
+    if (exported.kind !== "receipt" || !exported.receipt.ok) throw new Error("expected export receipt");
+  });
+
+  it("items_add / items_delete / payments_create / payments_delete / import_time resolve a number in the invoiceId slot", async () => {
+    const fake = createFakeWorkspace(seed());
+    const add = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "INV-1", description: "Work", unitPrice: 10 },
+      context: makeContext(fake),
+    });
+    if (add.kind !== "preview") throw new Error("expected items_add preview");
+    expect((add.operation.payload as any).invoiceId).toBe("inv1");
+
+    const del = await executeAction({
+      actionName: "clockify_invoices_items_delete",
+      args: { invoiceId: "INV-1", index: 0 },
+      context: makeContext(fake),
+    });
+    if (del.kind !== "preview") throw new Error("expected items_delete preview");
+    expect((del.operation.payload as any).invoiceId).toBe("inv1");
+
+    const pay = await executeAction({
+      actionName: "clockify_invoices_payments_create",
+      args: { invoiceId: "INV-1", amount: 5, paymentDate: "2026-06-06" },
+      context: makeContext(fake),
+    });
+    if (pay.kind !== "preview") throw new Error("expected payments_create preview");
+    expect((pay.operation.payload as any).invoiceId).toBe("inv1");
+
+    const payDel = await executeAction({
+      actionName: "clockify_invoices_payments_delete",
+      args: { invoiceId: "INV-1", paymentId: "pay-1" },
+      context: makeContext(fake),
+    });
+    if (payDel.kind !== "preview") throw new Error("expected payments_delete preview");
+    expect((payDel.operation.payload as any).invoiceId).toBe("inv1");
+
+    const imp = await executeAction({
+      actionName: "clockify_invoices_import_time",
+      args: { invoiceId: "INV-1", from: "2026-06-01", to: "2026-06-30" },
+      context: makeContext(fake),
+    });
+    if (imp.kind !== "preview") throw new Error("expected import_time preview");
+    expect((imp.operation.payload as any).invoiceId).toBe("inv1");
+  });
+
+  it("a risky invoice action clarifies (never previews a doomed commit) when the number matches nothing", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "INV-999", description: "Work" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+});

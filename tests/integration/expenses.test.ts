@@ -59,6 +59,37 @@ describe("expense actions", () => {
     expect(fake.state.expenses.find((e) => e.notes === "AIASSIST_SMOKE_exp")).toBeDefined();
   });
 
+  it("clockify_expenses_create resolves the category by NAME (categoryName, or a name in the categoryId slot) — live-loop FIX 1", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 10, categoryName: "travel" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "preview") throw new Error("expected a preview");
+    expect((byName.operation.payload as any).input.categoryId).toBe("c1");
+
+    const inIdSlot = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 10, categoryId: "Travel" },
+      context: makeContext(fake),
+    });
+    if (inIdSlot.kind !== "preview") throw new Error("expected a preview");
+    expect((inIdSlot.operation.payload as any).input.categoryId).toBe("c1");
+  });
+
+  it("clockify_expenses_create clarifies with the real category list on an unknown category (item 171: NO_SUCH_CAT was previewed)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 10, categoryId: "NO_SUCH_CAT" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("c1");
+    expect(fake.counts.createExpense ?? 0).toBe(0);
+  });
+
   it("clockify_expenses_create resolves a RELATIVE date server-side (live: the model sent the literal string 'today' to the wire → Clockify 400)", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

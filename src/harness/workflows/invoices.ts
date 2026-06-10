@@ -1,12 +1,15 @@
 import { z } from "zod";
 import {
+  defineAction,
   defineReadAction,
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type ActionResult,
+  type RiskyClarifyResult,
 } from "../action.js";
-import { successReceipt, type Warning } from "../receipts.js";
-import { matchByName, suggestOptions } from "./resolve.js";
+import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
+import { matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -81,6 +84,61 @@ function itemTypeClarify(options: string[]): { clarify: string; options: { id: s
   };
 }
 
+/**
+ * The planner refers to invoices by their NUMBER at least as often as by id —
+ * the live loop sent `/invoices/INV-…` on every single invoice call, each one a
+ * confirmed-then-failed commit. Resolve either form (id, number, or a number in
+ * the id slot) against the workspace's invoices at preview time.
+ */
+async function resolveInvoiceRef(
+  ctx: ActionContext,
+  ref: { id?: string; number?: string },
+  verb: string,
+): Promise<{ ok: true; id: string; number?: string } | { ok: false; clarify: RiskyClarifyResult }> {
+  const resolved = await resolveEntityRef(
+    { id: ref.id, name: ref.number },
+    {
+      noun: "invoice",
+      verb,
+      list: async () =>
+        (await ctx.clockify.listInvoices()).map((inv) => ({ id: inv.id, name: inv.number ?? inv.id })),
+    },
+  );
+  if (!resolved.ok) return resolved;
+  return { ok: true, id: resolved.id, number: resolved.name };
+}
+
+/** Identity schema for invoice reads: an id, or a number (either slot works). */
+const invoiceRefSchema = z
+  .object({ id: z.string().min(1).optional(), number: z.string().min(1).optional() })
+  .refine((v) => v.id !== undefined || v.number !== undefined, {
+    message: "Provide the invoice id or its number.",
+  });
+
+/** Read-with-resolution helper: clarify on an unresolvable ref, else the receipt. */
+function defineInvoiceRead(def: {
+  name: string;
+  description: string;
+  schema?: z.ZodTypeAny;
+  read(ctx: ActionContext, id: string, args: Record<string, unknown>): Promise<SuccessReceipt>;
+}): ActionDefinition {
+  return defineAction({
+    name: def.name,
+    description: def.description,
+    featureGroup: INV,
+    risks: ["read"],
+    schema: def.schema ?? invoiceRefSchema,
+    async handler(ctx, args): Promise<ActionResult> {
+      const typed = args as { id?: string; number?: string };
+      const resolved = await resolveInvoiceRef(ctx, typed, "fetch");
+      if (!resolved.ok) {
+        return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      }
+      return { kind: "receipt", receipt: await def.read(ctx, resolved.id, args as Record<string, unknown>) };
+    },
+  });
+}
+
 const listInvoices = defineReadAction({
   name: "clockify_invoices_list",
   description: "List invoices (optional live status filter).",
@@ -97,13 +155,12 @@ const listInvoices = defineReadAction({
   },
 });
 
-const getInvoice = defineReadAction({
+const getInvoice = defineInvoiceRead({
   name: "clockify_invoices_get",
-  description: "Fetch a single invoice by id (line items embedded).",
-  group: INV,
-  schema: z.object({ id: z.string().min(1) }),
-  async handler(ctx, args) {
-    const entity = await ctx.clockify.getInvoice(args.id);
+  description:
+    "Fetch a single invoice by id or by its `number` (line items embedded) — both resolved server-side.",
+  async read(ctx, id) {
+    const entity = await ctx.clockify.getInvoice(id);
     return successReceipt({
       action: "clockify_invoices_get",
       entity: "invoice",
@@ -113,49 +170,53 @@ const getInvoice = defineReadAction({
   },
 });
 
-const listInvoiceItems = defineReadAction({
+const listInvoiceItems = defineInvoiceRead({
   name: "clockify_invoices_items_list",
-  description: "List the line items on an invoice.",
-  group: INV,
-  schema: z.object({ id: z.string().min(1) }),
-  async handler(ctx, args) {
-    const items = await ctx.clockify.listInvoiceItems(args.id);
+  description: "List the line items on an invoice (by invoice id or `number`).",
+  async read(ctx, id) {
+    const items = await ctx.clockify.listInvoiceItems(id);
     return successReceipt({
       action: "clockify_invoices_items_list",
       entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: args.id },
+      ids: { workspaceId: ctx.workspaceId, invoiceId: id },
       data: { count: items.length, items },
     });
   },
 });
 
-const listInvoicePayments = defineReadAction({
+const listInvoicePayments = defineInvoiceRead({
   name: "clockify_invoices_payments_list",
-  description: "List the payments recorded against an invoice.",
-  group: INV,
-  schema: z.object({ id: z.string().min(1) }),
-  async handler(ctx, args) {
-    const items = await ctx.clockify.listInvoicePayments(args.id);
+  description: "List the payments recorded against an invoice (by invoice id or `number`).",
+  async read(ctx, id) {
+    const items = await ctx.clockify.listInvoicePayments(id);
     return successReceipt({
       action: "clockify_invoices_payments_list",
       entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: args.id },
+      ids: { workspaceId: ctx.workspaceId, invoiceId: id },
       data: { count: items.length, items },
     });
   },
 });
 
-const exportInvoice = defineReadAction({
+const exportInvoice = defineInvoiceRead({
   name: "clockify_invoices_export",
-  description: "Export an invoice as a PDF (base64). Read — no confirmation.",
-  group: INV,
-  schema: z.object({ id: z.string().min(1), format: z.enum(["PDF"]).optional() }),
-  async handler(ctx, args) {
-    const exp = await ctx.clockify.exportInvoice(args.id, args.format);
+  description:
+    "Export an invoice as a PDF (base64), by invoice id or `number`. Read — no confirmation.",
+  schema: z
+    .object({
+      id: z.string().min(1).optional(),
+      number: z.string().min(1).optional(),
+      format: z.enum(["PDF"]).optional(),
+    })
+    .refine((v) => v.id !== undefined || v.number !== undefined, {
+      message: "Provide the invoice id or its number.",
+    }),
+  async read(ctx, id, args) {
+    const exp = await ctx.clockify.exportInvoice(id, args.format as "PDF" | undefined);
     return successReceipt({
       action: "clockify_invoices_export",
       entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: args.id },
+      ids: { workspaceId: ctx.workspaceId, invoiceId: id },
       data: { contentType: exp.contentType, bytes: exp.bytes, truncated: exp.truncated, base64: exp.base64 },
       warnings: exp.truncated
         ? [
@@ -363,7 +424,7 @@ const createInvoice = defineRiskyAction({
 const updateInvoice = defineRiskyAction({
   name: "clockify_invoices_update",
   description:
-    "Update an invoice (note/subject/number/dates/currency/client, or status). Billing action — previews and requires confirmation.",
+    "Update an invoice (note/subject/number/dates/currency/client, or status). `id` accepts the invoice id or its NUMBER (resolved server-side); `number` sets a NEW number. Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
   schema: z
@@ -390,7 +451,9 @@ const updateInvoice = defineRiskyAction({
         v.status !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const resolved = await resolveInvoiceRef(ctx, { id: args.id }, "update");
+    if (!resolved.ok) return resolved.clarify;
     const patch: Record<string, unknown> = {
       ...(args.number !== undefined ? { number: args.number } : {}),
       ...(args.issuedDate !== undefined ? { issuedDate: args.issuedDate } : {}),
@@ -404,11 +467,11 @@ const updateInvoice = defineRiskyAction({
     if (args.status !== undefined) changes.push(`set status ${args.status}`);
     return {
       actionLabel: "Update invoice",
-      targets: [{ type: "invoice", id: args.id }],
+      targets: [{ type: "invoice", id: resolved.id, name: resolved.number }],
       expectedChanges: changes,
       reversibility: "You can update the invoice again to revert most fields.",
       warnings: ["Updating an invoice changes a live billing document."],
-      payload: { id: args.id, patch, ...(args.status !== undefined ? { status: args.status } : {}) },
+      payload: { id: resolved.id, patch, ...(args.status !== undefined ? { status: args.status } : {}) },
     };
   },
   async commit(ctx, payload) {
@@ -425,18 +488,26 @@ const updateInvoice = defineRiskyAction({
 
 const deleteInvoice = defineRiskyAction({
   name: "clockify_invoices_delete",
-  description: "Delete an invoice. Destructive billing action — previews and requires confirmation.",
+  description:
+    "Delete an invoice, by id or by its `number` (resolved server-side). Destructive billing action — previews and requires confirmation.",
   group: INV,
   risks: ["destructive", "billing"],
-  schema: z.object({ id: z.string().min(1), number: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({ id: z.string().min(1).optional(), number: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.number !== undefined, {
+      message: "Provide the invoice id or its number.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveInvoiceRef(ctx, args, "delete");
+    if (!resolved.ok) return resolved.clarify;
+    const number = resolved.number ?? args.number;
     return {
       actionLabel: "Delete invoice",
-      targets: [{ type: "invoice", id: args.id, name: args.number }],
-      expectedChanges: [`Delete invoice ${args.number ?? args.id}`],
+      targets: [{ type: "invoice", id: resolved.id, name: number }],
+      expectedChanges: [`Delete invoice ${number ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an invoice permanently removes a billing document."],
-      payload: { id: args.id, number: args.number },
+      payload: { id: resolved.id, number },
     };
   },
   async commit(ctx, payload) {
@@ -468,6 +539,8 @@ const addInvoiceItem = defineRiskyAction({
     applyTaxes: z.enum(["TAX1", "TAX2", "TAX1TAX2", "NONE"]).optional(),
   }),
   async preview(ctx, args) {
+    const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "add an item to");
+    if (!invoice.ok) return invoice.clarify;
     // Resolve the item type against the workspace's actual configured types
     // (discovered from existing line items) — never a blind "NEW DEFAULT".
     const discovered = await discoverItemTypes(ctx);
@@ -485,11 +558,11 @@ const addInvoiceItem = defineRiskyAction({
     };
     return {
       actionLabel: "Add invoice item",
-      targets: [{ type: "invoice", id: args.invoiceId }],
+      targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Add ${itemType} item${args.description ? ` "${args.description}"` : ""}`],
       reversibility: "You can delete the line item afterward.",
       warnings: ["This changes a live billing document."],
-      payload: { invoiceId: args.invoiceId, item },
+      payload: { invoiceId: invoice.id, item },
     };
   },
   async commit(ctx, payload) {
@@ -514,14 +587,16 @@ const deleteInvoiceItem = defineRiskyAction({
   group: INV,
   risks: ["destructive", "billing"],
   schema: z.object({ invoiceId: z.string().min(1), index: z.number().int().nonnegative() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete an item from");
+    if (!invoice.ok) return invoice.clarify;
     return {
       actionLabel: "Delete invoice item",
-      targets: [{ type: "invoice", id: args.invoiceId }],
+      targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Delete invoice line item #${args.index}`],
       reversibility: "This cannot be undone; re-add the line to restore it.",
       warnings: ["This changes a live billing document."],
-      payload: { invoiceId: args.invoiceId, index: args.index },
+      payload: { invoiceId: invoice.id, index: args.index },
     };
   },
   async commit(ctx, payload) {
@@ -550,7 +625,9 @@ const createInvoicePayment = defineRiskyAction({
     paymentDate: z.string().min(1), // full ISO or YYYY-MM-DD
     note: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "record a payment against");
+    if (!invoice.ok) return invoice.clarify;
     const amountMinor = toMinor(args.amount, args.amountUnit);
     const payment = {
       amountMinor,
@@ -559,11 +636,11 @@ const createInvoicePayment = defineRiskyAction({
     };
     return {
       actionLabel: "Record invoice payment",
-      targets: [{ type: "invoice", id: args.invoiceId }],
+      targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Record a payment of ${amountMinor} (minor units) dated ${args.paymentDate}`],
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
-      payload: { invoiceId: args.invoiceId, payment },
+      payload: { invoiceId: invoice.id, payment },
     };
   },
   async commit(ctx, payload) {
@@ -588,14 +665,16 @@ const deleteInvoicePayment = defineRiskyAction({
   group: INV,
   risks: ["destructive", "payment"],
   schema: z.object({ invoiceId: z.string().min(1), paymentId: z.string().min(1) }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete a payment from");
+    if (!invoice.ok) return invoice.clarify;
     return {
       actionLabel: "Delete invoice payment",
-      targets: [{ type: "invoice", id: args.invoiceId }],
+      targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Delete payment ${args.paymentId}`],
       reversibility: "This cannot be undone; re-record the payment to restore it.",
       warnings: ["This removes a recorded payment from a live invoice."],
-      payload: { invoiceId: args.invoiceId, paymentId: args.paymentId },
+      payload: { invoiceId: invoice.id, paymentId: args.paymentId },
     };
   },
   async commit(ctx, payload) {
@@ -622,7 +701,9 @@ const importInvoiceTime = defineRiskyAction({
     to: z.string().min(1), // full ISO or YYYY-MM-DD
     projectIds: z.array(z.string().min(1)).optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "import time into");
+    if (!invoice.ok) return invoice.clarify;
     const range = {
       from: args.from,
       to: args.to,
@@ -630,11 +711,11 @@ const importInvoiceTime = defineRiskyAction({
     };
     return {
       actionLabel: "Import time into invoice",
-      targets: [{ type: "invoice", id: args.invoiceId }],
+      targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Import billable time from ${args.from} to ${args.to}`],
       reversibility: "Delete the imported line items to revert.",
       warnings: ["This adds billable time as invoice line items."],
-      payload: { invoiceId: args.invoiceId, range },
+      payload: { invoiceId: invoice.id, range },
     };
   },
   async commit(ctx, payload) {

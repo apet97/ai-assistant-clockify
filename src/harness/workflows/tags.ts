@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName, suggestOptions } from "./resolve.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed tag workflows (goclmcp §2.5). Reads + create execute immediately;
@@ -88,31 +88,16 @@ const updateTag = defineRiskyAction({
       message: "Provide at least one field to change.",
     }),
   async preview(ctx, args) {
-    let id = args.id;
-    let targetName = args.currentName;
-    // Resolve currentName → id (the delete-by-name pattern) so a rename never
-    // dead-ends on a missing id. Ambiguous identity stops and asks.
-    if (!id) {
-      const tags = await ctx.clockify.listTags();
-      const match = matchByName(tags, args.currentName as string);
-      if (match.kind === "none") {
-        const options = suggestOptions(tags, args.currentName as string);
-        return {
-          clarify: options.length
-            ? `I couldn't find an active tag named "${args.currentName}". Did you mean one of these?`
-            : `There are no active tags named "${args.currentName}" to update.`,
-          options: options.length ? options : undefined,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          clarify: `Several active tags are named "${args.currentName}". Which one should I update?`,
-          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
-        };
-      }
-      id = match.entity.id;
-      targetName = match.entity.name;
-    }
+    // Resolve currentName → id (the delete-by-name pattern, including a name
+    // passed in the id slot) so a rename never dead-ends on a missing id.
+    // Ambiguous identity stops and asks.
+    const resolved = await resolveEntityRef(
+      { id: args.id, name: args.currentName },
+      { noun: "tag", verb: "update", list: () => ctx.clockify.listTags() },
+    );
+    if (!resolved.ok) return resolved.clarify;
+    const id = resolved.id;
+    const targetName = resolved.name ?? args.currentName;
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
@@ -150,31 +135,16 @@ const deleteTag = defineRiskyAction({
       message: "Provide the tag id or its exact name.",
     }),
   async preview(ctx, args) {
-    let id = args.id;
-    let name = args.name;
-    // Resolve a name → id when no id was supplied, so a delete never dead-ends on
-    // a missing id. Ambiguous identity stops and asks (it never picks one).
-    if (!id) {
-      const tags = await ctx.clockify.listTags();
-      const match = matchByName(tags, name as string);
-      if (match.kind === "none") {
-        const options = suggestOptions(tags, name as string);
-        return {
-          clarify: options.length
-            ? `I couldn't find an active tag named "${name}". Did you mean one of these?`
-            : `There are no active tags named "${name}" to delete.`,
-          options: options.length ? options : undefined,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          clarify: `Several active tags are named "${name}". Which one should I delete?`,
-          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
-        };
-      }
-      id = match.entity.id;
-      name = match.entity.name;
-    }
+    // Resolve a name → id (including a name passed in the id slot), so a delete
+    // never dead-ends or commits a doomed id. Ambiguous identity stops and asks.
+    const resolved = await resolveEntityRef(args, {
+      noun: "tag",
+      verb: "delete",
+      list: () => ctx.clockify.listTags(),
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const { id } = resolved;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete tag",
       targets: [{ type: "tag", id, name }],

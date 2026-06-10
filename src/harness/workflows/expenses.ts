@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveRelativeDay } from "./resolve.js";
+import { resolveEntityRef, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date. */
 function resolveDate(ctx: ActionContext, date?: string): string {
@@ -89,28 +89,41 @@ const listExpenseCategories = defineReadAction({
 const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
   description:
-    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Billing action — previews and requires confirmation.",
+    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
-  schema: z.object({
-    amount: z.number().positive(),
-    /** `major` (e.g. 125.00) is converted ×100 to the minor units stored in the payload. */
-    amountUnit: z.enum(["major", "minor"]).default("major"),
-    /** YYYY-MM-DD, full ISO, or relative today/yesterday/tomorrow; defaults to today. */
-    date: z.string().min(1).optional(),
-    categoryId: z.string().min(1),
-    notes: z.string().optional(),
-    billable: z.boolean().optional(),
-    projectId: z.string().optional(),
-    taskId: z.string().optional(),
-  }),
+  schema: z
+    .object({
+      amount: z.number().positive(),
+      /** `major` (e.g. 125.00) is converted ×100 to the minor units stored in the payload. */
+      amountUnit: z.enum(["major", "minor"]).default("major"),
+      /** YYYY-MM-DD, full ISO, or relative today/yesterday/tomorrow; defaults to today. */
+      date: z.string().min(1).optional(),
+      categoryId: z.string().min(1).optional(),
+      /** The category's exact name, resolved to an id server-side. */
+      categoryName: z.string().min(1).optional(),
+      notes: z.string().optional(),
+      billable: z.boolean().optional(),
+      projectId: z.string().optional(),
+      taskId: z.string().optional(),
+    })
+    .refine((v) => v.categoryId !== undefined || v.categoryName !== undefined, {
+      message: "Provide the expense category id or its exact categoryName.",
+    }),
   async preview(ctx, args) {
+    // Resolve the category by name (or a name in the categoryId slot) — a bogus
+    // category must clarify with the REAL list, never preview a doomed commit.
+    const category = await resolveEntityRef(
+      { id: args.categoryId, name: args.categoryName },
+      { noun: "expense category", verb: "use", list: () => ctx.clockify.listExpenseCategories() },
+    );
+    if (!category.ok) return category.clarify;
     const input: StoredExpense = {
       amountMinor: toMinor(args.amount, args.amountUnit),
       // Live: the model sent the literal string "today" to the wire (400) —
       // the harness resolves relative dates and defaults to today.
       date: resolveDate(ctx, args.date),
-      categoryId: args.categoryId,
+      categoryId: category.id,
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
       ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
@@ -120,7 +133,7 @@ const createExpense = defineRiskyAction({
       actionLabel: "Create expense",
       targets: [],
       expectedChanges: [
-        `Create an expense of ${input.amountMinor} (minor units) in category ${args.categoryId}${args.notes ? ` — "${args.notes}"` : ""}`,
+        `Create an expense of ${input.amountMinor} (minor units) in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
       ],
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],

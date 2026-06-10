@@ -6,6 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -190,18 +191,30 @@ const updateGroup = defineRiskyAction({
 
 const deleteGroup = defineRiskyAction({
   name: "clockify_groups_delete",
-  description: "Delete a user group. Destructive — previews and requires confirmation.",
+  description:
+    "Delete a user group. Pass the group id, or its exact `name` and the harness resolves it. Destructive — previews and requires confirmation.",
   group: UG,
   risks: ["destructive"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the group id or its exact name.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(args, {
+      noun: "user group",
+      verb: "delete",
+      list: () => ctx.clockify.listGroups(),
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete user group",
-      targets: [{ type: "group", id: args.id, name: args.name }],
-      expectedChanges: [`Delete user group ${args.name ?? args.id}`],
+      targets: [{ type: "group", id: resolved.id, name }],
+      expectedChanges: [`Delete user group ${name ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting a group removes its membership grouping."],
-      payload: { id: args.id, name: args.name },
+      payload: { id: resolved.id, name },
     };
   },
   async commit(ctx, payload) {

@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName, suggestOptions } from "./resolve.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -40,19 +40,35 @@ const listProjects = defineReadAction({
   },
 });
 
-const getProject = defineReadAction({
+const getProject = defineAction({
   name: "clockify_projects_get",
-  description: "Fetch a single project by id.",
-  group: PROJECT_GROUP,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single project by id, or by its exact `name` (resolved server-side).",
+  featureGroup: PROJECT_GROUP,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the project id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getProject(args.id);
-    return successReceipt({
-      action: "clockify_projects_get",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { entity },
+    const resolved = await resolveEntityRef(args, {
+      noun: "project",
+      verb: "fetch",
+      list: () => ctx.clockify.listProjects(),
     });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getProject(resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_projects_get",
+        entity: "project",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { entity },
+      }),
+    };
   },
 });
 
@@ -109,18 +125,23 @@ const createFromTemplate = defineAction({
 const updateProject = defineRiskyAction({
   name: "clockify_projects_update",
   description:
-    "Update a project's fields (rename, reassign client, billing, color, visibility). Elevated write — previews and requires confirmation.",
+    "Update a project's fields (rename, reassign client, billing, color, visibility). Pass the project's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["high_risk_write"],
   schema: z
     .object({
-      id: z.string().min(1),
+      id: z.string().min(1).optional(),
+      /** The project's existing name, resolved to an id server-side (rename-by-name). */
+      currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       clientId: z.string().optional(),
       billable: z.boolean().optional(),
       color: z.string().optional(),
       isPublic: z.boolean().optional(),
       archived: z.boolean().optional(),
+    })
+    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
+      message: "Provide the project id or its exact currentName.",
     })
     .refine(
       (v) =>
@@ -132,16 +153,21 @@ const updateProject = defineRiskyAction({
         v.archived !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async preview(_ctx, args) {
-    const { id, ...patch } = args;
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(
+      { id: args.id, name: args.currentName },
+      { noun: "project", verb: "update", list: () => ctx.clockify.listProjects() },
+    );
+    if (!resolved.ok) return resolved.clarify;
+    const { id: _id, currentName: _currentName, ...patch } = args;
     const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
     return {
       actionLabel: "Update project",
-      targets: [{ type: "project", id, name: args.name }],
+      targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
       expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
       reversibility: "You can update the project again to revert most fields.",
       warnings: ["Updating a project changes live workspace data."],
-      payload: { id, patch: fields },
+      payload: { id: resolved.id, patch: fields },
     };
   },
   async commit(ctx, payload) {
@@ -158,18 +184,30 @@ const updateProject = defineRiskyAction({
 
 const archiveProject = defineRiskyAction({
   name: "clockify_projects_archive",
-  description: "Archive a project (hides it from active lists). Previews and requires confirmation.",
+  description:
+    "Archive a project (hides it from active lists). Pass the project id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["destructive"],
-  schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the project id or its exact name.",
+    }),
+  async preview(ctx, args) {
+    const resolved = await resolveEntityRef(args, {
+      noun: "project",
+      verb: "archive",
+      list: () => ctx.clockify.listProjects(),
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Archive project",
-      targets: [{ type: "project", id: args.id, name: args.name }],
-      expectedChanges: [`Archive project ${args.name ?? args.id}`],
+      targets: [{ type: "project", id: resolved.id, name }],
+      expectedChanges: [`Archive project ${name ?? resolved.id}`],
       reversibility: "Archiving is reversible — you can unarchive the project later.",
       warnings: ["Archiving hides the project from active workflows."],
-      payload: { id: args.id, name: args.name },
+      payload: { id: resolved.id, name },
     };
   },
   async commit(ctx, payload) {
@@ -196,31 +234,16 @@ const deleteProject = defineRiskyAction({
       message: "Provide the project id or its exact name.",
     }),
   async preview(ctx, args) {
-    let id = args.id;
-    let name = args.name;
-    // Resolve a name → id when no id was supplied, so a delete never dead-ends on
-    // a missing id. Ambiguous identity stops and asks (it never picks one).
-    if (!id) {
-      const projects = await ctx.clockify.listProjects();
-      const match = matchByName(projects, name as string);
-      if (match.kind === "none") {
-        const options = suggestOptions(projects, name as string);
-        return {
-          clarify: options.length
-            ? `I couldn't find an active project named "${name}". Did you mean one of these?`
-            : `There are no active projects named "${name}" to delete.`,
-          options: options.length ? options : undefined,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          clarify: `Several active projects are named "${name}". Which one should I delete?`,
-          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
-        };
-      }
-      id = match.entity.id;
-      name = match.entity.name;
-    }
+    // Resolve a name → id (including a name passed in the id slot), so a delete
+    // never dead-ends or commits a doomed id. Ambiguous identity stops and asks.
+    const resolved = await resolveEntityRef(args, {
+      noun: "project",
+      verb: "delete",
+      list: () => ctx.clockify.listProjects(),
+    });
+    if (!resolved.ok) return resolved.clarify;
+    const { id } = resolved;
+    const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete project",
       targets: [{ type: "project", id, name }],

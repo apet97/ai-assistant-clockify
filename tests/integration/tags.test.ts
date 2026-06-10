@@ -114,6 +114,13 @@ describe("tag actions", () => {
     expect(fake.counts.deleteTag ?? 0).toBe(0);
   });
 
+  it("clockify_tags_delete resolves a NAME passed in the id slot (the audit-log failure shape)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_tags_delete", args: { id: "Deep Work" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { id: string }).id).toBe("t1");
+  });
+
   it("clockify_tags_delete rejects a call with neither id nor name", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({ actionName: "clockify_tags_delete", args: {}, context: makeContext(fake) });
