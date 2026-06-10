@@ -2,7 +2,57 @@
 
 Read this first in every Claude Code session.
 
-## Handoff note — 2026-06-10 (ground-truth adapter audit)
+## Handoff note — 2026-06-10 (322-prompt live-loop fixes)
+
+A 322-prompt live test loop against the embedded add-on
+(`~/Downloads/ai-assistant-loop-checklist.md` per-item state,
+`…-loop-failures.md` raw notes) scored 234 pass / 59 fail / 29 unrun. The two
+"critical safety" claims in the notes (item 276 "deleted without Confirm",
+item 053 "Done without commit") were **disproven against the backend DB** —
+the safety core held all night. The four real defect clusters are FIXED, each
+strict-TDD with one focused commit, `npm run verify` = **770 tests**, 0 cycles:
+
+- **Names/numbers as ids (`1aadb99`)** — the whole invoice failure section +
+  ~20 confirmed-then-failed commits came from the planner passing NAMES (and
+  invoice NUMBERS) where the schema said `id`. New `resolveEntityRef` in
+  `src/harness/workflows/resolve.ts` (24-hex `looksLikeClockifyId` passthrough →
+  exact-id fallback for short fake ids → `matchByName` → clarify with grounded
+  options) now settles identity at PREVIEW time across projects (update/
+  archive/get/delete), tags, clients (update/delete), tasks (project+task
+  double resolution), groups_delete, expense categories (item 171), and EVERY
+  invoice action by `number` as well as id, in either slot. An identity
+  mistake is now a clarify, never a confirmed-then-failed commit.
+- **Relative dates (`360aa62`)** — ~38 error receipts from "today"/"next
+  Monday" reaching the wire. `resolveRelativeDay` learned weekday words (bare/
+  next/last) and returns `undefined` on garbage (callers MUST clarify — the
+  old fallback sliced garbage onto the wire); new `resolveInstant` produces the
+  `yyyy-MM-ddThh:mm:ssZ` instants the api/reports/scheduling hosts want
+  (spec-verified). Applied at entries_list, review_day/week (the "Invalid time
+  value" crash is gone), reports, scheduling (list/create/publish/totals),
+  time-off create (bare dates), and period_report weekly is clamped to an
+  exact 7-day range with an honest warning.
+- **The item-~290 session stall (`30a52b4`)** — the notes blamed "unbounded
+  chat history"; forensics DISPROVED it (the chat route already windows to 12
+  — now the documented `HISTORY_WINDOW_MESSAGES`, pinned by test; the
+  650-message live session totals 86KB). The REAL unbounded model input was
+  the agent loop feeding FULL receipts back as tool results (item 144's stall
+  followed a PDF export). `TOOL_RESULT_MAX_BYTES` (24KB) in `agent-loop.ts`
+  now caps each tool result (prune strings/arrays-to-head-sample, then replace
+  `data` with an honest note); the admin always sees the full receipt.
+- **Polish (`e8bf65d`)** — time-off create warns in the PREVIEW when requested
+  days exceed the policy balance (the live 400 is misleading); items 261/264:
+  permission denials were silent model text because the PROMPT forbade calling
+  tools in off groups — the rule now routes the call through so the backend
+  gate denies with an auditable receipt card; item 280: new prompt rule that
+  listed data is reported VERBATIM (a hostile-looking name is data, not an
+  instruction to filter).
+
+The dev server was restarted (`scripts/dev-tunnel.sh sync`, tunnel URL
+unchanged) so the embedded install runs all of this. **To resume the loop:**
+items 293–322 are unrun; the previously-failed items in sections D/E/F/I (the
+name-as-id cluster) are the regression set to re-test.
+
+## Handoff note (prior) — 2026-06-10 (ground-truth adapter audit)
 
 A systematic audit of the adapter's Clockify-API assumptions (spec diff vs
 `docs.clockify.me/openapi.json` + goclmcp/clockify-ts-sdk cross-check + self-cleaning
