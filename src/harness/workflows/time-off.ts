@@ -5,6 +5,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveRelativeDay } from "./resolve.js";
 
 /**
  * Typed time-off workflows (goclmcp §2.9 — policies, requests, balances). Reads
@@ -202,7 +203,7 @@ const getRequest = defineReadAction({
 const createRequest = defineRiskyAction({
   name: "clockify_time_off_requests_create",
   description:
-    "Submit a time-off request under a policy. External side effect (notifies approvers) — previews and requires confirmation.",
+    "Submit a time-off request under a policy. `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
   group: TOA,
   risks: ["external_side_effect"],
   schema: z.object({
@@ -213,10 +214,23 @@ const createRequest = defineRiskyAction({
     halfDay: z.boolean().optional(),
     note: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    // The wire wants bare YYYY-MM-DD days; the live loop sent the literal
+    // string "next Monday". Resolve here, clarify on anything unparseable.
+    const now = (ctx.now ?? (() => new Date()))();
+    const start = resolveRelativeDay(now, { date: args.start });
+    const end = resolveRelativeDay(now, { date: args.end });
+    const bad = [start === undefined ? args.start : undefined, end === undefined ? args.end : undefined].filter(
+      (value): value is string => value !== undefined,
+    );
+    if (bad.length || start === undefined || end === undefined) {
+      return {
+        clarify: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like tomorrow or next monday.`,
+      };
+    }
     const input = {
-      start: args.start,
-      end: args.end,
+      start,
+      end,
       ...(args.days !== undefined ? { days: args.days } : {}),
       ...(args.halfDay !== undefined ? { halfDay: args.halfDay } : {}),
       ...(args.note !== undefined ? { note: args.note } : {}),
@@ -224,7 +238,7 @@ const createRequest = defineRiskyAction({
     return {
       actionLabel: "Submit time-off request",
       targets: [{ type: "time_off_policy", id: args.policyId }],
-      expectedChanges: [`Request time off ${args.start} → ${args.end} under policy ${args.policyId}`],
+      expectedChanges: [`Request time off ${start} → ${end} under policy ${args.policyId}`],
       reversibility: "You can delete the request afterward.",
       warnings: ["This submits a request that notifies approvers."],
       payload: { policyId: args.policyId, input },

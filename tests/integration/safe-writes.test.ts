@@ -284,6 +284,58 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     }
   });
 
+  it("review_day resolves a RELATIVE date server-side (live: ?start=today reached the wire)", async () => {
+    // makeContext's clock is 2026-06-05.
+    const fake = createFakeWorkspace({
+      entries: [
+        { id: "in1", start: "2026-06-05T09:00:00.000Z", end: "2026-06-05T10:00:00.000Z", description: "a" },
+        { id: "out", start: "2026-06-04T09:00:00.000Z", end: "2026-06-04T10:00:00.000Z", description: "b" },
+      ],
+    });
+    const result = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "today" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as { count: number }).count).toBe(1);
+  });
+
+  it("review_day CLARIFIES on an unparseable date (live: it crashed with 'Invalid time value')", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "banana" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+
+  it("review_week resolves a relative start and CLARIFIES on garbage instead of throwing", async () => {
+    // 2026-06-05 is a Friday → "last monday" = 2026-06-01.
+    const fake = createFakeWorkspace({
+      entries: [
+        { id: "w1", start: "2026-06-01T09:00:00.000Z", description: "a" },
+        { id: "w2", start: "2026-06-07T23:00:00.000Z", description: "b" },
+        { id: "later", start: "2026-06-08T09:00:00.000Z", description: "c" },
+      ],
+    });
+    const resolved = await executeAction({
+      actionName: "clockify_review_week",
+      args: { start: "last monday" },
+      context: makeContext(fake),
+    });
+    if (resolved.kind !== "receipt" || !resolved.receipt.ok) throw new Error("expected a success receipt");
+    expect((resolved.receipt.data as { count: number }).count).toBe(2);
+
+    const garbage = await executeAction({
+      actionName: "clockify_review_week",
+      args: { start: "whenever" },
+      context: makeContext(fake),
+    });
+    expect(garbage.kind).toBe("clarify");
+  });
+
   it("fix_entry updates a known time entry without confirmation", async () => {
     const fake = createFakeWorkspace({
       entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "old" }],

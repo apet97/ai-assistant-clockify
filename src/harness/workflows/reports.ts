@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveInstant } from "./resolve.js";
 
 /**
  * Typed report workflows (goclmcp §2.14). All reads on the REPORTS host. Reports
@@ -18,7 +19,10 @@ const REPORT_MAX_BYTES = 200_000;
 
 // The date range is optional: the planner often omits it (it can't see the
 // schema), so default to the last 7 days through now rather than dead-ending on
-// `invalid_args`. An explicit range still wins.
+// `invalid_args`. An explicit range still wins. Relative values (today /
+// yesterday / last monday / YYYY-MM-DD) are resolved server-side — the live
+// loop sent the words straight through and the reports host 400'd "Invalid
+// date!"; an unresolvable value clarifies, it never reaches the wire.
 const rangeSchema = z.object({
   dateRangeStart: z.string().min(1).optional(),
   dateRangeEnd: z.string().min(1).optional(),
@@ -26,13 +30,33 @@ const rangeSchema = z.object({
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
+type ResolvedRange =
+  | { ok: true; range: { dateRangeStart: string; dateRangeEnd: string } }
+  | { ok: false; message: string };
+
 function resolveRange(
   ctx: ActionContext,
   args: { dateRangeStart?: string; dateRangeEnd?: string },
-): { dateRangeStart: string; dateRangeEnd: string } {
-  const end = args.dateRangeEnd ?? (ctx.now ?? (() => new Date()))().toISOString();
-  const start = args.dateRangeStart ?? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString();
-  return { dateRangeStart: start, dateRangeEnd: end };
+): ResolvedRange {
+  const now = (ctx.now ?? (() => new Date()))();
+  const end = args.dateRangeEnd !== undefined ? resolveInstant(now, args.dateRangeEnd, "end") : now.toISOString();
+  const start =
+    args.dateRangeStart !== undefined
+      ? resolveInstant(now, args.dateRangeStart, "start")
+      : end !== undefined
+        ? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString()
+        : undefined;
+  const bad = [
+    args.dateRangeStart !== undefined && start === undefined ? args.dateRangeStart : undefined,
+    args.dateRangeEnd !== undefined && end === undefined ? args.dateRangeEnd : undefined,
+  ].filter((value): value is string => value !== undefined);
+  if (bad.length || start === undefined || end === undefined) {
+    return {
+      ok: false,
+      message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`,
+    };
+  }
+  return { ok: true, range: { dateRangeStart: start, dateRangeEnd: end } };
 }
 
 /** Cap a report payload; returns {data} or {bytes, truncated} + a warning flag. */
@@ -61,7 +85,9 @@ const summary = defineAction({
   risks: ["read"],
   schema: rangeSchema.extend({ groups: z.array(z.enum(["PROJECT", "CLIENT", "TASK", "TAG", "USER", "DATE"])).optional() }),
   async handler(ctx, args) {
-    const data = await ctx.clockify.summaryReport(resolveRange(ctx, args), args.groups);
+    const resolved = resolveRange(ctx, args);
+    if (!resolved.ok) return { kind: "clarify", message: resolved.message };
+    const data = await ctx.clockify.summaryReport(resolved.range, args.groups);
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_summary", ctx.workspaceId, data) };
   },
 });
@@ -73,7 +99,9 @@ const detailed = defineAction({
   risks: ["read"],
   schema: rangeSchema,
   async handler(ctx, args) {
-    const data = await ctx.clockify.detailedReport(resolveRange(ctx, args));
+    const resolved = resolveRange(ctx, args);
+    if (!resolved.ok) return { kind: "clarify", message: resolved.message };
+    const data = await ctx.clockify.detailedReport(resolved.range);
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_detailed", ctx.workspaceId, data) };
   },
 });
@@ -85,7 +113,9 @@ const weekly = defineAction({
   risks: ["read"],
   schema: rangeSchema,
   async handler(ctx, args) {
-    const data = await ctx.clockify.weeklyReport(resolveRange(ctx, args));
+    const resolved = resolveRange(ctx, args);
+    if (!resolved.ok) return { kind: "clarify", message: resolved.message };
+    const data = await ctx.clockify.weeklyReport(resolved.range);
     return { kind: "receipt", receipt: reportReceipt("clockify_reports_weekly", ctx.workspaceId, data) };
   },
 });

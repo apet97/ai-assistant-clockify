@@ -111,3 +111,31 @@ describe("time-off actions", () => {
     expect(fake.counts.updateTimeOffBalance).toBe(1);
   });
 });
+
+describe("time-off date normalization (live-loop FIX 2: the literal 'next Monday' reached the wire)", () => {
+  it("requests_create resolves weekday words to bare dates server-side", async () => {
+    const fake = createFakeWorkspace(seed());
+    // NOW is 2026-06-06 (a Saturday) → next monday = 2026-06-08, next friday = 2026-06-12.
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "pol1", start: "next Monday", end: "next Friday" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).input).toMatchObject({
+      start: "2026-06-08",
+      end: "2026-06-12",
+    });
+  });
+
+  it("requests_create clarifies on an unparseable date", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "pol1", start: "sometime", end: "next Friday" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+  });
+});

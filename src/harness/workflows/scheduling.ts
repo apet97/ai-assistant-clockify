@@ -3,9 +3,11 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveInstant } from "./resolve.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -18,14 +20,47 @@ import { successReceipt } from "../receipts.js";
 const SCHED = "scheduling" as const;
 const seriesOption = z.enum(["ONLY_THIS", "ALL", "THIS_AND_FOLLOWING"]);
 
-const listAssignments = defineReadAction({
+/**
+ * Every scheduling start/end is a `yyyy-MM-ddThh:mm:ssZ` instant on the wire
+ * (OpenAPI: AssignmentCreateRequestV1 / PublishAssignmentsRequestV1 / the
+ * assignments query params). The live loop sent relative words straight
+ * through; resolve them server-side and STOP on anything unparseable.
+ */
+function resolveSchedulingWindow(
+  ctx: ActionContext,
+  args: { start?: string; end?: string },
+): { ok: true; start?: string; end?: string } | { ok: false; message: string } {
+  const now = (ctx.now ?? (() => new Date()))();
+  const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
+  const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
+  const bad = [
+    args.start !== undefined && start === undefined ? args.start : undefined,
+    args.end !== undefined && end === undefined ? args.end : undefined,
+  ].filter((value): value is string => value !== undefined);
+  if (bad.length) {
+    return {
+      ok: false,
+      message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, tomorrow, or next monday.`,
+    };
+  }
+  return { ok: true, start, end };
+}
+
+const listAssignments = defineAction({
   name: "clockify_scheduling_assignments_list",
-  description: "List scheduling assignments in a date range (optional user/project filter).",
-  group: SCHED,
+  description:
+    "List scheduling assignments in a date range (optional user/project filter). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/next monday…), resolved server-side.",
+  featureGroup: SCHED,
+  risks: ["read"],
   schema: z.object({ start: z.string().optional(), end: z.string().optional(), userId: z.string().optional(), projectId: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listAssignments(args);
-    return successReceipt({ action: "clockify_scheduling_assignments_list", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const window = resolveSchedulingWindow(ctx, args);
+    if (!window.ok) return { kind: "clarify", message: window.message };
+    const items = await ctx.clockify.listAssignments({ ...args, start: window.start, end: window.end });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({ action: "clockify_scheduling_assignments_list", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }),
+    };
   },
 });
 
@@ -42,7 +77,8 @@ const getAssignment = defineReadAction({
 
 const createAssignment = defineAction({
   name: "clockify_scheduling_assignments_create",
-  description: "Create a scheduling assignment (draft). Safe write — executes immediately when policy allows.",
+  description:
+    "Create a scheduling assignment (draft). `start`/`end` accept YYYY-MM-DD or a relative day (today/next monday…), resolved server-side. Safe write — executes immediately when policy allows.",
   featureGroup: SCHED,
   risks: ["safe_write"],
   schema: z.object({
@@ -54,7 +90,13 @@ const createAssignment = defineAction({
     note: z.string().optional(),
   }),
   async handler(ctx, args) {
-    const assignment = await ctx.clockify.createAssignment(args);
+    const window = resolveSchedulingWindow(ctx, args);
+    if (!window.ok) return { kind: "clarify", message: window.message };
+    const assignment = await ctx.clockify.createAssignment({
+      ...args,
+      start: window.start as string,
+      end: window.end as string,
+    });
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_scheduling_assignments_create", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "assignment", id: assignment.id }] } }) };
   },
 });
@@ -118,14 +160,17 @@ const publish = defineRiskyAction({
   group: SCHED,
   risks: ["external_side_effect"],
   schema: z.object({ start: z.string().min(1), end: z.string().min(1), notifyUsers: z.boolean().optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const window = resolveSchedulingWindow(ctx, args);
+    if (!window.ok) return { clarify: window.message };
+    const { start, end } = window as { start: string; end: string };
     return {
       actionLabel: "Publish schedule",
       targets: [],
-      expectedChanges: [`Publish scheduled assignments ${args.start} → ${args.end}${args.notifyUsers ? " (notify users)" : ""}`],
+      expectedChanges: [`Publish scheduled assignments ${start} → ${end}${args.notifyUsers ? " (notify users)" : ""}`],
       reversibility: "Publishing notifies assignees and is hard to reverse.",
       warnings: ["This publishes the schedule and may email affected users."],
-      payload: { start: args.start, end: args.end, notifyUsers: args.notifyUsers },
+      payload: { start, end, notifyUsers: args.notifyUsers },
     };
   },
   async commit(ctx, payload) {
@@ -135,25 +180,46 @@ const publish = defineRiskyAction({
   },
 });
 
-const projectTotals = defineReadAction({
+const projectTotals = defineAction({
   name: "clockify_scheduling_project_totals",
-  description: "Get scheduled-hours totals per project in a date range.",
-  group: SCHED,
+  description:
+    "Get scheduled-hours totals per project in a date range (`start`/`end` accept relative days, resolved server-side).",
+  featureGroup: SCHED,
+  risks: ["read"],
   schema: z.object({ start: z.string().min(1), end: z.string().min(1), projectId: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.getProjectScheduleTotals(args);
-    return successReceipt({ action: "clockify_scheduling_project_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const window = resolveSchedulingWindow(ctx, args);
+    if (!window.ok) return { kind: "clarify", message: window.message };
+    const items = await ctx.clockify.getProjectScheduleTotals({
+      ...args,
+      start: window.start as string,
+      end: window.end as string,
+    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({ action: "clockify_scheduling_project_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }),
+    };
   },
 });
 
-const userTotals = defineReadAction({
+const userTotals = defineAction({
   name: "clockify_scheduling_user_totals",
-  description: "Get a user's scheduled-hours totals in a date range (defaults to you).",
-  group: SCHED,
+  description:
+    "Get a user's scheduled-hours totals in a date range (defaults to you; `start`/`end` accept relative days, resolved server-side).",
+  featureGroup: SCHED,
+  risks: ["read"],
   schema: z.object({ userId: z.string().optional(), start: z.string().min(1), end: z.string().min(1) }),
   async handler(ctx, args) {
-    const data = await ctx.clockify.getUserScheduleTotals(args.userId ?? ctx.adminUserId, { start: args.start, end: args.end });
-    return successReceipt({ action: "clockify_scheduling_user_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { totals: data } });
+    const window = resolveSchedulingWindow(ctx, args);
+    if (!window.ok) return { kind: "clarify", message: window.message };
+    const data = await ctx.clockify.getUserScheduleTotals(args.userId ?? ctx.adminUserId, {
+      start: window.start as string,
+      end: window.end as string,
+    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({ action: "clockify_scheduling_user_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { totals: data } }),
+    };
   },
 });
 

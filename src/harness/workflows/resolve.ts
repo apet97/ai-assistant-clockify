@@ -108,21 +108,70 @@ function addDays(isoDay: string, days: number): string {
   return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
+/** Weekday names in JS `getUTCDay()` order (0 = Sunday). */
+const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/** A calendar day that exists (rejects 2026-13-99 etc., which Date.parse NaNs). */
+function isRealDay(day: string): boolean {
+  return !Number.isNaN(Date.parse(`${day}T00:00:00Z`));
+}
+
 /**
- * Resolve a day (YYYY-MM-DD) server-side. The model knows "yesterday" but not
- * the calendar date (its own clock is unreliable — live it sent the literal
- * string "today" to the wire), so this accepts a relative word
- * (`today`/`yesterday`/`tomorrow`) or a numeric `dayOffset` (0=today,
- * -1=yesterday) and the harness — which has `ctx.now` — does the math. A
- * literal `YYYY-MM-DD…` still wins; absent everything, today.
+ * Resolve a day (YYYY-MM-DD) server-side. The model knows "yesterday" or "next
+ * Monday" but not the calendar date (its own clock is unreliable — live it sent
+ * the literal strings "today" and "next Monday" to the wire), so this accepts a
+ * relative word (`today`/`yesterday`/`tomorrow`), a weekday (bare = the next
+ * occurrence, today counts; `next <weekday>` = strictly after today; `last
+ * <weekday>` = strictly before), or a numeric `dayOffset` (0=today,
+ * -1=yesterday), and the harness — which has `ctx.now` — does the math. A
+ * literal `YYYY-MM-DD…` still wins; absent everything, today. Anything else
+ * returns `undefined`: callers must CLARIFY — an unresolved date may never
+ * reach the wire (the live loop's `?start=today` / "Invalid time value" class).
  */
-export function resolveRelativeDay(now: Date, args: { date?: string; dayOffset?: number }): string {
+export function resolveRelativeDay(
+  now: Date,
+  args: { date?: string; dayOffset?: number },
+): string | undefined {
   const today = now.toISOString().slice(0, 10);
   if (args.dayOffset !== undefined) return addDays(today, args.dayOffset);
   const raw = args.date?.trim().toLowerCase();
   if (!raw) return today;
-  if (raw === "today") return today;
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) {
+    const day = raw.slice(0, 10);
+    return isRealDay(day) ? day : undefined;
+  }
+  if (raw === "today" || raw === "now") return today;
   if (raw === "yesterday") return addDays(today, -1);
   if (raw === "tomorrow") return addDays(today, 1);
-  return args.date!.slice(0, 10);
+  const weekday = raw.match(/^(?:(next|last|previous)\s+)?([a-z]+)$/);
+  if (weekday) {
+    const target = WEEKDAYS.indexOf(weekday[2]);
+    if (target >= 0) {
+      const current = now.getUTCDay();
+      if (weekday[1] === "last" || weekday[1] === "previous") {
+        return addDays(today, -(((current - target + 7) % 7) || 7));
+      }
+      const ahead = (target - current + 7) % 7;
+      return addDays(today, weekday[1] === "next" ? ahead || 7 : ahead);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a day-or-instant reference to the UTC instant the api/reports/
+ * scheduling hosts want (`yyyy-MM-ddThh:mm:ssZ`, per the OpenAPI spec): a full
+ * ISO datetime passes through normalized; a day reference becomes start-of-day
+ * (`edge: "start"`) or end-of-day (`edge: "end"`). `undefined` = unparseable —
+ * clarify, never send.
+ */
+export function resolveInstant(now: Date, raw: string, edge: "start" | "end"): string | undefined {
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+    const parsed = Date.parse(trimmed);
+    return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString();
+  }
+  const day = resolveRelativeDay(now, { date: trimmed });
+  if (day === undefined) return undefined;
+  return edge === "start" ? `${day}T00:00:00.000Z` : `${day}T23:59:59.999Z`;
 }

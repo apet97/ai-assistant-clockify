@@ -110,10 +110,15 @@ const stopTimer = defineAction({
   },
 });
 
-/** Resolve the entry's day (YYYY-MM-DD) server-side — shared {@link resolveRelativeDay}. */
-function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string {
+/** Resolve the entry's day (YYYY-MM-DD) server-side — shared {@link resolveRelativeDay}.
+ *  `undefined` = unparseable; callers clarify instead of sending it (live: review
+ *  crashed with "Invalid time value" on `new Date("today")`). */
+function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string | undefined {
   return resolveRelativeDay((ctx.now ?? (() => new Date()))(), args);
 }
+
+const DATE_CLARIFY = (raw: string) =>
+  `I couldn't make sense of the date "${raw}" — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`;
 
 /**
  * Resolve a completed-entry start/end from the shapes the planner naturally emits
@@ -151,7 +156,9 @@ function resolveLogTimes(
       message: "How long was it (e.g. 2 hours), or what start and end times should I use?",
     };
   }
-  const start = `${resolveDay(ctx, args)}T09:00:00.000Z`;
+  const day = resolveDay(ctx, args);
+  if (day === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
+  const start = `${day}T09:00:00.000Z`;
   const end = args.end ?? addMinutes(start, durationMinutes);
   return { kind: "ok", start, end };
 }
@@ -252,15 +259,17 @@ const logWork = defineAction({
 
 const reviewDay = defineAction({
   name: "clockify_review_day",
-  description: "Summarize a user's time entries for a single day (defaults to today and the caller).",
+  description:
+    "Summarize a user's time entries for a single day (defaults to today and the caller). `date` accepts YYYY-MM-DD or a relative day (today/yesterday/last monday…), resolved server-side.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
-    date: z.string().optional(), // YYYY-MM-DD; defaults to today
+    date: z.string().optional(), // YYYY-MM-DD or a relative day; defaults to today
     userId: z.string().optional(),
   }),
   async handler(ctx, args) {
-    const date = args.date ?? nowIso(ctx).slice(0, 10);
+    const date = resolveDay(ctx, { date: args.date });
+    if (date === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
     const userId = args.userId ?? ctx.adminUserId;
     const start = `${date}T00:00:00.000Z`;
     // Exclusive end = next-day midnight (consistent with review_week's window).
@@ -280,15 +289,17 @@ const reviewDay = defineAction({
 
 const reviewWeek = defineAction({
   name: "clockify_review_week",
-  description: "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller).",
+  description:
+    "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller). `start` accepts YYYY-MM-DD or a relative day (today/last monday…), resolved server-side.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
-    start: z.string().optional(), // YYYY-MM-DD; defaults to today
+    start: z.string().optional(), // YYYY-MM-DD or a relative day; defaults to today
     userId: z.string().optional(),
   }),
   async handler(ctx, args) {
-    const startDate = args.start ?? nowIso(ctx).slice(0, 10);
+    const startDate = resolveDay(ctx, { date: args.start });
+    if (startDate === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.start as string) };
     const userId = args.userId ?? ctx.adminUserId;
     const start = `${startDate}T00:00:00.000Z`;
     const end = new Date(Date.parse(start) + 7 * 24 * 60 * 60 * 1000).toISOString();

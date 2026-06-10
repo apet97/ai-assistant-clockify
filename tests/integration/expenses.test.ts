@@ -102,6 +102,25 @@ describe("expense actions", () => {
     expect((preview.operation.payload as any).input.date).toBe("2026-06-06");
   });
 
+  it("clockify_expenses_create resolves weekday words and clarifies on garbage dates", async () => {
+    // NOW is 2026-06-06, a Saturday → "next monday" = 2026-06-08.
+    const fake = createFakeWorkspace(seed());
+    const weekday = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 5, date: "next monday", categoryId: "c1" },
+      context: makeContext(fake),
+    });
+    if (weekday.kind !== "preview") throw new Error("expected a preview");
+    expect((weekday.operation.payload as any).input.date).toBe("2026-06-08");
+
+    const garbage = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 5, date: "someday", categoryId: "c1" },
+      context: makeContext(fake),
+    });
+    expect(garbage.kind).toBe("clarify");
+  });
+
   it("clockify_expenses_create defaults an omitted date to today", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

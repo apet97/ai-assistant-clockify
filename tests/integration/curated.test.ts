@@ -89,3 +89,38 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     if (receipt.ok) expect((receipt.warnings ?? []).some((w) => /group/i.test(w.message))).toBe(true);
   });
 });
+
+describe("period_report weekly clamp (live-loop FIX 2: a month range 400s 'exactly 7 days')", () => {
+  it("clamps a longer period to the exact last 7 days of the range for the weekly report", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_period_report",
+      args: { period: "last_month", type: "weekly" },
+      context: ctx(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    const data = result.receipt.data as any;
+    // last_month = 2026-05-01 → 2026-05-31; the weekly report gets its last 7 days.
+    expect(data.report.range).toEqual({
+      dateRangeStart: "2026-05-25T00:00:00.000Z",
+      dateRangeEnd: "2026-05-31T23:59:59.999Z",
+    });
+    expect(fake.counts.weeklyReport).toBe(1);
+  });
+
+  it("leaves an exact-7-day period (last_week) untouched", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_period_report",
+      args: { period: "last_week", type: "weekly" },
+      context: ctx(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    const data = result.receipt.data as any;
+    // 2026-06-05 is a Friday → last week = Mon 2026-05-25 … Sun 2026-05-31.
+    expect(data.report.range).toEqual({
+      dateRangeStart: "2026-05-25T00:00:00.000Z",
+      dateRangeEnd: "2026-05-31T23:59:59.999Z",
+    });
+  });
+});

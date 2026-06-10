@@ -41,6 +41,40 @@ describe("time-entry actions — reads", () => {
     } else throw new Error("expected receipt");
   });
 
+  it("clockify_entries_list resolves RELATIVE start/end to UTC instants (live: ?start=today hit the wire 12×)", async () => {
+    // NOW is 2026-06-06; the seeded entries are on 2026-06-05.
+    const fake = createFakeWorkspace(seedEntries());
+    const yesterday = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { start: "yesterday", end: "yesterday" },
+      context: makeContext(fake),
+    });
+    if (yesterday.kind !== "receipt" || !yesterday.receipt.ok) throw new Error("expected a success receipt");
+    const data = yesterday.receipt.data as { count: number; window?: { start?: string; end?: string } };
+    expect(data.count).toBe(2);
+    // The resolved window is surfaced (and is what went to the wire).
+    expect(data.window).toEqual({ start: "2026-06-05T00:00:00.000Z", end: "2026-06-05T23:59:59.999Z" });
+
+    const today = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { start: "today" },
+      context: makeContext(fake),
+    });
+    if (today.kind !== "receipt" || !today.receipt.ok) throw new Error("expected a success receipt");
+    expect((today.receipt.data as { count: number }).count).toBe(0);
+  });
+
+  it("clockify_entries_list clarifies on an unparseable date instead of sending it", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { start: "the other day" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.getEntries ?? 0).toBe(0);
+  });
+
   it("clockify_entries_list is read-gated by time_tracking", async () => {
     const fake = createFakeWorkspace(seedEntries());
     const off = defaultAdminPolicy();

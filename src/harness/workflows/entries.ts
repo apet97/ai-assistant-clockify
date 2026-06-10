@@ -1,10 +1,12 @@
 import { z } from "zod";
 import {
-  defineReadAction,
+  defineAction,
   defineRiskyAction,
+  defineReadAction,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
+import { resolveInstant } from "./resolve.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -14,11 +16,12 @@ import { successReceipt, errorReceipt } from "../receipts.js";
  * feature group even though it operates on time entries.
  */
 
-const listEntries = defineReadAction({
+const listEntries = defineAction({
   name: "clockify_entries_list",
   description:
-    "List time entries for a user (defaults to the caller). Optional date window and project/task filters.",
-  group: "time_tracking",
+    "List time entries for a user (defaults to the caller). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters.",
+  featureGroup: "time_tracking",
+  risks: ["read"],
   schema: z.object({
     userId: z.string().optional(),
     start: z.string().optional(),
@@ -28,19 +31,42 @@ const listEntries = defineReadAction({
   }),
   async handler(ctx, args) {
     const userId = args.userId ?? ctx.adminUserId;
+    // The wire wants yyyy-MM-ddThh:mm:ssZ instants; the live loop sent
+    // `?start=today` 12× (400 every time). Resolve here, clarify on garbage.
+    const now = (ctx.now ?? (() => new Date()))();
+    const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
+    const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
+    const bad = [
+      args.start !== undefined && start === undefined ? args.start : undefined,
+      args.end !== undefined && end === undefined ? args.end : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (bad.length) {
+      return {
+        kind: "clarify",
+        message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`,
+      };
+    }
     const items = await ctx.clockify.getEntries({
       userId,
-      start: args.start,
-      end: args.end,
+      start,
+      end,
       projectId: args.projectId,
       taskId: args.taskId,
     });
-    return successReceipt({
-      action: "clockify_entries_list",
-      entity: "time_entry",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { userId, count: items.length, items },
-    });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_entries_list",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        data: {
+          userId,
+          count: items.length,
+          items,
+          ...(start !== undefined || end !== undefined ? { window: { start, end } } : {}),
+        },
+      }),
+    };
   },
 });
 

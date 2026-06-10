@@ -70,3 +70,70 @@ describe("scheduling actions", () => {
     expect(fake.counts.publishSchedule).toBe(1);
   });
 });
+
+describe("scheduling date normalization (live-loop FIX 2: invalid start/end)", () => {
+  it("assignments_create resolves relative start/end to the wire's UTC instants", async () => {
+    const fake = createFakeWorkspace();
+    // NOW is 2026-06-06 (a Saturday) → next monday = 2026-06-08.
+    const result = await executeAction({
+      actionName: "clockify_scheduling_assignments_create",
+      args: { userId: "u1", projectId: "p1", start: "next monday", end: "next friday", hoursPerDay: 8 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    expect(fake.state.assignments[0]).toMatchObject({
+      start: "2026-06-08T00:00:00.000Z",
+      end: "2026-06-12T23:59:59.999Z",
+    });
+  });
+
+  it("assignments_create clarifies on an unparseable date instead of a doomed call", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_scheduling_assignments_create",
+      args: { userId: "u1", projectId: "p1", start: "soonish", end: "later", hoursPerDay: 8 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createAssignment ?? 0).toBe(0);
+  });
+
+  it("assignments_list resolves relative start/end and clarifies on garbage", async () => {
+    const fake = createFakeWorkspace();
+    const ok = await executeAction({
+      actionName: "clockify_scheduling_assignments_list",
+      args: { start: "today", end: "today" },
+      context: makeContext(fake),
+    });
+    expect(ok.kind).toBe("receipt");
+
+    const garbage = await executeAction({
+      actionName: "clockify_scheduling_assignments_list",
+      args: { start: "whenever" },
+      context: makeContext(fake),
+    });
+    expect(garbage.kind).toBe("clarify");
+    expect(fake.counts.listAssignments ?? 0).toBe(1);
+  });
+
+  it("publish + totals resolve relative ranges too", async () => {
+    const fake = createFakeWorkspace();
+    const publish = await executeAction({
+      actionName: "clockify_scheduling_publish",
+      args: { start: "today", end: "next friday" },
+      context: makeContext(fake),
+    });
+    if (publish.kind !== "preview") throw new Error("expected a preview");
+    expect(publish.operation.payload).toMatchObject({
+      start: "2026-06-06T00:00:00.000Z",
+      end: "2026-06-12T23:59:59.999Z",
+    });
+
+    const totals = await executeAction({
+      actionName: "clockify_scheduling_user_totals",
+      args: { start: "banana", end: "today" },
+      context: makeContext(fake),
+    });
+    expect(totals.kind).toBe("clarify");
+  });
+});

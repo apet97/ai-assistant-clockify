@@ -55,3 +55,32 @@ describe("report actions", () => {
     else throw new Error("expected receipt");
   });
 });
+
+describe("report date normalization (live-loop FIX 2: 'Invalid date!' 400s)", () => {
+  it("resolves relative range words to UTC instants before they reach the reports host", async () => {
+    const fake = createFakeWorkspace();
+    // NOW is 2026-06-06.
+    const result = await executeAction({
+      actionName: "clockify_reports_summary",
+      args: { dateRangeStart: "yesterday", dateRangeEnd: "yesterday" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    // The fake echoes the range it was called with.
+    expect((result.receipt.data as any).report.range).toEqual({
+      dateRangeStart: "2026-06-05T00:00:00.000Z",
+      dateRangeEnd: "2026-06-05T23:59:59.999Z",
+    });
+  });
+
+  it("clarifies on an unparseable range instead of sending it", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_reports_weekly",
+      args: { dateRangeStart: "since the sprint started" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.weeklyReport ?? 0).toBe(0);
+  });
+});

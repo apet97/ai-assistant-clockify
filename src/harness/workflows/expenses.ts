@@ -3,10 +3,14 @@ import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDef
 import { successReceipt } from "../receipts.js";
 import { resolveEntityRef, resolveRelativeDay } from "./resolve.js";
 
-/** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date. */
-function resolveDate(ctx: ActionContext, date?: string): string {
+/** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
+ *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
+function resolveDate(ctx: ActionContext, date?: string): string | undefined {
   return resolveRelativeDay((ctx.now ?? (() => new Date()))(), { date });
 }
+
+const DATE_CLARIFY = (raw: string) =>
+  `I couldn't make sense of the date "${raw}" — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or next Monday.`;
 
 /**
  * Typed expense workflows (goclmcp §2.7). Reads (list/get/categories_list)
@@ -118,11 +122,13 @@ const createExpense = defineRiskyAction({
       { noun: "expense category", verb: "use", list: () => ctx.clockify.listExpenseCategories() },
     );
     if (!category.ok) return category.clarify;
+    // Live: the model sent the literal string "today" to the wire (400) —
+    // the harness resolves relative dates and defaults to today.
+    const date = resolveDate(ctx, args.date);
+    if (date === undefined) return { clarify: DATE_CLARIFY(args.date as string) };
     const input: StoredExpense = {
       amountMinor: toMinor(args.amount, args.amountUnit),
-      // Live: the model sent the literal string "today" to the wire (400) —
-      // the harness resolves relative dates and defaults to today.
-      date: resolveDate(ctx, args.date),
+      date,
       categoryId: category.id,
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
@@ -193,9 +199,11 @@ const updateExpense = defineRiskyAction({
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
+    const date = args.date !== undefined ? resolveDate(ctx, args.date) : undefined;
+    if (args.date !== undefined && date === undefined) return { clarify: DATE_CLARIFY(args.date) };
     const values: Record<string, unknown> = {
       ...(args.amount !== undefined ? { amountMinor: toMinor(args.amount, args.amountUnit) } : {}),
-      ...(args.date !== undefined ? { date: resolveDate(ctx, args.date) } : {}),
+      ...(date !== undefined ? { date } : {}),
       ...(args.categoryId !== undefined ? { categoryId: args.categoryId } : {}),
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),

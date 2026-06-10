@@ -113,7 +113,23 @@ const periodReport = defineAction({
     groups: z.array(z.enum(["PROJECT", "CLIENT", "TASK", "TAG", "USER", "DATE"])).optional(),
   }),
   async handler(ctx, args) {
-    const range = resolvePeriod(nowDate(ctx), args.period);
+    let range = resolvePeriod(nowDate(ctx), args.period);
+    let weeklyClamped = false;
+    if (args.type === "weekly") {
+      // Clockify's weekly report REJECTS any range that isn't exactly 7 days
+      // ("Please select date range of exactly 7 days") — the live loop routed a
+      // month into it. Clamp to the LAST 7 calendar days of the resolved period.
+      const endDay = range.dateRangeEnd.slice(0, 10);
+      const startDay = new Date(Date.parse(`${endDay}T00:00:00.000Z`) - 6 * DAY_MS)
+        .toISOString()
+        .slice(0, 10);
+      const clamped = {
+        dateRangeStart: `${startDay}T00:00:00.000Z`,
+        dateRangeEnd: `${endDay}T23:59:59.999Z`,
+      };
+      weeklyClamped = clamped.dateRangeStart !== range.dateRangeStart || clamped.dateRangeEnd !== range.dateRangeEnd;
+      range = clamped;
+    }
     const report =
       args.type === "detailed"
         ? await ctx.clockify.detailedReport(range)
@@ -127,6 +143,14 @@ const periodReport = defineAction({
         entity: "report",
         ids: { workspaceId: ctx.workspaceId },
         data: { period: args.period, type: args.type, range, report },
+        warnings: weeklyClamped
+          ? [
+              {
+                code: "weekly_range_clamped",
+                message: `The weekly report only accepts an exact 7-day range, so it covers the last 7 days of ${args.period} (${range.dateRangeStart.slice(0, 10)} → ${range.dateRangeEnd.slice(0, 10)}). Use type "summary" or "detailed" for the full period.`,
+              },
+            ]
+          : undefined,
       }),
     };
   },
