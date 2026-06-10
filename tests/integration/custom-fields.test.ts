@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { catalogForModel } from "../../src/harness/catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
@@ -31,6 +32,24 @@ describe("custom field actions", () => {
     const result = await executeAction({ actionName: "clockify_custom_fields_get", args: { id: "cf1" }, context: makeContext(fake) });
     if (result.kind === "receipt" && result.receipt.ok) expect((result.receipt.data as any).entity).toMatchObject({ id: "cf1", type: "TXT" });
     else throw new Error("expected receipt");
+  });
+
+  it("clockify_custom_fields_create clarifies with the platform restriction at PREVIEW on the add-on auth class (live item 180) — never a doomed confirm", async () => {
+    const fake = createFakeWorkspace();
+    fake.client.authClass = "addon";
+    const result = await executeAction({
+      actionName: "clockify_custom_fields_create",
+      args: { name: "AIASSIST_LOOP_CF", fieldType: "TXT" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("does not allow add-ons");
+    expect(fake.counts.createCustomField ?? 0).toBe(0);
+  });
+
+  it("the create description NAMES the add-on restriction so 'why can't you create custom fields?' answers truthfully (live item 186)", async () => {
+    const entry = catalogForModel().find((a) => a.name === "clockify_custom_fields_create");
+    expect(entry?.description).toContain("add-ons");
   });
 
   it("clockify_custom_fields_create previews high_risk_write then creates once", async () => {

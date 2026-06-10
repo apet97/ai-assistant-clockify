@@ -72,6 +72,9 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
   const workspaceRest = makeWorkspaceRest(core, opts.workspaceId);
 
   return {
+    // Some endpoint families are refused for the add-on token class — the
+    // workflows surface that at PREVIEW time instead of a doomed confirm.
+    authClass: "addonToken" in opts.auth ? "addon" : "api_key",
     // Typed area modules (spread first); the inline methods below cover the
     // not-yet-migrated areas.
     ...projectRest,

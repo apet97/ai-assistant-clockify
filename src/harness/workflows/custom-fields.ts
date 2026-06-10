@@ -63,7 +63,7 @@ const getCustomField = defineReadAction({
 const createCustomField = defineRiskyAction({
   name: "clockify_custom_fields_create",
   description:
-    "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). Elevated write — previews and requires confirmation. Dropdowns require allowedValues.",
+    "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). NOTE: Clockify blocks custom-field CREATION for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice; an admin can add the field in Clockify's workspace settings. Elevated write — previews and requires confirmation. Dropdowns require allowedValues.",
   group: CF,
   risks: ["high_risk_write"],
   schema: z
@@ -78,7 +78,16 @@ const createCustomField = defineRiskyAction({
       (v) => !isDropdown(v.fieldType) || (Array.isArray(v.allowedValues) && v.allowedValues.length > 0),
       { message: "allowedValues is required for DROPDOWN_SINGLE / DROPDOWN_MULTIPLE." },
     ),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    // Clockify refuses custom-field CREATION for add-on tokens — no manifest
+    // scope can grant it (probed live 2026-06-10). Surface that at PREVIEW time
+    // so the admin is never told to confirm a doomed create (live item 180).
+    if (ctx.clockify.authClass === "addon") {
+      return {
+        clarify:
+          "Clockify does not allow add-ons to create custom fields — no manifest scope can grant it, so I can't do this from inside the add-on. This is a Clockify platform restriction, not one of your assistant permissions. An admin can add the field under Clockify's workspace settings; I can read and set values on existing custom fields.",
+      };
+    }
     const input = {
       name: args.name,
       type: args.fieldType,

@@ -36,6 +36,34 @@ describe("webhook actions", () => {
     else throw new Error("expected receipt");
   });
 
+  it("webhook WRITES clarify with the platform restriction at PREVIEW on the add-on auth class (live item 248) — never a doomed confirm", async () => {
+    const fake = createFakeWorkspace({ webhooks: [{ id: "w1", name: "Hook" }] });
+    fake.client.authClass = "addon";
+    const create = await executeAction({
+      actionName: "clockify_webhooks_create",
+      args: { name: "Hook", url: "https://example.com/hook", webhookEvent: "NEW_TIME_ENTRY" },
+      context: makeContext(fake),
+    });
+    expect(create.kind).toBe("clarify");
+    if (create.kind === "clarify") expect(create.message).toContain("does not allow add-ons");
+    expect(fake.counts.createWebhook ?? 0).toBe(0);
+
+    const update = await executeAction({
+      actionName: "clockify_webhooks_update",
+      args: { id: "w1", name: "Renamed" },
+      context: makeContext(fake),
+    });
+    expect(update.kind).toBe("clarify");
+    const del = await executeAction({
+      actionName: "clockify_webhooks_delete",
+      args: { id: "w1" },
+      context: makeContext(fake),
+    });
+    expect(del.kind).toBe("clarify");
+    expect(fake.counts.updateWebhook ?? 0).toBe(0);
+    expect(fake.counts.deleteWebhook ?? 0).toBe(0);
+  });
+
   it("webhooks_create previews external_side_effect, rejects non-HTTPS, then creates", async () => {
     const fake = createFakeWorkspace();
     const bad = await executeAction({ actionName: "clockify_webhooks_create", args: { name: "Hook", url: "http://x.example/h", webhookEvent: "NEW_TIME_ENTRY" }, context: makeContext(fake) });

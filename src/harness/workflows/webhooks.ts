@@ -2,9 +2,24 @@ import { z } from "zod";
 import {
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+
+/**
+ * Clockify refuses the ENTIRE webhooks API for add-on tokens — no manifest
+ * scope can grant it (probed live 2026-06-10). A webhook write must surface
+ * that at PREVIEW time so the admin is never told to confirm a doomed change
+ * (live item 248); the reads already fail honestly at call time.
+ */
+function addonWebhookRestriction(ctx: ActionContext): { clarify: string } | undefined {
+  if (ctx.clockify.authClass !== "addon") return undefined;
+  return {
+    clarify:
+      "Clockify does not allow add-ons to call the webhooks API — no manifest scope can grant it, so I can't change webhooks from inside this add-on. This is a Clockify platform restriction, not one of your assistant permissions. Webhooks can be managed in Clockify's workspace settings or with a personal API key.",
+  };
+}
 
 /**
  * Typed webhook workflows (goclmcp §2.12). Reads (list/get/events/logs) execute
@@ -78,7 +93,7 @@ const listLogs = defineReadAction({
 const createWebhook = defineRiskyAction({
   name: "clockify_webhooks_create",
   description:
-    "Create a webhook (HTTPS url, a webhookEvent type). External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+    "Create a webhook (HTTPS url, a webhookEvent type). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
   group: WH,
   risks: ["external_side_effect"],
   schema: z.object({
@@ -88,7 +103,9 @@ const createWebhook = defineRiskyAction({
     triggerSource: z.array(z.string().min(1)).optional(),
     triggerSourceType: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const blocked = addonWebhookRestriction(ctx);
+    if (blocked) return blocked;
     const input = {
       name: args.name,
       url: args.url,
@@ -131,7 +148,9 @@ const updateWebhook = defineRiskyAction({
       (v) => v.name !== undefined || v.url !== undefined || v.webhookEvent !== undefined || v.triggerSource !== undefined || v.triggerSourceType !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const blocked = addonWebhookRestriction(ctx);
+    if (blocked) return blocked;
     const { id, ...patch } = args;
     return {
       actionLabel: "Update webhook",
@@ -155,7 +174,9 @@ const deleteWebhook = defineRiskyAction({
   group: WH,
   risks: ["destructive", "external_side_effect"],
   schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const blocked = addonWebhookRestriction(ctx);
+    if (blocked) return blocked;
     return {
       actionLabel: "Delete webhook",
       targets: [{ type: "webhook", id: args.id, name: args.name }],

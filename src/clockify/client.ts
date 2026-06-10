@@ -64,7 +64,16 @@ export interface WorkspaceClient
     WorkspacePort,
     UserPort,
     WebhookPort,
-    MiscRiskyPort {}
+    MiscRiskyPort {
+  /**
+   * The auth class this client calls Clockify with. Clockify refuses some
+   * endpoint FAMILIES for add-on tokens regardless of manifest scopes (probed
+   * live 2026-06-10: webhooks, custom-field management) — preview-time honesty
+   * keys on this so a doomed write is never offered for confirmation. Absent
+   * (tests/dev API key) means unrestricted.
+   */
+  authClass?: "addon" | "api_key";
+}
 
 // Re-export the port slices so importers can depend on a single barrel
 // (`clockify/client.js`) for both the composed port and its pieces.
