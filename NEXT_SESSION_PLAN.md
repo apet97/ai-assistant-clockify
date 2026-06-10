@@ -1,8 +1,9 @@
 # Implementation Plan — getting AI Assistant to a product we'd trust
 
-> Companion to `NEXT_SESSION_PROMPT.md` (the live-test kickoff). That file tells you how
-> to bring the environment up and drive the chat. **This file is the forward plan.**
-> Read `CLAUDE.md` → Handoff note first.
+> **ARCHIVED (2026-06-10): fully executed** — and since superseded by the agentic
+> loop + the 322-prompt live-loop fix arc built on top of it (current truth:
+> `CLAUDE.md` → "Current state"; journals: `docs/HISTORY.md`). Kept for the
+> reasoning record. Companion: `NEXT_SESSION_PROMPT.md` (the live-test kickoff).
 
 ## ✅ STATUS (2026-06-09): Phases 1–7 are COMPLETE for everything buildable in-repo.
 

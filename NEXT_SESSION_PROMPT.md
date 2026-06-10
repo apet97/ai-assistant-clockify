@@ -6,15 +6,18 @@
 > up and drive the chat. Runtime values (tunnel URL especially) are **ephemeral** —
 > verify them first.
 
-## Where this stands (2026-06-09)
+## Where this stands (2026-06-10)
 
-V1 + full Clockify REST parity are complete, AND the **"trust lives in the code" roadmap
-(Phases 1–7) is complete for everything buildable in-repo**. `npm run verify` is green at
-**618 tests**, all committed/pushed to `main`. Highlights now live: native **tool-calling**
-by default (provider-validated args), atomic **composition** (no orphans), **idempotency**
-(no duplicate invoices) + **undo**, preview-time **constraint surfacing**, **curated**
-intent actions, **metrics** (`GET /api/metrics`), UI **a11y**, and **NDJSON streaming**
-(`POST /api/chat/stream`). See `CLAUDE.md` → Current Status for the per-phase detail.
+Everything buildable is complete: V1 + full REST parity + the "trust lives in the
+code" roadmap + the **durable agentic loop (default ON)** + the 322-prompt
+live-loop fix arc, all re-verified by a live regression run in the embedded chat.
+`npm run verify` is green at **823 tests** (madge 0), all pushed to `main`.
+Highlights live: native **tool-calling**, atomic **composition**, **idempotency**
++ **undo**, preview-time **constraint surfacing** (incl. add-on platform
+restrictions), name→id resolution (incl. **archived**), server-side dates (incl.
+forward ranges), audit-log **recaps** (`assistant_recent_outcomes`), the
+typed-consent guard, **metrics**, a11y, NDJSON streaming. See `CLAUDE.md`;
+journals in `docs/HISTORY.md`.
 
 **There are no open implementation tasks.** What remains is human-gated (hosting, prod
 security review, prod AUDIT-host clearance — see the bottom). So a fresh session is for
@@ -30,7 +33,7 @@ Continue the Clockify "AI Assistant" add-on. Repo:
 Read `CLAUDE.md` (Handoff note + Current Status) + `AGENTS.md` first, and recall the
 project memories (`clockify-addon-public-key-builtin`, `clockify-api-base-resolution`,
 `clockify-dev-console-login-and-reinstall`, `streaming-conflicts-truthful-previews`).
-`npm run verify` is green at **618 tests**. Keep the discipline: failing test first,
+`npm run verify` is green at **823 tests**. Keep the discipline: failing test first,
 verify green, focused commits, no new deps without my OK, never print/commit tokens.
 
 ## Bring the live environment up (do this first)
@@ -91,8 +94,10 @@ POST messages (no secrets printed):
 - Clockify **reserves a project name even after archive-then-delete** ("already exists" on
   re-create) — use unique `AIASSIST_SMOKE_*` names in tests and hard-delete leftovers.
 - Dev-console session is short-lived → restore via the test-accounts tab (above).
-- On the **dev host**, `webhooks_list` + `workspace_get` (`GET /workspaces`) return 401
-  "API is not accessible" — likely a dev-environment limit; left as-is (may differ in prod).
+- Webhooks (all) + custom-field CREATE + account-level `GET /workspaces` are blocked
+  for the ADD-ON TOKEN CLASS regardless of scopes (NOT dev-only) — surfaced as an
+  honest platform-restriction message at preview/call time; `workspace_get` uses the
+  workspace-scoped route, which works.
 - **Invoice line items** need a workspace-configured invoice item type (no API to list/create
   them); a fresh workspace has none → the add-on now warns in the **preview** and the total
   stays $0 until an admin configures one in Clockify → Invoices. Platform constraint.

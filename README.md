@@ -56,6 +56,11 @@ stays a thin, replaceable translator:
   provider validates against a JSON Schema generated from the same Zod schema the
   harness validates with — so the model stops inventing argument shapes. The Zod +
   risk/policy gate is still the trust boundary (provider validation is convenience).
+- **A durable, approval-gated agentic loop** (default on): reads and safe writes
+  auto-chain with their receipts fed back to the model; the first risky write
+  interrupts into the preview → button-confirm flow, and the confirmed receipt
+  resumes the loop across the HTTP round-trip — it can chain another preview, never
+  commit inline.
 - **Atomic multi-step composition** — a multi-entity request either completes or rolls
   back what it created; no orphans.
 - **Idempotency** — re-confirming the same intent can't create a duplicate (e.g. a

@@ -1,30 +1,32 @@
 # AGENTS.md — AI Assistant Add-on
 
 Agent quick-reference. Read `CLAUDE.md` first; it is the source of truth. This
-file is the short map.
+file is the short map. Handoff journals: `docs/HISTORY.md`.
 
-> **Taking over?** Read the **Handoff note at the top of `CLAUDE.md`** first — it
-> summarizes exactly where this stands and what (only human-gated items) remains.
+> **Taking over?** Read **`CLAUDE.md` → "Current state"** first — everything
+> buildable is DONE; only human-gated launch items remain.
 
 ## What this is
 
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **694 tests**, 0 circular deps. Done + on `main`:
-- **Ground-truth adapter audit (2026-06-10)** — 9 confirmed-wrong wire shapes
-  fixed (invoice update zeroing tax/discount; approvals wrapper + resubmit body;
-  time-off status field/days/dead single-GET; users role POST; tags
-  rename-by-name) — `CLAUDE.md` → top handoff note.
+verify` is green at **823 tests**, 0 circular deps. Done + on `main`:
 - **Full Clockify REST parity** (~115 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
-  NDJSON streaming) — `CLAUDE.md` → Current Status.
+  NDJSON streaming).
 - **Durable approval-gated agentic loop, default ON** (`LLM_AGENTIC`, `=0` rolls
   back): reads + safe-writes auto-chain; a risky write interrupts → button-confirm →
   durable **resume** across the HTTP round-trip (the confirm streams the resume so the
   button never blocks). Eval: 90.5% multi-step task completion vs 57.1% single-turn.
-  `src/assistant/agent-loop.ts` + `agent-state.ts`; `CLAUDE.md` → top handoff note.
+  `src/assistant/agent-loop.ts` + `agent-state.ts`.
+- **Ground-truth adapter audit + the 322-prompt live-loop fix arc** — every wire
+  shape and every loop failure closed (name→id resolution incl. archived,
+  server-side dates incl. forward ranges, bounded model input, audit-log recaps,
+  typed-consent guard, preview-time platform restrictions), then re-verified live
+  in the embedded chat. `CLAUDE.md` → "Safety & planner invariants" +
+  "Clockify API facts"; journals in `docs/HISTORY.md`.
 
 **Ground truth, not the code:** this codebase was built fast and its Clockify-API
 assumptions have repeatedly been WRONG (invoice item types, instant formats, host
@@ -70,13 +72,16 @@ flat `projectName`/bare strings, folded by a `z.preprocess`). (2) `clockify_tags
 accepts an exact `name` and resolves it to an id (no `invalid_args` dead-end). The
 planner prompt was reworded to match. See `CLAUDE.md` → Current Status.
 
-**Honest state / what's NOT a model problem (see `CLAUDE.md` → "Known limitations & next
-steps"):** the planner is never sent action input schemas, so it guesses arg shapes — we
-band-aid per action (forgiving Zod + server defaults + name→id). The real next step is
-feeding arg schemas/examples to the model (or native tool-calling), NOT swapping the LLM.
-Invoice amounts need a workspace-configured invoice item type (Clockify UI only, no API).
-Risky-action "Done/Confirmed" hallucinations are neutralized deterministically by the
-route (truthful previews). `deepseek-v4-pro` and `gemini-cli` behave alike here.
+**Honest state / what's NOT a model problem:** native tool-calling is the default
+(`LLM_MODE=tool`) — the provider validates args against schemas generated from the
+SAME Zod the harness re-validates with, so arg-shape guessing is gone; identity
+(names/numbers→ids, incl. archived) and calendar math resolve server-side at
+preview. Invoice amounts still need a workspace-configured invoice item type
+(Clockify UI only, no API — surfaced in the preview). Risky-action
+"Done/Confirmed" hallucinations are neutralized deterministically (truthful
+previews + boilerplate filtered from model-visible history); a typed "yes" at a
+pending preview never reaches the planner. Swapping the LLM fixes none of the
+remaining platform constraints.
 
 Pending/deferred: the AUDIT host has **no token claim** (the URL claims are
 backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-only
@@ -125,8 +130,9 @@ npm run dev           # tsx src/server.ts (needs env)
   `src/clockify/rest-workspace.ts` — the live REST adapter (`X-Addon-Token` or
   API-key auth); I/O only.
 - `src/assistant/` — model client (HTTP OpenAI-compatible **or** the `gemini-cli`
-  backend via `LLM_PROVIDER`, `gemini-cli-client.ts`), prompt builder, validated planner (JSON +
-  one repair retry).
+  backend via `LLM_PROVIDER`), prompt builder, planner (native tool-calling default,
+  JSON + one repair retry as fallback), `agent-loop.ts`/`agent-state.ts` (durable
+  agentic loop).
 - `src/harness/` — the safety boundary: `action.ts` (contracts + `defineAction`),
   `actions.ts` (executor + confirm/batch commit), `catalog.ts`, `permissions.ts`,
   `risk.ts`, `receipts.ts`, `confirmations.ts`, `tools.ts` (Zod→JSON-schema tools for
