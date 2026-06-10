@@ -64,11 +64,25 @@ are model-judgment items made safe by the preview gate; 187 was test data
 ("1111" never existed); 053/276's "executed without Confirm" claims were
 DISPROVEN against the backend DB — the safety core held throughout.
 
-**Next live re-run focus:** the newly-fixed flows end-to-end in the embedded
-chat — archived-entity deletes by name, "add me to project X", typed-"yes" at
-a pending preview, "what failed today?", "archive category X", webhook/custom-
-field create (expect the honest restriction at preview), scheduling "next
-month".
+**LIVE REGRESSION RE-RUN: DONE (2026-06-10, embedded chat, workspace
+69bda6b3…) — every fixed flow PASSED end-to-end,** verified against the UI
+cards AND the audit DB: 069 (billable read = "Yes"), 058 ("add me" inferred
+the caller, merge previewed "Add 0 member(s) (1 existing kept)"), 305
+(ARCHIVED project deleted by name), 157 (typed "yes" at a live preview got
+the deterministic button-pointer reply, model never called, original Confirm
+then executed once), 304 (recap called assistant_recent_outcomes and produced
+a data-driven table), 176 (an ARCHIVE preview, committed), 180/186/248
+(honest platform-restriction clarifies at preview + a truthful "why"), 321
+("next month" resolved, honest empty answer). Self-cleaning: RG1/RGT/RGCAT
+all deleted, 0 live pending previews. **The run also CAUGHT one new bug** —
+`clockify_expenses_categories_delete` kept a raw required id, so "delete
+category <name>" sent the NAME to the wire and 400'd after confirm; fixed
+TDD in **`f9bcd6b`** (name resolution incl. archived; the categories list
+port/adapter gained the spec's `archived` filter — the wire DEFAULTS to
+active-only). `npm run verify` = **823 tests**, madge 0, server resynced
+(URL unchanged). NOTE: a second quick tunnel for a colleague may be running
+against :3001 (`/tmp/colleague-tunnel.log`); the manifest baseUrl still pins
+the primary tunnel — never `dev-tunnel.sh restart`.
 
 ## Handoff note (prior) — 2026-06-10 (322-prompt live-loop fixes)
 
