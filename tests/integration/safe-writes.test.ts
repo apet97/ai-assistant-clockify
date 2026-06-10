@@ -46,6 +46,18 @@ describe("safe writes", () => {
     expect(fake.counts.startTimeEntry).toBe(1);
   });
 
+  it("stop_timer with no running timer is a truthful no-op: success WITH the warning, nothing changed", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_stop_timer",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect(result.receipt.warnings).toEqual([{ message: "No running timer to stop." }]);
+    expect(result.receipt.changed).toBeUndefined();
+  });
+
   it("create_work_package creates new entities and reuses existing ones", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "client-existing", name: "Acme" }] });
     const result = await executeAction({
