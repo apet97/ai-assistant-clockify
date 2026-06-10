@@ -69,6 +69,15 @@ export function sanitizeStoredReplyForModel(content: string): string {
   return "[I prepared a pending change here; it awaited the admin's button confirmation and had not been applied at that point.]";
 }
 
+/**
+ * A bare typed consent ("yes", "confirm", "do it", …). While a preview is
+ * pending this must never reach the planner (live item 157: "yes" planned a
+ * NEW operation) — typed consent never executes anything; only the button
+ * nonce does.
+ */
+const TYPED_CONSENT =
+  /^\s*(yes|yep|yeah|yes please|confirm|confirmed|ok|okay|sure|do it|go ahead|proceed|apply)\s*[.!]*\s*$/i;
+
 /** Idempotency window: re-confirming the same intent within this is deduped. */
 const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
 
@@ -520,6 +529,17 @@ export function apiRouter(deps: AppDeps): Router {
       role: "user",
       content: message,
     });
+
+    // SAFETY (live item 157): a bare typed consent while a preview is pending
+    // must never reach the planner — live, "yes" made the model plan a NEW
+    // operation instead of pointing at the button. Deterministic reply; only
+    // the button nonce can execute the pending change.
+    if (TYPED_CONSENT.test(message) && deps.store.countPendingConfirmations(claims.sessionId, now().toISOString()) > 0) {
+      const text =
+        "Typed approval can't apply a pending change — only the Confirm button on its preview card can. The change is still waiting: click Confirm to apply it, or Cancel to discard it.";
+      persistAssistantReply(claims, "answer", text, []);
+      return { ok: true, replyKind: "answer", replyText: text, results: [] };
+    }
 
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
     const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES);

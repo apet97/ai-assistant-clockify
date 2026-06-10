@@ -135,6 +135,8 @@ export interface Store {
   /** Atomically transition pending → cancelled. */
   cancelConfirmation(id: string): boolean;
   setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
+  /** This session's still-live pending previews (status pending, not expired). */
+  countPendingConfirmations(sessionId: string, nowIso: string): number;
 
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
@@ -485,6 +487,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         result === undefined ? null : JSON.stringify(result),
         id,
       );
+    },
+
+    countPendingConfirmations(sessionId, nowIso) {
+      const row = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM pending_confirmations WHERE session_id = ? AND status = 'pending' AND expires_at > ?",
+        )
+        .get(sessionId, nowIso) as { n: number };
+      return row.n;
     },
 
     addAuditEvent(input) {

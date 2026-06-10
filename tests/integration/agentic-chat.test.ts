@@ -675,6 +675,35 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
   });
 });
 
+describe("typed consent guard (live item 157: typing 'yes' at a pending preview planned a NEW operation)", () => {
+  it("a bare 'yes' while a preview is pending is answered deterministically — the model never sees it, nothing new is planned", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [{ text: "Deleting the tag now.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+    );
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete tag urgent" });
+    expect(first.status).toBe(200);
+    expect(previewsOf(first.body.results as ResultItem[])).toHaveLength(1);
+    const callsAfterPreview = model.calls.length;
+
+    const yes = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "yes" });
+    expect(yes.status).toBe(200);
+    expect(model.calls.length).toBe(callsAfterPreview); // the model never saw "yes"
+    expect(yes.body.results).toEqual([]); // no new previews, no receipts
+    expect(String(yes.body.reply?.text ?? "")).toMatch(/confirm button/i);
+    expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
+  });
+
+  it("a bare 'yes' with NOTHING pending still reaches the model (the guard is scoped to pending previews)", async () => {
+    const fake = createFakeWorkspace();
+    const { app, model, cookie } = await makeApp([{ text: "Could you say more?", toolCalls: [] }], fake);
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "yes" });
+    expect(res.status).toBe(200);
+    expect(model.calls.length).toBe(1);
+  });
+});
+
 describe("model-visible history window (live-loop FIX 3: the session must stay responsive at item 300)", () => {
   it("sends only the window to the model even when the session has hundreds of stored messages", async () => {
     const fake = createFakeWorkspace();
