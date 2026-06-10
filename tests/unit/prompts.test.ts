@@ -109,6 +109,11 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt.toLowerCase()).toContain("text alone performs nothing");
   });
 
+  it("explains the tool-only constraint when asked to call the API directly or use its token (live item 287: the model silently substituted a list call)", () => {
+    expect(prompt.toLowerCase()).toContain("call the clockify api directly");
+    expect(prompt.toLowerCase()).toContain("never hold");
+  });
+
   it("routes activity-recap questions to assistant_recent_outcomes instead of chat memory (live items 304/316: the recap contradicted the audit log)", () => {
     expect(prompt).toContain("assistant_recent_outcomes");
     expect(prompt.toLowerCase()).toContain("what failed");

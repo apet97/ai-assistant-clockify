@@ -525,7 +525,7 @@ const deleteInvoice = defineRiskyAction({
 const addInvoiceItem = defineRiskyAction({
   name: "clockify_invoices_items_add",
   description:
-    "Add a line item to an invoice. Billing action — previews and requires confirmation. `itemType` names a workspace-configured invoice item type; pass the one the admin asked for (e.g. \"service\") — the harness checks it against the workspace's actual types and, if it isn't configured, asks the admin to pick from the real list (it never guesses).",
+    "Add a line item to an invoice. An amount alone is enough — description (defaults to the item type), quantity (1) and itemType (discovered from the workspace) all default server-side, so don't ask the admin for them. Billing action — previews and requires confirmation. `itemType` names a workspace-configured invoice item type; pass the one the admin asked for (e.g. \"service\") — the harness checks it against the workspace's actual types and, if it isn't configured, asks the admin to pick from the real list (it never guesses).",
   group: INV,
   risks: ["billing"],
   schema: z.object({

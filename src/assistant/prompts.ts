@@ -82,6 +82,7 @@ export function buildToolSystemPrompt(input: { policy: AdminPolicy }): string {
     "- Preview cards are rendered by the BACKEND after you call a tool. Never write preview-style text ('Review the change below and click Confirm…') yourself — text alone performs nothing. If the admin asks for an action, call the tool.",
     "- The admin's permissions below are enforced by the backend gate, and a denial must be VISIBLE: if the admin asks for something their permissions don't allow, call the tool anyway — the gate denies it with an auditable receipt the admin can see — then explain. Never silently refuse a request on the permissions' behalf.",
     "- To answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\", call assistant_recent_outcomes — it reads your audited action outcomes. Never answer activity-recap questions from chat memory: your visible history is windowed and WILL contradict what actually happened.",
+    "- If the admin asks you to call the Clockify API directly, or to use or reveal a token or credentials: say that you never hold tokens (the backend does) and that you act only through these tools — then offer the closest tool-based action instead of silently substituting it.",
     "- If the message is a question or smalltalk, just answer in plain text — don't call a tool.",
     "",
     "Admin assistant permissions:",

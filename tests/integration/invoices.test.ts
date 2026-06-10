@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { catalogForModel } from "../../src/harness/catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
@@ -216,6 +217,12 @@ describe("invoice actions", () => {
       { id: "inv10", number: "INV-10", clientId: "c9", currency: "USD" as const, status: "UNSENT" as const,
         items: [{ order: 0, description: "y", quantity: 1, unitPrice: 1000, itemType: "Travel" }] },
     ],
+  });
+
+  it("the items_add description says an AMOUNT ALONE is enough — the model must not interrogate the admin for defaults (live item 139)", () => {
+    const entry = catalogForModel().find((a) => a.name === "clockify_invoices_items_add");
+    expect(entry?.description.toLowerCase()).toContain("amount alone is enough");
+    expect(entry?.description.toLowerCase()).toContain("don't ask the admin");
   });
 
   it("items_add defaults to a DISCOVERED item type, not the per-workspace-specific 'NEW DEFAULT'", async () => {
