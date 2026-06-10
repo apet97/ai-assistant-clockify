@@ -10,7 +10,7 @@
  * (type-check + the vite build are the safety nets); keep these builders exact.
  */
 
-import { expiryView } from "./presentation.js";
+import { batchItemOutcomes, expiryView } from "./presentation.js";
 import {
   featureGroupRows,
   settleConfirmOutcome,
@@ -329,7 +329,20 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
       try {
         const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
         stopTimer();
-        card.remove();
+        // The card stays as the settled record: one ✓/✗ row per item, with the
+        // server's message verbatim on failures — so a partial batch shows
+        // exactly WHICH item failed and why, not just "1 of 2".
+        const list = el("div", "batch-outcomes");
+        for (const outcome of batchItemOutcomes(previews.map((p) => p.preview.actionLabel), responses)) {
+          const row = el("div", `batch-outcome ${outcome.ok ? "ok" : "failed"}`);
+          row.appendChild(svgIcon(outcome.ok ? ICON_CHECK : ICON_X));
+          row.appendChild(el("span", undefined, outcome.label));
+          row.appendChild(el("span", "detail", outcome.detail));
+          list.appendChild(row);
+        }
+        actions.replaceWith(list);
+        countdown?.remove(); // the deadline no longer applies to a settled card
+        card.classList.add("settled");
         settleConfirmOutcome(responses, confirmHooks);
       } catch {
         showError("Confirmation failed.");
