@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { runComposition, type CompositionStep } from "../compose.js";
-import { matchByName } from "./resolve.js";
+import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -16,86 +16,12 @@ import { matchByName } from "./resolve.js";
  * group adds best-effort).
  */
 
-export const REPORT_PERIODS = [
-  "today",
-  "yesterday",
-  "this_week",
-  "last_week",
-  "this_month",
-  "last_month",
-  "last_7_days",
-  "last_30_days",
-  "this_quarter",
-  "last_quarter",
-  "this_year",
-  "last_year",
-] as const;
-export type ReportPeriod = (typeof REPORT_PERIODS)[number];
+// The period vocabulary + resolver live in resolve.ts (the planner emits these
+// keywords as plain date values too — e.g. entries_list start="last_7_days" —
+// so the shared date resolvers need them). Re-exported here for existing imports.
+export { REPORT_PERIODS, resolvePeriod, type ReportPeriod } from "./resolve.js";
 
 const DAY_MS = 86_400_000;
-
-/** Resolve a named period to a UTC date range using `now` (the harness owns the math). */
-export function resolvePeriod(now: Date, period: ReportPeriod): { dateRangeStart: string; dateRangeEnd: string } {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  const startOf = (yy: number, mm: number, dd: number): Date => new Date(Date.UTC(yy, mm, dd, 0, 0, 0, 0));
-  const endOf = (yy: number, mm: number, dd: number): Date => new Date(Date.UTC(yy, mm, dd, 23, 59, 59, 999));
-  const range = (s: Date, e: Date) => ({ dateRangeStart: s.toISOString(), dateRangeEnd: e.toISOString() });
-  const lastDayOf = (yy: number, mm: number): number => new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
-  const dow = (now.getUTCDay() + 6) % 7; // 0 = Monday … 6 = Sunday
-  const qStart = Math.floor(m / 3) * 3;
-
-  switch (period) {
-    case "today":
-      return range(startOf(y, m, d), endOf(y, m, d));
-    case "yesterday": {
-      const yd = new Date(Date.UTC(y, m, d) - DAY_MS);
-      return range(
-        startOf(yd.getUTCFullYear(), yd.getUTCMonth(), yd.getUTCDate()),
-        endOf(yd.getUTCFullYear(), yd.getUTCMonth(), yd.getUTCDate()),
-      );
-    }
-    case "this_week": {
-      const ws = new Date(Date.UTC(y, m, d) - dow * DAY_MS);
-      return range(startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()), now);
-    }
-    case "last_week": {
-      const ws = new Date(Date.UTC(y, m, d) - (dow + 7) * DAY_MS);
-      const we = new Date(ws.getTime() + 6 * DAY_MS);
-      return range(
-        startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()),
-        endOf(we.getUTCFullYear(), we.getUTCMonth(), we.getUTCDate()),
-      );
-    }
-    case "this_month":
-      return range(startOf(y, m, 1), now);
-    case "last_month": {
-      const yy = m === 0 ? y - 1 : y;
-      const mm = m === 0 ? 11 : m - 1;
-      return range(startOf(yy, mm, 1), endOf(yy, mm, lastDayOf(yy, mm)));
-    }
-    case "last_7_days":
-      return range(new Date(now.getTime() - 7 * DAY_MS), now);
-    case "last_30_days":
-      return range(new Date(now.getTime() - 30 * DAY_MS), now);
-    case "this_quarter":
-      return range(startOf(y, qStart, 1), now);
-    case "last_quarter": {
-      let qm = qStart - 3;
-      let qy = y;
-      if (qm < 0) {
-        qm += 12;
-        qy -= 1;
-      }
-      return range(startOf(qy, qm, 1), endOf(qy, qm + 2, lastDayOf(qy, qm + 2)));
-    }
-    case "this_year":
-      return range(startOf(y, 0, 1), now);
-    case "last_year":
-      return range(startOf(y - 1, 0, 1), endOf(y - 1, 11, 31));
-  }
-}
 
 function nowDate(ctx: ActionContext): Date {
   return (ctx.now ?? (() => new Date()))();

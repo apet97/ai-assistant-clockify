@@ -59,4 +59,16 @@ describe("resolveInstant", () => {
     expect(resolveInstant(NOW, "next sprint", "start")).toBeUndefined();
     expect(resolveInstant(NOW, "2026-06-01Tbanana", "start")).toBeUndefined();
   });
+
+  it("accepts the period keywords the planner emits as date values (live: entries_list got start='last_7_days' twice)", () => {
+    // Edge semantics: a period maps to its own start/end instant.
+    expect(resolveInstant(NOW, "last_7_days", "start")).toBe(
+      new Date(NOW.getTime() - 7 * 86_400_000).toISOString(),
+    );
+    expect(resolveInstant(NOW, "last_7_days", "end")).toBe(NOW.toISOString());
+    // 2026-06-10 is a Wednesday → last week = Mon 2026-06-01 … Sun 2026-06-07.
+    expect(resolveInstant(NOW, "last week", "start")).toBe("2026-06-01T00:00:00.000Z");
+    expect(resolveInstant(NOW, "Last Week", "end")).toBe("2026-06-07T23:59:59.999Z");
+    expect(resolveInstant(NOW, "this_month", "start")).toBe("2026-06-01T00:00:00.000Z");
+  });
 });

@@ -64,6 +64,18 @@ describe("time-entry actions — reads", () => {
     expect((today.receipt.data as { count: number }).count).toBe(0);
   });
 
+  it("clockify_entries_list accepts a PERIOD keyword as a date bound (live: the planner sent start='last_7_days')", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { start: "last_7_days" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    // NOW is 2026-06-06; the 2026-06-05 seed entries fall inside the window.
+    expect((result.receipt.data as { count: number }).count).toBe(2);
+  });
+
   it("clockify_entries_list clarifies on an unparseable date instead of sending it", async () => {
     const fake = createFakeWorkspace(seedEntries());
     const result = await executeAction({
