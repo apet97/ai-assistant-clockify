@@ -301,6 +301,12 @@ body {
 }
 
 /* ----- 6. Chips (clarify options, example prompts) ------------------------ */
+/* The clarify wrapper is transparent to the log's flex column, so the bubble
+   and chip row align exactly like standalone messages. */
+.clarify {
+  display: contents;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;

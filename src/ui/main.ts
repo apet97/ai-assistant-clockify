@@ -1,5 +1,5 @@
 import "./styles.css";
-import { el, renderPermissionTable, renderPreview, renderReceipt } from "./render.js";
+import { el, renderClarify, renderPermissionTable, renderPreview, renderReceipt } from "./render.js";
 import {
   type ChatController,
   type ChatResult,
@@ -312,6 +312,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
     statusBar.classList.toggle("hidden", !working);
   }
 
+  // Assigned in renderChat; clarify chips send their label through this SAME
+  // path as typed text — never to a confirmation endpoint.
+  let sendText: (text: string) => Promise<void> = async () => {};
+
   function appendMessage(role: string, text: string): void {
     messages.appendChild(el("div", `message ${role}`, text));
     messages.scrollTop = messages.scrollHeight;
@@ -323,7 +327,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
       messages.appendChild(renderPreview(previews, { controller, showError, appendMessage, renderResults }));
     for (const result of results) {
       if (result.kind === "receipt") messages.appendChild(renderReceipt(result, { controller, showError }));
-      else if (result.kind === "clarify") appendMessage("assistant", result.message);
+      else if (result.kind === "clarify")
+        messages.appendChild(renderClarify(result, { sendText: (text) => void sendText(text) }));
     }
     messages.scrollTop = messages.scrollHeight;
   }
@@ -341,14 +346,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
     form.appendChild(input);
     form.appendChild(send);
     let busy = false;
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (busy) return; // a one-at-a-time guard (Enter while working can't double-submit)
-      const text = input.value.trim();
-      if (!text) return;
-      // Typed text always goes to chat — never to a confirmation endpoint.
+    // The ONE path into chat for typed text AND clarify chips — never a
+    // confirmation endpoint.
+    sendText = async (text: string): Promise<void> => {
+      if (busy || !text) return; // one-at-a-time guard (Enter/chip while working can't double-submit)
       appendMessage("user", text);
-      input.value = "";
       clearError();
       // Streaming: harness results render as they arrive, then the truthful reply.
       await submitStreaming(api, text, {
@@ -363,6 +365,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
         onResults: (results) => renderResults(results),
         onError: (message) => showError(message),
       });
+    };
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (busy) return;
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      await sendText(text);
     });
     chat.appendChild(form);
     chat.classList.remove("hidden");

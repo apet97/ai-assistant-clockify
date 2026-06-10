@@ -16,6 +16,7 @@ import {
   submitConfirmStream,
   type ChatController,
   type ChatResult,
+  type ClarifyResult,
   type ConfirmHooks,
   type ConfirmResponse,
   type PolicyShape,
@@ -68,6 +69,45 @@ export function renderPermissionTable(
   wrapper.appendChild(table);
   wrapper.appendChild(saveButton);
   return wrapper;
+}
+
+/** Dependencies `renderClarify` needs from the host `mount`. */
+export interface ClarifyDeps {
+  /** Send text through the NORMAL chat path (same function the composer uses). */
+  sendText: (text: string) => void;
+}
+
+/**
+ * A clarify turn: the question bubble plus the grounded "did you mean?" options
+ * as one-use chips. A chip click sends the option LABEL as an ordinary chat
+ * message — it goes through the same send path as typed text, so nothing here
+ * can reach a confirmation endpoint (the option id is never sent).
+ */
+export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLElement {
+  const wrap = el("div", "clarify");
+  wrap.appendChild(el("div", "message assistant", result.message));
+  const options = result.options ?? [];
+  if (options.length > 0) {
+    const row = el("div", "chip-row");
+    row.setAttribute("role", "group");
+    row.setAttribute("aria-label", "Suggested replies");
+    for (const option of options) {
+      const chip = el("button", "chip", option.label) as HTMLButtonElement;
+      chip.type = "button";
+      chip.addEventListener("click", () => {
+        // One-use: the whole row disables; the chosen chip stays highlighted
+        // as a record of what was picked.
+        for (const button of Array.from(row.querySelectorAll("button"))) {
+          (button as HTMLButtonElement).disabled = true;
+        }
+        chip.classList.add("chip-selected");
+        deps.sendText(option.label);
+      });
+      row.appendChild(chip);
+    }
+    wrap.appendChild(row);
+  }
+  return wrap;
 }
 
 /** Dependencies `renderReceipt` needs from the host `mount`. */
