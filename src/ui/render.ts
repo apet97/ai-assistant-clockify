@@ -142,6 +142,9 @@ export interface ReceiptDeps {
   showError: (message: string) => void;
 }
 
+/** Unique ids for the details disclosure (aria-controls). */
+let detailsSeq = 0;
+
 export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLElement {
   const { controller, showError } = deps;
   const warnings = result.receipt.warnings ?? [];
@@ -152,8 +155,15 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
   const card = el("div", `receipt ${result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `${status}: ${result.receipt.action}`);
-  card.appendChild(el("strong", undefined, status));
-  card.appendChild(el("span", "action", result.receipt.action));
+  const head = el("div", "receipt-head");
+  const icon = el("span", "receipt-icon");
+  icon.appendChild(svgIcon(result.receipt.ok ? (warnings.length ? ICON_ALERT : ICON_CHECK) : ICON_X));
+  head.appendChild(icon);
+  head.appendChild(el("strong", undefined, status));
+  head.appendChild(el("span", "action", result.receipt.action));
+  card.appendChild(head);
+  // The server's own outcome message (e.g. why an action failed) — verbatim.
+  if (result.receipt.message) card.appendChild(el("p", "receipt-message", result.receipt.message));
   // Surface warnings inline (not buried in Details) so the user sees them.
   for (const w of warnings) card.appendChild(el("p", "warning", w.message));
   // One-click undo for a reversible creation (deletes what was just created).
@@ -166,29 +176,39 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
       try {
         const res = (await controller.undo(undoId)) as { ok?: boolean };
         if (res?.ok) {
-          undoButton.textContent = "Undone";
+          const done = el("span", "undo-done");
+          done.appendChild(svgIcon(ICON_CHECK));
+          done.appendChild(document.createTextNode("Undone"));
+          undoButton.replaceWith(done);
+          // The log region announces additions — give non-visual users the outcome.
+          card.appendChild(el("p", "sr-only", "Undo complete"));
         } else {
-          undoButton.textContent = "Undo";
           undoButton.disabled = false;
           showError("Undo failed.");
         }
       } catch {
-        undoButton.textContent = "Undo";
         undoButton.disabled = false;
         showError("Undo failed.");
       }
     });
     card.appendChild(undoButton);
   }
-  const details = el("pre", "details hidden", JSON.stringify(result.receipt, null, 2));
-  const toggle = el("button", "link", "Details") as HTMLButtonElement;
+  // Collapsible raw-receipt disclosure (mono, height-capped, scrolls inside).
+  detailsSeq += 1;
+  const body = el("div", "details-body");
+  body.id = `receipt-details-${detailsSeq}`;
+  body.appendChild(el("pre", undefined, JSON.stringify(result.receipt, null, 2)));
+  const toggle = el("button", "link details-toggle") as HTMLButtonElement;
+  toggle.appendChild(svgIcon(ICON_CHEVRON));
+  toggle.appendChild(document.createTextNode("Details"));
   toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-controls", body.id);
   toggle.addEventListener("click", () => {
-    const open = details.classList.toggle("hidden") === false;
+    const open = body.classList.toggle("open");
     toggle.setAttribute("aria-expanded", String(open));
   });
   card.appendChild(toggle);
-  card.appendChild(details);
+  card.appendChild(body);
   return card;
 }
 
