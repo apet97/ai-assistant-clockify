@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePeriod } from "../../src/harness/workflows/curated.js";
+import { resolvePeriod } from "../../src/harness/workflows/resolve.js";
 
 const NOW = new Date("2026-06-05T00:00:00.000Z"); // a Friday
 
