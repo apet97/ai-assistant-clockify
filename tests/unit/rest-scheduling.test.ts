@@ -55,12 +55,15 @@ describe("scheduling rest", () => {
     // The recurring PATCH is a full replace — it rejects a body without start/end,
     // so update list-scans the existing assignment and re-sends userId/projectId/start/end.
     // The read-back exposes the period as a nested `period:{start,end}` object.
+    // Per the OpenAPI spec the PATCH responds with an ARRAY of AssignmentDtoV1
+    // (the updated occurrence(s)) — the id comes from its first element.
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
         ? jsonResponse([{ id: "a1", userId: "u1", projectId: "p1", period: { start: "2026-06-01", end: "2026-06-05" }, hoursPerDay: 8 }])
-        : jsonResponse({ id: "a1" }),
+        : jsonResponse([{ id: "a1-updated", userId: "u1" }]),
     );
-    await rest(f as unknown as typeof fetch).updateAssignment("a1", { hoursPerDay: 6, seriesUpdateOption: "ALL" });
+    const updated = await rest(f as unknown as typeof fetch).updateAssignment("a1", { hoursPerDay: 6, seriesUpdateOption: "ALL" });
+    expect(updated).toMatchObject({ id: "a1-updated" });
     const calls = (f as any).mock.calls;
     expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PATCH"]);
     expect(calls[1][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/recurring/a1");

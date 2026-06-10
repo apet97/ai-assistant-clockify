@@ -82,8 +82,11 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
         ...(patch.note !== undefined ? { note: patch.note } : existing.note !== undefined ? { note: existing.note } : {}),
         ...(patch.seriesUpdateOption !== undefined ? { seriesUpdateOption: patch.seriesUpdateOption } : {}),
       };
-      const r = (await core.call("api", "PATCH", `${ws}/scheduling/assignments/recurring/${id}`, body)) as { id?: string } | null;
-      return { id: r?.id ?? id, name: r?.id ?? id };
+      // The PATCH responds with an ARRAY of AssignmentDtoV1 (the updated
+      // occurrence(s)), same as the recurring POST.
+      const r = (await core.call("api", "PATCH", `${ws}/scheduling/assignments/recurring/${id}`, body)) as unknown;
+      const first = ((Array.isArray(r) ? r[0] : r) ?? {}) as { id?: string };
+      return { id: first.id ?? id, name: first.id ?? id };
     },
     async deleteAssignment(id, seriesUpdateOption) {
       const qs = seriesUpdateOption ? `?${new URLSearchParams({ seriesUpdateOption }).toString()}` : "";
