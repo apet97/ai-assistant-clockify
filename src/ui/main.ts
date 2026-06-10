@@ -1,4 +1,5 @@
 import "./styles.css";
+import { isNearBottom } from "./presentation.js";
 import { el, renderClarify, renderPermissionTable, renderPreview, renderReceipt } from "./render.js";
 import {
   type ChatController,
@@ -291,7 +292,9 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // Errors are assertive; the working status is polite (announced as it changes).
   const errorBar = el("div", "error hidden");
   errorBar.setAttribute("role", "alert");
-  const statusBar = el("div", "status hidden");
+  // Visually replaced by the typing indicator (sr-only) but still the live
+  // region that ANNOUNCES "Assistant is working…" — keep its semantics exact.
+  const statusBar = el("div", "status sr-only hidden");
   statusBar.setAttribute("role", "status");
   statusBar.setAttribute("aria-live", "polite");
   root.appendChild(errorBar);
@@ -307,9 +310,30 @@ function mount(root: HTMLElement, api: ChatApi): void {
     errorBar.textContent = "";
     errorBar.classList.add("hidden");
   }
+  // The visible "working" affordance: a transient assistant bubble with three
+  // dots. aria-hidden — the sr-only status bar above does the announcing, so
+  // screen readers hear it once, not twice.
+  const typing = el("div", "message assistant typing");
+  typing.setAttribute("aria-hidden", "true");
+  const typingDots = el("span", "typing-dots");
+  for (let i = 0; i < 3; i += 1) typingDots.appendChild(el("span"));
+  typing.appendChild(typingDots);
+
   function setWorking(working: boolean): void {
     statusBar.textContent = working ? "Assistant is working…" : "";
     statusBar.classList.toggle("hidden", !working);
+    if (working) {
+      const stick = isNearBottom(messages);
+      messages.appendChild(typing);
+      if (stick) messages.scrollTop = messages.scrollHeight;
+    } else {
+      typing.remove();
+    }
+  }
+
+  /** Keep the typing bubble below results that stream in while it shows. */
+  function bumpTyping(): void {
+    if (typing.isConnected) messages.appendChild(typing);
   }
 
   // Assigned in renderChat; clarify chips send their label through this SAME
@@ -317,11 +341,16 @@ function mount(root: HTMLElement, api: ChatApi): void {
   let sendText: (text: string) => Promise<void> = async () => {};
 
   function appendMessage(role: string, text: string): void {
+    // Stickiness is decided BEFORE appending: someone reading older history is
+    // never yanked back down by streamed results; at the bottom the log follows.
+    const stick = isNearBottom(messages);
     messages.appendChild(el("div", `message ${role}`, text));
-    messages.scrollTop = messages.scrollHeight;
+    bumpTyping();
+    if (stick) messages.scrollTop = messages.scrollHeight;
   }
 
   function renderResults(results: ChatResult[]): void {
+    const stick = isNearBottom(messages);
     const previews = results.filter((r): r is PreviewResult => r.kind === "preview");
     if (previews.length > 0)
       messages.appendChild(renderPreview(previews, { controller, showError, appendMessage, renderResults }));
@@ -330,7 +359,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
       else if (result.kind === "clarify")
         messages.appendChild(renderClarify(result, { sendText: (text) => void sendText(text) }));
     }
-    messages.scrollTop = messages.scrollHeight;
+    bumpTyping();
+    if (stick) messages.scrollTop = messages.scrollHeight;
   }
 
   function renderChat(): void {
@@ -351,13 +381,15 @@ function mount(root: HTMLElement, api: ChatApi): void {
     sendText = async (text: string): Promise<void> => {
       if (busy || !text) return; // one-at-a-time guard (Enter/chip while working can't double-submit)
       appendMessage("user", text);
+      messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
       clearError();
       // Streaming: harness results render as they arrive, then the truthful reply.
       await submitStreaming(api, text, {
         onWorking: (working) => {
           busy = working;
-          setWorking(working); // announces "Assistant is working…" to screen readers
+          setWorking(working); // announces "Assistant is working…" + shows the typing dots
           send.disabled = working;
+          input.disabled = working;
           form.setAttribute("aria-busy", String(working));
           if (!working) input.focus(); // return focus to the composer after the turn
         },
