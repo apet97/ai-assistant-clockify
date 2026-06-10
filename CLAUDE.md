@@ -12,7 +12,7 @@ durable agentic loop (default ON) + the 322-prompt live-loop fix arc + a live
 regression re-run in the embedded chat (all fixed flows passed; verified vs UI
 AND the audit DB) + a measured quality pass (2026-06-10: truth/dead-code/fake
 drift; notes in `~/Downloads/ai-assistant-quality-pass-NOTES.md`).
-`npm run verify` = **828 tests**, `npx madge --circular
+`npm run verify` = **843 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`. Remaining work is **human-gated only**:
 1. **Stable hosting** — quick-tunnel URL rotates; needs a Cloudflare zone
