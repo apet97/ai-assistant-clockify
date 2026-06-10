@@ -5,7 +5,7 @@ import type Database from "better-sqlite3";
  * timestamps are ISO-8601 UTC strings, and every admin-scoped row carries
  * workspace_id + admin_user_id.
  */
-export const SCHEMA_STATEMENTS: string[] = [
+const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS installations (
     workspace_id TEXT PRIMARY KEY,
     addon_id TEXT NOT NULL,

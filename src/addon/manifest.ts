@@ -15,8 +15,8 @@ import {
  * endpoints the backend serves.
  */
 export const ADDON_KEY = "ai-assistant";
-export const ADDON_NAME = "AI Assistant";
-export const COMPONENT_PATH = "/component/assistant";
+const ADDON_NAME = "AI Assistant";
+const COMPONENT_PATH = "/component/assistant";
 export const ICON_PATH = "/icon.svg";
 
 /**
@@ -32,7 +32,7 @@ export const ADDON_ICON_SVG =
   '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>' +
   '<path d="M12 8v4M12 15.5h.01M9.5 10.5h5" stroke-width="1.6"/></svg>';
 
-export const LIFECYCLE_PATHS = {
+const LIFECYCLE_PATHS = {
   installed: "/lifecycle/installed",
   statusChanged: "/lifecycle/status-changed",
   deleted: "/lifecycle/deleted",

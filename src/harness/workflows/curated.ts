@@ -16,11 +16,6 @@ import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
  * group adds best-effort).
  */
 
-// The period vocabulary + resolver live in resolve.ts (the planner emits these
-// keywords as plain date values too — e.g. entries_list start="last_7_days" —
-// so the shared date resolvers need them). Re-exported here for existing imports.
-export { REPORT_PERIODS, resolvePeriod, type ReportPeriod } from "./resolve.js";
-
 const DAY_MS = 86_400_000;
 
 function nowDate(ctx: ActionContext): Date {

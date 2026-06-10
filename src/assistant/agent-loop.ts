@@ -22,7 +22,7 @@ import type { ModelClient, ModelMessage, ToolCall, ToolCompletion, ToolDefinitio
 /** Max model round-trips per turn before we stop and answer truthfully. */
 export const DEFAULT_MAX_STEPS = 6;
 /** Max tool calls honored from a single model turn (guards pathological output). */
-export const DEFAULT_MAX_TOOL_CALLS_PER_STEP = 8;
+const DEFAULT_MAX_TOOL_CALLS_PER_STEP = 8;
 /**
  * Byte budget for ONE tool result fed back to the model. Receipts are unbounded
  * (a PDF export carries base64; a list receipt grows with the workspace; a
@@ -60,7 +60,7 @@ function pruneValue(value: unknown): unknown {
  * to a head sample so read-then-act can still pick ids) and, if still over the
  * budget, its `data` is replaced wholesale with an honest note.
  */
-export function capToolResultForModel(receipt: SuccessReceipt | ErrorReceipt): string {
+function capToolResultForModel(receipt: SuccessReceipt | ErrorReceipt): string {
   const full = JSON.stringify(receipt);
   if (Buffer.byteLength(full, "utf8") <= TOOL_RESULT_MAX_BYTES) return full;
 

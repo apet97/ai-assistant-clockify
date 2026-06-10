@@ -22,9 +22,9 @@ export interface AppDeps {
   now?: () => Date;
 }
 
-export const SESSION_COOKIE = "ai_assistant_session";
+const SESSION_COOKIE = "ai_assistant_session";
 
-export function parseCookies(header: string | undefined): Record<string, string> {
+function parseCookies(header: string | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   if (!header) return out;
   for (const part of header.split(";")) {

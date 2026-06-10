@@ -11,7 +11,7 @@ import type { RiskLabel } from "./risk.js";
  * an opaque nonce whose hash must match the stored hash.
  */
 
-export const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_TTL_MS = 5 * 60 * 1000;
 
 export type PendingStatus =
   | "pending"

@@ -14,7 +14,7 @@ import { canWrite, type AdminPolicy, type FeatureGroup } from "./permissions.js"
  * undo re-checks write policy for every affected group and denies the whole undo if
  * any is disabled — it never half-reverses on a policy boundary.
  */
-export const REVERSIBLE_ENTITY_GROUP: Record<string, FeatureGroup> = {
+const REVERSIBLE_ENTITY_GROUP: Record<string, FeatureGroup> = {
   project: "work_structure",
   client: "work_structure",
   task: "work_structure",
