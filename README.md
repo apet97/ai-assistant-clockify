@@ -70,7 +70,7 @@ stays a thin, replaceable translator:
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
-  reaches for instead of scrambling ~115 primitives.
+  reaches for instead of scrambling 136 primitives.
 - **Operational metrics** (`GET /api/metrics`) and a **planner eval harness**
   (`scripts/eval-planner.ts`) that scores the planner's accuracy *and* run-to-run
   consistency over a real corpus.

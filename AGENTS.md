@@ -11,8 +11,8 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **823 tests**, 0 circular deps. Done + on `main`:
-- **Full Clockify REST parity** (~115 typed catalog actions, 16 areas, 3 hosts).
+verify` is green at **828 tests**, 0 circular deps. Done + on `main`:
+- **Full Clockify REST parity** (136 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
   NDJSON streaming).
@@ -149,7 +149,6 @@ npm run dev           # tsx src/server.ts (needs env)
 - Node 20+ (this machine: only Node 26 runs → `better-sqlite3` is pinned `^12`).
 - Live Clockify is wired via the REST adapter `src/clockify/rest-workspace.ts`
   (the `WorkspaceClient` port over the REST API, `X-Addon-Token` in production).
-  The `clockify-sdk-ts-115` wrapper is unbuilt and not on the request path.
   Tests use the fake. Live checks are opt-in against a sacrificial workspace:
   `scripts/live-full.ts` (exhaustive, API key), `scripts/live-sweep.ts` (cleanup),
   `scripts/live-smoke.ts` (small), `scripts/addon-smoke.ts` (production add-on
