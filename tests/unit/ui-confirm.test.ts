@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  batchItemOutcomes,
   settleConfirmOutcome,
   submitConfirmStream,
   type ConfirmHooks,
@@ -167,5 +168,28 @@ describe("submitConfirmStream (streaming single confirm)", () => {
     const failing: ConfirmStreamApi = { confirmStream: async () => { throw new Error("network"); } };
     await submitConfirmStream(failing, { previewId: "p1", nonce: "n1" }, hooks);
     expect(events.some((e) => e.startsWith("error:"))).toBe(true);
+  });
+});
+
+describe("batchItemOutcomes (per-item truth on the settled batch card)", () => {
+  it("maps each label to its response: ok → Confirmed, failure → the server's message verbatim", () => {
+    const out = batchItemOutcomes(
+      ["Delete tag Old", "Archive project Apollo"],
+      [okReceipt, { ok: false, code: "policy_denied", message: "Write access to projects is disabled." } as ConfirmResponse],
+    );
+    expect(out).toEqual([
+      { label: "Delete tag Old", ok: true, detail: "Confirmed" },
+      { label: "Archive project Apollo", ok: false, detail: "Write access to projects is disabled." },
+    ]);
+  });
+
+  it("a failure without a message falls back honestly", () => {
+    const out = batchItemOutcomes(["Delete tag Old"], [{ ok: false } as ConfirmResponse]);
+    expect(out).toEqual([{ label: "Delete tag Old", ok: false, detail: "Confirmation failed." }]);
+  });
+
+  it("a missing response never invents success", () => {
+    const out = batchItemOutcomes(["A", "B"], [okReceipt]);
+    expect(out[1]).toEqual({ label: "B", ok: false, detail: "No response." });
   });
 });

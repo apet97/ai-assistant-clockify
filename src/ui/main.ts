@@ -26,6 +26,16 @@ export type {
   ConfirmStreamApi,
   StreamEvent,
 } from "./shared.js";
+export {
+  batchItemOutcomes,
+  expiryView,
+  formatCountdown,
+  humanizeGroup,
+  isNearBottom,
+  levelLabel,
+  msUntil,
+} from "./presentation.js";
+export type { BatchItemOutcome, ExpiryView } from "./presentation.js";
 
 /**
  * Vanilla TS chat UI (frontend rules: no framework). The testable core is the

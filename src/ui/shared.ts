@@ -37,7 +37,17 @@ export interface PreviewResult {
   kind: "preview";
   previewId: string;
   nonce: string;
-  preview: { actionLabel: string; expectedChanges: string[]; reversibility: string; warnings: string[] };
+  /** ISO expiry of the one-use nonce (advisory for the UI; the server enforces). */
+  expiresAt?: string;
+  preview: {
+    actionLabel: string;
+    expectedChanges: string[];
+    reversibility: string;
+    warnings: string[];
+    featureGroup?: string;
+    riskLabels?: string[];
+    targets?: Array<{ type: string; id: string; name?: string }>;
+  };
 }
 
 export interface ReceiptResult {
