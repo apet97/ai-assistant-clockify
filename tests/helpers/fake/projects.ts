@@ -23,9 +23,9 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
         const needle = filter.name.toLowerCase();
         rows = rows.filter((p) => p.name.toLowerCase().includes(needle));
       }
-      if (filter?.archived !== undefined) {
-        rows = rows.filter((p) => Boolean(p.archived) === filter.archived);
-      }
+      // The real adapter always wires archived=false unless asked (rest/projects.ts).
+      const archived = filter?.archived ?? false;
+      rows = rows.filter((p) => Boolean(p.archived) === archived);
       if (filter?.clientIds?.length) {
         rows = rows.filter((p) => p.clientId !== undefined && filter.clientIds?.includes(p.clientId));
       }

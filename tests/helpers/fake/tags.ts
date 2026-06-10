@@ -13,9 +13,9 @@ export function makeFakeTags({ state, bump, nextId }: FakeContext): Pick<
         const needle = filter.name.toLowerCase();
         rows = rows.filter((t) => t.name.toLowerCase().includes(needle));
       }
-      if (filter?.archived !== undefined) {
-        rows = rows.filter((t) => Boolean(t.archived) === filter.archived);
-      }
+      // The real adapter always wires archived=false unless asked (rest/tags.ts).
+      const archived = filter?.archived ?? false;
+      rows = rows.filter((t) => Boolean(t.archived) === archived);
       return rows;
     },
     async getTag(id) {
