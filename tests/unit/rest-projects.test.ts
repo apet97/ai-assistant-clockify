@@ -55,6 +55,16 @@ describe("project rest", () => {
     expect(await rest(miss as unknown as typeof fetch).getProject("pX")).toBeNull();
   });
 
+  it("maps the spec's `billable` flag — the old map DROPPED it, so 'is X billable?' couldn't answer (live item 069)", async () => {
+    const hit = vi.fn(async () => jsonResponse({ id: "p1", name: "Site", billable: true }));
+    const project = await rest(hit as unknown as typeof fetch).getProject("p1");
+    expect(project?.billable).toBe(true);
+
+    const list = vi.fn(async () => jsonResponse([{ id: "p1", name: "Site", billable: false }]));
+    const projects = await rest(list as unknown as typeof fetch).listProjects();
+    expect(projects[0].billable).toBe(false);
+  });
+
   it("createProject POSTs only the provided fields", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "p9", name: "New", clientId: "c1" }));
     const p = await rest(f as unknown as typeof fetch).createProject({

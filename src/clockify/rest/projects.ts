@@ -16,6 +16,7 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     name: p.name,
     clientId: p.clientId,
     archived: p.archived,
+    billable: p.billable,
   });
 
   return {

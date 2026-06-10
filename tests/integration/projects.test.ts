@@ -433,6 +433,17 @@ describe("project actions — name→id resolution at preview time (live-loop FI
     expect(fake.counts.archiveProject).toBe(1);
   });
 
+  it("clockify_projects_get carries the billable flag so 'is X billable?' is answerable (live item 069)", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website", billable: true }] });
+    const result = await executeAction({
+      actionName: "clockify_projects_get",
+      args: { id: "p1" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a read receipt");
+    expect((result.receipt.data as { entity: { billable?: boolean } }).entity.billable).toBe(true);
+  });
+
   it("clockify_projects_get fetches by name when no id is given", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({
