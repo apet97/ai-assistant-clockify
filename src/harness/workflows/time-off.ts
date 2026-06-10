@@ -235,12 +235,31 @@ const createRequest = defineRiskyAction({
       ...(args.halfDay !== undefined ? { halfDay: args.halfDay } : {}),
       ...(args.note !== undefined ? { note: args.note } : {}),
     };
+    // Surface a short balance before confirm: Clockify rejects an over-balance
+    // request with the misleading "Value for number of days is not allowed", so
+    // the constraint must be visible in the PREVIEW (Phase 4 discipline). The
+    // balance read is best-effort — a failure never blocks the request.
+    const requestedDays =
+      args.days ??
+      (args.halfDay ? 0.5 : Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1);
+    const warnings = ["This submits a request that notifies approvers."];
+    try {
+      const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
+      const policyBalance = balances.find((b) => b.policyId === args.policyId)?.balance;
+      if (policyBalance !== undefined && requestedDays > policyBalance) {
+        warnings.push(
+          `This requests ${requestedDays} day(s) but the policy balance is ${policyBalance} — Clockify will likely reject it (its error reads "Value for number of days is not allowed"). Top up the balance or shorten the request.`,
+        );
+      }
+    } catch {
+      // Balance unavailable — submit as before; Clockify itself remains the gate.
+    }
     return {
       actionLabel: "Submit time-off request",
       targets: [{ type: "time_off_policy", id: args.policyId }],
       expectedChanges: [`Request time off ${start} → ${end} under policy ${args.policyId}`],
       reversibility: "You can delete the request afterward.",
-      warnings: ["This submits a request that notifies approvers."],
+      warnings,
       payload: { policyId: args.policyId, input },
     };
   },

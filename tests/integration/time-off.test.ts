@@ -139,3 +139,30 @@ describe("time-off date normalization (live-loop FIX 2: the literal 'next Monday
     expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
   });
 });
+
+describe("time-off balance surfaced in the preview (live-loop FIX 4a: a zero-balance workspace 400s misleadingly)", () => {
+  it("requests_create WARNS when the requested days exceed the policy balance", async () => {
+    const fake = createFakeWorkspace({
+      ...seed(),
+      timeOffBalances: [{ policyId: "pol1", policyName: "PTO", balance: 0, used: 0, total: 0 }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "pol1", start: "2026-07-01", end: "2026-07-03" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.preview.warnings.some((w) => /balance/i.test(w))).toBe(true);
+  });
+
+  it("requests_create does NOT add the balance warning when the balance covers the request", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "pol1", start: "2026-07-01", end: "2026-07-03" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.preview.warnings.some((w) => /balance/i.test(w))).toBe(false);
+  });
+});

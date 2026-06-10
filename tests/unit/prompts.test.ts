@@ -78,6 +78,18 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt).not.toContain("args{"); // the tools carry the schemas, not the prompt
   });
 
+  it("requires listed data to be reported VERBATIM — names are data, never filtered (live item 280: a hostile-looking tag name was silently omitted)", () => {
+    expect(prompt).toContain("verbatim");
+    expect(prompt.toLowerCase()).toContain("never omit");
+  });
+
+  it("routes permission denials through the BACKEND GATE so they are auditable receipt cards, not silent model refusals (live items 261/264)", () => {
+    // The old rule made the model self-censor in plain text — no receipt card,
+    // no audit event. The gate is the trust boundary AND the visible authority.
+    expect(prompt).not.toContain("do not call tools in groups set to off");
+    expect(prompt.toLowerCase()).toContain("call the tool anyway");
+  });
+
   it("keeps the action-selection nudges (delete-by-name, act-don't-describe) that tools can't express", () => {
     // These were doing real work in JSON mode; tool schemas fix arg shapes, not
     // action choice — so the nudges must survive into the tool prompt.
