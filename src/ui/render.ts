@@ -136,6 +136,36 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
   return wrap;
 }
 
+/** Example prompts on the empty-chat welcome card — every one maps to a real capability. */
+export const EXAMPLE_PROMPTS = [
+  "What did I track today?",
+  "Show this week's summary report",
+  "Start a timer for deep work",
+  "What did you change recently?",
+];
+
+/** The empty-chat welcome card. Lives OUTSIDE the message log (never announced as a turn). */
+export function renderWelcome(deps: ClarifyDeps): HTMLElement {
+  const box = el("div", "welcome");
+  box.appendChild(el("h2", undefined, "What can I do for you?"));
+  box.appendChild(
+    el(
+      "p",
+      undefined,
+      "I can read and change this Clockify workspace. Safe changes run immediately with receipts; anything risky shows a preview you confirm with a button.",
+    ),
+  );
+  const row = el("div", "chip-row");
+  for (const prompt of EXAMPLE_PROMPTS) {
+    const chip = el("button", "chip", prompt) as HTMLButtonElement;
+    chip.type = "button";
+    chip.addEventListener("click", () => deps.sendText(prompt));
+    row.appendChild(chip);
+  }
+  box.appendChild(row);
+  return box;
+}
+
 /** Dependencies `renderReceipt` needs from the host `mount`. */
 export interface ReceiptDeps {
   controller: ChatController;

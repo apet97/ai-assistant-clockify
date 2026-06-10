@@ -1,6 +1,6 @@
 import "./styles.css";
 import { isNearBottom } from "./presentation.js";
-import { el, renderClarify, renderPermissionTable, renderPreview, renderReceipt } from "./render.js";
+import { el, renderClarify, renderPermissionTable, renderPreview, renderReceipt, renderWelcome } from "./render.js";
 import {
   type ChatController,
   type ChatResult,
@@ -380,6 +380,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     // confirmation endpoint.
     sendText = async (text: string): Promise<void> => {
       if (busy || !text) return; // one-at-a-time guard (Enter/chip while working can't double-submit)
+      chat.querySelector(".welcome")?.remove(); // the conversation has started
       appendMessage("user", text);
       messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
       clearError();
@@ -407,6 +408,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
       await sendText(text);
     });
     chat.appendChild(form);
+    // First visit: a welcome card with example prompts, ABOVE the message log
+    // (outside the live region, so it is never announced as a turn).
+    if (messages.childElementCount === 0) {
+      chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+    }
     chat.classList.remove("hidden");
     input.focus();
   }
