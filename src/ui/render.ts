@@ -10,6 +10,7 @@
  * (type-check + the vite build are the safety nets); keep these builders exact.
  */
 
+import { expiryView } from "./presentation.js";
 import {
   featureGroupRows,
   settleConfirmOutcome,
@@ -32,6 +33,31 @@ export function el(tag: string, className?: string, text?: string): HTMLElement 
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+
+// Inline stroke icons, built via createElementNS (NEVER innerHTML).
+export const ICON_CHECK = "M5 13l4 4L19 7";
+export const ICON_X = "M6 6l12 12M18 6L6 18";
+export const ICON_ALERT = "M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z";
+export const ICON_CLOCK = "M12 8v4l2.5 2.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
+export const ICON_CHEVRON = "M9 6l6 6-6 6";
+export const ICON_GEAR = "M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M8 15v4";
+export const ICON_UNDO = "M3 7v6h6M3 13a9 9 0 1 0 3-7.7";
+
+export function svgIcon(pathD: string): SVGSVGElement {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(NS, "path");
+  path.setAttribute("d", pathD);
+  svg.appendChild(path);
+  return svg;
 }
 
 export function renderPermissionTable(
@@ -181,50 +207,133 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   const card = el("div", "preview-card");
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", batch ? `${previews.length} changes awaiting confirmation` : "Change awaiting confirmation");
+
+  // Header: what's pending, how risky, and how long the one-use preview lasts.
+  const head = el("div", "preview-head");
+  head.appendChild(svgIcon(ICON_CLOCK));
+  head.appendChild(
+    el("strong", undefined, batch ? `${previews.length} changes awaiting confirmation` : previews[0].preview.actionLabel),
+  );
+  for (const risk of [...new Set(previews.flatMap((p) => p.preview.riskLabels ?? []))]) {
+    head.appendChild(el("span", `badge risk${risk === "destructive" ? " risk-destructive" : ""}`, risk.split("_").join(" ")));
+  }
+  // The countdown is ADVISORY (the server's TTL stays authoritative). A batch
+  // shows its earliest deadline — one card, one Confirm all, one honest clock.
+  const expiries = previews.map((p) => p.expiresAt).filter((e): e is string => typeof e === "string");
+  const minExpiry = expiries.length > 0 ? expiries.reduce((a, b) => (a < b ? a : b)) : undefined;
+  const initialView = expiryView(minExpiry, Date.now());
+  let countdown: HTMLElement | undefined;
+  if (initialView) {
+    countdown = el("span", "countdown", initialView.label);
+    countdown.setAttribute("aria-hidden", "true"); // a ticking live region would be hostile
+    head.appendChild(countdown);
+  }
+  card.appendChild(head);
+
   for (const preview of previews) {
     const block = el("div", "preview");
-    block.appendChild(el("strong", undefined, preview.preview.actionLabel));
+    if (batch) block.appendChild(el("strong", undefined, preview.preview.actionLabel));
+    const targets = (preview.preview.targets ?? []).map((t) => t.name ?? t.id);
+    if (targets.length > 0) block.appendChild(el("div", "targets", `Target: ${targets.join(", ")}`));
     const changes = el("ul");
     for (const change of preview.preview.expectedChanges) {
       changes.appendChild(el("li", undefined, change));
     }
     block.appendChild(changes);
     block.appendChild(el("em", "reversibility", preview.preview.reversibility));
+    // Surface the harness's preview warnings (the "$0 caveat" class) — they
+    // exist precisely so the admin sees them BEFORE confirming.
+    for (const warning of preview.preview.warnings ?? []) {
+      block.appendChild(el("p", "warning", warning));
+    }
     card.appendChild(block);
   }
+
   const actions = el("div", "buttons");
   const refs: PreviewRef[] = previews.map((p) => ({ previewId: p.previewId, nonce: p.nonce }));
   const confirmButton = el("button", "primary", batch ? "Confirm all" : "Confirm") as HTMLButtonElement;
+  const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel") as HTMLButtonElement;
+  const setButtons = (disabled: boolean): void => {
+    confirmButton.disabled = disabled;
+    cancelButton.disabled = disabled;
+  };
+
+  // Expiry lifecycle: tick once a second while the card is connected; at zero
+  // the buttons die and the card says why. The server re-checks regardless —
+  // a stale click gets its verbatim 400 expired / 409 already-used message.
+  let timer: number | undefined;
+  const stopTimer = (): void => {
+    if (timer !== undefined) window.clearInterval(timer);
+    timer = undefined;
+  };
+  const expire = (): void => {
+    stopTimer();
+    setButtons(true);
+    card.classList.add("expired");
+    if (countdown) {
+      countdown.textContent = "Expired";
+      countdown.classList.add("expired-pill");
+    }
+    card.appendChild(el("p", "expired-note", "This preview expired — ask the assistant to prepare it again."));
+    card.appendChild(el("p", "sr-only", "Preview expired")); // one polite announcement via the log region
+  };
+  if (initialView && countdown) {
+    if (initialView.expired) {
+      expire();
+    } else {
+      timer = window.setInterval(() => {
+        if (!card.isConnected) {
+          stopTimer(); // self-cleanup on any removal path
+          return;
+        }
+        const view = expiryView(minExpiry, Date.now());
+        if (!view) return;
+        countdown!.textContent = view.label;
+        if (view.expired) expire();
+      }, 1000);
+    }
+  }
+
   const confirmHooks: ConfirmHooks = {
     onAssistant: (text) => appendMessage("assistant", text),
     onResults: renderResults,
     onError: showError,
   };
   confirmButton.addEventListener("click", async () => {
-    confirmButton.disabled = true;
+    // One-use: neither button may fire again (or cross-fire) once clicked.
+    setButtons(true);
     if (batch) {
       // Batch ("Confirm all") is single-turn only (agentic mode interrupts at the
       // first risky write, so it never produces a batch) — plain JSON, settled
       // truthfully: a failed confirm shows its message, never "Confirmed."
       try {
         const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
+        stopTimer();
         card.remove();
         settleConfirmOutcome(responses, confirmHooks);
       } catch {
         showError("Confirmation failed.");
-        confirmButton.disabled = false;
+        setButtons(false);
       }
       return;
     }
     // Single confirm STREAMS: the committed receipt renders immediately (the
     // button never feels dead), then the durable resume streams its continuation
     // — receipts, a chained preview, and the truthful reply — as it runs.
+    stopTimer();
     card.remove();
     await submitConfirmStream(controller, refs[0], confirmHooks);
   });
-  const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel") as HTMLButtonElement;
   cancelButton.addEventListener("click", async () => {
-    for (const ref of refs) await controller.cancel(ref.previewId);
+    setButtons(true);
+    try {
+      for (const ref of refs) await controller.cancel(ref.previewId);
+    } catch {
+      showError("Cancel failed.");
+      setButtons(false);
+      return;
+    }
+    stopTimer();
     card.remove();
     appendMessage("assistant", "Cancelled.");
   });
