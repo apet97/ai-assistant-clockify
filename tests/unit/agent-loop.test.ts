@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runAgentTurn, type AgentTurnResult } from "../../src/assistant/agent-loop.js";
+import { runAgentTurn, TOOL_RESULT_MAX_BYTES, type AgentTurnResult } from "../../src/assistant/agent-loop.js";
 import type { ActionResult } from "../../src/harness/action.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
@@ -217,5 +217,64 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
     expect(result.kind).toBe("interrupt");
     // Only the read step is emitted; the risky preview is returned, not streamed as a step.
     expect(steps).toEqual(["s1"]);
+  });
+
+  it("caps a huge tool-result receipt before it reaches the model transcript (live: a PDF-export receipt stalled the session)", async () => {
+    const model = scriptedToolModel([
+      { text: "", toolCalls: [{ id: "c1", name: "clockify_invoices_export", arguments: {} }] },
+      { text: "Done.", toolCalls: [] },
+    ]);
+    const fat = successReceipt({
+      action: "clockify_invoices_export",
+      data: { base64: "A".repeat(400_000), contentType: "application/pdf" },
+    });
+    const runAction = vi.fn(async (): Promise<ActionResult> => ({ kind: "receipt", receipt: fat }));
+    const result = await runAgentTurn({ modelClient: model, messages: userTurn("export it"), tools: NO_TOOLS, runAction });
+
+    expect(result.kind).toBe("final");
+    const toolMsg = model.calls[1].messages.find((m) => m.role === "tool");
+    if (!toolMsg) throw new Error("expected a tool message in the second call's transcript");
+    expect(Buffer.byteLength(toolMsg.content, "utf8")).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
+    // Still valid JSON, still says what happened, and admits the truncation.
+    const parsed = JSON.parse(toolMsg.content);
+    expect(parsed.ok).toBe(true);
+    expect(toolMsg.content).toContain("truncated");
+  });
+
+  it("prunes oversized list receipts to a head sample so read-then-act still works", async () => {
+    const model = scriptedToolModel([
+      { text: "", toolCalls: [{ id: "c1", name: "clockify_entries_list", arguments: {} }] },
+      { text: "Done.", toolCalls: [] },
+    ]);
+    const items = Array.from({ length: 2_000 }, (_, i) => ({
+      id: `e${i}`,
+      description: `entry ${i} ${"x".repeat(50)}`,
+    }));
+    const runAction = vi.fn(async (): Promise<ActionResult> => ({
+      kind: "receipt",
+      receipt: successReceipt({ action: "clockify_entries_list", data: { count: items.length, items } }),
+    }));
+    const result = await runAgentTurn({ modelClient: model, messages: userTurn("list"), tools: NO_TOOLS, runAction });
+
+    expect(result.kind).toBe("final");
+    const toolMsg = model.calls[1].messages.find((m) => m.role === "tool");
+    if (!toolMsg) throw new Error("expected a tool message");
+    expect(Buffer.byteLength(toolMsg.content, "utf8")).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
+    const parsed = JSON.parse(toolMsg.content);
+    // The head of the list survives (the model can still pick ids), the count is intact.
+    expect(parsed.data.items[0]).toMatchObject({ id: "e0" });
+    expect(parsed.data.count).toBe(2_000);
+  });
+
+  it("leaves a small tool-result receipt byte-identical", async () => {
+    const model = scriptedToolModel([
+      { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_list", arguments: {} }] },
+      { text: "Done.", toolCalls: [] },
+    ]);
+    const small = successReceipt({ action: "clockify_tags_list", data: { items: [{ id: "t1", name: "urgent" }] } });
+    const runAction = vi.fn(async (): Promise<ActionResult> => ({ kind: "receipt", receipt: small }));
+    await runAgentTurn({ modelClient: model, messages: userTurn("list"), tools: NO_TOOLS, runAction });
+    const toolMsg = model.calls[1].messages.find((m) => m.role === "tool");
+    expect(toolMsg?.content).toBe(JSON.stringify(small));
   });
 });

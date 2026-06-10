@@ -8,6 +8,8 @@ import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
 import { DEFAULT_MAX_STEPS, EXHAUSTED_TEXT } from "../../src/assistant/agent-loop.js";
+import { HISTORY_WINDOW_MESSAGES } from "../../src/routes/api.js";
+import { verifySessionCookie } from "../../src/auth/sessions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
@@ -670,5 +672,45 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(confirm.body.receipt.ok).toBe(true);
     expect(confirm.body.resume).toBeUndefined();
     expect(fake.counts.deleteTag).toBe(1);
+  });
+});
+
+describe("model-visible history window (live-loop FIX 3: the session must stay responsive at item 300)", () => {
+  it("sends only the window to the model even when the session has hundreds of stored messages", async () => {
+    const fake = createFakeWorkspace();
+    const { app, model, cookie, store } = await makeApp([{ text: "Hi!", toolCalls: [] }], fake);
+
+    // Recover the route's sessionId from the signed cookie and stuff the session
+    // with 300 stored messages (the loop reached 650 live).
+    const claims = verifySessionCookie(decodeURIComponent(cookie.split("=").slice(1).join("=")), "test-session-secret");
+    if (!claims) throw new Error("could not decode the test session cookie");
+    for (let i = 0; i < 300; i += 1) {
+      store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        role: i % 2 === 0 ? "user" : "assistant",
+        content: `filler message ${i}`,
+      });
+    }
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "list tags" });
+    expect(res.status).toBe(200);
+
+    const seen = model.calls[0].messages;
+    // system prompt + at most HISTORY_WINDOW_MESSAGES of history (the new user
+    // message is inside the window).
+    expect(seen.length).toBeLessThanOrEqual(1 + HISTORY_WINDOW_MESSAGES);
+    expect(seen[0].role).toBe("system");
+    // The window holds the MOST RECENT history; ancient filler is gone.
+    expect(seen.some((m) => m.content === "filler message 299")).toBe(true);
+    expect(seen.some((m) => m.content === "filler message 0")).toBe(false);
+    expect(seen[seen.length - 1].content).toBe("list tags");
+
+    // The STORED history stays complete — only the model-visible window shrinks.
+    expect(store.getRecentMessages(claims.sessionId, 1000).length).toBeGreaterThanOrEqual(301);
   });
 });

@@ -44,6 +44,16 @@ const groupsPatchSchema = z
 const chatBodySchema = z.object({ message: z.string().min(1) });
 const confirmBodySchema = z.object({ nonce: z.string().min(1) });
 
+/**
+ * How many stored chat messages (user + assistant turns, newest first) are sent
+ * to the model each turn. The STORED history is complete — this only bounds the
+ * model-visible window, so a marathon session (the live loop stored 650
+ * messages in one session) keeps a constant-size prompt. Receipts/payloads are
+ * never part of this history; the agent loop separately byte-caps tool results
+ * (see TOOL_RESULT_MAX_BYTES).
+ */
+export const HISTORY_WINDOW_MESSAGES = 12;
+
 /** Idempotency window: re-confirming the same intent within this is deduped. */
 const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
 
@@ -493,7 +503,7 @@ export function apiRouter(deps: AppDeps): Router {
     });
 
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
-    const history = deps.store.getRecentMessages(claims.sessionId, 12);
+    const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES);
     const messages: ModelMessage[] = history
       .filter((m) => m.role !== "system")
       .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
