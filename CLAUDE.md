@@ -2,7 +2,75 @@
 
 Read this first in every Claude Code session.
 
-## Handoff note — 2026-06-10 (322-prompt live-loop fixes)
+## Handoff note — 2026-06-10 PM (loop-failure resolution: ALL 322 items closed)
+
+The full triage+fix pass over `~/Downloads/ai-assistant-loop-failures.md` is
+DONE: the checklist (`~/Downloads/ai-assistant-loop-checklist.md`) now reads
+**322/322 `[x]`** — every pre-fix item re-verified against a green pin (test
+name + fix commit noted inline), every post-fix defect fixed strict-TDD.
+`npm run verify` = **820 tests**, madge 0, all pushed; the dev server was
+restarted via `scripts/dev-tunnel.sh sync` (URL UNCHANGED — the embedded
+install keeps working). Nine focused commits:
+
+- **`3cb3bdc` (item 305)** — `resolveEntityRef` gained `includeArchived`:
+  delete/archive/unarchive verbs resolve ARCHIVED entities by name (the wire
+  defaults to active-only, so both states are fetched explicitly; archived
+  candidates are labeled in clarifies). Wired: projects delete/archive/
+  unarchive, clients, tags, tasks_delete's project ref.
+- **`0639087` (items 091/096, found in triage)** — the LAST name-as-id holes:
+  the GENERIC `clockify_update_entity`/`delete_entity` now resolve
+  project/client/tag identity at preview, and `projects_update` resolves a
+  client NAME in the `clientId` slot (empty-string unassign passes through).
+- **`5a68577` (items 304/316)** — recaps stop confabulating: new read action
+  `assistant_recent_outcomes` (buildMetrics over the caller's audited
+  outcomes, 24h default window; `ActionContext.recentOutcomes` capability
+  injected by the route) + prompt rule: "what did you do / what failed" MUST
+  call it, never answer from windowed chat memory.
+- **`5f45409` (item 321)** — forward ranges: `next_week`/`next_month`/
+  `next_quarter`/`next_year` resolve to full forward windows at every
+  `resolveInstant` consumer (scheduling/entries/reports/period_report).
+- **`0a22ac6` (items 318 + 011 + the 210/276 "missing buttons")** — the model
+  parroted the stored truthful-preview boilerplate as its own answer with ZERO
+  tool calls; `sanitizeStoredReplyForModel` rewrites it to a neutral note in
+  the MODEL-VISIBLE history only (stored history byte-identical) + prompt rule
+  "text alone performs nothing". The buttonless-"preview" sightings were this
+  class (no real preview row existed — DB-confirmed), not a UI bug.
+- **`93c3221` (items 180/186/248)** — the add-on token class restriction
+  (webhooks ALL, custom-field CREATE) surfaces at PREVIEW as an honest
+  platform-restriction clarify (new `WorkspaceClient.authClass` set by the
+  REST adapter; API-key/dev flows untouched); descriptions name the
+  restriction so "why can't you…" answers truthfully.
+- **`f88ac33` (item 069)** — ProjectDtoV1.billable (spec-verified) was DROPPED
+  by the REST map; project reads now carry it.
+- **`222a040` (item 058)** — "add me to project X": memberships_update gained
+  `addUserIds` with "me" → `ctx.adminUserId`, MERGED into the current set via
+  new port method `getProjectMemberships` (the PATCH replaces; a naive add
+  would drop members); project resolves by name.
+- **`78f8a57` (item 157)** — a bare typed "yes/confirm/do it" while a preview
+  is pending NEVER reaches the planner (live it planned a NEW operation):
+  deterministic reply points at the Confirm button; store gained
+  `countPendingConfirmations`. Scoped — "yes" with nothing pending still goes
+  to the model.
+- **`7952622` (item 176)** + **`4d9f2e0` (items 139/287)** — expense categories
+  archive/unarchive by name (the status PATCH the delete already used,
+  spec-verified); items_add description says an amount alone is enough; prompt
+  rule for "call the API directly with your token" (explain tool-only, never
+  holds tokens, offer the closest tool action).
+
+Triage attribution (no code change needed, marked inline in the checklist):
+the name-as-id, date, context-overflow, policy-denial/verbatim and wire-shape
+clusters were re-verified against the five prior fix commits' pins; 065/244
+are model-judgment items made safe by the preview gate; 187 was test data
+("1111" never existed); 053/276's "executed without Confirm" claims were
+DISPROVEN against the backend DB — the safety core held throughout.
+
+**Next live re-run focus:** the newly-fixed flows end-to-end in the embedded
+chat — archived-entity deletes by name, "add me to project X", typed-"yes" at
+a pending preview, "what failed today?", "archive category X", webhook/custom-
+field create (expect the honest restriction at preview), scheduling "next
+month".
+
+## Handoff note (prior) — 2026-06-10 (322-prompt live-loop fixes)
 
 A 322-prompt live test loop against the embedded add-on
 (`~/Downloads/ai-assistant-loop-checklist.md` per-item state,
