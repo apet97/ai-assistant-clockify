@@ -34,7 +34,13 @@ async function resolveTaskRef(
 > {
   const project = await resolveEntityRef(
     { id: refs.projectId, name: refs.projectName },
-    { noun: "project", verb, list: () => ctx.clockify.listProjects() },
+    {
+      noun: "project",
+      verb,
+      list: (filter) => ctx.clockify.listProjects(filter),
+      // A task delete may target a task inside an ARCHIVED project.
+      includeArchived: verb === "delete",
+    },
   );
   if (!project.ok) return project;
   const task = await resolveEntityRef(

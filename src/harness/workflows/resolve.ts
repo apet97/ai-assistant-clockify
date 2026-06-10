@@ -13,30 +13,41 @@ export type NameMatch<T> =
 /** Most "did you mean?" options to offer when a named entity isn't found. */
 const MAX_SUGGESTIONS = 12;
 
+/** A clarify option label that flags archived candidates so duplicates are tellable apart. */
+function optionLabel(item: { name: string; archived?: boolean }): string {
+  return item.archived ? `${item.name} (archived)` : item.name;
+}
+
 /**
  * Build grounded "did you mean one of these?" clarify options from the candidates
  * already fetched (Phase 4 — a clarify offers options, never "go list them
- * yourself"). Prefers names containing the query; falls back to all active
- * candidates; excludes archived; capped. Empty when there are none to offer.
+ * yourself"). Prefers names containing the query; falls back to all candidates;
+ * excludes archived unless `includeArchived` (destructive/archive verbs may
+ * legitimately target archived entities — live item 305); capped. Empty when
+ * there are none to offer.
  */
 export function suggestOptions<T extends { id: string; name: string; archived?: boolean }>(
   items: T[],
   query: string,
+  opts?: { includeArchived?: boolean },
 ): ClarifyOption[] {
-  const active = items.filter((item) => !item.archived);
+  const candidates = opts?.includeArchived ? items : items.filter((item) => !item.archived);
   const q = query.trim().toLowerCase();
-  const contains = q ? active.filter((item) => item.name.toLowerCase().includes(q)) : [];
-  const pool = contains.length > 0 ? contains : active;
-  return pool.slice(0, MAX_SUGGESTIONS).map((item) => ({ id: item.id, label: item.name }));
+  const contains = q ? candidates.filter((item) => item.name.toLowerCase().includes(q)) : [];
+  const pool = contains.length > 0 ? contains : candidates;
+  return pool.slice(0, MAX_SUGGESTIONS).map((item) => ({ id: item.id, label: optionLabel(item) }));
 }
 
 export function matchByName<T extends { name: string; archived?: boolean }>(
   items: T[],
   name: string,
+  opts?: { includeArchived?: boolean },
 ): NameMatch<T> {
   const target = name.trim().toLowerCase();
   const matches = items.filter(
-    (item) => !item.archived && item.name.trim().toLowerCase() === target,
+    (item) =>
+      (opts?.includeArchived || !item.archived) &&
+      item.name.trim().toLowerCase() === target,
   );
   if (matches.length === 0) return { kind: "none" };
   if (matches.length === 1) return { kind: "one", entity: matches[0] };
@@ -57,6 +68,25 @@ export type ResolveEntityResult<T> =
   | { ok: true; id: string; name?: string; entity?: T }
   | { ok: false; clarify: RiskyClarifyResult };
 
+/** The archived filter the WorkspaceClient list methods accept. */
+export type ArchivedFilter = { archived?: boolean };
+
+/**
+ * Fetch active + archived entities explicitly — the real list adapters default
+ * to ACTIVE-ONLY on the wire, so an includeArchived resolution must ask for
+ * both states. Deduped by id in case a backend ignores the filter.
+ */
+async function listBothArchivedStates<T extends { id: string }>(
+  list: (filter?: ArchivedFilter) => Promise<T[]>,
+): Promise<T[]> {
+  const [active, archived] = await Promise.all([
+    list({ archived: false }),
+    list({ archived: true }),
+  ]);
+  const seen = new Set(active.map((item) => item.id));
+  return [...active, ...archived.filter((item) => !seen.has(item.id))];
+}
+
 /**
  * Resolve a possibly-symbolic entity reference to a real id at PREVIEW time, so
  * an identity mistake becomes a clarify — never a confirmed-then-failed commit.
@@ -66,39 +96,51 @@ export type ResolveEntityResult<T> =
  *   short ids), then treated as a name.
  * - A `name` resolves via {@link matchByName}; none/many stop and ask, with
  *   grounded "did you mean?" options.
+ * - `includeArchived` lets destructive/archive/unarchive verbs target an
+ *   ARCHIVED entity by name (live item 305: "delete <archived project>" could
+ *   neither match nor suggest it). Create/normal-update resolution stays
+ *   archived-excluding.
  */
 export async function resolveEntityRef<T extends { id: string; name: string; archived?: boolean }>(
   ref: { id?: string; name?: string },
-  opts: { noun: string; verb: string; list: () => Promise<T[]> },
+  opts: {
+    noun: string;
+    verb: string;
+    list: (filter?: ArchivedFilter) => Promise<T[]>;
+    includeArchived?: boolean;
+  },
 ): Promise<ResolveEntityResult<T>> {
   const rawId = ref.id?.trim();
   if (rawId && looksLikeClockifyId(rawId)) return { ok: true, id: rawId, name: ref.name };
   const query = (ref.name ?? rawId ?? "").trim();
-  const items = await opts.list();
+  const includeArchived = opts.includeArchived === true;
+  const items = includeArchived ? await listBothArchivedStates(opts.list) : await opts.list();
   if (rawId) {
     const exact = items.find((item) => item.id === rawId);
     if (exact) return { ok: true, id: exact.id, name: exact.name, entity: exact };
   }
-  const match = matchByName(items, query);
+  const match = matchByName(items, query, { includeArchived });
   if (match.kind === "one") {
     return { ok: true, id: match.entity.id, name: match.entity.name, entity: match.entity };
   }
   if (match.kind === "many") {
+    const qualifier = includeArchived ? "" : "active ";
     return {
       ok: false,
       clarify: {
-        clarify: `More than one active ${opts.noun} is named "${query}". Which one should I ${opts.verb}?`,
-        options: match.matches.map((m) => ({ id: m.id, label: m.name })),
+        clarify: `More than one ${qualifier}${opts.noun} is named "${query}". Which one should I ${opts.verb}?`,
+        options: match.matches.map((m) => ({ id: m.id, label: optionLabel(m) })),
       },
     };
   }
-  const options = suggestOptions(items, query);
+  const options = suggestOptions(items, query, { includeArchived });
+  const article = includeArchived ? (/^[aeiou]/i.test(opts.noun) ? "an" : "a") : "an active";
   return {
     ok: false,
     clarify: {
       clarify: options.length
-        ? `I couldn't find an active ${opts.noun} named "${query}". Did you mean one of these?`
-        : `There is no active ${opts.noun} named "${query}" to ${opts.verb}.`,
+        ? `I couldn't find ${article} ${opts.noun} named "${query}". Did you mean one of these?`
+        : `There is no ${includeArchived ? "" : "active "}${opts.noun} named "${query}" to ${opts.verb}.`,
       options: options.length ? options : undefined,
     },
   };

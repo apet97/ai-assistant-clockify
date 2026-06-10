@@ -161,6 +161,20 @@ describe("task actions — name→id resolution at preview time (live-loop FIX 1
     expect(fake.counts.deleteTask).toBe(1);
   });
 
+  it("clockify_tasks_delete resolves the project by name even when the project is ARCHIVED (live item 305)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p9", name: "Old Project", archived: true }],
+      tasks: [{ id: "t9", name: "Leftover", projectId: "p9" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_tasks_delete",
+      args: { projectName: "Old Project", name: "Leftover" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.operation.payload).toMatchObject({ projectId: "p9", id: "t9" });
+  });
+
   it("clockify_tasks_delete clarifies when the project name itself is unknown", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({

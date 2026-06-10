@@ -94,6 +94,17 @@ describe("client actions", () => {
     expect((inIdSlot.operation.payload as { id: string }).id).toBe("c1");
   });
 
+  it("clockify_clients_delete resolves an ARCHIVED client by name — deleting an archived client is valid (live item 305)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c9", name: "Old Client", archived: true }] });
+    const preview = await executeAction({
+      actionName: "clockify_clients_delete",
+      args: { name: "Old Client" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("c9");
+  });
+
   it("clockify_clients_delete clarifies on no / ambiguous name match", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }, { id: "c2", name: "Acme" }] });
     const ambiguous = await executeAction({

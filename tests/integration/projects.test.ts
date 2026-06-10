@@ -174,6 +174,35 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.deleteProject).toBe(1);
   });
 
+  it("clockify_projects_delete resolves an ARCHIVED project by name — deleting an archived project is valid (live item 305)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p9", name: "Old Thing", archived: true }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_delete",
+      args: { name: "Old Thing" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("p9");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.projects.find((p) => p.id === "p9")).toBeUndefined();
+  });
+
+  it("clockify_projects_update can UNARCHIVE by name — archived:false resolves archived candidates (live item 305)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p9", name: "Old Thing", archived: true }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Old Thing", archived: false },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("p9");
+  });
+
   it("clockify_projects_delete clarifies (not invalid_args) on no / ambiguous name match", async () => {
     const none = await executeAction({
       actionName: "clockify_projects_delete",

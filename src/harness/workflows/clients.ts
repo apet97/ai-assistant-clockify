@@ -93,7 +93,13 @@ const updateClient = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveEntityRef(
       { id: args.id, name: args.currentName },
-      { noun: "client", verb: "update", list: () => ctx.clockify.listClients() },
+      {
+        noun: "client",
+        verb: "update",
+        list: (filter) => ctx.clockify.listClients(filter),
+        // Unarchiving targets an entity that is archived by definition.
+        includeArchived: args.archived === false,
+      },
     );
     if (!resolved.ok) return resolved.clarify;
     const patch: Record<string, unknown> = {
@@ -137,7 +143,9 @@ const deleteClient = defineRiskyAction({
     const resolved = await resolveEntityRef(args, {
       noun: "client",
       verb: "delete",
-      list: () => ctx.clockify.listClients(),
+      list: (filter) => ctx.clockify.listClients(filter),
+      // Deleting an ARCHIVED client is valid (delete archives first anyway).
+      includeArchived: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const name = resolved.name ?? args.name;

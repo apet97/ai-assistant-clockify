@@ -99,6 +99,20 @@ describe("tag actions", () => {
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 
+  it("clockify_tags_delete resolves an ARCHIVED tag by name — deleting an archived tag is valid (live item 305)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t9", name: "Old Tag", archived: true }] });
+    const preview = await executeAction({
+      actionName: "clockify_tags_delete",
+      args: { name: "Old Tag" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("t9");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.tags.find((t) => t.id === "t9")).toBeUndefined();
+  });
+
   it("clockify_tags_delete asks to clarify (not invalid_args) when the name matches no tag", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({ actionName: "clockify_tags_delete", args: { name: "Nope" }, context: makeContext(fake) });

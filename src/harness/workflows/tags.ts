@@ -93,7 +93,13 @@ const updateTag = defineRiskyAction({
     // Ambiguous identity stops and asks.
     const resolved = await resolveEntityRef(
       { id: args.id, name: args.currentName },
-      { noun: "tag", verb: "update", list: () => ctx.clockify.listTags() },
+      {
+        noun: "tag",
+        verb: "update",
+        list: (filter) => ctx.clockify.listTags(filter),
+        // Unarchiving targets an entity that is archived by definition.
+        includeArchived: args.archived === false,
+      },
     );
     if (!resolved.ok) return resolved.clarify;
     const id = resolved.id;
@@ -140,7 +146,9 @@ const deleteTag = defineRiskyAction({
     const resolved = await resolveEntityRef(args, {
       noun: "tag",
       verb: "delete",
-      list: () => ctx.clockify.listTags(),
+      list: (filter) => ctx.clockify.listTags(filter),
+      // Deleting an ARCHIVED tag is valid.
+      includeArchived: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const { id } = resolved;

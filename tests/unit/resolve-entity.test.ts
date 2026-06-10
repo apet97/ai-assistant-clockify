@@ -89,3 +89,75 @@ describe("resolveEntityRef", () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe("resolveEntityRef — includeArchived (destructive/archive verbs, live item 305)", () => {
+  const items = [
+    { id: "p1", name: "Website Redesign" },
+    { id: "p3", name: "Old Site", archived: true },
+  ];
+  const list = async () => items;
+
+  it("resolves an ARCHIVED entity by name (deleting/unarchiving an archived entity is valid)", async () => {
+    const result = await resolveEntityRef(
+      { name: "Old Site" },
+      { noun: "project", verb: "delete", list, includeArchived: true },
+    );
+    expect(result).toMatchObject({ ok: true, id: "p3", name: "Old Site" });
+  });
+
+  it("fetches BOTH archived states explicitly — the real list adapters default to active-only", async () => {
+    const filters: Array<{ archived?: boolean } | undefined> = [];
+    const result = await resolveEntityRef(
+      { name: "Old Site" },
+      {
+        noun: "project",
+        verb: "delete",
+        list: async (filter?: { archived?: boolean }) => {
+          filters.push(filter);
+          if (filter?.archived === true) return [{ id: "p3", name: "Old Site", archived: true }];
+          return [{ id: "p1", name: "Website Redesign" }];
+        },
+        includeArchived: true,
+      },
+    );
+    expect(result).toMatchObject({ ok: true, id: "p3" });
+    expect(filters).toContainEqual({ archived: false });
+    expect(filters).toContainEqual({ archived: true });
+  });
+
+  it("offers archived candidates as did-you-mean options, labeled '(archived)'", async () => {
+    const result = await resolveEntityRef(
+      { name: "Old Sight" },
+      { noun: "project", verb: "delete", list, includeArchived: true },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.options?.map((o) => o.id)).toContain("p3");
+      const archivedLabel = result.clarify.options?.find((o) => o.id === "p3")?.label;
+      expect(archivedLabel).toBe("Old Site (archived)");
+    }
+  });
+
+  it("labels archived duplicates in an ambiguity clarify so the admin can tell them apart", async () => {
+    const dupes = [
+      { id: "a", name: "Focus" },
+      { id: "b", name: "Focus", archived: true },
+    ];
+    const result = await resolveEntityRef(
+      { name: "Focus" },
+      { noun: "tag", verb: "delete", list: async () => dupes, includeArchived: true },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.options?.map((o) => o.label)).toEqual(["Focus", "Focus (archived)"]);
+    }
+  });
+
+  it("keeps EXCLUDING archived entities by default (create/normal-update resolution unchanged)", async () => {
+    const result = await resolveEntityRef(
+      { name: "Old Site" },
+      { noun: "project", verb: "update", list },
+    );
+    expect(result.ok).toBe(false);
+  });
+});

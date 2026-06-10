@@ -156,7 +156,13 @@ const updateProject = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveEntityRef(
       { id: args.id, name: args.currentName },
-      { noun: "project", verb: "update", list: () => ctx.clockify.listProjects() },
+      {
+        noun: "project",
+        verb: "update",
+        list: (filter) => ctx.clockify.listProjects(filter),
+        // Unarchiving targets an entity that is archived by definition.
+        includeArchived: args.archived === false,
+      },
     );
     if (!resolved.ok) return resolved.clarify;
     const { id: _id, currentName: _currentName, ...patch } = args;
@@ -197,7 +203,8 @@ const archiveProject = defineRiskyAction({
     const resolved = await resolveEntityRef(args, {
       noun: "project",
       verb: "archive",
-      list: () => ctx.clockify.listProjects(),
+      list: (filter) => ctx.clockify.listProjects(filter),
+      includeArchived: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const name = resolved.name ?? args.name;
@@ -239,7 +246,9 @@ const deleteProject = defineRiskyAction({
     const resolved = await resolveEntityRef(args, {
       noun: "project",
       verb: "delete",
-      list: () => ctx.clockify.listProjects(),
+      list: (filter) => ctx.clockify.listProjects(filter),
+      // Deleting an ARCHIVED project is valid (delete archives first anyway).
+      includeArchived: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const { id } = resolved;
