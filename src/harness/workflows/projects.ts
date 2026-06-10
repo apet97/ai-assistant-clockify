@@ -167,6 +167,17 @@ const updateProject = defineRiskyAction({
     if (!resolved.ok) return resolved.clarify;
     const { id: _id, currentName: _currentName, ...patch } = args;
     const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+    // A client NAME in the clientId slot resolves to the real id (live item
+    // 096: "assign P4 to client X" previewed the name and failed at commit).
+    // An empty clientId is the unassign sentinel and passes through.
+    if (typeof fields.clientId === "string" && fields.clientId !== "") {
+      const client = await resolveEntityRef(
+        { id: fields.clientId },
+        { noun: "client", verb: "assign", list: (filter) => ctx.clockify.listClients(filter) },
+      );
+      if (!client.ok) return client.clarify;
+      fields.clientId = client.id;
+    }
     return {
       actionLabel: "Update project",
       targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],

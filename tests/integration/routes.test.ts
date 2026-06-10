@@ -73,7 +73,9 @@ beforeAll(async () => {
     addonToken: "addon-token",
   });
   const parser = createSignatureParser(ADDON_KEY, keys.pem);
-  fake = createFakeWorkspace();
+  // The fake model's delete plan targets project p1/Acme — it must exist now
+  // that the generic delete resolves identity at preview time.
+  fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
   app = createApp({
     config,
     store,

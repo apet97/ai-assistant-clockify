@@ -2,11 +2,13 @@ import { z } from "zod";
 import {
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
+import { resolveEntityRef, type ArchivedFilter } from "./resolve.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -41,6 +43,29 @@ const ENTITY_GROUP: Record<(typeof DELETABLE_ENTITY_TYPES)[number], FeatureGroup
   group: "users_groups",
 };
 
+/**
+ * The list call backing name→id resolution for the generic actions' entity
+ * types. The planner sometimes reaches for the GENERIC action with a NAME in
+ * the id slot (live item 091: a client rename via update_entity failed at
+ * commit) — those ids must resolve at preview, exactly like the typed actions.
+ * Other types keep their typed actions (which resolve names themselves).
+ */
+function genericEntityList(
+  ctx: ActionContext,
+  entityType: string,
+): ((filter?: ArchivedFilter) => Promise<{ id: string; name: string; archived?: boolean }[]>) | undefined {
+  switch (entityType) {
+    case "project":
+      return (filter) => ctx.clockify.listProjects(filter);
+    case "client":
+      return (filter) => ctx.clockify.listClients(filter);
+    case "tag":
+      return (filter) => ctx.clockify.listTags(filter);
+    default:
+      return undefined;
+  }
+}
+
 const deleteEntity = defineRiskyAction({
   name: "clockify_delete_entity",
   description: "Delete a Clockify entity. Always previews first and requires confirmation.",
@@ -52,14 +77,25 @@ const deleteEntity = defineRiskyAction({
     name: z.string().optional(),
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    let { id, name } = args;
+    const list = genericEntityList(ctx, args.entityType);
+    if (list) {
+      const resolved = await resolveEntityRef(
+        { id: args.id, name: args.name },
+        { noun: args.entityType, verb: "delete", list, includeArchived: true },
+      );
+      if (!resolved.ok) return resolved.clarify;
+      id = resolved.id;
+      name = resolved.name ?? args.name;
+    }
     return {
       actionLabel: `Delete ${args.entityType}`,
-      targets: [{ type: args.entityType, id: args.id, name: args.name }],
-      expectedChanges: [`Delete ${args.entityType} ${args.name ?? args.id}`],
+      targets: [{ type: args.entityType, id, name }],
+      expectedChanges: [`Delete ${args.entityType} ${name ?? id}`],
       reversibility: "This cannot be undone.",
       warnings: [`Deleting a ${args.entityType} is permanent.`],
-      payload: { entityType: args.entityType, id: args.id, name: args.name },
+      payload: { entityType: args.entityType, id, name },
     };
   },
   async commit(ctx, payload) {
@@ -177,21 +213,38 @@ const updateEntity = defineRiskyAction({
     fields: z.record(z.string(), z.unknown()).optional(),
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
     if (!GENERIC_UPDATE_TYPES.has(args.entityType)) {
       const typed = TYPED_UPDATE_ACTION[args.entityType];
       return {
         clarify: `The generic update can't change a ${args.entityType} — use ${typed ?? "the matching typed action"} instead.`,
       };
     }
-    const fields = { ...(args.name ? { name: args.name } : {}), ...(args.fields ?? {}) };
+    const fields: Record<string, unknown> = {
+      ...(args.name ? { name: args.name } : {}),
+      ...(args.fields ?? {}),
+    };
+    // GENERIC_UPDATE_TYPES are exactly the listable ones — a NAME in the id
+    // slot resolves here (item 091), never reaches the wire. Unarchiving may
+    // target an archived entity.
+    const list = genericEntityList(ctx, args.entityType)!;
+    const resolved = await resolveEntityRef(
+      { id: args.id },
+      {
+        noun: args.entityType,
+        verb: "update",
+        list,
+        includeArchived: fields.archived === false,
+      },
+    );
+    if (!resolved.ok) return resolved.clarify;
     return {
       actionLabel: `Update ${args.entityType}`,
-      targets: [{ type: args.entityType, id: args.id, name: args.name }],
+      targets: [{ type: args.entityType, id: resolved.id, name: resolved.name ?? args.name }],
       expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
       reversibility: "You can update the entity again to revert most fields.",
       warnings: ["Updating an entity changes live workspace data."],
-      payload: { entityType: args.entityType, id: args.id, fields },
+      payload: { entityType: args.entityType, id: resolved.id, fields },
     };
   },
   async commit(ctx, payload) {

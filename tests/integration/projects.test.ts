@@ -378,6 +378,47 @@ describe("project actions — name→id resolution at preview time (live-loop FI
     expect(fake.counts.updateProject ?? 0).toBe(0);
   });
 
+  it("clockify_projects_update resolves a client NAME in the clientId slot (live item 096: 'assign P4 to client X' failed at commit)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      clients: [{ id: "c1", name: "Acme" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Website", clientId: "Acme" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { patch: { clientId: string } }).patch.clientId).toBe("c1");
+  });
+
+  it("clockify_projects_update clarifies on an unknown client name in clientId (never previews a doomed assign)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      clients: [{ id: "c1", name: "Acme" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Website", clientId: "Ghost Client" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+
+  it("clockify_projects_update passes an empty clientId through (unassigning the client)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website", clientId: "c1" }],
+      clients: [{ id: "c1", name: "Acme" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Website", clientId: "" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { patch: { clientId: string } }).patch.clientId).toBe("");
+  });
+
   it("clockify_projects_archive resolves by name and pins the id", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

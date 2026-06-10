@@ -34,14 +34,14 @@ async function previewDelete(fake: FakeWorkspace, policy?: AdminPolicy) {
 
 describe("risky preview + confirmation", () => {
   it("delete returns a preview and does not mutate", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const result = await previewDelete(fake);
     expect(result.preview.riskLabels).toContain("destructive");
     expect(fake.counts.deleteEntity ?? 0).toBe(0);
   });
 
   it("confirm executes the delete exactly once and cannot be replayed", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const preview = await previewDelete(fake);
     const created = createPendingConfirmation({
       sessionId: "sess-1",
@@ -85,7 +85,7 @@ describe("risky preview + confirmation", () => {
   });
 
   it("a typed 'yes' is not a valid confirmation and does not execute", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const preview = await previewDelete(fake);
     const created = createPendingConfirmation({
       sessionId: "sess-1",
@@ -111,7 +111,7 @@ describe("risky preview + confirmation", () => {
   });
 
   it("an expired preview cannot be confirmed", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const preview = await previewDelete(fake);
     const created = createPendingConfirmation({
       sessionId: "sess-1",
@@ -140,7 +140,7 @@ describe("risky preview + confirmation", () => {
   });
 
   it("re-checks policy at confirm time: a write disabled after preview is denied", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const preview = await previewDelete(fake); // built under full policy
     const lowered = defaultAdminPolicy();
     lowered.groups.work_structure = "off";
@@ -204,6 +204,53 @@ describe("expanded risky actions (Phase 3)", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.updateEntity).toBe(1);
+  });
+
+  it("update_entity resolves a NAME in the id slot for its generic types (live item 091: a client rename via the GENERIC action failed at commit)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const preview = await executeAction({
+      actionName: "clockify_update_entity",
+      args: { entityType: "client", id: "Acme", name: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("c1");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.updateEntity).toBe(1);
+  });
+
+  it("update_entity clarifies on an unknown name instead of previewing a doomed commit", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const result = await executeAction({
+      actionName: "clockify_update_entity",
+      args: { entityType: "client", id: "Acmee", name: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateEntity ?? 0).toBe(0);
+  });
+
+  it("delete_entity resolves a NAME in the id slot — including an ARCHIVED entity (items 091/305 class)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t9", name: "Old Tag", archived: true }] });
+    const preview = await executeAction({
+      actionName: "clockify_delete_entity",
+      args: { entityType: "tag", id: "Old Tag" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as { id: string }).id).toBe("t9");
+  });
+
+  it("delete_entity clarifies on an unknown project name instead of sending it to the wire", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const result = await executeAction({
+      actionName: "clockify_delete_entity",
+      args: { entityType: "project", id: "AIASSIST_LOOP_NOPE" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.deleteEntity ?? 0).toBe(0);
   });
 
   it("update_entity CLARIFIES at preview for entity types its adapter can't update — never preview-then-fail-at-commit (live: a confirmed time_entry update died with 'update not supported')", async () => {
