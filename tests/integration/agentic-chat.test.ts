@@ -713,4 +713,52 @@ describe("model-visible history window (live-loop FIX 3: the session must stay r
     // The STORED history stays complete — only the model-visible window shrinks.
     expect(store.getRecentMessages(claims.sessionId, 1000).length).toBeGreaterThanOrEqual(301);
   });
+
+  it("replaces stored truthful-preview boilerplate in PRIOR assistant turns so the model can't learn to parrot it (live item 318)", async () => {
+    const fake = createFakeWorkspace();
+    const { app, model, cookie, store } = await makeApp([{ text: "Hi!", toolCalls: [] }], fake);
+    const claims = verifySessionCookie(decodeURIComponent(cookie.split("=").slice(1).join("=")), "test-session-secret");
+    if (!claims) throw new Error("could not decode the test session cookie");
+
+    // Saturate the visible window with the EXACT deterministic reply this route
+    // stores for pending previews — the live failure shape: the model
+    // reproduced it as its own answer with zero tool calls.
+    for (let i = 0; i < HISTORY_WINDOW_MESSAGES; i += 2) {
+      store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        role: "user",
+        content: `delete tag t${i}`,
+      });
+      store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        role: "assistant",
+        content: 'Review the change below and click "Confirm" to apply it. Nothing has been changed yet.',
+      });
+    }
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete every AIASSIST client" });
+    expect(res.status).toBe(200);
+
+    const seen = model.calls[0].messages;
+    const assistantTurns = seen.filter((m) => m.role === "assistant");
+    expect(assistantTurns.length).toBeGreaterThan(0);
+    for (const turn of assistantTurns) {
+      expect(turn.content).not.toContain('click "Confirm"');
+      expect(turn.content).not.toContain("Review the change below");
+    }
+    // The factual content survives — a pending change existed at that point.
+    expect(assistantTurns.some((m) => (m.content ?? "").includes("button confirmation"))).toBe(true);
+
+    // Only the MODEL-VISIBLE copy is sanitized; the stored history is untouched.
+    expect(
+      store.getRecentMessages(claims.sessionId, 1000).some((m) => m.content.includes('click "Confirm"')),
+    ).toBe(true);
+  });
 });

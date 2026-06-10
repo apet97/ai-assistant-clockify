@@ -104,6 +104,11 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt.toLowerCase()).toContain("rename");
   });
 
+  it("forbids narrating preview-card boilerplate the backend renders (live item 318: the model parroted 'Review the change below…' with zero tool calls)", () => {
+    expect(prompt.toLowerCase()).toContain("preview");
+    expect(prompt.toLowerCase()).toContain("text alone performs nothing");
+  });
+
   it("routes activity-recap questions to assistant_recent_outcomes instead of chat memory (live items 304/316: the recap contradicted the audit log)", () => {
     expect(prompt).toContain("assistant_recent_outcomes");
     expect(prompt.toLowerCase()).toContain("what failed");

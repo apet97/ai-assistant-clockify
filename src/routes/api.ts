@@ -54,6 +54,21 @@ const confirmBodySchema = z.object({ nonce: z.string().min(1) });
  */
 export const HISTORY_WINDOW_MESSAGES = 12;
 
+/**
+ * The deterministic truthful-preview replies this route STORES for pending
+ * previews (`truthfulReplyText`). A session saturated with them taught the
+ * model to parrot the boilerplate as its own answer with zero tool calls
+ * (live item 318) — so the model-visible history rewrites them into a neutral
+ * factual note. The stored history (what the admin saw) is never changed.
+ */
+const PREVIEW_BOILERPLATE =
+  /^(Review the change below and click "Confirm" to apply it\.|I've prepared \d+ changes — review them below and click "Confirm all" to apply\.)/;
+
+export function sanitizeStoredReplyForModel(content: string): string {
+  if (!PREVIEW_BOILERPLATE.test(content)) return content;
+  return "[I prepared a pending change here; it awaited the admin's button confirmation and had not been applied at that point.]";
+}
+
 /** Idempotency window: re-confirming the same intent within this is deduped. */
 const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
 
@@ -510,7 +525,11 @@ export function apiRouter(deps: AppDeps): Router {
     const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES);
     const messages: ModelMessage[] = history
       .filter((m) => m.role !== "system")
-      .map((m) => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.content }));
+      .map((m) =>
+        m.role === "assistant"
+          ? { role: "assistant" as const, content: sanitizeStoredReplyForModel(m.content) }
+          : { role: "user" as const, content: m.content },
+      );
 
     const m = createTurnMachinery(claims, installation, onResult);
 
