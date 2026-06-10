@@ -494,9 +494,12 @@ async function runInvoices(h: LiveHarness): Promise<void> {
     // Real update: clean-body GET-then-PUT changing only the note.
     await h.risky("clockify_invoices_update", { id: invoiceId, note: `AIASSIST_SMOKE note ${h.sfx}` });
     // Sub-resource mutations: preview-only by design (see runInvoices doc).
+    // itemType is OMITTED on purpose: it defaults to the workspace's first
+    // configured invoice item type, so this previews deterministically whether
+    // or not the workspace already has types. Passing a non-configured type
+    // (correctly) yields a did-you-mean clarify, not a preview.
     await h.previewOnly("clockify_invoices_items_add", {
       invoiceId,
-      itemType: "AIASSIST_SMOKE",
       description: "smoke item",
       quantity: 1,
       unitPrice: 1,
