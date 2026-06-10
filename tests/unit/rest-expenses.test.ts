@@ -119,6 +119,15 @@ describe("expense rest", () => {
     expect(form.get("categoryId")).toBe("c1");
   });
 
+  it("setExpenseCategoryArchived PATCHes the spec's /categories/{id}/status route", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    await rest(f as unknown as typeof fetch).setExpenseCategoryArchived("c1", true);
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toContain("/expenses/categories/c1/status");
+    expect(init.method).toBe("PATCH");
+    expect(JSON.parse(init.body)).toEqual({ archived: true });
+  });
+
   it("deleteExpense issues a DELETE", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).deleteExpense("x1");

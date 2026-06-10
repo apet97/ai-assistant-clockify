@@ -302,28 +302,63 @@ const createExpenseCategory = defineRiskyAction({
 
 const updateExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_update",
-  description: "Rename an expense category. Billing action — previews and requires confirmation.",
+  description:
+    "Rename and/or archive/unarchive an expense category. Pass the category `id` or its exact `currentName` (the harness resolves it); `name` sets a new name, `archived` archives (true) or restores (false). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
-  schema: z.object({ id: z.string().min(1), name: z.string().min(1) }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({
+      id: z.string().min(1).optional(),
+      /** The category's existing name, resolved to an id server-side. */
+      currentName: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      archived: z.boolean().optional(),
+    })
+    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
+      message: "Provide the category id or its exact currentName.",
+    })
+    .refine((v) => v.name !== undefined || v.archived !== undefined, {
+      message: "Provide a new name and/or archived.",
+    }),
+  async preview(ctx, args) {
+    // "archive category X" used to render a RENAME preview (live item 176) —
+    // there IS a real archive route (the status PATCH the delete already uses).
+    const resolved = await resolveEntityRef(
+      { id: args.id, name: args.currentName },
+      {
+        noun: "expense category",
+        verb: "update",
+        list: () => ctx.clockify.listExpenseCategories(),
+        // Unarchiving targets an entity that is archived by definition.
+        includeArchived: args.archived === false,
+      },
+    );
+    if (!resolved.ok) return resolved.clarify;
+    const changes = [
+      ...(args.name !== undefined ? [`Rename expense category to "${args.name}"`] : []),
+      ...(args.archived !== undefined
+        ? [`${args.archived ? "Archive" : "Unarchive"} expense category ${resolved.name ?? resolved.id}`]
+        : []),
+    ];
     return {
       actionLabel: "Update expense category",
-      targets: [{ type: "expense_category", id: args.id, name: args.name }],
-      expectedChanges: [`Rename expense category to "${args.name}"`],
-      reversibility: "You can rename the category again to revert.",
+      targets: [{ type: "expense_category", id: resolved.id, name: resolved.name ?? args.name }],
+      expectedChanges: changes,
+      reversibility: "You can update the category again to revert.",
       warnings: ["This changes a workspace expense category."],
-      payload: { id: args.id, name: args.name },
+      payload: { id: resolved.id, name: args.name, archived: args.archived },
     };
   },
   async commit(ctx, payload) {
-    const { id, name } = payload as { id: string; name: string };
-    const category = await ctx.clockify.updateExpenseCategory(id, { name });
+    const { id, name, archived } = payload as { id: string; name?: string; archived?: boolean };
+    let summary: { id: string; name?: string } = { id };
+    if (name !== undefined) summary = await ctx.clockify.updateExpenseCategory(id, { name });
+    if (archived !== undefined) await ctx.clockify.setExpenseCategoryArchived(id, archived);
     return successReceipt({
       action: "clockify_expenses_categories_update",
       entity: "expense_category",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "expense_category", id: category.id, name: category.name }] },
+      changed: { updated: [{ type: "expense_category", id: summary.id, name: summary.name ?? name }] },
     });
   },
 });

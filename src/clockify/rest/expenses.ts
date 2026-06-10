@@ -188,6 +188,9 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       };
       return { id: c?.id ?? id, name: c?.name ?? patch.name ?? id };
     },
+    async setExpenseCategoryArchived(id, archived) {
+      await core.call("api", "PATCH", `${ws}/expenses/categories/${id}/status`, { archived });
+    },
     async deleteExpenseCategory(id) {
       // Clockify rejects deleting an active category ("Category must be archived to
       // be deleted"); archive via PATCH /status, then delete.

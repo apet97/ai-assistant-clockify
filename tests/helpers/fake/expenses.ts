@@ -15,6 +15,7 @@ export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
   | "listExpenseCategories"
   | "createExpenseCategory"
   | "updateExpenseCategory"
+  | "setExpenseCategoryArchived"
   | "deleteExpenseCategory"
 > {
   return {
@@ -86,6 +87,11 @@ export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
       if (index >= 0) state.expenseCategories[index] = updated;
       else state.expenseCategories.push(updated);
       return { id, name: updated.name };
+    },
+    async setExpenseCategoryArchived(id, archived) {
+      bump("setExpenseCategoryArchived");
+      const cat = state.expenseCategories.find((c) => c.id === id);
+      if (cat) cat.archived = archived;
     },
     async deleteExpenseCategory(id) {
       bump("deleteExpenseCategory");

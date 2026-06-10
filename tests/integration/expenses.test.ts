@@ -195,6 +195,34 @@ describe("expense actions", () => {
     expect(fake.state.expenseCategories[0].name).toBe("Travel & Lodging");
   });
 
+  it("categories_update ARCHIVES a category by currentName — 'archive category X' used to preview a RENAME (live item 176)", async () => {
+    const fake = createFakeWorkspace({ expenseCategories: [{ id: "c1", name: "Travel" }] });
+    const preview = await executeAction({
+      actionName: "clockify_expenses_categories_update",
+      args: { currentName: "Travel", archived: true },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.preview.expectedChanges.join(" ")).toMatch(/archive/i);
+    expect(preview.preview.expectedChanges.join(" ")).not.toMatch(/rename/i);
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.expenseCategories[0].archived).toBe(true);
+    expect(fake.counts.setExpenseCategoryArchived).toBe(1);
+  });
+
+  it("categories_update UNARCHIVES an archived category by name (the archived target must resolve)", async () => {
+    const fake = createFakeWorkspace({ expenseCategories: [{ id: "c1", name: "Travel", archived: true }] });
+    const preview = await executeAction({
+      actionName: "clockify_expenses_categories_update",
+      args: { currentName: "Travel", archived: false },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.state.expenseCategories[0].archived).toBe(false);
+  });
+
   it("clockify_expenses_categories_delete previews destructive+billing then deletes", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_expenses_categories_delete", args: { id: "c1", name: "Travel" }, context: makeContext(fake) });
