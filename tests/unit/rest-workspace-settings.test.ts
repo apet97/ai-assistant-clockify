@@ -9,11 +9,13 @@ const rest = (fetchImpl: typeof fetch) =>
   makeWorkspaceRest(createRestCore({ apiBase: "https://api.clockify.me/api/v1", auth: { apiKey: "k" }, fetchImpl }), "ws-1");
 
 describe("workspace & template rest", () => {
-  it("getWorkspace finds the current workspace in GET /workspaces", async () => {
-    const f = vi.fn(async () => jsonResponse([{ id: "ws-1", name: "Acme", currencies: [{ code: "GBP", isDefault: true }] }, { id: "ws-2", name: "Other" }]));
+  it("getWorkspace GETs the single workspace path — the account-level GET /workspaces list 401s 'API is not accessible' for add-on tokens (probed live), the scoped GET works", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "ws-1", name: "Acme", currencies: [{ code: "GBP", isDefault: true }] }));
     const ws = (await rest(f as unknown as typeof fetch).getWorkspace()) as any;
     expect(ws).toMatchObject({ id: "ws-1", name: "Acme" });
-    expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces");
+    expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1");
+    const miss = vi.fn(async () => jsonResponse({ message: "no" }, 404));
+    expect(await rest(miss as unknown as typeof fetch).getWorkspace()).toBeNull();
   });
 
   it("listTemplates GETs /projects?is-template=true and maps", async () => {

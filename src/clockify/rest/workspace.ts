@@ -10,17 +10,18 @@ function mapTemplate(raw: any): EntitySummary {
 
 /**
  * Typed workspace & project-template REST module (goclmcp §2.16–2.17). I/O only.
- * `getWorkspace` reads the workspace list (`GET /workspaces`) and returns the
- * current one; templates are projects flagged `is-template=true`.
+ * `getWorkspace` GETs the single workspace path: the account-level
+ * `GET /workspaces` list 401s "API is not accessible" for ADD-ON tokens (they
+ * are bound to one workspace; probed live 2026-06-10) while the scoped
+ * `GET /workspaces/{id}` returns the full body on the same token. Templates are
+ * projects flagged `is-template=true`.
  */
 export function makeWorkspaceRest(core: RestCore, workspaceId: string): WorkspacePort {
   const ws = `/workspaces/${workspaceId}`;
 
   return {
     async getWorkspace() {
-      const rows = (await core.call("api", "GET", "/workspaces")) as any[] | null;
-      const found = (Array.isArray(rows) ? rows : []).find((w) => w.id === workspaceId);
-      return found ?? null;
+      return (await core.call("api", "GET", ws, undefined, true)) ?? null;
     },
     async listTemplates() {
       const rows = (await core.call("api", "GET", `${ws}/projects?is-template=true`)) as any[] | null;

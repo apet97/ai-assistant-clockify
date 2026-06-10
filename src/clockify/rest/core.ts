@@ -132,6 +132,16 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     if (res.status === 404 && allow404) return null;
     if (!res.ok) {
       const text = await res.text();
+      // Clockify refuses some endpoint FAMILIES for add-on tokens regardless of
+      // manifest scopes — no scope exists to grant them (probed live 2026-06-10:
+      // webhooks, custom-field management, account-level GET /workspaces). Name
+      // the restriction instead of surfacing a bare 401; API-key auth keeps the
+      // raw error so dev scripts see the unmapped truth.
+      if (res.status === 401 && "X-Addon-Token" in authHeader && text.includes("API is not accessible")) {
+        throw new Error(
+          `Clockify does not allow add-ons to call ${method} ${path} — this endpoint is outside the add-on token's reach regardless of manifest scopes.`,
+        );
+      }
       throw new Error(`Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     }
     if (res.status === 204) return null;

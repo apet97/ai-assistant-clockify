@@ -100,6 +100,26 @@ describe("rest core host routing + auth", () => {
     await expect(core.call("api", "GET", "/missing")).rejects.toThrow(/404/);
   });
 
+  it("maps the add-on token's 401 'API is not accessible' to an actionable restriction message (probed live: webhooks + custom-field management are outside the add-on token's reach regardless of scopes)", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => res({ message: "API is not accessible.", code: 401 }, 401)) as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "GET", "/workspaces/ws-1/webhooks")).rejects.toThrow(
+      /Clockify does not allow add-ons to call/,
+    );
+  });
+
+  it("keeps the raw 401 for API-key auth (dev scripts must see the unmapped truth)", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () => res({ message: "API is not accessible.", code: 401 }, 401)) as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "GET", "/workspaces/ws-1/webhooks")).rejects.toThrow(/401: .*API is not accessible/);
+  });
+
   it("paginate loops page/page-size until a short page and concatenates rows", async () => {
     const page1 = Array.from({ length: 200 }, (_, i) => ({ id: `p${i}` }));
     const fetchImpl = vi

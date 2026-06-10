@@ -583,7 +583,17 @@ platform constraint** or a **human-gated launch item** (hosting, prod security/c
   lists instead of updating~~ **FIXED (2026-06-10):** the cause was structural —
   `tags_update` REQUIRED an id, so the model couldn't rename by name; it now resolves
   `currentName` server-side (the delete-by-name pattern) + the prompt names the rename
-  case. Still open: `webhooks_list`/`workspace_get` 401 on the dev host (likely dev-only).
+  case. ~~`webhooks_list`/`workspace_get` 401 on the dev host (likely dev-only)~~
+  **CHARACTERIZED + PARTLY FIXED (2026-06-10, probed with the install's own add-on
+  token):** NOT dev-only — Clockify refuses some endpoint families for the ADD-ON
+  TOKEN CLASS regardless of manifest scopes (the generated scope schema has no
+  webhook scope at all, and the manifest already declares every scope that exists).
+  Blocked for add-ons: **webhooks (all), custom-fields CREATE (management), the
+  account-level `GET /workspaces`**. Custom-fields LIST works. `workspace_get` is
+  FIXED (now uses the workspace-scoped `GET /workspaces/{id}`, which works on the
+  add-on token). The blocked calls now fail with an honest "Clockify does not allow
+  add-ons to call …" receipt (mapped in `core.call`; API-key dev scripts still see
+  the raw 401).
 - **Model choice:** not the bottleneck. `deepseek-v4-pro` (current) and the `gemini-cli`
   backend behave similarly on the above; a swap won't change the schema-guessing or the
   invoice-item-type limits. Switch backends via `LLM_PROVIDER` (see above) only for
