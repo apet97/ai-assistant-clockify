@@ -10,7 +10,7 @@
  * (type-check + the vite build are the safety nets); keep these builders exact.
  */
 
-import { batchItemOutcomes, expiryView } from "./presentation.js";
+import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
 import {
   featureGroupRows,
   settleConfirmOutcome,
@@ -62,22 +62,27 @@ export function svgIcon(pathD: string): SVGSVGElement {
 
 export function renderPermissionTable(
   policy: PolicyShape,
-  onSave: (groups: Record<string, string>) => void,
+  onSave: (groups: Record<string, string>) => Promise<boolean>,
 ): HTMLElement {
   const table = el("table", "permissions");
   table.setAttribute("aria-label", "Assistant permissions by feature group");
+  const headRow = el("tr");
+  headRow.appendChild(el("th", undefined, "Feature group"));
+  headRow.appendChild(el("th", undefined, "Access"));
+  table.appendChild(headRow);
   const selections: Record<string, string> = {};
   for (const { group, level } of featureGroupRows(policy)) {
     selections[group] = level;
+    const label = humanizeGroup(group);
     const row = el("tr");
-    row.appendChild(el("td", "group", group));
+    row.appendChild(el("td", "group", label));
     const select = document.createElement("select");
     // Each control names its own group so a screen reader reads them in context.
-    select.setAttribute("aria-label", `Permission level for ${group}`);
+    select.setAttribute("aria-label", `Permission level for ${label}`);
     for (const option of PERMISSION_LEVELS) {
       const opt = document.createElement("option");
-      opt.value = option;
-      opt.textContent = option;
+      opt.value = option; // the wire value stays raw — only the display text is humanized
+      opt.textContent = levelLabel(option);
       if (option === level) opt.selected = true;
       select.appendChild(opt);
     }
@@ -90,10 +95,26 @@ export function renderPermissionTable(
     table.appendChild(row);
   }
   const saveButton = el("button", "primary", "Save permissions") as HTMLButtonElement;
-  saveButton.addEventListener("click", () => onSave({ ...selections }));
+  const saveStatus = el("span", "save-status");
+  saveStatus.setAttribute("role", "status"); // "Saved" is announced, not just shown
+  saveButton.addEventListener("click", async () => {
+    saveButton.disabled = true;
+    saveStatus.textContent = "Saving…";
+    let saved = false;
+    try {
+      saved = await onSave({ ...selections });
+    } catch {
+      saved = false;
+    }
+    saveButton.disabled = false;
+    saveStatus.textContent = saved ? "Saved" : ""; // failures speak through the error bar
+  });
+  const footer = el("div", "permission-footer");
+  footer.appendChild(saveButton);
+  footer.appendChild(saveStatus);
   const wrapper = el("div", "permission-panel");
   wrapper.appendChild(table);
-  wrapper.appendChild(saveButton);
+  wrapper.appendChild(footer);
   return wrapper;
 }
 

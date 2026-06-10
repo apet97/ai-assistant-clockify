@@ -1,6 +1,15 @@
 import "./styles.css";
 import { isNearBottom } from "./presentation.js";
-import { el, renderClarify, renderPermissionTable, renderPreview, renderReceipt, renderWelcome } from "./render.js";
+import {
+  el,
+  ICON_GEAR,
+  renderClarify,
+  renderPermissionTable,
+  renderPreview,
+  renderReceipt,
+  renderWelcome,
+  svgIcon,
+} from "./render.js";
 import {
   type ChatController,
   type ChatResult,
@@ -277,10 +286,20 @@ function mount(root: HTMLElement, api: ChatApi): void {
   root.replaceChildren();
   const header = el("header", "app-header");
   header.appendChild(el("h1", undefined, "AI Assistant"));
+  // Settings (assistant permissions). Hidden until the chat is up, so the
+  // first-run setup flow can't be bypassed mid-way.
+  const settingsButton = el("button", "icon-button hidden") as HTMLButtonElement;
+  settingsButton.type = "button";
+  settingsButton.setAttribute("aria-label", "Assistant permissions");
+  settingsButton.setAttribute("aria-expanded", "false");
+  settingsButton.setAttribute("aria-controls", "permissions-panel");
+  settingsButton.appendChild(svgIcon(ICON_GEAR));
+  header.appendChild(settingsButton);
   root.appendChild(header);
 
   const setup = el("section", "setup hidden");
-  setup.setAttribute("aria-label", "Set up assistant permissions");
+  setup.id = "permissions-panel";
+  setup.setAttribute("aria-label", "Assistant permissions");
   const chat = el("section", "chat hidden");
   chat.setAttribute("aria-label", "Assistant chat");
   // The message log is a live region so a screen reader announces new turns.
@@ -414,37 +433,77 @@ function mount(root: HTMLElement, api: ChatApi): void {
       chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
     }
     chat.classList.remove("hidden");
+    settingsButton.classList.remove("hidden");
     input.focus();
   }
+
+  function closePermissions(): void {
+    setup.classList.add("hidden");
+    chat.classList.remove("hidden");
+    settingsButton.setAttribute("aria-expanded", "false");
+    settingsButton.focus();
+  }
+
+  /**
+   * The permissions panel — the first-run setup and the gear's settings reopen
+   * are the SAME panel + the same GET/confirm endpoints; only the copy and the
+   * exit path differ. Always re-fetches so the table shows the current policy.
+   */
+  async function openPermissions(firstRun: boolean): Promise<void> {
+    try {
+      const perms = (await api.getPermissions()) as PermissionsResponse;
+      setup.replaceChildren();
+      setup.appendChild(
+        el("h2", undefined, firstRun ? "Set up your assistant permissions" : "Assistant permissions"),
+      );
+      setup.appendChild(
+        el(
+          "p",
+          undefined,
+          firstRun
+            ? "Defaults grant full read & write for every group. Adjust if you like, then start."
+            : "The assistant can only do what these levels allow. Changes apply as soon as you save.",
+        ),
+      );
+      setup.appendChild(
+        renderPermissionTable(perms.policy, async (groups) => {
+          try {
+            await controller.savePermissions(groups);
+            if (firstRun) {
+              setup.classList.add("hidden");
+              renderChat();
+            }
+            return true; // reopen: stay open so the inline "Saved" is visible
+          } catch {
+            showError("Could not save permissions.");
+            return false;
+          }
+        }),
+      );
+      if (!firstRun) {
+        const close = el("button", "secondary", "Close") as HTMLButtonElement;
+        close.type = "button";
+        close.addEventListener("click", closePermissions);
+        setup.appendChild(close);
+        chat.classList.add("hidden");
+        settingsButton.setAttribute("aria-expanded", "true");
+      }
+      setup.classList.remove("hidden");
+    } catch {
+      showError("Could not load the assistant.");
+    }
+  }
+
+  settingsButton.addEventListener("click", () => {
+    if (setup.classList.contains("hidden")) void openPermissions(false);
+    else closePermissions();
+  });
 
   async function init(): Promise<void> {
     try {
       const perms = (await api.getPermissions()) as PermissionsResponse;
-      if (perms.firstRun) {
-        setup.replaceChildren();
-        setup.appendChild(el("h2", undefined, "Set up your assistant permissions"));
-        setup.appendChild(
-          el(
-            "p",
-            undefined,
-            "Defaults grant full read & write for every group. Adjust if you like, then start.",
-          ),
-        );
-        setup.appendChild(
-          renderPermissionTable(perms.policy, async (groups) => {
-            try {
-              await controller.savePermissions(groups);
-              setup.classList.add("hidden");
-              renderChat();
-            } catch {
-              showError("Could not save permissions.");
-            }
-          }),
-        );
-        setup.classList.remove("hidden");
-      } else {
-        renderChat();
-      }
+      if (perms.firstRun) await openPermissions(true);
+      else renderChat();
     } catch {
       showError("Could not load the assistant.");
     }
