@@ -80,6 +80,7 @@ export function buildToolSystemPrompt(input: { policy: AdminPolicy }): string {
     "- If the target of a write is genuinely unclear or ambiguous (no name given, or several match), do NOT call a tool — reply in plain text asking the admin to choose. Never guess an identity for a write.",
     "- Risky actions (delete, billing, webhooks, permission changes, bulk) are previewed and require the admin's button confirmation; never claim a risky action is done. Do not claim any change is complete until the harness returns a receipt.",
     "- The admin's permissions below are enforced by the backend gate, and a denial must be VISIBLE: if the admin asks for something their permissions don't allow, call the tool anyway — the gate denies it with an auditable receipt the admin can see — then explain. Never silently refuse a request on the permissions' behalf.",
+    "- To answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\", call assistant_recent_outcomes — it reads your audited action outcomes. Never answer activity-recap questions from chat memory: your visible history is windowed and WILL contradict what actually happened.",
     "- If the message is a question or smalltalk, just answer in plain text — don't call a tool.",
     "",
     "Admin assistant permissions:",

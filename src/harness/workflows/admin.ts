@@ -9,6 +9,7 @@ import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
 import { resolveEntityRef, type ArchivedFilter } from "./resolve.js";
+import { buildMetrics } from "../../metrics/metrics.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -270,6 +271,37 @@ const updateEntity = defineRiskyAction({
   },
 });
 
+const recentOutcomes = defineReadAction({
+  name: "assistant_recent_outcomes",
+  description:
+    "Summarize what the assistant actually DID, from the audited action outcomes: per-action success/failure counts, error codes, and confirm/cancel rates. Use this to answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\" — never answer activity-recap questions from chat memory.",
+  group: "workspace_settings",
+  schema: z
+    .object({
+      /** Window in hours (default 24 — \"today\"); resolved server-side from ctx.now. */
+      sinceHours: z.number().int().positive().max(24 * 30).optional(),
+    })
+    .strip(),
+  async handler(ctx, args) {
+    if (!ctx.recentOutcomes) {
+      return errorReceipt({
+        action: "assistant_recent_outcomes",
+        code: "unsupported",
+        message: "Action outcomes are not available in this context.",
+      });
+    }
+    const now = ctx.now?.() ?? new Date();
+    const sinceIso = new Date(now.getTime() - (args.sinceHours ?? 24) * 3_600_000).toISOString();
+    const { outcomes, confirmationStatuses } = ctx.recentOutcomes(sinceIso);
+    return successReceipt({
+      action: "assistant_recent_outcomes",
+      entity: "action_outcomes",
+      ids: { workspaceId: ctx.workspaceId },
+      data: { since: sinceIso, metrics: buildMetrics(outcomes, confirmationStatuses, now.toISOString()) },
+    });
+  },
+});
+
 const showPermissions = defineReadAction({
   name: "assistant_show_permissions",
   description: "Show the caller's own assistant permissions for this workspace. Read-only.",
@@ -290,4 +322,5 @@ export const ADMIN_ACTIONS: ActionDefinition[] = [
   updatePermissions,
   updateEntity,
   showPermissions,
+  recentOutcomes,
 ];

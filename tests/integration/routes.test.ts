@@ -22,6 +22,13 @@ const modelClient: ModelClient = {
   async complete(messages) {
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const text = lastUser?.content ?? "";
+    if (text.toLowerCase().includes("what failed")) {
+      return JSON.stringify({
+        kind: "actions",
+        text: "Here is what actually happened.",
+        actions: [{ name: "assistant_recent_outcomes", arguments: {} }],
+      });
+    }
     if (text.toLowerCase().includes("delete")) {
       return JSON.stringify({
         // The model optimistically (and falsely) claims it already executed — the
@@ -153,6 +160,20 @@ describe("routes", () => {
       .send({ nonce: "whatever" });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe("not_found");
+  });
+
+  it("recap questions read the AUDIT LOG through assistant_recent_outcomes — the route wires the capability (live items 304/316)", async () => {
+    const cookie = await adminCookie();
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "what failed today?" });
+    expect(res.status).toBe(200);
+    const receipt = res.body.results.find((r: { kind: string }) => r.kind === "receipt");
+    expect(receipt).toBeDefined();
+    expect(receipt.receipt.ok).toBe(true);
+    expect(receipt.receipt.data.metrics.totals).toBeDefined();
+    expect(Array.isArray(receipt.receipt.data.metrics.byAction)).toBe(true);
   });
 
   it("a pending preview never reports the risky action as done — reply text is truthful", async () => {

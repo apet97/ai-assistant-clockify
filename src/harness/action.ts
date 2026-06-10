@@ -3,6 +3,7 @@ import type { AdminPolicy, FeatureGroup } from "./permissions.js";
 import type { RiskLabel } from "./risk.js";
 import type { EntityRef, ErrorReceipt, SuccessReceipt } from "./receipts.js";
 import type { WorkspaceClient } from "../clockify/client.js";
+import type { ActionOutcome } from "../metrics/metrics.js";
 
 /**
  * Action contracts and the typed `defineAction` helper. This is a leaf module
@@ -24,6 +25,13 @@ export interface ActionContext {
    * store, so the permission action's commit can be self-contained.
    */
   savePolicy?(policy: AdminPolicy): void;
+  /**
+   * Read the caller's OWN audited action outcomes + confirmation statuses since
+   * an ISO instant; provided by the route which owns the store. Lets the recap
+   * action answer "what did you do / what failed" from the audit log instead of
+   * windowed chat memory (live items 304/316: recaps contradicted the log).
+   */
+  recentOutcomes?(sinceIso?: string): { outcomes: ActionOutcome[]; confirmationStatuses: string[] };
 }
 
 /**

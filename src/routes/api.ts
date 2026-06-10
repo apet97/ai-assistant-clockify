@@ -86,6 +86,10 @@ export function apiRouter(deps: AppDeps): Router {
       clockify: deps.clockifyForWorkspace(installation),
       now,
       savePolicy: (policy) => deps.store.upsertAdminPolicy(workspaceId, adminUserId, policy),
+      recentOutcomes: (sinceIso) => ({
+        outcomes: deps.store.listActionOutcomes(workspaceId, adminUserId, sinceIso),
+        confirmationStatuses: deps.store.listConfirmationOutcomes(workspaceId, adminUserId, sinceIso),
+      }),
     };
   }
 
