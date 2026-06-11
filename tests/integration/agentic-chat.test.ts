@@ -132,6 +132,36 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 
+  // safety-invariants-05: the raw one-use confirmation nonce must live ONLY in
+  // the live HTTP response/page state, per confirmations.ts ("only its hash is
+  // stored"). It must NEVER be durably persisted in chat_messages.payload_json.
+  it("never persists the raw confirmation nonce in the stored chat message (only the live response carries it)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie, store } = await makeApp(
+      [{ text: "Deleting the tag now.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    expect(res.status).toBe(200);
+    const preview = previewsOf(res.body.results as ResultItem[])[0];
+    // The live response DOES carry the nonce (the page needs it to confirm).
+    expect(preview.nonce).toBeTruthy();
+
+    const claims = verifySessionCookie(decodeURIComponent(cookie.split("=").slice(1).join("=")), "test-session-secret");
+    if (!claims) throw new Error("could not decode the test session cookie");
+    const stored = store
+      .getRecentMessages(claims.sessionId, 1000)
+      .filter((m) => m.role === "assistant")
+      .at(-1);
+    expect(stored).toBeDefined();
+    // The persisted payload keeps the preview metadata but NOT the raw nonce.
+    expect(JSON.stringify(stored?.payload ?? null)).not.toContain(preview.nonce as string);
+    const storedPreview = (stored?.payload as { results?: ResultItem[] })?.results?.find((r) => r.kind === "preview");
+    expect(storedPreview?.previewId).toBe(preview.previewId);
+    expect((storedPreview as { nonce?: string } | undefined)?.nonce).toBeUndefined();
+  });
+
   it("reads executed before the interrupt are kept as receipts alongside the preview", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, cookie } = await makeApp(
