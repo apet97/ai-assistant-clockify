@@ -33,38 +33,46 @@ export interface AppConfig {
   geminiModel?: string;
 }
 
-const envSchema = z
-  .object({
-    NODE_ENV: z.string().min(1).optional(),
-    PORT: z.coerce.number().int().positive(),
-    BASE_URL: z.string().min(1),
-    CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
-    CLOCKIFY_ADDON_KEY: z.string().min(1),
-    SESSION_SECRET: z.string().min(1),
-    DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
-    DATABASE_PATH: z.string().min(1),
-    // The HTTP provider needs base/key/model; the gemini-cli provider needs none
-    // (it uses the authenticated CLI), so these are optional here and enforced
-    // below only for the http provider.
-    LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
-    LLM_MODE: z.enum(["tool", "json"]).default("tool"),
-    // Default ON: the durable agentic loop is the proven default (live PASS=10,
-    // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
-    LLM_AGENTIC: z.enum(["0", "1"]).default("1"),
-    LLM_BASE_URL: z.string().min(1).optional(),
-    LLM_API_KEY: z.string().min(1).optional(),
-    LLM_MODEL: z.string().min(1).optional(),
-    GEMINI_MODEL: z.string().min(1).optional(),
-  })
-  .superRefine((v, ctx) => {
-    if (v.LLM_PROVIDER === "http") {
-      for (const key of ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"] as const) {
-        if (!v[key]) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${key} is required when LLM_PROVIDER=http`, path: [key] });
-        }
+const envObjectSchema = z.object({
+  NODE_ENV: z.string().min(1).optional(),
+  PORT: z.coerce.number().int().positive(),
+  BASE_URL: z.string().min(1),
+  CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
+  CLOCKIFY_ADDON_KEY: z.string().min(1),
+  SESSION_SECRET: z.string().min(1),
+  DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
+  DATABASE_PATH: z.string().min(1),
+  // The HTTP provider needs base/key/model; the gemini-cli provider needs none
+  // (it uses the authenticated CLI), so these are optional here and enforced
+  // below only for the http provider.
+  LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
+  LLM_MODE: z.enum(["tool", "json"]).default("tool"),
+  // Default ON: the durable agentic loop is the proven default (live PASS=10,
+  // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
+  LLM_AGENTIC: z.enum(["0", "1"]).default("1"),
+  LLM_BASE_URL: z.string().min(1).optional(),
+  LLM_API_KEY: z.string().min(1).optional(),
+  LLM_MODEL: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().min(1).optional(),
+});
+
+const envSchema = envObjectSchema.superRefine((v, ctx) => {
+  if (v.LLM_PROVIDER === "http") {
+    for (const key of ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"] as const) {
+      if (!v[key]) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${key} is required when LLM_PROVIDER=http`, path: [key] });
       }
     }
-  });
+  }
+});
+
+/**
+ * Every environment variable the schema accepts. `.env.example` must document
+ * each one (required values uncommented, optional knobs as commented entries) so
+ * the README's "full list" claim stays true; a unit test pins this (no schema
+ * key may silently skip the template).
+ */
+export const ENV_SCHEMA_KEYS: readonly string[] = Object.keys(envObjectSchema.shape);
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(env);
