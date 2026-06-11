@@ -106,7 +106,7 @@ async function resolveInvoiceRef(
   ref: { id?: string; number?: string },
   verb: string,
 ): Promise<
-  | { ok: true; id: string; number?: string; invoices?: ReadonlyArray<{ id: string }> }
+  | { ok: true; id: string; number?: string; currency?: string; invoices?: ReadonlyArray<{ id: string }> }
   | { ok: false; clarify: RiskyClarifyResult }
 > {
   // Capture the fetched invoice list once so item-type discovery can reuse it
@@ -114,7 +114,7 @@ async function resolveInvoiceRef(
   // ref is already a real id, resolveEntityRef never lists — leave it undefined
   // and let discoverItemTypes fetch lazily only if it's actually needed.
   let invoices: ReadonlyArray<{ id: string }> | undefined;
-  const resolved = await resolveEntityRef(
+  const resolved = await resolveEntityRef<{ id: string; name: string; currency?: string }>(
     { id: ref.id, name: ref.number },
     {
       noun: "invoice",
@@ -122,7 +122,9 @@ async function resolveInvoiceRef(
       list: async () => {
         const list = await ctx.clockify.listInvoices();
         invoices = list;
-        return list.map((inv) => ({ id: inv.id, name: inv.number ?? inv.id }));
+        // Carry the currency through so an amount preview (item-add/payment) can
+        // label the figure with the invoice's actual currency.
+        return list.map((inv) => ({ id: inv.id, name: inv.number ?? inv.id, currency: inv.currency }));
       },
     },
   );
@@ -130,7 +132,9 @@ async function resolveInvoiceRef(
   // `invoices` stays undefined when resolveEntityRef short-circuited on a real
   // 24-hex id (no list fetched) — discoverItemTypes then fetches lazily so a
   // real-id item-add still discovers types instead of scanning an empty list.
-  return { ok: true, id: resolved.id, number: resolved.name, invoices };
+  // `currency` is likewise only known when the invoice was resolved from the
+  // list; on the raw-id fast path the amount preview shows the figure unlabelled.
+  return { ok: true, id: resolved.id, number: resolved.name, currency: resolved.entity?.currency, invoices };
 }
 
 /** Identity schema for invoice reads: an id, or a number (either slot works). */
@@ -574,19 +578,31 @@ const addInvoiceItem = defineRiskyAction({
     const resolved = resolveItemType(discovered, args.itemType);
     if (!resolved.ok) return itemTypeClarify(resolved.options);
     const itemType = resolved.itemType;
+    const quantity = args.quantity ?? 1;
+    const unitPriceMinor =
+      args.unitPrice !== undefined ? toMinor(args.unitPrice, args.unitPriceUnit) : undefined;
     const item: Record<string, unknown> = {
       itemType,
       // Clockify REQUIRES description + quantity on the items POST (live: 400
       // "Description is required."); default them visibly in the preview.
       description: args.description ?? itemType,
-      quantity: args.quantity ?? 1,
-      ...(args.unitPrice !== undefined ? { unitPriceMinor: toMinor(args.unitPrice, args.unitPriceUnit) } : {}),
+      quantity,
+      ...(unitPriceMinor !== undefined ? { unitPriceMinor } : {}),
       ...(args.applyTaxes !== undefined ? { applyTaxes: args.applyTaxes } : {}),
     };
+    // Show the quantity AND the unit price (the human/major figure, never the
+    // 100x wire integer) on the card — the admin confirms a billing amount, so a
+    // model-garbled price must be catchable before Confirm, the same as
+    // create-with-items. Currency is appended when the invoice's is known.
+    const currencySuffix = invoice.currency ? ` ${invoice.currency}` : "";
+    const expectedChange =
+      `Add ${itemType} item${args.description ? ` "${args.description}"` : ""}` +
+      ` ×${quantity}` +
+      (unitPriceMinor !== undefined ? ` @ ${(unitPriceMinor / 100).toFixed(2)}${currencySuffix}` : "");
     return {
       actionLabel: "Add invoice item",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
-      expectedChanges: [`Add ${itemType} item${args.description ? ` "${args.description}"` : ""}`],
+      expectedChanges: [expectedChange],
       reversibility: "You can delete the line item afterward.",
       warnings: ["This changes a live billing document."],
       payload: { invoiceId: invoice.id, item },

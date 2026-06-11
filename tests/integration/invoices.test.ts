@@ -335,6 +335,24 @@ describe("invoice actions", () => {
     expect(fake.state.invoices[0].items).toHaveLength(2);
   });
 
+  it("items_add SHOWS the unit price (and quantity) on the preview card — the admin confirms a billing amount, so it must be catchable before Confirm", async () => {
+    const fake = createFakeWorkspace(typedSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv9", itemType: "Consulting", description: "web development", quantity: 1, unitPrice: 250 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const changes = preview.preview.expectedChanges.join(" ");
+    // The $250 the admin typed is stored in the payload (25000 minor) and WILL be
+    // committed — a billing preview that hides it is uninformative.
+    expect(preview.operation.payload).toMatchObject({ item: { unitPriceMinor: 25000 } });
+    expect(changes).toContain("250.00");
+    expect(changes).toContain("×1");
+    // …and never the raw 100x wire integer (would read as $25000 on a $250 item).
+    expect(changes).not.toContain("25000");
+  });
+
   it("clockify_invoices_items_delete previews destructive+billing then deletes by index", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_invoices_items_delete", args: { invoiceId: "inv1", index: 0 }, context: makeContext(fake) });
