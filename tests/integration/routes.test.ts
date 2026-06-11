@@ -40,6 +40,16 @@ const modelClient: ModelClient = {
         ],
       });
     }
+    if (text.toLowerCase().includes("create tag")) {
+      return JSON.stringify({
+        // truthfulness-02: the model narrates success BEFORE execution, but the
+        // proposed safe write has invalid args (no name) so it FAILS. The route
+        // must not surface this pre-execution success claim.
+        kind: "actions",
+        text: 'Done! I created the tag "Billing" for you.',
+        actions: [{ name: "clockify_tags_create", arguments: {} }],
+      });
+    }
     return JSON.stringify({ kind: "answer", text: "Hello, admin." });
   },
 };
@@ -191,6 +201,27 @@ describe("routes", () => {
     expect(reply).not.toMatch(/\bconfirmed\b/i);
     expect(reply).toMatch(/confirm/i); // tells the user to click Confirm
     expect(reply).toMatch(/not|nothing|yet/i); // makes clear nothing has changed
+  });
+
+  it("a failed single-turn safe write never reports the model's pre-execution success claim (truthfulness-02)", async () => {
+    const cookie = await adminCookie();
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create tag Billing" });
+    expect(chat.status).toBe(200);
+    // The only proposed write failed (invalid_args) — no preview, a failed receipt.
+    expect(chat.body.results.some((r: { kind: string }) => r.kind === "preview")).toBe(false);
+    const receipt = chat.body.results.find((r: { kind: string }) => r.kind === "receipt");
+    expect(receipt).toBeDefined();
+    expect(receipt.receipt.ok).toBe(false);
+
+    const reply = String(chat.body.reply?.text ?? "");
+    // The model lied ("Done! I created the tag"); the route must replace that with
+    // deterministic honest text that reports the failure, not the optimistic claim.
+    expect(reply).not.toMatch(/\bdone\b/i);
+    expect(reply).not.toMatch(/\bcreated\b/i);
+    expect(reply).toMatch(/fail/i); // tells the user the action failed
   });
 
   it("a risky chat message creates a preview that can be cancelled", async () => {
