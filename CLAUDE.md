@@ -176,6 +176,13 @@ such bug was found against the REAL API, not by reading the code.
   expenses. Invoice GET returns `discount/tax/tax2` (×100 ints) but PUT wants
   `discountPercent/taxPercent/tax2Percent` — mapping wrong silently ZEROES
   them. Payments POST returns the INVOICE doc (payment id is list-diffed).
+  Invoice POST `/invoices` accepts ONLY CreateInvoiceRequest fields
+  (clientId/currency/dueDate/issuedDate/number) — **`note`/`subject` sent on
+  CREATE are SILENTLY DROPPED** (live-probed 2026-06-11: POST + GET both echo
+  the workspace placeholder "INPUT BILL INFO HERE", never the supplied text).
+  `createInvoice` POSTs the minimal body then applies note/subject via the
+  verified GET-then-clean-PUT update path (same silent-drop class as the
+  tax/discount zeroing — never trust a create-receipt for a field the spec omits).
 - Invoice ITEM TYPES are per-workspace configured NAMES, no list/create API —
   discovered from existing invoices (`discoverItemTypes`); fresh workspace has
   none → $0 caveat surfaced in the PREVIEW. items POST requires

@@ -78,7 +78,7 @@ describe("invoice rest", () => {
     expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices/inv1");
   });
 
-  it("createInvoice POSTs the required fields, normalizes dates, and pins status UNSENT", async () => {
+  it("createInvoice POSTs only the spec-required fields (no note/subject — the POST silently drops them), normalizes dates, pins status UNSENT", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "inv9", number: "INV-9" }));
     const inv = await rest(f as unknown as typeof fetch).createInvoice({
       clientId: "c1",
@@ -86,9 +86,9 @@ describe("invoice rest", () => {
       issuedDate: "2026-06-06",
       currency: "GBP",
       dueDate: "2026-07-06",
-      note: "thanks",
     });
     expect(inv).toEqual({ id: "inv9", name: "INV-9" });
+    expect((f as any).mock.calls).toHaveLength(1);
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices");
     expect(init.method).toBe("POST");
@@ -99,8 +99,46 @@ describe("invoice rest", () => {
       currency: "GBP",
       dueDate: "2026-07-06T00:00:00Z",
       status: "UNSENT",
-      note: "thanks",
     });
+  });
+
+  it("createInvoice with note/subject POSTs the clean body, then GET-then-PUTs them through the verified update path (live-probed: POST /invoices ignores note/subject, keeping the workspace default placeholder)", async () => {
+    const f = vi.fn(async (url: string, init: any) => {
+      if (init.method === "POST") return jsonResponse({ id: "inv9", number: "INV-9" });
+      if (init.method === "GET")
+        return jsonResponse({
+          id: "inv9",
+          number: "INV-9",
+          clientId: "c1",
+          currency: "GBP",
+          issuedDate: "2026-06-06T00:00:00Z",
+          dueDate: "2026-07-06T00:00:00Z",
+          note: "INPUT BILL INFO HERE",
+          subject: "SUBJECT EXAMPLE - CHANGABLE",
+        });
+      return jsonResponse({ id: "inv9", number: "INV-9" }); // PUT
+    });
+    const inv = await rest(f as unknown as typeof fetch).createInvoice({
+      clientId: "c1",
+      number: "INV-9",
+      issuedDate: "2026-06-06",
+      currency: "GBP",
+      dueDate: "2026-07-06",
+      note: "thanks",
+      subject: "Consulting Q2",
+    });
+    expect(inv).toEqual({ id: "inv9", name: "INV-9" });
+    const calls = (f as any).mock.calls;
+    // POST (create) → GET (read clean body) → PUT (apply note/subject)
+    expect(calls.map((c: any) => c[1].method)).toEqual(["POST", "GET", "PUT"]);
+    // the POST must NOT carry note/subject — Clockify ignores them there
+    const postBody = JSON.parse(calls[0][1].body);
+    expect(postBody).not.toHaveProperty("note");
+    expect(postBody).not.toHaveProperty("subject");
+    // the PUT carries the requested note/subject so the billing doc is truthful
+    const putBody = JSON.parse(calls[2][1].body);
+    expect(putBody.note).toBe("thanks");
+    expect(putBody.subject).toBe("Consulting Q2");
   });
 
   it("updateInvoice GET-then-PUTs a CLEAN body (drops read-only fields, keeps required ones)", async () => {

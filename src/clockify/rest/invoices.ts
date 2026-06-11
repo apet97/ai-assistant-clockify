@@ -135,6 +135,42 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
     return Array.isArray(env) ? env : (env?.payments ?? env?.items ?? env?.data ?? []);
   }
 
+  // Closure-scoped so createInvoice can route note/subject through the SAME
+  // verified GET-then-clean-PUT path the public update uses (no `this`, which
+  // would break once the port is spread into the combined WorkspaceClient).
+  async function updateInvoiceImpl(
+    id: string,
+    { patch, status }: { patch?: Record<string, unknown>; status?: string },
+  ): Promise<EntitySummary> {
+    const hasPatch = !!patch && Object.keys(patch).length > 0;
+    let number: string | undefined;
+    // GET once when there is anything to do — it feeds BOTH the clean PUT body
+    // (field updates) and the receipt's invoice number (status-only changes).
+    if (hasPatch || status) {
+      const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
+      number = existing.number as string | undefined;
+      if (hasPatch) {
+        const body: Record<string, unknown> = {};
+        for (const key of INVOICE_EDITABLE_FIELDS) {
+          if (existing[key] !== undefined) body[key] = existing[key];
+        }
+        for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
+          const value = existing[getKey];
+          if (typeof value === "number") body[putKey] = value / 100;
+        }
+        Object.assign(body, patch);
+        if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
+        if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
+        const updated = (await core.call("api", "PUT", `${ws}/invoices/${id}`, body)) as { number?: string };
+        number = updated?.number ?? number;
+      }
+    }
+    if (status) {
+      await core.call("api", "PATCH", `${ws}/invoices/${id}/status`, { invoiceStatus: status });
+    }
+    return { id, name: number ?? id };
+  }
+
   return {
     async listInvoices(filter) {
       const base: Record<string, string> = {};
@@ -183,6 +219,12 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       };
     },
     async createInvoice(input): Promise<EntitySummary> {
+      // POST /invoices accepts ONLY the spec's CreateInvoiceRequest fields
+      // (clientId, currency, dueDate, issuedDate, number). note/subject sent
+      // here are SILENTLY DROPPED — live-probed 2026-06-11: the POST response
+      // and a follow-up GET both show the workspace's default placeholder
+      // ("INPUT BILL INFO HERE"), never the supplied text. Apply them via the
+      // verified GET-then-clean-PUT update path so the billing doc is truthful.
       const body: Record<string, unknown> = {
         clientId: input.clientId,
         number: input.number,
@@ -190,40 +232,18 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
         currency: input.currency,
         dueDate: toClockifyDate(input.dueDate),
         status: "UNSENT",
-        ...(input.note !== undefined ? { note: input.note } : {}),
-        ...(input.subject !== undefined ? { subject: input.subject } : {}),
       };
       const inv = (await core.call("api", "POST", `${ws}/invoices`, body)) as { id: string; number?: string };
+      if (input.note !== undefined || input.subject !== undefined) {
+        const patch: Record<string, unknown> = {};
+        if (input.note !== undefined) patch.note = input.note;
+        if (input.subject !== undefined) patch.subject = input.subject;
+        return updateInvoiceImpl(inv.id, { patch });
+      }
       return { id: inv.id, name: inv.number ?? input.number };
     },
-    async updateInvoice(id, { patch, status }): Promise<EntitySummary> {
-      const hasPatch = !!patch && Object.keys(patch).length > 0;
-      let number: string | undefined;
-      // GET once when there is anything to do — it feeds BOTH the clean PUT body
-      // (field updates) and the receipt's invoice number (status-only changes).
-      if (hasPatch || status) {
-        const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
-        number = existing.number as string | undefined;
-        if (hasPatch) {
-          const body: Record<string, unknown> = {};
-          for (const key of INVOICE_EDITABLE_FIELDS) {
-            if (existing[key] !== undefined) body[key] = existing[key];
-          }
-          for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
-            const value = existing[getKey];
-            if (typeof value === "number") body[putKey] = value / 100;
-          }
-          Object.assign(body, patch);
-          if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
-          if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
-          const updated = (await core.call("api", "PUT", `${ws}/invoices/${id}`, body)) as { number?: string };
-          number = updated?.number ?? number;
-        }
-      }
-      if (status) {
-        await core.call("api", "PATCH", `${ws}/invoices/${id}/status`, { invoiceStatus: status });
-      }
-      return { id, name: number ?? id };
+    async updateInvoice(id, opts): Promise<EntitySummary> {
+      return updateInvoiceImpl(id, opts);
     },
     async deleteInvoice(id) {
       await core.call("api", "DELETE", `${ws}/invoices/${id}`);
