@@ -15,8 +15,15 @@ drift) + a full-angle live investigation (2026-06-11: safety 16/16, agentic
 10/10 + 21/21, live-full 115/115, planner 98.6%, chat-tour clean — one stale
 live fixture fixed, no product defect; notes in
 `~/Downloads/ai-assistant-quality-pass-NOTES.md` +
-`…-investigation-NOTES.md`).
-`npm run verify` = **881 tests**, `npx madge --circular
+`…-investigation-NOTES.md`) + a full-angle audit fix run (2026-06-11,
+fix-only of the `e538561` audit): 34 fixes landed across security (lifecycle
+workspaceId now trusts the token claim, not the body), safety invariants
+(resume tool-result cap, nonce never persisted), API drift (webhook-logs
+POST-only, invoice has no note/subject/status), truthfulness (preview cards
+show chosen values), efficiency, dead-code, test-gaps, and docs — 0
+wont_fix/blocked/deferred; gate green; notes in
+`~/Downloads/ai-assistant-full-angle-audit-NOTES.md`).
+`npm run verify` = **882 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`. Remaining work is **human-gated only**:
 1. **Stable hosting** — quick-tunnel URL rotates; needs a Cloudflare zone
