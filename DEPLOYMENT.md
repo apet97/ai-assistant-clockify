@@ -6,26 +6,29 @@ endpoints, and the chat API. It keeps all state in one SQLite file. Railway give
 it a **stable public URL**, which retires the dev quick-tunnel entirely (no more
 URL rotation, no reinstall dance).
 
-## One-time prerequisite: publish the SDK
+## The SDK is vendored — no prerequisite
 
 `@apet97/clockify-addon-sdk` is a dependency on the request path (token signature
-verification + manifest building). It must be installable from npm — a local
-`file:` path does not exist in the Railway build (the sibling is outside the
-deploy root, for both GitHub and `railway up` flows). Publish it once:
+verification + manifest building). Its source lives in a sibling repo outside this
+one, so a bare `file:../…` path wouldn't exist in the Railway build. Instead it is
+**vendored as a committed tarball** at `vendor/apet97-clockify-addon-sdk-1.0.0.tgz`,
+and `package.json` points the dependency at it:
 
-```bash
-npm login                            # required first — the @apet97 scope maps to
-                                     # your npm username (publish as user `apet97`)
-cd ../addon-ts-sdk/addon-sdk
-npm publish --access public          # scoped packages default to private; this
-                                     # makes it public (free). The prepack gate
-                                     # runs type-check + 121 tests + build first.
+```json
+"@apet97/clockify-addon-sdk": "file:vendor/apet97-clockify-addon-sdk-1.0.0.tgz"
 ```
 
-Then this repo's `package.json` pins `"@apet97/clockify-addon-sdk": "^1.0.0"` and
-`npm install` resolves it from the registry (the committed `package-lock.json`
-reflects this). If your npm username is not `apet97`, either create an `@apet97`
-org or republish under a name you own.
+`npm ci` resolves it from the in-repo tarball (the lockfile pins its integrity
+hash), so the Railway build is self-contained — no npm publish, account, or token
+needed. To re-vendor after an SDK change:
+
+```bash
+( cd ../addon-ts-sdk/addon-sdk && npm pack --pack-destination "$OLDPWD/vendor" )
+# bump the filename in package.json if the version changed, then: npm install
+```
+
+(If you later publish the SDK to npm, swap the dependency to a version range like
+`"^1.0.0"` and drop the `vendor/` tarball — see git history for the publish path.)
 
 ## 1. Create the Railway service
 
@@ -44,10 +47,9 @@ railway up                   # build + deploy the current dir via Nixpacks
 railway domain               # generate the public URL -> use it as BASE_URL below
 ```
 
-Note: `railway up` uploads this repo dir and runs `npm install` in the container,
-so the SDK must already be on npm (step above) — the `file:` sibling is not
-uploaded. After `railway domain` gives you the URL, set `BASE_URL` to it (step 3)
-and redeploy.
+Note: `railway up` uploads this repo dir and runs `npm ci` in the container; the
+SDK is vendored in-repo (`vendor/…tgz`), so the install is self-contained. After
+`railway domain` gives you the URL, set `BASE_URL` to it (step 3) and redeploy.
 
 ## 2. Attach a Volume — REQUIRED (do not skip)
 
