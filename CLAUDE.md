@@ -4,7 +4,7 @@ Read this first in every Claude Code session. History/journals: `docs/HISTORY.md
 (handoff archive); live-test state: `~/Downloads/ai-assistant-loop-checklist.md`
 (322/322 closed) + `…-loop-failures.md` (root causes + resolutions).
 
-## Current state (2026-06-11)
+## Current state (2026-06-12)
 
 Everything buildable is DONE and live-verified: V1 + full REST parity (136
 typed actions, 16 areas, 3 hosts) + the trust-lives-in-the-code roadmap + the
@@ -32,17 +32,27 @@ LOC and cohesive; the api.ts splits touch safety-critical flow — not worth the
 regression risk yet).
 `npm run verify` = **885 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
-to `main`. Remaining work is **human-gated only**:
-1. **Stable hosting** — quick-tunnel URL rotates; needs a Cloudflare zone
-   (named tunnel) or a real deploy. User declined the zone for now.
-2. **Prod security review + token rotation.**
-3. **Prod AUDIT-host `X-Addon-Token` clearance** — run
-   `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN`
-   (dev cleanly reports "audit log not available"; prod-only question).
+to `main`.
 
-A colleague may be testing via a second quick tunnel against :3001 (see
-`/tmp/colleague-tunnel.log`); the manifest `baseUrl` pins the PRIMARY tunnel —
-**never `dev-tunnel.sh restart`** (it rotates the URL and breaks every install).
+**DEPLOYED on Railway (2026-06-12) and installed + working in Clockify.**
+Stable hosting is SOLVED — the quick tunnel is retired. Live at
+`https://ai-assistant-production-c2e6.up.railway.app` (project
+`ai-assistant-clockify`, service `ai-assistant`). The SDK
+(`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
+tarball at `vendor/` (npm 2FA blocked publishing) so `npm ci` is self-contained;
+prod build = `tsconfig.build.json` → `dist/server/server.js`, `npm start`; a 5GB
+Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
+installs survive redeploys. Full checklist: `DEPLOYMENT.md`. Remaining work is
+**human-gated only**:
+1. **Prod security review + token rotation** (the `.env.server` LLM creds were
+   reused on Railway — rotate for real prod; review before real users).
+2. **Prod AUDIT-host `X-Addon-Token` clearance** — now unblocked: run
+   `scripts/host-auth-spike.ts` against the live Railway install with a captured
+   prod `LIVE_ADDON_TOKEN` (dev cleanly reports "audit log not available").
+
+Local dev still uses `scripts/dev-tunnel.sh` (quick tunnel + server on :3001);
+prod no longer depends on it. **Never `dev-tunnel.sh restart`** for the local
+flow (it rotates the URL); a colleague may share `:3001` via a second tunnel.
 
 ## Product contract
 
