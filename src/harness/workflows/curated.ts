@@ -87,7 +87,7 @@ const onboardUser = defineAction({
     groups: z.array(z.string().min(1)).optional(),
     sendEmail: z.boolean().optional(),
   }),
-  async handler(ctx, args) {
+  async handler(_ctx, args) {
     const groups = args.groups ?? [];
     return {
       kind: "preview",
