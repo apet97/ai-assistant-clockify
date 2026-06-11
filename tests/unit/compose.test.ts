@@ -79,6 +79,31 @@ describe("runComposition", () => {
     }
   });
 
+  it("CONTINUES rolling back the remaining undos after one undo throws (multi-undo partial rollback)", async () => {
+    const order: string[] = [];
+    const outcome = await runComposition([
+      doneStep("client", [ref("client", "c1")], async () => void order.push("undo-c1")),
+      doneStep("project", [ref("project", "p1")], async () => {
+        order.push("undo-p1-attempt");
+        throw new Error("project delete refused");
+      }),
+      doneStep("task", [ref("task", "t1")], async () => void order.push("undo-t1")),
+      { label: "report", required: true, run: async () => { throw new Error("boom"); } },
+    ]);
+    expect(outcome.status.kind).toBe("failed");
+    if (outcome.status.kind === "failed") {
+      expect(outcome.status.label).toBe("report");
+      // Reverse order, SKIPPING the one whose undo threw: t1 then c1 (not p1).
+      expect(outcome.status.rolledBack.map((r) => r.id)).toEqual(["t1", "c1"]);
+      const failed = outcome.status.rollbackWarnings.filter((w) => w.code === "rollback_failed");
+      expect(failed.length).toBe(1);
+      expect(failed[0].message).toContain("project p1");
+      expect(failed[0].message).toContain("project delete refused");
+    }
+    // The failing undo was attempted but did NOT abort the others.
+    expect(order).toEqual(["undo-t1", "undo-p1-attempt", "undo-c1"]);
+  });
+
   it("only registers an undo for created entities (reused entities are never rolled back)", async () => {
     const undoClient = vi.fn(async () => {});
     const outcome = await runComposition([
