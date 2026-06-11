@@ -130,12 +130,20 @@ const onboardUser = defineAction({
         },
       },
     ];
+    // The group list is identical across every group step within one commit;
+    // fetch it once (lazy single-flight, captured by each step) instead of
+    // re-fetching per group. Lazy-inside-the-step preserves semantics exactly:
+    // a listGroups failure still surfaces as the per-group (non-required) warning
+    // and can never fail the required invite step.
+    let groupsPromise: ReturnType<ActionContext["clockify"]["listGroups"]> | undefined;
+    const getGroups = (): ReturnType<ActionContext["clockify"]["listGroups"]> =>
+      (groupsPromise ??= ctx.clockify.listGroups());
     for (const groupName of payload.groups) {
       steps.push({
         label: `group:${groupName}`,
         required: false, // a group problem must not undo a successful invite
         run: async () => {
-          const match = matchByName(await ctx.clockify.listGroups(), groupName);
+          const match = matchByName(await getGroups(), groupName);
           if (match.kind !== "one") {
             return {
               kind: "done",

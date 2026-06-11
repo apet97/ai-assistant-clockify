@@ -87,6 +87,28 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     expect(warnings).toMatch(/without an invitation email/i);
   });
 
+  it("fetches the group list ONCE per commit, not once per group (no N+1)", async () => {
+    const fake = createFakeWorkspace({
+      groups: [
+        { id: "g1", name: "Engineering" },
+        { id: "g2", name: "Design" },
+        { id: "g3", name: "Sales" },
+      ],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_onboard_user",
+      args: { email: "ada@example.com", groups: ["Engineering", "Design", "Sales"] },
+      context: ctx(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(ctx(fake), preview.operation as ConfirmableOperation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.addUserToGroup).toBe(3);
+    // The group list is identical across the per-group steps within one commit —
+    // resolve it once, not once per group.
+    expect(fake.counts.listGroups).toBe(1);
+  });
+
   it("a missing group is a warning — the user is still invited (best-effort group adds)", async () => {
     const fake = createFakeWorkspace(); // no groups configured
     const preview = await executeAction({
