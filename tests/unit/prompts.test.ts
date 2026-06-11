@@ -56,6 +56,15 @@ describe("buildSystemPrompt", () => {
     expect(prompt).toContain("harness resolves");
     expect(prompt).not.toContain("first call the matching");
   });
+
+  it("grounds the planner to current entities, not names from earlier (possibly undone) turns", () => {
+    // Anchoring fix: after create→undo the windowed history still shows the
+    // deleted entity, so a vague later request must resolve/verify by name (or
+    // ask) instead of reusing a name/id from the transcript.
+    expect(prompt.toLowerCase()).toContain("currently exist");
+    expect(prompt.toLowerCase()).toContain("deleted");
+    expect(prompt.toLowerCase()).toContain("undone");
+  });
 });
 
 describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
@@ -118,6 +127,15 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt).toContain("assistant_recent_outcomes");
     expect(prompt.toLowerCase()).toContain("what failed");
     expect(prompt.toLowerCase()).toContain("chat memory");
+  });
+
+  it("grounds the planner to current entities, not names from earlier (possibly undone) turns", () => {
+    // Anchoring fix: after create→undo the windowed history still shows the
+    // deleted entity, so a vague later request must resolve/verify by name (or
+    // ask) instead of reusing a name/id from the transcript.
+    expect(prompt.toLowerCase()).toContain("currently exist");
+    expect(prompt.toLowerCase()).toContain("deleted");
+    expect(prompt.toLowerCase()).toContain("undone");
   });
 
   it("carries no secret-bearing field names", () => {
