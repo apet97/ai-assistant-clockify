@@ -33,6 +33,22 @@ describe("resolveRelativeDay", () => {
     expect(resolveRelativeDay(NOW, { date: "last wednesday" })).toBe("2026-06-03");
   });
 
+  it("resolves a month-name + day partial date to the CURRENT year (the model must not fabricate a year)", () => {
+    // "June 1 to June 5" (no year) must mean 2026 — the year of `now` — never a
+    // training-data default like 2025. The harness owns the year, not the model.
+    expect(resolveRelativeDay(NOW, { date: "June 1" })).toBe("2026-06-01");
+    expect(resolveRelativeDay(NOW, { date: "june 5" })).toBe("2026-06-05");
+    expect(resolveRelativeDay(NOW, { date: "Jun 1" })).toBe("2026-06-01");
+    expect(resolveRelativeDay(NOW, { date: "June 1st" })).toBe("2026-06-01");
+    expect(resolveRelativeDay(NOW, { date: "3 March" })).toBe("2026-03-03");
+    expect(resolveRelativeDay(NOW, { date: "December 31" })).toBe("2026-12-31");
+  });
+
+  it("rejects an out-of-range day in a month-name partial (clarify, never send)", () => {
+    expect(resolveRelativeDay(NOW, { date: "February 30" })).toBeUndefined();
+    expect(resolveRelativeDay(NOW, { date: "June 0" })).toBeUndefined();
+  });
+
   it("returns undefined on unparseable input — callers must clarify, never send it to the wire", () => {
     expect(resolveRelativeDay(NOW, { date: "banana" })).toBeUndefined();
     expect(resolveRelativeDay(NOW, { date: "06/10/2026" })).toBeUndefined();
@@ -53,6 +69,12 @@ describe("resolveInstant", () => {
     expect(resolveInstant(NOW, "2026-06-01T09:30:00.000+02:00", "start")).toBe(
       "2026-06-01T07:30:00.000Z",
     );
+  });
+
+  it("resolves a month-name + day partial date to the CURRENT-year start/end instant (report range without a year)", () => {
+    // The finding: "report from June 1 to June 5" must run for 2026, not 2025.
+    expect(resolveInstant(NOW, "June 1", "start")).toBe("2026-06-01T00:00:00.000Z");
+    expect(resolveInstant(NOW, "June 5", "end")).toBe("2026-06-05T23:59:59.999Z");
   });
 
   it("returns undefined on unparseable input", () => {

@@ -186,9 +186,55 @@ function addDays(isoDay: string, days: number): string {
 /** Weekday names in JS `getUTCDay()` order (0 = Sunday). */
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
+/** Month names + 3-letter abbreviations, index 0 = January (matches getUTCMonth). */
+const MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+
 /** A calendar day that exists (rejects 2026-13-99 etc., which Date.parse NaNs). */
 function isRealDay(day: string): boolean {
   return !Number.isNaN(Date.parse(`${day}T00:00:00Z`));
+}
+
+/**
+ * Build a YYYY-MM-DD from year/0-based-month/day, rejecting overflow (e.g.
+ * Feb 30 — which `Date.UTC` silently rolls into March). Used by the month-name
+ * partial-date branch so an impossible day clarifies instead of being sent.
+ */
+function buildDay(year: number, monthIndex: number, day: number): string | undefined {
+  const d = new Date(Date.UTC(year, monthIndex, day));
+  if (d.getUTCFullYear() !== year || d.getUTCMonth() !== monthIndex || d.getUTCDate() !== day) {
+    return undefined;
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Parse a month-name + day partial date with NO year ("June 1", "Jun 5",
+ * "June 1st", "3 March") and resolve it to the CURRENT year. The model must
+ * never fabricate a year for a partial date the admin typed — left to itself it
+ * defaults to a training-data year (live: "June 1 to June 5" narrated as 2025);
+ * the harness, which holds `now`, owns the year. Returns undefined when it isn't
+ * a month-name partial or the day is out of range (caller then clarifies).
+ */
+function parseMonthNameDay(now: Date, raw: string): string | undefined {
+  const m = raw.match(/^([a-z]+)\.?\s+(\d{1,2})(?:st|nd|rd|th)?$/) ?? raw.match(/^(\d{1,2})(?:st|nd|rd|th)?\s+([a-z]+)\.?$/);
+  if (!m) return undefined;
+  const [word, dayStr] = /^\d/.test(m[1]) ? [m[2], m[1]] : [m[1], m[2]];
+  const monthIndex = MONTHS.findIndex((name) => name === word || name.startsWith(word));
+  if (monthIndex < 0 || word.length < 3) return undefined;
+  return buildDay(now.getUTCFullYear(), monthIndex, Number(dayStr));
 }
 
 /**
@@ -230,6 +276,8 @@ export function resolveRelativeDay(
       return addDays(today, weekday[1] === "next" ? ahead || 7 : ahead);
     }
   }
+  const monthDay = parseMonthNameDay(now, raw);
+  if (monthDay !== undefined) return monthDay;
   return undefined;
 }
 

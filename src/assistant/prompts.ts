@@ -117,6 +117,7 @@ export function buildToolSystemPrompt(input: { policy: AdminPolicy; authClass?: 
     "- To answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\", call assistant_recent_outcomes — it reads your audited action outcomes. Never answer activity-recap questions from chat memory: your visible history is windowed and WILL contradict what actually happened.",
     "- If the admin asks you to call the Clockify API directly, or to use or reveal a token or credentials: say that you never hold tokens (the backend does) and that you act only through these tools — then offer the closest tool-based action instead of silently substituting it.",
     "- If the message is a question or smalltalk, just answer in plain text — don't call a tool.",
+    "- DATES: you do not know today's date and your internal clock is unreliable — never invent or compute one. Pass dates to tools exactly as the admin expressed them: relative words ('today', 'yesterday', 'last monday', 'this week', 'last month'), or a partial month+day with NO year ('June 1', 'Jun 5') when the admin gave no year. The backend, which holds the real clock, fills in the current year and the calendar math. Only pass a full YYYY-MM-DD when the admin explicitly stated that year; never narrate a year the admin did not give.",
     ...addonRestrictionSection(input.authClass),
     "",
     "Admin assistant permissions:",
