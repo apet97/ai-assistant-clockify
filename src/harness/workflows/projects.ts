@@ -6,6 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { toMinor } from "../money.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
@@ -301,7 +302,7 @@ const rateUpdate = defineRiskyAction({
     since: z.string().optional(),
   }),
   async preview(_ctx, args) {
-    const amountMinor = args.amountUnit === "minor" ? Math.round(args.amount) : Math.round(args.amount * 100);
+    const amountMinor = toMinor(args.amount, args.amountUnit);
     return {
       actionLabel: `Set project ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
       targets: [{ type: "project", id: args.projectId }],

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
@@ -25,11 +26,6 @@ const DATE_CLARIFY = (raw: string) =>
  */
 
 const EXP = "expenses" as const;
-
-/** Resolve a major/minor amount to integer minor units (cents). */
-function toMinor(amount: number, unit: "major" | "minor"): number {
-  return unit === "minor" ? Math.round(amount) : Math.round(amount * 100);
-}
 
 /** Fields stored in the create payload (userId is added from the admin at commit). */
 interface StoredExpense {
