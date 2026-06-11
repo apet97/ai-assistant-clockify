@@ -42,7 +42,6 @@ export const ICON_ALERT = "M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 
 export const ICON_CLOCK = "M12 8v4l2.5 2.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0";
 export const ICON_CHEVRON = "M9 6l6 6-6 6";
 export const ICON_GEAR = "M4 7h10M18 7h2M4 17h2M10 17h10M14 5v4M8 15v4";
-export const ICON_UNDO = "M3 7v6h6M3 13a9 9 0 1 0 3-7.7";
 
 export function svgIcon(pathD: string): SVGSVGElement {
   const NS = "http://www.w3.org/2000/svg";
