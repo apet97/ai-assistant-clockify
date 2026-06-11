@@ -79,6 +79,11 @@ const SCHEMA_STATEMENTS: string[] = [
     ON chat_messages(session_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_lookup
     ON pending_confirmations(workspace_id, admin_user_id, status, expires_at)`,
+  // Session-scoped seek for the typed-consent guard's countPendingConfirmations
+  // (TYPED_CONSENT safety hot path, run on every "yes"/"confirm"-shaped message).
+  // Without it the count is a full SCAN over an append-only, unpruned table.
+  `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_session
+    ON pending_confirmations(session_id, status, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_admin_created
     ON audit_events(workspace_id, admin_user_id, created_at)`,
   `CREATE TABLE IF NOT EXISTS idempotency_keys (

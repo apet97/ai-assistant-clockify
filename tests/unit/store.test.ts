@@ -177,6 +177,27 @@ describe("store", () => {
     expect(inst?.addonToken).toBe("secret-token");
   });
 
+  it("uses an index seek for the typed-consent countPendingConfirmations query (no full table scan)", () => {
+    const dbPath = tempDbPath();
+    // Build the schema through migrate(), then open the same DB file directly to
+    // ask SQLite how it would run the exact countPendingConfirmations query on the
+    // TYPED_CONSENT safety hot path (run on every "yes"/"confirm"-shaped message).
+    createStore(dbPath, { encryptionKey: ENC_KEY }).close();
+
+    const raw = new Database(dbPath);
+    const plan = raw
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM pending_confirmations WHERE session_id = ? AND status = 'pending' AND expires_at > ?",
+      )
+      .all("session-1", "2026-01-01T00:00:00.000Z") as Array<{ detail: string }>;
+    raw.close();
+
+    const details = plan.map((p) => p.detail).join(" | ");
+    // Without a session_id-leading index this is `SCAN pending_confirmations`.
+    expect(details).toMatch(/USING (COVERING )?INDEX/);
+    expect(details).not.toMatch(/SCAN pending_confirmations/);
+  });
+
   it("loads a pending confirmation with corrupt agent_state_json as agentState undefined (malformed => no resume below the schema layer too)", () => {
     const dbPath = tempDbPath();
     // Persist a real pending confirmation carrying a valid agentState, then close.
