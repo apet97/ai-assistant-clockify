@@ -75,7 +75,8 @@ such bug was found against the REAL API, not by reading the code.
 ## Branch layout
 
 - **`main`** (curated): `src/`, `tests/`, `scripts/`, this file, `AGENTS.md`,
-  `README.md`, `NEXT_SESSION_PROMPT.md` (live-test kickoff), `docs/HISTORY.md`.
+  `README.md`, `NEXT_SESSION_PROMPT.md` (live-test kickoff), `docs/HISTORY.md`,
+  `.claude/workflows/` (the full-angle audit-and-fix workflow).
 - **`slopbranch`**: the design docs (`PRD/SPEC/ARCHITECTURE/DATA_MODEL/
   SAFETY_AND_PERMISSIONS/IMPLEMENTATION_PLAN*/TESTING_AND_ACCEPTANCE/
   API_COVERAGE_PLAN/REFERENCES`, `.claude/`). Read via `git show slopbranch:SPEC.md`.
