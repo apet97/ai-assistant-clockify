@@ -167,6 +167,9 @@ export interface Store {
 export interface TestStore extends Store {
   tables(): string[];
   rawAddonTokenForTest(workspaceId: string): string | undefined;
+  /** EXPLAIN QUERY PLAN of the exact `listActionOutcomes` statement (for the
+   *  index-seek regression test); `detail` lines only. */
+  explainActionOutcomesPlan(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
 }
 
 interface InstallationRow {
@@ -220,6 +223,31 @@ function parseStoredAgentState(value: string | null): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * SQL for {@link Store.listActionOutcomes}. The `created_at >= ?` predicate is
+ * appended ONLY when a `since` bound is supplied. The previous
+ * `(? IS NULL OR created_at >= ?)` form silently disabled the range column of
+ * `idx_audit_events_workspace_admin_created` (the optimizer can't use a range
+ * seek behind an OR on a bind param), turning every since-bounded recap/metrics
+ * read into a workspace+admin partial-index SCAN. `json_extract` pulls the two
+ * scalars the caller reads (`ok`, `code`) so SQLite never materializes the full
+ * multi-KB receipt as a JS document just to read a boolean and a code string.
+ * Single source of truth for both the query and the test-only EXPLAIN helper.
+ */
+function actionOutcomesSql(bounded: boolean): string {
+  return `SELECT action_name,
+            json_extract(receipt_json, '$.ok') AS ok,
+            json_extract(receipt_json, '$.code') AS code
+          FROM audit_events
+          WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
+}
+
+/** SQL for {@link Store.listConfirmationOutcomes}; same conditional-bound shape. */
+function confirmationOutcomesSql(bounded: boolean): string {
+  return `SELECT status, expires_at FROM pending_confirmations
+          WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
 }
 
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
@@ -544,30 +572,27 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     },
 
     listActionOutcomes(workspaceId, adminUserId, sinceIso) {
-      const rows = db
-        .prepare(
-          `SELECT action_name, receipt_json FROM audit_events
-           WHERE workspace_id = ? AND admin_user_id = ? AND (? IS NULL OR created_at >= ?)`,
-        )
-        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{
+      const sql = actionOutcomesSql(sinceIso !== undefined);
+      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const rows = db.prepare(sql).all(...params) as Array<{
         action_name: string;
-        receipt_json: string;
+        // SQLite json_extract returns the JSON value as a native scalar: 1/0 for
+        // booleans, a string (or NULL) for code. Extracting the two scalars in
+        // SQLite avoids JSON.parse'ing the (potentially multi-KB) receipt per row.
+        ok: number | null;
+        code: string | null;
       }>;
       return rows.map((row) => {
-        const receipt = JSON.parse(row.receipt_json) as { ok?: boolean; code?: string };
-        const outcome: ActionOutcome = { actionName: row.action_name, ok: receipt.ok === true };
-        if (!outcome.ok && typeof receipt.code === "string") outcome.code = receipt.code;
+        const outcome: ActionOutcome = { actionName: row.action_name, ok: row.ok === 1 };
+        if (!outcome.ok && typeof row.code === "string") outcome.code = row.code;
         return outcome;
       });
     },
 
     listConfirmationOutcomes(workspaceId, adminUserId, sinceIso) {
-      const rows = db
-        .prepare(
-          `SELECT status, expires_at FROM pending_confirmations
-           WHERE workspace_id = ? AND admin_user_id = ? AND (? IS NULL OR created_at >= ?)`,
-        )
-        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{
+      const sql = confirmationOutcomesSql(sinceIso !== undefined);
+      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const rows = db.prepare(sql).all(...params) as Array<{
         status: string;
         expires_at: string;
       }>;
@@ -660,6 +685,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         .prepare("SELECT addon_token_ciphertext FROM installations WHERE workspace_id = ?")
         .get(workspaceId) as { addon_token_ciphertext: string } | undefined;
       return row?.addon_token_ciphertext;
+    },
+
+    explainActionOutcomesPlan(workspaceId, adminUserId, sinceIso) {
+      const sql = actionOutcomesSql(sinceIso !== undefined);
+      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
+        detail: string;
+      }>;
+      return rows.map((r) => r.detail);
     },
 
     close() {
