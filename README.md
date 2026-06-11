@@ -145,11 +145,24 @@ Tests run entirely against fakes by default — no network, no credentials. Live
 checks are opt-in and **must target a throwaway workspace**. They are gated by
 env (`LIVE_CLOCKIFY=1`, plus the relevant tokens/IDs):
 
+- `scripts/live-full.ts` — exhaustive, self-cleaning exerciser: runs every
+  typed action against a throwaway workspace and cleans up after itself.
+- `scripts/live-sweep.ts` — leftover sweep; **must end at 0 leftovers** before
+  any run is considered clean.
 - `scripts/live-smoke.ts` — drives the real harness (read + safe write + risky
   preview→confirm→commit) via a personal-API-key adapter; self-cleaning.
 - `scripts/addon-smoke.ts` — exercises the production add-on-token request path.
+  Prerequisite: run `scripts/capture-addon-token.ts` first to copy the encrypted
+  installation token from the store into the gitignored `.env` as
+  `LIVE_ADDON_TOKEN` (the token is never printed, only its length).
 - `scripts/chat-smoke.ts` — live model round-trip (the model is sent only the
   action catalog + policy, never a token).
+
+The **full opt-in battery** (eval meters `eval-planner.ts` / `eval-agentic.ts`,
+the HTTP confirm-flow and agentic-flow live checks, the broad chat tour, plus
+the exact env vars each one needs) is the canonical list in
+[`CLAUDE.md` → "Live testing"](./CLAUDE.md); this section is the headline subset.
+Always finish a live run with the sweep at 0 leftovers.
 
 Never commit or paste live credentials.
 
