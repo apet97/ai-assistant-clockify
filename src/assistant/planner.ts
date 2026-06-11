@@ -52,6 +52,8 @@ export interface PlanConversationInput {
   tools?: ToolDefinition[];
   /** Clockify auth class so the prompt can surface add-on platform restrictions. */
   authClass?: AuthClass;
+  /** Server clock date (YYYY-MM-DD) so the model narrates the real date, not its cutoff. */
+  currentDate?: string;
 }
 
 type ParseResult =
@@ -84,6 +86,8 @@ export interface AgentConversationInput
   tools?: ToolDefinition[];
   /** Clockify auth class so the prompt can surface add-on platform restrictions. */
   authClass?: AuthClass;
+  /** Server clock date (YYYY-MM-DD) so the model narrates the real date, not its cutoff. */
+  currentDate?: string;
 }
 
 /**
@@ -94,7 +98,11 @@ export interface AgentConversationInput
  * resumes the returned transcript on an interrupt.
  */
 export async function runAgentConversation(input: AgentConversationInput): Promise<AgentTurnResult> {
-  const system = buildToolSystemPrompt({ policy: input.policy, authClass: input.authClass });
+  const system = buildToolSystemPrompt({
+    policy: input.policy,
+    authClass: input.authClass,
+    currentDate: input.currentDate,
+  });
   return runAgentTurn({
     modelClient: input.modelClient,
     messages: [{ role: "system", content: system }, ...input.messages],
@@ -120,7 +128,11 @@ export async function planConversation(input: PlanConversationInput): Promise<Mo
  * still re-validates and gates every proposed action (Zod + risk/policy).
  */
 async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
-  const system = buildToolSystemPrompt({ policy: input.policy, authClass: input.authClass });
+  const system = buildToolSystemPrompt({
+    policy: input.policy,
+    authClass: input.authClass,
+    currentDate: input.currentDate,
+  });
   const messages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
   const tools = input.tools ?? toolsForModel();
   const completion = await input.modelClient.completeWithTools!(messages, tools);

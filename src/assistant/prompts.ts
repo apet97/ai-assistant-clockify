@@ -42,6 +42,28 @@ function addonRestrictionSection(authClass?: AuthClass): string[] {
   ];
 }
 
+/**
+ * The DATES rule. Calendar math stays server-side (the harness holds the clock
+ * and resolves relative/partial dates), but the OLD framing — "you do not know
+ * today's date" — left the model free to narrate from its stale training cutoff:
+ * it called early-June-2026 dates "in the future" and claimed "we're still in
+ * 2025", contradicting the server clock the harness actually used (finding
+ * new-3). When the caller supplies the server's current date, we state it as a
+ * fact the model must trust over its own knowledge cutoff — while still routing
+ * relative/partial dates through the backend for the actual math.
+ */
+function datesRule(currentDate?: string): string {
+  if (currentDate) {
+    return [
+      `- DATES: today's date is ${currentDate} (the server's clock — this is the real, current date).`,
+      " Treat it as ground truth and trust it over your own knowledge cutoff: never tell the admin that a date is 'in the future' or that 'we're still in' an earlier year when it is not — your internal sense of the current year is stale and wrong.",
+      " You still do not do calendar math yourself: pass dates to tools exactly as the admin expressed them — relative words ('today', 'yesterday', 'last monday', 'this week', 'last month'), or a partial month+day with no year ('June 1', 'Jun 5') when the admin gave no year — and the backend fills in the year and the math.",
+      " Only pass a full YYYY-MM-DD when the admin explicitly stated that year; never narrate a year the admin did not give.",
+    ].join("");
+  }
+  return "- DATES: you do not know today's date and your internal clock is unreliable — never invent or compute one. Pass dates to tools exactly as the admin expressed them: relative words ('today', 'yesterday', 'last monday', 'this week', 'last month'), or a partial month+day with NO year ('June 1', 'Jun 5') when the admin gave no year. The backend, which holds the real clock, fills in the current year and the calendar math. Only pass a full YYYY-MM-DD when the admin explicitly stated that year; never narrate a year the admin did not give.";
+}
+
 export function buildSystemPrompt(input: BuildPromptInput): string {
   const actions = input.actionCatalog
     .map(
@@ -91,7 +113,12 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
  * invariants, and the admin's permissions. The harness still re-validates and
  * gates every tool call — this prompt never carries tokens, secrets, or headers.
  */
-export function buildToolSystemPrompt(input: { policy: AdminPolicy; authClass?: AuthClass }): string {
+export function buildToolSystemPrompt(input: {
+  policy: AdminPolicy;
+  authClass?: AuthClass;
+  /** The server clock's date (YYYY-MM-DD) — see {@link datesRule}. */
+  currentDate?: string;
+}): string {
   const policy = Object.entries(input.policy.groups)
     .map(([group, level]) => `- ${group}: ${level}`)
     .join("\n");
@@ -117,7 +144,7 @@ export function buildToolSystemPrompt(input: { policy: AdminPolicy; authClass?: 
     "- To answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\", call assistant_recent_outcomes — it reads your audited action outcomes. Never answer activity-recap questions from chat memory: your visible history is windowed and WILL contradict what actually happened.",
     "- If the admin asks you to call the Clockify API directly, or to use or reveal a token or credentials: say that you never hold tokens (the backend does) and that you act only through these tools — then offer the closest tool-based action instead of silently substituting it.",
     "- If the message is a question or smalltalk, just answer in plain text — don't call a tool.",
-    "- DATES: you do not know today's date and your internal clock is unreliable — never invent or compute one. Pass dates to tools exactly as the admin expressed them: relative words ('today', 'yesterday', 'last monday', 'this week', 'last month'), or a partial month+day with NO year ('June 1', 'Jun 5') when the admin gave no year. The backend, which holds the real clock, fills in the current year and the calendar math. Only pass a full YYYY-MM-DD when the admin explicitly stated that year; never narrate a year the admin did not give.",
+    datesRule(input.currentDate),
     ...addonRestrictionSection(input.authClass),
     "",
     "Admin assistant permissions:",

@@ -144,6 +144,24 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt).not.toContain("Authorization");
   });
 
+  it("anchors the model to the server's current date so its narration never claims a past 2026 date is in the future (finding new-3: 'Q2 2026 hasn't happened yet — we're still in 2025')", () => {
+    // The model's knowledge cutoff makes it narrate early-2026 dates as future
+    // ('we're still in 2025'), contradicting the server clock the harness uses.
+    // The prompt must carry the authoritative server date as a fact the model
+    // treats as ground truth — it still passes relative/partial dates to tools,
+    // but never overrides the real date with its stale internal clock.
+    const dated = buildToolSystemPrompt({
+      policy: defaultAdminPolicy(),
+      currentDate: "2026-06-12",
+    });
+    // The exact server date appears as a stated fact.
+    expect(dated).toContain("2026-06-12");
+    // The model is told not to second-guess it with its own knowledge cutoff.
+    expect(dated.toLowerCase()).toContain("knowledge cutoff");
+    // Without a date, the prompt is unchanged (no stray "Today's date" line).
+    expect(prompt).not.toContain("Today's date");
+  });
+
   it("warns the model up-front about the add-on platform restrictions so it surfaces them immediately instead of gathering args (finding new-1: webhook-ask-then-refuse — the model gathered name/URL/event across 4 turns before preview() fired)", () => {
     const addonPrompt = buildToolSystemPrompt({ policy: defaultAdminPolicy(), authClass: "addon" });
     const apiKeyPrompt = buildToolSystemPrompt({ policy: defaultAdminPolicy(), authClass: "api_key" });
