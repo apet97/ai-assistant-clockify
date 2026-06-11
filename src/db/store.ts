@@ -125,7 +125,12 @@ export interface Store {
   getSession(id: string): ChatSession | undefined;
 
   addMessage(input: NewMessageInput): void;
-  getRecentMessages(sessionId: string, limit: number): ChatMessage[];
+  /**
+   * Loads the most recent `limit` messages, oldest-first. `payload` is omitted
+   * unless `includePayload` is true — the model-visible window only needs
+   * role + content, so the stored payload blob is not fetched/parsed by default.
+   */
+  getRecentMessages(sessionId: string, limit: number, includePayload?: boolean): ChatMessage[];
 
   savePendingConfirmation(record: PendingConfirmationRecord): void;
   getPendingConfirmation(id: string): PendingConfirmationRecord | undefined;
@@ -443,23 +448,30 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       );
     },
 
-    getRecentMessages(sessionId, limit) {
+    getRecentMessages(sessionId, limit, includePayload = false) {
+      // The model-visible window (the sole request-path consumer) needs only
+      // role + content; the stored payload can be a fat list/report receipt
+      // (100KB+), so fetching + JSON.parsing it per windowed row is wasted work.
+      // It is loaded only when a caller explicitly opts in.
+      const columns = includePayload ? "role, content, payload_json" : "role, content";
       const rows = db
         .prepare(
-          "SELECT role, content, payload_json FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+          `SELECT ${columns} FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
         )
         .all(sessionId, limit) as Array<{
         role: ChatRole;
         content: string;
-        payload_json: string | null;
+        payload_json?: string | null;
       }>;
-      return rows
-        .reverse()
-        .map((r) => ({
-          role: r.role,
-          content: r.content,
-          payload: r.payload_json ? JSON.parse(r.payload_json) : undefined,
-        }));
+      return rows.reverse().map((r) =>
+        includePayload
+          ? {
+              role: r.role,
+              content: r.content,
+              payload: r.payload_json ? JSON.parse(r.payload_json) : undefined,
+            }
+          : { role: r.role, content: r.content },
+      );
     },
 
     savePendingConfirmation(record) {

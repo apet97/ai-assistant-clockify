@@ -244,4 +244,33 @@ describe("store", () => {
     expect(loaded?.preview).toEqual({ summary: "delete a thing" });
     store.close();
   });
+
+  it("getRecentMessages omits the parsed payload by default and only loads it when asked (efficiency-05)", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    // A fat assistant payload (the kind persisted with full list/report receipts).
+    const payload = { kind: "answer", results: [{ kind: "receipt", blob: "x".repeat(2000) }] };
+    store.addMessage({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      role: "assistant",
+      content: "here you go",
+      payload,
+    });
+
+    // The model-visible window (the sole request-path consumer) only needs
+    // role + content; it never reads payload. So the default load must NOT
+    // fetch + JSON.parse the payload blob.
+    const lean = store.getRecentMessages(session.id, 12);
+    expect(lean).toHaveLength(1);
+    expect(lean[0]?.role).toBe("assistant");
+    expect(lean[0]?.content).toBe("here you go");
+    expect(lean[0]?.payload).toBeUndefined();
+
+    // Opt-in callers (e.g. the persisted-nonce safety check) can still read it.
+    const full = store.getRecentMessages(session.id, 12, true);
+    expect(full[0]?.payload).toEqual(payload);
+    store.close();
+  });
 });

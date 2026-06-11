@@ -151,7 +151,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     const claims = verifySessionCookie(decodeURIComponent(cookie.split("=").slice(1).join("=")), "test-session-secret");
     if (!claims) throw new Error("could not decode the test session cookie");
     const stored = store
-      .getRecentMessages(claims.sessionId, 1000)
+      .getRecentMessages(claims.sessionId, 1000, true)
       .filter((m) => m.role === "assistant")
       .at(-1);
     expect(stored).toBeDefined();
