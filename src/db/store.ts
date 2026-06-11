@@ -201,6 +201,27 @@ interface PendingRow {
   agent_state_json: string | null;
 }
 
+/**
+ * Parse the persisted agentic suspension defensively. A truncated/corrupt
+ * agent_state_json must never throw out of getPendingConfirmation — the
+ * confirm/cancel routes call that getter with no try/catch, so a raw JSON.parse
+ * SyntaxError would escape as an unhandled rejection and leave the preview
+ * permanently unconfirmable AND uncancellable. Returning undefined honours the
+ * agentic-loop invariant ("agent_state_json … malformed ⇒ no resume"): the
+ * confirm commits the receipt with no resume, the same fate parseAgentState
+ * gives a structurally-malformed (but parseable) value. Only this column is
+ * tolerant; risk/preview/operation stay strict because corrupting them is an
+ * integrity failure, not a lost resume.
+ */
+function parseStoredAgentState(value: string | null): unknown {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
   const db = new Database(databasePath);
   migrate(db);
@@ -459,7 +480,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         createdAt: row.created_at,
         usedAt: row.used_at ?? undefined,
         result: row.result_json ? JSON.parse(row.result_json) : undefined,
-        agentState: row.agent_state_json ? JSON.parse(row.agent_state_json) : undefined,
+        // Fail-soft ONLY for the agentic suspension: a corrupt/truncated
+        // agent_state_json (crash mid-write, partial migration) must degrade to
+        // undefined, not throw out of this getter into the confirm/cancel route
+        // (which call it with no try/catch). Per the agentic-loop invariant
+        // ("agent_state_json … malformed ⇒ no resume"), the confirm then commits
+        // the receipt with no resume — exactly as the schema layer (parseAgentState)
+        // does for structurally-malformed values. The risk/preview/operation parses
+        // stay strict: corrupting THEM is a real integrity failure, not a lost resume.
+        agentState: parseStoredAgentState(row.agent_state_json),
       };
     },
 

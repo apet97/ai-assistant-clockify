@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStore, type TestStore } from "../../src/db/store.js";
+import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import {
   FEATURE_GROUPS,
   adminPolicySchema,
@@ -174,5 +175,52 @@ describe("store", () => {
     expect(inst?.reportsUrl).toBe("https://developer.clockify.me/report");
     expect(inst?.apiUrl).toBe("https://developer.clockify.me/api");
     expect(inst?.addonToken).toBe("secret-token");
+  });
+
+  it("loads a pending confirmation with corrupt agent_state_json as agentState undefined (malformed => no resume below the schema layer too)", () => {
+    const dbPath = tempDbPath();
+    // Persist a real pending confirmation carrying a valid agentState, then close.
+    const seed = createStore(dbPath, { encryptionKey: ENC_KEY });
+    const session = seed.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const created = createPendingConfirmation({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      risk: ["destructive"],
+      preview: { summary: "delete a thing" },
+      operation: {
+        actionName: "projects_delete",
+        featureGroup: "work_structure",
+        risks: ["destructive"],
+        payload: {},
+      },
+      sessionSecret: "s",
+      agentState: { transcript: [{ role: "user", content: "hi" }], call: { id: "r1", name: "x" } },
+    });
+    seed.savePendingConfirmation(created.record);
+    seed.close();
+
+    // Simulate a row whose agent_state_json was truncated at rest (crash mid-write,
+    // disk corruption, a partial migration). JSON.parse would throw on this value.
+    const raw = new Database(dbPath);
+    raw
+      .prepare("UPDATE pending_confirmations SET agent_state_json = ? WHERE id = ?")
+      .run("{truncated", created.previewId);
+    raw.close();
+
+    // The confirm/cancel routes call getPendingConfirmation with no try/catch, so a
+    // raw SyntaxError here would escape as an unhandled rejection and leave the
+    // preview permanently unconfirmable AND uncancellable. Per the agentic-loop
+    // invariant ("agent_state_json ... malformed => no resume"), a corrupt stored
+    // state must degrade to agentState undefined: the confirm then commits the
+    // receipt with no resume. The strict parses (risk/preview/operation) are
+    // untouched and still load.
+    const store = createStore(dbPath, { encryptionKey: ENC_KEY });
+    const loaded = store.getPendingConfirmation(created.previewId);
+    expect(loaded).toBeDefined();
+    expect(loaded?.agentState).toBeUndefined();
+    expect(loaded?.risk).toEqual(["destructive"]);
+    expect(loaded?.preview).toEqual({ summary: "delete a thing" });
+    store.close();
   });
 });
