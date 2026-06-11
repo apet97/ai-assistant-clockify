@@ -62,9 +62,9 @@ export interface RestCore {
 }
 
 /** Page size used by `paginate`; Clockify's per-page cap for list endpoints. */
-const PAGE_SIZE = 200;
+export const PAGE_SIZE = 200;
 /** Hard ceiling on pagination loops (200 * 50 = 10k rows) — a runaway backstop. */
-const MAX_PAGES = 50;
+export const MAX_PAGES = 50;
 
 function hostsFor(apiBase: string): { api: string; reports: string; audit: string | undefined } {
   // https://api.clockify.me/api/v1 -> reports.api.clockify.me/v1, auditlog-api.api.clockify.me/v1

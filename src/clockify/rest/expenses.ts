@@ -1,4 +1,4 @@
-import type { RestCore } from "./core.js";
+import { MAX_PAGES, PAGE_SIZE, type RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type {
   ExpensePort,
@@ -40,9 +40,6 @@ function existingAmount(existing: Record<string, unknown>): string | undefined {
   const qty = numFrom(existing.quantity) || 1;
   return (total / qty / 100).toFixed(2);
 }
-
-const PAGE_SIZE = 200;
-const MAX_PAGES = 50;
 
 function mapExpense(raw: any): ExpenseSummary {
   const name = (raw.notes as string | undefined) ?? raw.id;

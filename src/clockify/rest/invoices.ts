@@ -1,4 +1,4 @@
-import type { RestCore } from "./core.js";
+import { MAX_PAGES, PAGE_SIZE, type RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type {
   InvoicePort,
@@ -12,10 +12,6 @@ import type {
 function toClockifyDate(d: string): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00Z` : d;
 }
-
-/** Clockify's per-page cap for list endpoints; the invoices envelope is paged the same way. */
-const PAGE_SIZE = 200;
-const MAX_PAGES = 50;
 
 /**
  * Largest export the receipt will carry inline (1 MB raw → base64). Over this,
