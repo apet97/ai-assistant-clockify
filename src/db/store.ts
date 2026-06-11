@@ -535,11 +535,22 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     listConfirmationOutcomes(workspaceId, adminUserId, sinceIso) {
       const rows = db
         .prepare(
-          `SELECT status FROM pending_confirmations
+          `SELECT status, expires_at FROM pending_confirmations
            WHERE workspace_id = ? AND admin_user_id = ? AND (? IS NULL OR created_at >= ?)`,
         )
-        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{ status: string }>;
-      return rows.map((row) => row.status);
+        .all(workspaceId, adminUserId, sinceIso ?? null, sinceIso ?? null) as Array<{
+        status: string;
+        expires_at: string;
+      }>;
+      // A preview never gets an 'expired' status written to the DB (the safety
+      // paths read expires_at directly); derive it here so metrics/recaps don't
+      // report a lapsed preview as eternally pending.
+      const nowMs = now().getTime();
+      return rows.map((row) =>
+        row.status === "pending" && new Date(row.expires_at).getTime() <= nowMs
+          ? "expired"
+          : row.status,
+      );
     },
 
     recordIdempotency(key, receipt, committedAtEpochMs) {

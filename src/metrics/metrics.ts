@@ -79,7 +79,7 @@ export function buildMetrics(
     cancelled: count("cancelled"),
     expired: count("expired"),
     failed: count("failed"),
-    pending: count("pending") + count("executing"),
+    pending: count("pending"),
   };
 
   return {
