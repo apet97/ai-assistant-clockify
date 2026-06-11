@@ -13,6 +13,24 @@ function getLifecycleToken(req: Request): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/**
+ * Bind the workspace to the VERIFIED token claim. A valid lifecycle token must
+ * only ever mutate the workspace it was signed for, so the attacker-controlled
+ * request body can never select a different (victim) workspace. Returns the
+ * authoritative workspaceId, or `"mismatch"` when the body names a workspace
+ * that disagrees with the claim (cross-workspace install hijack / DoS).
+ */
+function resolveWorkspaceId(
+  claimWorkspaceId: unknown,
+  bodyWorkspaceId: unknown,
+): string | undefined | "mismatch" {
+  const claimWs = typeof claimWorkspaceId === "string" ? claimWorkspaceId : undefined;
+  const bodyWs = typeof bodyWorkspaceId === "string" ? bodyWorkspaceId : undefined;
+  if (claimWs && bodyWs && claimWs !== bodyWs) return "mismatch";
+  // Prefer the verified claim; fall back to the body only when the claim omits it.
+  return claimWs ?? bodyWs;
+}
+
 export function lifecycleRouter(deps: AppDeps): Router {
   const router = Router();
 
@@ -25,7 +43,10 @@ export function lifecycleRouter(deps: AppDeps): Router {
     // apiUrl, addonUserId, webhooks }. Only the installation token + workspace
     // are essential — capture the rest opportunistically. Requiring optional
     // metadata (e.g. addonUserId) would reject otherwise-valid installs.
-    const workspaceId = body.workspaceId ?? claims.workspaceId;
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    if (workspaceId === "mismatch") {
+      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+    }
     const addonToken = body.authToken;
     if (!workspaceId || !addonToken) {
       return res.status(400).json({ ok: false, code: "invalid_payload" });
@@ -49,7 +70,10 @@ export function lifecycleRouter(deps: AppDeps): Router {
     if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
     const body = req.body ?? {};
-    const workspaceId = body.workspaceId ?? claims.workspaceId;
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    if (workspaceId === "mismatch") {
+      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+    }
     if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
 
     const status = String(body.status ?? "").toUpperCase() === "ACTIVE" ? "active" : "inactive";
@@ -62,7 +86,10 @@ export function lifecycleRouter(deps: AppDeps): Router {
     if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
     const body = req.body ?? {};
-    const workspaceId = body.workspaceId ?? claims.workspaceId;
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    if (workspaceId === "mismatch") {
+      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+    }
     if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
 
     deps.store.setInstallationStatus(workspaceId, "deleted");

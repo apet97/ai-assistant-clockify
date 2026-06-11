@@ -138,4 +138,93 @@ describe("POST /lifecycle/installed", () => {
     expect(saved?.addonId).toBe("addon-minimal");
     expect(saved?.addonUserId).toBe("");
   });
+
+  it("rejects a token signed for workspace A that targets a different workspace B", async () => {
+    // Pre-existing legitimate install for the VICTIM workspace.
+    store.saveInstallation({
+      workspaceId: "ws-victim-install",
+      addonId: "addon-victim",
+      addonUserId: "victim-user",
+      addonToken: "victim-real-token",
+      apiUrl: "https://victim.api.clockify.me",
+      backendUrl: "https://victim.api.clockify.me",
+      status: "active",
+      installedByUserId: "victim-owner",
+    });
+
+    // Attacker holds a VALID lifecycle token, but signed for THEIR workspace.
+    const token = await lifecycleToken({
+      workspaceId: "ws-attacker",
+      addonId: "addon-attacker",
+    });
+    const res = await request(app)
+      .post("/lifecycle/installed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({
+        workspaceId: "ws-victim-install",
+        authToken: "attacker-evil-token",
+        apiUrl: "https://attacker.api.example.com",
+      });
+
+    // Must NOT overwrite the victim's encrypted install token / host.
+    expect(res.status).toBe(403);
+    const victim = store.getInstallation("ws-victim-install");
+    expect(victim?.addonToken).toBe("victim-real-token");
+    expect(victim?.apiUrl).toBe("https://victim.api.clockify.me");
+  });
+});
+
+describe("POST /lifecycle/deleted", () => {
+  it("rejects a token signed for workspace A that disables a different workspace B (cross-tenant DoS)", async () => {
+    store.saveInstallation({
+      workspaceId: "ws-victim-delete",
+      addonId: "addon-victim",
+      addonUserId: "victim-user",
+      addonToken: "victim-token",
+      apiUrl: "https://victim.api.clockify.me",
+      backendUrl: "https://victim.api.clockify.me",
+      status: "active",
+      installedByUserId: "victim-owner",
+    });
+
+    const token = await lifecycleToken({
+      workspaceId: "ws-attacker",
+      addonId: "addon-attacker",
+    });
+    const res = await request(app)
+      .post("/lifecycle/deleted")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ workspaceId: "ws-victim-delete" });
+
+    expect(res.status).toBe(403);
+    // Victim install stays active; it must NOT be flipped to "deleted".
+    expect(store.getInstallation("ws-victim-delete")?.status).toBe("active");
+  });
+});
+
+describe("POST /lifecycle/status-changed", () => {
+  it("rejects a token signed for workspace A that flips a different workspace B's status", async () => {
+    store.saveInstallation({
+      workspaceId: "ws-victim-status",
+      addonId: "addon-victim",
+      addonUserId: "victim-user",
+      addonToken: "victim-token",
+      apiUrl: "https://victim.api.clockify.me",
+      backendUrl: "https://victim.api.clockify.me",
+      status: "active",
+      installedByUserId: "victim-owner",
+    });
+
+    const token = await lifecycleToken({
+      workspaceId: "ws-attacker",
+      addonId: "addon-attacker",
+    });
+    const res = await request(app)
+      .post("/lifecycle/status-changed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ workspaceId: "ws-victim-status", status: "INACTIVE" });
+
+    expect(res.status).toBe(403);
+    expect(store.getInstallation("ws-victim-status")?.status).toBe("active");
+  });
 });
