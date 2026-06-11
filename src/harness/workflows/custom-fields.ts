@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { describePatch } from "./resolve.js";
 
 /**
  * Typed custom-field workflows (goclmcp §2.8). Reads (list/get) execute
@@ -151,7 +152,7 @@ const updateCustomField = defineRiskyAction({
     return {
       actionLabel: "Update custom field",
       targets: [{ type: "custom_field", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the custom field again to revert most fields.",
       warnings: ["This changes a workspace custom field."],
       payload: { id: args.id, patch },

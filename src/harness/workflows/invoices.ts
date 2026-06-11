@@ -9,7 +9,7 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
-import { matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
+import { describePatch, matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -463,8 +463,8 @@ const updateInvoice = defineRiskyAction({
       ...(args.subject !== undefined ? { subject: args.subject } : {}),
       ...(args.clientId !== undefined ? { clientId: args.clientId } : {}),
     };
-    const changes = Object.keys(patch).map((k) => `set ${k}`);
-    if (args.status !== undefined) changes.push(`set status ${args.status}`);
+    const changes = describePatch(patch);
+    if (args.status !== undefined) changes.push(`set status → ${args.status}`);
     return {
       actionLabel: "Update invoice",
       targets: [{ type: "invoice", id: resolved.id, name: resolved.number }],

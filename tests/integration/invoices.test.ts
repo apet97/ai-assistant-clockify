@@ -181,6 +181,21 @@ describe("invoice actions", () => {
     expect((fake.state.invoices[0] as any).note).toBe("Thanks for your business");
   });
 
+  it("clockify_invoices_update preview shows the VALUE each field will be set to (catchable before confirm)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", currency: "EUR", note: "Net 30" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const changes = preview.preview.expectedChanges.join(" ");
+    // The admin confirms a BUTTON, so the value the commit will write must be on
+    // the card — a model-garbled "EUR"/"GBP" must be catchable at preview time.
+    expect(changes).toContain("EUR");
+    expect(changes).toContain("Net 30");
+  });
+
   it("clockify_invoices_update routes status through the payload", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

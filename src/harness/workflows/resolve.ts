@@ -146,6 +146,38 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
   };
 }
 
+/** Longest value rendered on a preview "set <field> → <value>" line. */
+const MAX_PATCH_VALUE_LEN = 80;
+
+/**
+ * Render a single patch value for a risky-update PREVIEW card. Strings show
+ * as-is (quoted so a trailing space / emptiness is visible); arrays/objects are
+ * JSON; everything else stringifies. Long values are elided so the card stays
+ * readable. Values come from the typed patch the COMMIT will write — never a
+ * token (patches never carry secrets, by construction), so nothing sensitive
+ * can surface here.
+ */
+function renderPatchValue(value: unknown): string {
+  let text: string;
+  if (typeof value === "string") text = JSON.stringify(value);
+  else if (value === null || value === undefined) text = String(value);
+  else if (typeof value === "object") text = JSON.stringify(value);
+  else text = String(value);
+  return text.length > MAX_PATCH_VALUE_LEN ? `${text.slice(0, MAX_PATCH_VALUE_LEN - 1)}…` : text;
+}
+
+/**
+ * Build the `expectedChanges` list for a risky UPDATE preview as
+ * `set <field> → <value>` — the value the commit will actually write, not just
+ * the field name. A model-garbled value (wrong currency, mangled note) is then
+ * catchable at preview time, the same philosophy as name→id resolution at
+ * preview time. Values are clamped/stringified by {@link renderPatchValue};
+ * patches never carry tokens, so nothing sensitive can leak.
+ */
+export function describePatch(patch: Record<string, unknown>): string[] {
+  return Object.entries(patch).map(([field, value]) => `set ${field} → ${renderPatchValue(value)}`);
+}
+
 function addDays(isoDay: string, days: number): string {
   return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
 }

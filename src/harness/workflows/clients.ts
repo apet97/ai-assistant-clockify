@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed client workflows (goclmcp §2.4). Reads + create execute immediately;
@@ -110,7 +110,7 @@ const updateClient = defineRiskyAction({
     return {
       actionLabel: "Update client",
       targets: [{ type: "client", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the client again to revert most fields.",
       warnings: ["Updating a client changes live workspace data."],
       payload: { id: resolved.id, patch },

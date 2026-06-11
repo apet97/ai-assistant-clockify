@@ -7,7 +7,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveInstant } from "./resolve.js";
+import { describePatch, resolveInstant } from "./resolve.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -118,7 +118,7 @@ const updateAssignment = defineRiskyAction({
     return {
       actionLabel: "Update scheduling assignment",
       targets: [{ type: "assignment", id: args.id }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the assignment again.",
       warnings: ["This changes a user's scheduled work."],
       payload: { id: args.id, patch },

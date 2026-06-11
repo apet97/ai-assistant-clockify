@@ -5,7 +5,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveRelativeDay } from "./resolve.js";
+import { describePatch, resolveRelativeDay } from "./resolve.js";
 
 /**
  * Typed time-off workflows (goclmcp §2.9 — policies, requests, balances). Reads
@@ -119,7 +119,7 @@ const updatePolicy = defineRiskyAction({
     return {
       actionLabel: "Update time-off policy",
       targets: [{ type: "time_off_policy", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the policy again to revert most fields.",
       warnings: ["This changes a workspace time-off policy."],
       payload: { id: args.id, patch },

@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -181,7 +181,7 @@ const updateProject = defineRiskyAction({
     return {
       actionLabel: "Update project",
       targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
+      expectedChanges: describePatch(fields),
       reversibility: "You can update the project again to revert most fields.",
       warnings: ["Updating a project changes live workspace data."],
       payload: { id: resolved.id, patch: fields },

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveEntityRef, resolveRelativeDay } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
@@ -210,15 +210,19 @@ const updateExpense = defineRiskyAction({
       ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
       ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
     };
-    const changeFields = (
+    const selected = (
       ["amount", "date", "categoryId", "notes", "billable", "projectId", "taskId"] as const
-    )
-      .filter((k) => args[k] !== undefined)
-      .map((k) => UPDATE_FIELD_TOKEN[k]);
+    ).filter((k) => args[k] !== undefined);
+    const changeFields = selected.map((k) => UPDATE_FIELD_TOKEN[k]);
+    // Show the VALUE each field becomes (the user-facing amount/date, not the
+    // wire-minor amount) so a model-garbled value is catchable at preview time.
+    const changeValues: Record<string, unknown> = Object.fromEntries(
+      selected.map((k) => [UPDATE_FIELD_TOKEN[k], k === "date" ? date : args[k]]),
+    );
     return {
       actionLabel: "Update expense",
       targets: [{ type: "expense", id: args.id }],
-      expectedChanges: changeFields.map((t) => `set ${t}`),
+      expectedChanges: describePatch(changeValues),
       reversibility: "You can update the expense again to revert most fields.",
       warnings: ["Updating an expense changes an expense record."],
       payload: { id: args.id, changeFields, values },

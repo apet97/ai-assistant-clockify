@@ -8,7 +8,7 @@ import {
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
 import type { FeatureGroup } from "../permissions.js";
-import { resolveEntityRef, type ArchivedFilter } from "./resolve.js";
+import { describePatch, resolveEntityRef, type ArchivedFilter } from "./resolve.js";
 import { buildMetrics } from "../../metrics/metrics.js";
 
 /**
@@ -242,7 +242,7 @@ const updateEntity = defineRiskyAction({
     return {
       actionLabel: `Update ${args.entityType}`,
       targets: [{ type: args.entityType, id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: Object.keys(fields).map((key) => `set ${key}`),
+      expectedChanges: describePatch(fields),
       reversibility: "You can update the entity again to revert most fields.",
       warnings: ["Updating an entity changes live workspace data."],
       payload: { entityType: args.entityType, id: resolved.id, fields },

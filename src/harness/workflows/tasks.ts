@@ -8,7 +8,7 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -147,7 +147,7 @@ const updateTask = defineRiskyAction({
     return {
       actionLabel: "Update task",
       targets: [{ type: "task", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the task again to revert most fields.",
       warnings: ["Updating a task changes live workspace data."],
       payload: { projectId: resolved.projectId, id: resolved.id, patch },

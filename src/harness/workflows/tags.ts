@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed tag workflows (goclmcp §2.5). Reads + create execute immediately;
@@ -111,7 +111,7 @@ const updateTag = defineRiskyAction({
     return {
       actionLabel: "Update tag",
       targets: [{ type: "tag", id, name: targetName ?? args.name }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the tag again to revert most fields.",
       warnings: ["Updating a tag changes live workspace data."],
       payload: { id, patch },

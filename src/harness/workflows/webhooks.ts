@@ -6,6 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { describePatch } from "./resolve.js";
 
 /**
  * Clockify refuses the ENTIRE webhooks API for add-on tokens — no manifest
@@ -155,7 +156,7 @@ const updateWebhook = defineRiskyAction({
     return {
       actionLabel: "Update webhook",
       targets: [{ type: "webhook", id, ...(args.name !== undefined ? { name: args.name } : {}) }],
-      expectedChanges: Object.keys(patch).map((k) => `set ${k}`),
+      expectedChanges: describePatch(patch),
       reversibility: "You can update the webhook again.",
       warnings: ["This changes where/which workspace events are delivered."],
       payload: { id, patch },
