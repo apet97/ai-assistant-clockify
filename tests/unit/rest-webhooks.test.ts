@@ -63,11 +63,14 @@ describe("webhook rest", () => {
     expect(init.method).toBe("DELETE");
   });
 
-  it("listWebhookLogs GETs the per-webhook logs", async () => {
+  it("listWebhookLogs POSTs a WebhookLogSearchRequestV1 search body (the GET 405s live)", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "log1" }]));
     const out = await rest(f as unknown as typeof fetch).listWebhookLogs("w1");
     expect(out).toEqual([{ id: "log1" }]);
-    expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/webhooks/w1/logs");
+    const [url, init] = (f as any).mock.calls[0];
+    expect(new URL(url).pathname).toBe("/api/v1/workspaces/ws-1/webhooks/w1/logs");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ status: "ALL", sortByNewest: true });
   });
 
   it("listWebhookEvents returns a non-empty static event list (no API call)", async () => {

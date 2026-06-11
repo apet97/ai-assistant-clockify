@@ -89,7 +89,12 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
       return [...WEBHOOK_EVENTS];
     },
     async listWebhookLogs(id) {
-      const rows = (await core.call("api", "GET", `${ws}/webhooks/${id}/logs`)) as unknown[] | null;
+      // Logs are a POST search per the OpenAPI spec (WebhookLogSearchRequestV1);
+      // the GET on this route 405s live. Ask for ALL statuses, newest first.
+      const rows = (await core.call("api", "POST", `${ws}/webhooks/${id}/logs`, {
+        status: "ALL",
+        sortByNewest: true,
+      })) as unknown[] | null;
       return Array.isArray(rows) ? rows : [];
     },
   };

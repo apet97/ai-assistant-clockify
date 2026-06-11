@@ -812,13 +812,14 @@ async function runWebhooks(h: LiveHarness): Promise<void> {
     webhookId = created?.changed?.created?.[0]?.id;
     if (webhookId) {
       await h.read("clockify_webhooks_get", { id: webhookId });
-      // logs: best-effort — GET /logs 405s on this workspace (goclmcp's documented
-      // shape, pinned by the unit test); record SKIP rather than failing the gate.
+      // logs: POST search per the OpenAPI spec (WebhookLogSearchRequestV1) — the
+      // GET on this route 405s. A fresh hook has no deliveries yet, so an empty
+      // array is a legitimate PASS; only an actual error degrades to SKIP.
       try {
         const r: any = await executeAction({ actionName: "clockify_webhooks_logs", args: { id: webhookId }, context: h.ctx });
         h.record("clockify_webhooks_logs", r.kind === "receipt" && r.receipt.ok ? "PASS" : "SKIP", r.receipt?.ok ? summarize(r.receipt) : `logs unavailable: ${r.receipt?.code ?? r.kind}`);
       } catch (e) {
-        h.record("clockify_webhooks_logs", "SKIP", `logs endpoint not GETtable: ${err(e)}`);
+        h.record("clockify_webhooks_logs", "SKIP", `logs search failed: ${err(e)}`);
       }
       await h.risky("clockify_webhooks_update", { id: webhookId, name: `${name}_v2` });
       const del = await h.risky("clockify_webhooks_delete", { id: webhookId, name: `${name}_v2` });
