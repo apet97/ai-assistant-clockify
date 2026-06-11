@@ -8,6 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -84,6 +85,76 @@ describe("undo route", () => {
     // one-use: a second undo is rejected
     const again = await request(app).post(`/api/undo/${undoId}`).set("Cookie", cookie).send({});
     expect(again.status).toBe(409);
+  });
+
+  // Mirrors routes.test.ts "a confirm denied by lowered policy does not consume the
+  // preview" for the undo route: the policy re-check must run BEFORE markUndone, so a
+  // lowered policy denies cleanly without burning the one-use record. Uses its own
+  // store/fake so the shared-suite tag (and its idempotency window) can't suppress the
+  // fresh undo handle this assertion depends on.
+  it("an undo denied by lowered policy does not burn the one-use record", async () => {
+    const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
+    isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const isoFake = createFakeWorkspace();
+    const isoApp = createApp({
+      config: {
+        nodeEnv: "test",
+        port: 3997,
+        baseUrl: "https://example.com/ai-assistant",
+        clockifyAddonPublicKeyPem: keys.pem,
+        clockifyAddonKey: ADDON_KEY,
+        sessionSecret: "test-session-secret",
+        databasePath: ":memory:",
+        llmBaseUrl: "https://llm.example.com",
+        llmApiKey: "llm-key",
+        llmModel: "cheap-model",
+        llmProvider: "http",
+      },
+      store: isoStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => isoFake.client,
+    });
+
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+      addonId: "addon-1",
+    });
+    const auth = await request(isoApp).get("/component/assistant").query({ auth_token: token });
+    const setCookie = auth.headers["set-cookie"];
+    const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+
+    const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a tag" });
+    expect(chat.status).toBe(200);
+    const receiptResult = (chat.body.results as Array<{ kind: string; undo?: { id: string } }>).find(
+      (r) => r.kind === "receipt",
+    );
+    const undoId = receiptResult?.undo?.id;
+    expect(typeof undoId).toBe("string");
+    expect(isoFake.state.deleted.length).toBe(0);
+
+    // Lower the policy to read-only for the tag's group AFTER the undo handle was issued.
+    const lowered = defaultAdminPolicy();
+    lowered.groups.work_structure = "read";
+    isoStore.upsertAdminPolicy("ws-1", "admin-1", lowered);
+
+    // Deny-before-burn: the policy re-check rejects (400) WITHOUT consuming the record
+    // and WITHOUT deleting the entity.
+    const denied = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", cookie).send({});
+    expect(denied.status).toBe(400);
+    expect(denied.body.code).toBe("policy_denied");
+    expect(isoFake.state.deleted.length).toBe(0);
+
+    // Re-enable write access and undo the SAME record — it was never burned, so it reverses now.
+    isoStore.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
+    const ok = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", cookie).send({});
+    expect(ok.status).toBe(200);
+    expect(ok.body.ok).toBe(true);
+    expect(isoFake.state.deleted.some((d) => d.entityType === "tag")).toBe(true);
+
+    isoStore.close();
   });
 
   it("404s an unknown undo id", async () => {
