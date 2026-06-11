@@ -10,24 +10,44 @@ URL rotation, no reinstall dance).
 
 `@apet97/clockify-addon-sdk` is a dependency on the request path (token signature
 verification + manifest building). It must be installable from npm — a local
-`file:` path does not exist on Railway. Publish it once:
+`file:` path does not exist in the Railway build (the sibling is outside the
+deploy root, for both GitHub and `railway up` flows). Publish it once:
 
 ```bash
+npm login                            # required first — the @apet97 scope maps to
+                                     # your npm username (publish as user `apet97`)
 cd ../addon-ts-sdk/addon-sdk
-npm publish --access public          # or --access restricted for a private pkg
+npm publish --access public          # scoped packages default to private; this
+                                     # makes it public (free). The prepack gate
+                                     # runs type-check + 121 tests + build first.
 ```
 
 Then this repo's `package.json` pins `"@apet97/clockify-addon-sdk": "^1.0.0"` and
 `npm install` resolves it from the registry (the committed `package-lock.json`
-reflects this).
+reflects this). If your npm username is not `apet97`, either create an `@apet97`
+org or republish under a name you own.
 
 ## 1. Create the Railway service
 
-- New Project → Deploy from GitHub repo → `apet97/ai-assistant-clockify`.
-- Railway auto-detects Nixpacks; `railway.json` pins the build/start/healthcheck.
-  Build runs `npm run build` (tsc + vite), start runs `npm start`.
-- Node is pinned to **22.x** via `engines` (gets a `better-sqlite3` prebuild; no
-  native compile needed).
+Railway auto-detects Nixpacks; `railway.json` pins the build/start/healthcheck
+(build = `npm run build` (tsc + vite), start = `npm start`). Node is pinned to
+**22.x** via `engines` (gets a `better-sqlite3` prebuild — no native compile).
+
+**Dashboard:** New Project → Deploy from GitHub repo → `apet97/ai-assistant-clockify`.
+
+**Railway CLI** (you have it installed):
+
+```bash
+railway login
+railway init                 # new project  (or: railway link  for an existing one)
+railway up                   # build + deploy the current dir via Nixpacks
+railway domain               # generate the public URL -> use it as BASE_URL below
+```
+
+Note: `railway up` uploads this repo dir and runs `npm install` in the container,
+so the SDK must already be on npm (step above) — the `file:` sibling is not
+uploaded. After `railway domain` gives you the URL, set `BASE_URL` to it (step 3)
+and redeploy.
 
 ## 2. Attach a Volume — REQUIRED (do not skip)
 
@@ -37,7 +57,8 @@ volume the database is wiped on every redeploy/restart, which silently breaks
 every existing Clockify install (the stored `X-Addon-Token` is gone and Clockify
 does not resend it).
 
-- Service → **Volumes** → add a volume, mount path `/data`.
+- Dashboard: Service → **Volumes** → add a volume, mount path `/data`.
+- CLI: `railway volume add` (set the mount path to `/data` when prompted).
 - Set `DATABASE_PATH=/data/ai-assistant.sqlite` (see env below).
 
 ## 3. Environment variables
@@ -56,6 +77,9 @@ not set it.
 | `LLM_BASE_URL` | your OpenAI-compatible endpoint |
 | `LLM_API_KEY` | the model API key |
 | `LLM_MODEL` | the model name |
+
+CLI equivalent: `railway variables --set "BASE_URL=https://…" --set
+"DATABASE_PATH=/data/ai-assistant.sqlite" --set "SESSION_SECRET=…"` (etc.).
 
 Optional knobs (defaults are fine): `LLM_PROVIDER=http`, `LLM_MODE=tool`,
 `LLM_AGENTIC=1`. Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform
