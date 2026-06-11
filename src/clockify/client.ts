@@ -35,8 +35,6 @@ export type {
   ProjectSummary,
   TaskSummary,
   TimeEntrySummary,
-  StartTimeEntryInput,
-  CreateTimeEntryInput,
 } from "./types.js";
 
 /**

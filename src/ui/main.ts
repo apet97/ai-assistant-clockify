@@ -24,12 +24,9 @@ import {
 // from main (which imports render's builders) — that would be a circular dep.
 export { featureGroupRows, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
 export type {
-  PreviewRef,
   PolicyShape,
   ChatController,
   PreviewResult,
-  ReceiptResult,
-  ClarifyResult,
   ChatResult,
   ConfirmResponse,
   ConfirmHooks,
@@ -45,7 +42,6 @@ export {
   levelLabel,
   msUntil,
 } from "./presentation.js";
-export type { BatchItemOutcome, ExpiryView } from "./presentation.js";
 
 /**
  * Vanilla TS chat UI (frontend rules: no framework). The testable core is the
