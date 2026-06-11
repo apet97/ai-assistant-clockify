@@ -4,7 +4,7 @@ import type { AdminPolicy } from "../harness/permissions.js";
 import { toolsForModel } from "../harness/tools.js";
 import { runAgentTurn, type AgentTurnResult, type RunAgentTurnInput } from "./agent-loop.js";
 import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.js";
-import { buildRepairMessage, buildSystemPrompt, buildToolSystemPrompt } from "./prompts.js";
+import { buildRepairMessage, buildSystemPrompt, buildToolSystemPrompt, type AuthClass } from "./prompts.js";
 
 /**
  * Validated planning flow (SPEC "Chat Flow" steps 5–7). The model output must be
@@ -50,6 +50,8 @@ export interface PlanConversationInput {
   useTools?: boolean;
   /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
   tools?: ToolDefinition[];
+  /** Clockify auth class so the prompt can surface add-on platform restrictions. */
+  authClass?: AuthClass;
 }
 
 type ParseResult =
@@ -80,6 +82,8 @@ export interface AgentConversationInput
   policy: AdminPolicy;
   /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
   tools?: ToolDefinition[];
+  /** Clockify auth class so the prompt can surface add-on platform restrictions. */
+  authClass?: AuthClass;
 }
 
 /**
@@ -90,7 +94,7 @@ export interface AgentConversationInput
  * resumes the returned transcript on an interrupt.
  */
 export async function runAgentConversation(input: AgentConversationInput): Promise<AgentTurnResult> {
-  const system = buildToolSystemPrompt({ policy: input.policy });
+  const system = buildToolSystemPrompt({ policy: input.policy, authClass: input.authClass });
   return runAgentTurn({
     modelClient: input.modelClient,
     messages: [{ role: "system", content: system }, ...input.messages],
@@ -116,7 +120,7 @@ export async function planConversation(input: PlanConversationInput): Promise<Mo
  * still re-validates and gates every proposed action (Zod + risk/policy).
  */
 async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
-  const system = buildToolSystemPrompt({ policy: input.policy });
+  const system = buildToolSystemPrompt({ policy: input.policy, authClass: input.authClass });
   const messages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
   const tools = input.tools ?? toolsForModel();
   const completion = await input.modelClient.completeWithTools!(messages, tools);
@@ -136,6 +140,7 @@ async function planWithJson(input: PlanConversationInput): Promise<ModelPlan> {
   const system = buildSystemPrompt({
     actionCatalog: input.actionCatalog,
     policy: input.policy,
+    authClass: input.authClass,
   });
   const baseMessages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
 

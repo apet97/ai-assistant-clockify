@@ -7,9 +7,39 @@ import type { AdminPolicy } from "../harness/permissions.js";
  * never tokens, secrets, or raw headers. Clockify data is untrusted input and is
  * explicitly demoted to data, not instructions.
  */
+/**
+ * The Clockify auth class the assistant is running under. The embedded add-on
+ * uses `"addon"`; dev scripts use `"api_key"`. Some Clockify APIs are blocked
+ * for the add-on token class regardless of scopes (probed live), so the model
+ * must be told up-front to surface that restriction immediately instead of
+ * gathering args for a write that the harness will only reject at preview time.
+ */
+export type AuthClass = "addon" | "api_key";
+
 export interface BuildPromptInput {
   actionCatalog: ActionCatalogEntry[];
   policy: AdminPolicy;
+  authClass?: AuthClass;
+}
+
+/**
+ * The platform-restriction notice for the add-on auth class. These APIs are
+ * blocked for the add-on token regardless of manifest scopes (probed live), so
+ * the harness clarifies at PREVIEW time — but without this notice the model
+ * gathers every arg across several turns before that clarify fires (finding
+ * new-1: webhook-ask-then-refuse). Telling the model up-front lets it surface
+ * the restriction on the FIRST turn the intent appears, never gathering args.
+ * Only added when `authClass === "addon"`; dev (`api_key`) is not subject to it.
+ */
+function addonRestrictionSection(authClass?: AuthClass): string[] {
+  if (authClass !== "addon") return [];
+  return [
+    "",
+    "PLATFORM RESTRICTION (this embedded add-on): Clockify blocks a few APIs for add-ons regardless of the admin's assistant permissions — no scope can grant them. Do NOT gather arguments for these; the moment the admin's intent is one of them, say IMMEDIATELY that it is a Clockify platform restriction (not an assistant-permission setting) and point them to Clockify's workspace settings (or a personal API key). The blocked actions are:",
+    "- The webhooks API for writes (clockify_webhooks_create / clockify_webhooks_update / clockify_webhooks_delete) — the whole webhooks API is blocked for add-ons.",
+    "- Creating a custom field (clockify_custom_fields_create) — an admin can add the field in Clockify's workspace settings; you can still read and set values on existing custom fields.",
+    "- Listing all workspaces account-wide (account-level GET /workspaces); you operate within this one workspace only.",
+  ];
 }
 
 export function buildSystemPrompt(input: BuildPromptInput): string {
@@ -46,6 +76,7 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
     "",
     "Action catalog:",
     actions,
+    ...addonRestrictionSection(input.authClass),
     "",
     "Admin assistant permissions:",
     policy,
@@ -60,7 +91,7 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
  * invariants, and the admin's permissions. The harness still re-validates and
  * gates every tool call — this prompt never carries tokens, secrets, or headers.
  */
-export function buildToolSystemPrompt(input: { policy: AdminPolicy }): string {
+export function buildToolSystemPrompt(input: { policy: AdminPolicy; authClass?: AuthClass }): string {
   const policy = Object.entries(input.policy.groups)
     .map(([group, level]) => `- ${group}: ${level}`)
     .join("\n");
@@ -86,6 +117,7 @@ export function buildToolSystemPrompt(input: { policy: AdminPolicy }): string {
     "- To answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\", call assistant_recent_outcomes — it reads your audited action outcomes. Never answer activity-recap questions from chat memory: your visible history is windowed and WILL contradict what actually happened.",
     "- If the admin asks you to call the Clockify API directly, or to use or reveal a token or credentials: say that you never hold tokens (the backend does) and that you act only through these tools — then offer the closest tool-based action instead of silently substituting it.",
     "- If the message is a question or smalltalk, just answer in plain text — don't call a tool.",
+    ...addonRestrictionSection(input.authClass),
     "",
     "Admin assistant permissions:",
     policy,

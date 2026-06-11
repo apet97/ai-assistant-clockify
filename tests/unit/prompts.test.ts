@@ -143,4 +143,26 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt).not.toContain("SESSION_SECRET");
     expect(prompt).not.toContain("Authorization");
   });
+
+  it("warns the model up-front about the add-on platform restrictions so it surfaces them immediately instead of gathering args (finding new-1: webhook-ask-then-refuse — the model gathered name/URL/event across 4 turns before preview() fired)", () => {
+    const addonPrompt = buildToolSystemPrompt({ policy: defaultAdminPolicy(), authClass: "addon" });
+    const apiKeyPrompt = buildToolSystemPrompt({ policy: defaultAdminPolicy(), authClass: "api_key" });
+
+    // The add-on prompt must name the webhooks API as platform-blocked AND the
+    // blocked-write tools so the model does not gather args for a doomed create.
+    expect(addonPrompt.toLowerCase()).toContain("platform restriction");
+    expect(addonPrompt).toContain("clockify_webhooks_create");
+    expect(addonPrompt.toLowerCase()).toContain("webhooks api");
+    expect(addonPrompt.toLowerCase()).toContain("custom field");
+    // And it must instruct the model to surface the restriction immediately
+    // rather than collecting name/URL/event first.
+    expect(addonPrompt.toLowerCase()).toContain("do not gather");
+    expect(addonPrompt.toLowerCase()).toContain("immediately");
+
+    // The api_key class (dev scripts) is not subject to these add-on blocks, so
+    // the guidance must NOT appear there — and the default (no authClass) is the
+    // existing prod-neutral prompt.
+    expect(apiKeyPrompt).not.toContain("clockify_webhooks_create");
+    expect(prompt).not.toContain("clockify_webhooks_create");
+  });
 });
