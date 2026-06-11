@@ -6,12 +6,14 @@
 > up and drive the chat. Runtime values (tunnel URL especially) are **ephemeral** —
 > verify them first.
 
-## Where this stands (2026-06-10)
+## Where this stands (2026-06-11)
 
 Everything buildable is complete: V1 + full REST parity + the "trust lives in the
 code" roadmap + the **durable agentic loop (default ON)** + the 322-prompt
-live-loop fix arc, all re-verified by a live regression run in the embedded chat.
-`npm run verify` is green at **823 tests** (madge 0), all pushed to `main`.
+live-loop fix arc, all re-verified by a live regression run in the embedded chat,
+plus the 2026-06-11 full-angle live investigation (safety 16/16, agentic 10/10 +
+21/21, live-full 115/115, planner 98.6%, chat-tour clean — no product defect).
+`npm run verify` is green at **881 tests** (madge 0), all pushed to `main`.
 Highlights live: native **tool-calling**, atomic **composition**, **idempotency**
 + **undo**, preview-time **constraint surfacing** (incl. add-on platform
 restrictions), name→id resolution (incl. **archived**), server-side dates (incl.
@@ -33,7 +35,7 @@ Continue the Clockify "AI Assistant" add-on. Repo:
 Read `CLAUDE.md` (Handoff note + Current Status) + `AGENTS.md` first, and recall the
 project memories (`clockify-addon-public-key-builtin`, `clockify-api-base-resolution`,
 `clockify-dev-console-login-and-reinstall`, `streaming-conflicts-truthful-previews`).
-`npm run verify` is green at **823 tests**. Keep the discipline: failing test first,
+`npm run verify` is green at **881 tests**. Keep the discipline: failing test first,
 verify green, focused commits, no new deps without my OK, never print/commit tokens.
 
 ## Bring the live environment up (do this first)
