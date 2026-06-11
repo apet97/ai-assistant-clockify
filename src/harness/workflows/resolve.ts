@@ -1,4 +1,5 @@
 import type { ClarifyOption, RiskyClarifyResult } from "../action.js";
+import { DAY_MS } from "../../durations.js";
 
 /**
  * Deterministic name → entity resolution shared by workflows. Writes must stop
@@ -179,7 +180,7 @@ export function describePatch(patch: Record<string, unknown>): string[] {
 }
 
 function addDays(isoDay: string, days: number): string {
-  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
 }
 
 /** Weekday names in JS `getUTCDay()` order (0 = Sunday). */
@@ -255,7 +256,6 @@ export const REPORT_PERIODS = [
 ] as const;
 export type ReportPeriod = (typeof REPORT_PERIODS)[number];
 
-const DAY_MS = 86_400_000;
 
 /** Resolve a named period to a UTC date range using `now` (the harness owns the math). */
 export function resolvePeriod(now: Date, period: ReportPeriod): { dateRangeStart: string; dateRangeEnd: string } {

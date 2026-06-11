@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { resolveInstant } from "./resolve.js";
+import { SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
  * Typed report workflows (goclmcp §2.14). All reads on the REPORTS host. Reports
@@ -27,8 +28,6 @@ const rangeSchema = z.object({
   dateRangeStart: z.string().min(1).optional(),
   dateRangeEnd: z.string().min(1).optional(),
 });
-
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 type ResolvedRange =
   | { ok: true; range: { dateRangeStart: string; dateRangeEnd: string } }

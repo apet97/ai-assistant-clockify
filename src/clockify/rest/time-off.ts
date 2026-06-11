@@ -1,5 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
+import { DAY_MS } from "../../durations.js";
 import type {
   TimeOffPort,
   TimeOffPolicySummary,
@@ -19,7 +20,6 @@ function toBareDate(d: string): string {
   return Number.isNaN(parsed.getTime()) ? d : parsed.toISOString().slice(0, 10);
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Inclusive calendar-day span between two bare dates (start === end → 1). */
 function inclusiveDays(start: string, end: string): number | undefined {

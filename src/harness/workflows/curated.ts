@@ -3,6 +3,7 @@ import { defineAction, type ActionContext, type ActionDefinition } from "../acti
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { runComposition, type CompositionStep } from "../compose.js";
 import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
+import { DAY_MS } from "../../durations.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -15,8 +16,6 @@ import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
  * ONE preview, committed atomically via the composition layer (invite required,
  * group adds best-effort).
  */
-
-const DAY_MS = 86_400_000;
 
 function nowDate(ctx: ActionContext): Date {
   return (ctx.now ?? (() => new Date()))();

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
  * Typed audit workflows (goclmcp §2.15). Both reads. The audit-log search runs on
@@ -32,7 +33,6 @@ function capRows(rows: unknown[]): { data?: unknown[]; count: number; bytes: num
 
 /** Every audit action in the enum — the default when the planner names none. */
 const ALL_AUDIT_ACTIONS = auditAction.options;
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
 
 const search = defineAction({
   name: "clockify_audit_logs_search",

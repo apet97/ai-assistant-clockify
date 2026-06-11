@@ -10,6 +10,7 @@ import {
 } from "../action.js";
 import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
 import { toMinor } from "../money.js";
+import { THIRTY_DAYS_MS } from "../../durations.js";
 import { describePatch, matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
@@ -28,7 +29,6 @@ const INV = "invoices" as const;
 /** Live invoice statuses (DRAFT is rejected by Clockify; use UNSENT for draft-like). */
 const invoiceStatusSchema = z.enum(["UNSENT", "SENT", "PAID", "PARTIALLY_PAID", "VOID", "OVERDUE"]);
 
-const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 function nowDate(ctx: ActionContext): Date {
   return (ctx.now ?? (() => new Date()))();
 }

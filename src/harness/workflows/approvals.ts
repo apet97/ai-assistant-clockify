@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { DAY_MS } from "../../durations.js";
 
 /**
  * Typed approval workflows (goclmcp §2.11). Reads (list/get) execute
@@ -14,7 +15,6 @@ import { successReceipt } from "../receipts.js";
  */
 
 const AP = "approvals" as const;
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Clockify's approval endpoint wants a full ISO-8601 UTC instant (e.g.
  *  `2026-06-01T00:00:00Z`), NOT a bare date — a bare date 400s with code 501.

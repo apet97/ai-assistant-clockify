@@ -3,6 +3,7 @@ import { defineAction, type ActionContext, type ActionDefinition } from "../acti
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
 import { matchByName, resolveRelativeDay } from "./resolve.js";
+import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
  * Time-tracking read + safe-write workflows (SPEC "Safe Writes"): status, start
@@ -273,7 +274,7 @@ const reviewDay = defineAction({
     const userId = args.userId ?? ctx.adminUserId;
     const start = `${date}T00:00:00.000Z`;
     // Exclusive end = next-day midnight (consistent with review_week's window).
-    const end = new Date(Date.parse(start) + 24 * 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.parse(start) + DAY_MS).toISOString();
     const entries = await ctx.clockify.getEntries({ userId, start, end });
     return {
       kind: "receipt",
@@ -302,7 +303,7 @@ const reviewWeek = defineAction({
     if (startDate === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.start as string) };
     const userId = args.userId ?? ctx.adminUserId;
     const start = `${startDate}T00:00:00.000Z`;
-    const end = new Date(Date.parse(start) + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.parse(start) + SEVEN_DAYS_MS).toISOString();
     const entries = await ctx.clockify.getEntries({ userId, start, end });
     return {
       kind: "receipt",
