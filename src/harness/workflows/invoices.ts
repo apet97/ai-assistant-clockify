@@ -655,12 +655,29 @@ const createInvoicePayment = defineRiskyAction({
       payment: Parameters<typeof ctx.clockify.createInvoicePayment>[1];
     };
     const created = await ctx.clockify.createInvoicePayment(typed.invoiceId, typed.payment);
-    return successReceipt({
-      action: "clockify_invoices_payments_create",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
-      changed: { created: [{ type: "payment", id: created.id ?? "payment" }] },
-    });
+    // The payment id comes from a list-diff around the POST and can be
+    // undetermined (concurrent payment, id-less rows). Never invent one — when
+    // it's unknown, record the invoice itself as updated and warn honestly
+    // rather than fabricating a payment EntityRef with a placeholder id.
+    return created.id
+      ? successReceipt({
+          action: "clockify_invoices_payments_create",
+          entity: "invoice",
+          ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
+          changed: { created: [{ type: "payment", id: created.id }] },
+        })
+      : successReceipt({
+          action: "clockify_invoices_payments_create",
+          entity: "invoice",
+          ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
+          changed: { updated: [{ type: "invoice", id: typed.invoiceId }] },
+          warnings: [
+            {
+              code: "payment_id_unknown",
+              message: "Payment recorded, but its id could not be determined from the invoice.",
+            },
+          ],
+        });
   },
 });
 

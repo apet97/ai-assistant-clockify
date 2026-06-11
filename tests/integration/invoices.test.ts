@@ -366,6 +366,32 @@ describe("invoice actions", () => {
     expect(fake.state.invoicePayments["inv1"][0].amount).toBe(5000);
   });
 
+  it("clockify_invoices_payments_create does not fabricate a 'payment' id when the list-diff can't identify it", async () => {
+    const fake = createFakeWorkspace(seed());
+    // Simulate the live list-diff returning nothing identifiable (e.g. a
+    // concurrent payment or id-less rows) → the adapter returns {}.
+    fake.client.createInvoicePayment = async () => ({});
+    const preview = await executeAction({
+      actionName: "clockify_invoices_payments_create",
+      args: { invoiceId: "inv1", amount: 50, paymentDate: "2026-06-06" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    if (!receipt.ok) throw new Error("expected success receipt");
+    // No fabricated EntityRef with the literal id "payment" anywhere in the change set.
+    const refs = [
+      ...(receipt.changed?.created ?? []),
+      ...(receipt.changed?.updated ?? []),
+      ...(receipt.changed?.deleted ?? []),
+      ...(receipt.changed?.reused ?? []),
+    ];
+    expect(refs.map((r) => r.id)).not.toContain("payment");
+    // The receipt stays honest about the unknown id via a warning.
+    expect((receipt.warnings ?? []).map((w) => w.code)).toContain("payment_id_unknown");
+  });
+
   it("clockify_invoices_payments_delete previews destructive+payment then deletes", async () => {
     const fake = createFakeWorkspace(seed());
     // seed a payment via the create path first
