@@ -135,7 +135,7 @@ const createExpense = defineRiskyAction({
       actionLabel: "Create expense",
       targets: [],
       expectedChanges: [
-        `Create an expense of ${input.amountMinor} (minor units) in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
+        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
       ],
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],

@@ -59,6 +59,22 @@ describe("expense actions", () => {
     expect(fake.state.expenses.find((e) => e.notes === "AIASSIST_SMOKE_exp")).toBeDefined();
   });
 
+  it("clockify_expenses_create previews the amount in major units, never raw minor with a '(minor units)' debug label", async () => {
+    // The admin asked for $75; the preview must read "75.00", never the wire
+    // value 7500 nor the internal "(minor units)" annotation (truthfulness).
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 75, categoryId: "c1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const change = preview.preview.expectedChanges.join(" ");
+    expect(change).toContain("75.00");
+    expect(change).not.toContain("(minor units)");
+    expect(change).not.toContain("7500");
+  });
+
   it("clockify_expenses_create resolves the category by NAME (categoryName, or a name in the categoryId slot) — live-loop FIX 1", async () => {
     const fake = createFakeWorkspace(seed());
     const byName = await executeAction({
