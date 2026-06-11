@@ -22,8 +22,15 @@ workspaceId now trusts the token claim, not the body), safety invariants
 POST-only, invoice has no note/subject/status), truthfulness (preview cards
 show chosen values), efficiency, dead-code, test-gaps, and docs — 0
 wont_fix/blocked/deferred; gate green; notes in
-`~/Downloads/ai-assistant-full-angle-audit-NOTES.md`).
-`npm run verify` = **882 tests**, `npx madge --circular
+`~/Downloads/ai-assistant-full-angle-audit-NOTES.md`) + an adversarial codebase
+review (2026-06-11) whose actionable findings landed as three duplication
+consolidations — the major/minor amount mapping (`src/harness/money.ts`),
+day-based time spans (`src/durations.ts`), and the pagination limits (exported
+from `rest/core.ts`) — plus a dead-param cleanup; the larger `routes/api.ts` and
+`db/store.ts` structural decompositions were reviewed and DEFERRED (both <1000
+LOC and cohesive; the api.ts splits touch safety-critical flow — not worth the
+regression risk yet).
+`npm run verify` = **885 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`. Remaining work is **human-gated only**:
 1. **Stable hosting** — quick-tunnel URL rotates; needs a Cloudflare zone
@@ -82,7 +89,8 @@ such bug was found against the REAL API, not by reading the code.
 ## Branch layout
 
 - **`main`** (curated): `src/`, `tests/`, `scripts/`, this file, `AGENTS.md`,
-  `README.md`, `NEXT_SESSION_PROMPT.md` (live-test kickoff), `docs/HISTORY.md`,
+  `README.md`, `NEXT_SESSION_PROMPT.md` (live-test kickoff) + `NEXT_SESSION_PLAN.md`
+  (the executed trust-lives-in-the-code roadmap, archived), `docs/HISTORY.md`,
   `.claude/workflows/` (the full-angle audit-and-fix workflow).
 - **`slopbranch`**: the design docs (`PRD/SPEC/ARCHITECTURE/DATA_MODEL/
   SAFETY_AND_PERMISSIONS/IMPLEMENTATION_PLAN*/TESTING_AND_ACCEPTANCE/
@@ -111,8 +119,9 @@ such bug was found against the REAL API, not by reading the code.
   point), `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts`,
   `confirmations.ts`, `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`,
   `compose.ts` (atomic multi-step + rollback), `idempotency.ts` (intent-hash
-  dedupe, 10-min window), `undo.ts` (reverse creations), `workflows/<area>.ts`
-  (+ `workflows/resolve.ts` — see invariants below).
+  dedupe, 10-min window), `undo.ts` (reverse creations), `money.ts` (the one
+  major↔minor amount mapping), `workflows/<area>.ts` (+ `workflows/resolve.ts`
+  — see invariants below). Shared day-span constants live in `src/durations.ts`.
 - `src/assistant/` — model client (`LLM_PROVIDER=http` OpenAI-compatible
   DeepSeek default, or `gemini-cli`), `prompts.ts`, `planner.ts`,
   `agent-loop.ts` + `agent-state.ts` (the durable agentic loop).

@@ -11,7 +11,7 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **843 tests**, 0 circular deps. Done + on `main`:
+verify` is green at **885 tests**, 0 circular deps. Done + on `main`:
 - **Full Clockify REST parity** (136 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
@@ -36,7 +36,7 @@ spec** (`https://docs.clockify.me/openapi.json`), the read-only sibling refs
 See `CLAUDE.md` → "Ground truth & verification discipline."
 
 What remains is human-gated (stable hosting, prod security review, prod AUDIT-host
-clearance) — `CLAUDE.md` → Handoff.
+clearance) — `CLAUDE.md` → "Current state".
 
 **Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev
 workspace and driven through the embedded chat — sidebar component → DeepSeek →
@@ -70,7 +70,7 @@ continue/test in a fresh session, start from `NEXT_SESSION_PROMPT.md`.**
 server-side) and accepts the shapes the planner actually emits (`startTimer: true`,
 flat `projectName`/bare strings, folded by a `z.preprocess`). (2) `clockify_tags_delete`
 accepts an exact `name` and resolves it to an id (no `invalid_args` dead-end). The
-planner prompt was reworded to match. See `CLAUDE.md` → Current Status.
+planner prompt was reworded to match. See `CLAUDE.md` → "Current state".
 
 **Honest state / what's NOT a model problem:** native tool-calling is the default
 (`LLM_MODE=tool`) — the provider validates args against schemas generated from the
@@ -88,7 +88,7 @@ backendUrl/reportsUrl/locationsUrl/screenshotsUrl/ptoUrl), so it's derived prod-
 (`resolveClockifyAuditBase`); on dev/non-audit environments audit actions now return
 a clean "audit log not available" error receipt instead of `fetch failed`. The prod
 audit-host X-Addon-Token clearance is still unconfirmed. Phase 17 (raw-API fallback)
-is deferred. See `CLAUDE.md` → Current Status.
+is deferred. See `CLAUDE.md` → "Current state".
 
 ## Non-negotiable invariants
 
@@ -138,7 +138,8 @@ npm run dev           # tsx src/server.ts (needs env)
   `risk.ts`, `receipts.ts`, `confirmations.ts`, `tools.ts` (Zod→JSON-schema tools for
   native tool-calling), `arg-summary.ts`, `compose.ts` (atomic multi-step / rollback),
   `idempotency.ts` (dedup confirmed commits), `undo.ts` (reverse the last creation),
-  `workflows/*` (time-tracking, work-structure, admin/risky, resolve).
+  `money.ts` (the one major↔minor amount mapping), `workflows/*` (time-tracking,
+  work-structure, admin/risky, resolve). Shared day-spans: `src/durations.ts`.
 - `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts`, shared `deps.ts`.
   `src/server.ts` — `createApp(deps)` + `start()`.
 - `src/ui/` — vanilla TS chat UI. `tests/` — unit + integration (fakes via
