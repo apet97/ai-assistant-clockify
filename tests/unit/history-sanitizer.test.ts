@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitizeStoredReplyForModel } from "../../src/routes/api.js";
+import { previewReplyText, sanitizeStoredReplyForModel } from "../../src/routes/api.js";
 
 /**
  * Live item 318: a long session saturated with the deterministic
@@ -7,21 +7,23 @@ import { sanitizeStoredReplyForModel } from "../../src/routes/api.js";
  * REPRODUCE that boilerplate as its own answer with zero tool calls. The
  * stored history keeps the exact text (it's what the admin saw); only the
  * model-visible copy is rewritten into a neutral factual note.
+ *
+ * safety-invariants-02: assert against `previewReplyText` (the single source of
+ * truth) rather than a re-typed literal, so a reword can't silently desync the
+ * stored boilerplate from the sanitizer regex.
  */
 describe("sanitizeStoredReplyForModel", () => {
   it("rewrites the single-preview boilerplate into a neutral factual note", () => {
-    const out = sanitizeStoredReplyForModel(
-      'Review the change below and click "Confirm" to apply it. Nothing has been changed yet.',
-    );
+    const out = sanitizeStoredReplyForModel(previewReplyText(1));
+    expect(out).not.toBe(previewReplyText(1));
     expect(out).not.toContain('click "Confirm"');
     expect(out).not.toContain("Review the change below");
     expect(out).toContain("button confirmation");
   });
 
   it("rewrites the batch-preview boilerplate too", () => {
-    const out = sanitizeStoredReplyForModel(
-      'I\'ve prepared 3 changes — review them below and click "Confirm all" to apply. Nothing has been changed yet.',
-    );
+    const out = sanitizeStoredReplyForModel(previewReplyText(3));
+    expect(out).not.toBe(previewReplyText(3));
     expect(out).not.toContain('click "Confirm all"');
     expect(out).toContain("button confirmation");
   });

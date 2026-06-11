@@ -8,7 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
 import { DEFAULT_MAX_STEPS, EXHAUSTED_TEXT } from "../../src/assistant/agent-loop.js";
-import { HISTORY_WINDOW_MESSAGES } from "../../src/routes/api.js";
+import { HISTORY_WINDOW_MESSAGES, previewReplyText, sanitizeStoredReplyForModel } from "../../src/routes/api.js";
 import { verifySessionCookie } from "../../src/auth/sessions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
@@ -789,5 +789,55 @@ describe("model-visible history window (live-loop FIX 3: the session must stay r
     expect(
       store.getRecentMessages(claims.sessionId, 1000).some((m) => m.content.includes('click "Confirm"')),
     ).toBe(true);
+  });
+
+  // safety-invariants-02: the REAL produce-then-sanitize round trip. The route's
+  // stored truthful-preview reply and the sanitizer regex must derive from ONE
+  // constant — so any future reword of the boilerplate stays sanitized. This test
+  // never hardcodes the boilerplate string: it derives the expected stored reply
+  // from the SAME exported builder the route uses, so it passes for ANY wording.
+  it("sanitizes a REAL stored preview reply in the next turn's model window (single source of truth)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie, store } = await makeApp(
+      [
+        // Turn 1: a risky delete → one preview, route stores the truthful reply.
+        { text: "Deleting the tag now.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        // Turn 2: any plain answer (no tool call) — we only inspect what it SAW.
+        { text: "Sure.", toolCalls: [] },
+      ],
+      fake,
+    );
+    const claims = verifySessionCookie(decodeURIComponent(cookie.split("=").slice(1).join("=")), "test-session-secret");
+    if (!claims) throw new Error("could not decode the test session cookie");
+
+    // Turn 1: produce a genuine preview via the route.
+    const t1 = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    expect(t1.status).toBe(200);
+    expect((t1.body.results as Array<{ kind: string }>).filter((r) => r.kind === "preview")).toHaveLength(1);
+
+    // The STORED assistant reply is exactly what the route's builder generates for
+    // ONE pending preview — derived, never re-typed. Drift the builder and this
+    // assertion follows it; drift only the sanitizer and the next-turn check breaks.
+    const storedTurn1 = store
+      .getRecentMessages(claims.sessionId, 1000)
+      .filter((msg) => msg.role === "assistant")
+      .at(-1);
+    expect(storedTurn1?.content).toBe(previewReplyText(1));
+    // The route's own boilerplate must round-trip through the sanitizer to the note.
+    expect(sanitizeStoredReplyForModel(previewReplyText(1))).toContain("button confirmation");
+
+    // Turn 2: whatever the route now feeds the model must NOT contain the stored
+    // boilerplate verbatim, and must carry the neutral note instead.
+    const t2 = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "anything else" });
+    expect(t2.status).toBe(200);
+    const seen = model.calls[model.calls.length - 1].messages;
+    const assistantTurns = seen.filter((msg) => msg.role === "assistant");
+    expect(assistantTurns.length).toBeGreaterThan(0);
+    expect(assistantTurns.some((msg) => (msg.content ?? "") === previewReplyText(1))).toBe(false);
+    for (const turn of assistantTurns) {
+      expect(turn.content).not.toContain('click "Confirm"');
+      expect(turn.content).not.toContain("Review the change below");
+    }
+    expect(assistantTurns.some((msg) => (msg.content ?? "").includes("button confirmation"))).toBe(true);
   });
 });
