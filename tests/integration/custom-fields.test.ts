@@ -52,6 +52,32 @@ describe("custom field actions", () => {
     expect(entry?.description).toContain("add-ons");
   });
 
+  it("clockify_custom_fields_create refuses up front on the add-on auth class WITHOUT needing a fieldType (never asks for the type first)", async () => {
+    const fake = createFakeWorkspace();
+    fake.client.authClass = "addon";
+    const result = await executeAction({
+      actionName: "clockify_custom_fields_create",
+      args: { name: "AIASSIST_LOOP_CF" }, // no fieldType — addon must refuse immediately
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("does not allow add-ons");
+    expect(fake.counts.createCustomField ?? 0).toBe(0);
+  });
+
+  it("clockify_custom_fields_create clarifies for the type on the api_key/dev path when fieldType is omitted (preserves dev UX)", async () => {
+    const fake = createFakeWorkspace();
+    fake.client.authClass = "api_key";
+    const result = await executeAction({
+      actionName: "clockify_custom_fields_create",
+      args: { name: "Severity" }, // no fieldType — dev path should ask which type
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message.toLowerCase()).toContain("type");
+    expect(fake.counts.createCustomField ?? 0).toBe(0);
+  });
+
   it("clockify_custom_fields_create previews high_risk_write then creates once", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({

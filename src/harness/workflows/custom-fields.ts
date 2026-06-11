@@ -67,26 +67,42 @@ const createCustomField = defineRiskyAction({
     "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). NOTE: Clockify blocks custom-field CREATION for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice; an admin can add the field in Clockify's workspace settings. Elevated write — previews and requires confirmation. Dropdowns require allowedValues.",
   group: CF,
   risks: ["high_risk_write"],
+  // `fieldType` is OPTIONAL in the schema so an add-on session refuses up front
+  // (the platform restriction below) without first being forced to ask the user
+  // which type — the dev/api_key path still clarifies for the type after that.
   schema: z
     .object({
       name: z.string().min(1),
-      fieldType: fieldTypeSchema,
+      fieldType: fieldTypeSchema.optional(),
       allowedValues: z.array(z.string().min(1)).optional(),
       required: z.boolean().optional(),
       status: z.string().optional(),
     })
     .refine(
-      (v) => !isDropdown(v.fieldType) || (Array.isArray(v.allowedValues) && v.allowedValues.length > 0),
+      (v) =>
+        v.fieldType === undefined ||
+        !isDropdown(v.fieldType) ||
+        (Array.isArray(v.allowedValues) && v.allowedValues.length > 0),
       { message: "allowedValues is required for DROPDOWN_SINGLE / DROPDOWN_MULTIPLE." },
     ),
   async preview(ctx, args) {
     // Clockify refuses custom-field CREATION for add-on tokens — no manifest
     // scope can grant it (probed live 2026-06-10). Surface that at PREVIEW time
     // so the admin is never told to confirm a doomed create (live item 180).
+    // This is the FIRST check (before any use of fieldType) so an add-on session
+    // refuses immediately instead of asking which type for a doomed create.
     if (ctx.clockify.authClass === "addon") {
       return {
         clarify:
           "Clockify does not allow add-ons to create custom fields — no manifest scope can grant it, so I can't do this from inside the add-on. This is a Clockify platform restriction, not one of your assistant permissions. An admin can add the field under Clockify's workspace settings; I can read and set values on existing custom fields.",
+      };
+    }
+    // Dev/api_key path: the type is required to create the field, so clarify for
+    // it rather than guessing (preserves the dev UX the add-on restriction skips).
+    if (args.fieldType === undefined) {
+      return {
+        clarify:
+          "Which type of custom field should I create — TXT, NUMBER, DROPDOWN_SINGLE, DROPDOWN_MULTIPLE, CHECKBOX, or LINK? (Dropdowns also need a list of allowed values.)",
       };
     }
     const input = {
