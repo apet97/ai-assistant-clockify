@@ -201,7 +201,7 @@ Perform these checks and report the structured result. Do not fix anything; only
 3. Baseline madge: "npx madge --circular --extensions ts --ts-config tsconfig.json src"; record the cycle count (0 expected).
    If verify or madge is red → ok=false, baselineBroken=true, abortReason quotes the failure excerpt.
 4. Capabilities (presence checks only — never print values):
-   - live: .env.server contains LIVE_CLOCKIFY_API_KEY and LIVE_WORKSPACE_ID, and the LIVE_WORKSPACE_ID value equals ${WORKSPACE_ID} (you may compare the value with a shell test without printing it; if it differs, set live=false and add a warning saying it differs — the live battery must only ever hit the sacrificial workspace).
+   - live: LIVE_CLOCKIFY_API_KEY and LIVE_WORKSPACE_ID present in .env OR .env.server (the LIVE keys live in .env on this machine), and the LIVE_WORKSPACE_ID value equals ${WORKSPACE_ID} (you may compare the value with a shell test without printing it; if it differs, set live=false and add a warning saying it differs — the live battery must only ever hit the sacrificial workspace).
    - server: "scripts/dev-tunnel.sh status" (status ONLY) reports the server/tunnel up, AND a curl health probe of the local server (e.g. curl -s -o /dev/null -w '%{http_code}' against the BASE_URL from .env.server or http://localhost:3000) returns 2xx/3xx. Don't print the full tunnel URL.
    - model: .env.server contains LLM_API_KEY (or LLM_PROVIDER=gemini-cli).
 5. colleagueActive: true if /tmp/colleague-tunnel.log exists with mtime < 24h (a colleague may be testing against the same workspace — refuters will discount live-failure findings accordingly). Add a warning when true.
@@ -232,12 +232,12 @@ Report FIX_SCHEMA with findingId="baseline".`
 const BATTERY_STEPS = [
   {
     key: 'live-full', needs: ['live'],
-    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-full.ts',
+    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env --env-file=.env.server scripts/live-full.ts',
     expect: 'Per-action matrix ending in a summary like "PASS=… PREVIEW_OK=… UNSUPPORTED=… FAIL=… SKIP=…". Gate: FAIL=0. Every FAIL line becomes one finding (dimension "live", severity high) quoting the action name + error verbatim. This exercises every catalog action against live Clockify and self-cleans; it can take 10–30 minutes — run in background and poll.',
   },
   {
     key: 'live-sweep-mid', needs: ['live'],
-    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-sweep.ts',
+    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env --env-file=.env.server scripts/live-sweep.ts',
     expect: 'Must report 0 leftovers ("No AIASSIST_SMOKE_ leftovers found. Clean."). Leftovers = one finding (dimension "live", severity high) listing them — it means some action failed to clean up.',
   },
   {
@@ -247,7 +247,7 @@ const BATTERY_STEPS = [
   },
   {
     key: 'live-agentic-flow', needs: ['live', 'model'],
-    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-agentic-flow.ts',
+    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env --env-file=.env.server scripts/live-agentic-flow.ts',
     expect: 'Agentic loop vs the real host. Gate: PASS=10. Any FAIL is a finding (dimension "live", severity high; CRITICAL if it shows a risky write committing without confirmation).',
   },
   {
@@ -257,7 +257,7 @@ const BATTERY_STEPS = [
   },
   {
     key: 'live-sweep-final', needs: ['live'],
-    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-sweep.ts',
+    cmd: 'LIVE_CLOCKIFY=1 npx tsx --env-file=.env --env-file=.env.server scripts/live-sweep.ts',
     expect: 'FINAL sweep — must report 0 leftovers. Leftovers = finding (dimension "live", severity high).',
   },
   {
