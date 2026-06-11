@@ -60,7 +60,7 @@ function pruneValue(value: unknown): unknown {
  * to a head sample so read-then-act can still pick ids) and, if still over the
  * budget, its `data` is replaced wholesale with an honest note.
  */
-function capToolResultForModel(receipt: SuccessReceipt | ErrorReceipt): string {
+export function capToolResultForModel(receipt: SuccessReceipt | ErrorReceipt): string {
   const full = JSON.stringify(receipt);
   if (Buffer.byteLength(full, "utf8") <= TOOL_RESULT_MAX_BYTES) return full;
 

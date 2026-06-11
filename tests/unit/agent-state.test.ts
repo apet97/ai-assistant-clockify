@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { capAgentState, parseAgentState, resumeMessages, type AgentState } from "../../src/assistant/agent-state.js";
+import { TOOL_RESULT_MAX_BYTES } from "../../src/assistant/agent-loop.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 import { createStore } from "../../src/db/store.js";
@@ -44,6 +45,36 @@ describe("agent-state (durable agentic suspension)", () => {
     expect(last.toolCallId).toBe("r1");
     expect(last.content).toContain("clockify_tags_delete");
     expect(last.content).toContain('"ok":true');
+  });
+
+  it("resumeMessages byte-caps a fat committed receipt like every other tool result (TOOL_RESULT_MAX_BYTES)", () => {
+    // A fat commit receipt (bulk ops / compose / a many-item invoice doc) must
+    // obey the same per-tool-result cap as in-loop receipts; otherwise the
+    // resume transcript can blow the provider request budget and runResume
+    // silently drops the follow-up narration.
+    const receipt = successReceipt({
+      action: "clockify_invoices_create",
+      entity: "invoice",
+      data: { items: Array.from({ length: 5000 }, (_, i) => ({ description: `line ${i}`, quantity: 1, unitPrice: 1234 })) },
+    });
+    expect(Buffer.byteLength(JSON.stringify(receipt), "utf8")).toBeGreaterThan(TOOL_RESULT_MAX_BYTES);
+
+    const messages = resumeMessages(state, receipt);
+    const last = messages[messages.length - 1];
+    expect(last.role).toBe("tool");
+    expect(last.toolCallId).toBe("r1");
+    expect(Buffer.byteLength(last.content, "utf8")).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
+    // The honest truncation marker is present, while the identifying fields survive.
+    expect(last.content).toContain("truncatedForModel");
+    expect(last.content).toContain('"ok":true');
+    expect(last.content).toContain("clockify_invoices_create");
+  });
+
+  it("resumeMessages leaves a small committed receipt byte-identical", () => {
+    const receipt = successReceipt({ action: "clockify_tags_delete", entity: "tag" });
+    const messages = resumeMessages(state, receipt);
+    const last = messages[messages.length - 1];
+    expect(last.content).toBe(JSON.stringify(receipt));
   });
 
   it("capAgentState passes a normal state through and drops an oversized one (no-resume is the safe fallback; truncating would corrupt tool-call pairing)", () => {

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ErrorReceipt, SuccessReceipt } from "../harness/receipts.js";
+import { capToolResultForModel } from "./agent-loop.js";
 import type { ModelMessage } from "./model-client.js";
 
 /**
@@ -61,7 +62,15 @@ export function capAgentState(state: AgentState): AgentState | undefined {
   return Buffer.byteLength(JSON.stringify(state), "utf8") <= MAX_AGENT_STATE_BYTES ? state : undefined;
 }
 
-/** The resumed transcript: the suspension plus the committed receipt as the risky call's tool result. */
+/**
+ * The resumed transcript: the suspension plus the committed receipt as the risky
+ * call's tool result. The committed receipt is a tool result entering the same
+ * agent loop, so it obeys the SAME per-tool-result byte cap as in-loop results
+ * (`capToolResultForModel`) — a fat commit receipt (bulk ops, compose, a
+ * many-item invoice doc) is pruned with the honest truncation marker rather than
+ * blowing the provider request budget and silently dropping the resume. The
+ * admin still sees the full receipt; only the model-visible copy is capped.
+ */
 export function resumeMessages(state: AgentState, receipt: SuccessReceipt | ErrorReceipt): ModelMessage[] {
-  return [...state.transcript, { role: "tool", toolCallId: state.call.id, content: JSON.stringify(receipt) }];
+  return [...state.transcript, { role: "tool", toolCallId: state.call.id, content: capToolResultForModel(receipt) }];
 }
