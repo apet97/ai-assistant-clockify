@@ -197,6 +197,28 @@ describe("rest core host routing + auth", () => {
     await expect(bad.getBinary("api", "/x")).rejects.toThrow(/500/);
   });
 
+  it("getBinary maps the add-on token's 401 'API is not accessible' to the named restriction (parity with call)", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => res({ message: "API is not accessible.", code: 401 }, 401)) as unknown as typeof fetch,
+    });
+    await expect(core.getBinary("api", "/workspaces/ws-1/invoices/inv1/export?format=PDF")).rejects.toThrow(
+      /Clockify does not allow add-ons to call/,
+    );
+  });
+
+  it("getBinary keeps the raw 401 for API-key auth (dev scripts must see the unmapped truth)", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () => res({ message: "API is not accessible.", code: 401 }, 401)) as unknown as typeof fetch,
+    });
+    await expect(core.getBinary("api", "/workspaces/ws-1/invoices/inv1/export?format=PDF")).rejects.toThrow(
+      /401: .*API is not accessible/,
+    );
+  });
+
   it("postForm sends a FormData body without a JSON content-type", async () => {
     const fetchImpl = vi.fn(async () => res({ id: "x1" }));
     const core = createRestCore({

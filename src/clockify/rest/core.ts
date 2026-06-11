@@ -98,6 +98,20 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       ? { "X-Addon-Token": opts.auth.addonToken }
       : { "X-Api-Key": opts.auth.apiKey };
 
+  // Clockify refuses some endpoint FAMILIES for add-on tokens regardless of
+  // manifest scopes — no scope exists to grant them (probed live 2026-06-10:
+  // webhooks, custom-field management, account-level GET /workspaces). Name the
+  // restriction instead of surfacing a bare 401; API-key auth keeps the raw
+  // error so dev scripts see the unmapped truth. Shared by every request shape
+  // (call + getBinary) so the honesty mapping covers them identically.
+  function mapAddonRestriction(status: number, method: string, path: string, text: string): void {
+    if (status === 401 && "X-Addon-Token" in authHeader && text.includes("API is not accessible")) {
+      throw new Error(
+        `Clockify does not allow add-ons to call ${method} ${path} — this endpoint is outside the add-on token's reach regardless of manifest scopes.`,
+      );
+    }
+  }
+
   // Resolve a host base, or fail cleanly when this environment has none (only the
   // audit host can be absent). This prevents fetching a guessed, non-resolving
   // host — the raw "fetch failed" the dev environment used to produce.
@@ -132,16 +146,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     if (res.status === 404 && allow404) return null;
     if (!res.ok) {
       const text = await res.text();
-      // Clockify refuses some endpoint FAMILIES for add-on tokens regardless of
-      // manifest scopes — no scope exists to grant them (probed live 2026-06-10:
-      // webhooks, custom-field management, account-level GET /workspaces). Name
-      // the restriction instead of surfacing a bare 401; API-key auth keeps the
-      // raw error so dev scripts see the unmapped truth.
-      if (res.status === 401 && "X-Addon-Token" in authHeader && text.includes("API is not accessible")) {
-        throw new Error(
-          `Clockify does not allow add-ons to call ${method} ${path} — this endpoint is outside the add-on token's reach regardless of manifest scopes.`,
-        );
-      }
+      mapAddonRestriction(res.status, method, path, text);
       throw new Error(`Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     }
     if (res.status === 204) return null;
@@ -197,6 +202,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     const res = await doFetch(`${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
     if (!res.ok) {
       const text = await res.text();
+      mapAddonRestriction(res.status, "GET", path, text);
       throw new Error(`Clockify GET ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     }
     const bytes = new Uint8Array(await res.arrayBuffer());
