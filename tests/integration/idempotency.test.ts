@@ -126,4 +126,55 @@ describe("idempotent commits (Phase 5)", () => {
     await commitConfirmedOperation(ctx, op);
     expect(fake.counts.createInvoice).toBe(2); // unchanged legacy behavior
   });
+
+  it("a FAILED commit is not recorded — the retry actually executes and creates the entity exactly once", async () => {
+    // A transiently-failing first commit must NOT poison the dedup window:
+    // re-confirming the same intent has to run for real, not replay the stale
+    // failure as "already completed — no duplicate was created" for an invoice
+    // that never existed. Pins the `receipt.ok` guard at actions.ts:146 (only
+    // SUCCESSFUL commits are recorded, per idempotency.ts:15-16).
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    let createCalls = 0;
+    const realCreateInvoice = fake.client.createInvoice.bind(fake.client);
+    // Wrap the client so createInvoice throws on its FIRST call only, then works.
+    const flakyClient = new Proxy(fake.client, {
+      get(target, prop, receiver) {
+        if (prop === "createInvoice") {
+          return (...args: Parameters<typeof realCreateInvoice>) => {
+            createCalls += 1;
+            if (createCalls === 1) throw new Error("transient host failure");
+            return realCreateInvoice(...args);
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    // A spy ledger so we can assert WHAT got recorded, not just the net effect:
+    // a failed receipt must never enter the ledger (else the retry would replay it).
+    const map = new Map<string, SuccessReceipt>();
+    const recorded: SuccessReceipt[] = [];
+    const ledger: IdempotencyLedger = {
+      lookup: (k) => map.get(k),
+      record: (k, r) => {
+        recorded.push(r);
+        map.set(k, r);
+      },
+    };
+    const ctx: ActionContext = { ...ctxWith(fake, ledger), clockify: flakyClient };
+    const op = await previewInvoice(ctx, "qwen");
+
+    const r1 = await commitConfirmedOperation(ctx, op); // first commit fails
+    expect(r1.ok).toBe(false); // the failure is surfaced honestly, not swallowed
+    expect(recorded).toHaveLength(0); // the failed attempt was NOT written to the ledger
+
+    const r2 = await commitConfirmedOperation(ctx, op); // retry must run for real
+
+    expect(r2.ok).toBe(true); // the retry succeeded — the failure didn't poison the ledger
+    expect(createCalls).toBe(2); // both confirms reached the host (first threw, second created)
+    expect(fake.counts.createInvoice).toBe(1); // exactly one invoice exists
+    // Only the successful retry was recorded, and it is a real commit — NOT a replay.
+    expect(recorded).toHaveLength(1);
+    expect(recorded.every((r) => r.ok)).toBe(true);
+    if (r2.ok) expect((r2.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(false);
+  });
 });
