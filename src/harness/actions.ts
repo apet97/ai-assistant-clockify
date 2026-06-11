@@ -155,39 +155,6 @@ export async function commitConfirmedOperation(
   }
 }
 
-export interface BatchItemResult {
-  actionName: string;
-  status: "succeeded" | "failed" | "skipped";
-  receipt: SuccessReceipt | ErrorReceipt;
-}
-
-export interface BatchReceipt {
-  ok: boolean;
-  action: "batch";
-  results: BatchItemResult[];
-}
-
-/**
- * Execute a confirmed batch sequentially (SPEC "Batch Confirmation"). Each item
- * is recorded as succeeded/failed; partial failure is never hidden. Items are
- * treated as independent in V1, so one failure does not skip the rest.
- */
-export async function commitBatch(
-  ctx: ActionContext,
-  operations: ConfirmableOperation[],
-): Promise<BatchReceipt> {
-  const results: BatchItemResult[] = [];
-  for (const operation of operations) {
-    const receipt = await commitConfirmedOperation(ctx, operation);
-    results.push({
-      actionName: operation.actionName,
-      status: receipt.ok ? "succeeded" : "failed",
-      receipt,
-    });
-  }
-  return { ok: results.every((r) => r.status === "succeeded"), action: "batch", results };
-}
-
 function policyDenied(
   actionName: string,
   group: string,

@@ -16,7 +16,7 @@ drift) + a full-angle live investigation (2026-06-11: safety 16/16, agentic
 live fixture fixed, no product defect; notes in
 `~/Downloads/ai-assistant-quality-pass-NOTES.md` +
 `…-investigation-NOTES.md`).
-`npm run verify` = **843 tests**, `npx madge --circular
+`npm run verify` = **881 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`. Remaining work is **human-gated only**:
 1. **Stable hosting** — quick-tunnel URL rotates; needs a Cloudflare zone
