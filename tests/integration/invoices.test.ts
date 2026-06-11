@@ -355,6 +355,10 @@ describe("invoice actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("payment");
     expect(preview.operation.payload).toMatchObject({ payment: { amountMinor: 5000 } });
+    // The money preview shows the HUMAN amount, not the 100x wire integer — a
+    // $50 payment must read "50.00", never "5000 (minor units)".
+    expect(preview.preview.expectedChanges[0]).toContain("50.00");
+    expect(preview.preview.expectedChanges[0]).not.toContain("5000 (minor units)");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.createInvoicePayment).toBe(1);

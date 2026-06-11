@@ -637,7 +637,13 @@ const createInvoicePayment = defineRiskyAction({
     return {
       actionLabel: "Record invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
-      expectedChanges: [`Record a payment of ${amountMinor} (minor units) dated ${args.paymentDate}`],
+      // Show the HUMAN amount (major units), matching the item preview's
+      // `(unitPriceMinor / 100).toFixed(2)` formatting — never the 100x wire
+      // integer, which would read as $5000 on a $50 payment. Minor units stay
+      // in the payload only.
+      expectedChanges: [
+        `Record a payment of ${(amountMinor / 100).toFixed(2)} dated ${args.paymentDate}`,
+      ],
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
       payload: { invoiceId: invoice.id, payment },
