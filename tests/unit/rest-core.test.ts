@@ -172,6 +172,30 @@ describe("rest core host routing + auth", () => {
     expect(url).toContain("page=1");
   });
 
+  it("paginate stops at the MAX_PAGES backstop (50) and truncates a runaway list to 10k rows", async () => {
+    // Every page returns a FULL page (200 rows) so the short-page break never
+    // fires — the only thing that can stop the loop is the MAX_PAGES ceiling.
+    // This pins BOTH the runaway backstop (never loops unbounded against the live
+    // host) AND the truncation point: a workspace with > 10k rows is silently
+    // cut off at 50 * 200 = 10000 rows with no warning marker. An off-by-one in
+    // the loop bound or a regression in the short-page condition would change
+    // either the call count or the row total and fail here.
+    const fullPage = Array.from({ length: 200 }, (_, i) => ({ id: i }));
+    const fetchImpl = vi.fn(async () => res(fullPage));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const rows = await core.paginate("api", "/workspaces/ws-1/time-entries");
+    expect(fetchImpl).toHaveBeenCalledTimes(50); // MAX_PAGES — no 51st request
+    expect(rows).toHaveLength(10000); // PAGE_SIZE * MAX_PAGES, truncated silently
+    // The last request asked for page 50; there is no page 51 (the backstop, not
+    // a short page, ended the loop).
+    const lastUrl = (fetchImpl as any).mock.calls[49][0] as string;
+    expect(lastUrl).toContain("page=50");
+  });
+
   it("getThenPut GETs the resource, merges the patch, and PUTs the full body", async () => {
     const calls: Array<{ method: string }> = [];
     const fetchImpl = vi.fn(async (_url: string, init: any) => {
