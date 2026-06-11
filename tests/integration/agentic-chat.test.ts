@@ -201,6 +201,55 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(fake.counts.deleteTag ?? 0).toBe(0);
   });
 
+  // fix-clarify-double-render: a clarify message must be delivered EXACTLY ONCE
+  // across results[] + reply.text. The UI appends both a clarify result bubble
+  // (renderClarify) AND reply.text (onAssistant), so emitting the same message in
+  // both renders it twice. The clarify (with its grounded options) rides in
+  // results[]; reply.text must NOT echo it.
+  it("delivers the clarify message exactly once (agentic path) — not in BOTH results[] and reply.text", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "c1", name: "clockify_tags_delete", arguments: { name: "nope-no-such-tag" } }] }],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the nope tag" });
+
+    expect(res.status).toBe(200);
+    const clarifies = (res.body.results as Array<{ kind: string; message?: string }>).filter((r) => r.kind === "clarify");
+    expect(clarifies).toHaveLength(1);
+    const clarifyMessage = (clarifies[0].message ?? "").trim();
+    expect(clarifyMessage.length).toBeGreaterThan(0);
+    const replyText = String(res.body.reply?.text ?? "").trim();
+    // The same message must NOT also ride in reply.text (that is the double render).
+    expect(replyText).not.toBe(clarifyMessage);
+    // Count occurrences across both delivery channels: exactly one.
+    const channels = [replyText, ...clarifies.map((c) => (c.message ?? "").trim())];
+    expect(channels.filter((t) => t === clarifyMessage)).toHaveLength(1);
+  });
+
+  it("delivers the clarify message exactly once (single-turn path) — not in BOTH results[] and reply.text", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      // The single-turn planner narrates BEFORE the action runs; if its narration
+      // echoes the clarify the UI renders it twice. Force that worst case.
+      [{ text: "There are multiple tags matching — which did you mean?", toolCalls: [{ id: "c1", name: "clockify_tags_delete", arguments: { name: "nope-no-such-tag" } }] }],
+      fake,
+      { agentic: false },
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the nope tag" });
+
+    expect(res.status).toBe(200);
+    const clarifies = (res.body.results as Array<{ kind: string; message?: string }>).filter((r) => r.kind === "clarify");
+    expect(clarifies).toHaveLength(1);
+    const clarifyMessage = (clarifies[0].message ?? "").trim();
+    const replyText = String(res.body.reply?.text ?? "").trim();
+    // When a turn ends in a clarify, reply.text must not echo the clarify message.
+    expect(replyText).not.toBe(clarifyMessage);
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
   it("surfaces a calm model_unavailable error when the model fails mid-loop", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const failing: ModelClient = {
