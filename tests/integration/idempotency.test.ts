@@ -11,10 +11,14 @@ function memoryLedger(): IdempotencyLedger {
   return { lookup: (k) => map.get(k), record: (k, r) => void map.set(k, r) };
 }
 
-function ctxWith(fake: FakeWorkspace, ledger?: IdempotencyLedger): ActionContext {
+function ctxWith(
+  fake: FakeWorkspace,
+  ledger?: IdempotencyLedger,
+  scope?: { workspaceId?: string; adminUserId?: string },
+): ActionContext {
   return {
-    workspaceId: "ws-1",
-    adminUserId: "admin-1",
+    workspaceId: scope?.workspaceId ?? "ws-1",
+    adminUserId: scope?.adminUserId ?? "admin-1",
     policy: defaultAdminPolicy(),
     clockify: fake.client,
     now: () => new Date("2026-06-05T00:00:00.000Z"),
@@ -80,6 +84,38 @@ describe("idempotent commits (Phase 5)", () => {
     await commitConfirmedOperation(ctx, await previewInvoice(ctx, "qwen"));
     await commitConfirmedOperation(ctx, await previewInvoice(ctx, "acme"));
     expect(fake.counts.createInvoice).toBe(2);
+  });
+
+  it("does NOT replay across admins — the ledger is shared but the scope key is per-admin", async () => {
+    // One workspace, one shared ledger. The 10-min dedup window is keyed on
+    // (workspace, admin, action, semantic): admin A's prior receipt must never
+    // leak into admin B's chat, so B's identical intent creates its OWN invoice.
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const ledger = memoryLedger();
+    const ctxA = ctxWith(fake, ledger, { adminUserId: "admin-1" });
+    const ctxB = ctxWith(fake, ledger, { adminUserId: "admin-2" });
+
+    const rA = await commitConfirmedOperation(ctxA, await previewInvoice(ctxA, "qwen"));
+    const rB = await commitConfirmedOperation(ctxB, await previewInvoice(ctxB, "qwen"));
+
+    expect(rA.ok && rB.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(2); // each admin got their own invoice
+    if (rB.ok) expect((rB.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(false);
+  });
+
+  it("does NOT replay across workspaces — the scope key is per-workspace", async () => {
+    // Same admin, same intent, same shared ledger, but two different workspaces.
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const ledger = memoryLedger();
+    const ctx1 = ctxWith(fake, ledger, { workspaceId: "ws-1" });
+    const ctx2 = ctxWith(fake, ledger, { workspaceId: "ws-2" });
+
+    const r1 = await commitConfirmedOperation(ctx1, await previewInvoice(ctx1, "qwen"));
+    const r2 = await commitConfirmedOperation(ctx2, await previewInvoice(ctx2, "qwen"));
+
+    expect(r1.ok && r2.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(2); // each workspace got its own invoice
+    if (r2.ok) expect((r2.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(false);
   });
 
   it("without a ledger in context, behaves exactly as before (no dedup)", async () => {
