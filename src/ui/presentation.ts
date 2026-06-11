@@ -69,7 +69,15 @@ export function batchItemOutcomes(labels: string[], responses: ConfirmResponse[]
     const response = responses[i];
     if (!response) return { label, ok: false, detail: "No response." };
     if (response.ok) return { label, ok: true, detail: "Confirmed" };
-    return { label, ok: false, detail: typeof response.message === "string" ? response.message : "Confirmation failed." };
+    // A failed COMMIT carries its reason on `receipt.message` (the route adds no
+    // top-level `message` for it); pre-commit rejections carry a top-level one.
+    const detail =
+      typeof response.message === "string"
+        ? response.message
+        : typeof response.receipt?.message === "string"
+          ? response.receipt.message
+          : "Confirmation failed.";
+    return { label, ok: false, detail };
   });
 }
 

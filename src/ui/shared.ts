@@ -70,7 +70,7 @@ export interface ConfirmResponse {
   ok: boolean;
   code?: string;
   message?: string;
-  receipt?: { ok: boolean; action: string };
+  receipt?: { ok: boolean; action: string; message?: string };
   resume?: { reply: { kind: string; text: string }; results: ChatResult[] };
 }
 
@@ -143,7 +143,15 @@ export function settleConfirmOutcome(responses: ConfirmResponse[], hooks: Confir
   let resumed = false;
   for (const response of responses) {
     if (!response?.ok) {
-      hooks.onError(typeof response?.message === "string" ? response.message : "Confirmation failed.");
+      // A failed COMMIT carries its reason on `receipt.message` (the route adds no
+      // top-level `message` for it); pre-commit rejections carry a top-level one.
+      const reason =
+        typeof response?.message === "string"
+          ? response.message
+          : typeof response?.receipt?.message === "string"
+            ? response.receipt.message
+            : "Confirmation failed.";
+      hooks.onError(reason);
       continue;
     }
     committed += 1;

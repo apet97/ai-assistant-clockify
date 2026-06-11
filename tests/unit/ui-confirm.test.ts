@@ -38,6 +38,24 @@ describe("settleConfirmOutcome (truthful confirm flow)", () => {
     expect(events.some((e) => e.startsWith("assistant:"))).toBe(false);
   });
 
+  it("surfaces the failed COMMIT's receipt reason (no top-level message) — never the generic fallback", () => {
+    // A failed commit comes back as { ok:false, receipt:{ message } } with no
+    // top-level message; the real reason must reach onError, not be swallowed.
+    const { hooks, events } = recorder();
+    const committed = settleConfirmOutcome(
+      [
+        {
+          ok: false,
+          receipt: { ok: false, action: "clockify_tags_delete", message: "Clockify DELETE /tags/t1 -> 400: tag in use" },
+        } as ConfirmResponse,
+      ],
+      hooks,
+    );
+    expect(committed).toBe(0);
+    expect(events).toContain("error:Clockify DELETE /tags/t1 -> 400: tag in use");
+    expect(events).not.toContain("error:Confirmation failed.");
+  });
+
   it("confirms a plain (non-resume) preview exactly as before", () => {
     const { hooks, events } = recorder();
     const committed = settleConfirmOutcome([okReceipt], hooks);
@@ -180,6 +198,23 @@ describe("batchItemOutcomes (per-item truth on the settled batch card)", () => {
     expect(out).toEqual([
       { label: "Delete tag Old", ok: true, detail: "Confirmed" },
       { label: "Archive project Apollo", ok: false, detail: "Write access to projects is disabled." },
+    ]);
+  });
+
+  it("a failed COMMIT (no top-level message) surfaces the receipt's reason verbatim", () => {
+    // The confirm route returns a failed commit as { ok:false, receipt:{ message } }
+    // with NO top-level message — the real reason lives on receipt.message.
+    const out = batchItemOutcomes(
+      ["Delete tag Old"],
+      [
+        {
+          ok: false,
+          receipt: { ok: false, action: "clockify_tags_delete", message: "Clockify DELETE /tags/t1 -> 400: tag in use" },
+        } as ConfirmResponse,
+      ],
+    );
+    expect(out).toEqual([
+      { label: "Delete tag Old", ok: false, detail: "Clockify DELETE /tags/t1 -> 400: tag in use" },
     ]);
   });
 
