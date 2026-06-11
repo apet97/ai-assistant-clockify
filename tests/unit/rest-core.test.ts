@@ -100,6 +100,24 @@ describe("rest core host routing + auth", () => {
     await expect(core.call("api", "GET", "/missing")).rejects.toThrow(/404/);
   });
 
+  it("names the request when a 2xx body is not JSON (proxy/tunnel HTML interjection) instead of a context-free SyntaxError", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: (async () =>
+        new Response("<html>Bad gateway</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        })) as unknown as typeof fetch,
+    });
+    // The receipt/model/admin must be able to tell WHICH call broke — every other
+    // failure from `call` names the method + path; a malformed 2xx body must too.
+    await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(
+      /GET \/workspaces\/ws-1\/projects/,
+    );
+    await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(/non-JSON/i);
+  });
+
   it("maps the add-on token's 401 'API is not accessible' to an actionable restriction message (probed live: webhooks + custom-field management are outside the add-on token's reach regardless of scopes)", async () => {
     const core = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",

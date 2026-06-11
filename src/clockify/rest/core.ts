@@ -151,7 +151,18 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     }
     if (res.status === 204) return null;
     const text = await res.text();
-    return text ? JSON.parse(text) : null;
+    if (!text) return null;
+    // A 2xx body that is not JSON means a proxy/tunnel interjected (HTML error
+    // page, "Bad gateway") — name the request like every other `call` failure so
+    // the receipt/model/admin can tell WHICH call broke, not a context-free
+    // SyntaxError.
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(
+        `Clockify ${method} ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`,
+      );
+    }
   }
 
   async function paginate(
