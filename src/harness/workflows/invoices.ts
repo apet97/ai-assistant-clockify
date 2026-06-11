@@ -46,14 +46,29 @@ function nowDate(ctx: ActionContext): Date {
  * workspace's existing invoices (bounded scan) rather than blindly sending a
  * guess. Returns the distinct configured names (empty on a workspace that has
  * never had an invoice line item).
+ *
+ * `invoices` lets a caller that JUST fetched the invoice list (e.g.
+ * `resolveInvoiceRef`) share it, so an item-add preview issues exactly one
+ * `listInvoices`. Only the ≤12 most-recent invoices are scanned, and their
+ * detail GETs run with bounded concurrency (each is a real `GET /invoices/{id}`)
+ * so the preview's discovery scan overlaps instead of awaiting one at a time.
  */
 const MAX_INVOICES_SCANNED_FOR_TYPES = 12;
-async function discoverItemTypes(ctx: ActionContext): Promise<string[]> {
-  const invoices = await ctx.clockify.listInvoices();
+const ITEM_TYPE_SCAN_CONCURRENCY = 4;
+async function discoverItemTypes(
+  ctx: ActionContext,
+  invoices?: ReadonlyArray<{ id: string }>,
+): Promise<string[]> {
+  const all = invoices ?? (await ctx.clockify.listInvoices());
+  const scanned = all.slice(0, MAX_INVOICES_SCANNED_FOR_TYPES);
   const names = new Set<string>();
-  for (const inv of invoices.slice(0, MAX_INVOICES_SCANNED_FOR_TYPES)) {
-    const items = await ctx.clockify.listInvoiceItems(inv.id);
-    for (const it of items) if (it.itemType) names.add(it.itemType);
+  // Bounded-concurrency scan: chunk the ≤12 detail GETs so up to
+  // ITEM_TYPE_SCAN_CONCURRENCY are in flight at once (kind to the add-on rate
+  // limit) instead of one strictly-sequential await per invoice.
+  for (let i = 0; i < scanned.length; i += ITEM_TYPE_SCAN_CONCURRENCY) {
+    const chunk = scanned.slice(i, i + ITEM_TYPE_SCAN_CONCURRENCY);
+    const itemLists = await Promise.all(chunk.map((inv) => ctx.clockify.listInvoiceItems(inv.id)));
+    for (const items of itemLists) for (const it of items) if (it.itemType) names.add(it.itemType);
   }
   return [...names];
 }
@@ -94,18 +109,32 @@ async function resolveInvoiceRef(
   ctx: ActionContext,
   ref: { id?: string; number?: string },
   verb: string,
-): Promise<{ ok: true; id: string; number?: string } | { ok: false; clarify: RiskyClarifyResult }> {
+): Promise<
+  | { ok: true; id: string; number?: string; invoices?: ReadonlyArray<{ id: string }> }
+  | { ok: false; clarify: RiskyClarifyResult }
+> {
+  // Capture the fetched invoice list once so item-type discovery can reuse it
+  // (an item-add preview must issue exactly one listInvoices, not two). When the
+  // ref is already a real id, resolveEntityRef never lists — leave it undefined
+  // and let discoverItemTypes fetch lazily only if it's actually needed.
+  let invoices: ReadonlyArray<{ id: string }> | undefined;
   const resolved = await resolveEntityRef(
     { id: ref.id, name: ref.number },
     {
       noun: "invoice",
       verb,
-      list: async () =>
-        (await ctx.clockify.listInvoices()).map((inv) => ({ id: inv.id, name: inv.number ?? inv.id })),
+      list: async () => {
+        const list = await ctx.clockify.listInvoices();
+        invoices = list;
+        return list.map((inv) => ({ id: inv.id, name: inv.number ?? inv.id }));
+      },
     },
   );
   if (!resolved.ok) return resolved;
-  return { ok: true, id: resolved.id, number: resolved.name };
+  // `invoices` stays undefined when resolveEntityRef short-circuited on a real
+  // 24-hex id (no list fetched) — discoverItemTypes then fetches lazily so a
+  // real-id item-add still discovers types instead of scanning an empty list.
+  return { ok: true, id: resolved.id, number: resolved.name, invoices };
 }
 
 /** Identity schema for invoice reads: an id, or a number (either slot works). */
@@ -543,7 +572,9 @@ const addInvoiceItem = defineRiskyAction({
     if (!invoice.ok) return invoice.clarify;
     // Resolve the item type against the workspace's actual configured types
     // (discovered from existing line items) — never a blind "NEW DEFAULT".
-    const discovered = await discoverItemTypes(ctx);
+    // Reuse the invoice list resolveInvoiceRef just fetched, so this preview
+    // issues a single listInvoices instead of two.
+    const discovered = await discoverItemTypes(ctx, invoice.invoices);
     const resolved = resolveItemType(discovered, args.itemType);
     if (!resolved.ok) return itemTypeClarify(resolved.options);
     const itemType = resolved.itemType;
