@@ -250,6 +250,41 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(fake.counts.deleteTag ?? 0).toBe(0);
   });
 
+  // fix-clarify-double-render (single-turn worst case): the model's pre-action
+  // narration can be BYTE-IDENTICAL to the clarify the harness produces. When the
+  // single-turn action resolves to a clarify result, reply.text must NOT carry that
+  // narration — the clarify rides ONLY in results[], so the UI bubble appears once.
+  it("blanks reply.text when a single-turn action yields a clarify, even if narration equals the clarify verbatim", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      // The harness clarify for an unknown tag is "I couldn't find a tag named
+      // …. Did you mean one of these?"; force the model's narration to MATCH it.
+      [
+        {
+          text: 'I couldn\'t find a tag named "nope-no-such-tag". Did you mean one of these?',
+          toolCalls: [{ id: "c1", name: "clockify_tags_delete", arguments: { name: "nope-no-such-tag" } }],
+        },
+      ],
+      fake,
+      { agentic: false },
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the nope tag" });
+
+    expect(res.status).toBe(200);
+    const clarifies = (res.body.results as Array<{ kind: string; message?: string }>).filter((r) => r.kind === "clarify");
+    expect(clarifies).toHaveLength(1);
+    const clarifyMessage = (clarifies[0].message ?? "").trim();
+    expect(clarifyMessage.length).toBeGreaterThan(0);
+    const replyText = String(res.body.reply?.text ?? "").trim();
+    // The clarify rides ONLY in results[]; reply.text must be empty (the UI appends
+    // an assistant bubble only for non-empty reply.text → exactly one clarify bubble).
+    expect(replyText).toBe("");
+    const channels = [replyText, ...clarifies.map((c) => (c.message ?? "").trim())];
+    expect(channels.filter((t) => t === clarifyMessage)).toHaveLength(1);
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
   it("surfaces a calm model_unavailable error when the model fails mid-loop", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const failing: ModelClient = {
