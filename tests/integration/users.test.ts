@@ -84,6 +84,37 @@ describe("user & group actions", () => {
     expect(fake.counts.updateUserRole ?? 0).toBe(0);
   });
 
+  it("rate_update sets a workspace member's Team-section rate (billing): resolves name/me, major→minor, truthful preview", async () => {
+    const fake = createFakeWorkspace(seed());
+    const ctx = makeContext(fake);
+    // Resolve a member by name; 60 major → 6000 minor; billing risk, gated by invoices.
+    const byName = await executeAction({ actionName: "clockify_users_rate_update", args: { userName: "Bob", rateKind: "HOURLY", amount: 60 }, context: ctx });
+    if (byName.kind !== "preview") throw new Error("expected a preview");
+    expect(byName.operation.risks).toContain("billing");
+    expect(byName.operation.featureGroup).toBe("invoices");
+    expect(byName.operation.payload).toMatchObject({ userId: "u2", rateKind: "HOURLY", amountMinor: 6000 });
+    // Truthful preview: shows the major amount, never raw minor units.
+    const change = byName.preview.expectedChanges.join(" ");
+    expect(change).toContain("60.00");
+    expect(change).not.toContain("minor");
+    expect(change).not.toContain("6000");
+    const receipt = await commitConfirmedOperation(makeContext(fake), byName.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.updateWorkspaceMemberRate).toBe(1);
+
+    // "me" resolves to the admin.
+    const me = await executeAction({ actionName: "clockify_users_rate_update", args: { userId: "me", rateKind: "COST", amount: 25 }, context: ctx });
+    if (me.kind !== "preview") throw new Error("expected a preview");
+    expect(me.operation.payload).toMatchObject({ userId: "admin-1", rateKind: "COST", amountMinor: 2500 });
+  });
+
+  it("rate_update clarifies when the member isn't a workspace user (never confirm-then-fail)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({ actionName: "clockify_users_rate_update", args: { userName: "Nobody", rateKind: "HOURLY", amount: 10 }, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateWorkspaceMemberRate ?? 0).toBe(0);
+  });
+
   it("deactivate refuses self-deactivation (no preview, no commit)", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({ actionName: "clockify_users_deactivate", args: { userId: "admin-1" }, context: makeContext(fake) });

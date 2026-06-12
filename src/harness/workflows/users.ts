@@ -6,6 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
+import { toMinor } from "../money.js";
 import { matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
@@ -167,6 +168,65 @@ const updateRole = defineRiskyAction({
     // in the URL, scope (workspace/project/group) in entityId. Live-verified 2026-06-12.
     await ctx.clockify.updateUserRole(granteeId, role, entityId, sourceType);
     return successReceipt({ action: "clockify_users_role_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: granteeId, name: role }] } });
+  },
+});
+
+const rateUpdate = defineRiskyAction({
+  name: "clockify_users_rate_update",
+  description:
+    'Set a workspace member\'s default billable hourly or cost rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or "me"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is \'minor\'. Billing action — previews and requires confirmation.',
+  group: "invoices",
+  risks: ["billing"],
+  schema: z
+    .object({
+      /** The member's user id, exact name (via userName), or "me" (resolved server-side). */
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+      rateKind: z.enum(["HOURLY", "COST"]),
+      amount: z.number().nonnegative(),
+      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
+      amountUnit: z.enum(["major", "minor"]).default("major"),
+      since: z.string().optional(),
+    })
+    .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
+  async preview(ctx, args) {
+    // Resolve + VERIFY the member ("me" -> admin; a name -> a user id). A 24-hex
+    // id that is actually a project/task sails past the trust-the-id path and the
+    // rate PUT 404s, so confirm the member is a real workspace user at preview.
+    let userId: string;
+    let memberLabel: string;
+    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
+      userId = ctx.adminUserId;
+      memberLabel = "you";
+    } else {
+      const users = await ctx.clockify.listUsers();
+      let u = args.userId ? users.find((x) => x.id === args.userId) : undefined;
+      if (!u && args.userName) {
+        const m = matchByName(users, args.userName);
+        if (m.kind === "many") return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((x) => ({ id: x.id, label: x.name })) };
+        if (m.kind === "one") u = m.entity;
+      }
+      if (!u) {
+        const target = args.userName ?? args.userId ?? "";
+        return { clarify: `"${target}" isn't a workspace member, so I can't set a rate for them.`, options: suggestOptions(users, target) };
+      }
+      userId = u.id;
+      memberLabel = u.name;
+    }
+    const amountMinor = toMinor(args.amount, args.amountUnit);
+    return {
+      actionLabel: `Set member ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
+      targets: [{ type: "user", id: userId }],
+      expectedChanges: [`Set ${args.rateKind} rate for ${memberLabel} to ${(amountMinor / 100).toFixed(2)}`],
+      reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
+      warnings: ["This changes the member's default billable rate for future entries."],
+      payload: { userId, rateKind: args.rateKind, amountMinor, since: args.since },
+    };
+  },
+  async commit(ctx, payload) {
+    const operation = payload as { userId: string; rateKind: "HOURLY" | "COST"; amountMinor: number; since?: string };
+    await ctx.clockify.updateWorkspaceMemberRate(operation);
+    return successReceipt({ action: "clockify_users_rate_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: operation.userId }] } });
   },
 });
 
@@ -361,6 +421,6 @@ const removeUser = defineRiskyAction({
 });
 
 export const USER_GROUP_ACTIONS: ActionDefinition[] = [
-  listUsers, inviteUser, updateRole, deactivateUser,
+  listUsers, inviteUser, updateRole, rateUpdate, deactivateUser,
   listGroups, getGroup, createGroup, updateGroup, deleteGroup, addUser, removeUser,
 ];

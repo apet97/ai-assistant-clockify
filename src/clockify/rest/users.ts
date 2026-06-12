@@ -47,6 +47,17 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       });
       return { id: userId, name: role };
     },
+    async updateWorkspaceMemberRate(input) {
+      // PUT /workspaces/{ws}/users/{userId}/{hourly-rate|cost-rate} {amount, since?}.
+      // This is the Team-section default rate for the member (distinct from the
+      // per-project member rate). Live-verified 2026-06-12 (200, returns the
+      // workspace doc). `amount` is integer minor units.
+      const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
+      await core.call("api", "PUT", `${ws}/users/${input.userId}/${kind}`, {
+        amount: input.amountMinor,
+        ...(input.since ? { since: input.since } : {}),
+      });
+    },
     async deactivateUser(userId): Promise<EntitySummary> {
       const u = (await core.call("api", "PUT", `${ws}/users/${userId}`, { status: "INACTIVE" })) as { id?: string } | null;
       return { id: u?.id ?? userId, name: "INACTIVE" };

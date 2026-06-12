@@ -7,6 +7,7 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
   | "listUsers"
   | "inviteUser"
   | "updateUserRole"
+  | "updateWorkspaceMemberRate"
   | "deactivateUser"
   | "listGroups"
   | "getGroup"
@@ -35,6 +36,10 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
       const u = state.users.find((x) => x.id === userId);
       if (u) u.status = `ROLE:${role}`;
       return { id: userId, name: role };
+    },
+    async updateWorkspaceMemberRate(input) {
+      bump("updateWorkspaceMemberRate");
+      void input;
     },
     async deactivateUser(userId) {
       bump("deactivateUser");

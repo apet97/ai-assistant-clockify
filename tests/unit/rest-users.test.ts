@@ -35,6 +35,21 @@ describe("user & group rest", () => {
     expect(JSON.parse(init.body)).toEqual({ entityId: "team1", role: "TEAM_MANAGER" });
   });
 
+  it("updateWorkspaceMemberRate PUTs amount (minor units) to /users/{id}/{hourly-rate|cost-rate}", async () => {
+    const h = vi.fn(async () => jsonResponse({}));
+    await rest(h as unknown as typeof fetch).updateWorkspaceMemberRate({ userId: "u1", rateKind: "HOURLY", amountMinor: 7500 });
+    let [url, init] = (h as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/hourly-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 7500 });
+
+    const c = vi.fn(async () => jsonResponse({}));
+    await rest(c as unknown as typeof fetch).updateWorkspaceMemberRate({ userId: "u1", rateKind: "COST", amountMinor: 3000, since: "2026-01-01" });
+    [url, init] = (c as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/cost-rate");
+    expect(JSON.parse(init.body)).toEqual({ amount: 3000, since: "2026-01-01" });
+  });
+
   it("deactivateUser PUTs /users/{id} {status:INACTIVE}", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "u1" }));
     await rest(f as unknown as typeof fetch).deactivateUser("u1");
