@@ -156,6 +156,33 @@ describe("invoice actions", () => {
     if (many.kind === "clarify") expect(many.options?.length).toBe(2);
   });
 
+  it("clockify_invoices_create resolves RELATIVE issuedDate/dueDate server-side (billing must never wire 'next month')", async () => {
+    // NOW is 2026-06-06 (a Saturday).
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientId: "c1", issuedDate: "today", dueDate: "next month" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const input = (preview.operation.payload as any).input;
+    expect(input.issuedDate).toBe("2026-06-06T00:00:00.000Z");
+    expect(input.dueDate.slice(0, 10)).toBe("2026-07-01");
+    // Truthful preview: the resolved dates are what the admin verifies.
+    expect(preview.preview.expectedChanges.join(" ")).toContain("due 2026-07-01");
+  });
+
+  it("clockify_invoices_create clarifies on an unparseable date instead of wiring it", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const result = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientId: "c1", dueDate: "whenever it suits" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createInvoice ?? 0).toBe(0);
+  });
+
   it("clockify_invoices_create resolves a client NAME placed in the clientId SLOT (billing must never wire an unverified ref)", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }] });
     const preview = await executeAction({

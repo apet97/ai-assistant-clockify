@@ -11,7 +11,7 @@ import {
 import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
 import { toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
-import { describePatch, resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveInstant } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -273,7 +273,7 @@ const invoiceItemSchema = z.object({
 const createInvoice = defineRiskyAction({
   name: "clockify_invoices_create",
   description:
-    "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `number`, `issuedDate`, `dueDate`, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Billing action — previews and requires confirmation.",
+    "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `issuedDate`/`dueDate` accept YYYY-MM-DD or a relative day/period (today, next monday, next month — resolved server-side; never guess a calendar date); `number`, dates, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
   schema: z
@@ -309,12 +309,23 @@ const createInvoice = defineRiskyAction({
     const clientId = client.id;
     const clientName = client.name ?? args.clientName;
 
-    // Default the required fields the planner usually omits.
+    // Default the required fields the planner usually omits. Dates resolve
+    // server-side ("today"/"next month" must never reach a billing wire raw);
+    // unresolvable ⇒ clarify, never send.
     const now = nowDate(ctx);
     const stamp = now.toISOString().replace(/[^0-9]/g, "").slice(0, 14);
     const number = args.number ?? `INV-${stamp}`;
-    const issuedDate = args.issuedDate ?? now.toISOString();
-    const dueDate = args.dueDate ?? new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
+    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start") : now.toISOString();
+    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start") : new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
+    const badDates = [
+      args.issuedDate !== undefined && issuedDate === undefined ? `issued date "${args.issuedDate}"` : undefined,
+      args.dueDate !== undefined && dueDate === undefined ? `due date "${args.dueDate}"` : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (badDates.length || issuedDate === undefined || dueDate === undefined) {
+      return {
+        clarify: `I couldn't make sense of the ${badDates.join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, next monday, or next month.`,
+      };
+    }
     const currency = args.currency ?? "USD";
 
     const input = {
