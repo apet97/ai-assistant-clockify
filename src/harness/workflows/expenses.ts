@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef, resolveRelativeDay } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
@@ -90,7 +90,7 @@ const listExpenseCategories = defineReadAction({
 const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
   description:
-    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Defaults to YOUR expense; to log it for another user pass their `userId` or exact `userName` (or 'me' for yourself). Billing action — previews and requires confirmation.",
+    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Link a project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — also resolved server-side. Defaults to YOUR expense; to log it for another user pass their `userId` or exact `userName` (or 'me' for yourself). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
   schema: z
@@ -110,7 +110,11 @@ const createExpense = defineRiskyAction({
       notes: z.string().optional(),
       billable: z.boolean().optional(),
       projectId: z.string().optional(),
+      /** The linked project's exact name, resolved to an id server-side. */
+      projectName: z.string().optional(),
       taskId: z.string().optional(),
+      /** The linked task's exact name (needs the project), resolved server-side. */
+      taskName: z.string().optional(),
     })
     .refine((v) => v.categoryId !== undefined || v.categoryName !== undefined, {
       message: "Provide the expense category id or its exact categoryName.",
@@ -141,6 +145,14 @@ const createExpense = defineRiskyAction({
         ownerLabel = owner.name ?? owner.id;
       }
     }
+    // A linked project/task resolves by name in either slot — a bogus ref
+    // clarifies at preview, never a confirmed-then-failed commit.
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "attach the expense to",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+    });
+    if (!refs.ok) return refs.clarify;
     // Live: the model sent the literal string "today" to the wire (400) —
     // the harness resolves relative dates and defaults to today.
     const date = resolveDate(ctx, args.date);
@@ -152,14 +164,17 @@ const createExpense = defineRiskyAction({
       userId: ownerId,
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
-      ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
-      ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
+      ...(refs.projectId !== undefined ? { projectId: refs.projectId } : {}),
+      ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
     };
+    const onProject = refs.projectId
+      ? ` on project "${refs.projectName ?? refs.projectId}"${refs.taskId ? ` (task "${refs.taskName ?? refs.taskId}")` : ""}`
+      : "";
     return {
       actionLabel: "Create expense",
       targets: [],
       expectedChanges: [
-        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} for ${ownerLabel} in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
+        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} for ${ownerLabel} in category ${category.name ?? category.id}${onProject}${args.notes ? ` — "${args.notes}"` : ""}`,
       ],
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],
@@ -180,20 +195,10 @@ const createExpense = defineRiskyAction({
   },
 });
 
-/** Map a provided update field to its Clockify `changeFields` token. */
-const UPDATE_FIELD_TOKEN: Record<string, string> = {
-  amount: "AMOUNT",
-  date: "DATE",
-  categoryId: "CATEGORY",
-  notes: "NOTES",
-  billable: "BILLABLE",
-  projectId: "PROJECT",
-  taskId: "TASK",
-};
-
 const updateExpense = defineRiskyAction({
   name: "clockify_expenses_update",
-  description: "Update an expense. Billing action — previews and requires confirmation.",
+  description:
+    "Update an expense. Category/project/task accept an id or the exact name (`categoryName`/`projectName`/`taskName`) — resolved server-side. Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
   schema: z
@@ -203,43 +208,73 @@ const updateExpense = defineRiskyAction({
       amountUnit: z.enum(["major", "minor"]).default("major"),
       date: z.string().optional(),
       categoryId: z.string().optional(),
+      /** The category's exact name, resolved to an id server-side. */
+      categoryName: z.string().optional(),
       notes: z.string().optional(),
       billable: z.boolean().optional(),
       projectId: z.string().optional(),
+      /** The linked project's exact name, resolved server-side. */
+      projectName: z.string().optional(),
       taskId: z.string().optional(),
+      /** The linked task's exact name (needs the project), resolved server-side. */
+      taskName: z.string().optional(),
     })
     .refine(
       (v) =>
         v.amount !== undefined ||
         v.date !== undefined ||
         v.categoryId !== undefined ||
+        v.categoryName !== undefined ||
         v.notes !== undefined ||
         v.billable !== undefined ||
         v.projectId !== undefined ||
-        v.taskId !== undefined,
+        v.projectName !== undefined ||
+        v.taskId !== undefined ||
+        v.taskName !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
     const date = args.date !== undefined ? resolveDate(ctx, args.date) : undefined;
     if (args.date !== undefined && date === undefined) return { clarify: DATE_CLARIFY(args.date) };
+    // Resolve symbolic refs (a name in either slot) to verified ids — an
+    // identity mistake clarifies at preview, never a confirmed-then-failed PUT.
+    let category: { id: string; name?: string } | undefined;
+    if (args.categoryId !== undefined || args.categoryName !== undefined) {
+      const resolved = await resolveEntityRef(
+        { id: args.categoryId, name: args.categoryName },
+        { noun: "expense category", verb: "use", list: () => ctx.clockify.listExpenseCategories() },
+      );
+      if (!resolved.ok) return resolved.clarify;
+      category = resolved;
+    }
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "move the expense to",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+    });
+    if (!refs.ok) return refs.clarify;
     const values: Record<string, unknown> = {
       ...(args.amount !== undefined ? { amountMinor: toMinor(args.amount, args.amountUnit) } : {}),
       ...(date !== undefined ? { date } : {}),
-      ...(args.categoryId !== undefined ? { categoryId: args.categoryId } : {}),
+      ...(category !== undefined ? { categoryId: category.id } : {}),
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
-      ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
-      ...(args.taskId !== undefined ? { taskId: args.taskId } : {}),
+      ...(refs.projectId !== undefined ? { projectId: refs.projectId } : {}),
+      ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
     };
-    const selected = (
-      ["amount", "date", "categoryId", "notes", "billable", "projectId", "taskId"] as const
-    ).filter((k) => args[k] !== undefined);
-    const changeFields = selected.map((k) => UPDATE_FIELD_TOKEN[k]);
-    // Show the VALUE each field becomes (the user-facing amount/date, not the
-    // wire-minor amount) so a model-garbled value is catchable at preview time.
-    const changeValues: Record<string, unknown> = Object.fromEntries(
-      selected.map((k) => [UPDATE_FIELD_TOKEN[k], k === "date" ? date : args[k]]),
-    );
+    // Preview VALUES are the user-facing ones (major amount, resolved NAMES) so
+    // a model-garbled value is catchable at preview time; the payload `values`
+    // carry the wire ids the commit writes.
+    const display: Array<[token: string, value: unknown]> = [];
+    if (args.amount !== undefined) display.push(["AMOUNT", args.amount]);
+    if (date !== undefined) display.push(["DATE", date]);
+    if (category !== undefined) display.push(["CATEGORY", category.name ?? category.id]);
+    if (args.notes !== undefined) display.push(["NOTES", args.notes]);
+    if (args.billable !== undefined) display.push(["BILLABLE", args.billable]);
+    if (refs.projectId !== undefined) display.push(["PROJECT", refs.projectName ?? refs.projectId]);
+    if (refs.taskId !== undefined) display.push(["TASK", refs.taskName ?? refs.taskId]);
+    const changeFields = display.map(([token]) => token);
+    const changeValues: Record<string, unknown> = Object.fromEntries(display);
     return {
       actionLabel: "Update expense",
       targets: [{ type: "expense", id: args.id }],

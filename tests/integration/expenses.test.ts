@@ -215,6 +215,78 @@ describe("expense actions", () => {
     expect(fake.state.expenses[0].notes).toBe("Taxi to airport");
   });
 
+  it("clockify_expenses_create resolves project/task NAMES (either slot) to verified ids in the payload", async () => {
+    const fake = createFakeWorkspace({
+      expenseCategories: [{ id: "c1", name: "Travel" }],
+      projects: [{ id: "p-apollo", name: "Apollo" }],
+      tasks: [{ id: "t-design", name: "Design", projectId: "p-apollo" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel", projectName: "Apollo", taskName: "Design" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).input).toMatchObject({ projectId: "p-apollo", taskId: "t-design" });
+    // Truthful preview: the card names the project, not an opaque id.
+    expect(preview.preview.expectedChanges.join(" ")).toContain('project "Apollo"');
+
+    // The planner habit: a NAME in the projectId SLOT resolves too.
+    const slot = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel", projectId: "Apollo" },
+      context: makeContext(fake),
+    });
+    if (slot.kind !== "preview") throw new Error("expected a preview");
+    expect((slot.operation.payload as any).input.projectId).toBe("p-apollo");
+  });
+
+  it("clockify_expenses_create clarifies on an unknown project — never previews a doomed commit", async () => {
+    const fake = createFakeWorkspace({
+      expenseCategories: [{ id: "c1", name: "Travel" }],
+      projects: [{ id: "p-apollo", name: "Apollo" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel", projectName: "Apolo" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("p-apollo");
+    expect(fake.counts.createExpense ?? 0).toBe(0);
+  });
+
+  it("clockify_expenses_update resolves project/task names; preview shows the NAME, payload carries the id", async () => {
+    const fake = createFakeWorkspace({
+      ...seed(),
+      projects: [{ id: "p-apollo", name: "Apollo" }],
+      tasks: [{ id: "t-design", name: "Design", projectId: "p-apollo" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_expenses_update",
+      args: { id: "x1", projectName: "Apollo", taskName: "Design" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const payload = preview.operation.payload as any;
+    expect(payload.changeFields).toEqual(expect.arrayContaining(["PROJECT", "TASK"]));
+    expect(payload.values).toMatchObject({ projectId: "p-apollo", taskId: "t-design" });
+    // The preview line shows the resolved NAME (the value the admin can verify).
+    expect(preview.preview.expectedChanges.join(" ")).toContain("Apollo");
+    expect(preview.preview.expectedChanges.join(" ")).not.toContain("p-apollo");
+  });
+
+  it("clockify_expenses_update clarifies on a task name with no project to scope it", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_expenses_update",
+      args: { id: "x1", taskName: "Design" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateExpense ?? 0).toBe(0);
+  });
+
   it("clockify_expenses_delete previews destructive+billing then deletes once", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_expenses_delete", args: { id: "x1", notes: "Taxi" }, context: makeContext(fake) });
