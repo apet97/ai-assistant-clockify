@@ -189,15 +189,32 @@ const publish = defineRiskyAction({
 const projectTotals = defineAction({
   name: "clockify_scheduling_project_totals",
   description:
-    "Get scheduled-hours totals per project in a date range (`start`/`end` accept relative days, resolved server-side).",
+    "Get scheduled-hours totals per project in a date range (`start`/`end` accept relative days, resolved server-side). Filter to one project by `projectId` or its exact `projectName` (resolved server-side).",
   featureGroup: SCHED,
   risks: ["read"],
-  schema: z.object({ start: z.string().min(1), end: z.string().min(1), projectId: z.string().optional() }),
+  schema: z.object({
+    start: z.string().min(1),
+    end: z.string().min(1),
+    projectId: z.string().optional(),
+    projectName: z.string().optional(),
+  }),
   async handler(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { kind: "clarify", message: window.message };
+    // A name in either filter slot resolves to a verified id; unknown clarifies.
+    let projectId: string | undefined;
+    if (args.projectId?.trim() || args.projectName?.trim()) {
+      const project = await resolveEntityRef(
+        { id: args.projectId, name: args.projectName },
+        { noun: "project", verb: "total", list: (f) => ctx.clockify.listProjects(f) },
+      );
+      if (!project.ok) {
+        return { kind: "clarify", message: project.clarify.clarify, options: project.clarify.options };
+      }
+      projectId = project.id;
+    }
     const items = await ctx.clockify.getProjectScheduleTotals({
-      ...args,
+      projectId,
       start: window.start as string,
       end: window.end as string,
     });

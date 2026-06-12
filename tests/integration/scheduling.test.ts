@@ -33,6 +33,31 @@ describe("scheduling actions", () => {
     else throw new Error("expected receipt");
   });
 
+  it("project_totals resolves a project NAME filter (either slot) and clarifies on an unknown one", async () => {
+    const fake = createFakeWorkspace({ ...seed(), projects: [{ id: "p1", name: "Apollo" }] });
+    const byName = await executeAction({
+      actionName: "clockify_scheduling_project_totals",
+      args: { start: "2026-06-01", end: "2026-06-30", projectName: "Apollo" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+
+    const bySlot = await executeAction({
+      actionName: "clockify_scheduling_project_totals",
+      args: { start: "2026-06-01", end: "2026-06-30", projectId: "Apollo" },
+      context: makeContext(fake),
+    });
+    if (bySlot.kind !== "receipt" || !bySlot.receipt.ok) throw new Error(`expected a receipt, got ${bySlot.kind}`);
+
+    const unknown = await executeAction({
+      actionName: "clockify_scheduling_project_totals",
+      args: { start: "2026-06-01", end: "2026-06-30", projectName: "Apolo" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    expect(fake.counts.getProjectScheduleTotals ?? 0).toBe(2); // the unknown filter never reached the wire
+  });
+
   it("assignments_create is a SAFE write (executes immediately)", async () => {
     const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Alice", status: "ACTIVE" }], projects: [{ id: "p1", name: "Apollo" }] });
     const result = await executeAction({ actionName: "clockify_scheduling_assignments_create", args: { userId: "u1", projectId: "p1", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }, context: makeContext(fake) });
