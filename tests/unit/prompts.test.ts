@@ -118,6 +118,19 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt.toLowerCase()).toContain("text alone performs nothing");
   });
 
+  it("makes the model narrate strictly from receipts — never claim a 'created' entity the receipt shows as reused, nor a side effect with no receipt (finding new-3-model-falsely-reports-creating-n: 'switch to Acme' on an EXISTING project narrated 'Created a new client Acme and a project Acme' + an unproven 'Beta Corp was stopped automatically')", () => {
+    // clockify_create_work_package reuses an existing project/client and the
+    // receipt's changed set distinguishes `reused` from `created`. The model
+    // hallucinated creation (and an auto-stop) it never performed, so the prompt
+    // must pin narration to the receipt's reused-vs-created facts and forbid
+    // claiming any action no receipt shows.
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("reused");
+    expect(lower).toContain("created");
+    // It must forbid narrating an action that has no receipt to back it.
+    expect(lower).toContain("no receipt");
+  });
+
   it("explains the tool-only constraint when asked to call the API directly or use its token (live item 287: the model silently substituted a list call)", () => {
     expect(prompt.toLowerCase()).toContain("call the clockify api directly");
     expect(prompt.toLowerCase()).toContain("never hold");
