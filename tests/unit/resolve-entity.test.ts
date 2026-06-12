@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeClockifyId, resolveEntityRef } from "../../src/harness/workflows/resolve.js";
+import { looksLikeClockifyId, resolveEntityRef, resolveUserRefs } from "../../src/harness/workflows/resolve.js";
 
 const HEX_ID = "5f1e2d3c4b5a69788796a5b4";
 
@@ -159,5 +159,55 @@ describe("resolveEntityRef — includeArchived (destructive/archive verbs, live 
       { noun: "project", verb: "update", list },
     );
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("resolveUserRefs", () => {
+  const users = [
+    { id: HEX_ID, name: "Alice" },
+    { id: "u2", name: "Bob" },
+    { id: "u3", name: "Charlie" },
+    { id: "u4", name: "Charlie" }, // duplicate name → ambiguous
+  ];
+  const opts = (listed: { n: number }) => ({
+    verb: "assign",
+    adminUserId: "admin-1",
+    listUsers: async () => {
+      listed.n += 1;
+      return users;
+    },
+  });
+
+  it("trusts a 24-hex id WITHOUT listing, maps 'me' to the admin, and resolves names", async () => {
+    const listed = { n: 0 };
+    const r = await resolveUserRefs([HEX_ID, "me", "Bob"], opts(listed));
+    // HEX_ID + me need no list; "Bob" triggers exactly one list call.
+    expect(listed.n).toBe(1);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.userIds).toEqual([HEX_ID, "admin-1", "u2"]);
+  });
+
+  it("resolves short (test-style) ids via the listed users before treating them as names", async () => {
+    const r = await resolveUserRefs(["u2"], opts({ n: 0 }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.userIds).toEqual(["u2"]);
+  });
+
+  it("collapses duplicates and ignores blanks", async () => {
+    const r = await resolveUserRefs(["me", "me", "  ", "Alice"], opts({ n: 0 }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.userIds).toEqual(["admin-1", HEX_ID]);
+  });
+
+  it("clarifies (does not guess) on an ambiguous name", async () => {
+    const r = await resolveUserRefs(["Charlie"], opts({ n: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.options?.map((o) => o.id)).toEqual(["u3", "u4"]);
+  });
+
+  it("clarifies with grounded options on an unknown name", async () => {
+    const r = await resolveUserRefs(["Nobody"], opts({ n: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace member");
   });
 });

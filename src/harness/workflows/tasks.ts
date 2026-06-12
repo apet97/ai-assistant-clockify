@@ -9,7 +9,7 @@ import {
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveUserRefs } from "./resolve.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -87,20 +87,30 @@ const getTask = defineReadAction({
 const createTask = defineAction({
   name: "clockify_tasks_create",
   description:
-    "Create a task under a project, optionally assigning members inline with `assigneeIds` (an array of user ids). Safe write — executes immediately when policy allows.",
+    "Create a task under a project, optionally assigning members inline with `assigneeIds` — each entry is a user id, an exact name, or 'me'; the harness resolves names server-side (clarifies on an unknown name). Safe write — executes immediately when policy allows.",
   featureGroup: WORK,
   risks: ["safe_write"],
   schema: z.object({
     projectId: z.string().min(1),
     name: z.string().min(1),
-    /** User ids to assign to the new task (Clockify's TaskCreateRequest.assigneeIds). */
+    /** Assignees to set on the new task: user ids, exact names, or 'me' (resolved server-side). */
     assigneeIds: z.array(z.string().min(1)).optional(),
   }),
   async handler(ctx, args) {
+    let assigneeIds: string[] | undefined;
+    if (args.assigneeIds?.length) {
+      const resolved = await resolveUserRefs(args.assigneeIds, {
+        verb: "assign",
+        adminUserId: ctx.adminUserId,
+        listUsers: () => ctx.clockify.listUsers(),
+      });
+      if (!resolved.ok) return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      assigneeIds = resolved.userIds;
+    }
     const task = await ctx.clockify.createTask({
       projectId: args.projectId,
       name: args.name,
-      ...(args.assigneeIds?.length ? { assigneeIds: args.assigneeIds } : {}),
+      ...(assigneeIds?.length ? { assigneeIds } : {}),
     });
     return {
       kind: "receipt",
@@ -117,7 +127,7 @@ const createTask = defineAction({
 const updateTask = defineRiskyAction({
   name: "clockify_tasks_update",
   description:
-    "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. Elevated write — previews and requires confirmation.",
+    "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. `assigneeIds` entries may be user ids, exact names, or 'me' (resolved server-side, clarifies on an unknown name). Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
@@ -149,10 +159,20 @@ const updateTask = defineRiskyAction({
       "update",
     );
     if (!resolved.ok) return resolved.clarify;
+    let assigneeIds: string[] | undefined;
+    if (args.assigneeIds !== undefined) {
+      const assignees = await resolveUserRefs(args.assigneeIds, {
+        verb: "assign",
+        adminUserId: ctx.adminUserId,
+        listUsers: () => ctx.clockify.listUsers(),
+      });
+      if (!assignees.ok) return assignees.clarify;
+      assigneeIds = assignees.userIds;
+    }
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
-      ...(args.assigneeIds !== undefined ? { assigneeIds: args.assigneeIds } : {}),
+      ...(assigneeIds !== undefined ? { assigneeIds } : {}),
       ...(args.fields ?? {}),
     };
     return {

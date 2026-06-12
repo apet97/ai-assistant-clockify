@@ -147,6 +147,67 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
   };
 }
 
+/**
+ * Resolve a LIST of user references — ids, exact names, or "me" — to user ids,
+ * for multi-assignee fields (task assignees). A 24-hex value is trusted as an id
+ * (same happy path as {@link resolveEntityRef}, no list call); "me" is the admin;
+ * anything else is matched by name against the workspace users. An ambiguous or
+ * unknown name STOPS with a grounded clarify (identity-mistake-is-a-clarify), so a
+ * confirmed task never commits with a missing or wrong assignee. Order is kept and
+ * duplicates collapse. `listUsers` is called at most once, only when a name is seen.
+ */
+export async function resolveUserRefs(
+  refs: string[],
+  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>> },
+): Promise<{ ok: true; userIds: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const userIds: string[] = [];
+  const push = (id: string): void => {
+    if (!userIds.includes(id)) userIds.push(id);
+  };
+  let users: Array<{ id: string; name: string }> | undefined;
+  for (const raw of refs) {
+    const ref = raw.trim();
+    if (!ref) continue;
+    if (ref.toLowerCase() === "me") {
+      push(opts.adminUserId);
+      continue;
+    }
+    if (looksLikeClockifyId(ref)) {
+      push(ref);
+      continue;
+    }
+    if (!users) users = await opts.listUsers();
+    // A non-hex ref may still be a real (short, test-style) id before it is a name.
+    const byId = users.find((u) => u.id === ref);
+    if (byId) {
+      push(byId.id);
+      continue;
+    }
+    const match = matchByName(users, ref);
+    if (match.kind === "one") {
+      push(match.entity.id);
+      continue;
+    }
+    if (match.kind === "many") {
+      return {
+        ok: false,
+        clarify: {
+          clarify: `Several workspace users match "${ref}". Which one should I ${opts.verb}?`,
+          options: match.matches.map((u) => ({ id: u.id, label: u.name })),
+        },
+      };
+    }
+    return {
+      ok: false,
+      clarify: {
+        clarify: `"${ref}" isn't a workspace member, so I can't ${opts.verb} them.`,
+        options: suggestOptions(users, ref),
+      },
+    };
+  }
+  return { ok: true, userIds };
+}
+
 /** Longest value rendered on a preview "set <field> → <value>" line. */
 const MAX_PATCH_VALUE_LEN = 80;
 

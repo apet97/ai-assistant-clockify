@@ -63,8 +63,16 @@ describe("task actions", () => {
     expect(fake.counts.createTask).toBe(1);
   });
 
+  const seedWithUsers = () => ({
+    ...seed(),
+    users: [
+      { id: "u1", name: "Alice", email: "alice@x.com", status: "ACTIVE" },
+      { id: "u2", name: "Bob", email: "bob@x.com", status: "ACTIVE" },
+    ],
+  });
+
   it("clockify_tasks_create assigns members inline via assigneeIds (safe write)", async () => {
-    const fake = createFakeWorkspace(seed());
+    const fake = createFakeWorkspace(seedWithUsers());
     const result = await executeAction({
       actionName: "clockify_tasks_create",
       args: { projectId: "p1", name: "AIASSIST_SMOKE_task", assigneeIds: ["u1", "u2"] },
@@ -74,6 +82,51 @@ describe("task actions", () => {
     const created = fake.state.tasks.find((t) => t.name === "AIASSIST_SMOKE_task") as { assigneeIds?: string[] } | undefined;
     expect(created?.assigneeIds).toEqual(["u1", "u2"]);
     expect(fake.counts.createTask).toBe(1);
+  });
+
+  it("clockify_tasks_create resolves assignee NAMES (and 'me') to ids inline", async () => {
+    const fake = createFakeWorkspace(seedWithUsers());
+    const result = await executeAction({
+      actionName: "clockify_tasks_create",
+      args: { projectId: "p1", name: "AIASSIST_SMOKE_task2", assigneeIds: ["Alice", "me"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
+    const created = fake.state.tasks.find((t) => t.name === "AIASSIST_SMOKE_task2") as { assigneeIds?: string[] } | undefined;
+    expect(created?.assigneeIds).toEqual(["u1", "admin-1"]);
+  });
+
+  it("clockify_tasks_create clarifies on an unknown assignee name (never creates a half-assigned task)", async () => {
+    const fake = createFakeWorkspace(seedWithUsers());
+    const result = await executeAction({
+      actionName: "clockify_tasks_create",
+      args: { projectId: "p1", name: "AIASSIST_SMOKE_task3", assigneeIds: ["Nobody"] },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createTask ?? 0).toBe(0);
+  });
+
+  it("clockify_tasks_update resolves assignee NAMES to ids at preview time", async () => {
+    const fake = createFakeWorkspace(seedWithUsers());
+    const preview = await executeAction({
+      actionName: "clockify_tasks_update",
+      args: { projectId: "p1", id: "t1", assigneeIds: ["Bob", "me"] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).patch.assigneeIds).toEqual(["u2", "admin-1"]);
+  });
+
+  it("clockify_tasks_update clarifies on an unknown assignee name (never previews a doomed commit)", async () => {
+    const fake = createFakeWorkspace(seedWithUsers());
+    const result = await executeAction({
+      actionName: "clockify_tasks_update",
+      args: { projectId: "p1", id: "t1", assigneeIds: ["Ghost"] },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTask ?? 0).toBe(0);
   });
 
   it("clockify_tasks_update previews then updates once on commit", async () => {
