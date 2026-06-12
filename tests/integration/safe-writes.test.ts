@@ -229,6 +229,28 @@ describe("safe writes", () => {
     expect(fake.counts.startTimeEntry ?? 0).toBe(0);
   });
 
+  it("status resolves the running entry's projectId to a human-readable projectName", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "proj-acme", name: "Acme Corp" }],
+      running: {
+        id: "e-run",
+        description: "Daily work",
+        projectId: "proj-acme",
+        start: "2026-06-12T09:00:00.000Z",
+      },
+    });
+    const result = await executeAction({
+      actionName: "clockify_status",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    const data = result.receipt.data as { running: { projectId?: string; projectName?: string } | null };
+    expect(data.running).not.toBeNull();
+    // The receipt must carry the resolved name so the model never has to leak the raw id.
+    expect(data.running?.projectName).toBe("Acme Corp");
+  });
+
   it("a read is allowed under a read policy but blocked under off", async () => {
     const readPolicy = defaultAdminPolicy();
     readPolicy.groups.time_tracking = "read";

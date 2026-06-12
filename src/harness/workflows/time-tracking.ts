@@ -33,13 +33,21 @@ const status = defineAction({
   schema: z.object({}).strip(),
   async handler(ctx) {
     const running = await ctx.clockify.getRunningTimeEntry(ctx.adminUserId);
+    // Resolve the projectId to a human-readable name so the model has a name to
+    // show. Without it the model leaks the opaque internal id to the admin
+    // (getProject fetches by id regardless of archived state, unlike listProjects).
+    let projectName: string | undefined;
+    if (running?.projectId) {
+      const project = await ctx.clockify.getProject(running.projectId);
+      projectName = project?.name;
+    }
     return {
       kind: "receipt",
       receipt: successReceipt({
         action: "clockify_status",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
-        data: { running: running ?? null },
+        data: { running: running ? { ...running, projectName } : null },
       }),
     };
   },
