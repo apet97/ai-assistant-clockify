@@ -35,9 +35,9 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
       bump("getProject");
       return state.projects.find((p) => p.id === id) ?? null;
     },
-    async createProject({ name, clientId }) {
+    async createProject({ name, clientId, hourlyRate }) {
       bump("createProject");
-      const p: ProjectSummary = { id: nextId("project"), name, clientId };
+      const p: ProjectSummary = { id: nextId("project"), name, clientId, ...(hourlyRate ? { hourlyRate } : {}) };
       state.projects.push(p);
       return p;
     },
@@ -50,6 +50,7 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
         ...(typeof patch.name === "string" ? { name: patch.name } : {}),
         ...(typeof patch.clientId === "string" ? { clientId: patch.clientId } : {}),
         ...(typeof patch.archived === "boolean" ? { archived: patch.archived } : {}),
+        ...(patch.hourlyRate ? { hourlyRate: patch.hourlyRate as { amount: number } } : {}),
       };
       if (index >= 0) state.projects[index] = updated;
       else state.projects.push(updated);

@@ -38,6 +38,8 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
         ...(input.billable !== undefined ? { billable: input.billable } : {}),
         ...(input.color ? { color: input.color } : {}),
         ...(input.isPublic !== undefined ? { isPublic: input.isPublic } : {}),
+        ...(input.hourlyRate ? { hourlyRate: input.hourlyRate } : {}),
+        ...(input.costRate ? { costRate: input.costRate } : {}),
       });
       return map(p);
     },

@@ -295,6 +295,33 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.updateProjectRate ?? 0).toBe(0);
   });
 
+  it("clockify_projects_create sets the project DEFAULT rate on create (major→minor)", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_projects_create",
+      args: { name: "Apollo", hourlyRate: 200 },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
+    const created = fake.state.projects.find((p) => p.name === "Apollo") as { hourlyRate?: { amount: number } } | undefined;
+    expect(created?.hourlyRate?.amount).toBe(20000); // 200.00 -> 20000 minor
+  });
+
+  it("clockify_projects_update sets the project DEFAULT rate via the patch (major→minor)", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Apollo" }] });
+    const preview = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { id: "p1", hourlyRate: 150 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).patch.hourlyRate).toEqual({ amount: 15000 });
+    expect(preview.preview.expectedChanges.join(" ")).toContain("150.00");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect((fake.state.projects.find((p) => p.id === "p1") as { hourlyRate?: { amount: number } })?.hourlyRate?.amount).toBe(15000);
+  });
+
   it("clockify_projects_estimate_update previews then commits once", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({

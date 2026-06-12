@@ -77,7 +77,8 @@ const getProject = defineAction({
 
 const createProject = defineAction({
   name: "clockify_projects_create",
-  description: "Create a project. Safe write — executes immediately when policy allows.",
+  description:
+    "Create a project. Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
   featureGroup: PROJECT_GROUP,
   risks: ["safe_write"],
   schema: z.object({
@@ -86,9 +87,22 @@ const createProject = defineAction({
     billable: z.boolean().optional(),
     color: z.string().optional(), // hex
     isPublic: z.boolean().optional(),
+    /** Project DEFAULT hourly/cost rate amount (the project-wide rate). */
+    hourlyRate: z.number().nonnegative().optional(),
+    costRate: z.number().nonnegative().optional(),
+    rateUnit: z.enum(["major", "minor"]).default("major"),
   }),
   async handler(ctx, args) {
-    const project = await ctx.clockify.createProject(args);
+    const unit = args.rateUnit ?? "major";
+    const project = await ctx.clockify.createProject({
+      name: args.name,
+      ...(args.clientId ? { clientId: args.clientId } : {}),
+      ...(args.billable !== undefined ? { billable: args.billable } : {}),
+      ...(args.color ? { color: args.color } : {}),
+      ...(args.isPublic !== undefined ? { isPublic: args.isPublic } : {}),
+      ...(args.hourlyRate !== undefined ? { hourlyRate: { amount: toMinor(args.hourlyRate, unit) } } : {}),
+      ...(args.costRate !== undefined ? { costRate: { amount: toMinor(args.costRate, unit) } } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({
@@ -140,6 +154,10 @@ const updateProject = defineRiskyAction({
       color: z.string().optional(),
       isPublic: z.boolean().optional(),
       archived: z.boolean().optional(),
+      /** The project's DEFAULT hourly/cost rate (the project-wide rate, set here). */
+      hourlyRate: z.number().nonnegative().optional(),
+      costRate: z.number().nonnegative().optional(),
+      rateUnit: z.enum(["major", "minor"]).default("major"),
     })
     .refine((v) => v.id !== undefined || v.currentName !== undefined, {
       message: "Provide the project id or its exact currentName.",
@@ -151,7 +169,9 @@ const updateProject = defineRiskyAction({
         v.billable !== undefined ||
         v.color !== undefined ||
         v.isPublic !== undefined ||
-        v.archived !== undefined,
+        v.archived !== undefined ||
+        v.hourlyRate !== undefined ||
+        v.costRate !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
@@ -166,8 +186,22 @@ const updateProject = defineRiskyAction({
       },
     );
     if (!resolved.ok) return resolved.clarify;
-    const { id: _id, currentName: _currentName, ...patch } = args;
-    const fields = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined));
+    // Rates are major numbers in the args but the wire wants { amount: minor }; pull
+    // them out (with rateUnit) before the generic patch passthrough.
+    const { id: _id, currentName: _currentName, hourlyRate, costRate, rateUnit, ...rest } = args;
+    const fields: Record<string, unknown> = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined));
+    const rateUnitFinal = rateUnit ?? "major";
+    const rateChanges: string[] = [];
+    if (hourlyRate !== undefined) {
+      const amount = toMinor(hourlyRate, rateUnitFinal);
+      fields.hourlyRate = { amount };
+      rateChanges.push(`Set the project default hourly rate to ${(amount / 100).toFixed(2)}`);
+    }
+    if (costRate !== undefined) {
+      const amount = toMinor(costRate, rateUnitFinal);
+      fields.costRate = { amount };
+      rateChanges.push(`Set the project default cost rate to ${(amount / 100).toFixed(2)}`);
+    }
     // A client NAME in the clientId slot resolves to the real id (live item
     // 096: "assign P4 to client X" previewed the name and failed at commit).
     // An empty clientId is the unassign sentinel and passes through.
@@ -182,7 +216,10 @@ const updateProject = defineRiskyAction({
     return {
       actionLabel: "Update project",
       targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: describePatch(fields),
+      expectedChanges: [
+        ...describePatch(Object.fromEntries(Object.entries(fields).filter(([k]) => k !== "hourlyRate" && k !== "costRate"))),
+        ...rateChanges,
+      ],
       reversibility: "You can update the project again to revert most fields.",
       warnings: ["Updating a project changes live workspace data."],
       payload: { id: resolved.id, patch: fields },

@@ -14,6 +14,9 @@ export interface CreateProjectInput {
   billable?: boolean;
   color?: string; // hex
   isPublic?: boolean;
+  /** Project default rates (minor units on the wire; major→minor done upstream). */
+  hourlyRate?: { amount: number; since?: string };
+  costRate?: { amount: number; since?: string };
 }
 
 /** Project billing-rate write (minor units on the wire; major→minor done upstream). */
