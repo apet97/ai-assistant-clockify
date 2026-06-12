@@ -27,11 +27,12 @@ const DATE_CLARIFY = (raw: string) =>
 
 const EXP = "expenses" as const;
 
-/** Fields stored in the create payload (userId is added from the admin at commit). */
+/** Fields stored in the create payload (`userId` = the resolved expense owner). */
 interface StoredExpense {
   amountMinor: number;
   date: string;
   categoryId: string;
+  userId: string;
   notes?: string;
   billable?: boolean;
   projectId?: string;
@@ -89,7 +90,7 @@ const listExpenseCategories = defineReadAction({
 const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
   description:
-    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Billing action — previews and requires confirmation.",
+    "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Defaults to YOUR expense; to log it for another user pass their `userId` or exact `userName` (or 'me' for yourself). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
   schema: z
@@ -102,6 +103,10 @@ const createExpense = defineRiskyAction({
       categoryId: z.string().min(1).optional(),
       /** The category's exact name, resolved to an id server-side. */
       categoryName: z.string().min(1).optional(),
+      /** The expense owner — defaults to the admin; a user id or 'me'. */
+      userId: z.string().min(1).optional(),
+      /** The owner's exact name, resolved to an id server-side. */
+      userName: z.string().min(1).optional(),
       notes: z.string().optional(),
       billable: z.boolean().optional(),
       projectId: z.string().optional(),
@@ -118,6 +123,24 @@ const createExpense = defineRiskyAction({
       { noun: "expense category", verb: "use", list: () => ctx.clockify.listExpenseCategories() },
     );
     if (!category.ok) return category.clarify;
+    // Resolve the OWNER: default to the admin; allow another user by id/exact name
+    // ("me" = the admin). Clockify needs a real userId — a bad one must clarify at
+    // PREVIEW, never confirm-then-fail.
+    let ownerId = ctx.adminUserId;
+    let ownerLabel = "you";
+    if (args.userId || args.userName) {
+      if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
+        ownerId = ctx.adminUserId;
+      } else {
+        const owner = await resolveEntityRef(
+          { id: args.userId, name: args.userName },
+          { noun: "user", verb: "create the expense for", list: () => ctx.clockify.listUsers() },
+        );
+        if (!owner.ok) return owner.clarify;
+        ownerId = owner.id;
+        ownerLabel = owner.name ?? owner.id;
+      }
+    }
     // Live: the model sent the literal string "today" to the wire (400) —
     // the harness resolves relative dates and defaults to today.
     const date = resolveDate(ctx, args.date);
@@ -126,6 +149,7 @@ const createExpense = defineRiskyAction({
       amountMinor: toMinor(args.amount, args.amountUnit),
       date,
       categoryId: category.id,
+      userId: ownerId,
       ...(args.notes !== undefined ? { notes: args.notes } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
       ...(args.projectId !== undefined ? { projectId: args.projectId } : {}),
@@ -135,7 +159,7 @@ const createExpense = defineRiskyAction({
       actionLabel: "Create expense",
       targets: [],
       expectedChanges: [
-        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
+        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} for ${ownerLabel} in category ${category.name ?? category.id}${args.notes ? ` — "${args.notes}"` : ""}`,
       ],
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],
@@ -144,8 +168,9 @@ const createExpense = defineRiskyAction({
   },
   async commit(ctx, payload) {
     const { input } = payload as { input: StoredExpense };
-    // The expense owner is the admin making the change — never model-supplied.
-    const expense = await ctx.clockify.createExpense({ ...input, userId: ctx.adminUserId });
+    // The owner was resolved at preview (defaults to the admin); the model never
+    // sets it directly on the wire.
+    const expense = await ctx.clockify.createExpense(input);
     return successReceipt({
       action: "clockify_expenses_create",
       entity: "expense",

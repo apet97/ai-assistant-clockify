@@ -59,6 +59,42 @@ describe("expense actions", () => {
     expect(fake.state.expenses.find((e) => e.notes === "AIASSIST_SMOKE_exp")).toBeDefined();
   });
 
+  it("clockify_expenses_create logs for another user by name (defaults to the admin, clarifies on unknown)", async () => {
+    const fake = createFakeWorkspace({
+      expenseCategories: [{ id: "c1", name: "Travel" }],
+      users: [
+        { id: "u-mike", name: "Mike Admin" },
+        { id: "admin-1", name: "Me" },
+      ],
+    });
+    // For another user by exact name → the resolved owner, not the admin.
+    const forMike = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel", userName: "Mike Admin" },
+      context: makeContext(fake),
+    });
+    if (forMike.kind !== "preview") throw new Error("expected a preview");
+    expect((forMike.operation.payload as any).input.userId).toBe("u-mike");
+    expect(forMike.preview.expectedChanges.join(" ")).toContain("Mike Admin");
+
+    // No owner given → defaults to the admin.
+    const forMe = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel" },
+      context: makeContext(fake),
+    });
+    if (forMe.kind !== "preview") throw new Error("expected a preview");
+    expect((forMe.operation.payload as any).input.userId).toBe("admin-1");
+
+    // Unknown user → clarify at preview, never confirm-then-fail.
+    const ghost = await executeAction({
+      actionName: "clockify_expenses_create",
+      args: { amount: 50, categoryName: "Travel", userName: "Ghost" },
+      context: makeContext(fake),
+    });
+    expect(ghost.kind).toBe("clarify");
+  });
+
   it("clockify_expenses_create previews the amount in major units, never raw minor with a '(minor units)' debug label", async () => {
     // The admin asked for $75; the preview must read "75.00", never the wire
     // value 7500 nor the internal "(minor units)" annotation (truthfulness).
