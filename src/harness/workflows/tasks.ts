@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike, zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -94,7 +95,7 @@ const createTask = defineAction({
     projectId: z.string().min(1),
     name: z.string().min(1),
     /** Assignees to set on the new task: user ids, exact names, or 'me' (resolved server-side). */
-    assigneeIds: z.array(z.string().min(1)).optional(),
+    assigneeIds: zStringList().optional(),
   }),
   async handler(ctx, args) {
     let assigneeIds: string[] | undefined;
@@ -140,7 +141,7 @@ const updateTask = defineRiskyAction({
       currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       status: z.string().optional(),
-      assigneeIds: z.array(z.string()).optional(),
+      assigneeIds: zStringList(z.array(z.string())).optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
@@ -257,7 +258,7 @@ const rateUpdate = defineRiskyAction({
       taskId: z.string().min(1).optional(),
       taskName: z.string().min(1).optional(),
       rateKind: z.enum(["HOURLY", "COST"]),
-      amount: z.number().nonnegative(),
+      amount: zNumberLike(z.number().nonnegative()),
       /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
       amountUnit: z.enum(["major", "minor"]).default("major"),
       since: z.string().optional(),

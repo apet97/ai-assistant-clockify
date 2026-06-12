@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -93,7 +94,7 @@ const createAssignment = defineAction({
     projectId: z.string().min(1),
     start: z.string().min(1),
     end: z.string().min(1),
-    hoursPerDay: z.number().min(0.5).max(24),
+    hoursPerDay: zNumberLike(z.number().min(0.5).max(24)),
     note: z.string().optional(),
   }),
   async handler(ctx, args) {
@@ -120,7 +121,7 @@ const updateAssignment = defineRiskyAction({
   group: SCHED,
   risks: ["high_risk_write"],
   schema: z
-    .object({ id: z.string().min(1), hoursPerDay: z.number().min(0.5).max(24).optional(), note: z.string().optional(), seriesUpdateOption: seriesOption.optional() })
+    .object({ id: z.string().min(1), hoursPerDay: zNumberLike(z.number().min(0.5).max(24)).optional(), note: z.string().optional(), seriesUpdateOption: seriesOption.optional() })
     .refine((v) => v.hoursPerDay !== undefined || v.note !== undefined, { message: "Provide hoursPerDay or note to change." }),
   async preview(_ctx, args) {
     const patch = {

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -132,8 +133,8 @@ const createHoliday = defineAction({
       startDate: z.string().min(1), // YYYY-MM-DD
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: z.array(z.string().min(1)).optional(),
-      userGroupIds: z.array(z.string().min(1)).optional(),
+      userIds: zStringList().optional(),
+      userGroupIds: zStringList().optional(),
     })
     .refine((v) => (v.userIds?.length ?? 0) > 0 || (v.userGroupIds?.length ?? 0) > 0, {
       message: "A holiday needs at least one userIds or userGroupIds assignment.",
@@ -174,8 +175,8 @@ const updateHoliday = defineAction({
       startDate: z.string().optional(),
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: z.array(z.string().min(1)).optional(),
-      userGroupIds: z.array(z.string().min(1)).optional(),
+      userIds: zStringList().optional(),
+      userGroupIds: zStringList().optional(),
     })
     .refine(
       (v) =>

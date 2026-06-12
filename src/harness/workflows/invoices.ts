@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -262,8 +263,8 @@ const exportInvoice = defineInvoiceRead({
 /** A line item the planner can attach when creating the invoice. */
 const invoiceItemSchema = z.object({
   description: z.string().optional(),
-  quantity: z.number().positive().optional(),
-  amount: z.number().nonnegative().optional(),
+  quantity: zNumberLike(z.number().positive()).optional(),
+  amount: zNumberLike(z.number().nonnegative()).optional(),
   /** `major` (e.g. 100.00) is converted ×100 to the minor units Clockify wants. */
   amountUnit: z.enum(["major", "minor"]).default("major"),
   itemType: z.string().min(1).optional(),
@@ -563,8 +564,8 @@ const addInvoiceItem = defineRiskyAction({
     invoiceId: z.string().min(1),
     itemType: z.string().min(1).optional(),
     description: z.string().optional(),
-    quantity: z.number().positive().optional(),
-    unitPrice: z.number().nonnegative().optional(),
+    quantity: zNumberLike(z.number().positive()).optional(),
+    unitPrice: zNumberLike(z.number().nonnegative()).optional(),
     /** `major` (e.g. 125.00) is converted ×100 to the minor units Clockify wants. */
     unitPriceUnit: z.enum(["major", "minor"]).default("major"),
     applyTaxes: z.enum(["TAX1", "TAX2", "TAX1TAX2", "NONE"]).optional(),
@@ -664,7 +665,7 @@ const createInvoicePayment = defineRiskyAction({
   risks: ["payment"],
   schema: z.object({
     invoiceId: z.string().min(1),
-    amount: z.number().positive(),
+    amount: zNumberLike(z.number().positive()),
     /** `major` (e.g. 50.00) is converted ×100 to the minor units Clockify wants. */
     amountUnit: z.enum(["major", "minor"]).default("major"),
     paymentDate: z.string().min(1), // full ISO or YYYY-MM-DD

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zStringList } from "../arg-shapes.js";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { runComposition, type CompositionStep } from "../compose.js";
@@ -84,7 +85,7 @@ const onboardUser = defineAction({
   risks: ["external_side_effect"],
   schema: z.object({
     email: z.string().min(1),
-    groups: z.array(z.string().min(1)).optional(),
+    groups: zStringList().optional(),
     sendEmail: z.boolean().optional(),
   }),
   async handler(_ctx, args) {

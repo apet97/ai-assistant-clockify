@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike, zStringList } from "../arg-shapes.js";
 import { defineAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
@@ -81,9 +82,9 @@ const startTimer = defineAction({
     projectName: z.string().optional(),
     taskId: z.string().optional(),
     taskName: z.string().optional(),
-    tagIds: z.array(z.string()).optional(),
+    tagIds: zStringList(z.array(z.string())).optional(),
     /** Tag names (or use tagIds) — resolved to verified ids server-side. */
-    tagNames: z.array(z.string()).optional(),
+    tagNames: zStringList(z.array(z.string())).optional(),
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
@@ -219,16 +220,16 @@ const logWork = defineAction({
     start: z.string().optional(),
     end: z.string().optional(),
     date: z.string().optional(),
-    dayOffset: z.number().int().optional(),
-    durationMinutes: z.number().positive().optional(),
-    durationHours: z.number().positive().optional(),
+    dayOffset: zNumberLike(z.number().int()).optional(),
+    durationMinutes: zNumberLike(z.number().positive()).optional(),
+    durationHours: zNumberLike(z.number().positive()).optional(),
     projectId: z.string().optional(),
     projectName: z.string().optional(),
     taskId: z.string().optional(),
     taskName: z.string().optional(),
-    tagIds: z.array(z.string()).optional(),
+    tagIds: zStringList(z.array(z.string())).optional(),
     /** Tag names (or use tagIds) — resolved to verified ids server-side. */
-    tagNames: z.array(z.string()).optional(),
+    tagNames: zStringList(z.array(z.string())).optional(),
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
@@ -359,9 +360,9 @@ const fixEntry = defineAction({
       projectName: z.string().optional(),
       taskId: z.string().optional(),
       taskName: z.string().optional(),
-      tagIds: z.array(z.string()).optional(),
+      tagIds: zStringList(z.array(z.string())).optional(),
       /** Tag names (or use tagIds) — resolved to verified ids server-side. */
-      tagNames: z.array(z.string()).optional(),
+      tagNames: zStringList(z.array(z.string())).optional(),
       billable: z.boolean().optional(),
     })
     .refine(

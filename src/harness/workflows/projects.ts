@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -90,8 +91,8 @@ const createProject = defineAction({
     color: z.string().optional(), // hex
     isPublic: z.boolean().optional(),
     /** Project DEFAULT hourly/cost rate amount (the project-wide rate). */
-    hourlyRate: z.number().nonnegative().optional(),
-    costRate: z.number().nonnegative().optional(),
+    hourlyRate: zNumberLike(z.number().nonnegative()).optional(),
+    costRate: zNumberLike(z.number().nonnegative()).optional(),
     rateUnit: z.enum(["major", "minor"]).default("major"),
   }),
   async handler(ctx, args) {
@@ -192,8 +193,8 @@ const updateProject = defineRiskyAction({
       isPublic: z.boolean().optional(),
       archived: z.boolean().optional(),
       /** The project's DEFAULT hourly/cost rate (the project-wide rate, set here). */
-      hourlyRate: z.number().nonnegative().optional(),
-      costRate: z.number().nonnegative().optional(),
+      hourlyRate: zNumberLike(z.number().nonnegative()).optional(),
+      costRate: zNumberLike(z.number().nonnegative()).optional(),
       rateUnit: z.enum(["major", "minor"]).default("major"),
     })
     .refine((v) => v.id !== undefined || v.currentName !== undefined, {
@@ -374,7 +375,7 @@ const rateUpdate = defineRiskyAction({
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
       rateKind: z.enum(["HOURLY", "COST"]),
-      amount: z.number().nonnegative(),
+      amount: zNumberLike(z.number().nonnegative()),
       /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
       amountUnit: z.enum(["major", "minor"]).default("major"),
       since: z.string().optional(),

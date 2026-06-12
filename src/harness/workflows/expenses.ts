@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike } from "../arg-shapes.js";
 import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
@@ -95,7 +96,7 @@ const createExpense = defineRiskyAction({
   risks: ["billing"],
   schema: z
     .object({
-      amount: z.number().positive(),
+      amount: zNumberLike(z.number().positive()),
       /** `major` (e.g. 125.00) is converted ×100 to the minor units stored in the payload. */
       amountUnit: z.enum(["major", "minor"]).default("major"),
       /** YYYY-MM-DD, full ISO, or relative today/yesterday/tomorrow; defaults to today. */
@@ -204,7 +205,7 @@ const updateExpense = defineRiskyAction({
   schema: z
     .object({
       id: z.string().min(1),
-      amount: z.number().positive().optional(),
+      amount: zNumberLike(z.number().positive()).optional(),
       amountUnit: z.enum(["major", "minor"]).default("major"),
       date: z.string().optional(),
       categoryId: z.string().optional(),

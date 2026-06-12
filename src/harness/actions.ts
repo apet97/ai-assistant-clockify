@@ -5,6 +5,7 @@ import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
 import { idempotencyScopeKey, markReplayed } from "./idempotency.js";
+import { formatZodIssues } from "./arg-shapes.js";
 
 /**
  * Action executor — the safety boundary (ARCHITECTURE "The model can propose.
@@ -41,7 +42,9 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
       receipt: errorReceipt({
         action: action.name,
         code: "invalid_args",
-        message: parsed.error.issues.map((i) => i.message).join("; ") || "Invalid arguments.",
+        // Field-path-prefixed so the agent loop can self-correct ("assigneeIds:
+        // Expected array, received string" — not just the bare Zod message).
+        message: formatZodIssues(parsed.error) || "Invalid arguments.",
         recovery: { hint: "Fix the arguments and try again.", retryable: true },
       }),
     };

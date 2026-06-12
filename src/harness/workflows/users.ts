@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike, zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -165,7 +166,7 @@ const rateUpdate = defineRiskyAction({
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
       rateKind: z.enum(["HOURLY", "COST"]),
-      amount: z.number().nonnegative(),
+      amount: zNumberLike(z.number().nonnegative()),
       /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
       amountUnit: z.enum(["major", "minor"]).default("major"),
       since: z.string().optional(),
@@ -386,7 +387,7 @@ const addUser = defineRiskyAction({
       groupId: z.string().min(1).optional(),
       groupName: z.string().min(1).optional(),
       /** Members to add: user ids, exact names, or 'me' (resolved + verified server-side). */
-      members: z.array(z.string().min(1)).optional(),
+      members: zStringList().optional(),
       // Single-member shape, tolerated because the planner emits both.
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),

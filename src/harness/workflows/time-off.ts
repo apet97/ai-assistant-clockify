@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zNumberLike, zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineReadAction,
@@ -93,10 +94,10 @@ const createPolicy = defineRiskyAction({
   schema: z.object({
     name: z.string().min(1),
     requiresApproval: z.boolean().optional(),
-    daysPerYear: z.number().nonnegative().optional(),
+    daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
     negativeBalance: z.boolean().optional(),
-    userIds: z.array(z.string().min(1)).optional(),
-    userGroupIds: z.array(z.string().min(1)).optional(),
+    userIds: zStringList().optional(),
+    userGroupIds: zStringList().optional(),
   }),
   async preview(ctx, args) {
     const scope = await resolvePolicyScope(ctx, args);
@@ -141,9 +142,9 @@ const updatePolicy = defineRiskyAction({
       id: z.string().min(1),
       name: z.string().optional(),
       requiresApproval: z.boolean().optional(),
-      daysPerYear: z.number().nonnegative().optional(),
-      userIds: z.array(z.string().min(1)).optional(),
-      userGroupIds: z.array(z.string().min(1)).optional(),
+      daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
+      userIds: zStringList().optional(),
+      userGroupIds: zStringList().optional(),
     })
     .refine(
       (v) =>
@@ -283,7 +284,7 @@ const createRequest = defineRiskyAction({
       policyName: z.string().min(1).optional(),
       start: z.string().min(1),
       end: z.string().min(1),
-      days: z.number().positive().optional(),
+      days: zNumberLike(z.number().positive()).optional(),
       halfDay: z.boolean().optional(),
       note: z.string().optional(),
     })
@@ -458,8 +459,8 @@ const updateBalance = defineRiskyAction({
   risks: ["high_risk_write"],
   schema: z.object({
     policyId: z.string().min(1),
-    userIds: z.array(z.string().min(1)).min(1),
-    value: z.number(),
+    userIds: zStringList(z.array(z.string().min(1)).min(1)),
+    value: zNumberLike(z.number()),
     note: z.string().optional(),
   }),
   async preview(ctx, args) {

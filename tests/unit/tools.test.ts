@@ -59,6 +59,15 @@ describe("toolsForModel", () => {
     expect(Object.keys(props)).toHaveLength(0);
   });
 
+  it("zStringList/zNumberLike fields still advertise the CANONICAL types to the model", () => {
+    // The harness tolerates a scalar, but the tool schema must keep nudging the
+    // model toward the canonical array/number (preprocess unwraps to the inner).
+    const tasks = paramsFor("clockify_tasks_create").properties as Record<string, { type?: string }>;
+    expect(tasks.assigneeIds?.type).toBe("array");
+    const expenses = paramsFor("clockify_expenses_create").properties as Record<string, { type?: string }>;
+    expect(expenses.amount?.type).toBe("number");
+  });
+
   it("the tool definitions carry no secret-bearing field names", () => {
     const serialized = JSON.stringify(toolsForModel());
     expect(serialized).not.toContain("addonToken");
