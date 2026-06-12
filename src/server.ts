@@ -66,6 +66,9 @@ function liveClockifyForWorkspace(installation: Installation): WorkspaceClient {
   });
 }
 
+/** Operational-table retention sweep cadence (see Store.pruneExpired). */
+const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+
 export function start(): void {
   const config = loadConfig();
   const store = createStore(config.databasePath, { encryptionKey: config.dataEncryptionKey });
@@ -79,6 +82,25 @@ export function start(): void {
     modelClient,
     clockifyForWorkspace: liveClockifyForWorkspace,
   });
+
+  // Retention: prune expired operational rows at startup (catches backlog
+  // after long-idle deploys) and hourly. Never audit_events/chat_messages.
+  const prune = (): void => {
+    try {
+      const counts = store.pruneExpired(new Date().toISOString());
+      const total = counts.pendingConfirmations + counts.idempotencyKeys + counts.undoRecords;
+      if (total > 0) {
+        console.log(
+          `retention prune: confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords}`,
+        );
+      }
+    } catch (error) {
+      console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
+    }
+  };
+  prune();
+  const pruneTimer = setInterval(prune, PRUNE_INTERVAL_MS);
+  pruneTimer.unref();
 
   app.listen(config.port, () => {
     // Intentionally minimal, non-secret startup log.

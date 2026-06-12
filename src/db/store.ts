@@ -112,6 +112,24 @@ export interface StoreOptions {
 
 const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
+/**
+ * Operational-table retention. audit_events and chat_messages are NEVER pruned
+ * (the audit log and durable history are product features). Settled/expired
+ * confirmations age out on a 30d clock so listConfirmationOutcomes metrics
+ * keep a generous recent window; the committed receipts live forever in
+ * audit_events regardless.
+ */
+const CONFIRMATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Must stay comfortably above routes/api.ts IDEMPOTENCY_WINDOW_MS (10 min). */
+export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
+
+export interface PruneCounts {
+  pendingConfirmations: number;
+  idempotencyKeys: number;
+  undoRecords: number;
+}
+
 export interface Store {
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
   upsertAdminPolicy(workspaceId: string, adminUserId: string, policy: AdminPolicy): void;
@@ -159,6 +177,9 @@ export interface Store {
    *  statuses, scoped to a workspace + admin, optionally since an ISO timestamp. */
   listActionOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): ActionOutcome[];
   listConfirmationOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
+
+  /** Delete operational rows past retention. NEVER touches audit_events/chat_messages. */
+  pruneExpired(nowIso: string): PruneCounts;
 
   close(): void;
 }
@@ -683,6 +704,32 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         .prepare("UPDATE undo_records SET status = 'undone', undone_at = ? WHERE id = ? AND status = 'available'")
         .run(nowIso(), id);
       return info.changes > 0;
+    },
+
+    pruneExpired(nowIsoArg) {
+      const nowMs = Date.parse(nowIsoArg);
+      const confirmationCutoff = new Date(nowMs - CONFIRMATION_RETENTION_MS).toISOString();
+      const undoCutoff = new Date(nowMs - UNDO_RETENTION_MS).toISOString();
+      const idempotencyCutoff = nowMs - IDEMPOTENCY_RETENTION_MS;
+      // One transaction, three statements — operational tables ONLY. ISO-string
+      // comparison is safe: every writer stamps via toISOString().
+      const run = db.transaction((): PruneCounts => {
+        const confirmations = db
+          .prepare(
+            `DELETE FROM pending_confirmations
+              WHERE (status != 'pending' AND created_at < ?)
+                 OR (status  = 'pending' AND expires_at < ?)`,
+          )
+          .run(confirmationCutoff, confirmationCutoff).changes;
+        const idempotency = db
+          .prepare("DELETE FROM idempotency_keys WHERE committed_at < ?")
+          .run(idempotencyCutoff).changes;
+        const undo = db
+          .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
+          .run(undoCutoff).changes;
+        return { pendingConfirmations: confirmations, idempotencyKeys: idempotency, undoRecords: undo };
+      });
+      return run();
     },
 
     tables() {
