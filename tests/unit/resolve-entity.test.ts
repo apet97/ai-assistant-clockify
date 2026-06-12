@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeClockifyId, resolveEntityRef, resolveGroupRefs, resolveUserRefs } from "../../src/harness/workflows/resolve.js";
+import {
+  looksLikeClockifyId,
+  resolveEntityRef,
+  resolveGroupRefs,
+  resolveProjectTaskRefs,
+  resolveUserRefs,
+} from "../../src/harness/workflows/resolve.js";
 
 const HEX_ID = "5f1e2d3c4b5a69788796a5b4";
 
@@ -87,6 +93,144 @@ describe("resolveEntityRef", () => {
       { noun: "project", verb: "update", list },
     );
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("resolveEntityRef — notFoundHint", () => {
+  const items = [{ id: "p1", name: "Website Redesign" }];
+  const list = async () => items;
+
+  it("appends the hint to the did-you-mean clarify (options exist)", async () => {
+    const result = await resolveEntityRef(
+      { name: "Webside" },
+      { noun: "project", verb: "update", list, notFoundHint: "Or should I create it first?" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.clarify).toContain("Did you mean one of these?");
+      expect(result.clarify.clarify).toContain("Or should I create it first?");
+    }
+  });
+
+  it("appends the hint to the no-options clarify too", async () => {
+    const result = await resolveEntityRef(
+      { name: "Ghost" },
+      { noun: "client", verb: "invoice", list: async () => [], notFoundHint: "Or should I create the client first?" },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.clarify).toContain('There is no active client named "Ghost" to invoice.');
+      expect(result.clarify.clarify).toContain("Or should I create the client first?");
+    }
+  });
+
+  it("leaves the copy byte-identical when no hint is given", async () => {
+    const result = await resolveEntityRef({ name: "Ghost" }, { noun: "client", verb: "invoice", list: async () => [] });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.clarify).toBe('There is no active client named "Ghost" to invoice.');
+    }
+  });
+});
+
+describe("resolveProjectTaskRefs", () => {
+  const projects = [
+    { id: "p1", name: "Website Redesign" },
+    { id: "p2", name: "Mobile App" },
+  ];
+  const tasksByProject: Record<string, Array<{ id: string; name: string }>> = {
+    p1: [
+      { id: "t1", name: "Design" },
+      { id: "t2", name: "Review" },
+      { id: "t3", name: "Review" }, // duplicate name → ambiguous
+    ],
+  };
+  const makeOpts = (counts: { projects: number; tasks: number }) => ({
+    verb: "log against",
+    listProjects: async () => {
+      counts.projects += 1;
+      return projects;
+    },
+    listTasks: async (projectId: string) => {
+      counts.tasks += 1;
+      return tasksByProject[projectId] ?? [];
+    },
+  });
+
+  it("passes through untouched (zero list calls) when no refs are given", async () => {
+    const counts = { projects: 0, tasks: 0 };
+    const r = await resolveProjectTaskRefs({}, makeOpts(counts));
+    expect(r).toEqual({ ok: true, projectId: undefined, projectName: undefined, taskId: undefined, taskName: undefined });
+    expect(counts).toEqual({ projects: 0, tasks: 0 });
+  });
+
+  it("trusts 24-hex project and task ids with ZERO list calls (happy path unchanged)", async () => {
+    const counts = { projects: 0, tasks: 0 };
+    const TASK_HEX = "6a1b2c3d4e5f60718293a4b5";
+    const r = await resolveProjectTaskRefs({ projectId: HEX_ID, taskId: TASK_HEX }, makeOpts(counts));
+    expect(r).toMatchObject({ ok: true, projectId: HEX_ID, taskId: TASK_HEX });
+    expect(counts).toEqual({ projects: 0, tasks: 0 });
+  });
+
+  it("resolves a NAME in the projectId slot (the planner habit) and returns the resolved name", async () => {
+    const r = await resolveProjectTaskRefs({ projectId: "Mobile App" }, makeOpts({ projects: 0, tasks: 0 }));
+    expect(r).toMatchObject({ ok: true, projectId: "p2", projectName: "Mobile App" });
+  });
+
+  it("resolves projectName and a task NAME in the taskId slot together", async () => {
+    const r = await resolveProjectTaskRefs(
+      { projectName: "Website Redesign", taskId: "Design" },
+      makeOpts({ projects: 0, tasks: 0 }),
+    );
+    expect(r).toMatchObject({ ok: true, projectId: "p1", taskId: "t1", taskName: "Design" });
+  });
+
+  it("resolves taskName via listTasks(resolved project)", async () => {
+    const counts = { projects: 0, tasks: 0 };
+    const r = await resolveProjectTaskRefs({ projectId: "p1", taskName: "Design" }, makeOpts(counts));
+    expect(r).toMatchObject({ ok: true, projectId: "p1", taskId: "t1", taskName: "Design" });
+    expect(counts.tasks).toBe(1);
+  });
+
+  it("clarifies when a task name is given without any project", async () => {
+    const r = await resolveProjectTaskRefs({ taskName: "Design" }, makeOpts({ projects: 0, tasks: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.clarify.clarify).toBe('To log against task "Design" I need the project. Which project is it in?');
+    }
+  });
+
+  it("clarifies (never picks) on an ambiguous task name, with grounded options", async () => {
+    const r = await resolveProjectTaskRefs({ projectId: "p1", taskName: "Review" }, makeOpts({ projects: 0, tasks: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.options?.map((o) => o.id)).toEqual(["t2", "t3"]);
+  });
+
+  it("clarifies on an unknown task name in the project", async () => {
+    const r = await resolveProjectTaskRefs({ projectId: "p1", taskName: "Ghost" }, makeOpts({ projects: 0, tasks: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.clarify).toContain('"Ghost"');
+  });
+
+  it("clarifies on an unknown project name, carrying the projectNotFoundHint", async () => {
+    const counts = { projects: 0, tasks: 0 };
+    const r = await resolveProjectTaskRefs(
+      { projectName: "Webside" },
+      { ...makeOpts(counts), projectNotFoundHint: "Or should I create it first?" },
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.clarify.clarify).toContain("Or should I create it first?");
+      expect(r.clarify.options?.map((o) => o.id)).toContain("p1");
+    }
+  });
+
+  it("trusts a 24-hex taskId even with no project ref (id already resolved)", async () => {
+    const counts = { projects: 0, tasks: 0 };
+    const TASK_HEX = "6a1b2c3d4e5f60718293a4b5";
+    const r = await resolveProjectTaskRefs({ taskId: TASK_HEX }, makeOpts(counts));
+    expect(r).toMatchObject({ ok: true, taskId: TASK_HEX });
+    expect(counts).toEqual({ projects: 0, tasks: 0 });
   });
 });
 

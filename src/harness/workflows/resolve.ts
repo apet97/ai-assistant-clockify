@@ -101,6 +101,9 @@ async function listBothArchivedStates<T extends { id: string }>(
  *   ARCHIVED entity by name (live item 305: "delete <archived project>" could
  *   neither match nor suggest it). Create/normal-update resolution stays
  *   archived-excluding.
+ * - `notFoundHint` appends a caller-specific sentence to the none-match
+ *   clarifies ("Or should I create it first?") — copy stays byte-identical
+ *   when absent.
  */
 export async function resolveEntityRef<T extends { id: string; name: string; archived?: boolean }>(
   ref: { id?: string; name?: string },
@@ -109,6 +112,7 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
     verb: string;
     list: (filter?: ArchivedFilter) => Promise<T[]>;
     includeArchived?: boolean;
+    notFoundHint?: string;
   },
 ): Promise<ResolveEntityResult<T>> {
   const rawId = ref.id?.trim();
@@ -136,15 +140,78 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
   }
   const options = suggestOptions(items, query, { includeArchived });
   const article = includeArchived ? (/^[aeiou]/i.test(opts.noun) ? "an" : "a") : "an active";
+  const base = options.length
+    ? `I couldn't find ${article} ${opts.noun} named "${query}". Did you mean one of these?`
+    : `There is no ${includeArchived ? "" : "active "}${opts.noun} named "${query}" to ${opts.verb}.`;
   return {
     ok: false,
     clarify: {
-      clarify: options.length
-        ? `I couldn't find ${article} ${opts.noun} named "${query}". Did you mean one of these?`
-        : `There is no ${includeArchived ? "" : "active "}${opts.noun} named "${query}" to ${opts.verb}.`,
+      clarify: opts.notFoundHint ? `${base} ${opts.notFoundHint}` : base,
       options: options.length ? options : undefined,
     },
   };
+}
+
+/**
+ * Resolve the OPTIONAL project/task slot pair every entry-shaped action carries
+ * (expenses create/update, fix_entry, start_timer, log_work, entries_list) —
+ * ONE copy of "a name in either slot resolves; a task needs its project". A
+ * 24-hex id is trusted with zero list calls (the happy path stays free); a
+ * symbolic ref resolves via {@link resolveEntityRef} with grounded clarifies.
+ * Returns resolved names so previews can speak names, not ids. No refs ⇒
+ * all-undefined passthrough.
+ */
+export async function resolveProjectTaskRefs(
+  refs: { projectId?: string; projectName?: string; taskId?: string; taskName?: string },
+  opts: {
+    verb: string;
+    listProjects: (filter?: ArchivedFilter) => Promise<Array<{ id: string; name: string; archived?: boolean }>>;
+    listTasks: (projectId: string) => Promise<Array<{ id: string; name: string }>>;
+    /** Appended to an unknown-project clarify ("Or should I create it first?"). */
+    projectNotFoundHint?: string;
+  },
+): Promise<
+  | { ok: true; projectId?: string; projectName?: string; taskId?: string; taskName?: string }
+  | { ok: false; clarify: RiskyClarifyResult }
+> {
+  let projectId: string | undefined;
+  let projectName: string | undefined;
+  if (refs.projectId?.trim() || refs.projectName?.trim()) {
+    const project = await resolveEntityRef(
+      { id: refs.projectId, name: refs.projectName },
+      { noun: "project", verb: opts.verb, list: opts.listProjects, notFoundHint: opts.projectNotFoundHint },
+    );
+    if (!project.ok) return project;
+    projectId = project.id;
+    projectName = project.name;
+  }
+
+  let taskId: string | undefined;
+  let taskName: string | undefined;
+  const rawTaskId = refs.taskId?.trim();
+  if (rawTaskId && looksLikeClockifyId(rawTaskId)) {
+    // An already-resolved task id is trusted as-is — no project needed.
+    taskId = rawTaskId;
+    taskName = refs.taskName;
+  } else if (rawTaskId || refs.taskName?.trim()) {
+    const query = (refs.taskName ?? rawTaskId ?? "").trim();
+    if (!projectId) {
+      return {
+        ok: false,
+        clarify: { clarify: `To ${opts.verb} task "${query}" I need the project. Which project is it in?` },
+      };
+    }
+    const scopedProjectId = projectId;
+    const task = await resolveEntityRef(
+      { id: rawTaskId, name: refs.taskName },
+      { noun: "task", verb: opts.verb, list: () => opts.listTasks(scopedProjectId) },
+    );
+    if (!task.ok) return task;
+    taskId = task.id;
+    taskName = task.name;
+  }
+
+  return { ok: true, projectId, projectName, taskId, taskName };
 }
 
 /**
