@@ -33,6 +33,42 @@ describe("scheduling actions", () => {
     else throw new Error("expected receipt");
   });
 
+  it("assignments_list resolves a user NAME filter (or 'me') and clarifies on an unknown one", async () => {
+    const fake = createFakeWorkspace({ ...seed(), users: [{ id: "u1", name: "Alice", status: "ACTIVE" }] });
+    const byName = await executeAction({
+      actionName: "clockify_scheduling_assignments_list",
+      args: { userId: "Alice" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+    expect((byName.receipt.data as any).count).toBe(1); // a1 belongs to u1
+
+    const unknown = await executeAction({
+      actionName: "clockify_scheduling_assignments_list",
+      args: { userId: "Ghost" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    expect(fake.counts.listAssignments ?? 0).toBe(1); // the unknown filter never reached the wire
+  });
+
+  it("user_totals resolves a user NAME (defaults to the caller when absent)", async () => {
+    const fake = createFakeWorkspace({ ...seed(), users: [{ id: "u1", name: "Alice", status: "ACTIVE" }] });
+    const byName = await executeAction({
+      actionName: "clockify_scheduling_user_totals",
+      args: { userId: "Alice", start: "2026-06-01", end: "2026-06-30" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+
+    const unknown = await executeAction({
+      actionName: "clockify_scheduling_user_totals",
+      args: { userId: "Ghost", start: "2026-06-01", end: "2026-06-30" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+  });
+
   it("project_totals resolves a project NAME filter (either slot) and clarifies on an unknown one", async () => {
     const fake = createFakeWorkspace({ ...seed(), projects: [{ id: "p1", name: "Apollo" }] });
     const byName = await executeAction({

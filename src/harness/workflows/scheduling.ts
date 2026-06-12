@@ -7,7 +7,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolveInstant, resolveUserRef } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveInstant, resolveUserFilter, resolveUserRef } from "./resolve.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -49,14 +49,21 @@ function resolveSchedulingWindow(
 const listAssignments = defineAction({
   name: "clockify_scheduling_assignments_list",
   description:
-    "List scheduling assignments in a date range (optional user/project filter). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/next monday…), resolved server-side.",
+    "List scheduling assignments in a date range (optional user/project filter; `userId` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/next monday…), resolved server-side.",
   featureGroup: SCHED,
   risks: ["read"],
   schema: z.object({ start: z.string().optional(), end: z.string().optional(), userId: z.string().optional(), projectId: z.string().optional() }),
   async handler(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { kind: "clarify", message: window.message };
-    const items = await ctx.clockify.listAssignments({ ...args, start: window.start, end: window.end });
+    // The user filter resolves id/name/'me'; absent = all users (no default).
+    const user = await resolveUserFilter(args.userId, {
+      verb: "list assignments for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+    });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const items = await ctx.clockify.listAssignments({ ...args, userId: user.userId, start: window.start, end: window.end });
     return {
       kind: "receipt",
       receipt: successReceipt({ action: "clockify_scheduling_assignments_list", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }),
@@ -228,14 +235,21 @@ const projectTotals = defineAction({
 const userTotals = defineAction({
   name: "clockify_scheduling_user_totals",
   description:
-    "Get a user's scheduled-hours totals in a date range (defaults to you; `start`/`end` accept relative days, resolved server-side).",
+    "Get a user's scheduled-hours totals in a date range (defaults to you; `userId` accepts a user id, exact name, or 'me'; `start`/`end` accept relative days, resolved server-side).",
   featureGroup: SCHED,
   risks: ["read"],
   schema: z.object({ userId: z.string().optional(), start: z.string().min(1), end: z.string().min(1) }),
   async handler(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { kind: "clarify", message: window.message };
-    const data = await ctx.clockify.getUserScheduleTotals(args.userId ?? ctx.adminUserId, {
+    const user = await resolveUserFilter(args.userId, {
+      verb: "total scheduled hours for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
+    });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const data = await ctx.clockify.getUserScheduleTotals(user.userId as string, {
       start: window.start as string,
       end: window.end as string,
     });
