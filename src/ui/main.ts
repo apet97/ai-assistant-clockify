@@ -11,8 +11,10 @@ import {
   svgIcon,
 } from "./render.js";
 import {
+  historyRestoreItems,
   type ChatController,
   type ChatResult,
+  type HistoryResponse,
   type PolicyShape,
   type PreviewResult,
   type StreamEvent,
@@ -58,6 +60,8 @@ export {
 export interface ChatApi {
   getPermissions(): Promise<unknown>;
   savePermissions(groups: Record<string, string>): Promise<unknown>;
+  /** Session restore: prior messages + live pending previews (rotated nonces). */
+  getHistory(): Promise<unknown>;
   sendMessage(message: string): Promise<unknown>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -235,6 +239,7 @@ export function createFetchApi(): ChatApi {
     getPermissions: () => json("/api/permissions"),
     savePermissions: (groups) =>
       json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
+    getHistory: () => json("/api/chat/history"),
     sendMessage: (message) =>
       json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
     streamMessage: async (message, onEvent) => {
@@ -540,11 +545,35 @@ function mount(root: HTMLElement, api: ChatApi): void {
     else closePermissions();
   });
 
+  /**
+   * Session restore: replay the stored conversation + the session's still-live
+   * pending previews (with freshly rotated nonces) after an iframe reload.
+   * Best-effort but honest — a failure leaves the composer fully usable.
+   */
+  async function restoreHistory(): Promise<void> {
+    try {
+      const history = (await api.getHistory()) as HistoryResponse;
+      const items = historyRestoreItems(history);
+      if (items.length === 0) return;
+      chat.querySelector(".welcome")?.remove(); // the conversation already started
+      for (const item of items) {
+        if (item.kind === "bubble") appendMessage(item.role, item.text);
+        else renderResults(item.results);
+      }
+      messages.scrollTop = messages.scrollHeight;
+    } catch {
+      showError("Couldn't restore the conversation history — you can keep chatting.");
+    }
+  }
+
   async function init(): Promise<void> {
     try {
       const perms = (await api.getPermissions()) as PermissionsResponse;
       if (perms.firstRun) await openPermissions(true);
-      else renderChat();
+      else {
+        renderChat();
+        await restoreHistory();
+      }
     } catch {
       showError("Could not load the assistant.");
     }

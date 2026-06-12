@@ -172,3 +172,53 @@ export function settleConfirmOutcome(responses: ConfirmResponse[], hooks: Confir
   }
   return committed;
 }
+
+// --- Session restore (GET /api/chat/history) --------------------------------
+
+export interface HistoryMessage {
+  role: string;
+  content: string;
+  results?: ChatResult[];
+}
+
+export interface HistoryResponse {
+  ok?: boolean;
+  messages?: HistoryMessage[];
+  pendingPreviews?: PreviewResult[];
+}
+
+export type RestoreItem =
+  | { kind: "bubble"; role: "user" | "assistant"; text: string }
+  | { kind: "results"; results: ChatResult[] };
+
+/**
+ * Flatten a history response into renderable restore items: a bubble per
+ * non-empty message content, a results item per non-empty results list, and
+ * the LIVE pending previews LAST (the actionable card belongs at the bottom).
+ * Defensive even against an older server: preview-kind results and `undo`
+ * handles inside stored messages are dropped here too — history is a record,
+ * not a control surface; live previews arrive only via `pendingPreviews`.
+ */
+export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
+  const items: RestoreItem[] = [];
+  for (const message of history.messages ?? []) {
+    if (message.role !== "user" && message.role !== "assistant") continue;
+    if (message.content.trim().length > 0) {
+      items.push({ kind: "bubble", role: message.role, text: message.content });
+    }
+    const results = (message.results ?? [])
+      .filter((r) => r.kind !== "preview")
+      .map((r) => {
+        if (r.kind === "receipt" && "undo" in r) {
+          const { undo: _undo, ...rest } = r;
+          return rest as ChatResult;
+        }
+        return r;
+      });
+    if (results.length > 0) items.push({ kind: "results", results });
+  }
+  if (history.pendingPreviews?.length) {
+    items.push({ kind: "results", results: history.pendingPreviews });
+  }
+  return items;
+}

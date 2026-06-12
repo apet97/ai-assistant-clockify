@@ -16,6 +16,10 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("savePermissions");
       return { ok: true };
     },
+    async getHistory() {
+      bump("getHistory");
+      return { ok: true, messages: [], pendingPreviews: [] };
+    },
     async sendMessage() {
       bump("sendMessage");
       return { ok: true, reply: { kind: "answer", text: "" }, results: [] };
