@@ -6,7 +6,7 @@ import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harn
 import type { RiskLabel } from "../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../harness/receipts.js";
-import type { ActionOutcome } from "../metrics/metrics.js";
+import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
 
 /**
  * The single SQLite access module (backend rule: all DB access goes through
@@ -128,7 +128,11 @@ export interface PruneCounts {
   pendingConfirmations: number;
   idempotencyKeys: number;
   undoRecords: number;
+  turnTelemetry: number;
 }
+
+/** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
+const TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 export interface Store {
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
@@ -181,6 +185,20 @@ export interface Store {
    *  statuses, scoped to a workspace + admin, optionally since an ISO timestamp. */
   listActionOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): ActionOutcome[];
   listConfirmationOutcomes(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
+
+  /** Per-turn model telemetry (cost + latency; see metrics.ts TurnTelemetry). */
+  recordTurnTelemetry(input: {
+    sessionId: string;
+    workspaceId: string;
+    adminUserId: string;
+    kind: "chat" | "resume";
+    modelCalls: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    turnMs: number;
+    modelMs: number;
+  }): void;
+  listTurnTelemetry(workspaceId: string, adminUserId: string, sinceIso?: string): TurnTelemetry[];
 
   /** Delete operational rows past retention. NEVER touches audit_events/chat_messages. */
   pruneExpired(nowIso: string): PruneCounts;
@@ -731,13 +749,66 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       return info.changes > 0;
     },
 
+    recordTurnTelemetry(input) {
+      db.prepare(
+        `INSERT INTO turn_telemetry (
+           id, session_id, workspace_id, admin_user_id, kind, model_calls,
+           prompt_tokens, completion_tokens, turn_ms, model_ms, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        randomUUID(),
+        input.sessionId,
+        input.workspaceId,
+        input.adminUserId,
+        input.kind,
+        input.modelCalls,
+        input.promptTokens ?? null,
+        input.completionTokens ?? null,
+        input.turnMs,
+        input.modelMs,
+        nowIso(),
+      );
+    },
+
+    listTurnTelemetry(workspaceId, adminUserId, sinceIso) {
+      // Conditional bound, same shape as actionOutcomesSql: appending the range
+      // predicate only when bounded keeps the index seek (see that comment).
+      const bounded = sinceIso !== undefined;
+      const rows = db
+        .prepare(
+          `SELECT kind, model_calls, prompt_tokens, completion_tokens, turn_ms, model_ms, created_at
+             FROM turn_telemetry
+            WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}
+            ORDER BY created_at ASC`,
+        )
+        .all(...(bounded ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId])) as Array<{
+        kind: "chat" | "resume";
+        model_calls: number;
+        prompt_tokens: number | null;
+        completion_tokens: number | null;
+        turn_ms: number;
+        model_ms: number;
+        created_at: string;
+      }>;
+      return rows.map((row) => ({
+        kind: row.kind,
+        modelCalls: row.model_calls,
+        promptTokens: row.prompt_tokens ?? undefined,
+        completionTokens: row.completion_tokens ?? undefined,
+        turnMs: row.turn_ms,
+        modelMs: row.model_ms,
+        createdAt: row.created_at,
+      }));
+    },
+
     pruneExpired(nowIsoArg) {
       const nowMs = Date.parse(nowIsoArg);
       const confirmationCutoff = new Date(nowMs - CONFIRMATION_RETENTION_MS).toISOString();
       const undoCutoff = new Date(nowMs - UNDO_RETENTION_MS).toISOString();
+      const telemetryCutoff = new Date(nowMs - TELEMETRY_RETENTION_MS).toISOString();
       const idempotencyCutoff = nowMs - IDEMPOTENCY_RETENTION_MS;
-      // One transaction, three statements — operational tables ONLY. ISO-string
-      // comparison is safe: every writer stamps via toISOString().
+      // One transaction — operational tables ONLY. ISO-string comparison is
+      // safe: every writer stamps via toISOString().
       const run = db.transaction((): PruneCounts => {
         const confirmations = db
           .prepare(
@@ -752,7 +823,10 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         const undo = db
           .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
           .run(undoCutoff).changes;
-        return { pendingConfirmations: confirmations, idempotencyKeys: idempotency, undoRecords: undo };
+        const telemetry = db
+          .prepare("DELETE FROM turn_telemetry WHERE created_at < ?")
+          .run(telemetryCutoff).changes;
+        return { pendingConfirmations: confirmations, idempotencyKeys: idempotency, undoRecords: undo, turnTelemetry: telemetry };
       });
       return run();
     },

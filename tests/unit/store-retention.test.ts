@@ -78,6 +78,28 @@ describe("store.pruneExpired", () => {
     store.close();
   });
 
+  it("records + lists turn telemetry (since-bounded) and prunes rows past 30d", () => {
+    const past = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => past.value });
+    const base = { sessionId: "s1", workspaceId: "ws-1", adminUserId: "admin-1", kind: "chat" as const };
+    store.recordTurnTelemetry({ ...base, modelCalls: 3, promptTokens: 1200, completionTokens: 90, turnMs: 4000, modelMs: 3500 });
+    past.value = NOW; // second row is fresh
+    store.recordTurnTelemetry({ ...base, kind: "resume", modelCalls: 1, turnMs: 800, modelMs: 600 });
+
+    const all = store.listTurnTelemetry("ws-1", "admin-1");
+    expect(all).toHaveLength(2);
+    expect(all[0]).toMatchObject({ kind: "chat", modelCalls: 3, promptTokens: 1200 });
+    expect(all[1]).toMatchObject({ kind: "resume", promptTokens: undefined }); // honest absence, not zero
+
+    const bounded = store.listTurnTelemetry("ws-1", "admin-1", iso(-DAY_MS));
+    expect(bounded).toHaveLength(1);
+
+    const counts = store.pruneExpired(NOW.toISOString());
+    expect(counts.turnTelemetry).toBe(1);
+    expect(store.listTurnTelemetry("ws-1", "admin-1")).toHaveLength(1);
+    store.close();
+  });
+
   it("NEVER touches audit_events or chat_messages, even with a far-future clock", () => {
     const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });

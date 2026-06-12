@@ -102,6 +102,23 @@ const SCHEMA_STATEMENTS: string[] = [
     created_at TEXT NOT NULL,
     undone_at TEXT
   )`,
+  // Per-turn model telemetry (cost + latency). prompt/completion tokens are
+  // NULL when the backend reported no usage — honest absence, never zero.
+  `CREATE TABLE IF NOT EXISTS turn_telemetry (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('chat', 'resume')),
+    model_calls INTEGER NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    turn_ms INTEGER NOT NULL,
+    model_ms INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_telemetry_workspace_admin_created
+    ON turn_telemetry(workspace_id, admin_user_id, created_at)`,
 ];
 
 export function migrate(db: Database.Database): void {

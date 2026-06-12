@@ -90,3 +90,49 @@ export function buildMetrics(
     confirmations,
   };
 }
+
+// --- Turn telemetry (cost + latency) ----------------------------------------
+
+/** One chat/resume turn's model telemetry, as stored in turn_telemetry. */
+export interface TurnTelemetry {
+  kind: "chat" | "resume";
+  modelCalls: number;
+  /** Absent when the backend reported no token counts (absence ≠ zero). */
+  promptTokens?: number;
+  completionTokens?: number;
+  turnMs: number;
+  modelMs: number;
+  createdAt: string;
+}
+
+export interface UsageMetrics {
+  turns: number;
+  modelCalls: number;
+  promptTokens: number;
+  completionTokens: number;
+  avgTurnMs: number;
+  maxTurnMs: number;
+  avgModelMs: number;
+  last24h: { turns: number; modelCalls: number; promptTokens: number; completionTokens: number; avgTurnMs: number };
+}
+
+const DAY_IN_MS = 24 * 60 * 60 * 1000;
+
+/** Pure aggregation over turn_telemetry rows (cost review + latency baseline). */
+export function buildUsageMetrics(rows: TurnTelemetry[], generatedAt: string): UsageMetrics {
+  const cutoff = new Date(Date.parse(generatedAt) - DAY_IN_MS).toISOString();
+  const sum = (subset: TurnTelemetry[]) => ({
+    turns: subset.length,
+    modelCalls: subset.reduce((n, r) => n + r.modelCalls, 0),
+    promptTokens: subset.reduce((n, r) => n + (r.promptTokens ?? 0), 0),
+    completionTokens: subset.reduce((n, r) => n + (r.completionTokens ?? 0), 0),
+    avgTurnMs: subset.length ? Math.round(subset.reduce((n, r) => n + r.turnMs, 0) / subset.length) : 0,
+  });
+  const recent = rows.filter((r) => r.createdAt >= cutoff);
+  return {
+    ...sum(rows),
+    maxTurnMs: rows.reduce((m, r) => Math.max(m, r.turnMs), 0),
+    avgModelMs: rows.length ? Math.round(rows.reduce((n, r) => n + r.modelMs, 0) / rows.length) : 0,
+    last24h: sum(recent),
+  };
+}

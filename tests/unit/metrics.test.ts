@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMetrics, type ActionOutcome } from "../../src/metrics/metrics.js";
+import { buildMetrics, buildUsageMetrics, type ActionOutcome } from "../../src/metrics/metrics.js";
 
 const outcomes: ActionOutcome[] = [
   { actionName: "clockify_tags_create", ok: true },
@@ -50,5 +50,36 @@ describe("buildMetrics", () => {
     expect(m.byAction).toEqual([]);
     expect(m.errorsByCode).toEqual([]);
     expect(m.confirmations.previewed).toBe(0);
+  });
+});
+
+describe("buildUsageMetrics", () => {
+  const NOW_ISO = "2026-06-06T12:00:00.000Z";
+  const row = (overrides: Partial<import("../../src/metrics/metrics.js").TurnTelemetry> = {}) => ({
+    kind: "chat" as const,
+    modelCalls: 2,
+    promptTokens: 1000,
+    completionTokens: 100,
+    turnMs: 4000,
+    modelMs: 3000,
+    createdAt: "2026-06-06T11:00:00.000Z", // inside the 24h window
+    ...overrides,
+  });
+
+  it("aggregates totals + last-24h separately (the old row drops out of last24h)", () => {
+    const old = row({ createdAt: "2026-06-01T00:00:00.000Z", turnMs: 10_000 });
+    const metrics = buildUsageMetrics([old, row()], NOW_ISO);
+    expect(metrics.turns).toBe(2);
+    expect(metrics.modelCalls).toBe(4);
+    expect(metrics.promptTokens).toBe(2000);
+    expect(metrics.maxTurnMs).toBe(10_000);
+    expect(metrics.avgTurnMs).toBe(7000);
+    expect(metrics.last24h).toMatchObject({ turns: 1, modelCalls: 2, promptTokens: 1000, avgTurnMs: 4000 });
+  });
+
+  it("treats absent token counts as 0 in sums and handles empty rows", () => {
+    const noUsage = row({ promptTokens: undefined, completionTokens: undefined });
+    expect(buildUsageMetrics([noUsage], NOW_ISO).promptTokens).toBe(0);
+    expect(buildUsageMetrics([], NOW_ISO)).toMatchObject({ turns: 0, avgTurnMs: 0, maxTurnMs: 0 });
   });
 });
