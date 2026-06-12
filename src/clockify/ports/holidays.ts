@@ -4,6 +4,9 @@ export interface HolidaySummary extends EntitySummary {
   startDate?: string;
   endDate?: string;
   occursAnnually?: boolean;
+  /** Assigned user / user-group ids (the real holiday GET returns these). */
+  userIds?: string[];
+  userGroupIds?: string[];
 }
 
 export interface CreateHolidayInput {

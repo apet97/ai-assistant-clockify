@@ -33,6 +33,8 @@ export function makeFakeHolidays({ state, bump, nextId }: FakeContext): Pick<
         startDate: input.startDate,
         endDate: input.endDate ?? input.startDate,
         occursAnnually: input.occursAnnually,
+        ...(input.userIds?.length ? { userIds: input.userIds } : {}),
+        ...(input.userGroupIds?.length ? { userGroupIds: input.userGroupIds } : {}),
       };
       state.holidays.push(holiday);
       return { id: holiday.id, name: holiday.name };
@@ -47,6 +49,8 @@ export function makeFakeHolidays({ state, bump, nextId }: FakeContext): Pick<
         ...(patch.startDate !== undefined ? { startDate: patch.startDate } : {}),
         ...(patch.endDate !== undefined ? { endDate: patch.endDate } : {}),
         ...(patch.occursAnnually !== undefined ? { occursAnnually: patch.occursAnnually } : {}),
+        ...(patch.userIds?.length ? { userIds: patch.userIds } : {}),
+        ...(patch.userGroupIds?.length ? { userGroupIds: patch.userGroupIds } : {}),
       };
       if (index >= 0) state.holidays[index] = updated;
       else state.holidays.push(updated);

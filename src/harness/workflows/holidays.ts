@@ -3,9 +3,37 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
+  type ActionResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveGroupRefs, resolveUserRefs } from "./resolve.js";
+
+/**
+ * Resolve a holiday's `userIds` (names/'me'/ids) and `userGroupIds` (names/ids) to
+ * real ids at the handler entry, so a name never reaches the wire (it would 400 /
+ * silently mis-assign). Returns the resolved ids, or a `clarify` ActionResult to
+ * return directly. Both lists are verified against the real users/groups.
+ */
+async function resolveHolidayAssignment(
+  ctx: ActionContext,
+  args: { userIds?: string[]; userGroupIds?: string[] },
+): Promise<{ ok: true; userIds?: string[]; userGroupIds?: string[] } | { ok: false; clarify: ActionResult }> {
+  let userIds: string[] | undefined;
+  let userGroupIds: string[] | undefined;
+  if (args.userIds?.length) {
+    const r = await resolveUserRefs(args.userIds, { verb: "assign the holiday to", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers(), verifyIds: true });
+    if (!r.ok) return { ok: false, clarify: { kind: "clarify", message: r.clarify.clarify, options: r.clarify.options } };
+    userIds = r.userIds;
+  }
+  if (args.userGroupIds?.length) {
+    const r = await resolveGroupRefs(args.userGroupIds, { verb: "assign the holiday to", listGroups: () => ctx.clockify.listGroups() });
+    if (!r.ok) return { ok: false, clarify: { kind: "clarify", message: r.clarify.clarify, options: r.clarify.options } };
+    userGroupIds = r.groupIds;
+  }
+  return { ok: true, userIds, userGroupIds };
+}
 
 /**
  * Typed holiday workflows (goclmcp §2.9 — holidays). Reads (list/get/in-period)
@@ -68,7 +96,7 @@ const listInPeriod = defineReadAction({
 const createHoliday = defineAction({
   name: "clockify_holidays_create",
   description:
-    "Create a workspace holiday. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
+    "Create a workspace holiday. Assign it with `userIds` and/or `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
   featureGroup: TOA,
   risks: ["safe_write"],
   schema: z
@@ -84,7 +112,16 @@ const createHoliday = defineAction({
       message: "A holiday needs at least one userIds or userGroupIds assignment.",
     }),
   async handler(ctx, args) {
-    const holiday = await ctx.clockify.createHoliday(args);
+    const assign = await resolveHolidayAssignment(ctx, args);
+    if (!assign.ok) return assign.clarify;
+    const holiday = await ctx.clockify.createHoliday({
+      name: args.name,
+      startDate: args.startDate,
+      ...(args.endDate !== undefined ? { endDate: args.endDate } : {}),
+      ...(args.occursAnnually !== undefined ? { occursAnnually: args.occursAnnually } : {}),
+      ...(assign.userIds?.length ? { userIds: assign.userIds } : {}),
+      ...(assign.userGroupIds?.length ? { userGroupIds: assign.userGroupIds } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({
@@ -99,7 +136,8 @@ const createHoliday = defineAction({
 
 const updateHoliday = defineAction({
   name: "clockify_holidays_update",
-  description: "Update a workspace holiday. Safe write — executes immediately when policy allows.",
+  description:
+    "Update a workspace holiday. `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Safe write — executes immediately when policy allows.",
   featureGroup: TOA,
   risks: ["safe_write"],
   schema: z
@@ -123,8 +161,14 @@ const updateHoliday = defineAction({
       { message: "Provide at least one field to change." },
     ),
   async handler(ctx, args) {
-    const { id, ...patch } = args;
-    const holiday = await ctx.clockify.updateHoliday(id, patch);
+    const assign = await resolveHolidayAssignment(ctx, args);
+    if (!assign.ok) return assign.clarify;
+    const { id, userIds: _userIds, userGroupIds: _userGroupIds, ...rest } = args;
+    const holiday = await ctx.clockify.updateHoliday(id, {
+      ...rest,
+      ...(assign.userIds?.length ? { userIds: assign.userIds } : {}),
+      ...(assign.userGroupIds?.length ? { userGroupIds: assign.userGroupIds } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({

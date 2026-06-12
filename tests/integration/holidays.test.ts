@@ -9,6 +9,13 @@ function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPoli
   return { workspaceId: "ws-1", adminUserId: "admin-1", policy, clockify: fake.client, now: () => NOW };
 }
 const seed = () => ({ holidays: [{ id: "h1", name: "Xmas", startDate: "2026-12-25", endDate: "2026-12-25" }] });
+const directory = () => ({
+  users: [
+    { id: "u1", name: "Alice", email: "a@x.com", status: "ACTIVE" },
+    { id: "u2", name: "Bob", email: "b@x.com", status: "ACTIVE" },
+  ],
+  groups: [{ id: "g1", name: "Devs", userIds: [] }],
+});
 
 describe("holiday actions", () => {
   it("holidays_list is read-gated", async () => {
@@ -37,7 +44,7 @@ describe("holiday actions", () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
       actionName: "clockify_holidays_create",
-      args: { name: "AIASSIST_SMOKE_hol", startDate: "2026-07-01", userIds: ["admin-1"] },
+      args: { name: "AIASSIST_SMOKE_hol", startDate: "2026-07-01", userIds: ["me"] },
       context: makeContext(fake),
     });
     if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "holiday" });
@@ -49,6 +56,42 @@ describe("holiday actions", () => {
     const bad = await executeAction({ actionName: "clockify_holidays_create", args: { name: "X", startDate: "2026-07-01" }, context: makeContext(fake) });
     if (bad.kind === "receipt" && !bad.receipt.ok) expect(bad.receipt.code).toBe("invalid_args");
     else throw new Error("expected invalid_args");
+  });
+
+  it("holidays_create resolves user + group NAMES (and 'me') to ids before the write", async () => {
+    const fake = createFakeWorkspace(directory());
+    const result = await executeAction({
+      actionName: "clockify_holidays_create",
+      args: { name: "AIASSIST_SMOKE_hol2", startDate: "2026-07-01", userIds: ["Alice", "me"], userGroupIds: ["Devs"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error(`expected an ok receipt, got ${result.kind}`);
+    const created = fake.state.holidays.find((h) => h.name === "AIASSIST_SMOKE_hol2") as { userIds?: string[]; userGroupIds?: string[] } | undefined;
+    expect(created?.userIds).toEqual(["u1", "admin-1"]);
+    expect(created?.userGroupIds).toEqual(["g1"]);
+  });
+
+  it("holidays_create clarifies on an unknown group name (no write)", async () => {
+    const fake = createFakeWorkspace(directory());
+    const result = await executeAction({
+      actionName: "clockify_holidays_create",
+      args: { name: "X", startDate: "2026-07-01", userGroupIds: ["Ghosts"] },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createHoliday ?? 0).toBe(0);
+  });
+
+  it("holidays_update resolves group NAMES to ids", async () => {
+    const fake = createFakeWorkspace({ ...directory(), holidays: [{ id: "h1", name: "Xmas", startDate: "2026-12-25" }] });
+    const result = await executeAction({
+      actionName: "clockify_holidays_update",
+      args: { id: "h1", userGroupIds: ["Devs"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
+    const updated = fake.state.holidays.find((h) => h.id === "h1") as { userGroupIds?: string[] } | undefined;
+    expect(updated?.userGroupIds).toEqual(["g1"]);
   });
 
   it("holidays_update is a SAFE write (executes immediately)", async () => {
