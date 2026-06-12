@@ -156,11 +156,20 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
   return wrap;
 }
 
-/** Example prompts on the empty-chat welcome card — every one maps to a real capability. */
+/**
+ * Example prompts on the empty-chat welcome card — every one maps to a real,
+ * live-verified capability, deliberately spanning the breadth (tracking,
+ * reports, billing+project links, time off, team) so a new admin discovers
+ * more than timers. One screen, no categories — chips stay scannable.
+ */
 export const EXAMPLE_PROMPTS = [
   "What did I track today?",
   "Show this week's summary report",
   "Start a timer for deep work",
+  "Log 2 hours on a project with a tag for yesterday",
+  "Log a $50 travel expense on a project",
+  "Invoice a client, due next month",
+  "Request 2 days off next week",
   "What did you change recently?",
 ];
 
