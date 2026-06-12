@@ -1,0 +1,24 @@
+# The same gate the repo runs locally before every commit: type-check + the
+# full vitest suite (fakes only — no network, no live creds) + the prod build,
+# plus the zero-circular-deps invariant. Node 22 = prod parity (package.json
+# engines / Railway).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify
+      - run: npx madge --circular --extensions ts --ts-config tsconfig.json src
