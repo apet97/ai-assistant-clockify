@@ -138,6 +138,41 @@ describe("time-off actions", () => {
     expect(fake.state.timeOffRequests.find((r) => r.id === "r1")).toBeUndefined();
   });
 
+  it("requests_list resolves a user NAME filter (or 'me') and clarifies on an unknown one", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({
+      actionName: "clockify_time_off_requests_list",
+      args: { userId: "Alice" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+
+    const unknown = await executeAction({
+      actionName: "clockify_time_off_requests_list",
+      args: { userId: "Ghost" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    if (unknown.kind === "clarify") expect(unknown.options?.map((o) => o.id)).toContain("u1");
+  });
+
+  it("balance_get resolves a user NAME (or 'me') in the userId slot", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({
+      actionName: "clockify_time_off_balance_get",
+      args: { userId: "Alice" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+
+    const unknown = await executeAction({
+      actionName: "clockify_time_off_balance_get",
+      args: { userId: "Ghost" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+  });
+
   it("balance_get reads (defaults to the admin) + balance_update previews high_risk_write", async () => {
     const fake = createFakeWorkspace(seed());
     const get = await executeAction({ actionName: "clockify_time_off_balance_get", args: {}, context: makeContext(fake) });

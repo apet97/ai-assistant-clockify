@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  defineAction,
   defineReadAction,
   defineRiskyAction,
   type ActionContext,
@@ -7,7 +8,7 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolveGroupRefs, resolveRelativeDay, resolveUserRefs } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveGroupRefs, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /**
  * Resolve a time-off policy's scope — `userIds` (ids/names/'me') and
@@ -225,19 +226,31 @@ const archivePolicy = defineRiskyAction({
 
 // ── Requests ────────────────────────────────────────────────────────────────
 
-const listRequests = defineReadAction({
+const listRequests = defineAction({
   name: "clockify_time_off_requests_list",
-  description: "List time-off requests (optional status / user filter).",
-  group: TOA,
+  description:
+    "List time-off requests (optional status / user filter; `userId` accepts a user id, exact name, or 'me').",
+  featureGroup: TOA,
+  risks: ["read"],
   schema: z.object({ status: z.string().optional(), userId: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listTimeOffRequests(args);
-    return successReceipt({
-      action: "clockify_time_off_requests_list",
-      entity: "time_off_request",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+    // The user filter resolves id/name/'me'; absent = all users (no default).
+    const user = await resolveUserFilter(args.userId, {
+      verb: "list time-off requests for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
     });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const items = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_time_off_requests_list",
+        entity: "time_off_request",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { count: items.length, items },
+      }),
+    };
   },
 });
 
@@ -397,19 +410,30 @@ const denyRequest = decisionAction("deny");
 
 // ── Balances ────────────────────────────────────────────────────────────────
 
-const getBalance = defineReadAction({
+const getBalance = defineAction({
   name: "clockify_time_off_balance_get",
-  description: "Get a user's time-off balances (defaults to you).",
-  group: TOA,
+  description: "Get a user's time-off balances (defaults to you; `userId` accepts a user id, exact name, or 'me').",
+  featureGroup: TOA,
+  risks: ["read"],
   schema: z.object({ userId: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.getTimeOffBalance(args.userId ?? ctx.adminUserId);
-    return successReceipt({
-      action: "clockify_time_off_balance_get",
-      entity: "time_off_balance",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+    const user = await resolveUserFilter(args.userId, {
+      verb: "get the time-off balance for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
     });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const items = await ctx.clockify.getTimeOffBalance(user.userId as string);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_time_off_balance_get",
+        entity: "time_off_balance",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { count: items.length, items },
+      }),
+    };
   },
 });
 
