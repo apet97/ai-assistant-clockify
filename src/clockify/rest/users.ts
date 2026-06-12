@@ -36,8 +36,15 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       const u = (await core.call("api", "POST", `${ws}/users?${qs.toString()}`, { email })) as { id?: string; name?: string };
       return { id: u?.id ?? email, name: u?.name ?? email };
     },
-    async updateUserRole(userId, role, entityId): Promise<EntitySummary> {
-      await core.call("api", "POST", `${ws}/users/${userId}/roles`, { entityId, role });
+    async updateUserRole(userId, role, entityId, sourceType): Promise<EntitySummary> {
+      // POST /users/{recipient}/roles {entityId, role, sourceType?}. entityId is the
+      // SCOPE: workspaceId (ADMIN), projectId (PROJECT_MANAGER), or a group id with
+      // sourceType=USER_GROUP (TEAM_MANAGER of a group). Live-verified 2026-06-12.
+      await core.call("api", "POST", `${ws}/users/${userId}/roles`, {
+        entityId,
+        role,
+        ...(sourceType ? { sourceType } : {}),
+      });
       return { id: userId, name: role };
     },
     async deactivateUser(userId): Promise<EntitySummary> {

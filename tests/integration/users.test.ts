@@ -11,6 +11,7 @@ function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPoli
 const seed = () => ({
   users: [{ id: "admin-1", name: "Me", email: "me@x.com", status: "ACTIVE" }, { id: "u2", name: "Bob", email: "bob@x.com", status: "ACTIVE" }],
   groups: [{ id: "g1", name: "Devs", userIds: [] }],
+  projects: [{ id: "p1", name: "Apollo" }],
 });
 
 describe("user & group actions", () => {
@@ -39,11 +40,11 @@ describe("user & group actions", () => {
 
   it("role_update + deactivate preview high_risk_write; uses high_risk_write NOT permission_change", async () => {
     const fake = createFakeWorkspace(seed());
-    const role = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "u2", role: "TEAM_MANAGER" }, context: makeContext(fake) });
+    const role = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "u2", role: "TEAM_MANAGER", groupName: "Devs" }, context: makeContext(fake) });
     if (role.kind !== "preview") throw new Error("expected a preview");
     expect(role.operation.risks).toContain("high_risk_write");
     expect(role.operation.risks).not.toContain("permission_change");
-    // The recipient (u2) is the grantee; the acting admin is the URL user.
+    // The recipient (u2) is the grantee; the group is the scope.
     expect((role.operation.payload as any).granteeId).toBe("u2");
     await commitConfirmedOperation(makeContext(fake), role.operation);
     expect(fake.counts.updateUserRole).toBe(1);
@@ -55,15 +56,31 @@ describe("user & group actions", () => {
     expect(fake.state.users.find((u) => u.id === "u2")?.status).toBe("INACTIVE");
   });
 
-  it("role_update resolves the recipient by name and clarifies on a non-user id (no confirm-then-fail)", async () => {
+  it("role_update scopes entityId per role (live-verified): PM→project, TM→group+USER_GROUP, ADMIN→workspace; bad ids clarify", async () => {
     const fake = createFakeWorkspace(seed());
-    // By exact name → the recipient's id in the grantee slot.
-    const byName = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "PROJECT_MANAGER" }, context: makeContext(fake) });
-    if (byName.kind !== "preview") throw new Error("expected a preview");
-    expect((byName.operation.payload as any).granteeId).toBe("u2");
-    // A project/unknown id (the live bug: model put a project id here) → clarify, never a doomed commit.
-    const bogus = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "6a2be82c0cf5bebaba4dace3", role: "PROJECT_MANAGER" }, context: makeContext(fake) });
-    expect(bogus.kind).toBe("clarify");
+    const ctx = makeContext(fake);
+    // PROJECT_MANAGER → entityId is the PROJECT, no sourceType. Recipient resolved by name.
+    const pm = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "PROJECT_MANAGER", projectName: "Apollo" }, context: ctx });
+    if (pm.kind !== "preview") throw new Error("expected a preview");
+    expect(pm.operation.payload).toMatchObject({ granteeId: "u2", entityId: "p1", role: "PROJECT_MANAGER" });
+    expect((pm.operation.payload as any).sourceType).toBeUndefined();
+
+    // TEAM_MANAGER of a group → entityId is the GROUP, sourceType USER_GROUP.
+    const tm = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "TEAM_MANAGER", groupName: "Devs" }, context: ctx });
+    if (tm.kind !== "preview") throw new Error("expected a preview");
+    expect(tm.operation.payload).toMatchObject({ granteeId: "u2", entityId: "g1", role: "TEAM_MANAGER", sourceType: "USER_GROUP" });
+
+    // WORKSPACE_ADMIN → entityId is the workspace; no scope param needed.
+    const admin = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "WORKSPACE_ADMIN" }, context: ctx });
+    if (admin.kind !== "preview") throw new Error("expected a preview");
+    expect(admin.operation.payload).toMatchObject({ granteeId: "u2", entityId: "ws-1", role: "WORKSPACE_ADMIN" });
+
+    // The live bug shape: a project id in the recipient slot is NOT a member → clarify.
+    const badUser = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "6a2be82c0cf5bebaba4dace3", role: "PROJECT_MANAGER", projectName: "Apollo" }, context: ctx });
+    expect(badUser.kind).toBe("clarify");
+    // PROJECT_MANAGER with no project scope → clarify (don't guess).
+    const noScope = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "PROJECT_MANAGER" }, context: ctx });
+    expect(noScope.kind).toBe("clarify");
     expect(fake.counts.updateUserRole ?? 0).toBe(0);
   });
 

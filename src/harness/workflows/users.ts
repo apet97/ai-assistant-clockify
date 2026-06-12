@@ -60,7 +60,7 @@ const inviteUser = defineRiskyAction({
 const updateRole = defineRiskyAction({
   name: "clockify_users_role_update",
   description:
-    "Give a workspace member a manager role (WORKSPACE_ADMIN/TEAM_MANAGER/PROJECT_MANAGER). Pass the RECIPIENT by `userId` or exact `userName` (or 'me'). This grants a WORKSPACE-level role — it is NOT scoped to a single project (don't pass a project id). Elevated write — previews and requires confirmation.",
+    "Give a workspace member a manager role; the SCOPE depends on the role (live-verified): WORKSPACE_ADMIN = the whole workspace (no scope needed); PROJECT_MANAGER = a project (pass `projectId` or exact `projectName`); TEAM_MANAGER of a user group (pass `groupId` or exact `groupName`) or of a project (`projectId`/`projectName`). Pass the RECIPIENT by `userId`/`userName` (or 'me'). Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
   schema: z
@@ -69,16 +69,20 @@ const updateRole = defineRiskyAction({
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
       role: z.enum(["WORKSPACE_ADMIN", "PROJECT_MANAGER", "TEAM_MANAGER"]),
+      /** PROJECT_MANAGER / TEAM_MANAGER scope: the project the role applies to. */
+      projectId: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
+      /** TEAM_MANAGER scope: the user group the role applies to. */
+      groupId: z.string().min(1).optional(),
+      groupName: z.string().min(1).optional(),
     })
     .refine((v) => v.userId !== undefined || v.userName !== undefined, {
       message: "Provide the user (id or exact name) to give the role to.",
     }),
   async preview(ctx, args) {
-    // Clockify's roles endpoint puts the RECIPIENT's user id in the request body
-    // (entityId); a project/group id there 404s as "USER ... not found". The id is
-    // 24-hex like a real user, so we VERIFY it is an actual workspace member (not
-    // the usual trust-the-hex-id fast path) — an identity mistake clarifies at
-    // preview, it is never confirmed-then-failed.
+    // 1) RECIPIENT — the URL user. VERIFY it is a real workspace member (a 24-hex
+    // id that is actually a project sails past the trust-the-id path), so an
+    // identity mistake clarifies at preview, never confirmed-then-failed.
     let granteeId: string;
     let granteeName: string;
     if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
@@ -98,28 +102,70 @@ const updateRole = defineRiskyAction({
         const target = args.userName ?? args.userId ?? "";
         const options = suggestOptions(users, target);
         return {
-          clarify: `"${target}" isn't a workspace member, so I can't give it the ${args.role} role. Who should get it? (This grants a workspace-level role, not access to a specific project.)`,
+          clarify: `"${target}" isn't a workspace member, so I can't give it the ${args.role} role. Who should get it?`,
           options: options.length ? options : undefined,
         };
       }
       granteeId = member.id;
       granteeName = member.name;
     }
+
+    // 2) SCOPE (entityId) — live-verified contract: WORKSPACE_ADMIN = workspaceId
+    // (no sourceType); a group = the group id + sourceType USER_GROUP (TEAM_MANAGER);
+    // a project = the project id, no sourceType (PROJECT_MANAGER / TEAM_MANAGER).
+    let entityId: string;
+    let sourceType: string | undefined;
+    let scopeLabel: string;
+    if (args.role === "WORKSPACE_ADMIN") {
+      entityId = ctx.workspaceId;
+      scopeLabel = "the whole workspace";
+    } else if (args.groupId || args.groupName) {
+      const groups = await ctx.clockify.listGroups();
+      let group = args.groupId ? groups.find((g) => g.id === args.groupId) : undefined;
+      if (!group && args.groupName) {
+        const m = matchByName(groups, args.groupName);
+        if (m.kind === "many") return { clarify: `Several user groups match "${args.groupName}". Which one?`, options: m.matches.map((g) => ({ id: g.id, label: g.name })) };
+        if (m.kind === "one") group = m.entity;
+      }
+      if (!group) {
+        const target = args.groupName ?? args.groupId ?? "";
+        return { clarify: `I couldn't find a user group "${target}". Which group should ${granteeName} manage?`, options: suggestOptions(groups, target) };
+      }
+      entityId = group.id;
+      sourceType = "USER_GROUP";
+      scopeLabel = `the "${group.name}" group`;
+    } else if (args.projectId || args.projectName) {
+      const projects = await ctx.clockify.listProjects();
+      let project = args.projectId ? projects.find((p) => p.id === args.projectId) : undefined;
+      if (!project && args.projectName) {
+        const m = matchByName(projects, args.projectName);
+        if (m.kind === "many") return { clarify: `Several projects match "${args.projectName}". Which one?`, options: m.matches.map((p) => ({ id: p.id, label: p.name })) };
+        if (m.kind === "one") project = m.entity;
+      }
+      if (!project) {
+        const target = args.projectName ?? args.projectId ?? "";
+        return { clarify: `I couldn't find an active project "${target}". Which project should ${granteeName} manage?`, options: suggestOptions(projects, target) };
+      }
+      entityId = project.id;
+      scopeLabel = `the "${project.name}" project`;
+    } else {
+      return { clarify: `Which ${args.role === "TEAM_MANAGER" ? "project or user group" : "project"} should ${granteeName} manage as ${args.role}? Give me its exact name.` };
+    }
+
     return {
       actionLabel: "Update user role",
       targets: [{ type: "user", id: granteeId }],
-      expectedChanges: [`Make ${granteeName} a ${args.role} in this workspace`],
+      expectedChanges: [`Make ${granteeName} a ${args.role} for ${scopeLabel}`],
       reversibility: "You can change the role again.",
       warnings: ["This changes a user's workspace permissions."],
-      payload: { granteeId, role: args.role },
+      payload: { granteeId, role: args.role, entityId, sourceType },
     };
   },
   async commit(ctx, payload) {
-    const { granteeId, role } = payload as { granteeId: string; role: string };
-    // POST /users/{adminUserId}/roles {entityId: granteeId, role}: the URL user is
-    // the acting admin (grantor), entityId is the recipient (docs spec + the live
-    // 404 that rejected a project id in entityId as "USER not found").
-    await ctx.clockify.updateUserRole(ctx.adminUserId, role, granteeId);
+    const { granteeId, role, entityId, sourceType } = payload as { granteeId: string; role: string; entityId: string; sourceType?: string };
+    // POST /users/{recipient}/roles {entityId: scope, role, sourceType?} — recipient
+    // in the URL, scope (workspace/project/group) in entityId. Live-verified 2026-06-12.
+    await ctx.clockify.updateUserRole(granteeId, role, entityId, sourceType);
     return successReceipt({ action: "clockify_users_role_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: granteeId, name: role }] } });
   },
 });

@@ -28,9 +28,10 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
       state.users.push(u);
       return { id: u.id, name: u.name };
     },
-    async updateUserRole(userId, role, entityId) {
+    async updateUserRole(userId, role, entityId, sourceType) {
       bump("updateUserRole");
       void entityId;
+      void sourceType;
       const u = state.users.find((x) => x.id === userId);
       if (u) u.status = `ROLE:${role}`;
       return { id: userId, name: role };

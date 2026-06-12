@@ -20,7 +20,7 @@ export interface GroupSummary extends EntitySummary {
 export interface UserPort {
   listUsers(): Promise<UserSummary[]>;
   inviteUser(email: string, sendEmail: boolean): Promise<EntitySummary>;
-  updateUserRole(userId: string, role: string, entityId: string): Promise<EntitySummary>;
+  updateUserRole(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary>;
   deactivateUser(userId: string): Promise<EntitySummary>;
   listGroups(): Promise<GroupSummary[]>;
   getGroup(id: string): Promise<GroupSummary | null>;
