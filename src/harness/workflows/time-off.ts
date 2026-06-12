@@ -273,18 +273,31 @@ const getRequest = defineReadAction({
 const createRequest = defineRiskyAction({
   name: "clockify_time_off_requests_create",
   description:
-    "Submit a time-off request under a policy. `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
+    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
   group: TOA,
   risks: ["external_side_effect"],
-  schema: z.object({
-    policyId: z.string().min(1),
-    start: z.string().min(1),
-    end: z.string().min(1),
-    days: z.number().positive().optional(),
-    halfDay: z.boolean().optional(),
-    note: z.string().optional(),
-  }),
+  schema: z
+    .object({
+      policyId: z.string().min(1).optional(),
+      /** The policy's exact name, resolved to an id server-side. */
+      policyName: z.string().min(1).optional(),
+      start: z.string().min(1),
+      end: z.string().min(1),
+      days: z.number().positive().optional(),
+      halfDay: z.boolean().optional(),
+      note: z.string().optional(),
+    })
+    .refine((v) => v.policyId !== undefined || v.policyName !== undefined, {
+      message: "Provide the time-off policy id or its exact name.",
+    }),
   async preview(ctx, args) {
+    // The policy ref resolves by name in either slot (balance_update precedent) —
+    // a bogus policy clarifies with the real list, never a doomed commit.
+    const policy = await resolveEntityRef(
+      { id: args.policyId, name: args.policyName },
+      { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
+    );
+    if (!policy.ok) return policy.clarify;
     // The wire wants bare YYYY-MM-DD days; the live loop sent the literal
     // string "next Monday". Resolve here, clarify on anything unparseable.
     const now = (ctx.now ?? (() => new Date()))();
@@ -315,7 +328,7 @@ const createRequest = defineRiskyAction({
     const warnings = ["This submits a request that notifies approvers."];
     try {
       const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
-      const policyBalance = balances.find((b) => b.policyId === args.policyId)?.balance;
+      const policyBalance = balances.find((b) => b.policyId === policy.id)?.balance;
       if (policyBalance !== undefined && requestedDays > policyBalance) {
         warnings.push(
           `This requests ${requestedDays} day(s) but the policy balance is ${policyBalance} — Clockify will likely reject it (its error reads "Value for number of days is not allowed"). Top up the balance or shorten the request.`,
@@ -326,11 +339,11 @@ const createRequest = defineRiskyAction({
     }
     return {
       actionLabel: "Submit time-off request",
-      targets: [{ type: "time_off_policy", id: args.policyId }],
-      expectedChanges: [`Request time off ${start} → ${end} under policy ${args.policyId}`],
+      targets: [{ type: "time_off_policy", id: policy.id, name: policy.name }],
+      expectedChanges: [`Request time off ${start} → ${end} under policy ${policy.name ?? policy.id}`],
       reversibility: "You can delete the request afterward.",
       warnings,
-      payload: { policyId: args.policyId, input },
+      payload: { policyId: policy.id, input },
     };
   },
   async commit(ctx, payload) {

@@ -138,6 +138,39 @@ describe("time-off actions", () => {
     expect(fake.state.timeOffRequests.find((r) => r.id === "r1")).toBeUndefined();
   });
 
+  it("requests_create resolves the POLICY by name (either slot) and shows it in the preview", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", start: "2026-06-10", end: "2026-06-11" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "preview") throw new Error(`expected a preview, got ${byName.kind}`);
+    expect((byName.operation.payload as any).policyId).toBe("pol1");
+    expect(byName.preview.expectedChanges.join(" ")).toContain("PTO");
+
+    // The planner habit: a NAME in the policyId slot resolves too.
+    const bySlot = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "PTO", start: "2026-06-10", end: "2026-06-11" },
+      context: makeContext(fake),
+    });
+    if (bySlot.kind !== "preview") throw new Error(`expected a preview, got ${bySlot.kind}`);
+    expect((bySlot.operation.payload as any).policyId).toBe("pol1");
+  });
+
+  it("requests_create clarifies on an unknown policy with the real options", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "Sabbatical", start: "2026-06-10", end: "2026-06-11" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("pol1");
+    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+  });
+
   it("requests_list resolves a user NAME filter (or 'me') and clarifies on an unknown one", async () => {
     const fake = createFakeWorkspace(seed());
     const byName = await executeAction({
