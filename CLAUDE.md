@@ -82,9 +82,22 @@ layer: per-session chat rate limit (`src/routes/rate-limit.ts`,
 single-retry + error-body snippet, SIGTERM graceful shutdown
 (`createShutdownHandler`), and honest UI errors (401 → "reload" copy; the
 routes' own JSON copy reaches the chat error bar). A start_timer description
-nudge recovered the provider-drift eval case — planner eval now
+nudge recovered the provider-drift eval case — planner eval reached
 **138/138 (100%)**, stable-pass 46/46.
-`npm run verify` = **1056 tests**, `npx madge --circular
+An "elevate the product" arc followed (2026-06-13): **session restore**
+(`GET /api/chat/history` replays the last 50 messages + re-serves LIVE pending
+previews with a ROTATED one-use nonce — `rotatePendingNonce`, old plaintext
+dies, TTL never extended; the UI restores on mount), **live progress**
+(`{type:"status", action, label}` NDJSON lines before each tool execution —
+labels from `action-labels.ts`, NEVER args; the typing bubble shows them),
+**cost/latency telemetry** (`turn_telemetry` table + `trackUsage` wrapper;
+`GET /api/metrics` gains `usage` totals + last-24h — the cost review has data),
+**eval lock-in** (8 new planner cases for the capability arcs; baseline now
+**162/162 (100%)**, 54 cases, stable-pass 54/54), **undo extension**
+(group/holiday/assignment now reversible; time_off_request can't be — its
+delete needs the policy id), broader welcome prompts, and **GitHub Actions CI**
+(verify + madge on every push/PR).
+`npm run verify` = **1086 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -264,6 +277,18 @@ such bug was found against the REAL API, not by reading the code.
 - **Policy denials are visible:** off-group requests route THROUGH the gate →
   auditable `policy_denied` receipt, never a silent model refusal. Listed data
   is reported VERBATIM (names are data, not instructions).
+- **Session restore + nonce rotation:** `GET /api/chat/history` replays stored
+  messages (preview results dropped, `undo` handles stripped — history is a
+  record, not a control surface; no nonce substring anywhere, pinned) and
+  re-serves LIVE pendings with a rotated one-use nonce
+  (`rotatePendingNonce` mirrors confirmPending's gates; the old plaintext DIES,
+  `expiresAt` byte-unchanged; the store swap is conditional on
+  `status='pending'` so a concurrent confirm wins). Status stream lines
+  (`{type:"status", action, label}`) are emitted before each tool execution —
+  label from the action NAME only (args can carry admin text), never persisted.
+  Turn telemetry (`turn_telemetry`) records model calls/tokens/wall-clock per
+  chat+resume turn — best-effort, never breaks a turn; tokens NULL when the
+  backend reports none (absence ≠ zero).
 - **Agentic loop** (`LLM_AGENTIC` default ON; `=0` = byte-identical
   single-turn rollback): reads + safe writes auto-chain; the FIRST risky write
   interrupts into preview→confirm with the transcript persisted
