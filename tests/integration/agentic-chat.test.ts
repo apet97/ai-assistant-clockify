@@ -873,6 +873,43 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
   });
 
+  // finding new-5-typed-consent-guard-has-a-narrow: consent-adjacent phrases
+  // ("just do it already", "execute it now", "apply the change", "run it",
+  // "please go ahead and apply the pending change") bypassed the narrow regex,
+  // reached the planner, re-ran the SAME risky action and created a SECOND
+  // pending preview. They express approval while a preview is pending and must
+  // be intercepted deterministically — the model never sees them, nothing new
+  // is planned, the single pending preview is untouched.
+  it.each([
+    "just do it already",
+    "execute it now",
+    "apply the change",
+    "run it",
+    "please go ahead and apply the pending change",
+  ])("a consent-adjacent '%s' while a preview is pending is answered deterministically (no second preview)", async (phrase) => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    // If the guard misses, the message reaches the planner; script a second
+    // delete so a leaked planner turn would produce a SECOND preview.
+    const { app, model, cookie } = await makeApp(
+      [
+        { text: "Deleting the tag now.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "Deleting the tag now.", toolCalls: [{ id: "r2", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+      ],
+      fake,
+    );
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete tag urgent" });
+    expect(first.status).toBe(200);
+    expect(previewsOf(first.body.results as ResultItem[])).toHaveLength(1);
+    const callsAfterPreview = model.calls.length;
+
+    const consent = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: phrase });
+    expect(consent.status).toBe(200);
+    expect(model.calls.length).toBe(callsAfterPreview); // the model never saw the consent phrase
+    expect(consent.body.results).toEqual([]); // no SECOND preview, no receipts
+    expect(String(consent.body.reply?.text ?? "")).toMatch(/confirm button/i);
+    expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
+  });
+
   it("a bare 'yes' with NOTHING pending still reaches the model (the guard is scoped to pending previews)", async () => {
     const fake = createFakeWorkspace();
     const { app, model, cookie } = await makeApp([{ text: "Could you say more?", toolCalls: [] }], fake);
