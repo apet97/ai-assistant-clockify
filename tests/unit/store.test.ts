@@ -245,6 +245,59 @@ describe("store", () => {
     store.close();
   });
 
+  it("listPendingConfirmations returns only this session's LIVE pendings, oldest-first", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const now = new Date("2026-06-06T10:00:00.000Z");
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const other = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const make = (sessionId: string, nowAt: Date) =>
+      createPendingConfirmation({
+        sessionId,
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        risk: ["destructive"],
+        preview: { summary: "x" },
+        operation: { actionName: "a", featureGroup: "work_structure", risks: ["destructive"], payload: {} },
+        sessionSecret: "s",
+        now: nowAt,
+      });
+    const first = make(session.id, new Date(now.getTime() - 60_000));
+    const second = make(session.id, now);
+    const foreign = make(other.id, now);
+    const expired = make(session.id, new Date(now.getTime() - 10 * 60_000)); // 5-min TTL long past
+    for (const c of [second, first, foreign, expired]) store.savePendingConfirmation(c.record);
+    const cancelled = make(session.id, now);
+    store.savePendingConfirmation(cancelled.record);
+    store.cancelConfirmation(cancelled.previewId);
+
+    const live = store.listPendingConfirmations(session.id, now.toISOString());
+    expect(live.map((r) => r.id)).toEqual([first.previewId, second.previewId]);
+    store.close();
+  });
+
+  it("updateConfirmationNonceHash swaps the hash only while still pending (loser of a race gets false)", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const created = createPendingConfirmation({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      risk: ["destructive"],
+      preview: { summary: "x" },
+      operation: { actionName: "a", featureGroup: "work_structure", risks: ["destructive"], payload: {} },
+      sessionSecret: "s",
+    });
+    store.savePendingConfirmation(created.record);
+
+    expect(store.updateConfirmationNonceHash(created.previewId, "new-hash")).toBe(true);
+    expect(store.getPendingConfirmation(created.previewId)?.nonceHash).toBe("new-hash");
+
+    store.markConfirmationUsed(created.previewId);
+    expect(store.updateConfirmationNonceHash(created.previewId, "later-hash")).toBe(false);
+    expect(store.getPendingConfirmation(created.previewId)?.nonceHash).toBe("new-hash");
+    store.close();
+  });
+
   it("getRecentMessages omits the parsed payload by default and only loads it when asked (efficiency-05)", () => {
     const store = createStore(":memory:", { encryptionKey: ENC_KEY });
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });

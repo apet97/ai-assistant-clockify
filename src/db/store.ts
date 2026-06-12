@@ -152,6 +152,10 @@ export interface Store {
 
   savePendingConfirmation(record: PendingConfirmationRecord): void;
   getPendingConfirmation(id: string): PendingConfirmationRecord | undefined;
+  /** This session's still-live pending previews (status pending, not expired), oldest-first. */
+  listPendingConfirmations(sessionId: string, nowIso: string): PendingConfirmationRecord[];
+  /** Atomically swap the nonce hash; true only while still pending (a concurrent confirm/cancel wins). */
+  updateConfirmationNonceHash(id: string, nonceHash: string): boolean;
   /** Atomically transition pending → used. Returns true only for the caller
    *  that won the transition (closes the double-confirm TOCTOU). */
   markConfirmationUsed(id: string): boolean;
@@ -249,6 +253,32 @@ function parseStoredAgentState(value: string | null): unknown {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Map a pending_confirmations row to its record — shared by the single getter
+ * and the per-session list. Fail-soft ONLY for the agentic suspension column
+ * (see {@link parseStoredAgentState}); risk/preview/operation parse strictly
+ * because corrupting them is a real integrity failure, not a lost resume.
+ */
+function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    workspaceId: row.workspace_id,
+    adminUserId: row.admin_user_id,
+    status: row.status,
+    risk: JSON.parse(row.risk_json) as RiskLabel[],
+    preview: JSON.parse(row.preview_json),
+    operation: JSON.parse(row.operation_json),
+    operationHash: row.operation_hash,
+    nonceHash: row.nonce_hash,
+    expiresAt: row.expires_at,
+    createdAt: row.created_at,
+    usedAt: row.used_at ?? undefined,
+    result: row.result_json ? JSON.parse(row.result_json) : undefined,
+    agentState: parseStoredAgentState(row.agent_state_json),
+  };
 }
 
 /**
@@ -526,31 +556,26 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         | PendingRow
         | undefined;
       if (!row) return undefined;
-      return {
-        id: row.id,
-        sessionId: row.session_id,
-        workspaceId: row.workspace_id,
-        adminUserId: row.admin_user_id,
-        status: row.status,
-        risk: JSON.parse(row.risk_json) as RiskLabel[],
-        preview: JSON.parse(row.preview_json),
-        operation: JSON.parse(row.operation_json),
-        operationHash: row.operation_hash,
-        nonceHash: row.nonce_hash,
-        expiresAt: row.expires_at,
-        createdAt: row.created_at,
-        usedAt: row.used_at ?? undefined,
-        result: row.result_json ? JSON.parse(row.result_json) : undefined,
-        // Fail-soft ONLY for the agentic suspension: a corrupt/truncated
-        // agent_state_json (crash mid-write, partial migration) must degrade to
-        // undefined, not throw out of this getter into the confirm/cancel route
-        // (which call it with no try/catch). Per the agentic-loop invariant
-        // ("agent_state_json … malformed ⇒ no resume"), the confirm then commits
-        // the receipt with no resume — exactly as the schema layer (parseAgentState)
-        // does for structurally-malformed values. The risk/preview/operation parses
-        // stay strict: corrupting THEM is a real integrity failure, not a lost resume.
-        agentState: parseStoredAgentState(row.agent_state_json),
-      };
+      return pendingRowToRecord(row);
+    },
+
+    listPendingConfirmations(sessionId, nowIsoArg) {
+      // Rides idx_pending_confirmations_session(session_id, status, expires_at).
+      const rows = db
+        .prepare(
+          `SELECT * FROM pending_confirmations
+            WHERE session_id = ? AND status = 'pending' AND expires_at > ?
+            ORDER BY created_at ASC`,
+        )
+        .all(sessionId, nowIsoArg) as PendingRow[];
+      return rows.map(pendingRowToRecord);
+    },
+
+    updateConfirmationNonceHash(id, nonceHash) {
+      const info = db
+        .prepare("UPDATE pending_confirmations SET nonce_hash = ? WHERE id = ? AND status = 'pending'")
+        .run(nonceHash, id);
+      return info.changes === 1;
     },
 
     markConfirmationUsed(id) {
