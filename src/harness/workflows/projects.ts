@@ -78,12 +78,14 @@ const getProject = defineAction({
 const createProject = defineAction({
   name: "clockify_projects_create",
   description:
-    "Create a project. Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
+    "Create a project. Assign a client by `clientId` or its exact `clientName` (resolved server-side — an unknown client clarifies). Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
   featureGroup: PROJECT_GROUP,
   risks: ["safe_write"],
   schema: z.object({
     name: z.string().min(1),
     clientId: z.string().optional(),
+    /** The client's exact name, resolved to an id server-side. */
+    clientName: z.string().optional(),
     billable: z.boolean().optional(),
     color: z.string().optional(), // hex
     isPublic: z.boolean().optional(),
@@ -93,10 +95,23 @@ const createProject = defineAction({
     rateUnit: z.enum(["major", "minor"]).default("major"),
   }),
   async handler(ctx, args) {
+    // The client ref resolves BEFORE the write — this executes immediately, so
+    // a name in either slot must verify or clarify, never reach the wire.
+    let clientId: string | undefined;
+    if (args.clientId?.trim() || args.clientName?.trim()) {
+      const client = await resolveEntityRef(
+        { id: args.clientId, name: args.clientName },
+        { noun: "client", verb: "assign the new project to", list: (f) => ctx.clockify.listClients(f) },
+      );
+      if (!client.ok) {
+        return { kind: "clarify", message: client.clarify.clarify, options: client.clarify.options };
+      }
+      clientId = client.id;
+    }
     const unit = args.rateUnit ?? "major";
     const project = await ctx.clockify.createProject({
       name: args.name,
-      ...(args.clientId ? { clientId: args.clientId } : {}),
+      ...(clientId ? { clientId } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
       ...(args.color ? { color: args.color } : {}),
       ...(args.isPublic !== undefined ? { isPublic: args.isPublic } : {}),

@@ -64,7 +64,7 @@ describe("project actions — reads", () => {
 
 describe("project actions — safe writes", () => {
   it("clockify_projects_create creates a project and returns a receipt", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
     const result = await executeAction({
       actionName: "clockify_projects_create",
       args: { name: "AIASSIST_SMOKE_p", clientId: "c1", billable: true },
@@ -75,6 +75,39 @@ describe("project actions — safe writes", () => {
       expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "project" });
     }
     expect(fake.counts.createProject).toBe(1);
+    expect(fake.state.projects.find((p) => p.name === "AIASSIST_SMOKE_p")?.clientId).toBe("c1");
+  });
+
+  it("clockify_projects_create resolves clientName (and a name in the clientId slot) to the real id", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-acme", name: "Acme" }] });
+    const byName = await executeAction({
+      actionName: "clockify_projects_create",
+      args: { name: "AIASSIST_SMOKE_p1", clientName: "Acme" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error("expected a success receipt");
+    expect(fake.state.projects.find((p) => p.name === "AIASSIST_SMOKE_p1")?.clientId).toBe("c-acme");
+
+    // The planner habit: a NAME in the clientId SLOT resolves too.
+    const bySlot = await executeAction({
+      actionName: "clockify_projects_create",
+      args: { name: "AIASSIST_SMOKE_p2", clientId: "Acme" },
+      context: makeContext(fake),
+    });
+    if (bySlot.kind !== "receipt" || !bySlot.receipt.ok) throw new Error("expected a success receipt");
+    expect(fake.state.projects.find((p) => p.name === "AIASSIST_SMOKE_p2")?.clientId).toBe("c-acme");
+  });
+
+  it("clockify_projects_create clarifies on an unknown client and creates NOTHING (it executes immediately — a bad ref must stop it)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-acme", name: "Acme" }] });
+    const result = await executeAction({
+      actionName: "clockify_projects_create",
+      args: { name: "AIASSIST_SMOKE_p3", clientName: "Acmee" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("c-acme");
+    expect(fake.counts.createProject ?? 0).toBe(0);
   });
 
   it("clockify_projects_create is denied when work_structure is read-only", async () => {
