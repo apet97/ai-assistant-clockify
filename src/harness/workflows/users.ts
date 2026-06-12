@@ -204,27 +204,46 @@ const rateUpdate = defineRiskyAction({
 // defineAction to keep the guard byte-identical.
 const deactivateUser = defineAction({
   name: "clockify_users_deactivate",
-  description: "Deactivate a workspace user (removes their access). Elevated write — previews and requires confirmation.",
+  description:
+    "Deactivate a workspace user (removes their access). Pass the member by `userId`/`userName` — an id or the exact name, resolved + verified server-side. Elevated write — previews and requires confirmation.",
   featureGroup: UG,
   risks: ["high_risk_write"],
-  schema: z.object({ userId: z.string().min(1) }),
+  schema: z
+    .object({
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+    })
+    .refine((v) => v.userId !== undefined || v.userName !== undefined, {
+      message: "Provide the member (id or exact name).",
+    }),
   async handler(ctx, args) {
+    // Resolve + VERIFY the member first (a name in either slot, a wrong-typed
+    // 24-hex id ⇒ clarify) so the self-deactivation guard below holds on the
+    // RESOLVED id — 'me' or the admin's own name must not slip past it.
+    const member = await resolveUserRef(
+      { id: args.userId, name: args.userName },
+      { verb: "deactivate", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+    );
+    if (!member.ok) {
+      return { kind: "clarify", message: member.clarify.clarify, options: member.clarify.options };
+    }
     // Self-deactivation guard (defense in depth): refuse to lock the admin out.
-    if (args.userId === ctx.adminUserId) {
+    if (member.userId === ctx.adminUserId) {
       return { kind: "receipt", receipt: errorReceipt({ action: "clockify_users_deactivate", code: "invalid_args", message: "Refusing to deactivate yourself — that could lock you out of the workspace." }) };
     }
+    const label = member.label === "you" ? member.userId : member.label;
     return {
       kind: "preview",
       preview: {
         actionLabel: "Deactivate user",
         featureGroup: UG,
         riskLabels: ["high_risk_write"],
-        targets: [{ type: "user", id: args.userId }],
-        expectedChanges: [`Deactivate user ${args.userId}`],
+        targets: [{ type: "user", id: member.userId, name: label }],
+        expectedChanges: [`Deactivate user ${label}`],
         reversibility: "Reactivate the user from the Clockify UI to restore access.",
         warnings: ["This removes the user's access to the workspace."],
       },
-      operation: { actionName: "clockify_users_deactivate", featureGroup: UG, risks: ["high_risk_write"], payload: { userId: args.userId } },
+      operation: { actionName: "clockify_users_deactivate", featureGroup: UG, risks: ["high_risk_write"], payload: { userId: member.userId } },
     };
   },
   async commit(ctx, operation) {

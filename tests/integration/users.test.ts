@@ -123,6 +123,43 @@ describe("user & group actions", () => {
     expect(fake.counts.deactivateUser ?? 0).toBe(0);
   });
 
+  it("deactivate resolves a member NAME (or userName) and previews the NAME, not an opaque id", async () => {
+    const fake = createFakeWorkspace(seed());
+    const bySlot = await executeAction({ actionName: "clockify_users_deactivate", args: { userId: "Bob" }, context: makeContext(fake) });
+    if (bySlot.kind !== "preview") throw new Error(`expected a preview, got ${bySlot.kind}`);
+    expect((bySlot.operation.payload as any).userId).toBe("u2");
+    expect(bySlot.preview.expectedChanges.join(" ")).toContain("Bob");
+    await commitConfirmedOperation(makeContext(fake), bySlot.operation);
+    expect(fake.state.users.find((u) => u.id === "u2")?.status).toBe("INACTIVE");
+  });
+
+  it("deactivate refuses 'me' and the admin's own NAME (the guard must hold on the RESOLVED id)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const me = await executeAction({ actionName: "clockify_users_deactivate", args: { userId: "me" }, context: makeContext(fake) });
+    if (me.kind === "receipt" && !me.receipt.ok) expect(me.receipt.code).toBe("invalid_args");
+    else throw new Error(`expected refusal, got ${me.kind}`);
+
+    const ownName = await executeAction({ actionName: "clockify_users_deactivate", args: { userName: "Me" }, context: makeContext(fake) });
+    if (ownName.kind === "receipt" && !ownName.receipt.ok) expect(ownName.receipt.code).toBe("invalid_args");
+    else throw new Error(`expected refusal, got ${ownName.kind}`);
+    expect(fake.counts.deactivateUser ?? 0).toBe(0);
+  });
+
+  it("deactivate clarifies on an unknown member and a wrong-typed 24-hex id (verify, never trust)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const unknown = await executeAction({ actionName: "clockify_users_deactivate", args: { userName: "Ghost" }, context: makeContext(fake) });
+    expect(unknown.kind).toBe("clarify");
+
+    // A 24-hex value that is NOT a workspace user (e.g. a project id) must clarify.
+    const wrongType = await executeAction({
+      actionName: "clockify_users_deactivate",
+      args: { userId: "5f1e2d3c4b5a69788796a999" },
+      context: makeContext(fake),
+    });
+    expect(wrongType.kind).toBe("clarify");
+    expect(fake.counts.deactivateUser ?? 0).toBe(0);
+  });
+
   it("groups CRUD + add/remove member round-trip", async () => {
     const fake = createFakeWorkspace(seed());
     const create = await executeAction({ actionName: "clockify_groups_create", args: { name: "AIASSIST_SMOKE_grp" }, context: makeContext(fake) });
