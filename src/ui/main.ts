@@ -110,14 +110,38 @@ export interface ComposerHooks {
   onError(message: string): void;
 }
 
+/** Honest copy for an auth-expired exchange — the fix is a reload, say so. */
+export const SESSION_EXPIRED_MESSAGE = "Your session has expired — reload the page to continue.";
+
+/** An HTTP exchange the UI must surface by STATUS (only 401 throws; see json()). */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Honest user-facing copy for a failed HTTP exchange: 401 = the session
+ * expired (reload); anything else shows the server's own message (the routes
+ * return honest JSON copy, e.g. the rate limiter's "too quickly") or the
+ * caller's fallback.
+ */
+export function httpErrorMessage(status: number, serverMessage?: string, fallback = "Message failed to send."): string {
+  if (status === 401) return SESSION_EXPIRED_MESSAGE;
+  return serverMessage && serverMessage.trim() ? serverMessage : fallback;
+}
+
 export async function submitMessage(api: ChatApiLike, message: string, hooks: ComposerHooks): Promise<void> {
   hooks.onWorking(true);
   try {
     const response = (await api.sendMessage(message)) as ChatResponse;
     if (response.reply?.text) hooks.onAssistant(response.reply.text);
     hooks.onResults(response.results ?? []);
-  } catch {
-    hooks.onError("Message failed to send.");
+  } catch (error) {
+    hooks.onError(error instanceof ApiError ? error.message : "Message failed to send.");
   } finally {
     hooks.onWorking(false);
   }
@@ -195,7 +219,17 @@ export function createFetchApi(): ChatApi {
       headers: { "content-type": "application/json" },
       ...init,
     });
-    return res.json();
+    let body: unknown;
+    try {
+      body = await res.json();
+    } catch {
+      body = undefined;
+    }
+    // ONLY 401 throws: an expired session has one fix (reload) and must say so.
+    // Other non-ok statuses RETURN their JSON body — the confirm/cancel/undo
+    // flows render those `{ok:false, code, message}` payloads as return values.
+    if (res.status === 401) throw new ApiError(401, SESSION_EXPIRED_MESSAGE);
+    return body;
   }
   return {
     getPermissions: () => json("/api/permissions"),
@@ -211,7 +245,18 @@ export function createFetchApi(): ChatApi {
         body: JSON.stringify({ message }),
       });
       if (!res.ok || !res.body) {
-        onEvent({ type: "error", message: "The assistant is temporarily unavailable. Please try again." });
+        // Surface the route's honest JSON copy (rate limit, expired session)
+        // instead of a blanket "unavailable".
+        let serverMessage: string | undefined;
+        try {
+          serverMessage = ((await res.json()) as { message?: string })?.message;
+        } catch {
+          /* keep the fallback */
+        }
+        onEvent({
+          type: "error",
+          message: httpErrorMessage(res.status, serverMessage, "The assistant is temporarily unavailable. Please try again."),
+        });
         return;
       }
       const reader = res.body.getReader();
@@ -237,15 +282,15 @@ export function createFetchApi(): ChatApi {
         body: JSON.stringify({ nonce: ref.nonce }),
       });
       if (!res.ok || !res.body) {
-        // A non-OK confirm is a JSON error (validation/policy/expired) — surface it.
-        let message = "Confirmation failed.";
+        // A non-OK confirm is a JSON error (validation/policy/expired) — surface
+        // it; a 401 gets the session-expired copy.
+        let serverMessage: string | undefined;
         try {
-          const body = (await res.json()) as { message?: string };
-          if (body?.message) message = body.message;
+          serverMessage = ((await res.json()) as { message?: string })?.message;
         } catch {
           /* keep the default */
         }
-        onEvent({ type: "error", message });
+        onEvent({ type: "error", message: httpErrorMessage(res.status, serverMessage, "Confirmation failed.") });
         return;
       }
       const reader = res.body.getReader();
