@@ -250,6 +250,25 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(fake.counts.updateProjectRate).toBe(1);
   });
 
+  it("clockify_projects_rate_update resolves 'me' to the admin and previews the amount in major units", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const preview = await executeAction({
+      actionName: "clockify_projects_rate_update",
+      args: { projectId: "p1", userId: "me", rateKind: "HOURLY", amount: 20, amountUnit: "major" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    // Clockify rejects the literal "me" in the path (wants a 24-hex id) — it must
+    // be resolved to the admin's id at PREVIEW, never confirmed-then-failed.
+    expect((preview.operation.payload as any).userId).toBe("admin-1");
+    const change = preview.preview.expectedChanges.join(" ");
+    expect(change).toContain("20.00");
+    expect(change).not.toContain("minor units");
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+  });
+
   it("clockify_projects_rate_update passes minor units through unchanged", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({

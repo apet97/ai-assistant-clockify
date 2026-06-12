@@ -289,11 +289,12 @@ const deleteProject = defineRiskyAction({
 const rateUpdate = defineRiskyAction({
   name: "clockify_projects_rate_update",
   description:
-    "Set a project member's billable hourly or cost rate. Billing action — previews and requires confirmation.",
+    'Set a project member\'s billable hourly or cost rate. Pass the member\'s user id, or "me" for the requesting admin (the harness resolves it — never ask the admin who they are). Billing action — previews and requires confirmation.',
   group: "invoices",
   risks: ["billing"],
   schema: z.object({
     projectId: z.string().min(1),
+    /** A member's user id, or "me" for the requesting admin (resolved server-side). */
     userId: z.string().min(1),
     rateKind: z.enum(["HOURLY", "COST"]),
     amount: z.number().nonnegative(),
@@ -301,19 +302,25 @@ const rateUpdate = defineRiskyAction({
     amountUnit: z.enum(["major", "minor"]).default("major"),
     since: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    // Resolve "me" to the admin's real id BEFORE the wire — Clockify's rate
+    // endpoint takes a 24-hex user id in the path and rejects the literal "me"
+    // (400 "hexString has 24 characters"). An identity mistake must be caught at
+    // preview, never confirmed-then-failed.
+    const userId = args.userId.trim().toLowerCase() === "me" ? ctx.adminUserId : args.userId;
     const amountMinor = toMinor(args.amount, args.amountUnit);
+    const who = userId === ctx.adminUserId ? "you" : `user ${userId}`;
     return {
       actionLabel: `Set project ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
       targets: [{ type: "project", id: args.projectId }],
       expectedChanges: [
-        `Set ${args.rateKind} rate for user ${args.userId} to ${amountMinor} (minor units)`,
+        `Set ${args.rateKind} rate for ${who} to ${(amountMinor / 100).toFixed(2)}`,
       ],
       reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
       warnings: ["This changes the billable amount of future entries."],
       payload: {
         projectId: args.projectId,
-        userId: args.userId,
+        userId,
         rateKind: args.rateKind,
         amountMinor,
         since: args.since,
