@@ -78,6 +78,33 @@ describe("time-entry actions — reads", () => {
     expect(fake.counts.getEntries ?? 0).toBe(0);
   });
 
+  it("clockify_entries_list resolves a user NAME (or 'me') in the userId slot and clarifies on an unknown one", async () => {
+    const fake = createFakeWorkspace({ ...seedEntries(), users: [{ id: "u-ana", name: "Ana" }] });
+    const byName = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { userId: "Ana" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error("expected receipt");
+    expect((byName.receipt.data as any).userId).toBe("u-ana");
+
+    const me = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { userId: "me" },
+      context: makeContext(fake),
+    });
+    if (me.kind !== "receipt" || !me.receipt.ok) throw new Error("expected receipt");
+    expect((me.receipt.data as any).userId).toBe("admin-1");
+
+    const unknown = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { userId: "Ghost" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    expect(fake.counts.getEntries ?? 0).toBe(2); // the unknown filter never reached the wire
+  });
+
   it("clockify_entries_list clarifies on a task name filter with no project to scope it", async () => {
     const fake = createFakeWorkspace(seedEntries());
     const result = await executeAction({

@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { resolveInstant, resolveProjectTaskRefs } from "./resolve.js";
+import { resolveInstant, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -19,7 +19,7 @@ import { resolveInstant, resolveProjectTaskRefs } from "./resolve.js";
 const listEntries = defineAction({
   name: "clockify_entries_list",
   description:
-    "List time entries for a user (defaults to the caller). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters — pass an id or the exact name (`projectId`/`projectName`, `taskId`/`taskName`), resolved server-side.",
+    "List time entries for a user (defaults to the caller; `userId` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters — pass an id or the exact name (`projectId`/`projectName`, `taskId`/`taskName`), resolved server-side.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
@@ -32,7 +32,16 @@ const listEntries = defineAction({
     taskName: z.string().optional(),
   }),
   async handler(ctx, args) {
-    const userId = args.userId ?? ctx.adminUserId;
+    // The user filter resolves id/name/'me' (clarifies on unknown), defaulting
+    // to the caller.
+    const user = await resolveUserFilter(args.userId, {
+      verb: "list entries for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
+    });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const userId = user.userId as string;
     // The wire wants yyyy-MM-ddThh:mm:ssZ instants; the live loop sent
     // `?start=today` 12× (400 every time). Resolve here, clarify on garbage.
     const now = (ctx.now ?? (() => new Date()))();
