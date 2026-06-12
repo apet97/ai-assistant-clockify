@@ -348,13 +348,28 @@ export async function resolveGroupRefs(
  * `id` slot is matched by name after the exact-id lookup misses (the planner
  * routinely puts a NAME where an id belongs). `label` is "you" for the admin,
  * else the member's name — for a legible preview.
+ *
+ * `trustIds`: when true a 24-hex value is taken as the user id WITHOUT a list
+ * call (read FILTERS — a wrong id there yields an empty list, not a damaging
+ * write). Default false: even a 24-hex value is verified against the real
+ * users, so a wrong-typed id clarifies instead of hitting the wire
+ * (permission/assignment-affecting writes).
  */
 export async function resolveUserRef(
   ref: { id?: string; name?: string },
-  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>> },
+  opts: {
+    verb: string;
+    adminUserId: string;
+    listUsers: () => Promise<Array<{ id: string; name: string }>>;
+    trustIds?: boolean;
+  },
 ): Promise<{ ok: true; userId: string; label: string } | { ok: false; clarify: RiskyClarifyResult }> {
   if ((ref.id ?? ref.name ?? "").trim().toLowerCase() === "me") {
     return { ok: true, userId: opts.adminUserId, label: "you" };
+  }
+  const rawId = ref.id?.trim();
+  if (opts.trustIds && rawId && looksLikeClockifyId(rawId)) {
+    return { ok: true, userId: rawId, label: ref.name ?? rawId };
   }
   const users = await opts.listUsers();
   let user = ref.id ? users.find((u) => u.id === ref.id) : undefined;

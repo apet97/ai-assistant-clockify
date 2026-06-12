@@ -4,6 +4,7 @@ import {
   resolveEntityRef,
   resolveGroupRefs,
   resolveProjectTaskRefs,
+  resolveUserRef,
   resolveUserRefs,
 } from "../../src/harness/workflows/resolve.js";
 
@@ -353,6 +354,49 @@ describe("resolveUserRefs", () => {
     const r = await resolveUserRefs(["Nobody"], opts({ n: 0 }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace member");
+  });
+});
+
+describe("resolveUserRef — trustIds (read-filter happy path)", () => {
+  const users = [
+    { id: "u2", name: "Bob" },
+    { id: "u3", name: "Ana" },
+  ];
+  const opts = (listed: { n: number }, trustIds?: boolean) => ({
+    verb: "filter by",
+    adminUserId: "admin-1",
+    listUsers: async () => {
+      listed.n += 1;
+      return users;
+    },
+    trustIds,
+  });
+
+  it("trusts a 24-hex id WITHOUT a list call when trustIds is set", async () => {
+    const listed = { n: 0 };
+    const r = await resolveUserRef({ id: HEX_ID }, opts(listed, true));
+    expect(r).toMatchObject({ ok: true, userId: HEX_ID });
+    expect(listed.n).toBe(0);
+  });
+
+  it("still resolves 'me' and names (and clarifies on unknown) with trustIds set", async () => {
+    const listed = { n: 0 };
+    const me = await resolveUserRef({ id: "me" }, opts(listed, true));
+    expect(me).toMatchObject({ ok: true, userId: "admin-1", label: "you" });
+    expect(listed.n).toBe(0);
+
+    const byName = await resolveUserRef({ id: "Ana" }, opts(listed, true));
+    expect(byName).toMatchObject({ ok: true, userId: "u3", label: "Ana" });
+
+    const unknown = await resolveUserRef({ id: "Ghost" }, opts(listed, true));
+    expect(unknown.ok).toBe(false);
+  });
+
+  it("keeps VERIFYING a 24-hex id by default (permission-affecting writes unchanged)", async () => {
+    const listed = { n: 0 };
+    const r = await resolveUserRef({ id: HEX_ID }, opts(listed));
+    expect(listed.n).toBe(1);
+    expect(r.ok).toBe(false); // HEX_ID is not in the user list → clarify, not trust
   });
 });
 
