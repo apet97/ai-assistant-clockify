@@ -70,7 +70,8 @@ describe("invoice actions", () => {
   });
 
   it("clockify_invoices_create previews billing then creates once on commit", async () => {
-    const fake = createFakeWorkspace();
+    // The client must exist: a short id resolves via the listed exact-id fallback.
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
     const preview = await executeAction({
       actionName: "clockify_invoices_create",
       args: { clientId: "c1", number: "AIASSIST_SMOKE_inv", issuedDate: "2026-06-06", currency: "GBP", dueDate: "2026-07-06" },
@@ -153,6 +154,25 @@ describe("invoice actions", () => {
     });
     expect(many.kind).toBe("clarify");
     if (many.kind === "clarify") expect(many.options?.length).toBe(2);
+  });
+
+  it("clockify_invoices_create resolves a client NAME placed in the clientId SLOT (billing must never wire an unverified ref)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientId: "asdqwe123" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).input.clientId).toBe("c-asd");
+
+    const unknown = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientId: "Ghost Co" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    if (unknown.kind === "clarify") expect(unknown.message).toMatch(/create the client first/i);
   });
 
   it("clockify_invoices_create rejects a call with neither clientId nor clientName", async () => {

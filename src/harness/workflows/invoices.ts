@@ -11,7 +11,7 @@ import {
 import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
 import { toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
-import { describePatch, matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -292,31 +292,22 @@ const createInvoice = defineRiskyAction({
       message: "Provide the client id or its exact name.",
     }),
   async preview(ctx, args) {
-    // Resolve the client by name when no id was supplied — the planner has just
-    // created/named the client and should not be asked for its id.
-    let clientId = args.clientId;
-    let clientName = args.clientName;
-    if (!clientId) {
-      const clients = await ctx.clockify.listClients();
-      const match = matchByName(clients, clientName as string);
-      if (match.kind === "none") {
-        const options = suggestOptions(clients, clientName as string);
-        return {
-          clarify: options.length
-            ? `I couldn't find an active client named "${clientName}". Did you mean one of these, or should I create it?`
-            : `There are no active clients named "${clientName}". Want me to create it first?`,
-          options: options.length ? options : undefined,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          clarify: `Several active clients are named "${clientName}". Which one?`,
-          options: match.matches.map((c) => ({ id: c.id, label: c.name })),
-        };
-      }
-      clientId = match.entity.id;
-      clientName = match.entity.name;
-    }
+    // Resolve the client ref — a NAME in either slot (the planner has just
+    // created/named the client, or put the name where the id belongs) becomes a
+    // verified id; unknown/ambiguous clarifies. Billing must never wire an
+    // unverified ref.
+    const client = await resolveEntityRef(
+      { id: args.clientId, name: args.clientName },
+      {
+        noun: "client",
+        verb: "invoice",
+        list: (f) => ctx.clockify.listClients(f),
+        notFoundHint: "Or should I create the client first?",
+      },
+    );
+    if (!client.ok) return client.clarify;
+    const clientId = client.id;
+    const clientName = client.name ?? args.clientName;
 
     // Default the required fields the planner usually omits.
     const now = nowDate(ctx);
