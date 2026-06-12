@@ -46,7 +46,7 @@ create + update (`assigneeIds` takes ids, exact names, or 'me' — resolved via
 `resolve.ts` `resolveUserRefs`, clarifies on ambiguous/unknown; spec +
 live-verified). Reusable: `scripts/repro-chat.ts`
 + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **940 tests**, `npx madge --circular
+`npm run verify` = **942 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
