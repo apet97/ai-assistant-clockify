@@ -233,6 +233,24 @@ async function main(): Promise<void> {
   let modelClient: ModelClient;
   try {
     modelClient = selectModelClient(selection);
+    // Two-tier routing experiment: EVAL_PLAN_MODEL handles PLANNING calls (no
+    // tool results in the transcript yet) and EVAL_IMPL_MODEL the continuation/
+    // implementation calls (any transcript carrying a role:"tool" message —
+    // which is also every resume). Eval-only; the product stays single-model.
+    const planModel = process.env.EVAL_PLAN_MODEL;
+    const implModel = process.env.EVAL_IMPL_MODEL;
+    if (planModel && implModel) {
+      const plan = selectModelClient({ ...selection, llmModel: planModel });
+      const impl = selectModelClient({ ...selection, llmModel: implModel });
+      console.log(`mixed-tier routing: plan=${planModel} impl=${implModel}`);
+      modelClient = {
+        complete: (messages) => plan.complete(messages),
+        completeWithTools: (messages, tools) => {
+          const continuation = messages.some((m) => m.role === "tool");
+          return (continuation ? impl : plan).completeWithTools!(messages, tools);
+        },
+      };
+    }
   } catch (err) {
     console.error(
       `Refusing to run: ${err instanceof Error ? err.message : String(err)}\n` +
