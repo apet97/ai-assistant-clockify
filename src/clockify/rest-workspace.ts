@@ -123,6 +123,18 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         await webhookRest.deleteWebhook(id);
         return;
       }
+      if (entityType === "group") {
+        await userRest.deleteGroup(id);
+        return;
+      }
+      if (entityType === "holiday") {
+        await holidayRest.deleteHoliday(id);
+        return;
+      }
+      if (entityType === "assignment") {
+        await schedulingRest.deleteAssignment(id);
+        return;
+      }
       const pathByType: Record<string, string> = {
         time_entry: `${ws}/time-entries/${id}`,
       };

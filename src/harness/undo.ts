@@ -23,6 +23,11 @@ const REVERSIBLE_ENTITY_GROUP: Record<string, FeatureGroup> = {
   invoice: "invoices",
   expense: "expenses",
   webhook: "webhooks",
+  group: "users_groups",
+  holiday: "time_off_approvals",
+  assignment: "scheduling",
+  // time_off_request is deliberately ABSENT: its delete needs the POLICY id,
+  // which the created-entity ref doesn't carry.
 };
 
 /** The created entities from a success receipt that can be reversed by deleting them. */

@@ -21,6 +21,8 @@ const DELETE_COLLECTION: Partial<Record<string, keyof FakeState>> = {
   webhook: "webhooks",
   user: "users",
   group: "groups",
+  holiday: "holidays",
+  assignment: "assignments",
 };
 
 /**

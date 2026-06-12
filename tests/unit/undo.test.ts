@@ -33,6 +33,44 @@ describe("reversibleCreations", () => {
   it("returns [] for a receipt with no creates", () => {
     expect(reversibleCreations({ ok: true, action: "x" })).toEqual([]);
   });
+
+  it("treats group/holiday/assignment creations as reversible (their delete ports exist)", () => {
+    const refs = reversibleCreations(
+      receiptWith([
+        { type: "group", id: "g1" },
+        { type: "holiday", id: "h1" },
+        { type: "assignment", id: "a1" },
+        // The time-off request delete needs the POLICY id, which the ref
+        // doesn't carry — deliberately NOT reversible.
+        { type: "time_off_request", id: "r1" },
+      ]),
+    );
+    expect(refs.map((r) => r.type)).toEqual(["group", "holiday", "assignment"]);
+  });
+});
+
+describe("reverseCreation — extended types", () => {
+  it("undoes a group/holiday/assignment creation via the generic delete and respects each policy gate", async () => {
+    const fake = createFakeWorkspace({
+      groups: [{ id: "g1", name: "Devs", userIds: [] }],
+      holidays: [{ id: "h1", name: "Xmas", startDate: "2026-12-25", endDate: "2026-12-25" }],
+      assignments: [{ id: "a1", userId: "u1", projectId: "p1", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }],
+    });
+    const receipt = await reverseCreation(ctx(fake), [
+      { type: "group", id: "g1" },
+      { type: "holiday", id: "h1" },
+      { type: "assignment", id: "a1" },
+    ]);
+    expect(receipt.ok).toBe(true);
+    if (receipt.ok) {
+      expect(receipt.warnings ?? []).toEqual([]);
+      expect(receipt.changed?.deleted?.map((d) => d.type)).toEqual(["assignment", "holiday", "group"]);
+    }
+
+    // Policy gate per type: scheduling read-only denies an assignment undo.
+    const denied = await reverseCreation(ctx(createFakeWorkspace(), "scheduling"), [{ type: "assignment", id: "a9" }]);
+    expect(denied.ok).toBe(false);
+  });
 });
 
 describe("reverseCreation", () => {
