@@ -816,6 +816,48 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(res.status).toBe(200);
     expect(model.calls.length).toBe(1);
   });
+
+  // finding new-2-affirmative-after-completed-safe: a safe write executes
+  // immediately and leaves NO pending confirmation, so the TYPED_CONSENT pending
+  // guard (which keys on countPendingConfirmations) does not fire. A bare
+  // affirmative on the next turn ("yes please go ahead") must NOT re-plan another
+  // write — the prior turn already finished. The deterministic reply says it is
+  // already done; the model never sees the affirmative, so it cannot duplicate.
+  it("a bare affirmative right after a completed safe write does not log a duplicate entry", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" } as never] });
+    const { app, model, cookie } = await makeApp(
+      [
+        // Turn 1: log 2 hours on Acme — a safe write that completes immediately.
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_log_work", arguments: { description: "Work on Acme", projectName: "Acme", durationHours: 2, date: "today" } }] },
+        { text: "Done! Logged 2 hours on Acme for today.", toolCalls: [] },
+        // Turn 2 — if the affirmative ever reaches the model, it duplicates the log.
+        { text: "", toolCalls: [{ id: "c2", name: "clockify_log_work", arguments: { description: "Work on Acme", projectName: "Acme", durationHours: 2, date: "today" } }] },
+        { text: "All set!", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const first = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "log 2 hours on Acme today" });
+    expect(first.status).toBe(200);
+    expect((first.body.results as ResultItem[]).filter((r) => r.kind === "receipt")).toHaveLength(1);
+    expect(fake.counts.createTimeEntry).toBe(1);
+    const callsAfterFirst = model.calls.length;
+
+    const yes = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "yes please go ahead" });
+    expect(yes.status).toBe(200);
+    // The model never saw the affirmative, so it could not plan a duplicate.
+    expect(model.calls.length).toBe(callsAfterFirst);
+    // And nothing new was logged — still exactly one entry.
+    expect(fake.counts.createTimeEntry).toBe(1);
+    expect(yes.body.results).toEqual([]);
+    expect(yes.body.reply.kind).toBe("answer");
+  });
 });
 
 describe("model-visible history window (live-loop FIX 3: the session must stay responsive at item 300)", () => {
