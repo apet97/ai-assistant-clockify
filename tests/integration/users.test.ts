@@ -39,10 +39,12 @@ describe("user & group actions", () => {
 
   it("role_update + deactivate preview high_risk_write; uses high_risk_write NOT permission_change", async () => {
     const fake = createFakeWorkspace(seed());
-    const role = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "u2", role: "TEAM_MANAGER", entityId: "team1" }, context: makeContext(fake) });
+    const role = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "u2", role: "TEAM_MANAGER" }, context: makeContext(fake) });
     if (role.kind !== "preview") throw new Error("expected a preview");
     expect(role.operation.risks).toContain("high_risk_write");
     expect(role.operation.risks).not.toContain("permission_change");
+    // The recipient (u2) is the grantee; the acting admin is the URL user.
+    expect((role.operation.payload as any).granteeId).toBe("u2");
     await commitConfirmedOperation(makeContext(fake), role.operation);
     expect(fake.counts.updateUserRole).toBe(1);
 
@@ -51,6 +53,18 @@ describe("user & group actions", () => {
     expect(deact.operation.risks).toContain("high_risk_write");
     await commitConfirmedOperation(makeContext(fake), deact.operation);
     expect(fake.state.users.find((u) => u.id === "u2")?.status).toBe("INACTIVE");
+  });
+
+  it("role_update resolves the recipient by name and clarifies on a non-user id (no confirm-then-fail)", async () => {
+    const fake = createFakeWorkspace(seed());
+    // By exact name → the recipient's id in the grantee slot.
+    const byName = await executeAction({ actionName: "clockify_users_role_update", args: { userName: "Bob", role: "PROJECT_MANAGER" }, context: makeContext(fake) });
+    if (byName.kind !== "preview") throw new Error("expected a preview");
+    expect((byName.operation.payload as any).granteeId).toBe("u2");
+    // A project/unknown id (the live bug: model put a project id here) → clarify, never a doomed commit.
+    const bogus = await executeAction({ actionName: "clockify_users_role_update", args: { userId: "6a2be82c0cf5bebaba4dace3", role: "PROJECT_MANAGER" }, context: makeContext(fake) });
+    expect(bogus.kind).toBe("clarify");
+    expect(fake.counts.updateUserRole ?? 0).toBe(0);
   });
 
   it("deactivate refuses self-deactivation (no preview, no commit)", async () => {

@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { resolveEntityRef } from "./resolve.js";
+import { matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -59,24 +59,68 @@ const inviteUser = defineRiskyAction({
 
 const updateRole = defineRiskyAction({
   name: "clockify_users_role_update",
-  description: "Update a user's workspace role (WORKSPACE_ADMIN/PROJECT_MANAGER/TEAM_MANAGER). Elevated write — previews and requires confirmation.",
+  description:
+    "Give a workspace member a manager role (WORKSPACE_ADMIN/TEAM_MANAGER/PROJECT_MANAGER). Pass the RECIPIENT by `userId` or exact `userName` (or 'me'). This grants a WORKSPACE-level role — it is NOT scoped to a single project (don't pass a project id). Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
-  schema: z.object({ userId: z.string().min(1), role: z.enum(["WORKSPACE_ADMIN", "PROJECT_MANAGER", "TEAM_MANAGER"]), entityId: z.string().min(1) }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({
+      /** The user RECEIVING the role — an id, exact name (via userName), or 'me'. */
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+      role: z.enum(["WORKSPACE_ADMIN", "PROJECT_MANAGER", "TEAM_MANAGER"]),
+    })
+    .refine((v) => v.userId !== undefined || v.userName !== undefined, {
+      message: "Provide the user (id or exact name) to give the role to.",
+    }),
+  async preview(ctx, args) {
+    // Clockify's roles endpoint puts the RECIPIENT's user id in the request body
+    // (entityId); a project/group id there 404s as "USER ... not found". The id is
+    // 24-hex like a real user, so we VERIFY it is an actual workspace member (not
+    // the usual trust-the-hex-id fast path) — an identity mistake clarifies at
+    // preview, it is never confirmed-then-failed.
+    let granteeId: string;
+    let granteeName: string;
+    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
+      granteeId = ctx.adminUserId;
+      granteeName = "you";
+    } else {
+      const users = await ctx.clockify.listUsers();
+      let member = args.userId ? users.find((u) => u.id === args.userId) : undefined;
+      if (!member && args.userName) {
+        const m = matchByName(users, args.userName);
+        if (m.kind === "many") {
+          return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((u) => ({ id: u.id, label: u.name })) };
+        }
+        if (m.kind === "one") member = m.entity;
+      }
+      if (!member) {
+        const target = args.userName ?? args.userId ?? "";
+        const options = suggestOptions(users, target);
+        return {
+          clarify: `"${target}" isn't a workspace member, so I can't give it the ${args.role} role. Who should get it? (This grants a workspace-level role, not access to a specific project.)`,
+          options: options.length ? options : undefined,
+        };
+      }
+      granteeId = member.id;
+      granteeName = member.name;
+    }
     return {
       actionLabel: "Update user role",
-      targets: [{ type: "user", id: args.userId }],
-      expectedChanges: [`Set ${args.role} for user ${args.userId} on ${args.entityId}`],
+      targets: [{ type: "user", id: granteeId }],
+      expectedChanges: [`Make ${granteeName} a ${args.role} in this workspace`],
       reversibility: "You can change the role again.",
-      warnings: ["This changes a user's permissions."],
-      payload: { userId: args.userId, role: args.role, entityId: args.entityId },
+      warnings: ["This changes a user's workspace permissions."],
+      payload: { granteeId, role: args.role },
     };
   },
   async commit(ctx, payload) {
-    const { userId, role, entityId } = payload as { userId: string; role: string; entityId: string };
-    const result = await ctx.clockify.updateUserRole(userId, role, entityId);
-    return successReceipt({ action: "clockify_users_role_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: result.id, name: result.name }] } });
+    const { granteeId, role } = payload as { granteeId: string; role: string };
+    // POST /users/{adminUserId}/roles {entityId: granteeId, role}: the URL user is
+    // the acting admin (grantor), entityId is the recipient (docs spec + the live
+    // 404 that rejected a project id in entityId as "USER not found").
+    await ctx.clockify.updateUserRole(ctx.adminUserId, role, granteeId);
+    return successReceipt({ action: "clockify_users_role_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: granteeId, name: role }] } });
   },
 });
 
