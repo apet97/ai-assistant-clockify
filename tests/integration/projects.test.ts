@@ -232,7 +232,7 @@ describe("project actions — risky writes (preview → commit)", () => {
   });
 
   it("clockify_projects_rate_update converts major units to minor and commits once", async () => {
-    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }], users: [{ id: "u1", name: "Worker" }], projectMemberships: { p1: [{ userId: "u1" }] } });
     const preview = await executeAction({
       actionName: "clockify_projects_rate_update",
       args: { projectId: "p1", userId: "u1", rateKind: "HOURLY", amount: 75, amountUnit: "major" },
@@ -251,7 +251,7 @@ describe("project actions — risky writes (preview → commit)", () => {
   });
 
   it("clockify_projects_rate_update resolves 'me' to the admin and previews the amount in major units", async () => {
-    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }], projectMemberships: { p1: [{ userId: "admin-1" }] } });
     const preview = await executeAction({
       actionName: "clockify_projects_rate_update",
       args: { projectId: "p1", userId: "me", rateKind: "HOURLY", amount: 20, amountUnit: "major" },
@@ -270,7 +270,7 @@ describe("project actions — risky writes (preview → commit)", () => {
   });
 
   it("clockify_projects_rate_update passes minor units through unchanged", async () => {
-    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }], users: [{ id: "u1", name: "Worker" }], projectMemberships: { p1: [{ userId: "u1" }] } });
     const preview = await executeAction({
       actionName: "clockify_projects_rate_update",
       args: { projectId: "p1", userId: "u1", rateKind: "COST", amount: 5000, amountUnit: "minor" },
@@ -278,6 +278,21 @@ describe("project actions — risky writes (preview → commit)", () => {
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect((preview.operation.payload as any).amountMinor).toBe(5000);
+  });
+
+  it("clockify_projects_rate_update clarifies when the user isn't a project member (Clockify 404s otherwise)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      users: [{ id: "u1", name: "Worker" }],
+      projectMemberships: { p1: [] }, // u1 is a workspace user but NOT on the project
+    });
+    const result = await executeAction({
+      actionName: "clockify_projects_rate_update",
+      args: { projectName: "Website", userName: "Worker", rateKind: "HOURLY", amount: 50 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateProjectRate ?? 0).toBe(0);
   });
 
   it("clockify_projects_estimate_update previews then commits once", async () => {

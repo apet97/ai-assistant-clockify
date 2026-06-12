@@ -7,7 +7,7 @@ import {
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef } from "./resolve.js";
+import { describePatch, matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -289,37 +289,73 @@ const deleteProject = defineRiskyAction({
 const rateUpdate = defineRiskyAction({
   name: "clockify_projects_rate_update",
   description:
-    'Set a project member\'s billable hourly or cost rate. Pass the member\'s user id, or "me" for the requesting admin (the harness resolves it — never ask the admin who they are). Billing action — previews and requires confirmation.',
+    'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, and the member by `userId`/`userName` (or "me"). The member must already be on the project. Billing action — previews and requires confirmation.',
   group: "invoices",
   risks: ["billing"],
-  schema: z.object({
-    projectId: z.string().min(1),
-    /** A member's user id, or "me" for the requesting admin (resolved server-side). */
-    userId: z.string().min(1),
-    rateKind: z.enum(["HOURLY", "COST"]),
-    amount: z.number().nonnegative(),
-    /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
-    amountUnit: z.enum(["major", "minor"]).default("major"),
-    since: z.string().optional(),
-  }),
+  schema: z
+    .object({
+      projectId: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
+      /** A member's user id, exact name (via userName), or "me" (resolved server-side). */
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+      rateKind: z.enum(["HOURLY", "COST"]),
+      amount: z.number().nonnegative(),
+      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
+      amountUnit: z.enum(["major", "minor"]).default("major"),
+      since: z.string().optional(),
+    })
+    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact name." })
+    .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
   async preview(ctx, args) {
-    // Resolve "me" to the admin's real id BEFORE the wire — Clockify's rate
-    // endpoint takes a 24-hex user id in the path and rejects the literal "me"
-    // (400 "hexString has 24 characters"). An identity mistake must be caught at
-    // preview, never confirmed-then-failed.
-    const userId = args.userId.trim().toLowerCase() === "me" ? ctx.adminUserId : args.userId;
+    // Resolve the project.
+    const project = await resolveEntityRef(
+      { id: args.projectId, name: args.projectName },
+      { noun: "project", verb: "set a rate on", list: () => ctx.clockify.listProjects() },
+    );
+    if (!project.ok) return project.clarify;
+    // Resolve the member ("me" -> the admin; a name -> a user id). Clockify's rate
+    // endpoint wants a 24-hex user id in the path, not "me".
+    let userId: string;
+    let memberLabel: string;
+    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
+      userId = ctx.adminUserId;
+      memberLabel = "you";
+    } else {
+      const users = await ctx.clockify.listUsers();
+      let u = args.userId ? users.find((x) => x.id === args.userId) : undefined;
+      if (!u && args.userName) {
+        const m = matchByName(users, args.userName);
+        if (m.kind === "many") return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((x) => ({ id: x.id, label: x.name })) };
+        if (m.kind === "one") u = m.entity;
+      }
+      if (!u) {
+        const target = args.userName ?? args.userId ?? "";
+        return { clarify: `"${target}" isn't a workspace user.`, options: suggestOptions(users, target) };
+      }
+      userId = u.id;
+      memberLabel = u.name;
+    }
+    // VERIFY membership — a member-rate PUT for a non-member 404s ("User membership
+    // on project ... not found"), so catch it at preview, never confirm-then-fail.
+    const memberships = await ctx.clockify.getProjectMemberships(project.id);
+    if (!memberships.some((m) => String(m.userId) === userId)) {
+      const you = memberLabel === "you";
+      return {
+        clarify: `${you ? "You aren't" : `${memberLabel} isn't`} a member of "${project.name ?? project.id}" yet — Clockify only sets a rate for project members. Add ${you ? "yourself" : "them"} to the project first ("add ${you ? "me" : memberLabel} to ${project.name ?? project.id}"), then set the rate.`,
+      };
+    }
     const amountMinor = toMinor(args.amount, args.amountUnit);
-    const who = userId === ctx.adminUserId ? "you" : `user ${userId}`;
     return {
       actionLabel: `Set project ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-      targets: [{ type: "project", id: args.projectId }],
+      targets: [{ type: "project", id: project.id }],
       expectedChanges: [
-        `Set ${args.rateKind} rate for ${who} to ${(amountMinor / 100).toFixed(2)}`,
+        `Set ${args.rateKind} rate for ${memberLabel} on "${project.name ?? project.id}" to ${(amountMinor / 100).toFixed(2)}`,
       ],
       reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
       warnings: ["This changes the billable amount of future entries."],
       payload: {
-        projectId: args.projectId,
+        projectId: project.id,
         userId,
         rateKind: args.rateKind,
         amountMinor,
