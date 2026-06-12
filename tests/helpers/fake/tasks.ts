@@ -19,9 +19,9 @@ export function makeFakeTasks({ state, bump, nextId }: FakeContext): Pick<
       bump("getTask");
       return state.tasks.find((t) => t.projectId === projectId && t.id === id) ?? null;
     },
-    async createTask({ projectId, name }) {
+    async createTask({ projectId, name, assigneeIds }) {
       bump("createTask");
-      const t: TaskSummary = { id: nextId("task"), name, projectId };
+      const t: TaskSummary = { id: nextId("task"), name, projectId, ...(assigneeIds?.length ? { assigneeIds } : {}) };
       state.tasks.push(t);
       return t;
     },

@@ -23,7 +23,7 @@ export interface UpdateTaskRateInput {
 export interface TaskPort {
   listTasks(projectId: string, filter?: TaskFilter): Promise<TaskSummary[]>;
   getTask(projectId: string, id: string): Promise<TaskSummary | null>;
-  createTask(input: { projectId: string; name: string }): Promise<TaskSummary>;
+  createTask(input: { projectId: string; name: string; assigneeIds?: string[] }): Promise<TaskSummary>;
   updateTask(projectId: string, id: string, patch: Record<string, unknown>): Promise<TaskSummary>;
   /** Mark the task DONE (if needed) then DELETE. */
   deleteTask(projectId: string, id: string): Promise<void>;

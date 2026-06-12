@@ -86,12 +86,22 @@ const getTask = defineReadAction({
 
 const createTask = defineAction({
   name: "clockify_tasks_create",
-  description: "Create a task under a project. Safe write — executes immediately when policy allows.",
+  description:
+    "Create a task under a project, optionally assigning members inline with `assigneeIds` (an array of user ids). Safe write — executes immediately when policy allows.",
   featureGroup: WORK,
   risks: ["safe_write"],
-  schema: z.object({ projectId: z.string().min(1), name: z.string().min(1) }),
+  schema: z.object({
+    projectId: z.string().min(1),
+    name: z.string().min(1),
+    /** User ids to assign to the new task (Clockify's TaskCreateRequest.assigneeIds). */
+    assigneeIds: z.array(z.string().min(1)).optional(),
+  }),
   async handler(ctx, args) {
-    const task = await ctx.clockify.createTask({ projectId: args.projectId, name: args.name });
+    const task = await ctx.clockify.createTask({
+      projectId: args.projectId,
+      name: args.name,
+      ...(args.assigneeIds?.length ? { assigneeIds: args.assigneeIds } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({

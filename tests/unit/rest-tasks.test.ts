@@ -52,6 +52,13 @@ describe("task rest", () => {
     expect(JSON.parse(init.body)).toEqual({ name: "QA" });
   });
 
+  it("createTask POSTs assigneeIds inline when provided", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "t9", name: "QA", assigneeIds: ["u1", "u2"] }));
+    const t = await rest(f as unknown as typeof fetch).createTask({ projectId: "p1", name: "QA", assigneeIds: ["u1", "u2"] });
+    expect(t).toEqual({ id: "t9", name: "QA", projectId: "p1", assigneeIds: ["u1", "u2"] });
+    expect(JSON.parse((f as any).mock.calls[0][1].body)).toEqual({ name: "QA", assigneeIds: ["u1", "u2"] });
+  });
+
   it("updateTask GET-then-merge-PUTs (requires name; preserves other fields)", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
@@ -59,7 +66,7 @@ describe("task rest", () => {
         : jsonResponse({ id: "t1", name: "New", assigneeIds: ["u1"], status: "ACTIVE" }),
     );
     const updated = await rest(f as unknown as typeof fetch).updateTask("p1", "t1", { name: "New" });
-    expect(updated).toEqual({ id: "t1", name: "New", projectId: "p1" });
+    expect(updated).toEqual({ id: "t1", name: "New", projectId: "p1", assigneeIds: ["u1"] });
     const calls = (f as any).mock.calls;
     expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
     const putBody = JSON.parse(calls[1][1].body);

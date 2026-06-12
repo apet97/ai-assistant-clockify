@@ -63,6 +63,19 @@ describe("task actions", () => {
     expect(fake.counts.createTask).toBe(1);
   });
 
+  it("clockify_tasks_create assigns members inline via assigneeIds (safe write)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_tasks_create",
+      args: { projectId: "p1", name: "AIASSIST_SMOKE_task", assigneeIds: ["u1", "u2"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
+    const created = fake.state.tasks.find((t) => t.name === "AIASSIST_SMOKE_task") as { assigneeIds?: string[] } | undefined;
+    expect(created?.assigneeIds).toEqual(["u1", "u2"]);
+    expect(fake.counts.createTask).toBe(1);
+  });
+
   it("clockify_tasks_update previews then updates once on commit", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({

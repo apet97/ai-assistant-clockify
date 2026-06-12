@@ -11,7 +11,12 @@ import type { TaskSummary } from "../types.js";
  */
 export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
   const ws = `/workspaces/${workspaceId}`;
-  const map = (projectId: string, t: any): TaskSummary => ({ id: t.id, name: t.name, projectId });
+  const map = (projectId: string, t: any): TaskSummary => ({
+    id: t.id,
+    name: t.name,
+    projectId,
+    ...(Array.isArray(t.assigneeIds) ? { assigneeIds: t.assigneeIds } : {}),
+  });
 
   return {
     async listTasks(projectId, filter) {
@@ -25,8 +30,11 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
       const t = await core.call("api", "GET", `${ws}/projects/${projectId}/tasks/${id}`, undefined, true);
       return t ? map(projectId, t) : null;
     },
-    async createTask({ projectId, name }) {
-      const t = await core.call("api", "POST", `${ws}/projects/${projectId}/tasks`, { name });
+    async createTask({ projectId, name, assigneeIds }) {
+      const t = await core.call("api", "POST", `${ws}/projects/${projectId}/tasks`, {
+        name,
+        ...(assigneeIds?.length ? { assigneeIds } : {}),
+      });
       return map(projectId, t);
     },
     async updateTask(projectId, id, patch) {

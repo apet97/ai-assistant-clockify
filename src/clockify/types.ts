@@ -29,6 +29,8 @@ export interface TaskSummary {
   id: string;
   name: string;
   projectId: string;
+  /** Assignee user ids on the task (set at create or via update). */
+  assigneeIds?: string[];
 }
 
 export interface TimeEntrySummary {
