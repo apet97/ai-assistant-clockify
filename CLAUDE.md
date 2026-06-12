@@ -68,7 +68,23 @@ The USER side then closed too: all 7 read-filter `userId` slots resolve
 id/name/'me' via `resolveUserFilter`, and `users_deactivate` resolves +
 verifies the member (the self-guard now holds on the RESOLVED id — 'me'/
 own-name used to slip past it).
-`npm run verify` = **1005 tests**, `npx madge --circular
+A final harvest arc (2026-06-12) closed the rest: relative DATES on
+invoices_create (`issuedDate`/`dueDate`), approvals `periodStart` (which used
+to parse "June 1" via `new Date` → year 2001!), and holidays in_period (+ its
+missed `assignedTo` user slot); NAME resolution for time-off request policies,
+project templates, and entry TAGS (`resolveTagRefs`; start_timer/log_work/
+fix_entry take `tagNames` or names in `tagIds`); scalar-coercion absorption
+(`src/harness/arg-shapes.ts` — `zStringList`/`zNumberLike` across ~25 fields;
+tool schemas stay canonical) + field-path-prefixed invalid_args; and the OPS
+layer: per-session chat rate limit (`src/routes/rate-limit.ts`,
+`CHAT_RATE_LIMIT_MAX`/`_WINDOW_MS`, 429 + Retry-After), retention pruning
+(`store.pruneExpired` hourly — audit_events/chat_messages NEVER), model 429/5xx
+single-retry + error-body snippet, SIGTERM graceful shutdown
+(`createShutdownHandler`), and honest UI errors (401 → "reload" copy; the
+routes' own JSON copy reaches the chat error bar). A start_timer description
+nudge recovered the provider-drift eval case — planner eval now
+**138/138 (100%)**, stable-pass 46/46.
+`npm run verify` = **1056 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -210,13 +226,21 @@ such bug was found against the REAL API, not by reading the code.
   nothing ever commits half-assigned). `verifyIds` checks even a 24-hex value
   against the real list for permission/assignment-affecting writes.
   READ-FILTER `userId` slots (entries list, review day/week, scheduling
-  assignments list + user totals, time-off requests list + balance get) go
+  assignments list + user totals, time-off requests list + balance get,
+  holidays in_period `assignedTo`) go
   through `resolveUserFilter` (ONE copy; id/exact name/'me'; built on
   `resolveUserRef` `trustIds` so the 24-hex happy path stays list-free — a
   wrong id on a read is an empty list, not a damaging write; each action keeps
   its own absent-default: caller vs unfiltered). `users_deactivate` resolves +
   VERIFIES the member and the self-deactivation guard holds on the RESOLVED id
-  ('me'/own-name can't slip past). Destructive/archive/unarchive verbs pass
+  ('me'/own-name can't slip past). Entry TAGS resolve via `resolveTagRefs`
+  (start_timer/log_work/fix_entry `tagNames` or names in `tagIds`); time-off
+  `requests_create` resolves `policyName`; `projects_from_template` resolves
+  `templateName`. Scalar shapes are absorbed by `src/harness/arg-shapes.ts`
+  (`zStringList`: a bare string for a list; `zNumberLike`: "75" for 75 — never
+  ""→0; tool schemas STAY canonical, zodToJsonSchema unwraps preprocess) and
+  invalid_args messages are field-path-prefixed (`formatZodIssues`) so the
+  loop can self-correct. Destructive/archive/unarchive verbs pass
   `includeArchived` (the wire defaults to ACTIVE-ONLY — both states are
   fetched explicitly; archived options labeled). An identity mistake is a
   clarify, never a confirmed-then-failed commit.
@@ -225,7 +249,9 @@ such bug was found against the REAL API, not by reading the code.
   `undefined` ⇒ caller MUST clarify), `resolveInstant` (UTC instants the
   hosts want), `resolvePeriod` (REPORT_PERIODS keywords incl. forward
   next_week/next_month/next_quarter/next_year). Applied at entries/reports/
-  scheduling/time-off/approvals (`week: this_week|last_week`).
+  scheduling/time-off/approvals (`week: this_week|last_week` AND a relative
+  `periodStart` — `new Date("June 1")` fabricates year 2001, so resolveRelativeDay
+  owns it), invoices_create `issuedDate`/`dueDate`, and holidays in_period.
 - **Bounded model input:** `HISTORY_WINDOW_MESSAGES=12` (chat route) +
   `TOOL_RESULT_MAX_BYTES=24KB` per tool result in the agent loop (prune, then
   honest note; the admin always sees the full receipt). The model fetch itself
