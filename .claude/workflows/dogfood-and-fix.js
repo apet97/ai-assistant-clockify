@@ -186,7 +186,12 @@ for (const f of allFindings) {
 log(`Confirmed-new (medium+): ${confirmedNew.length} → ${confirmedNew.map((f) => f.id).join(', ') || 'none'}`)
 
 phase('Fix')
-const queue = [...KNOWN_FIXES, ...confirmedNew]
+// args.skipKnown skips the 3 pre-rooted known fixes (use on re-runs after they've
+// already landed) — the dogfood phase still validates them, this only avoids
+// re-attempting an already-fixed issue in the fix loop.
+const skipKnown = !!(args && args.skipKnown)
+const queue = [...(skipKnown ? [] : KNOWN_FIXES), ...confirmedNew]
+if (skipKnown) log('skipKnown: the 3 pre-rooted fixes are skipped; only confirmed-new issues will be fixed')
 const fixResults = []
 let consecutiveBlocked = 0
 let halted = null
