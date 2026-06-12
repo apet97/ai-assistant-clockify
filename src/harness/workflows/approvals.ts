@@ -2,6 +2,7 @@ import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { DAY_MS } from "../../durations.js";
+import { resolveRelativeDay } from "./resolve.js";
 
 /**
  * Typed approval workflows (goclmcp §2.11). Reads (list/get) execute
@@ -23,13 +24,31 @@ function toClockifyInstant(date: Date): string {
   return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
-/** Normalize a model-supplied periodStart to the full ISO UTC instant Clockify
- *  requires: a bare `YYYY-MM-DD` becomes midnight UTC; a fuller value is parsed. */
-function normalizeInstant(value: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return `${value}T00:00:00Z`;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : toClockifyInstant(parsed);
+/**
+ * Resolve a submit/resubmit period start to the full ISO UTC instant Clockify
+ * requires. `week` keywords compute the Monday server-side; an explicit
+ * `periodStart` accepts a full ISO instant, a bare YYYY-MM-DD, or a RELATIVE
+ * day ("next monday", "June 1" — resolved via resolveRelativeDay so the year is
+ * never fabricated: `new Date("June 1")` parses to 2001). `missing` = ask which
+ * period; `bad` = the value couldn't be resolved (clarify, never wire it).
+ */
+function resolvePeriodStart(
+  now: Date,
+  args: { week?: "this_week" | "last_week"; periodStart?: string },
+): { kind: "ok"; instant: string } | { kind: "missing" } | { kind: "bad"; raw: string } {
+  if (args.week) return { kind: "ok", instant: weekStartInstant(now, args.week) };
+  const raw = args.periodStart?.trim();
+  if (!raw) return { kind: "missing" };
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? { kind: "bad", raw } : { kind: "ok", instant: toClockifyInstant(parsed) };
+  }
+  const day = resolveRelativeDay(now, { date: raw });
+  return day === undefined ? { kind: "bad", raw } : { kind: "ok", instant: `${day}T00:00:00Z` };
 }
+
+const BAD_PERIOD_START = (raw: string): string =>
+  `I couldn't make sense of the period start "${raw}" — give me a calendar date (YYYY-MM-DD) or something like this week, last week, or next monday.`;
 
 /** The Monday (00:00:00Z) of this/last week, computed server-side from ctx.now so
  *  the model never has to guess a calendar date (matching the curated-report pattern). */
@@ -65,7 +84,7 @@ const getApproval = defineReadAction({
 const submitApproval = defineRiskyAction({
   name: "clockify_approvals_submit",
   description:
-    "Submit ONE timesheet period for approval. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` date (YYYY-MM-DD) — do NOT guess a calendar date. Elevated write: previews and requires confirmation. Submit one period per call.",
+    "Submit ONE timesheet period for approval. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` — YYYY-MM-DD or a relative day (next monday, June 1), resolved server-side; do NOT guess a calendar date. Elevated write: previews and requires confirmation. Submit one period per call.",
   group: AP,
   risks: ["high_risk_write"],
   schema: z.object({
@@ -77,17 +96,15 @@ const submitApproval = defineRiskyAction({
   }),
   async preview(ctx, args) {
     const now = (ctx.now ?? (() => new Date()))();
-    const periodStart = args.week
-      ? weekStartInstant(now, args.week)
-      : args.periodStart
-        ? normalizeInstant(args.periodStart)
-        : undefined;
-    if (!periodStart) {
+    const resolved = resolvePeriodStart(now, args);
+    if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
+    if (resolved.kind === "missing") {
       return {
         clarify:
           'Which period should I submit? Tell me a week ("this week" or "last week") or a start date like 2026-06-01. I submit one period per request.',
       };
     }
+    const periodStart = resolved.instant;
     return {
       actionLabel: "Submit timesheet for approval",
       targets: [],
@@ -159,7 +176,7 @@ const withdraw = defineRiskyAction({
 const resubmit = defineRiskyAction({
   name: "clockify_approvals_resubmit",
   description:
-    "Resubmit the caller's rejected/withdrawn entries for ONE approval period. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` date (YYYY-MM-DD) — do NOT guess a calendar date. Bulk external side effect — previews and requires confirmation.",
+    "Resubmit the caller's rejected/withdrawn entries for ONE approval period. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` — YYYY-MM-DD or a relative day (next monday, June 1), resolved server-side; do NOT guess a calendar date. Bulk external side effect — previews and requires confirmation.",
   group: AP,
   risks: ["bulk", "external_side_effect"],
   // The real endpoint takes the same {period, periodStart} body as submit (the
@@ -173,17 +190,15 @@ const resubmit = defineRiskyAction({
   }),
   async preview(ctx, args) {
     const now = (ctx.now ?? (() => new Date()))();
-    const periodStart = args.week
-      ? weekStartInstant(now, args.week)
-      : args.periodStart
-        ? normalizeInstant(args.periodStart)
-        : undefined;
-    if (!periodStart) {
+    const resolved = resolvePeriodStart(now, args);
+    if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
+    if (resolved.kind === "missing") {
       return {
         clarify:
           'Which period should I resubmit? Tell me a week ("this week" or "last week") or a start date like 2026-06-01. I resubmit one period per request.',
       };
     }
+    const periodStart = resolved.instant;
     return {
       actionLabel: "Resubmit entries for approval",
       targets: [],

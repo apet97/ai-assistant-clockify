@@ -71,6 +71,46 @@ describe("approval actions", () => {
     expect(fake.counts.submitApproval ?? 0).toBe(0);
   });
 
+  it("resolves a RELATIVE periodStart server-side (next monday, partial month-day — never a guessed year)", async () => {
+    // NOW is Sat 2026-06-06 → next monday = 2026-06-08.
+    const fake = createFakeWorkspace();
+    const monday = await executeAction({
+      actionName: "clockify_approvals_submit",
+      args: { periodStart: "next monday" },
+      context: makeContext(fake),
+    });
+    if (monday.kind !== "preview") throw new Error(`expected a preview, got ${monday.kind}`);
+    expect((monday.operation.payload as { periodStart: string }).periodStart).toBe("2026-06-08T00:00:00Z");
+
+    // "June 1" must resolve to the CURRENT year — new Date("June 1") fabricates 2001.
+    const partial = await executeAction({
+      actionName: "clockify_approvals_submit",
+      args: { periodStart: "June 1" },
+      context: makeContext(fake),
+    });
+    if (partial.kind !== "preview") throw new Error(`expected a preview, got ${partial.kind}`);
+    expect((partial.operation.payload as { periodStart: string }).periodStart).toBe("2026-06-01T00:00:00Z");
+  });
+
+  it("clarifies on an unresolvable periodStart instead of wiring it (submit AND resubmit)", async () => {
+    const fake = createFakeWorkspace();
+    const submit = await executeAction({
+      actionName: "clockify_approvals_submit",
+      args: { periodStart: "whenever" },
+      context: makeContext(fake),
+    });
+    expect(submit.kind).toBe("clarify");
+    expect(fake.counts.submitApproval ?? 0).toBe(0);
+
+    const resubmit = await executeAction({
+      actionName: "clockify_approvals_resubmit",
+      args: { periodStart: "whenever" },
+      context: makeContext(fake),
+    });
+    expect(resubmit.kind).toBe("clarify");
+    expect(fake.counts.resubmitApproval ?? 0).toBe(0);
+  });
+
   it("approve / reject preview external_side_effect then set state", async () => {
     const fake = createFakeWorkspace(seed());
     const approve = await executeAction({ actionName: "clockify_approvals_approve", args: { id: "ap1" }, context: makeContext(fake) });
