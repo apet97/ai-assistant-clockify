@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
 import { createApp } from "../../src/server.js";
@@ -103,6 +103,13 @@ beforeAll(async () => {
 });
 
 afterAll(() => store.close());
+
+// Each test starts from a fresh workspace. The generic delete now truly removes
+// the row (fake-fidelity), so a confirmed "delete project Acme" in one test must
+// not leave Acme missing for the next that needs it.
+beforeEach(() => {
+  fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
+});
 
 describe("routes", () => {
   it("GET /manifest returns the manifest", async () => {

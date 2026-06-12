@@ -36,4 +36,14 @@ describe("fake WorkspaceClient fidelity to the real adapters", () => {
     const archived = await fake.client.listTags({ archived: true });
     expect(archived.map((t) => t.id)).toEqual(["t2"]);
   });
+
+  it("deleteEntity() actually removes the row (the real adapter archive-then-deletes — undo of a creation truly removes it)", async () => {
+    const fake = createFakeWorkspace(seed());
+    await fake.client.deleteEntity!({ entityType: "project", id: "p1" });
+    // Gone from BOTH the active and the archived view — not merely recorded.
+    expect((await fake.client.listProjects()).some((p) => p.id === "p1")).toBe(false);
+    expect((await fake.client.listProjects({ archived: true })).some((p) => p.id === "p1")).toBe(false);
+    await fake.client.deleteEntity!({ entityType: "tag", id: "t1" });
+    expect((await fake.client.listTags()).some((t) => t.id === "t1")).toBe(false);
+  });
 });
