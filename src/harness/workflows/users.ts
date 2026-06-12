@@ -5,11 +5,10 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
-  type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { matchByName, resolveEntityRef, resolveUserRef, suggestOptions } from "./resolve.js";
+import { matchByName, resolveEntityRef, resolveUserRef, resolveUserRefs, suggestOptions } from "./resolve.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -345,65 +344,64 @@ const deleteGroup = defineRiskyAction({
 });
 
 /**
- * Resolve the (group, user) pair every group-membership write needs: the group by
- * id or exact name, the user by id/name/'me'. Both are verified at PREVIEW so a
- * name in the id slot (the live "hexString has 24 characters" 400) clarifies
- * before the confirm button, never a confirmed-then-failed commit.
+ * Resolve the GROUP every membership write targets, by id or exact name, so a bad
+ * group reference clarifies at PREVIEW. The member(s) are resolved separately
+ * (singular for remove, a verified LIST for add) — both clarify before the confirm
+ * button so a name in an id slot is never a confirmed-then-failed commit.
  */
-async function resolveGroupMember(
-  ctx: ActionContext,
-  args: { groupId?: string; groupName?: string; userId?: string; userName?: string },
-  verb: string,
-): Promise<
-  | { ok: true; groupId: string; groupName?: string; userId: string; userLabel: string }
-  | { ok: false; clarify: RiskyClarifyResult }
-> {
-  const group = await resolveEntityRef(
+function resolveGroupRef(ctx: ActionContext, args: { groupId?: string; groupName?: string }, verb: string) {
+  return resolveEntityRef(
     { id: args.groupId, name: args.groupName },
-    { noun: "user group", verb: `${verb} to`, list: () => ctx.clockify.listGroups() },
+    { noun: "user group", verb, list: () => ctx.clockify.listGroups() },
   );
-  if (!group.ok) return group;
-  const user = await resolveUserRef(
-    { id: args.userId, name: args.userName },
-    { verb, adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
-  );
-  if (!user.ok) return user;
-  return { ok: true, groupId: group.id, groupName: group.name, userId: user.userId, userLabel: user.label };
 }
-
-const groupMemberSchema = z
-  .object({
-    groupId: z.string().min(1).optional(),
-    groupName: z.string().min(1).optional(),
-    /** A user id, exact name, or 'me' (resolved + verified server-side). */
-    userId: z.string().min(1).optional(),
-    userName: z.string().min(1).optional(),
-  })
-  .refine((v) => v.groupId !== undefined || v.groupName !== undefined, { message: "Provide the group id or its exact name." })
-  .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the user (id or exact name, or 'me')." });
 
 const addUser = defineRiskyAction({
   name: "clockify_groups_add_user",
   description:
-    "Add a user to a group. Pass the group by `groupId`/`groupName` and the user by `userId`/`userName` (or 'me') — the harness resolves names server-side and clarifies on an unknown one. Elevated write — previews and requires confirmation.",
+    "Add one or more members to a group. Pass the group by `groupId`/`groupName` and the members by `members` (an array where each entry is a user id, exact name, or 'me'); a single `userId`/`userName` is also accepted. The harness resolves names server-side and clarifies on an unknown one. Elevated write — previews ALL the adds as ONE card and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
-  schema: groupMemberSchema,
+  schema: z
+    .object({
+      groupId: z.string().min(1).optional(),
+      groupName: z.string().min(1).optional(),
+      /** Members to add: user ids, exact names, or 'me' (resolved + verified server-side). */
+      members: z.array(z.string().min(1)).optional(),
+      // Single-member shape, tolerated because the planner emits both.
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+    })
+    .refine((v) => v.groupId !== undefined || v.groupName !== undefined, { message: "Provide the group id or its exact name." })
+    .refine((v) => (v.members?.length ?? 0) > 0 || v.userId !== undefined || v.userName !== undefined, {
+      message: "Provide at least one member (id, exact name, or 'me').",
+    }),
   async preview(ctx, args) {
-    const r = await resolveGroupMember(ctx, args, "add");
-    if (!r.ok) return r.clarify;
+    const group = await resolveGroupRef(ctx, args, "add members to");
+    if (!group.ok) return group.clarify;
+    const refs = [...(args.members ?? []), ...(args.userId ? [args.userId] : []), ...(args.userName ? [args.userName] : [])];
+    const members = await resolveUserRefs(refs, {
+      verb: "add",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      verifyIds: true,
+    });
+    if (!members.ok) return members.clarify;
+    const many = members.userIds.length > 1;
     return {
-      actionLabel: "Add user to group",
-      targets: [{ type: "group", id: r.groupId, name: r.groupName }],
-      expectedChanges: [`Add ${r.userLabel} to group "${r.groupName ?? r.groupId}"`],
+      actionLabel: many ? "Add users to group" : "Add user to group",
+      targets: [{ type: "group", id: group.id, name: group.name }],
+      expectedChanges: [`Add ${members.labels.join(", ")} to group "${group.name ?? group.id}"`],
       reversibility: "You can remove the user from the group afterward.",
       warnings: ["This changes group membership (may affect permissions)."],
-      payload: { groupId: r.groupId, userId: r.userId },
+      payload: { groupId: group.id, userIds: members.userIds },
     };
   },
   async commit(ctx, payload) {
-    const { groupId, userId } = payload as { groupId: string; userId: string };
-    await ctx.clockify.addUserToGroup(groupId, userId);
+    const { groupId, userIds } = payload as { groupId: string; userIds: string[] };
+    // POST /user-groups/{id}/users adds ONE member (it appends, not replaces), so
+    // each add is an independent call — done in turn over the previewed members.
+    for (const userId of userIds) await ctx.clockify.addUserToGroup(groupId, userId);
     return successReceipt({ action: "clockify_groups_add_user", entity: "group", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "group", id: groupId }] } });
   },
 });
@@ -414,17 +412,30 @@ const removeUser = defineRiskyAction({
     "Remove a user from a group. Pass the group by `groupId`/`groupName` and the user by `userId`/`userName` (or 'me') — the harness resolves names server-side and clarifies on an unknown one. Destructive — previews and requires confirmation.",
   group: UG,
   risks: ["destructive"],
-  schema: groupMemberSchema,
+  schema: z
+    .object({
+      groupId: z.string().min(1).optional(),
+      groupName: z.string().min(1).optional(),
+      userId: z.string().min(1).optional(),
+      userName: z.string().min(1).optional(),
+    })
+    .refine((v) => v.groupId !== undefined || v.groupName !== undefined, { message: "Provide the group id or its exact name." })
+    .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the user (id or exact name, or 'me')." }),
   async preview(ctx, args) {
-    const r = await resolveGroupMember(ctx, args, "remove");
-    if (!r.ok) return r.clarify;
+    const group = await resolveGroupRef(ctx, args, "remove a member from");
+    if (!group.ok) return group.clarify;
+    const user = await resolveUserRef(
+      { id: args.userId, name: args.userName },
+      { verb: "remove", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+    );
+    if (!user.ok) return user.clarify;
     return {
       actionLabel: "Remove user from group",
-      targets: [{ type: "group", id: r.groupId, name: r.groupName }],
-      expectedChanges: [`Remove ${r.userLabel} from group "${r.groupName ?? r.groupId}"`],
+      targets: [{ type: "group", id: group.id, name: group.name }],
+      expectedChanges: [`Remove ${user.label} from group "${group.name ?? group.id}"`],
       reversibility: "You can re-add the user to the group.",
       warnings: ["This changes group membership (may affect permissions)."],
-      payload: { groupId: r.groupId, userId: r.userId },
+      payload: { groupId: group.id, userId: user.userId },
     };
   },
   async commit(ctx, payload) {

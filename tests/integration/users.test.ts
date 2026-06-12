@@ -155,7 +155,7 @@ describe("user & group actions", () => {
     // The live bug: the model put "Bob" in the userId slot → 400 at commit.
     const add = await executeAction({ actionName: "clockify_groups_add_user", args: { groupId: "g1", userId: "Bob" }, context: makeContext(fake) });
     if (add.kind !== "preview") throw new Error(`expected a preview, got ${add.kind}`);
-    expect(add.operation.payload).toMatchObject({ groupId: "g1", userId: "u2" });
+    expect(add.operation.payload).toMatchObject({ groupId: "g1", userIds: ["u2"] });
     const change = add.preview.expectedChanges.join(" ");
     expect(change).toContain("Bob");
     expect(change).toContain("Devs");
@@ -167,7 +167,29 @@ describe("user & group actions", () => {
     const fake = createFakeWorkspace(seed());
     const add = await executeAction({ actionName: "clockify_groups_add_user", args: { groupName: "Devs", userId: "me" }, context: makeContext(fake) });
     if (add.kind !== "preview") throw new Error("expected a preview");
-    expect(add.operation.payload).toMatchObject({ groupId: "g1", userId: "admin-1" });
+    expect(add.operation.payload).toMatchObject({ groupId: "g1", userIds: ["admin-1"] });
+  });
+
+  it("groups_add_user adds MULTIPLE members (names + 'me') in ONE preview/commit", async () => {
+    const fake = createFakeWorkspace(seed());
+    const add = await executeAction({ actionName: "clockify_groups_add_user", args: { groupName: "Devs", members: ["Bob", "me"] }, context: makeContext(fake) });
+    if (add.kind !== "preview") throw new Error("expected a preview");
+    expect(add.operation.payload).toMatchObject({ groupId: "g1", userIds: ["u2", "admin-1"] });
+    expect(add.operation.risks).toContain("high_risk_write");
+    const change = add.preview.expectedChanges.join(" ");
+    expect(change).toContain("Bob");
+    expect(change).toContain("you");
+    await commitConfirmedOperation(makeContext(fake), add.operation);
+    const g = fake.state.groups.find((x) => x.id === "g1");
+    expect(g?.userIds).toEqual(expect.arrayContaining(["u2", "admin-1"]));
+    expect(fake.counts.addUserToGroup).toBe(2);
+  });
+
+  it("groups_add_user clarifies if ANY member in the list is unknown (no partial add)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({ actionName: "clockify_groups_add_user", args: { groupName: "Devs", members: ["Bob", "Ghost"] }, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.addUserToGroup ?? 0).toBe(0);
   });
 
   it("groups_add_user clarifies on an unknown user (never previews a doomed commit)", async () => {

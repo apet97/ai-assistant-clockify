@@ -148,44 +148,53 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
 }
 
 /**
- * Resolve a LIST of user references — ids, exact names, or "me" — to user ids,
- * for multi-assignee fields (task assignees). A 24-hex value is trusted as an id
- * (same happy path as {@link resolveEntityRef}, no list call); "me" is the admin;
- * anything else is matched by name against the workspace users. An ambiguous or
- * unknown name STOPS with a grounded clarify (identity-mistake-is-a-clarify), so a
- * confirmed task never commits with a missing or wrong assignee. Order is kept and
- * duplicates collapse. `listUsers` is called at most once, only when a name is seen.
+ * Resolve a LIST of user references — ids, exact names, or "me" — to user ids
+ * with display labels (for multi-member fields: task assignees, group adds).
+ * "me" is the admin (label "you"); anything else matches by name against the
+ * workspace users. An ambiguous or unknown name STOPS with a grounded clarify
+ * (identity-mistake-is-a-clarify), so a confirmed action never commits with a
+ * missing or wrong member. Order is kept and duplicates collapse; `labels[i]`
+ * pairs with `userIds[i]`. `listUsers` is called at most once.
+ *
+ * `verifyIds`: by default a 24-hex value is trusted as an id without a list call
+ * (the assignee happy path). Set it for permission-affecting writes (group
+ * membership) so even a 24-hex value is checked against the real users — a
+ * project id pasted into a member slot then clarifies instead of hitting the wire.
  */
 export async function resolveUserRefs(
   refs: string[],
-  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>> },
-): Promise<{ ok: true; userIds: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>>; verifyIds?: boolean },
+): Promise<{ ok: true; userIds: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
   const userIds: string[] = [];
-  const push = (id: string): void => {
-    if (!userIds.includes(id)) userIds.push(id);
+  const labels: string[] = [];
+  const push = (id: string, label: string): void => {
+    if (!userIds.includes(id)) {
+      userIds.push(id);
+      labels.push(label);
+    }
   };
   let users: Array<{ id: string; name: string }> | undefined;
   for (const raw of refs) {
     const ref = raw.trim();
     if (!ref) continue;
     if (ref.toLowerCase() === "me") {
-      push(opts.adminUserId);
+      push(opts.adminUserId, "you");
       continue;
     }
-    if (looksLikeClockifyId(ref)) {
-      push(ref);
+    if (looksLikeClockifyId(ref) && !opts.verifyIds) {
+      push(ref, ref);
       continue;
     }
     if (!users) users = await opts.listUsers();
-    // A non-hex ref may still be a real (short, test-style) id before it is a name.
+    // A ref may still be a real id (short test id, or a verified 24-hex) before it is a name.
     const byId = users.find((u) => u.id === ref);
     if (byId) {
-      push(byId.id);
+      push(byId.id, byId.name);
       continue;
     }
     const match = matchByName(users, ref);
     if (match.kind === "one") {
-      push(match.entity.id);
+      push(match.entity.id, match.entity.name);
       continue;
     }
     if (match.kind === "many") {
@@ -205,7 +214,7 @@ export async function resolveUserRefs(
       },
     };
   }
-  return { ok: true, userIds };
+  return { ok: true, userIds, labels };
 }
 
 /**
