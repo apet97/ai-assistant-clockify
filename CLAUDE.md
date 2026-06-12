@@ -30,7 +30,15 @@ from `rest/core.ts`) — plus a dead-param cleanup; the larger `routes/api.ts` a
 `db/store.ts` structural decompositions were reviewed and DEFERRED (both <1000
 LOC and cohesive; the api.ts splits touch safety-critical flow — not worth the
 regression risk yet).
-`npm run verify` = **885 tests**, `npx madge --circular
+A live-dogfooding + live-bug-fix arc (2026-06-11/12) followed: Sonnet agents
+drive `scripts/repro-chat.ts` (real route + live model + fake) and the user's
+live screenshots surfaced ~22 fixes — custom-field/webhook refuse up-front,
+clarify renders once, prefer-existing-entity grounding, amounts in major units,
+year/stale-date narration, whitespace-input guard, `'me'`→adminUserId on rate
+updates, expense-for-another-user, the live-verified role-grant contract, and a
+fake-fidelity fix (deleteEntity truly removes). Reusable: `scripts/repro-chat.ts`
++ `.claude/workflows/dogfood-and-fix.js`.
+`npm run verify` = **917 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -215,8 +223,14 @@ such bug was found against the REAL API, not by reading the code.
   description+quantity (defaulted visibly).
 - PUTs replace (time-entry/expense/holiday/scheduling) → GET-then-PUT with the
   full body. Time-off approve/deny field is `status`; create needs
-  `period.days` + bare `YYYY-MM-DD`. Role change is **POST**
-  `/users/{id}/roles`. Approvals submit/resubmit share `{period, periodStart}`
+  `period.days` + bare `YYYY-MM-DD`. Role grant is **POST**
+  `/users/{RECIPIENT}/roles` `{entityId, role, sourceType?}` (live-verified
+  2026-06-12): the URL user is the RECIPIENT, `entityId` is the SCOPE —
+  `workspaceId` for `WORKSPACE_ADMIN`, a `projectId` for `PROJECT_MANAGER` (no
+  `sourceType`), a user-group id + `sourceType:USER_GROUP` for `TEAM_MANAGER` of a
+  group. A user id in `entityId` 404s as "PROJECT not found". (Expense create takes
+  a `userId` — any member, not just the admin.) Approvals submit/resubmit share
+  `{period, periodStart}`
   (full ISO UTC instant). Scheduling delete takes `seriesUpdateOption`.
   Expense-category archive is `PATCH …/categories/{id}/status`; category list
   `archived` param DEFAULTS to false. Memberships PATCH REPLACES the set →
