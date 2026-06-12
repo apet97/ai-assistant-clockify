@@ -89,6 +89,20 @@ describe("time-off rest", () => {
     expect(body.userGroups).toEqual({ contains: "CONTAINS", ids: ["g1"], status: "ACTIVE" });
   });
 
+  it("updateTimeOffPolicy reconstructs users/userGroups FILTERS from the GET's flat ids (live: PUT rejects null users/userGroups)", async () => {
+    // The GET returns FLAT userIds/userGroupIds; the PUT needs {contains,ids} filters
+    // or it 400s "must not be null". A name-only update must still preserve the scope.
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "pol1", name: "Old", timeUnit: "DAYS", userIds: ["u1"], userGroupIds: ["g0"] })
+        : jsonResponse({ id: "pol1", name: "New" }),
+    );
+    await rest(f as unknown as typeof fetch).updateTimeOffPolicy("pol1", { name: "New" });
+    const body = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(body.users).toEqual({ contains: "CONTAINS", ids: ["u1"], status: "ACTIVE" });
+    expect(body.userGroups).toEqual({ contains: "CONTAINS", ids: ["g0"], status: "ACTIVE" });
+  });
+
   it("archiveTimeOffPolicy PATCHes status ARCHIVED / ACTIVE", async () => {
     const f = vi.fn(async () => jsonResponse({}));
     await rest(f as unknown as typeof fetch).archiveTimeOffPolicy("pol1", true);

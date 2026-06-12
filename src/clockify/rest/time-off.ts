@@ -121,8 +121,14 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       if (patch.requiresApproval !== undefined) {
         existing.approve = { ...(existing.approve ?? {}), requiresApproval: patch.requiresApproval };
       }
-      if (patch.userIds?.length) existing.users = filter(patch.userIds);
-      if (patch.userGroupIds?.length) existing.userGroups = filter(patch.userGroupIds);
+      // The PUT requires users/userGroups as {contains,ids} FILTERS, but the GET
+      // returns them FLAT as userIds/userGroupIds — re-sending the GET doc leaves
+      // the filters null and the PUT 400s "must not be null" (live-verified). Always
+      // reconstruct BOTH from the existing flat ids, overlaying the patch when given.
+      const existingUserIds = Array.isArray(existing.userIds) ? (existing.userIds as string[]) : [];
+      const existingGroupIds = Array.isArray(existing.userGroupIds) ? (existing.userGroupIds as string[]) : [];
+      existing.users = filter(patch.userIds?.length ? patch.userIds : existingUserIds);
+      existing.userGroups = filter(patch.userGroupIds?.length ? patch.userGroupIds : existingGroupIds);
       const result = (await core.call("api", "PUT", `${ws}/time-off/policies/${id}`, existing)) as { id?: string; name?: string };
       return { id: result?.id ?? id, name: result?.name ?? patch.name ?? id };
     },
