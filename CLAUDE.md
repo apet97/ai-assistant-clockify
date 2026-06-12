@@ -41,10 +41,12 @@ fully covered (live-verified 2026-06-12): project DEFAULT rate on project
 create/update; per-project MEMBER rate (`clockify_projects_rate_update`,
 membership-validated); TASK rate (`clockify_tasks_rate_update`, now
 task-validated + major-unit preview); and the Team-section workspace MEMBER
-rate (`clockify_users_rate_update`). Tasks can also assign members inline at
-create (`clockify_tasks_create.assigneeIds`, spec + live-verified). Reusable:
-`scripts/repro-chat.ts` + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **927 tests**, `npx madge --circular
+rate (`clockify_users_rate_update`). Tasks can also assign members inline on
+create + update (`assigneeIds` takes ids, exact names, or 'me' — resolved via
+`resolve.ts` `resolveUserRefs`, clarifies on ambiguous/unknown; spec +
+live-verified). Reusable: `scripts/repro-chat.ts`
++ `.claude/workflows/dogfood-and-fix.js`.
+`npm run verify` = **936 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -169,7 +171,9 @@ such bug was found against the REAL API, not by reading the code.
   `resolveEntityRef`): ids are 24-hex; anything else resolves via exact-id
   fallback → `matchByName` → grounded did-you-mean clarify. Covers every
   entity action incl. invoices BY NUMBER, the generic update/delete_entity,
-  `projects_update.clientId`, expense categories (create/update/delete).
+  `projects_update.clientId`, expense categories (create/update/delete). Task
+  `assigneeIds` resolve as a LIST via `resolveUserRefs` (each entry id/name/'me';
+  ambiguous/unknown ⇒ clarify, so a task never commits half-assigned).
   Destructive/archive/unarchive verbs pass `includeArchived` (the wire
   defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a
