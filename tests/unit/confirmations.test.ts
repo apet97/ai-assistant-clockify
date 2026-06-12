@@ -4,6 +4,7 @@ import {
   confirmPending,
   createPendingConfirmation,
   hashOperation,
+  rotatePendingNonce,
   type PendingConfirmationRecord,
 } from "../../src/harness/confirmations.js";
 
@@ -178,5 +179,53 @@ describe("confirmations", () => {
       now,
     });
     expect(result.ok).toBe(false);
+  });
+});
+
+describe("rotatePendingNonce (session restore)", () => {
+  const now = new Date("2026-06-05T00:00:00.000Z");
+  const base = { sessionId: "sess-1", workspaceId: "ws-1", adminUserId: "admin-1", sessionSecret: SECRET, now };
+
+  it("issues a NEW one-use nonce: the old plaintext stops working, the new one confirms; TTL byte-unchanged", () => {
+    const created = makePending(now);
+    const rotated = rotatePendingNonce({ record: created.record, ...base });
+    expect(rotated.ok).toBe(true);
+    if (!rotated.ok) return;
+    expect(rotated.nonce).not.toBe(created.nonce);
+    expect(rotated.record.expiresAt).toBe(created.record.expiresAt); // never extended
+    expect(rotated.record.nonceHash).not.toBe(created.record.nonceHash);
+
+    // The OLD nonce must be dead against the rotated record.
+    const stale = confirmPending({ record: rotated.record, ...base, nonce: created.nonce });
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(stale.code).toBe("invalid_confirmation");
+
+    // The NEW nonce confirms.
+    const fresh = confirmPending({ record: rotated.record, ...base, nonce: rotated.nonce });
+    expect(fresh.ok).toBe(true);
+  });
+
+  it("refuses non-pending, expired, foreign-session, and tampered records (same gate order as confirm)", () => {
+    const used = makePending(now);
+    used.record.status = "used";
+    const r1 = rotatePendingNonce({ record: used.record, ...base });
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.code).toBe("not_pending");
+
+    const foreign = makePending(now);
+    const r2 = rotatePendingNonce({ record: foreign.record, ...base, sessionId: "sess-other" });
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.code).toBe("forbidden");
+
+    const old = makePending(new Date(now.getTime() - 10 * 60_000));
+    const r3 = rotatePendingNonce({ record: old.record, ...base });
+    expect(r3.ok).toBe(false);
+    if (!r3.ok) expect(r3.code).toBe("expired");
+
+    const tampered = makePending(now);
+    tampered.record.operation = { action: "clockify_delete_entity", entityType: "project", id: "EVIL" };
+    const r4 = rotatePendingNonce({ record: tampered.record, ...base });
+    expect(r4.ok).toBe(false);
+    if (!r4.ok) expect(r4.code).toBe("operation_mismatch");
   });
 });

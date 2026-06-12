@@ -203,6 +203,59 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
   };
 }
 
+export interface RotateNonceInput {
+  record: PendingConfirmationRecord;
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  sessionSecret: string;
+  now?: Date;
+  /** Injectable for deterministic tests. */
+  nonce?: string;
+}
+
+export type RotateNonceResult =
+  | { ok: true; record: PendingConfirmationRecord; nonce: string }
+  | { ok: false; code: string; message: string };
+
+/**
+ * Re-issue the one-use nonce for a still-live pending preview (session restore:
+ * the plaintext nonce lives only in the UI, so an iframe reload strands the
+ * card). Rotation preserves the one-use property exactly — at any instant ONE
+ * plaintext validates, and storing the new hash kills the old one — and is
+ * gated by the same session/workspace/admin binding as confirm, so no privilege
+ * is gained. `expiresAt` is NEVER extended. Validation mirrors
+ * {@link confirmPending}'s gate order (minus the nonce check — we're minting it).
+ */
+export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
+  const { record } = input;
+  const now = input.now ?? new Date();
+
+  if (record.status !== "pending") {
+    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
+  }
+  if (
+    record.sessionId !== input.sessionId ||
+    record.workspaceId !== input.workspaceId ||
+    record.adminUserId !== input.adminUserId
+  ) {
+    return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
+  }
+  if (now.getTime() >= new Date(record.expiresAt).getTime()) {
+    return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
+  }
+  if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {
+    return { ok: false, code: "operation_mismatch", message: "Preview integrity check failed." };
+  }
+
+  const nonce = input.nonce ?? randomBytes(32).toString("base64url");
+  return {
+    ok: true,
+    nonce,
+    record: { ...record, nonceHash: hashNonce(nonce, record.id, record.operationHash, input.sessionSecret) },
+  };
+}
+
 export function cancelPending(input: CancelPendingInput): CancelPendingResult {
   const { record } = input;
   const now = input.now ?? new Date();
