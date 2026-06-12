@@ -73,7 +73,7 @@ const status = defineAction({
 const startTimer = defineAction({
   name: "clockify_start_timer",
   description:
-    "Start a new timer for the admin on an EXISTING project. Pass the project by name with `projectName` (resolved to its id; an unknown name CLARIFIES, it is never created) — use clockify_create_work_package with startTimer:true only when the admin explicitly asks to CREATE a new project.",
+    "Start a new timer for the admin on an EXISTING project. Call this DIRECTLY when asked to start a timer — do NOT check the current status first, and when no project is mentioned just start it with no project (all args are optional). Pass the project by name with `projectName` (resolved to its id; an unknown name CLARIFIES, it is never created) — use clockify_create_work_package with startTimer:true only when the admin explicitly asks to CREATE a new project.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z.object({
