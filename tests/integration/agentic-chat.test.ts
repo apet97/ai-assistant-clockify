@@ -517,7 +517,8 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(res.status).toBe(200);
     const events = parseEvents(res.text);
     const kinds = events.map((e) => (e.type === "result" ? `result:${(e.result as ResultItem).kind}` : e.type));
-    expect(kinds).toEqual(["result:receipt", "result:preview", "reply", "done"]);
+    // Each tool execution announces itself with an ephemeral status line first.
+    expect(kinds).toEqual(["status", "result:receipt", "status", "result:preview", "reply", "done"]);
     const reply = events.find((e) => e.type === "reply") as { text: string };
     expect(reply.text).toContain("Nothing has been changed yet");
     expect(fake.counts.deleteTag ?? 0).toBe(0);

@@ -86,6 +86,26 @@ describe("POST /api/chat/stream (NDJSON)", () => {
     expect(result.kind).toBe("receipt");
   });
 
+  it("emits a {type:status} line BEFORE its result — entity-free (no args ever)", async () => {
+    modelThrows = false;
+    const cookie = await adminCookie();
+    const res = await request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "create a tag" });
+    const events = parseEvents(res.text);
+
+    const statusIdx = events.findIndex((e) => e.type === "status");
+    const resultIdx = events.findIndex((e) => e.type === "result");
+    expect(statusIdx).toBeGreaterThanOrEqual(0);
+    expect(statusIdx).toBeLessThan(resultIdx); // progress precedes the outcome
+    const status = events[statusIdx];
+    // The event carries EXACTLY {type, action, label} — never arguments.
+    expect(Object.keys(status).sort()).toEqual(["action", "label", "type"]);
+    expect(status.action).toBe("clockify_create_work_package");
+    expect(typeof status.label).toBe("string");
+    // The argument text must never ride a status line.
+    const statusLines = events.filter((e) => e.type === "status");
+    expect(JSON.stringify(statusLines)).not.toContain("Deep Work");
+  });
+
   it("emits an error event (not a crash) when the model is unavailable", async () => {
     modelThrows = true;
     const cookie = await adminCookie();
