@@ -523,6 +523,70 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(fake.counts.deleteTag ?? 0).toBe(0);
   });
 
+  // finding new-4-failed-tool-call-receipt-silently-hidden: when the agentic loop
+  // attempts a tool call that FAILS (invalid_args) and then recovers with a
+  // successful preview in the SAME turn, the truthful-preview override replaced
+  // reply.text wholesale with the "Review the change… Confirm" boilerplate —
+  // erasing every trace of the failed attempt. The admin then saw a Confirm card
+  // for a pivoted action with no explanation. The failed receipts must be
+  // acknowledged in reply.text alongside the truthful-preview instruction.
+  it("acknowledges a failed tool call in reply.text when the loop recovers to a preview in the same turn", async () => {
+    const fake = createFakeWorkspace({
+      clients: [{ id: "client-1", name: "Acme Corp" }],
+      invoices: [
+        {
+          id: "inv-1",
+          number: "INV-001",
+          clientId: "client-1",
+          status: "DRAFT",
+          currency: "USD",
+          items: [{ order: 0, description: "Discount", quantity: 1, unitPrice: 0, itemType: "Discount" }],
+        } as never,
+      ],
+    });
+    const { app, cookie } = await makeApp(
+      [
+        // The model first tries a NEGATIVE unit price (a -10% discount) — Zod's
+        // nonnegative() rejects it as invalid_args.
+        {
+          text: "",
+          toolCalls: [
+            { id: "f1", name: "clockify_invoices_items_add", arguments: { invoiceId: "inv-1", itemType: "Discount", description: "10% Discount", unitPrice: -7.5 } },
+          ],
+        },
+        // It pivots to a positive workaround line item, which previews fine.
+        {
+          text: "Adding a discount line item instead.",
+          toolCalls: [
+            { id: "r1", name: "clockify_invoices_items_add", arguments: { invoiceId: "inv-1", itemType: "Discount", description: "10% Discount", unitPrice: 7.5 } },
+          ],
+        },
+      ],
+      fake,
+    );
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "apply a 10% discount to invoice INV-001" });
+
+    expect(res.status).toBe(200);
+    const results = res.body.results as ResultItem[];
+    const failed = results.filter((r) => r.kind === "receipt" && r.receipt?.ok === false);
+    const previews = previewsOf(results);
+    // The turn really did fail-then-recover: at least one failed receipt AND a preview.
+    expect(failed.length).toBeGreaterThanOrEqual(1);
+    expect(previews).toHaveLength(1);
+
+    const replyText = String(res.body.reply?.text ?? "");
+    // The truthful-preview instruction is still present (nothing applied yet).
+    expect(replyText).toContain("Nothing has been changed yet");
+    // …but it must NOT silently hide the failed attempt: the reply must
+    // acknowledge that an earlier attempt failed (a count or a "couldn't"/"failed"
+    // note), so the admin understands why a different card appeared.
+    expect(replyText).toMatch(/fail|couldn't|could not|didn't work/i);
+  });
+
   it("answers truthfully when the step budget is exhausted", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, model, cookie } = await makeApp(
