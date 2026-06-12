@@ -46,7 +46,7 @@ create + update (`assigneeIds` takes ids, exact names, or 'me' — resolved via
 `resolve.ts` `resolveUserRefs`, clarifies on ambiguous/unknown; spec +
 live-verified). Reusable: `scripts/repro-chat.ts`
 + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **936 tests**, `npx madge --circular
+`npm run verify` = **940 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -171,9 +171,12 @@ such bug was found against the REAL API, not by reading the code.
   `resolveEntityRef`): ids are 24-hex; anything else resolves via exact-id
   fallback → `matchByName` → grounded did-you-mean clarify. Covers every
   entity action incl. invoices BY NUMBER, the generic update/delete_entity,
-  `projects_update.clientId`, expense categories (create/update/delete). Task
-  `assigneeIds` resolve as a LIST via `resolveUserRefs` (each entry id/name/'me';
-  ambiguous/unknown ⇒ clarify, so a task never commits half-assigned).
+  `projects_update.clientId`, expense categories (create/update/delete). A SINGLE
+  member (role grant, per-project + workspace member rate, group add/remove) goes
+  through `resolveUserRef` (id/name/'me' → verified user id, else clarify — ONE
+  copy, not inlined per action); task `assigneeIds` resolve as a LIST via
+  `resolveUserRefs` (each entry id/name/'me'; ambiguous/unknown ⇒ clarify, so a
+  task never commits half-assigned).
   Destructive/archive/unarchive verbs pass `includeArchived` (the wire
   defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a
