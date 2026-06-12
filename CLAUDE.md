@@ -44,9 +44,17 @@ task-validated + major-unit preview); and the Team-section workspace MEMBER
 rate (`clockify_users_rate_update`). Tasks can also assign members inline on
 create + update (`assigneeIds` takes ids, exact names, or 'me' — resolved via
 `resolve.ts` `resolveUserRefs`, clarifies on ambiguous/unknown; spec +
-live-verified). Reusable: `scripts/repro-chat.ts`
+live-verified). The same identity-resolution arc then swept the remaining
+user/group slots (2026-06-12): group add accepts a member LIST; holidays
+(`userIds`+`userGroupIds`), time-off balance (`userIds`), and scheduling create
+(`userId`/`projectId`) all resolve names; and time-off POLICIES can now be
+scoped to groups/users (`userIds`/`userGroupIds`, a NEW capability — the API
+supported it, the addon didn't). Approvals + scheduling are per-user only (no
+group target in the API). Single-member resolution lives in `resolveUserRef`,
+lists in `resolveUserRefs`/`resolveGroupRefs` (one `resolveRefList` core).
+Reusable: `scripts/repro-chat.ts`
 + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **942 tests**, `npx madge --circular
+`npm run verify` = **955 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -172,11 +180,14 @@ such bug was found against the REAL API, not by reading the code.
   fallback → `matchByName` → grounded did-you-mean clarify. Covers every
   entity action incl. invoices BY NUMBER, the generic update/delete_entity,
   `projects_update.clientId`, expense categories (create/update/delete). A SINGLE
-  member (role grant, per-project + workspace member rate, group add/remove) goes
-  through `resolveUserRef` (id/name/'me' → verified user id, else clarify — ONE
-  copy, not inlined per action); task `assigneeIds` resolve as a LIST via
-  `resolveUserRefs` (each entry id/name/'me'; ambiguous/unknown ⇒ clarify, so a
-  task never commits half-assigned).
+  member (role grant, per-project + workspace member rate, group remove, scheduling
+  create) goes through `resolveUserRef` (id/name/'me' → verified user id, else
+  clarify — ONE copy, not inlined per action). LISTS go through `resolveUserRefs`
+  (task `assigneeIds`, group add, holiday/policy/balance `userIds`) and
+  `resolveGroupRefs` (holiday/policy `userGroupIds`) — both on one private
+  `resolveRefList` core (id/name/'me' per entry; ambiguous/unknown ⇒ clarify, so
+  nothing ever commits half-assigned). `verifyIds` checks even a 24-hex value
+  against the real list for permission/assignment-affecting writes.
   Destructive/archive/unarchive verbs pass `includeArchived` (the wire
   defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a
@@ -257,6 +268,13 @@ such bug was found against the REAL API, not by reading the code.
   2026-06-12); the **task** rate is `…/projects/{p}/tasks/{t}/…`. The
   **project DEFAULT** rate has NO standalone endpoint — set `hourlyRate`/`costRate`
   in the project create/update BODY. Previews always show MAJOR units.
+- **Group/user SCOPING** (live-verified 2026-06-12): holidays AND time-off
+  POLICIES accept `users` + `userGroups` as `{contains:"CONTAINS", ids, status}`
+  filters on POST/PUT, and the GET echoes them back FLAT as `userIds`/
+  `userGroupIds` arrays (not `userGroups.ids` — don't trust the nested shape).
+  A policy/holiday with no scope is rejected → default to the admin's id.
+  **Approvals** (per-user, by approval id) and **scheduling assignments**
+  (`userId` only) have NO group target in the API — name resolution only.
 - **Blocked for the add-on token class regardless of scopes** (probed live):
   webhooks (ALL), custom-field CREATE, account-level `GET /workspaces`
   (workspace-scoped GET works). Surfaced at PREVIEW as an honest platform
