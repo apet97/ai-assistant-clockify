@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
+import { resolveProjectTaskRefs, resolveRelativeDay, resolveUserFilter } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
@@ -251,7 +251,7 @@ const logWork = defineAction({
 const reviewDay = defineAction({
   name: "clockify_review_day",
   description:
-    "Summarize a user's time entries for a single day (defaults to today and the caller). `date` accepts YYYY-MM-DD or a relative day (today/yesterday/last monday…), resolved server-side.",
+    "Summarize a user's time entries for a single day (defaults to today and the caller). `date` accepts YYYY-MM-DD or a relative day (today/yesterday/last monday…), resolved server-side. `userId` accepts a user id, exact name, or 'me'.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
@@ -261,7 +261,14 @@ const reviewDay = defineAction({
   async handler(ctx, args) {
     const date = resolveDay(ctx, { date: args.date });
     if (date === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
-    const userId = args.userId ?? ctx.adminUserId;
+    const user = await resolveUserFilter(args.userId, {
+      verb: "review the day for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
+    });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const userId = user.userId as string;
     const start = `${date}T00:00:00.000Z`;
     // Exclusive end = next-day midnight (consistent with review_week's window).
     const end = new Date(Date.parse(start) + DAY_MS).toISOString();
@@ -281,7 +288,7 @@ const reviewDay = defineAction({
 const reviewWeek = defineAction({
   name: "clockify_review_week",
   description:
-    "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller). `start` accepts YYYY-MM-DD or a relative day (today/last monday…), resolved server-side.",
+    "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller). `start` accepts YYYY-MM-DD or a relative day (today/last monday…), resolved server-side. `userId` accepts a user id, exact name, or 'me'.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
@@ -291,7 +298,14 @@ const reviewWeek = defineAction({
   async handler(ctx, args) {
     const startDate = resolveDay(ctx, { date: args.start });
     if (startDate === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.start as string) };
-    const userId = args.userId ?? ctx.adminUserId;
+    const user = await resolveUserFilter(args.userId, {
+      verb: "review the week for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
+    });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const userId = user.userId as string;
     const start = `${startDate}T00:00:00.000Z`;
     const end = new Date(Date.parse(start) + SEVEN_DAYS_MS).toISOString();
     const entries = await ctx.clockify.getEntries({ userId, start, end });

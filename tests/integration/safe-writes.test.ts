@@ -411,6 +411,56 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     expect((result.receipt.data as { count: number }).count).toBe(1);
   });
 
+  it("review_day resolves a user NAME (or 'me') in the userId slot to the real member", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "u-ana", name: "Ana" }],
+      entries: [
+        { id: "a1", start: "2026-06-05T09:00:00.000Z", end: "2026-06-05T10:00:00.000Z", description: "ana" },
+      ],
+    });
+    const byName = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "2026-06-05", userId: "Ana" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error("expected a success receipt");
+    expect((byName.receipt.data as { userId: string }).userId).toBe("u-ana");
+
+    const me = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "2026-06-05", userId: "me" },
+      context: makeContext(fake),
+    });
+    if (me.kind !== "receipt" || !me.receipt.ok) throw new Error("expected a success receipt");
+    expect((me.receipt.data as { userId: string }).userId).toBe("admin-1");
+  });
+
+  it("review_day clarifies on an unknown user instead of a doomed wire call", async () => {
+    const fake = createFakeWorkspace({ users: [{ id: "u-ana", name: "Ana" }] });
+    const result = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "2026-06-05", userId: "Anna B" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("u-ana");
+    expect(fake.counts.getEntries ?? 0).toBe(0);
+  });
+
+  it("review_week resolves a user NAME in the userId slot", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "u-ana", name: "Ana" }],
+      entries: [{ id: "a1", start: "2026-06-05T09:00:00.000Z", description: "ana" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_review_week",
+      args: { start: "2026-06-01", userId: "Ana" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as { userId: string }).userId).toBe("u-ana");
+  });
+
   it("review_day CLARIFIES on an unparseable date (live: it crashed with 'Invalid time value')", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({

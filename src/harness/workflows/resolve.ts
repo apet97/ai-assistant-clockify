@@ -403,6 +403,32 @@ export async function resolveUserRef(
   return { ok: true, userId: user.id, label: user.name };
 }
 
+/**
+ * Resolve an OPTIONAL `userId` READ-FILTER slot — id, exact name, or 'me'. When
+ * the slot is empty the caller's stated default applies (`defaultTo`, usually
+ * the admin; `undefined` = unfiltered). Built on {@link resolveUserRef} with
+ * `trustIds` — a wrong id on a read yields an empty list, not a damaging
+ * write, so the 24-hex happy path stays list-free. ONE copy for every read
+ * that filters by user (entries list, review day/week, scheduling, time off).
+ */
+export async function resolveUserFilter(
+  userId: string | undefined,
+  opts: {
+    verb: string;
+    adminUserId: string;
+    listUsers: () => Promise<Array<{ id: string; name: string }>>;
+    /** The user id to use when the slot is empty (undefined = no filter). */
+    defaultTo?: string;
+  },
+): Promise<{ ok: true; userId: string | undefined } | { ok: false; clarify: RiskyClarifyResult }> {
+  if (!userId?.trim()) return { ok: true, userId: opts.defaultTo };
+  const user = await resolveUserRef(
+    { id: userId },
+    { verb: opts.verb, adminUserId: opts.adminUserId, listUsers: opts.listUsers, trustIds: true },
+  );
+  return user.ok ? { ok: true, userId: user.userId } : user;
+}
+
 /** Longest value rendered on a preview "set <field> → <value>" line. */
 const MAX_PATCH_VALUE_LEN = 80;
 
