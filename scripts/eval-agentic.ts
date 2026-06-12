@@ -227,6 +227,7 @@ async function main(): Promise<void> {
     llmBaseUrl: process.env.LLM_BASE_URL,
     llmApiKey: process.env.LLM_API_KEY,
     llmModel: process.env.LLM_MODEL,
+    llmReasoningEffort: process.env.LLM_REASONING_EFFORT,
     geminiModel: process.env.GEMINI_MODEL,
   };
 

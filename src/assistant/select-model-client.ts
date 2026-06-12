@@ -16,6 +16,8 @@ export interface ModelClientSelection {
   llmModel?: string;
   /** Per-request abort timeout (ms) for the HTTP client; defaults to 120s. */
   llmTimeoutMs?: number;
+  /** Provider thinking control (e.g. "none" disables Gemini thinking). */
+  llmReasoningEffort?: string;
   geminiModel?: string;
 }
 
@@ -31,5 +33,6 @@ export function selectModelClient(config: ModelClientSelection): ModelClient {
     apiKey: config.llmApiKey,
     model: config.llmModel,
     timeoutMs: config.llmTimeoutMs,
+    reasoningEffort: config.llmReasoningEffort,
   });
 }

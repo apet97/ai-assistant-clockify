@@ -187,6 +187,33 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
   });
 });
 
+describe("createModelClient reasoning effort", () => {
+  it("sends reasoning_effort on BOTH paths when configured, omits it otherwise", async () => {
+    const captured: { body?: string } = {};
+    const payload = { choices: [{ message: { content: "{}", tool_calls: [] } }] };
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      reasoningEffort: "none",
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await c.complete([{ role: "user", content: "hi" }]);
+    expect(JSON.parse(captured.body ?? "{}").reasoning_effort).toBe("none");
+    await c.completeWithTools!([{ role: "user", content: "hi" }], tools);
+    expect(JSON.parse(captured.body ?? "{}").reasoning_effort).toBe("none");
+
+    const plain = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await plain.complete([{ role: "user", content: "hi" }]);
+    expect("reasoning_effort" in JSON.parse(captured.body ?? "{}")).toBe(false);
+  });
+});
+
 describe("createModelClient token usage", () => {
   it("maps the provider's usage onto the completion (and omits it when absent)", async () => {
     const withUsage = {

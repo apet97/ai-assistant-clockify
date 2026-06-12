@@ -90,6 +90,12 @@ export interface ModelClientConfig {
   fetchImpl?: typeof fetch;
   /** Injectable backoff sleep for tests. */
   sleepImpl?: (ms: number) => Promise<void>;
+  /**
+   * Provider thinking control (OpenAI-compatible `reasoning_effort`; Gemini
+   * maps it to thinking budgets — "none" disables thinking entirely). Omitted
+   * from the wire when unset, so existing backends see byte-identical bodies.
+   */
+  reasoningEffort?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -199,7 +205,12 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
             "content-type": "application/json",
             authorization: `Bearer ${config.apiKey}`,
           },
-          body: JSON.stringify({ model: config.model, temperature: 0, ...body }),
+          body: JSON.stringify({
+          model: config.model,
+          temperature: 0,
+          ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
+          ...body,
+        }),
           signal: AbortSignal.timeout(timeoutMs),
         });
       } catch (error) {

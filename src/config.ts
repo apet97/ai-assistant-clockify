@@ -31,6 +31,8 @@ export interface AppConfig {
   llmModel?: string;
   /** Per-request model timeout (ms); the HTTP client defaults to 120s when unset. */
   llmTimeoutMs?: number;
+  /** Provider thinking control passed through as reasoning_effort. */
+  llmReasoningEffort?: string;
   /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
   geminiModel?: string;
   /** Chat rate limit per admin session; the route defaults apply when unset. */
@@ -60,6 +62,8 @@ const envObjectSchema = z.object({
   LLM_MODEL: z.string().min(1).optional(),
   /** Per-request model timeout (ms); the client defaults to 120s when unset. */
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  /** Provider thinking control (e.g. "none" disables Gemini thinking). */
+  LLM_REASONING_EFFORT: z.string().min(1).optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
   /** Chat rate limit per admin session (each turn drives a paid model loop). */
   CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
@@ -114,6 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
     llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
+    llmReasoningEffort: parsed.LLM_REASONING_EFFORT,
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,
     chatRateLimitWindowMs: parsed.CHAT_RATE_LIMIT_WINDOW_MS,
