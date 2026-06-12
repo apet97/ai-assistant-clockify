@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { looksLikeClockifyId, resolveEntityRef, resolveUserRefs } from "../../src/harness/workflows/resolve.js";
+import { looksLikeClockifyId, resolveEntityRef, resolveGroupRefs, resolveUserRefs } from "../../src/harness/workflows/resolve.js";
 
 const HEX_ID = "5f1e2d3c4b5a69788796a5b4";
 
@@ -209,5 +209,49 @@ describe("resolveUserRefs", () => {
     const r = await resolveUserRefs(["Nobody"], opts({ n: 0 }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace member");
+  });
+});
+
+describe("resolveGroupRefs", () => {
+  const groups = [
+    { id: "g1", name: "Devs" },
+    { id: "g2", name: "Ops" },
+    { id: "g3", name: "Ops" }, // duplicate name → ambiguous
+  ];
+  const opts = (listed: { n: number }) => ({
+    verb: "assign",
+    listGroups: async () => {
+      listed.n += 1;
+      return groups;
+    },
+  });
+
+  it("resolves group names + ids to ids with labels", async () => {
+    const r = await resolveGroupRefs(["Devs", "g2"], opts({ n: 0 }));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.groupIds).toEqual(["g1", "g2"]);
+      expect(r.labels).toEqual(["Devs", "Ops"]);
+    }
+  });
+
+  it("verifies even a 24-hex value (no blind trust): an unknown id clarifies as a group", async () => {
+    const listed = { n: 0 };
+    const r = await resolveGroupRefs([HEX_ID], opts(listed));
+    expect(listed.n).toBe(1); // it MUST list to verify
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.clarify).toContain("isn't a user group");
+  });
+
+  it("clarifies (does not guess) on an ambiguous group name", async () => {
+    const r = await resolveGroupRefs(["Ops"], opts({ n: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.options?.map((o) => o.id)).toEqual(["g2", "g3"]);
+  });
+
+  it("collapses duplicates and ignores blanks", async () => {
+    const r = await resolveGroupRefs(["Devs", "  ", "Devs", "g2"], opts({ n: 0 }));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.groupIds).toEqual(["g1", "g2"]);
   });
 });

@@ -148,51 +148,62 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
 }
 
 /**
- * Resolve a LIST of user references — ids, exact names, or "me" — to user ids
- * with display labels (for multi-member fields: task assignees, group adds).
- * "me" is the admin (label "you"); anything else matches by name against the
- * workspace users. An ambiguous or unknown name STOPS with a grounded clarify
- * (identity-mistake-is-a-clarify), so a confirmed action never commits with a
- * missing or wrong member. Order is kept and duplicates collapse; `labels[i]`
- * pairs with `userIds[i]`. `listUsers` is called at most once.
+ * Generic LIST resolver — id/exact-name (and an optional `special` token like
+ * "me") → ids + display labels, with a grounded clarify on any ambiguous/unknown
+ * entry (identity-mistake-is-a-clarify). Order is kept, duplicates collapse,
+ * `labels[i]` pairs with `ids[i]`, and `list` is called at most once. The single
+ * place this logic lives — `resolveUserRefs` and `resolveGroupRefs` are thin
+ * wrappers, so users and groups can never drift apart.
  *
- * `verifyIds`: by default a 24-hex value is trusted as an id without a list call
- * (the assignee happy path). Set it for permission-affecting writes (group
- * membership) so even a 24-hex value is checked against the real users — a
- * project id pasted into a member slot then clarifies instead of hitting the wire.
+ * `trustIds`: when true a 24-hex value is taken as an id WITHOUT a list call (the
+ * assignee happy path). When false even a 24-hex value is verified against the
+ * real list — a wrong-typed id (a project id in a member slot) then clarifies
+ * instead of hitting the wire (permission-affecting writes set this).
  */
-export async function resolveUserRefs(
+async function resolveRefList(
   refs: string[],
-  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>>; verifyIds?: boolean },
-): Promise<{ ok: true; userIds: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
-  const userIds: string[] = [];
+  opts: {
+    verb: string;
+    /** Plural noun for the ambiguity clarify ("workspace users" / "user groups"). */
+    pluralNoun: string;
+    /** "a workspace member" / "a user group" — for the not-found clarify. */
+    singularPhrase: string;
+    /** "them" / "it" — pronoun closing the not-found clarify. */
+    pronoun: string;
+    list: () => Promise<Array<{ id: string; name: string }>>;
+    special?: (ref: string) => { id: string; label: string } | undefined;
+    trustIds?: boolean;
+  },
+): Promise<{ ok: true; ids: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const ids: string[] = [];
   const labels: string[] = [];
   const push = (id: string, label: string): void => {
-    if (!userIds.includes(id)) {
-      userIds.push(id);
+    if (!ids.includes(id)) {
+      ids.push(id);
       labels.push(label);
     }
   };
-  let users: Array<{ id: string; name: string }> | undefined;
+  let items: Array<{ id: string; name: string }> | undefined;
   for (const raw of refs) {
     const ref = raw.trim();
     if (!ref) continue;
-    if (ref.toLowerCase() === "me") {
-      push(opts.adminUserId, "you");
+    const special = opts.special?.(ref);
+    if (special) {
+      push(special.id, special.label);
       continue;
     }
-    if (looksLikeClockifyId(ref) && !opts.verifyIds) {
+    if (opts.trustIds && looksLikeClockifyId(ref)) {
       push(ref, ref);
       continue;
     }
-    if (!users) users = await opts.listUsers();
+    if (!items) items = await opts.list();
     // A ref may still be a real id (short test id, or a verified 24-hex) before it is a name.
-    const byId = users.find((u) => u.id === ref);
+    const byId = items.find((x) => x.id === ref);
     if (byId) {
       push(byId.id, byId.name);
       continue;
     }
-    const match = matchByName(users, ref);
+    const match = matchByName(items, ref);
     if (match.kind === "one") {
       push(match.entity.id, match.entity.name);
       continue;
@@ -201,20 +212,63 @@ export async function resolveUserRefs(
       return {
         ok: false,
         clarify: {
-          clarify: `Several workspace users match "${ref}". Which one should I ${opts.verb}?`,
-          options: match.matches.map((u) => ({ id: u.id, label: u.name })),
+          clarify: `Several ${opts.pluralNoun} match "${ref}". Which one should I ${opts.verb}?`,
+          options: match.matches.map((x) => ({ id: x.id, label: x.name })),
         },
       };
     }
     return {
       ok: false,
       clarify: {
-        clarify: `"${ref}" isn't a workspace member, so I can't ${opts.verb} them.`,
-        options: suggestOptions(users, ref),
+        clarify: `"${ref}" isn't ${opts.singularPhrase}, so I can't ${opts.verb} ${opts.pronoun}.`,
+        options: suggestOptions(items, ref),
       },
     };
   }
-  return { ok: true, userIds, labels };
+  return { ok: true, ids, labels };
+}
+
+/**
+ * Resolve a LIST of user references — ids, exact names, or "me" — to user ids with
+ * display labels (task assignees, group adds). "me" is the admin (label "you").
+ * See {@link resolveRefList}; `verifyIds` sets `trustIds: false` so a 24-hex value
+ * is verified rather than blindly trusted (permission-affecting writes).
+ */
+export async function resolveUserRefs(
+  refs: string[],
+  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>>; verifyIds?: boolean },
+): Promise<{ ok: true; userIds: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const r = await resolveRefList(refs, {
+    verb: opts.verb,
+    pluralNoun: "workspace users",
+    singularPhrase: "a workspace member",
+    pronoun: "them",
+    list: opts.listUsers,
+    special: (ref) => (ref.toLowerCase() === "me" ? { id: opts.adminUserId, label: "you" } : undefined),
+    trustIds: !opts.verifyIds,
+  });
+  return r.ok ? { ok: true, userIds: r.ids, labels: r.labels } : r;
+}
+
+/**
+ * Resolve a LIST of user-GROUP references — ids or exact names — to group ids with
+ * display labels (holiday/policy scoping). No "me"; a 24-hex value is always
+ * verified against the real groups (so a project/user id in a group slot
+ * clarifies, never hits the wire). See {@link resolveRefList}.
+ */
+export async function resolveGroupRefs(
+  refs: string[],
+  opts: { verb: string; listGroups: () => Promise<Array<{ id: string; name: string }>> },
+): Promise<{ ok: true; groupIds: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const r = await resolveRefList(refs, {
+    verb: opts.verb,
+    pluralNoun: "user groups",
+    singularPhrase: "a user group",
+    pronoun: "it",
+    list: opts.listGroups,
+    trustIds: false,
+  });
+  return r.ok ? { ok: true, groupIds: r.ids, labels: r.labels } : r;
 }
 
 /**
