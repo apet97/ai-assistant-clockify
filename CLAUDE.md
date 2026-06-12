@@ -36,9 +36,14 @@ live screenshots surfaced ~22 fixes — custom-field/webhook refuse up-front,
 clarify renders once, prefer-existing-entity grounding, amounts in major units,
 year/stale-date narration, whitespace-input guard, `'me'`→adminUserId on rate
 updates, expense-for-another-user, the live-verified role-grant contract, and a
-fake-fidelity fix (deleteEntity truly removes). Reusable: `scripts/repro-chat.ts`
+fake-fidelity fix (deleteEntity truly removes). The Clockify rate model is now
+fully covered (live-verified 2026-06-12): project DEFAULT rate on project
+create/update; per-project MEMBER rate (`clockify_projects_rate_update`,
+membership-validated); TASK rate (`clockify_tasks_rate_update`, now
+task-validated + major-unit preview); and the Team-section workspace MEMBER
+rate (`clockify_users_rate_update`). Reusable: `scripts/repro-chat.ts`
 + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **917 tests**, `npx madge --circular
+`npm run verify` = **925 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -235,6 +240,15 @@ such bug was found against the REAL API, not by reading the code.
   Expense-category archive is `PATCH …/categories/{id}/status`; category list
   `archived` param DEFAULTS to false. Memberships PATCH REPLACES the set →
   "add me" merges via `getProjectMemberships` ("me" = `ctx.adminUserId`).
+- **Rates are PUTs of integer `{amount}` minor units** (`.../hourly-rate` |
+  `.../cost-rate`; GET on those paths 405s — discover the current value from a
+  membership doc): the **per-project member** rate is
+  `…/projects/{p}/users/{u}/{hourly-rate|cost-rate}` (member must be on the
+  project or it 404s); the **Team-section workspace member** rate is
+  `…/users/{u}/{hourly-rate|cost-rate}` (returns the workspace doc, live-verified
+  2026-06-12); the **task** rate is `…/projects/{p}/tasks/{t}/…`. The
+  **project DEFAULT** rate has NO standalone endpoint — set `hourlyRate`/`costRate`
+  in the project create/update BODY. Previews always show MAJOR units.
 - **Blocked for the add-on token class regardless of scopes** (probed live):
   webhooks (ALL), custom-field CREATE, account-level `GET /workspaces`
   (workspace-scoped GET works). Surfaced at PREVIEW as an honest platform
