@@ -132,12 +132,34 @@ const createProject = defineAction({
 
 const createFromTemplate = defineAction({
   name: "clockify_projects_from_template",
-  description: "Create a project from an existing project template.",
+  description:
+    "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list).",
   featureGroup: PROJECT_GROUP,
   risks: ["safe_write"],
-  schema: z.object({ templateId: z.string().min(1), name: z.string().optional() }),
+  schema: z
+    .object({
+      templateId: z.string().min(1).optional(),
+      /** The template's exact name, resolved to an id server-side. */
+      templateName: z.string().min(1).optional(),
+      name: z.string().optional(),
+    })
+    .refine((v) => v.templateId !== undefined || v.templateName !== undefined, {
+      message: "Provide the template id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const project = await ctx.clockify.createProjectFromTemplate(args);
+    // Executes immediately (safe write) — the template ref must verify or
+    // clarify before the wire, like projects_create's client ref.
+    const template = await resolveEntityRef(
+      { id: args.templateId, name: args.templateName },
+      { noun: "project template", verb: "create the project from", list: () => ctx.clockify.listTemplates() },
+    );
+    if (!template.ok) {
+      return { kind: "clarify", message: template.clarify.clarify, options: template.clarify.options };
+    }
+    const project = await ctx.clockify.createProjectFromTemplate({
+      templateId: template.id,
+      ...(args.name !== undefined ? { name: args.name } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({

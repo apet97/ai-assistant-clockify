@@ -128,7 +128,8 @@ describe("project actions — safe writes", () => {
   });
 
   it("clockify_projects_from_template creates a project from a template", async () => {
-    const fake = createFakeWorkspace();
+    // The template must exist: a short id resolves via the listed exact-id fallback.
+    const fake = createFakeWorkspace({ projects: [{ id: "tmpl-1", name: "Base Template" }] });
     const result = await executeAction({
       actionName: "clockify_projects_from_template",
       args: { templateId: "tmpl-1", name: "AIASSIST_SMOKE_p" },
@@ -138,6 +139,32 @@ describe("project actions — safe writes", () => {
       expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "project" });
     }
     expect(fake.counts.createProjectFromTemplate).toBe(1);
+  });
+
+  it("clockify_projects_from_template resolves the template by NAME (either slot) and clarifies on unknown", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "tmpl-1", name: "Base Template" }] });
+    const byName = await executeAction({
+      actionName: "clockify_projects_from_template",
+      args: { templateName: "Base Template", name: "AIASSIST_SMOKE_t1" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a success receipt, got ${byName.kind}`);
+
+    const bySlot = await executeAction({
+      actionName: "clockify_projects_from_template",
+      args: { templateId: "Base Template", name: "AIASSIST_SMOKE_t2" },
+      context: makeContext(fake),
+    });
+    if (bySlot.kind !== "receipt" || !bySlot.receipt.ok) throw new Error(`expected a success receipt, got ${bySlot.kind}`);
+    expect(fake.counts.createProjectFromTemplate).toBe(2);
+
+    const unknown = await executeAction({
+      actionName: "clockify_projects_from_template",
+      args: { templateName: "Ghost Template", name: "AIASSIST_SMOKE_t3" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+    expect(fake.counts.createProjectFromTemplate).toBe(2);
   });
 });
 
