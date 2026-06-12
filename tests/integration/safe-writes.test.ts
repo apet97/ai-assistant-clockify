@@ -80,6 +80,48 @@ describe("safe writes", () => {
     expect(fake.counts.startTimeEntry ?? 0).toBe(0); // and never starts a timer on an unverified project
   });
 
+  it("start_timer resolves a project NAME placed in the projectId SLOT (the planner habit)", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_start_timer",
+      args: { projectId: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect(fake.state.running?.projectId).toBe("p-acme");
+  });
+
+  it("start_timer's unknown-project clarify still offers to create it first", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_start_timer",
+      args: { projectName: "Acme Crp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") {
+      expect(result.message).toMatch(/should I create it first/i);
+      // The clarify is grounded: the near-miss is offered as an option.
+      expect(result.options?.map((o) => o.id)).toContain("p-acme");
+    }
+  });
+
+  it("log_work resolves a project NAME placed in the projectId SLOT", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: {
+        description: "design work",
+        start: "2026-06-05T09:00:00.000Z",
+        end: "2026-06-05T10:00:00.000Z",
+        projectId: "Acme Corp",
+      },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect(fake.state.timeEntries.at(-1)?.projectId).toBe("p-acme");
+  });
+
   it("stop_timer with no running timer is a truthful no-op: success WITH the warning, nothing changed", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
@@ -434,6 +476,51 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     expect(result.kind).toBe("receipt");
     if (result.kind === "receipt" && !result.receipt.ok) throw new Error("expected success");
     expect(fake.state.timeEntries.find((e) => e.id === "e1")?.billable).toBe(true);
+  });
+
+  it("fix_entry resolves projectName/taskName to ids before the wire write", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      tasks: [{ id: "t-design", name: "Design", projectId: "p-acme" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectName: "Acme Corp", taskName: "Design" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    const entry = fake.state.timeEntries.find((e) => e.id === "e1");
+    expect(entry?.projectId).toBe("p-acme");
+    expect(entry?.taskId).toBe("t-design");
+  });
+
+  it("fix_entry resolves a project NAME placed in the projectId SLOT", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectId: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.projectId).toBe("p-acme");
+  });
+
+  it("fix_entry clarifies on an unknown project name and writes NOTHING", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectName: "Acme Crp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
   });
 
   it("fix_entry is blocked when time_tracking is read-only", async () => {

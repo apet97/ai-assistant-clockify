@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName, resolveRelativeDay, suggestOptions } from "./resolve.js";
+import { resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
@@ -69,63 +69,24 @@ const startTimer = defineAction({
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
-    // Resolve project/task by NAME at execution time. An unknown name CLARIFIES
-    // (offering grounded options) — it is NEVER silently created. "Start timer on
-    // <misspelled project>" must ask, exactly like clockify_log_work; creating a
-    // project is the explicit job of clockify_create_work_package.
-    let projectId = args.projectId;
-    if (!projectId && args.projectName) {
-      const projects = await ctx.clockify.listProjects();
-      const match = matchByName(projects, args.projectName);
-      if (match.kind === "none") {
-        const options = suggestOptions(projects, args.projectName);
-        return {
-          kind: "clarify",
-          message: `I couldn't find an active project named "${args.projectName}". Which project should I start the timer on${options.length ? "" : ", or should I create it first"}?`,
-          options: options.length ? options : undefined,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          kind: "clarify",
-          message: `Several active projects are named "${args.projectName}". Which one?`,
-          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
-        };
-      }
-      projectId = match.entity.id;
-    }
-
-    let taskId = args.taskId;
-    if (!taskId && args.taskName) {
-      if (!projectId) {
-        return {
-          kind: "clarify",
-          message: `To start a timer on task "${args.taskName}" I need the project. Which project is it in?`,
-        };
-      }
-      const tasks = await ctx.clockify.listTasks(projectId);
-      const match = matchByName(tasks, args.taskName);
-      if (match.kind === "none") {
-        return {
-          kind: "clarify",
-          message: `I couldn't find a task named "${args.taskName}" in that project.`,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          kind: "clarify",
-          message: `Several tasks are named "${args.taskName}". Which one?`,
-          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
-        };
-      }
-      taskId = match.entity.id;
+    // Resolve project/task by NAME (in either slot) at execution time. An
+    // unknown name CLARIFIES (offering grounded options) — it is NEVER silently
+    // created; creating a project is the job of clockify_create_work_package.
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "start the timer on",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+      projectNotFoundHint: "Or should I create it first?",
+    });
+    if (!refs.ok) {
+      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
     }
 
     const entry = await ctx.clockify.startTimeEntry({
       userId: ctx.adminUserId,
       description: args.description,
-      projectId,
-      taskId,
+      projectId: refs.projectId,
+      taskId: refs.taskId,
       tagIds: args.tagIds,
       billable: args.billable,
       start: nowIso(ctx),
@@ -243,6 +204,7 @@ const logWork = defineAction({
     durationHours: z.number().positive().optional(),
     projectId: z.string().optional(),
     projectName: z.string().optional(),
+    taskId: z.string().optional(),
     taskName: z.string().optional(),
     tagIds: z.array(z.string()).optional(),
     billable: z.boolean().optional(),
@@ -253,57 +215,22 @@ const logWork = defineAction({
       return { kind: "clarify", message: times.message };
     }
 
-    let projectId = args.projectId;
-
-    if (!projectId && args.projectName) {
-      const projects = await ctx.clockify.listProjects();
-      const match = matchByName(projects, args.projectName);
-      if (match.kind === "none") {
-        return {
-          kind: "clarify",
-          message: `I couldn't find an active project named "${args.projectName}". Which project should I log against, or should I create it first?`,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          kind: "clarify",
-          message: `Several active projects are named "${args.projectName}". Which one?`,
-          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
-        };
-      }
-      projectId = match.entity.id;
-    }
-
-    let taskId: string | undefined;
-    if (args.taskName) {
-      if (!projectId) {
-        return {
-          kind: "clarify",
-          message: `To log against task "${args.taskName}" I need to know the project. Which project?`,
-        };
-      }
-      const tasks = await ctx.clockify.listTasks(projectId);
-      const match = matchByName(tasks, args.taskName);
-      if (match.kind === "none") {
-        return {
-          kind: "clarify",
-          message: `I couldn't find a task named "${args.taskName}" in that project.`,
-        };
-      }
-      if (match.kind === "many") {
-        return {
-          kind: "clarify",
-          message: `Several tasks are named "${args.taskName}". Which one?`,
-          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
-        };
-      }
-      taskId = match.entity.id;
+    // A name in EITHER slot resolves; unknown/ambiguous clarifies with grounded
+    // options — never silently created.
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "log against",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+      projectNotFoundHint: "Or should I create it first?",
+    });
+    if (!refs.ok) {
+      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
     }
 
     const entry = await ctx.clockify.createTimeEntry({
       description: args.description,
-      projectId,
-      taskId,
+      projectId: refs.projectId,
+      taskId: refs.taskId,
       tagIds: args.tagIds,
       billable: args.billable,
       start: times.start,
@@ -383,7 +310,7 @@ const reviewWeek = defineAction({
 const fixEntry = defineAction({
   name: "clockify_fix_entry",
   description:
-    "Update fields of a known time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Safe — the entry id is already resolved.",
+    "Update fields of a known time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Pass the project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — resolved server-side, clarifies on an unknown one. Safe — the entry id is already resolved.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z
@@ -391,7 +318,9 @@ const fixEntry = defineAction({
       id: z.string().min(1),
       description: z.string().optional(),
       projectId: z.string().optional(),
+      projectName: z.string().optional(),
       taskId: z.string().optional(),
+      taskName: z.string().optional(),
       tagIds: z.array(z.string()).optional(),
       billable: z.boolean().optional(),
     })
@@ -399,17 +328,29 @@ const fixEntry = defineAction({
       (v) =>
         v.description !== undefined ||
         v.projectId !== undefined ||
+        v.projectName !== undefined ||
         v.taskId !== undefined ||
+        v.taskName !== undefined ||
         v.tagIds !== undefined ||
         v.billable !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async handler(ctx, args) {
+    // A name in either project/task slot resolves to a verified id first — a
+    // mistaken identity clarifies, it never reaches the wire.
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "move the entry to",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+    });
+    if (!refs.ok) {
+      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
+    }
     const entry = await ctx.clockify.updateTimeEntry({
       id: args.id,
       description: args.description,
-      projectId: args.projectId,
-      taskId: args.taskId,
+      projectId: refs.projectId,
+      taskId: refs.taskId,
       tagIds: args.tagIds,
       billable: args.billable,
     });
