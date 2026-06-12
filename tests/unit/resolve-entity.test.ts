@@ -4,6 +4,7 @@ import {
   resolveEntityRef,
   resolveGroupRefs,
   resolveProjectTaskRefs,
+  resolveTagRefs,
   resolveUserRef,
   resolveUserRefs,
 } from "../../src/harness/workflows/resolve.js";
@@ -354,6 +355,41 @@ describe("resolveUserRefs", () => {
     const r = await resolveUserRefs(["Nobody"], opts({ n: 0 }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace member");
+  });
+});
+
+describe("resolveTagRefs", () => {
+  const tags = [
+    { id: "t1", name: "Deep Work" },
+    { id: "t2", name: "Review" },
+    { id: "t3", name: "Review" }, // duplicate → ambiguous
+  ];
+  const opts = (listed: { n: number }) => ({
+    verb: "tag the entry with",
+    listTags: async () => {
+      listed.n += 1;
+      return tags;
+    },
+  });
+
+  it("trusts a 24-hex id without listing and resolves names/short ids", async () => {
+    const listed = { n: 0 };
+    const r = await resolveTagRefs([HEX_ID, "Deep Work", "t2"], opts(listed));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.tagIds).toEqual([HEX_ID, "t1", "t2"]);
+    expect(listed.n).toBe(1); // one list serves both symbolic refs
+  });
+
+  it("clarifies (never guesses) on an ambiguous tag name with grounded options", async () => {
+    const r = await resolveTagRefs(["Review"], opts({ n: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.options?.map((o) => o.id)).toEqual(["t2", "t3"]);
+  });
+
+  it("clarifies on an unknown tag name", async () => {
+    const r = await resolveTagRefs(["Ghost"], opts({ n: 0 }));
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace tag");
   });
 });
 

@@ -339,6 +339,28 @@ export async function resolveGroupRefs(
 }
 
 /**
+ * Resolve a LIST of TAG references — ids or exact names — to tag ids ("log 2h
+ * with tag billable"). A 24-hex value is trusted without a list call (tags on
+ * an entry aren't permission-affecting; a wrong id is a wire 400, caught
+ * there); names/short ids resolve against the real tags with grounded
+ * clarifies. See {@link resolveRefList}.
+ */
+export async function resolveTagRefs(
+  refs: string[],
+  opts: { verb: string; listTags: () => Promise<Array<{ id: string; name: string }>> },
+): Promise<{ ok: true; tagIds: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const r = await resolveRefList(refs, {
+    verb: opts.verb,
+    pluralNoun: "workspace tags",
+    singularPhrase: "a workspace tag",
+    pronoun: "it",
+    list: opts.listTags,
+    trustIds: true,
+  });
+  return r.ok ? { ok: true, tagIds: r.ids, labels: r.labels } : r;
+}
+
+/**
  * Resolve ONE user reference — an id, an exact name, or "me" — to a `{ userId,
  * label }`, verifying it against the workspace user list so an identity mistake
  * (a name in the id slot, a 24-hex non-user) becomes a clarify at preview, never

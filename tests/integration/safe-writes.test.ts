@@ -122,6 +122,50 @@ describe("safe writes", () => {
     expect(fake.state.timeEntries.at(-1)?.projectId).toBe("p-acme");
   });
 
+  it("start_timer + log_work resolve tag NAMES (tagNames or a name inside tagIds) to verified ids", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      tags: [{ id: "t-deep", name: "Deep Work" }],
+    });
+    const started = await executeAction({
+      actionName: "clockify_start_timer",
+      args: { projectName: "Acme Corp", tagNames: ["Deep Work"] },
+      context: makeContext(fake),
+    });
+    if (started.kind !== "receipt" || !started.receipt.ok) throw new Error(`expected a success receipt, got ${started.kind}`);
+    expect(fake.state.running?.tagIds).toEqual(["t-deep"]);
+
+    const logged = await executeAction({
+      actionName: "clockify_log_work",
+      args: {
+        description: "focus",
+        start: "2026-06-05T09:00:00.000Z",
+        end: "2026-06-05T10:00:00.000Z",
+        tagIds: ["Deep Work"], // the planner habit: a NAME in the id slot
+      },
+      context: makeContext(fake),
+    });
+    if (logged.kind !== "receipt" || !logged.receipt.ok) throw new Error(`expected a success receipt, got ${logged.kind}`);
+    expect(fake.state.timeEntries.at(-1)?.tagIds).toEqual(["t-deep"]);
+  });
+
+  it("log_work clarifies on an unknown tag and writes NOTHING", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t-deep", name: "Deep Work" }] });
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: {
+        description: "focus",
+        start: "2026-06-05T09:00:00.000Z",
+        end: "2026-06-05T10:00:00.000Z",
+        tagNames: ["Deep Wrk"],
+      },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("t-deep");
+    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+  });
+
   it("stop_timer with no running timer is a truthful no-op: success WITH the warning, nothing changed", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({

@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { resolveProjectTaskRefs, resolveRelativeDay, resolveUserFilter } from "./resolve.js";
+import { resolveProjectTaskRefs, resolveRelativeDay, resolveTagRefs, resolveUserFilter } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
@@ -14,6 +14,22 @@ import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 function nowIso(ctx: ActionContext): string {
   return (ctx.now ?? (() => new Date()))().toISOString();
+}
+
+/**
+ * Merge `tagIds` + `tagNames` and resolve every entry (id, short id, or NAME —
+ * the planner puts names in either slot) to verified tag ids. No refs ⇒
+ * undefined (start/log: no tags; fix_entry: leave tags unchanged).
+ */
+async function resolveEntryTags(
+  ctx: ActionContext,
+  args: { tagIds?: string[]; tagNames?: string[] },
+): Promise<{ ok: true; tagIds: string[] | undefined } | { ok: false; message: string; options?: ClarifyOption[] }> {
+  const refs = [...(args.tagIds ?? []), ...(args.tagNames ?? [])];
+  if (refs.length === 0) return { ok: true, tagIds: undefined };
+  const tags = await resolveTagRefs(refs, { verb: "tag the entry with", listTags: () => ctx.clockify.listTags() });
+  if (!tags.ok) return { ok: false, message: tags.clarify.clarify, options: tags.clarify.options };
+  return { ok: true, tagIds: tags.tagIds };
 }
 
 /** Sum the durations (minutes) of entries that have ended. */
@@ -66,6 +82,8 @@ const startTimer = defineAction({
     taskId: z.string().optional(),
     taskName: z.string().optional(),
     tagIds: z.array(z.string()).optional(),
+    /** Tag names (or use tagIds) — resolved to verified ids server-side. */
+    tagNames: z.array(z.string()).optional(),
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
@@ -81,13 +99,15 @@ const startTimer = defineAction({
     if (!refs.ok) {
       return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
     }
+    const tags = await resolveEntryTags(ctx, args);
+    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
 
     const entry = await ctx.clockify.startTimeEntry({
       userId: ctx.adminUserId,
       description: args.description,
       projectId: refs.projectId,
       taskId: refs.taskId,
-      tagIds: args.tagIds,
+      tagIds: tags.tagIds,
       billable: args.billable,
       start: nowIso(ctx),
     });
@@ -207,6 +227,8 @@ const logWork = defineAction({
     taskId: z.string().optional(),
     taskName: z.string().optional(),
     tagIds: z.array(z.string()).optional(),
+    /** Tag names (or use tagIds) — resolved to verified ids server-side. */
+    tagNames: z.array(z.string()).optional(),
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
@@ -226,12 +248,14 @@ const logWork = defineAction({
     if (!refs.ok) {
       return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
     }
+    const tags = await resolveEntryTags(ctx, args);
+    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
 
     const entry = await ctx.clockify.createTimeEntry({
       description: args.description,
       projectId: refs.projectId,
       taskId: refs.taskId,
-      tagIds: args.tagIds,
+      tagIds: tags.tagIds,
       billable: args.billable,
       start: times.start,
       end: times.end,
@@ -336,6 +360,8 @@ const fixEntry = defineAction({
       taskId: z.string().optional(),
       taskName: z.string().optional(),
       tagIds: z.array(z.string()).optional(),
+      /** Tag names (or use tagIds) — resolved to verified ids server-side. */
+      tagNames: z.array(z.string()).optional(),
       billable: z.boolean().optional(),
     })
     .refine(
@@ -346,6 +372,7 @@ const fixEntry = defineAction({
         v.taskId !== undefined ||
         v.taskName !== undefined ||
         v.tagIds !== undefined ||
+        v.tagNames !== undefined ||
         v.billable !== undefined,
       { message: "Provide at least one field to change." },
     ),
@@ -360,12 +387,14 @@ const fixEntry = defineAction({
     if (!refs.ok) {
       return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
     }
+    const tags = await resolveEntryTags(ctx, args);
+    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
     const entry = await ctx.clockify.updateTimeEntry({
       id: args.id,
       description: args.description,
       projectId: refs.projectId,
       taskId: refs.taskId,
-      tagIds: args.tagIds,
+      tagIds: tags.tagIds,
       billable: args.billable,
     });
     return {
