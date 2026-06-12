@@ -31,13 +31,55 @@ describe("holiday actions", () => {
   });
 
   it("holidays_get + holidays_in_period read", async () => {
-    const fake = createFakeWorkspace(seed());
+    // assignedTo resolves against the real user list — the directory must exist.
+    const fake = createFakeWorkspace({ ...seed(), ...directory() });
     const get = await executeAction({ actionName: "clockify_holidays_get", args: { id: "h1" }, context: makeContext(fake) });
     if (get.kind === "receipt" && get.receipt.ok) expect((get.receipt.data as any).entity).toMatchObject({ id: "h1" });
     else throw new Error("expected receipt");
     const period = await executeAction({ actionName: "clockify_holidays_in_period", args: { assignedTo: "u1", start: "2026-12-01", end: "2026-12-31" }, context: makeContext(fake) });
     if (period.kind === "receipt" && period.receipt.ok) expect((period.receipt.data as any).count).toBe(1);
     else throw new Error("expected receipt");
+  });
+
+  it("holidays_in_period resolves a user NAME (defaults to the caller) and RELATIVE dates server-side", async () => {
+    const fake = createFakeWorkspace({
+      holidays: [{ id: "h2", name: "Midsummer", startDate: "2026-06-19", endDate: "2026-06-19" }],
+      ...directory(),
+    });
+    // NOW is 2026-06-06: "this month" should cover the June 19 holiday.
+    const byName = await executeAction({
+      actionName: "clockify_holidays_in_period",
+      args: { assignedTo: "Alice", start: "this month", end: "this month" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error(`expected a receipt, got ${byName.kind}`);
+    expect((byName.receipt.data as any).count).toBe(1);
+
+    // Omitted assignedTo defaults to the caller (the admin).
+    const mine = await executeAction({
+      actionName: "clockify_holidays_in_period",
+      args: { start: "2026-06-01", end: "2026-06-30" },
+      context: makeContext(fake),
+    });
+    if (mine.kind !== "receipt" || !mine.receipt.ok) throw new Error(`expected a receipt, got ${mine.kind}`);
+  });
+
+  it("holidays_in_period clarifies on an unknown user or an unparseable date", async () => {
+    const fake = createFakeWorkspace({ ...seed(), ...directory() });
+    const badUser = await executeAction({
+      actionName: "clockify_holidays_in_period",
+      args: { assignedTo: "Ghost", start: "2026-12-01", end: "2026-12-31" },
+      context: makeContext(fake),
+    });
+    expect(badUser.kind).toBe("clarify");
+
+    const badDate = await executeAction({
+      actionName: "clockify_holidays_in_period",
+      args: { assignedTo: "u1", start: "whenever", end: "2026-12-31" },
+      context: makeContext(fake),
+    });
+    expect(badDate.kind).toBe("clarify");
+    expect(fake.counts.listHolidaysInPeriod ?? 0).toBe(0);
   });
 
   it("holidays_create is a SAFE write (executes immediately) and needs an assignment", async () => {

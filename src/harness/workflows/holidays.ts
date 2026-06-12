@@ -8,7 +8,7 @@ import {
   type ActionResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveGroupRefs, resolveUserRefs } from "./resolve.js";
+import { resolveGroupRefs, resolveInstant, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /**
  * Resolve a holiday's `userIds` (names/'me'/ids) and `userGroupIds` (names/ids) to
@@ -77,19 +77,46 @@ const getHoliday = defineReadAction({
   },
 });
 
-const listInPeriod = defineReadAction({
+const listInPeriod = defineAction({
   name: "clockify_holidays_in_period",
-  description: "List holidays assigned to a user across a date period.",
-  group: TOA,
-  schema: z.object({ assignedTo: z.string().min(1), start: z.string().min(1), end: z.string().min(1) }),
+  description:
+    "List holidays assigned to a user across a date period (defaults to you; `assignedTo` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD or a relative day/period (today, next month…), resolved server-side.",
+  featureGroup: TOA,
+  risks: ["read"],
+  schema: z.object({ assignedTo: z.string().optional(), start: z.string().min(1), end: z.string().min(1) }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listHolidaysInPeriod(args);
-    return successReceipt({
-      action: "clockify_holidays_in_period",
-      entity: "holiday",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+    // The user slot resolves id/name/'me' (the user-sweep missed this one);
+    // the dates resolve server-side — a relative word must never reach the wire.
+    const user = await resolveUserFilter(args.assignedTo, {
+      verb: "list holidays for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      defaultTo: ctx.adminUserId,
     });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const now = (ctx.now ?? (() => new Date()))();
+    const start = resolveInstant(now, args.start, "start");
+    const end = resolveInstant(now, args.end, "end");
+    const bad = [
+      start === undefined ? args.start : undefined,
+      end === undefined ? args.end : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (bad.length || start === undefined || end === undefined) {
+      return {
+        kind: "clarify",
+        message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, next monday, or next month.`,
+      };
+    }
+    const items = await ctx.clockify.listHolidaysInPeriod({ assignedTo: user.userId as string, start, end });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_holidays_in_period",
+        entity: "holiday",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { count: items.length, items },
+      }),
+    };
   },
 });
 
