@@ -7,7 +7,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveInstant } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveInstant, resolveUserRef } from "./resolve.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -78,7 +78,7 @@ const getAssignment = defineReadAction({
 const createAssignment = defineAction({
   name: "clockify_scheduling_assignments_create",
   description:
-    "Create a scheduling assignment (draft). `start`/`end` accept YYYY-MM-DD or a relative day (today/next monday…), resolved server-side. Safe write — executes immediately when policy allows.",
+    "Create a scheduling assignment (draft) for ONE user (Clockify scheduling is per-user — there is no group assignment). Pass `userId` and `projectId` as ids or exact names (or 'me' for the user) — resolved server-side, clarifies on an unknown one. `start`/`end` accept YYYY-MM-DD or a relative day (today/next monday…). Safe write — executes immediately when policy allows.",
   featureGroup: SCHED,
   risks: ["safe_write"],
   schema: z.object({
@@ -92,8 +92,14 @@ const createAssignment = defineAction({
   async handler(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { kind: "clarify", message: window.message };
+    const user = await resolveUserRef({ id: args.userId }, { verb: "schedule", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() });
+    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    const project = await resolveEntityRef({ id: args.projectId }, { noun: "project", verb: "schedule on", list: (f) => ctx.clockify.listProjects(f) });
+    if (!project.ok) return { kind: "clarify", message: project.clarify.clarify, options: project.clarify.options };
     const assignment = await ctx.clockify.createAssignment({
       ...args,
+      userId: user.userId,
+      projectId: project.id,
       start: window.start as string,
       end: window.end as string,
     });

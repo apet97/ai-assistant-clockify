@@ -34,11 +34,22 @@ describe("scheduling actions", () => {
   });
 
   it("assignments_create is a SAFE write (executes immediately)", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Alice", status: "ACTIVE" }], projects: [{ id: "p1", name: "Apollo" }] });
     const result = await executeAction({ actionName: "clockify_scheduling_assignments_create", args: { userId: "u1", projectId: "p1", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }, context: makeContext(fake) });
     if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "assignment" });
     else throw new Error("expected receipt");
     expect(fake.counts.createAssignment).toBe(1);
+  });
+
+  it("assignments_create resolves user + project NAMES to ids, clarifies on an unknown user", async () => {
+    const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Alice", status: "ACTIVE" }], projects: [{ id: "p1", name: "Apollo" }] });
+    const ok = await executeAction({ actionName: "clockify_scheduling_assignments_create", args: { userId: "Alice", projectId: "Apollo", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }, context: makeContext(fake) });
+    if (ok.kind !== "receipt" || !ok.receipt.ok) throw new Error(`expected a receipt, got ${ok.kind}`);
+    expect(fake.state.assignments.find((a) => a.userId === "u1" && a.projectId === "p1")).toBeDefined();
+
+    const bad = await executeAction({ actionName: "clockify_scheduling_assignments_create", args: { userId: "Ghost", projectId: "Apollo", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }, context: makeContext(fake) });
+    expect(bad.kind).toBe("clarify");
+    expect(fake.counts.createAssignment).toBe(1); // only the first (resolved) one wrote
   });
 
   it("assignments_update previews high_risk_write then updates", async () => {
@@ -73,7 +84,7 @@ describe("scheduling actions", () => {
 
 describe("scheduling date normalization (live-loop FIX 2: invalid start/end)", () => {
   it("assignments_create resolves relative start/end to the wire's UTC instants", async () => {
-    const fake = createFakeWorkspace();
+    const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Alice", status: "ACTIVE" }], projects: [{ id: "p1", name: "Apollo" }] });
     // NOW is 2026-06-06 (a Saturday) → next monday = 2026-06-08.
     const result = await executeAction({
       actionName: "clockify_scheduling_assignments_create",
