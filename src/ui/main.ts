@@ -112,6 +112,8 @@ export interface ComposerHooks {
   onAssistant(text: string): void;
   onResults(results: ChatResult[]): void;
   onError(message: string): void;
+  /** Latest progress label ("Starting the timer") — purely cosmetic, optional. */
+  onStatus?(label: string): void;
 }
 
 /** Honest copy for an auth-expired exchange — the fix is a reload, say so. */
@@ -205,6 +207,8 @@ export async function submitStreaming(api: StreamingApi, message: string, hooks:
         if (event.text) hooks.onAssistant(event.text);
       } else if (event.type === "error") {
         hooks.onError(typeof event.message === "string" ? event.message : "Message failed.");
+      } else if (event.type === "status") {
+        if (typeof event.label === "string") hooks.onStatus?.(event.label);
       }
     });
   } catch {
@@ -383,6 +387,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
   const typingDots = el("span", "typing-dots");
   for (let i = 0; i < 3; i += 1) typingDots.appendChild(el("span"));
   typing.appendChild(typingDots);
+  // The latest streamed progress label ("Starting the timer…") rides next to
+  // the dots; the sr-only statusBar announces the same text politely.
+  const typingLabel = el("span", "typing-label");
+  typing.appendChild(typingLabel);
 
   function setWorking(working: boolean): void {
     statusBar.textContent = working ? "Assistant is working…" : "";
@@ -392,8 +400,15 @@ function mount(root: HTMLElement, api: ChatApi): void {
       messages.appendChild(typing);
       if (stick) messages.scrollTop = messages.scrollHeight;
     } else {
+      typingLabel.textContent = ""; // reset for the next turn
       typing.remove();
     }
+  }
+
+  /** Show the latest per-step progress label in the typing bubble + announce it. */
+  function setStatusLabel(label: string): void {
+    typingLabel.textContent = `${label}…`;
+    statusBar.textContent = `Assistant is working: ${label}…`;
   }
 
   /** Keep the typing bubble below results that stream in while it shows. */
@@ -462,6 +477,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
         onAssistant: (assistantText) => appendMessage("assistant", assistantText),
         onResults: (results) => renderResults(results),
         onError: (message) => showError(message),
+        onStatus: (label) => setStatusLabel(label),
       });
     };
     form.addEventListener("submit", async (event) => {

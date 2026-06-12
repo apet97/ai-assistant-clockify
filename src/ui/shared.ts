@@ -78,11 +78,13 @@ export interface ConfirmHooks {
   onAssistant(text: string): void;
   onResults(results: ChatResult[]): void;
   onError(message: string): void;
+  /** Latest progress label ("Starting the timer") — purely cosmetic, optional. */
+  onStatus?(label: string): void;
 }
 
 /** One event from a streaming chat OR confirm endpoint (NDJSON, one per line). */
 export interface StreamEvent {
-  type: "result" | "reply" | "error" | "done" | "receipt" | string;
+  type: "result" | "reply" | "error" | "done" | "receipt" | "status" | string;
   result?: ChatResult;
   /** Only on a confirm stream's first `receipt` event: the committed receipt + undo handle. */
   receipt?: ReceiptResult["receipt"];
@@ -91,6 +93,9 @@ export interface StreamEvent {
   text?: string;
   code?: string;
   message?: string;
+  /** Only on `status` events: the executing action + its human label. */
+  action?: string;
+  label?: string;
 }
 
 export interface ConfirmStreamApi {
@@ -122,6 +127,8 @@ export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef
         if (event.text) hooks.onAssistant(event.text);
       } else if (event.type === "error") {
         hooks.onError(typeof event.message === "string" ? event.message : "The follow-up couldn't complete.");
+      } else if (event.type === "status") {
+        if (typeof event.label === "string") hooks.onStatus?.(event.label);
       }
     });
   } catch {

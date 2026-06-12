@@ -25,13 +25,14 @@ describe("createNdjsonParser", () => {
   });
 });
 
-function recorder() {
+function recorder(withStatus = false) {
   const log: string[] = [];
   const hooks: ComposerHooks = {
     onWorking: (w) => log.push(`working:${w}`),
     onAssistant: (t) => log.push(`assistant:${t}`),
     onResults: (r) => log.push(`results:${r.map((x) => x.kind).join(",")}`),
     onError: (m) => log.push(`error:${m}`),
+    ...(withStatus ? { onStatus: (label: string) => log.push(`status:${label}`) } : {}),
   };
   return { hooks, log };
 }
@@ -61,6 +62,23 @@ describe("submitStreaming", () => {
     expect(log).toContain("assistant:review and confirm");
     expect(log.indexOf("results:preview,preview")).toBeLessThan(log.indexOf("assistant:review and confirm"));
     expect(log[log.length - 1]).toBe("working:false");
+  });
+
+  it("dispatches status labels to onStatus; harmless without the hook; unknown event types stay ignored", async () => {
+    const events: StreamEvent[] = [
+      { type: "status", action: "clockify_tags_list", label: "Tags list" },
+      { type: "some_future_event" },
+      { type: "reply", kind: "answer", text: "done" },
+      { type: "done" },
+    ];
+    const withHook = recorder(true);
+    await submitStreaming(streamApi(events), "m", withHook.hooks);
+    expect(withHook.log).toContain("status:Tags list");
+    expect(withHook.log.filter((l) => l.startsWith("error"))).toEqual([]); // unknown type ignored
+
+    const withoutHook = recorder(false);
+    await submitStreaming(streamApi(events), "m", withoutHook.hooks); // must not throw
+    expect(withoutHook.log).toContain("assistant:done");
   });
 
   it("surfaces a server error event and always clears working", async () => {
