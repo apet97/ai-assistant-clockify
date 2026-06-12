@@ -80,9 +80,16 @@ export interface ModelClientConfig {
   timeoutMs?: number;
   /** Injectable fetch for tests. */
   fetchImpl?: typeof fetch;
+  /** Injectable backoff sleep for tests. */
+  sleepImpl?: (ms: number) => Promise<void>;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+/** Single retry on a transient provider failure (429/5xx), fixed backoff. */
+const RETRY_BACKOFF_MS = 750;
+/** Provider error bodies are kept as a SHORT log/message snippet (no secrets —
+ *  our key rides the request header, never the response). */
+const ERROR_BODY_SNIPPET_CHARS = 200;
 
 interface RawToolCall {
   id?: string;
@@ -154,33 +161,56 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   const endpoint = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const doFetch = config.fetchImpl ?? fetch;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const sleep = config.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const retryable = (status: number): boolean => status === 429 || status >= 500;
 
-  /** POST one chat-completion body with the abort timeout; the signal also bounds a stuck body read. */
+  /**
+   * POST one chat-completion body with the abort timeout (the signal also
+   * bounds a stuck body read). A transient provider failure (429/5xx) retries
+   * ONCE — chat completions have no server-side effect, so the retry is safe.
+   * A timeout never retries (the 120s budget is already spent); the provider
+   * error body is kept as a short snippet in the thrown message + a server
+   * log, since the route maps any throw to a generic "temporarily unavailable".
+   */
   async function postChat(body: Record<string, unknown>): Promise<ChatCompletionResponse> {
-    let response: Response;
-    try {
-      response = await doFetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify({ model: config.model, temperature: 0, ...body }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error) {
-      const name = (error as { name?: string } | null)?.name;
-      if (name === "TimeoutError" || name === "AbortError") {
-        throw new Error(`Model request timed out after ${timeoutMs}ms`);
+    for (let attempt = 0; ; attempt += 1) {
+      let response: Response;
+      try {
+        response = await doFetch(endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${config.apiKey}`,
+          },
+          body: JSON.stringify({ model: config.model, temperature: 0, ...body }),
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        const name = (error as { name?: string } | null)?.name;
+        if (name === "TimeoutError" || name === "AbortError") {
+          throw new Error(`Model request timed out after ${timeoutMs}ms`);
+        }
+        throw error;
       }
-      throw error;
-    }
 
-    if (!response.ok) {
-      throw new Error(`Model request failed with status ${response.status}`);
-    }
+      if (response.ok) return (await response.json()) as ChatCompletionResponse;
 
-    return (await response.json()) as ChatCompletionResponse;
+      let snippet = "";
+      try {
+        snippet = (await response.text()).replace(/\s+/g, " ").trim().slice(0, ERROR_BODY_SNIPPET_CHARS);
+      } catch {
+        // Body unreadable — the status alone still beats silence.
+      }
+      const willRetry = attempt === 0 && retryable(response.status);
+      console.warn(
+        `model request failed: status=${response.status}${snippet ? ` body=${snippet}` : ""}${willRetry ? " (retrying once)" : ""}`,
+      );
+      if (willRetry) {
+        await sleep(RETRY_BACKOFF_MS);
+        continue;
+      }
+      throw new Error(`Model request failed with status ${response.status}${snippet ? `: ${snippet}` : ""}`);
+    }
   }
 
   return {

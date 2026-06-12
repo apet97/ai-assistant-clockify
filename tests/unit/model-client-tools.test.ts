@@ -10,8 +10,9 @@ function fakeFetch(payload: unknown, ok = true, captured?: { body?: string }): t
     if (captured) captured.body = init?.body;
     return {
       ok,
-      status: ok ? 200 : 500,
+      status: ok ? 200 : 400, // 400 = non-retryable, so single-shot tests stay single-shot
       json: async () => payload,
+      text: async () => JSON.stringify(payload),
     } as Response;
   }) as unknown as typeof fetch;
 }
@@ -183,6 +184,99 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
       { role: "user", content: "hi" },
     ]);
     expect(body.response_format).toEqual({ type: "json_object" });
+  });
+});
+
+describe("createModelClient retry + provider error detail", () => {
+  /** Queue of responses; each call shifts the next one. */
+  function sequencedFetch(responses: Array<{ status: number; body?: string; payload?: unknown }>): {
+    impl: typeof fetch;
+    calls: () => number;
+  } {
+    let n = 0;
+    const impl = vi.fn(async () => {
+      const next = responses[Math.min(n, responses.length - 1)];
+      n += 1;
+      return {
+        ok: next.status < 400,
+        status: next.status,
+        json: async () => next.payload ?? { choices: [{ message: { content: "ok" } }] },
+        text: async () => next.body ?? "",
+      } as Response;
+    }) as unknown as typeof fetch;
+    return { impl, calls: () => n };
+  }
+
+  function retryClient(fetchImpl: typeof fetch, sleeps: number[]) {
+    return createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      fetchImpl,
+      sleepImpl: async (ms: number) => {
+        sleeps.push(ms);
+      },
+    });
+  }
+
+  it("retries ONCE on 429 with a backoff sleep, then succeeds", async () => {
+    const sleeps: number[] = [];
+    const seq = sequencedFetch([{ status: 429, body: "rate limited" }, { status: 200 }]);
+    const text = await retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }]);
+    expect(text).toBe("ok");
+    expect(seq.calls()).toBe(2);
+    expect(sleeps).toHaveLength(1);
+  });
+
+  it("retries once on 5xx then throws with the status AND a provider-body snippet", async () => {
+    const sleeps: number[] = [];
+    const seq = sequencedFetch([{ status: 503, body: '{"error":"overloaded"}' }]);
+    await expect(retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }])).rejects.toThrow(
+      /status 503.*overloaded/,
+    );
+    expect(seq.calls()).toBe(2);
+  });
+
+  it("does NOT retry a 4xx (other than 429) — one call, snippet included", async () => {
+    const sleeps: number[] = [];
+    const seq = sequencedFetch([{ status: 400, body: "bad request shape" }]);
+    await expect(retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }])).rejects.toThrow(
+      /status 400.*bad request shape/,
+    );
+    expect(seq.calls()).toBe(1);
+    expect(sleeps).toHaveLength(0);
+  });
+
+  it("clamps a huge provider body to a short snippet", async () => {
+    const seq = sequencedFetch([{ status: 400, body: "x".repeat(1000) }]);
+    const error = await retryClient(seq.impl, [])
+      .complete([{ role: "user", content: "hi" }])
+      .then(() => undefined)
+      .catch((e: Error) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message.length).toBeLessThan(300);
+  });
+
+  it("a timeout abort is NOT retried (the budget is already spent)", async () => {
+    const sleeps: number[] = [];
+    let calls = 0;
+    const timeoutFetch = vi.fn(async () => {
+      calls += 1;
+      throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    }) as unknown as typeof fetch;
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      timeoutMs: 5,
+      fetchImpl: timeoutFetch,
+      sleepImpl: async (ms: number) => {
+        sleeps.push(ms);
+      },
+    });
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/timed out after 5ms/);
+    expect(calls).toBe(1);
+    expect(sleeps).toHaveLength(0);
   });
 });
 
