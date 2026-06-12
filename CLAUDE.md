@@ -64,7 +64,11 @@ one `resolveProjectTaskRefs`; `projects_create` resolves `clientName`;
 eval: 97.8% (135/138) — the one hard fail, `time_tracking/start` choosing
 `clockify_status` for a bare "start a timer", reproduces IDENTICALLY at
 pre-sweep commit `3261a1c` (DeepSeek provider drift, not a regression).
-`npm run verify` = **991 tests**, `npx madge --circular
+The USER side then closed too: all 7 read-filter `userId` slots resolve
+id/name/'me' via `resolveUserFilter`, and `users_deactivate` resolves +
+verifies the member (the self-guard now holds on the RESOLVED id — 'me'/
+own-name used to slip past it).
+`npm run verify` = **1005 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -205,11 +209,17 @@ such bug was found against the REAL API, not by reading the code.
   `resolveRefList` core (id/name/'me' per entry; ambiguous/unknown ⇒ clarify, so
   nothing ever commits half-assigned). `verifyIds` checks even a 24-hex value
   against the real list for permission/assignment-affecting writes.
-  Destructive/archive/unarchive verbs pass `includeArchived` (the wire
-  defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
-  options labeled). An identity mistake is a clarify, never a
-  confirmed-then-failed commit. Known follow-up: read-filter `userId` slots
-  (review_day/week, entries/assignments list) still take raw ids only.
+  READ-FILTER `userId` slots (entries list, review day/week, scheduling
+  assignments list + user totals, time-off requests list + balance get) go
+  through `resolveUserFilter` (ONE copy; id/exact name/'me'; built on
+  `resolveUserRef` `trustIds` so the 24-hex happy path stays list-free — a
+  wrong id on a read is an empty list, not a damaging write; each action keeps
+  its own absent-default: caller vs unfiltered). `users_deactivate` resolves +
+  VERIFIES the member and the self-deactivation guard holds on the RESOLVED id
+  ('me'/own-name can't slip past). Destructive/archive/unarchive verbs pass
+  `includeArchived` (the wire defaults to ACTIVE-ONLY — both states are
+  fetched explicitly; archived options labeled). An identity mistake is a
+  clarify, never a confirmed-then-failed commit.
 - **Dates server-side:** the model never computes calendar dates.
   `resolveRelativeDay` (today/yesterday/tomorrow, weekday words, dayOffset;
   `undefined` ⇒ caller MUST clarify), `resolveInstant` (UTC instants the
