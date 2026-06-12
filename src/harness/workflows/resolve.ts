@@ -208,6 +208,56 @@ export async function resolveUserRefs(
   return { ok: true, userIds };
 }
 
+/**
+ * Resolve ONE user reference — an id, an exact name, or "me" — to a `{ userId,
+ * label }`, verifying it against the workspace user list so an identity mistake
+ * (a name in the id slot, a 24-hex non-user) becomes a clarify at preview, never
+ * a confirmed-then-failed commit. Shared by every action that targets a single
+ * member (role grant, the per-project / workspace member rate, group add/remove)
+ * so the resolution + grounded clarify live in ONE place. A name passed in the
+ * `id` slot is matched by name after the exact-id lookup misses (the planner
+ * routinely puts a NAME where an id belongs). `label` is "you" for the admin,
+ * else the member's name — for a legible preview.
+ */
+export async function resolveUserRef(
+  ref: { id?: string; name?: string },
+  opts: { verb: string; adminUserId: string; listUsers: () => Promise<Array<{ id: string; name: string }>> },
+): Promise<{ ok: true; userId: string; label: string } | { ok: false; clarify: RiskyClarifyResult }> {
+  if ((ref.id ?? ref.name ?? "").trim().toLowerCase() === "me") {
+    return { ok: true, userId: opts.adminUserId, label: "you" };
+  }
+  const users = await opts.listUsers();
+  let user = ref.id ? users.find((u) => u.id === ref.id) : undefined;
+  if (!user) {
+    // A name may have been passed in EITHER slot — match it after the id lookup.
+    const query = (ref.name ?? ref.id ?? "").trim();
+    if (query) {
+      const match = matchByName(users, query);
+      if (match.kind === "many") {
+        return {
+          ok: false,
+          clarify: {
+            clarify: `Several workspace users match "${query}". Which one should I ${opts.verb}?`,
+            options: match.matches.map((u) => ({ id: u.id, label: u.name })),
+          },
+        };
+      }
+      if (match.kind === "one") user = match.entity;
+    }
+  }
+  if (!user) {
+    const target = (ref.name ?? ref.id ?? "").trim();
+    return {
+      ok: false,
+      clarify: {
+        clarify: `"${target}" isn't a workspace member, so I can't ${opts.verb} them.`,
+        options: suggestOptions(users, target),
+      },
+    };
+  }
+  return { ok: true, userId: user.id, label: user.name };
+}
+
 /** Longest value rendered on a preview "set <field> → <value>" line. */
 const MAX_PATCH_VALUE_LEN = 80;
 

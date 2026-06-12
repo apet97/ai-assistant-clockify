@@ -150,6 +150,42 @@ describe("user & group actions", () => {
     expect(fake.state.groups.find((g) => g.id === gid)).toBeUndefined();
   });
 
+  it("groups_add_user resolves a user NAME passed in the id slot and shows names in the preview (no confirm-then-400)", async () => {
+    const fake = createFakeWorkspace(seed());
+    // The live bug: the model put "Bob" in the userId slot → 400 at commit.
+    const add = await executeAction({ actionName: "clockify_groups_add_user", args: { groupId: "g1", userId: "Bob" }, context: makeContext(fake) });
+    if (add.kind !== "preview") throw new Error(`expected a preview, got ${add.kind}`);
+    expect(add.operation.payload).toMatchObject({ groupId: "g1", userId: "u2" });
+    const change = add.preview.expectedChanges.join(" ");
+    expect(change).toContain("Bob");
+    expect(change).toContain("Devs");
+    await commitConfirmedOperation(makeContext(fake), add.operation);
+    expect(fake.state.groups.find((g) => g.id === "g1")?.userIds).toContain("u2");
+  });
+
+  it("groups_add_user resolves the group by name + user by 'me'", async () => {
+    const fake = createFakeWorkspace(seed());
+    const add = await executeAction({ actionName: "clockify_groups_add_user", args: { groupName: "Devs", userId: "me" }, context: makeContext(fake) });
+    if (add.kind !== "preview") throw new Error("expected a preview");
+    expect(add.operation.payload).toMatchObject({ groupId: "g1", userId: "admin-1" });
+  });
+
+  it("groups_add_user clarifies on an unknown user (never previews a doomed commit)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({ actionName: "clockify_groups_add_user", args: { groupId: "g1", userId: "Ghost McNobody" }, context: makeContext(fake) });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.addUserToGroup ?? 0).toBe(0);
+  });
+
+  it("groups_remove_user resolves names and clarifies on an unknown group", async () => {
+    const fake = createFakeWorkspace(seed());
+    const ok = await executeAction({ actionName: "clockify_groups_remove_user", args: { groupName: "Devs", userId: "Bob" }, context: makeContext(fake) });
+    if (ok.kind !== "preview") throw new Error("expected a preview");
+    expect(ok.operation.payload).toMatchObject({ groupId: "g1", userId: "u2" });
+    const bad = await executeAction({ actionName: "clockify_groups_remove_user", args: { groupName: "Nope", userId: "Bob" }, context: makeContext(fake) });
+    expect(bad.kind).toBe("clarify");
+  });
+
   it("clockify_groups_delete resolves a group by name when no id is given (live-loop FIX 1)", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
