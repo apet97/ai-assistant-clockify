@@ -14,6 +14,8 @@ export interface ModelClientSelection {
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;
+  /** Per-request abort timeout (ms) for the HTTP client; defaults to 120s. */
+  llmTimeoutMs?: number;
   geminiModel?: string;
 }
 
@@ -28,5 +30,6 @@ export function selectModelClient(config: ModelClientSelection): ModelClient {
     baseUrl: config.llmBaseUrl,
     apiKey: config.llmApiKey,
     model: config.llmModel,
+    timeoutMs: config.llmTimeoutMs,
   });
 }

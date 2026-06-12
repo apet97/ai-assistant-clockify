@@ -43,6 +43,13 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, LLM_AGENTIC: "0" }).llmAgentic).toBe(false);
   });
 
+  it("parses LLM_TIMEOUT_MS to a number and leaves it undefined when absent (client default applies)", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).llmTimeoutMs).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_TIMEOUT_MS: "60000" }).llmTimeoutMs).toBe(60000);
+    expect(() => loadConfig({ ...base, LLM_TIMEOUT_MS: "not-a-number" })).toThrow();
+  });
+
   it("rejects production without data encryption key", () => {
     expect(() =>
       loadConfig({

@@ -72,9 +72,17 @@ export interface ModelClientConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
+  /**
+   * Per-request abort timeout. Without one a hung provider hangs the chat turn
+   * forever (the route awaits this fetch). Default is generous — DeepSeek
+   * thinking mode legitimately takes minutes on a long transcript.
+   */
+  timeoutMs?: number;
   /** Injectable fetch for tests. */
   fetchImpl?: typeof fetch;
 }
+
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 interface RawToolCall {
   id?: string;
@@ -145,55 +153,54 @@ function toWireMessage(message: ModelMessage): Record<string, unknown> {
 export function createModelClient(config: ModelClientConfig): ModelClient {
   const endpoint = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const doFetch = config.fetchImpl ?? fetch;
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
-  return {
-    async complete(messages: ModelMessage[]): Promise<string> {
-      const response = await doFetch(endpoint, {
+  /** POST one chat-completion body with the abort timeout; the signal also bounds a stuck body read. */
+  async function postChat(body: Record<string, unknown>): Promise<ChatCompletionResponse> {
+    let response: Response;
+    try {
+      response = await doFetch(endpoint, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           authorization: `Bearer ${config.apiKey}`,
         },
-        body: JSON.stringify({
-          model: config.model,
-          messages: messages.map(toWireMessage),
-          temperature: 0,
-          response_format: { type: "json_object" },
-        }),
+        body: JSON.stringify({ model: config.model, temperature: 0, ...body }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
-
-      if (!response.ok) {
-        throw new Error(`Model request failed with status ${response.status}`);
+    } catch (error) {
+      const name = (error as { name?: string } | null)?.name;
+      if (name === "TimeoutError" || name === "AbortError") {
+        throw new Error(`Model request timed out after ${timeoutMs}ms`);
       }
+      throw error;
+    }
 
-      const data = (await response.json()) as ChatCompletionResponse;
+    if (!response.ok) {
+      throw new Error(`Model request failed with status ${response.status}`);
+    }
+
+    return (await response.json()) as ChatCompletionResponse;
+  }
+
+  return {
+    async complete(messages: ModelMessage[]): Promise<string> {
+      const data = await postChat({
+        messages: messages.map(toWireMessage),
+        response_format: { type: "json_object" },
+      });
       return data.choices?.[0]?.message?.content ?? "";
     },
 
     async completeWithTools(messages: ModelMessage[], tools: ToolDefinition[]): Promise<ToolCompletion> {
-      const response = await doFetch(endpoint, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${config.apiKey}`,
-        },
-        body: JSON.stringify({
-          model: config.model,
-          messages: messages.map(toWireMessage),
-          temperature: 0,
-          tools: tools.map((tool) => ({
-            type: "function",
-            function: { name: tool.name, description: tool.description, parameters: tool.parameters },
-          })),
-          tool_choice: "auto",
-        }),
+      const data = await postChat({
+        messages: messages.map(toWireMessage),
+        tools: tools.map((tool) => ({
+          type: "function",
+          function: { name: tool.name, description: tool.description, parameters: tool.parameters },
+        })),
+        tool_choice: "auto",
       });
-
-      if (!response.ok) {
-        throw new Error(`Model request failed with status ${response.status}`);
-      }
-
-      const data = (await response.json()) as ChatCompletionResponse;
       const message = data.choices?.[0]?.message;
       return {
         text: message?.content ?? "",

@@ -29,6 +29,8 @@ export interface AppConfig {
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;
+  /** Per-request model timeout (ms); the HTTP client defaults to 120s when unset. */
+  llmTimeoutMs?: number;
   /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
   geminiModel?: string;
 }
@@ -53,6 +55,8 @@ const envObjectSchema = z.object({
   LLM_BASE_URL: z.string().min(1).optional(),
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_MODEL: z.string().min(1).optional(),
+  /** Per-request model timeout (ms); the client defaults to 120s when unset. */
+  LLM_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
 });
 
@@ -103,6 +107,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmBaseUrl: parsed.LLM_BASE_URL,
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
+    llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
     geminiModel: parsed.GEMINI_MODEL,
   };
 }

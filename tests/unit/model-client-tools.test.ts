@@ -185,3 +185,57 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
     expect(body.response_format).toEqual({ type: "json_object" });
   });
 });
+
+describe("createModelClient request timeout", () => {
+  function signalCapturingFetch(captured: { signals: Array<AbortSignal | undefined> }): typeof fetch {
+    return vi.fn(async (_url: unknown, init?: { signal?: AbortSignal }) => {
+      captured.signals.push(init?.signal ?? undefined);
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: "{}" } }] }) } as Response;
+    }) as unknown as typeof fetch;
+  }
+
+  it("passes an abort signal on BOTH complete and completeWithTools (a hung provider can't hang the turn)", async () => {
+    const captured: { signals: Array<AbortSignal | undefined> } = { signals: [] };
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "test-model",
+      fetchImpl: signalCapturingFetch(captured),
+    });
+    await c.complete([{ role: "user", content: "hi" }]);
+    await c.completeWithTools!([{ role: "user", content: "hi" }], tools);
+    expect(captured.signals).toHaveLength(2);
+    for (const signal of captured.signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("maps a timeout abort to a clean error naming the configured limit", async () => {
+    const timeoutFetch = vi.fn(async () => {
+      throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+    }) as unknown as typeof fetch;
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "test-model",
+      timeoutMs: 5,
+      fetchImpl: timeoutFetch,
+    });
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/timed out after 5ms/);
+    await expect(c.completeWithTools!([{ role: "user", content: "hi" }], tools)).rejects.toThrow(
+      /timed out after 5ms/,
+    );
+  });
+
+  it("defaults the timeout to 120s and leaves non-abort errors untouched", async () => {
+    const failFetch = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const c = createModelClient({ baseUrl: "https://api.test/v1", apiKey: "fake", model: "m", fetchImpl: failFetch });
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/ECONNREFUSED/);
+
+    const timeoutFetch = vi.fn(async () => {
+      throw Object.assign(new Error("aborted"), { name: "TimeoutError" });
+    }) as unknown as typeof fetch;
+    const d = createModelClient({ baseUrl: "https://api.test/v1", apiKey: "fake", model: "m", fetchImpl: timeoutFetch });
+    await expect(d.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/timed out after 120000ms/);
+  });
+});

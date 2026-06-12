@@ -21,4 +21,15 @@ describe("selectModelClient", () => {
     const client = selectModelClient({ llmProvider: "gemini-cli", geminiModel: "gemini-x" });
     expect(typeof client.complete).toBe("function");
   });
+
+  it("accepts llmTimeoutMs and threads it to the HTTP client", () => {
+    const client = selectModelClient({
+      llmProvider: "http",
+      llmBaseUrl: "https://example.test/v1",
+      llmApiKey: "fake-key",
+      llmModel: "test-model",
+      llmTimeoutMs: 60_000,
+    });
+    expect(typeof client.complete).toBe("function");
+  });
 });
