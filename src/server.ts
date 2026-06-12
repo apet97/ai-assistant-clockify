@@ -69,6 +69,53 @@ function liveClockifyForWorkspace(installation: Installation): WorkspaceClient {
 /** Operational-table retention sweep cadence (see Store.pruneExpired). */
 const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
+/** Drain budget before force-exit — Railway SIGKILLs shortly after SIGTERM. */
+const FORCE_EXIT_AFTER_MS = 10_000;
+
+export interface ShutdownDeps {
+  server: { close(cb: (err?: Error) => void): void; closeIdleConnections?: () => void };
+  store: { close(): void };
+  /** Cleared first so the retention sweep can't fire mid-teardown. */
+  pruneTimer?: NodeJS.Timeout;
+  exit?: (code: number) => void;
+  forceExitAfterMs?: number;
+  log?: (message: string) => void;
+}
+
+/**
+ * Graceful SIGTERM/SIGINT teardown: stop the prune loop, drop keep-alive
+ * sockets, drain in-flight requests, close the store, exit 0. A hung drain
+ * (e.g. an in-flight 120s model call) force-exits 1 before Railway's SIGKILL —
+ * WAL keeps the DB crash-safe either way. Idempotent: the second signal is a
+ * no-op while the first teardown runs.
+ */
+export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => void {
+  const exit = deps.exit ?? ((code: number) => process.exit(code));
+  const log = deps.log ?? ((message: string) => console.log(message));
+  let shuttingDown = false;
+  return (signal: string): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`${signal} received — draining`);
+    if (deps.pruneTimer) clearInterval(deps.pruneTimer);
+    const force = setTimeout(() => {
+      try {
+        deps.store.close();
+      } catch {
+        // The drain may still hold a statement open — exit regardless.
+      }
+      exit(1);
+    }, deps.forceExitAfterMs ?? FORCE_EXIT_AFTER_MS);
+    force.unref?.();
+    deps.server.closeIdleConnections?.();
+    deps.server.close(() => {
+      clearTimeout(force);
+      deps.store.close();
+      exit(0);
+    });
+  };
+}
+
 export function start(): void {
   const config = loadConfig();
   const store = createStore(config.databasePath, { encryptionKey: config.dataEncryptionKey });
@@ -102,10 +149,16 @@ export function start(): void {
   const pruneTimer = setInterval(prune, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 
-  app.listen(config.port, () => {
+  const server = app.listen(config.port, () => {
     // Intentionally minimal, non-secret startup log.
     console.log(`AI Assistant add-on listening on port ${config.port}`);
   });
+
+  // Railway redeploys SIGTERM the container — drain instead of dropping
+  // in-flight turns, and close the store cleanly.
+  const shutdown = createShutdownHandler({ server, store, pruneTimer });
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
+  process.once("SIGINT", () => shutdown("SIGINT"));
 }
 
 // Run only when executed directly (not when imported by tests).
