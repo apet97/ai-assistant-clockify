@@ -82,4 +82,25 @@ describe("GET /api/metrics", () => {
     const res = await request(app).get("/api/metrics");
     expect(res.status).toBe(401);
   });
+
+  it("reports per-turn usage telemetry (model calls + latency; JSON mode reports no tokens)", async () => {
+    const cookie = await adminCookie();
+    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create another tag" });
+
+    const res = await request(app).get("/api/metrics").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const usage = res.body.metrics.usage as {
+      turns: number;
+      modelCalls: number;
+      promptTokens: number;
+      avgTurnMs: number;
+      last24h: { turns: number };
+    };
+    expect(usage.turns).toBeGreaterThanOrEqual(1);
+    expect(usage.modelCalls).toBeGreaterThanOrEqual(1);
+    // This suite's model is a plain complete() client — no token counts, honestly zero.
+    expect(usage.promptTokens).toBe(0);
+    expect(usage.avgTurnMs).toBeGreaterThanOrEqual(0);
+    expect(usage.last24h.turns).toBeGreaterThanOrEqual(1);
+  });
 });
