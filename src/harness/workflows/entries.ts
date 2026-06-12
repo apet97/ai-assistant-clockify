@@ -6,7 +6,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { resolveInstant } from "./resolve.js";
+import { resolveInstant, resolveProjectTaskRefs } from "./resolve.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -19,7 +19,7 @@ import { resolveInstant } from "./resolve.js";
 const listEntries = defineAction({
   name: "clockify_entries_list",
   description:
-    "List time entries for a user (defaults to the caller). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters.",
+    "List time entries for a user (defaults to the caller). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters — pass an id or the exact name (`projectId`/`projectName`, `taskId`/`taskName`), resolved server-side.",
   featureGroup: "time_tracking",
   risks: ["read"],
   schema: z.object({
@@ -27,7 +27,9 @@ const listEntries = defineAction({
     start: z.string().optional(),
     end: z.string().optional(),
     projectId: z.string().optional(),
+    projectName: z.string().optional(),
     taskId: z.string().optional(),
+    taskName: z.string().optional(),
   }),
   async handler(ctx, args) {
     const userId = args.userId ?? ctx.adminUserId;
@@ -46,12 +48,22 @@ const listEntries = defineAction({
         message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`,
       };
     }
+    // A name in either filter slot resolves to a verified id — an unknown
+    // filter clarifies instead of a doomed (or silently-empty) wire call.
+    const refs = await resolveProjectTaskRefs(args, {
+      verb: "filter by",
+      listProjects: (f) => ctx.clockify.listProjects(f),
+      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
+    });
+    if (!refs.ok) {
+      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
+    }
     const items = await ctx.clockify.getEntries({
       userId,
       start,
       end,
-      projectId: args.projectId,
-      taskId: args.taskId,
+      projectId: refs.projectId,
+      taskId: refs.taskId,
     });
     return {
       kind: "receipt",

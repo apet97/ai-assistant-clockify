@@ -17,6 +17,12 @@ function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPoli
 }
 
 const seedEntries = () => ({
+  // The filter projects exist: a short id in the filter resolves via the
+  // listed exact-id fallback (a name resolves by exact match).
+  projects: [
+    { id: "p1", name: "Apollo" },
+    { id: "p2", name: "Beta" },
+  ],
   entries: [
     { id: "e1", description: "A", start: "2026-06-05T09:00:00Z", end: "2026-06-05T10:00:00Z", projectId: "p1" },
     { id: "e2", description: "B", start: "2026-06-05T11:00:00Z", end: "2026-06-05T12:00:00Z", projectId: "p2" },
@@ -39,6 +45,48 @@ describe("time-entry actions — reads", () => {
     if (filtered.kind === "receipt" && filtered.receipt.ok) {
       expect((filtered.receipt.data as any).count).toBe(1);
     } else throw new Error("expected receipt");
+  });
+
+  it("clockify_entries_list resolves a project NAME filter (either slot) to the real id", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const byName = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { projectName: "Apollo" },
+      context: makeContext(fake),
+    });
+    if (byName.kind !== "receipt" || !byName.receipt.ok) throw new Error("expected receipt");
+    expect((byName.receipt.data as any).count).toBe(1);
+
+    // The planner habit: a NAME in the projectId SLOT resolves too.
+    const bySlot = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { projectId: "Beta" },
+      context: makeContext(fake),
+    });
+    if (bySlot.kind !== "receipt" || !bySlot.receipt.ok) throw new Error("expected receipt");
+    expect((bySlot.receipt.data as any).count).toBe(1);
+  });
+
+  it("clockify_entries_list clarifies on an unknown project filter instead of a doomed wire call", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { projectName: "Apolo" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.getEntries ?? 0).toBe(0);
+  });
+
+  it("clockify_entries_list clarifies on a task name filter with no project to scope it", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: { taskName: "Design" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.getEntries ?? 0).toBe(0);
   });
 
   it("clockify_entries_list resolves RELATIVE start/end to UTC instants (live: ?start=today hit the wire 12×)", async () => {
