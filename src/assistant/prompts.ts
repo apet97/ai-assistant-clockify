@@ -94,6 +94,7 @@ export function buildSystemPrompt(input: BuildPromptInput): string {
     "- Do not claim any change is complete until the harness returns a receipt.",
     "- Respect the admin's permissions below; do not propose actions in groups set to off (or writes in read-only groups).",
     "- One turn cannot reference an id that an earlier action in the same turn will create. When the admin wants to create a project (or client/task) and immediately start a timer on it in the same request, use `clockify_create_work_package` with `startTimer: true` — it creates/reuses the project and starts the timer on the new id in one step. Never emit a separate `clockify_start_timer` whose `projectId` you do not yet have.",
+    "- To START a timer on an EXISTING project named by the admin (\"start timer on Acme\"), call `clockify_start_timer` with `projectName` — the harness resolves the name and CLARIFIES if it doesn't match (it never invents a project). Use `clockify_create_work_package` only when the admin explicitly asks to CREATE the project. A misspelled or unknown project name is a clarify, not a silent new project.",
     "- To delete a tag, pass `clockify_tags_delete` the exact `name` (or the `id` if you already have it) and the harness resolves it — do not spend a turn listing tags just to find an id. Never send a delete with neither id nor name.",
     "",
     "Action catalog:",

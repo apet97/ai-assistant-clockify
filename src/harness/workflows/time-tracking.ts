@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { matchByName, resolveRelativeDay } from "./resolve.js";
+import { matchByName, resolveRelativeDay, suggestOptions } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
@@ -55,22 +55,77 @@ const status = defineAction({
 
 const startTimer = defineAction({
   name: "clockify_start_timer",
-  description: "Start a new timer for the admin.",
+  description:
+    "Start a new timer for the admin on an EXISTING project. Pass the project by name with `projectName` (resolved to its id; an unknown name CLARIFIES, it is never created) — use clockify_create_work_package with startTimer:true only when the admin explicitly asks to CREATE a new project.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z.object({
     description: z.string().optional(),
     projectId: z.string().optional(),
+    projectName: z.string().optional(),
     taskId: z.string().optional(),
+    taskName: z.string().optional(),
     tagIds: z.array(z.string()).optional(),
     billable: z.boolean().optional(),
   }),
   async handler(ctx, args) {
+    // Resolve project/task by NAME at execution time. An unknown name CLARIFIES
+    // (offering grounded options) — it is NEVER silently created. "Start timer on
+    // <misspelled project>" must ask, exactly like clockify_log_work; creating a
+    // project is the explicit job of clockify_create_work_package.
+    let projectId = args.projectId;
+    if (!projectId && args.projectName) {
+      const projects = await ctx.clockify.listProjects();
+      const match = matchByName(projects, args.projectName);
+      if (match.kind === "none") {
+        const options = suggestOptions(projects, args.projectName);
+        return {
+          kind: "clarify",
+          message: `I couldn't find an active project named "${args.projectName}". Which project should I start the timer on${options.length ? "" : ", or should I create it first"}?`,
+          options: options.length ? options : undefined,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several active projects are named "${args.projectName}". Which one?`,
+          options: match.matches.map((p) => ({ id: p.id, label: p.name })),
+        };
+      }
+      projectId = match.entity.id;
+    }
+
+    let taskId = args.taskId;
+    if (!taskId && args.taskName) {
+      if (!projectId) {
+        return {
+          kind: "clarify",
+          message: `To start a timer on task "${args.taskName}" I need the project. Which project is it in?`,
+        };
+      }
+      const tasks = await ctx.clockify.listTasks(projectId);
+      const match = matchByName(tasks, args.taskName);
+      if (match.kind === "none") {
+        return {
+          kind: "clarify",
+          message: `I couldn't find a task named "${args.taskName}" in that project.`,
+        };
+      }
+      if (match.kind === "many") {
+        return {
+          kind: "clarify",
+          message: `Several tasks are named "${args.taskName}". Which one?`,
+          options: match.matches.map((t) => ({ id: t.id, label: t.name })),
+        };
+      }
+      taskId = match.entity.id;
+    }
+
     const entry = await ctx.clockify.startTimeEntry({
       userId: ctx.adminUserId,
       description: args.description,
-      projectId: args.projectId,
-      taskId: args.taskId,
+      projectId,
+      taskId,
       tagIds: args.tagIds,
       billable: args.billable,
       start: nowIso(ctx),

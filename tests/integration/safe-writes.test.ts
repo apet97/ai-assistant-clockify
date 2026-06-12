@@ -46,6 +46,40 @@ describe("safe writes", () => {
     expect(fake.counts.startTimeEntry).toBe(1);
   });
 
+  it("start_timer resolves a project NAME to its id and starts the timer on it", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_start_timer",
+      args: { projectName: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && result.receipt.ok) {
+      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.state.running?.projectId).toBe("p-acme");
+    } else {
+      throw new Error("expected a success receipt");
+    }
+    expect(fake.counts.createProject ?? 0).toBe(0); // never creates a project
+  });
+
+  it("start_timer clarifies (never creates) when the project NAME does not exist", async () => {
+    // The finding: a timer-start against a misspelled / non-existent project must
+    // clarify like clockify_log_work — never silently create a new project.
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_start_timer",
+      args: { projectName: "Acme Crp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") {
+      expect(result.message).toMatch(/Acme Crp/);
+    }
+    expect(fake.counts.createProject ?? 0).toBe(0); // never creates the mistyped project
+    expect(fake.counts.startTimeEntry ?? 0).toBe(0); // and never starts a timer on an unverified project
+  });
+
   it("stop_timer with no running timer is a truthful no-op: success WITH the warning, nothing changed", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
