@@ -7,7 +7,7 @@ import {
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { describePatch, matchByName, resolveEntityRef, suggestOptions } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveUserRef } from "./resolve.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -353,26 +353,13 @@ const rateUpdate = defineRiskyAction({
     if (!project.ok) return project.clarify;
     // Resolve the member ("me" -> the admin; a name -> a user id). Clockify's rate
     // endpoint wants a 24-hex user id in the path, not "me".
-    let userId: string;
-    let memberLabel: string;
-    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
-      userId = ctx.adminUserId;
-      memberLabel = "you";
-    } else {
-      const users = await ctx.clockify.listUsers();
-      let u = args.userId ? users.find((x) => x.id === args.userId) : undefined;
-      if (!u && args.userName) {
-        const m = matchByName(users, args.userName);
-        if (m.kind === "many") return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((x) => ({ id: x.id, label: x.name })) };
-        if (m.kind === "one") u = m.entity;
-      }
-      if (!u) {
-        const target = args.userName ?? args.userId ?? "";
-        return { clarify: `"${target}" isn't a workspace user.`, options: suggestOptions(users, target) };
-      }
-      userId = u.id;
-      memberLabel = u.name;
-    }
+    const member = await resolveUserRef(
+      { id: args.userId, name: args.userName },
+      { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+    );
+    if (!member.ok) return member.clarify;
+    const userId = member.userId;
+    const memberLabel = member.label;
     // VERIFY membership — a member-rate PUT for a non-member 404s ("User membership
     // on project ... not found"), so catch it at preview, never confirm-then-fail.
     const memberships = await ctx.clockify.getProjectMemberships(project.id);

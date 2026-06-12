@@ -83,35 +83,16 @@ const updateRole = defineRiskyAction({
       message: "Provide the user (id or exact name) to give the role to.",
     }),
   async preview(ctx, args) {
-    // 1) RECIPIENT — the URL user. VERIFY it is a real workspace member (a 24-hex
-    // id that is actually a project sails past the trust-the-id path), so an
-    // identity mistake clarifies at preview, never confirmed-then-failed.
-    let granteeId: string;
-    let granteeName: string;
-    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
-      granteeId = ctx.adminUserId;
-      granteeName = "you";
-    } else {
-      const users = await ctx.clockify.listUsers();
-      let member = args.userId ? users.find((u) => u.id === args.userId) : undefined;
-      if (!member && args.userName) {
-        const m = matchByName(users, args.userName);
-        if (m.kind === "many") {
-          return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((u) => ({ id: u.id, label: u.name })) };
-        }
-        if (m.kind === "one") member = m.entity;
-      }
-      if (!member) {
-        const target = args.userName ?? args.userId ?? "";
-        const options = suggestOptions(users, target);
-        return {
-          clarify: `"${target}" isn't a workspace member, so I can't give it the ${args.role} role. Who should get it?`,
-          options: options.length ? options : undefined,
-        };
-      }
-      granteeId = member.id;
-      granteeName = member.name;
-    }
+    // 1) RECIPIENT — the URL user. resolveUserRef VERIFIES it is a real workspace
+    // member (a 24-hex id that is actually a project sails past a trust-the-id
+    // path), so an identity mistake clarifies at preview, never confirmed-then-failed.
+    const recipient = await resolveUserRef(
+      { id: args.userId, name: args.userName },
+      { verb: `give the ${args.role} role to`, adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+    );
+    if (!recipient.ok) return recipient.clarify;
+    const granteeId = recipient.userId;
+    const granteeName = recipient.label;
 
     // 2) SCOPE (entityId) — live-verified contract: WORKSPACE_ADMIN = workspaceId
     // (no sourceType); a group = the group id + sourceType USER_GROUP (TEAM_MANAGER);
@@ -193,28 +174,15 @@ const rateUpdate = defineRiskyAction({
     .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
   async preview(ctx, args) {
     // Resolve + VERIFY the member ("me" -> admin; a name -> a user id). A 24-hex
-    // id that is actually a project/task sails past the trust-the-id path and the
-    // rate PUT 404s, so confirm the member is a real workspace user at preview.
-    let userId: string;
-    let memberLabel: string;
-    if ((args.userId ?? args.userName ?? "").trim().toLowerCase() === "me") {
-      userId = ctx.adminUserId;
-      memberLabel = "you";
-    } else {
-      const users = await ctx.clockify.listUsers();
-      let u = args.userId ? users.find((x) => x.id === args.userId) : undefined;
-      if (!u && args.userName) {
-        const m = matchByName(users, args.userName);
-        if (m.kind === "many") return { clarify: `Several workspace users match "${args.userName}". Which one?`, options: m.matches.map((x) => ({ id: x.id, label: x.name })) };
-        if (m.kind === "one") u = m.entity;
-      }
-      if (!u) {
-        const target = args.userName ?? args.userId ?? "";
-        return { clarify: `"${target}" isn't a workspace member, so I can't set a rate for them.`, options: suggestOptions(users, target) };
-      }
-      userId = u.id;
-      memberLabel = u.name;
-    }
+    // id that is actually a project/task sails past a trust-the-id path and the
+    // rate PUT 404s, so resolveUserRef confirms a real workspace user at preview.
+    const member = await resolveUserRef(
+      { id: args.userId, name: args.userName },
+      { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+    );
+    if (!member.ok) return member.clarify;
+    const userId = member.userId;
+    const memberLabel = member.label;
     const amountMinor = toMinor(args.amount, args.amountUnit);
     return {
       actionLabel: `Set member ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
