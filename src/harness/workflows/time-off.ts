@@ -274,7 +274,7 @@ const getRequest = defineReadAction({
 const createRequest = defineRiskyAction({
   name: "clockify_time_off_requests_create",
   description:
-    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
+    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
   group: TOA,
   risks: ["external_side_effect"],
   schema: z
