@@ -3,6 +3,9 @@ import type { EntitySummary } from "../types.js";
 export interface TimeOffPolicySummary extends EntitySummary {
   status?: string;
   timeUnit?: string;
+  /** The users / user groups the policy applies to (from the policy doc). */
+  userIds?: string[];
+  userGroupIds?: string[];
 }
 
 export interface TimeOffRequestSummary {
@@ -26,17 +29,22 @@ export interface TimeOffBalanceSummary {
 
 export interface CreateTimeOffPolicyInput {
   name: string;
-  /** Policy is scoped to this user (the admin) by default. */
+  /** Default scope (the admin) when neither userIds nor userGroupIds is given. */
   userId: string;
   requiresApproval?: boolean;
   daysPerYear?: number;
   negativeBalance?: boolean;
+  /** Scope the policy to these users / user groups (resolved ids). */
+  userIds?: string[];
+  userGroupIds?: string[];
 }
 
 export interface UpdateTimeOffPolicyInput {
   name?: string;
   requiresApproval?: boolean;
   daysPerYear?: number;
+  userIds?: string[];
+  userGroupIds?: string[];
 }
 
 export interface CreateTimeOffRequestInput {

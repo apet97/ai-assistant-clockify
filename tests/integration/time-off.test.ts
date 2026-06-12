@@ -12,6 +12,11 @@ const seed = () => ({
   timeOffPolicies: [{ id: "pol1", name: "PTO", status: "ACTIVE" }],
   timeOffRequests: [{ id: "r1", policyId: "pol1", userId: "u1", status: "PENDING" }],
   timeOffBalances: [{ policyId: "pol1", policyName: "PTO", balance: 15, used: 5, total: 20 }],
+  users: [
+    { id: "u1", name: "Alice", email: "a@x.com", status: "ACTIVE" },
+    { id: "u2", name: "Bob", email: "b@x.com", status: "ACTIVE" },
+  ],
+  groups: [{ id: "g1", name: "Devs", userIds: [] }],
 });
 
 describe("time-off actions", () => {
@@ -36,6 +41,29 @@ describe("time-off actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.createTimeOffPolicy).toBe(1);
+  });
+
+  it("policies_create scopes to a user GROUP + user BY NAME (resolves), clarifies on an unknown group", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_policies_create", args: { name: "AIASSIST_SMOKE_pol2", userGroupIds: ["Devs"], userIds: ["Bob"] }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.preview.expectedChanges.join(" ")).toContain("Devs");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    const created = fake.state.timeOffPolicies.find((p) => p.name === "AIASSIST_SMOKE_pol2") as { userGroupIds?: string[]; userIds?: string[] } | undefined;
+    expect(created?.userGroupIds).toEqual(["g1"]);
+    expect(created?.userIds).toEqual(["u2"]);
+
+    const bad = await executeAction({ actionName: "clockify_time_off_policies_create", args: { name: "X", userGroupIds: ["Ghosts"] }, context: makeContext(fake) });
+    expect(bad.kind).toBe("clarify");
+  });
+
+  it("policies_update sets a user-group scope BY NAME", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_policies_update", args: { id: "pol1", userGroupIds: ["Devs"] }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    const updated = fake.state.timeOffPolicies.find((p) => p.id === "pol1") as { userGroupIds?: string[] } | undefined;
+    expect(updated?.userGroupIds).toEqual(["g1"]);
   });
 
   it("policies_update previews then updates", async () => {
@@ -122,6 +150,18 @@ describe("time-off actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.updateTimeOffBalance).toBe(1);
+  });
+
+  it("balance_update resolves policy + user NAMES at preview, clarifies on an unknown user", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({ actionName: "clockify_time_off_balance_update", args: { policyId: "PTO", userIds: ["Alice", "me"], value: 3 }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.operation.payload).toMatchObject({ policyId: "pol1", userIds: ["u1", "admin-1"] });
+    expect(preview.preview.expectedChanges.join(" ")).toContain("Alice");
+
+    const bad = await executeAction({ actionName: "clockify_time_off_balance_update", args: { policyId: "PTO", userIds: ["Ghost"], value: 3 }, context: makeContext(fake) });
+    expect(bad.kind).toBe("clarify");
+    expect(fake.counts.updateTimeOffBalance ?? 0).toBe(0);
   });
 });
 

@@ -50,6 +50,19 @@ describe("time-off rest", () => {
     expect(body.automaticAccrual).toEqual({ amount: 20, period: "YEAR", timeUnit: "DAYS" });
   });
 
+  it("createTimeOffPolicy scopes to userGroups + users when provided (CONTAINS filter shape)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "pol9", name: "PTO" }));
+    await rest(f as unknown as typeof fetch).createTimeOffPolicy({
+      name: "PTO",
+      userId: "admin-1",
+      userIds: ["u1", "u2"],
+      userGroupIds: ["g1"],
+    });
+    const body = JSON.parse((f as any).mock.calls[0][1].body);
+    expect(body.users).toEqual({ contains: "CONTAINS", ids: ["u1", "u2"], status: "ACTIVE" });
+    expect(body.userGroups).toEqual({ contains: "CONTAINS", ids: ["g1"], status: "ACTIVE" });
+  });
+
   it("updateTimeOffPolicy GET-then-PUTs, merging fields into the existing policy", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
@@ -63,6 +76,17 @@ describe("time-off rest", () => {
     const body = JSON.parse(calls[1][1].body);
     expect(body.name).toBe("New");
     expect(body.color).toBe("#fff"); // preserved from existing
+  });
+
+  it("updateTimeOffPolicy overlays a userGroups scope onto the existing doc", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({ id: "pol1", name: "PTO", timeUnit: "DAYS" })
+        : jsonResponse({ id: "pol1", name: "PTO" }),
+    );
+    await rest(f as unknown as typeof fetch).updateTimeOffPolicy("pol1", { userGroupIds: ["g1"] });
+    const body = JSON.parse((f as any).mock.calls[1][1].body);
+    expect(body.userGroups).toEqual({ contains: "CONTAINS", ids: ["g1"], status: "ACTIVE" });
   });
 
   it("archiveTimeOffPolicy PATCHes status ARCHIVED / ACTIVE", async () => {

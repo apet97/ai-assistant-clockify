@@ -2,10 +2,39 @@ import { z } from "zod";
 import {
   defineReadAction,
   defineRiskyAction,
+  type ActionContext,
   type ActionDefinition,
+  type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveRelativeDay } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveGroupRefs, resolveRelativeDay, resolveUserRefs } from "./resolve.js";
+
+/**
+ * Resolve a time-off policy's scope — `userIds` (ids/names/'me') and
+ * `userGroupIds` (ids/names) — to real ids at PREVIEW, so a name never reaches the
+ * wire. Returns the resolved ids + display labels, or a clarify to return directly.
+ */
+async function resolvePolicyScope(
+  ctx: ActionContext,
+  args: { userIds?: string[]; userGroupIds?: string[] },
+): Promise<{ ok: true; userIds?: string[]; userGroupIds?: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
+  const labels: string[] = [];
+  let userIds: string[] | undefined;
+  let userGroupIds: string[] | undefined;
+  if (args.userIds?.length) {
+    const r = await resolveUserRefs(args.userIds, { verb: "scope the policy to", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers(), verifyIds: true });
+    if (!r.ok) return r;
+    userIds = r.userIds;
+    labels.push(...r.labels);
+  }
+  if (args.userGroupIds?.length) {
+    const r = await resolveGroupRefs(args.userGroupIds, { verb: "scope the policy to", listGroups: () => ctx.clockify.listGroups() });
+    if (!r.ok) return r;
+    userGroupIds = r.groupIds;
+    labels.push(...r.labels);
+  }
+  return { ok: true, userIds, userGroupIds, labels };
+}
 
 /**
  * Typed time-off workflows (goclmcp §2.9 — policies, requests, balances). Reads
@@ -57,7 +86,7 @@ const getPolicy = defineReadAction({
 const createPolicy = defineRiskyAction({
   name: "clockify_time_off_policies_create",
   description:
-    "Create a time-off policy (scoped to you). Elevated write — previews and requires confirmation.",
+    "Create a time-off policy. Scope it with `userIds` and/or `userGroupIds` — each entry an id, exact name, or 'me' (groups by id/exact name), resolved server-side, clarifies on an unknown one; defaults to just you when neither is given. Elevated write — previews and requires confirmation.",
   group: TOA,
   risks: ["high_risk_write"],
   schema: z.object({
@@ -65,25 +94,31 @@ const createPolicy = defineRiskyAction({
     requiresApproval: z.boolean().optional(),
     daysPerYear: z.number().nonnegative().optional(),
     negativeBalance: z.boolean().optional(),
+    userIds: z.array(z.string().min(1)).optional(),
+    userGroupIds: z.array(z.string().min(1)).optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const scope = await resolvePolicyScope(ctx, args);
+    if (!scope.ok) return scope.clarify;
     const input = {
       name: args.name,
       ...(args.requiresApproval !== undefined ? { requiresApproval: args.requiresApproval } : {}),
       ...(args.daysPerYear !== undefined ? { daysPerYear: args.daysPerYear } : {}),
       ...(args.negativeBalance !== undefined ? { negativeBalance: args.negativeBalance } : {}),
+      ...(scope.userIds?.length ? { userIds: scope.userIds } : {}),
+      ...(scope.userGroupIds?.length ? { userGroupIds: scope.userGroupIds } : {}),
     };
     return {
       actionLabel: "Create time-off policy",
       targets: [],
-      expectedChanges: [`Create time-off policy "${args.name}"`],
+      expectedChanges: [`Create time-off policy "${args.name}" (scoped to ${scope.labels.length ? scope.labels.join(", ") : "you"})`],
       reversibility: "You can archive the policy afterward.",
       warnings: ["This adds a time-off policy to the workspace."],
       payload: { input },
     };
   },
   async commit(ctx, payload) {
-    const { input } = payload as { input: { name: string; requiresApproval?: boolean; daysPerYear?: number; negativeBalance?: boolean } };
+    const { input } = payload as { input: { name: string; requiresApproval?: boolean; daysPerYear?: number; negativeBalance?: boolean; userIds?: string[]; userGroupIds?: string[] } };
     const policy = await ctx.clockify.createTimeOffPolicy({ ...input, userId: ctx.adminUserId });
     return successReceipt({
       action: "clockify_time_off_policies_create",
@@ -97,7 +132,7 @@ const createPolicy = defineRiskyAction({
 const updatePolicy = defineRiskyAction({
   name: "clockify_time_off_policies_update",
   description:
-    "Update a time-off policy (name / approval / days per year). Elevated write — previews and requires confirmation.",
+    "Update a time-off policy (name / approval / days per year) or re-scope it with `userIds`/`userGroupIds` (ids, exact names, or 'me'; resolved server-side, clarifies on an unknown one). Elevated write — previews and requires confirmation.",
   group: TOA,
   risks: ["high_risk_write"],
   schema: z
@@ -106,27 +141,45 @@ const updatePolicy = defineRiskyAction({
       name: z.string().optional(),
       requiresApproval: z.boolean().optional(),
       daysPerYear: z.number().nonnegative().optional(),
+      userIds: z.array(z.string().min(1)).optional(),
+      userGroupIds: z.array(z.string().min(1)).optional(),
     })
-    .refine((v) => v.name !== undefined || v.requiresApproval !== undefined || v.daysPerYear !== undefined, {
-      message: "Provide at least one field to change.",
-    }),
-  async preview(_ctx, args) {
+    .refine(
+      (v) =>
+        v.name !== undefined ||
+        v.requiresApproval !== undefined ||
+        v.daysPerYear !== undefined ||
+        v.userIds !== undefined ||
+        v.userGroupIds !== undefined,
+      { message: "Provide at least one field to change." },
+    ),
+  async preview(ctx, args) {
+    const scope = await resolvePolicyScope(ctx, args);
+    if (!scope.ok) return scope.clarify;
     const patch = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.requiresApproval !== undefined ? { requiresApproval: args.requiresApproval } : {}),
       ...(args.daysPerYear !== undefined ? { daysPerYear: args.daysPerYear } : {}),
+      ...(scope.userIds?.length ? { userIds: scope.userIds } : {}),
+      ...(scope.userGroupIds?.length ? { userGroupIds: scope.userGroupIds } : {}),
     };
+    const changes = describePatch({
+      ...(args.name !== undefined ? { name: args.name } : {}),
+      ...(args.requiresApproval !== undefined ? { requiresApproval: args.requiresApproval } : {}),
+      ...(args.daysPerYear !== undefined ? { daysPerYear: args.daysPerYear } : {}),
+    });
+    if (scope.labels.length) changes.push(`scope policy to ${scope.labels.join(", ")}`);
     return {
       actionLabel: "Update time-off policy",
       targets: [{ type: "time_off_policy", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
-      expectedChanges: describePatch(patch),
+      expectedChanges: changes,
       reversibility: "You can update the policy again to revert most fields.",
       warnings: ["This changes a workspace time-off policy."],
       payload: { id: args.id, patch },
     };
   },
   async commit(ctx, payload) {
-    const { id, patch } = payload as { id: string; patch: { name?: string; requiresApproval?: boolean; daysPerYear?: number } };
+    const { id, patch } = payload as { id: string; patch: { name?: string; requiresApproval?: boolean; daysPerYear?: number; userIds?: string[]; userGroupIds?: string[] } };
     const updated = await ctx.clockify.updateTimeOffPolicy(id, patch);
     return successReceipt({
       action: "clockify_time_off_policies_update",
@@ -363,7 +416,7 @@ const getBalance = defineReadAction({
 const updateBalance = defineRiskyAction({
   name: "clockify_time_off_balance_update",
   description:
-    "Adjust users' time-off balance for a policy. Elevated write — previews and requires confirmation.",
+    "Adjust users' time-off balance for a policy. Pass the policy by id or exact name, and `userIds` as ids/exact names/'me' — resolved server-side, clarifies on an unknown one. Elevated write — previews and requires confirmation.",
   group: TOA,
   risks: ["high_risk_write"],
   schema: z.object({
@@ -372,14 +425,26 @@ const updateBalance = defineRiskyAction({
     value: z.number(),
     note: z.string().optional(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const policy = await resolveEntityRef(
+      { id: args.policyId },
+      { noun: "time-off policy", verb: "adjust the balance on", list: () => ctx.clockify.listTimeOffPolicies() },
+    );
+    if (!policy.ok) return policy.clarify;
+    const members = await resolveUserRefs(args.userIds, {
+      verb: "adjust the balance for",
+      adminUserId: ctx.adminUserId,
+      listUsers: () => ctx.clockify.listUsers(),
+      verifyIds: true,
+    });
+    if (!members.ok) return members.clarify;
     return {
       actionLabel: "Adjust time-off balance",
-      targets: [{ type: "time_off_policy", id: args.policyId }],
-      expectedChanges: [`Adjust balance by ${args.value} for ${args.userIds.length} user(s) on policy ${args.policyId}`],
+      targets: [{ type: "time_off_policy", id: policy.id, name: policy.name }],
+      expectedChanges: [`Adjust balance by ${args.value} for ${members.labels.join(", ")} on policy "${policy.name ?? policy.id}"`],
       reversibility: "You can adjust the balance again to revert.",
       warnings: ["This changes users' accrued time-off balance."],
-      payload: { policyId: args.policyId, userIds: args.userIds, value: args.value, note: args.note },
+      payload: { policyId: policy.id, userIds: members.userIds, value: args.value, note: args.note },
     };
   },
   async commit(ctx, payload) {

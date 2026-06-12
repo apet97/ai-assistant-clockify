@@ -31,7 +31,14 @@ export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
     },
     async createTimeOffPolicy(input) {
       bump("createTimeOffPolicy");
-      const policy: TimeOffPolicySummary = { id: nextId("pol"), name: input.name, status: "ACTIVE", timeUnit: "DAYS" };
+      const policy: TimeOffPolicySummary = {
+        id: nextId("pol"),
+        name: input.name,
+        status: "ACTIVE",
+        timeUnit: "DAYS",
+        ...(input.userIds?.length ? { userIds: input.userIds } : {}),
+        ...(input.userGroupIds?.length ? { userGroupIds: input.userGroupIds } : {}),
+      };
       state.timeOffPolicies.push(policy);
       return { id: policy.id, name: policy.name };
     },
@@ -39,7 +46,12 @@ export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
       bump("updateTimeOffPolicy");
       const index = state.timeOffPolicies.findIndex((p) => p.id === id);
       const base: TimeOffPolicySummary = index >= 0 ? state.timeOffPolicies[index] : { id, name: id };
-      const updated: TimeOffPolicySummary = { ...base, ...(patch.name !== undefined ? { name: patch.name } : {}) };
+      const updated: TimeOffPolicySummary = {
+        ...base,
+        ...(patch.name !== undefined ? { name: patch.name } : {}),
+        ...(patch.userIds?.length ? { userIds: patch.userIds } : {}),
+        ...(patch.userGroupIds?.length ? { userGroupIds: patch.userGroupIds } : {}),
+      };
       if (index >= 0) state.timeOffPolicies[index] = updated;
       else state.timeOffPolicies.push(updated);
       return { id, name: updated.name };

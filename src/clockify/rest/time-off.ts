@@ -88,8 +88,9 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
         name: input.name,
         approve: { requiresApproval: input.requiresApproval ?? false },
         timeUnit: TIME_UNIT,
-        userGroups: filter([]),
-        users: filter([input.userId]),
+        userGroups: filter(input.userGroupIds ?? []),
+        // Scope to the given users, else the admin (a policy with no scope is rejected).
+        users: filter(input.userIds?.length ? input.userIds : [input.userId]),
         ...(input.daysPerYear !== undefined
           ? { automaticAccrual: { amount: input.daysPerYear, period: "YEAR", timeUnit: TIME_UNIT } }
           : {}),
@@ -120,6 +121,8 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       if (patch.requiresApproval !== undefined) {
         existing.approve = { ...(existing.approve ?? {}), requiresApproval: patch.requiresApproval };
       }
+      if (patch.userIds?.length) existing.users = filter(patch.userIds);
+      if (patch.userGroupIds?.length) existing.userGroups = filter(patch.userGroupIds);
       const result = (await core.call("api", "PUT", `${ws}/time-off/policies/${id}`, existing)) as { id?: string; name?: string };
       return { id: result?.id ?? id, name: result?.name ?? patch.name ?? id };
     },
