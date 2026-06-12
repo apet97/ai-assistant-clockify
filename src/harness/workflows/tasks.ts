@@ -217,28 +217,43 @@ const deleteTask = defineRiskyAction({
 const rateUpdate = defineRiskyAction({
   name: "clockify_tasks_rate_update",
   description:
-    "Set a task's billable hourly or cost rate. Billing action — previews and requires confirmation.",
+    "Set a task's billable hourly or cost rate. Pass the project by `projectId` or exact `projectName`, and the task by `taskId` or exact `taskName` — the harness resolves names and verifies the task exists server-side. `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
   group: "invoices",
   risks: ["billing"],
-  schema: z.object({
-    projectId: z.string().min(1),
-    taskId: z.string().min(1),
-    rateKind: z.enum(["HOURLY", "COST"]),
-    amount: z.number().nonnegative(),
-    amountUnit: z.enum(["major", "minor"]).default("major"),
-    since: z.string().optional(),
-  }),
-  async preview(_ctx, args) {
+  schema: z
+    .object({
+      projectId: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
+      taskId: z.string().min(1).optional(),
+      taskName: z.string().min(1).optional(),
+      rateKind: z.enum(["HOURLY", "COST"]),
+      amount: z.number().nonnegative(),
+      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
+      amountUnit: z.enum(["major", "minor"]).default("major"),
+      since: z.string().optional(),
+    })
+    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact projectName." })
+    .refine((v) => v.taskId !== undefined || v.taskName !== undefined, { message: "Provide the task id or its exact taskName." }),
+  async preview(ctx, args) {
+    // Resolve + VERIFY the task exists before previewing — an unresolved task id
+    // sails past the trust-the-id path and 404s at commit; clarify here instead.
+    const resolved = await resolveTaskRef(
+      ctx,
+      { projectId: args.projectId, projectName: args.projectName, id: args.taskId, name: args.taskName },
+      "set a rate on",
+    );
+    if (!resolved.ok) return resolved.clarify;
     const amountMinor = toMinor(args.amount, args.amountUnit);
+    const taskLabel = resolved.name ?? resolved.id;
     return {
       actionLabel: `Set task ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-      targets: [{ type: "task", id: args.taskId }],
-      expectedChanges: [`Set ${args.rateKind} rate to ${amountMinor} (minor units)`],
+      targets: [{ type: "task", id: resolved.id, name: resolved.name }],
+      expectedChanges: [`Set ${args.rateKind} rate for "${taskLabel}" to ${(amountMinor / 100).toFixed(2)}`],
       reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
       warnings: ["This changes the billable amount of future entries on the task."],
       payload: {
-        projectId: args.projectId,
-        taskId: args.taskId,
+        projectId: resolved.projectId,
+        taskId: resolved.id,
         rateKind: args.rateKind,
         amountMinor,
         since: args.since,

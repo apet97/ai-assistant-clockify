@@ -104,9 +104,36 @@ describe("task actions", () => {
     expect(preview.operation.risks).toContain("billing");
     expect(preview.operation.featureGroup).toBe("invoices");
     expect((preview.operation.payload as any).amountMinor).toBe(4200);
+    // Truthful preview: the admin sees the MAJOR amount (42.00), never raw minor units.
+    const change = preview.preview.expectedChanges.join(" ");
+    expect(change).toContain("42.00");
+    expect(change).not.toContain("minor");
+    expect(change).not.toContain("4200");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.updateTaskRate).toBe(1);
+  });
+
+  it("clockify_tasks_rate_update resolves projectName + taskName and pins both ids", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_tasks_rate_update",
+      args: { projectName: "Website", taskName: "design", rateKind: "COST", amount: 10 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.payload).toMatchObject({ projectId: "p1", taskId: "t1", amountMinor: 1000 });
+  });
+
+  it("clockify_tasks_rate_update clarifies on an unknown task (never previews a doomed commit)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_tasks_rate_update",
+      args: { projectName: "Website", taskName: "Nonexistent", rateKind: "HOURLY", amount: 5 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTaskRate ?? 0).toBe(0);
   });
 });
 
