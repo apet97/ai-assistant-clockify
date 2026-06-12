@@ -54,7 +54,17 @@ group target in the API). Single-member resolution lives in `resolveUserRef`,
 lists in `resolveUserRefs`/`resolveGroupRefs` (one `resolveRefList` core).
 Reusable: `scripts/repro-chat.ts`
 + `.claude/workflows/dogfood-and-fix.js`.
-`npm run verify` = **955 tests**, `npx madge --circular
+A follow-up sweep (2026-06-12) finished the ENTITY side of the same invariant:
+the optional project/task slot pair (expenses create/update, fix_entry,
+start_timer, log_work, entries_list, scheduling project_totals) resolves via
+one `resolveProjectTaskRefs`; `projects_create` resolves `clientName`;
+`invoices_create` resolves a non-hex `clientId`; `expenses_update` gains
+`categoryName`. Plus: every HTTP model request now carries
+`AbortSignal.timeout` (`LLM_TIMEOUT_MS`, default 120s). Post-sweep planner
+eval: 97.8% (135/138) — the one hard fail, `time_tracking/start` choosing
+`clockify_status` for a bare "start a timer", reproduces IDENTICALLY at
+pre-sweep commit `3261a1c` (DeepSeek provider drift, not a regression).
+`npm run verify` = **991 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
@@ -177,9 +187,16 @@ such bug was found against the REAL API, not by reading the code.
   points at the button (`TYPED_CONSENT` + `store.countPendingConfirmations`).
 - **Name→id resolution at PREVIEW time** (`workflows/resolve.ts`
   `resolveEntityRef`): ids are 24-hex; anything else resolves via exact-id
-  fallback → `matchByName` → grounded did-you-mean clarify. Covers every
+  fallback → `matchByName` → grounded did-you-mean clarify (`notFoundHint`
+  appends caller copy like "Or should I create it first?"). Covers every
   entity action incl. invoices BY NUMBER, the generic update/delete_entity,
-  `projects_update.clientId`, expense categories (create/update/delete). A SINGLE
+  `projects_create`/`projects_update` `clientId`+`clientName`, invoices_create
+  (a non-hex `clientId` resolves as a name), expense categories
+  (create/update/delete + `expenses_update.categoryName`). The OPTIONAL
+  project/task slot PAIR (expenses create/update, fix_entry, start_timer,
+  log_work, entries_list filters, scheduling project_totals) goes through ONE
+  `resolveProjectTaskRefs` (a name in EITHER slot resolves; a task name needs
+  its project or it clarifies; resolved NAMES feed the preview). A SINGLE
   member (role grant, per-project + workspace member rate, group remove, scheduling
   create) goes through `resolveUserRef` (id/name/'me' → verified user id, else
   clarify — ONE copy, not inlined per action). LISTS go through `resolveUserRefs`
@@ -191,7 +208,8 @@ such bug was found against the REAL API, not by reading the code.
   Destructive/archive/unarchive verbs pass `includeArchived` (the wire
   defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a
-  confirmed-then-failed commit.
+  confirmed-then-failed commit. Known follow-up: read-filter `userId` slots
+  (review_day/week, entries/assignments list) still take raw ids only.
 - **Dates server-side:** the model never computes calendar dates.
   `resolveRelativeDay` (today/yesterday/tomorrow, weekday words, dayOffset;
   `undefined` ⇒ caller MUST clarify), `resolveInstant` (UTC instants the
@@ -200,7 +218,10 @@ such bug was found against the REAL API, not by reading the code.
   scheduling/time-off/approvals (`week: this_week|last_week`).
 - **Bounded model input:** `HISTORY_WINDOW_MESSAGES=12` (chat route) +
   `TOOL_RESULT_MAX_BYTES=24KB` per tool result in the agent loop (prune, then
-  honest note; the admin always sees the full receipt).
+  honest note; the admin always sees the full receipt). The model fetch itself
+  is bounded too: `AbortSignal.timeout` on every HTTP model request
+  (`LLM_TIMEOUT_MS`, default 120s — a hung provider aborts with a clean
+  "timed out" error instead of hanging the turn).
 - **Recaps from the audit log:** "what did you do / what failed" must call
   `assistant_recent_outcomes` (route-injected `recentOutcomes` capability) —
   never answered from windowed chat memory.
