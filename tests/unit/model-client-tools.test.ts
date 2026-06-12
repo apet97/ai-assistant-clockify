@@ -187,6 +187,21 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
   });
 });
 
+describe("createModelClient token usage", () => {
+  it("maps the provider's usage onto the completion (and omits it when absent)", async () => {
+    const withUsage = {
+      choices: [{ message: { content: "hi", tool_calls: [] } }],
+      usage: { prompt_tokens: 1200, completion_tokens: 88 },
+    };
+    const reported = await client(withUsage).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(reported.usage).toEqual({ promptTokens: 1200, completionTokens: 88 });
+
+    const noUsage = { choices: [{ message: { content: "hi", tool_calls: [] } }] };
+    const absent = await client(noUsage).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(absent.usage).toBeUndefined();
+  });
+});
+
 describe("createModelClient retry + provider error detail", () => {
   /** Queue of responses; each call shifts the next one. */
   function sequencedFetch(responses: Array<{ status: number; body?: string; payload?: unknown }>): {

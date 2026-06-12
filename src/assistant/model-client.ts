@@ -47,12 +47,20 @@ export interface ToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Token counts the provider reported for one completion (cost telemetry). */
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
 /** The result of a tool-calling completion: assistant text and/or tool calls. */
 export interface ToolCompletion {
   text: string;
   toolCalls: ToolCall[];
   /** Thinking-mode reasoning to thread back on continuation (see ModelMessage). */
   reasoningContent?: string;
+  /** Present only when the provider reported token counts (absence ≠ zero). */
+  usage?: TokenUsage;
 }
 
 export interface ModelClient {
@@ -100,6 +108,15 @@ interface ChatCompletionResponse {
   choices?: Array<{
     message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: RawToolCall[] };
   }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
+}
+
+/** Map the provider's usage block to {@link TokenUsage}; undefined unless both counts are numbers. */
+function parseUsage(usage: ChatCompletionResponse["usage"]): TokenUsage | undefined {
+  if (typeof usage?.prompt_tokens === "number" && typeof usage.completion_tokens === "number") {
+    return { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens };
+  }
+  return undefined;
 }
 
 function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
@@ -232,10 +249,12 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         tool_choice: "auto",
       });
       const message = data.choices?.[0]?.message;
+      const usage = parseUsage(data.usage);
       return {
         text: message?.content ?? "",
         toolCalls: parseToolCalls(message?.tool_calls ?? []),
         ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
+        ...(usage ? { usage } : {}),
       };
     },
   };
