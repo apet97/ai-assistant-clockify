@@ -167,6 +167,18 @@ describe("GET /api/chat/history (session restore)", () => {
     expect(recovered.nonce).not.toBe(streamed.nonce);
     expect(recovered.preview).toBeTruthy();
 
+    // History is a record, not a control surface: the REPLAYED assistant message
+    // must NOT carry the settled preview result. The live card is re-served only
+    // via `pendingPreviews` (with a rotated nonce); the stored message's `results`
+    // must drop the kind:"preview" entry server-side, independent of the UI's
+    // defensive copy (r1-new-session-restore-03). Pins sanitizeResultsForHistory.
+    const replayed = (history.body.messages as Array<{ role: string; results: Array<Record<string, unknown>> }>).find(
+      (m) => m.role === "assistant",
+    );
+    expect(replayed).toBeDefined();
+    expect(replayed?.results.some((r) => r.kind === "preview")).toBe(false);
+    expect(JSON.stringify(replayed?.results)).not.toContain("previewId");
+
     // The ORIGINAL streamed nonce is dead after rotation (one-use preserved).
     const stale = await request(app)
       .post(`/api/confirmations/${streamed.previewId}/confirm`)
