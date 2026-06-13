@@ -4,13 +4,13 @@ Read this first in every Claude Code session. History/journals: `docs/HISTORY.md
 (handoff archive); live-test state: `~/Downloads/ai-assistant-loop-checklist.md`
 (322/322 closed) + `…-loop-failures.md` (root causes + resolutions).
 
-## Current state (2026-06-13)
+## Current state (2026-06-14)
 
 Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1184 tests**; `npx madge --circular
+**Verified gate:** `npm run verify` = **1205 tests**; `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both green). 137
 typed actions, 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND
 both Gemini tiers (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop
@@ -27,7 +27,30 @@ Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
 installs survive redeploys. Env vars + volume live in Railway — never commit
 tokens. Full checklist: `DEPLOYMENT.md`.
 
-**Latest — the goated-audit arc (2026-06-13):** a fresh-eyes multi-agent audit
+**Latest — live-fix + dogfood pass (2026-06-14):** seven failing-test-first
+fixes from a live-chat dogfooding + multi-perspective code-review sweep
+(1184→1205 tests). **Invoice tax works end-to-end now:** `taxPercent`/
+`tax2Percent`/`discountPercent` are exposed on `invoices_create`/`invoices_update`
+(the adapter already mapped them via `INVOICE_PERCENT_FIELDS`; the schemas didn't),
+line items default to taxed when a rate is set, and `invoices_items_add` inherits
+the invoice's current rate (`tax`/`tax2` now surfaced on `InvoiceSummary`).
+`invoices_import_time` and `expenses_list` resolve relative dates server-side
+(a raw "today"/"last month" was a 400 / silent-empty — same class as the
+date-resolution invariant). Every named-entity `*_get` read
+(clients/tags/groups/tasks/holidays/custom-fields/time-off-policies/templates)
+now resolves by NAME, not just a 24-hex id (the `projects_get` pattern; reads
+switched `defineReadAction`→`defineAction` so they can clarify). The typed-consent
+guard catches "confirm all"/"approve all"/"confirm them" (batch words added to
+`CONSENT_FILLER`/`CONSENT_PENDING_OBJECT`). `log_work` clarifies on an
+end-at/before-start (negative-length) entry. `busy_timeout=5000` pinned explicit
+(hardening; better-sqlite3's default — not a bug). The dogfood/review sweep
+(11 adversarial chat sessions + security/silent-failure/concurrency reviews)
+found NO further bugs; two flagged concurrency items were FALSE POSITIVES (the
+busy_timeout default above; the nonce-rotation "TOCTOU" is the intended
+reload-invalidation — `confirmPending` validates the record snapshot, not a
+DB re-read). Per-finding detail in git log (`3c4f064`…`8e1c447`).
+
+**Prior — the goated-audit arc (2026-06-13):** a fresh-eyes multi-agent audit
 (82 findings → 52 confirmed via 3-skeptic majority) whose backlog was then fully
 implemented — **43 confirmed findings fixed across three runs, 1 wont_fix, 0
 blocked**, each a failing-test-first TDD commit. Highlights: a CRITICAL server
