@@ -25,7 +25,11 @@ import type { AppDeps } from "./routes/deps.js";
  */
 export function createApp(deps: AppDeps): Express {
   const app = express();
-  app.use(express.json());
+  // Cap the request body: a hostile multi-MB JSON payload must never be parsed
+  // into memory or persisted. Oversized bodies are rejected by body-parser before
+  // any route runs (it raises a 413 PayloadTooLargeError, mapped below). The chat
+  // message/nonce field caps (routes/api.ts) are the second, finer layer.
+  app.use(express.json({ limit: "32kb" }));
 
   app.get("/manifest", (_req, res) => {
     res.json(buildAddon(deps.config.baseUrl).getManifest());
@@ -67,6 +71,16 @@ export function createApp(deps: AppDeps): Express {
       } catch {
         // Same — best-effort terminal flush.
       }
+      return;
+    }
+    // Body-parser client errors (oversized payload → 413, malformed JSON → 400)
+    // carry their own 4xx status — honor it so the caller learns it was a client
+    // mistake, not a server fault. A bare server error (e.g. a SQLITE_BUSY thrown
+    // mid-turn, no .status) stays a calm 500. Never echo err.message (it could
+    // carry request data); the status is enough.
+    const status = (err as { status?: unknown; statusCode?: unknown })?.status ?? (err as { statusCode?: unknown })?.statusCode;
+    if (typeof status === "number" && status >= 400 && status < 500) {
+      res.status(status).json({ ok: false, code: "invalid_request", message: "The request was rejected (too large or malformed)." });
       return;
     }
     res.status(500).json({ ok: false, code: "server_error", message: "Something went wrong on our side. Please try again." });

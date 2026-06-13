@@ -51,8 +51,14 @@ const groupsPatchSchema = z
   .record(z.enum(FEATURE_GROUPS as [FeatureGroup, ...FeatureGroup[]]), permissionLevelSchema)
   .optional();
 
-const chatBodySchema = z.object({ message: z.string().min(1) });
-const confirmBodySchema = z.object({ nonce: z.string().min(1) });
+// Cap the inputs at parse, before anything is persisted. The body parser caps
+// the whole payload (server.ts); these cap the fields. A whitespace-only message
+// is intentionally NOT rejected here — it stays length>=1 and flows to the
+// deterministic friendly "what would you like me to do?" handler in
+// executeChatTurn (live finding new-6, tested in chat-empty-message.test.ts) —
+// never to the planner.
+const chatBodySchema = z.object({ message: z.string().min(1).max(4000) });
+const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) });
 
 /**
  * How many stored chat messages (user + assistant turns, newest first) are sent
