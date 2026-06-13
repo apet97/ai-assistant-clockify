@@ -1,6 +1,11 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { previewReplyText, sanitizeStoredReplyForModel } from "../../src/routes/api.js";
+import {
+  HISTORY_RESULT_MAX_BYTES,
+  previewReplyText,
+  pruneHistoryResult,
+  sanitizeStoredReplyForModel,
+} from "../../src/routes/api.js";
 
 /**
  * Live item 318: a long session saturated with the deterministic
@@ -45,5 +50,64 @@ describe("sanitizeStoredReplyForModel", () => {
       "I couldn't find an active project named \"X\".",
     ];
     for (const text of texts) expect(sanitizeStoredReplyForModel(text)).toBe(text);
+  });
+});
+
+/**
+ * r2-new-session-restore-06: GET /api/chat/history caps replay by message COUNT
+ * (50) but not by bytes — a long session with several large list/report turns
+ * re-ships the union of all those read-action `data` blobs on every iframe
+ * reload. pruneHistoryResult backstops the count cap: a fat read receipt's bulky
+ * `data` is dropped with an honest note (mirroring capToolResultForModel),
+ * keeping the human record (status/changed/warnings/message). The admin already
+ * consumed the data live; restore re-anchors the conversation, not the megabytes.
+ */
+describe("pruneHistoryResult (byte backstop for session restore)", () => {
+  it("drops a fat read receipt's `data` blob with an honest note, keeping the rest", () => {
+    const bigItems = Array.from({ length: 5_000 }, (_, i) => ({
+      id: `proj-${i}`,
+      name: `Project number ${i} with a fairly long descriptive name`,
+    }));
+    const result = {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_projects_list",
+        entity: "project",
+        ids: { workspaceId: "ws-1" },
+        data: { count: bigItems.length, items: bigItems },
+        warnings: [{ code: "demo", message: "kept" }],
+      },
+    };
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeGreaterThan(HISTORY_RESULT_MAX_BYTES);
+
+    const pruned = pruneHistoryResult(result) as {
+      kind: string;
+      receipt: { ok: boolean; action: string; ids: unknown; warnings: unknown; data: { note?: string; items?: unknown } };
+    };
+    // The fat read payload is gone; an honest note replaces it.
+    expect(pruned.receipt.data.items).toBeUndefined();
+    expect(typeof pruned.receipt.data.note).toBe("string");
+    // The human record survives.
+    expect(pruned.kind).toBe("receipt");
+    expect(pruned.receipt.ok).toBe(true);
+    expect(pruned.receipt.action).toBe("clockify_projects_list");
+    expect(pruned.receipt.ids).toEqual({ workspaceId: "ws-1" });
+    expect(pruned.receipt.warnings).toEqual([{ code: "demo", message: "kept" }]);
+    // And the pruned result now fits the byte budget.
+    expect(Buffer.byteLength(JSON.stringify(pruned), "utf8")).toBeLessThanOrEqual(HISTORY_RESULT_MAX_BYTES);
+  });
+
+  it("leaves a small receipt byte-identical (no note injected)", () => {
+    const result = {
+      kind: "receipt",
+      receipt: { ok: true, action: "clockify_status", data: { running: false } },
+    };
+    expect(pruneHistoryResult(result)).toEqual(result);
+  });
+
+  it("leaves a non-receipt result untouched", () => {
+    const clarify = { kind: "clarify", message: "Which project?", options: [{ label: "A", value: "a" }] };
+    expect(pruneHistoryResult(clarify)).toEqual(clarify);
   });
 });

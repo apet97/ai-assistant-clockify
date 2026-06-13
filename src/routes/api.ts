@@ -73,6 +73,47 @@ export const HISTORY_WINDOW_MESSAGES = 12;
 export const CHAT_HISTORY_LIMIT = 50;
 
 /**
+ * Per-replayed-result byte budget for GET /api/chat/history. The 50-message
+ * COUNT cap (CHAT_HISTORY_LIMIT) bounds how MANY turns replay, not how big each
+ * one is — a read-action receipt carries its entire `data` blob (a summary
+ * report or a 1000-row list), so 50 fat reads still ship megabytes on every
+ * iframe reload (r2-new-session-restore-06). This backstops the count cap by
+ * BYTES: a replayed receipt over budget has its bulky read `data` dropped with
+ * an honest note (mirroring capToolResultForModel's model-side cap), keeping the
+ * human record (status/changed/warnings). The admin already consumed the data
+ * live — restore re-anchors the conversation, not the payload.
+ */
+export const HISTORY_RESULT_MAX_BYTES = 24_000;
+
+/**
+ * Backstop one replayed history result by BYTES. Non-receipts and small receipts
+ * pass through byte-identical; an over-budget receipt has its read `data` blob
+ * replaced wholesale with an honest note (the data was admin-visible live and is
+ * a record, not a control surface). Mutation receipts (no `data`, just `changed`)
+ * and error receipts are typically small and pass through; if one is still over
+ * budget without a `data` field it is left as-is (nothing safe to drop).
+ */
+export function pruneHistoryResult(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  const item = result as { kind?: string; receipt?: unknown };
+  if (item.kind !== "receipt" || !item.receipt || typeof item.receipt !== "object") return result;
+  const full = Buffer.byteLength(JSON.stringify(result), "utf8");
+  if (full <= HISTORY_RESULT_MAX_BYTES) return result;
+  const receipt = item.receipt as { data?: unknown } & Record<string, unknown>;
+  if (!("data" in receipt)) return result; // nothing bulky to drop
+  const { data: _data, ...rest } = receipt;
+  return {
+    ...item,
+    receipt: {
+      ...rest,
+      data: {
+        note: `result too large to replay on reload (${full} bytes); you saw the full result when it ran — re-run the query if you need the details again`,
+      },
+    },
+  };
+}
+
+/**
  * The deterministic truthful-preview reply this route STORES for a turn that
  * leaves `count` pending previews. A session saturated with them taught the
  * model to parrot the boilerplate as its own answer with zero tool calls
@@ -1086,9 +1127,12 @@ export function apiRouter(deps: AppDeps): Router {
       .map((r) => {
         if (r && typeof r === "object" && "undo" in (r as object)) {
           const { undo: _undo, ...rest } = r as { undo?: unknown };
-          return rest;
+          return pruneHistoryResult(rest);
         }
-        return r;
+        // Byte-backstop the count cap: a fat read-action receipt's `data` blob is
+        // dropped with an honest note so a marathon session doesn't re-ship
+        // megabytes on every reload (r2-new-session-restore-06).
+        return pruneHistoryResult(r);
       });
   }
 

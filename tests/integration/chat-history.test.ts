@@ -112,6 +112,42 @@ describe("GET /api/chat/history (session restore)", () => {
     expect(pendingPreviews).toEqual([]);
   });
 
+  it("byte-backstops a fat read receipt: a large list's `data` is dropped with a note, the human record survives", async () => {
+    // r2-new-session-restore-06: the COUNT cap (50) bounds how MANY turns replay,
+    // not how big each one is. A read-action receipt carries its entire `data`
+    // blob (here a big project list), so on reload the route must NOT re-ship the
+    // megabytes — it drops the bulky `data` with an honest note while keeping the
+    // human record (the receipt's status/action).
+    const projects = Array.from({ length: 4_000 }, (_, i) => ({
+      id: `proj-${i}`,
+      name: `Project number ${i} with a fairly long descriptive name`,
+    }));
+    const fake = createFakeWorkspace({ projects });
+    const { app, cookie } = await makeApp(
+      [{ text: "Here are your projects.", toolCalls: [{ id: "c1", name: "clockify_projects_list", arguments: {} }] },
+       { text: "Anything else?", toolCalls: [] }],
+      fake,
+    );
+    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list my projects" });
+
+    const res = await request(app).get("/api/chat/history").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const assistant = (res.body.messages as Array<{ role: string; results: Array<Record<string, unknown>> }>).find(
+      (m) => m.role === "assistant",
+    );
+    const receipt = assistant?.results.find((r) => r.kind === "receipt") as
+      | { receipt: { ok: boolean; action: string; data: { note?: string; items?: unknown } } }
+      | undefined;
+    expect(receipt).toBeDefined();
+    // The fat read payload is gone; an honest note replaces it; the record survives.
+    expect(receipt?.receipt.data.items).toBeUndefined();
+    expect(typeof receipt?.receipt.data.note).toBe("string");
+    expect(receipt?.receipt.ok).toBe(true);
+    expect(receipt?.receipt.action).toBe("clockify_projects_list");
+    // The replayed receipt no longer carries the 4000-row blob.
+    expect(JSON.stringify(res.body)).not.toContain("proj-3999");
+  });
+
   it("re-serves a LIVE pending preview with a ROTATED nonce: the streamed original dies, the rotated one confirms", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, cookie } = await makeApp(
