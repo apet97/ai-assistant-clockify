@@ -111,7 +111,25 @@ gemini-3.1-flash-lite(low) AND gemini-3.5-flash(low), 162/162 on DeepSeek
 v4-pro; agentic 7/7 on all three, 0 safety violations.** Backend swap is
 env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT=low`); prod stays DeepSeek
 until decided.
-`npm run verify` = **1095 tests**, `npx madge --circular
+A goated-audit run (2026-06-13, fresh-eyes "find what every pass missed":
+8 subsystem maps → 15-dimension loop-until-dry hunt → 3-skeptic majority verify;
+82 findings, 52 confirmed) landed **10 TDD fixes** across security, safety
+invariants, API drift, and truthfulness — incl. a CRITICAL (async route
+rejections hung the request AND crashed the server on any mid-turn DB error →
+`asyncHandler` + terminal error middleware + process net) and two HIGHs
+(`projects_from_template` sent `templateId` not the spec's required
+`templateProjectId`+`name`; `/component/assistant` minted a NEW session every
+load so session-restore was dead in prod — now reuses the cookie-bound session).
+Plus: per-tool-call `thoughtSignature` now survives the confirm-resume
+round-trip (Gemini 3.x no longer 400s); a total-failure undo reports failure not
+a false "Undone"; holidays dates resolve server-side; the time-off preview shows
+the deducted day count; `tasks_rate_update` previews the REAL task name
+(`resolveEntityRef` gained `verifyId`); NUL bytes removed from `api.ts` (grep
+treated the safety-critical file as binary); catalog is 137 actions. Planner held
+100% on the one schema-affecting change. Backlog of confirmed mediums/lows (races,
+per-request authz, typed-consent paraphrases, a11y) in
+`~/Downloads/ai-assistant-goated-audit-NOTES.md`.
+`npm run verify` = **1102 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
