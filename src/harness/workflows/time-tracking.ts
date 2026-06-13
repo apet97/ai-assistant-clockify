@@ -212,11 +212,12 @@ function resolveLogTimes(
 const logWork = defineAction({
   name: "clockify_log_work",
   description:
-    "Log a completed time entry. Resolves project/task by name. Give either an explicit `start` (+ `end`), or a `duration` (`durationHours`/`durationMinutes`) with the day — and you do NOT need to know the calendar date: pass `date` as `today`/`yesterday`/`tomorrow` (or YYYY-MM-DD), or `dayOffset` (0=today, -1=yesterday), and the harness anchors the start/end. Use this for \"log 2 hours on Apollo yesterday\" instead of asking for a clock time or date.",
+    "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — when the admin gave none, omit it (never ask for one, never invent one). Give either an explicit `start` (+ `end`), or a `duration` (`durationHours`/`durationMinutes`) with the day — and you do NOT need to know the calendar date: pass `date` as `today`/`yesterday`/`tomorrow` (or YYYY-MM-DD), or `dayOffset` (0=today, -1=yesterday), and the harness anchors the start/end. Use this for \"log 2 hours on Apollo yesterday\" instead of asking for a clock time or date.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z.object({
-    description: z.string().min(1),
+    /** Optional — omitted entries are honest blanks; never ask for or invent one. */
+    description: z.string().optional(),
     start: z.string().optional(),
     end: z.string().optional(),
     date: z.string().optional(),

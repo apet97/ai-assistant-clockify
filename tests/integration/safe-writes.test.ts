@@ -149,6 +149,23 @@ describe("safe writes", () => {
     expect(fake.state.timeEntries.at(-1)?.tagIds).toEqual(["t-deep"]);
   });
 
+  it("log_work works WITHOUT a description (omitted on the wire — never asked for, never invented)", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p-acme", name: "Acme Corp" }] });
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: {
+        projectName: "Acme Corp",
+        start: "2026-06-05T09:00:00.000Z",
+        end: "2026-06-05T11:00:00.000Z",
+      },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error(`expected a success receipt, got ${result.kind}`);
+    const entry = fake.state.timeEntries.at(-1);
+    expect(entry?.projectId).toBe("p-acme");
+    expect(entry?.description ?? "").toBe(""); // honest blank, not a fabricated description
+  });
+
   it("log_work clarifies on an unknown tag and writes NOTHING", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t-deep", name: "Deep Work" }] });
     const result = await executeAction({
