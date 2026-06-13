@@ -6,7 +6,7 @@ Read this first in every Claude Code session. History/journals: `docs/HISTORY.md
 
 ## Current state (2026-06-13)
 
-Everything buildable is DONE and live-verified: V1 + full REST parity (136
+Everything buildable is DONE and live-verified: V1 + full REST parity (137
 typed actions, 16 areas, 3 hosts) + the trust-lives-in-the-code roadmap + the
 durable agentic loop (default ON) + the 322-prompt live-loop fix arc + a live
 regression re-run in the embedded chat (all fixed flows passed; verified vs UI

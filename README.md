@@ -70,7 +70,7 @@ stays a thin, replaceable translator:
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
-  reaches for instead of scrambling 136 primitives.
+  reaches for instead of scrambling 137 primitives.
 - **Operational metrics** (`GET /api/metrics`, incl. per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy *and* run-to-run
