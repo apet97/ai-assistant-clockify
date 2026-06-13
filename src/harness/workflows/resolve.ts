@@ -113,16 +113,33 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
     list: (filter?: ArchivedFilter) => Promise<T[]>;
     includeArchived?: boolean;
     notFoundHint?: string;
+    /**
+     * Force a list lookup even for a 24-hex `id` (the happy path trusts it
+     * blind). Use where the PREVIEW must show the entity's REAL name, not the
+     * model-supplied one (e.g. billing rate cards), or where a wrong id must
+     * clarify rather than 404 at commit — mirrors resolveUserRef's verifyIds.
+     */
+    verifyId?: boolean;
   },
 ): Promise<ResolveEntityResult<T>> {
   const rawId = ref.id?.trim();
-  if (rawId && looksLikeClockifyId(rawId)) return { ok: true, id: rawId, name: ref.name };
+  const isHexId = !!rawId && looksLikeClockifyId(rawId);
+  if (isHexId && !opts.verifyId) return { ok: true, id: rawId as string, name: ref.name };
   const query = (ref.name ?? rawId ?? "").trim();
   const includeArchived = opts.includeArchived === true;
   const items = includeArchived ? await listBothArchivedStates(opts.list) : await opts.list();
   if (rawId) {
     const exact = items.find((item) => item.id === rawId);
     if (exact) return { ok: true, id: exact.id, name: exact.name, entity: exact };
+    // A VERIFIED hex id that isn't in the list must clarify — never fall through
+    // to matching a DIFFERENT entity by the (unverified) model-supplied name.
+    if (isHexId && opts.verifyId) {
+      const article = /^[aeiou]/i.test(opts.noun) ? "an" : "a";
+      return {
+        ok: false,
+        clarify: { clarify: `I couldn't find ${article} ${opts.noun} with id ${rawId} to ${opts.verb}.` },
+      };
+    }
   }
   const match = matchByName(items, query, { includeArchived });
   if (match.kind === "one") {

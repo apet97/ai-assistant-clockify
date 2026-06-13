@@ -30,6 +30,9 @@ async function resolveTaskRef(
   ctx: ActionContext,
   refs: { projectId?: string; projectName?: string; id?: string; name?: string },
   verb: string,
+  // `verifyTask` forces a real task lookup even for a 24-hex id so the caller's
+  // preview shows the REAL task name (billing rate cards) and a wrong id clarifies.
+  opts?: { verifyTask?: boolean },
 ): Promise<
   | { ok: true; projectId: string; id: string; name?: string }
   | { ok: false; clarify: RiskyClarifyResult }
@@ -47,7 +50,7 @@ async function resolveTaskRef(
   if (!project.ok) return project;
   const task = await resolveEntityRef(
     { id: refs.id, name: refs.name },
-    { noun: "task", verb, list: () => ctx.clockify.listTasks(project.id) },
+    { noun: "task", verb, list: () => ctx.clockify.listTasks(project.id), verifyId: opts?.verifyTask },
   );
   if (!task.ok) return task;
   return { ok: true, projectId: project.id, id: task.id, name: task.name ?? refs.name };
@@ -266,12 +269,15 @@ const rateUpdate = defineRiskyAction({
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact projectName." })
     .refine((v) => v.taskId !== undefined || v.taskName !== undefined, { message: "Provide the task id or its exact taskName." }),
   async preview(ctx, args) {
-    // Resolve + VERIFY the task exists before previewing — an unresolved task id
-    // sails past the trust-the-id path and 404s at commit; clarify here instead.
+    // Resolve + VERIFY the task exists before previewing (verifyTask): an
+    // unverified 24-hex id would otherwise sail past the trust-the-id path,
+    // echo the model-supplied name onto the billing card, and 404 at commit.
+    // verifyTask fetches the REAL name and clarifies on a wrong id.
     const resolved = await resolveTaskRef(
       ctx,
       { projectId: args.projectId, projectName: args.projectName, id: args.taskId, name: args.taskName },
       "set a rate on",
+      { verifyTask: true },
     );
     if (!resolved.ok) return resolved.clarify;
     const amountMinor = toMinor(args.amount, args.amountUnit);

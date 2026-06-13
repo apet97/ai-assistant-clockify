@@ -180,6 +180,27 @@ describe("task actions", () => {
     expect(fake.counts.updateTaskRate).toBe(1);
   });
 
+  it("clockify_tasks_rate_update preview shows the REAL task name for a 24-hex id, not the model's unverified one", async () => {
+    // r1-truthfulness-02: a 24-hex id short-circuited resolveEntityRef so the
+    // billing preview echoed the MODEL-supplied taskName verbatim — the handler
+    // comment promised VERIFY but didn't. The card must name the entity actually
+    // mutated, or clarify if the id isn't real.
+    const hexId = "0123456789abcdef01234567";
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      tasks: [{ id: hexId, name: "Real Task", projectId: "p1" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_tasks_rate_update",
+      args: { projectId: "p1", taskId: hexId, taskName: "Bogus Name", rateKind: "HOURLY", amount: 50 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const change = preview.preview.expectedChanges.join(" ");
+    expect(change).toContain("Real Task");
+    expect(change).not.toContain("Bogus Name");
+  });
+
   it("clockify_tasks_rate_update resolves projectName + taskName and pins both ids", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
