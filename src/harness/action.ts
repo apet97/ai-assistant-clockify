@@ -48,6 +48,47 @@ export interface IdempotencyLedger {
   record(scopedKey: string, receipt: SuccessReceipt): void;
 }
 
+/** Outcome of an atomic claim: this caller won the claim, found a completed
+ *  receipt to replay, or found a live in-flight claim held by another request. */
+export type ClaimState = "won" | "replay" | "in_flight";
+
+/**
+ * Atomic-claim extension of {@link IdempotencyLedger} (r1-concurrency-races-01).
+ * The ledger becomes the cross-row SERIALIZATION point: `claim` is taken BEFORE
+ * the commit await, so two concurrent confirms of one intent can't both reach
+ * the host. The winner `fill`s on success or `release`s on failure/throw; the
+ * loser reads the three-state machine via `claim`/`lookupCompleted`. All three
+ * methods are REQUIRED together — a partial ledger falls back to the legacy
+ * lookup→await→record path (see {@link isAtomicLedger}).
+ */
+export interface AtomicIdempotencyLedger extends IdempotencyLedger {
+  /** Atomically claim the key (taken BEFORE the commit await). */
+  claim(scopedKey: string): ClaimState;
+  /** Read the completed receipt for a key the claim reported as `replay`. */
+  lookupCompleted(scopedKey: string): SuccessReceipt | undefined;
+  /** Complete the OWN claim with its success receipt. */
+  fill(scopedKey: string, receipt: SuccessReceipt): void;
+  /** Release the OWN claim (commit failed/threw) so a retry can re-claim. */
+  release(scopedKey: string): void;
+}
+
+/**
+ * Narrow an {@link IdempotencyLedger} to the atomic shape. ALL THREE of
+ * claim/fill/release must be present — a claim-only ledger (which could leave a
+ * dangling NULL claim) fails the guard and takes the SAFE legacy path.
+ */
+export function isAtomicLedger(
+  ledger: IdempotencyLedger | undefined,
+): ledger is AtomicIdempotencyLedger {
+  return (
+    !!ledger &&
+    typeof (ledger as AtomicIdempotencyLedger).claim === "function" &&
+    typeof (ledger as AtomicIdempotencyLedger).fill === "function" &&
+    typeof (ledger as AtomicIdempotencyLedger).release === "function" &&
+    typeof (ledger as AtomicIdempotencyLedger).lookupCompleted === "function"
+  );
+}
+
 export interface ClarifyOption {
   id: string;
   label: string;

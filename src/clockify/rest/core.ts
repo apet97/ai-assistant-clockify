@@ -32,6 +32,14 @@ export interface RestCoreOptions {
   auth: ClockifyAuth;
   /** Injectable for tests. */
   fetchImpl?: typeof fetch;
+  /**
+   * Per-request commit/IO timeout (ms). Bounds commit latency (the POST +
+   * GET-then-PUT + per-item POSTs of e.g. createInvoice are otherwise unbounded
+   * — there is no other wire timeout on this path) so the idempotency-claim TTL
+   * is provably above worst-case (r1-concurrency-races-01). Defaults to
+   * {@link COMMIT_TIMEOUT_MS}.
+   */
+  commitTimeoutMs?: number;
 }
 
 export interface RestCore {
@@ -65,6 +73,17 @@ export interface RestCore {
 export const PAGE_SIZE = 200;
 /** Hard ceiling on pagination loops (200 * 50 = 10k rows) — a runaway backstop. */
 export const MAX_PAGES = 50;
+/**
+ * Default per-request commit/IO timeout (ms). Mirrors LLM_TIMEOUT_MS but is a
+ * DISTINCT knob (it bounds the Clockify wire, not the model). Env-overridable
+ * via COMMIT_TIMEOUT_MS. Bounds commit latency so the idempotency CLAIM_TTL (5
+ * min) is provably above worst-case (r1-concurrency-races-01).
+ */
+export const COMMIT_TIMEOUT_MS: number = (() => {
+  const raw = process.env.COMMIT_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : 120_000;
+})();
 
 function hostsFor(apiBase: string): { api: string; reports: string; audit: string | undefined } {
   // https://api.clockify.me/api/v1 -> reports.api.clockify.me/v1, auditlog-api.api.clockify.me/v1
@@ -92,7 +111,22 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     reports: opts.reportsBase ?? derived.reports,
     audit: opts.auditBase ?? derived.audit,
   };
-  const doFetch = opts.fetchImpl ?? fetch;
+  const baseFetch = opts.fetchImpl ?? fetch;
+  const commitTimeoutMs = opts.commitTimeoutMs ?? COMMIT_TIMEOUT_MS;
+  // Bound every Clockify request: a hung host aborts with a clean "timed out"
+  // error instead of running past the idempotency claim TTL (a slow commit's
+  // live claim must never be swept — r1-concurrency-races-01). AbortSignal.timeout
+  // fires a TimeoutError; remap it so the receipt names the host, not a DOMException.
+  async function doFetch(url: string, init: RequestInit): Promise<Response> {
+    try {
+      return await baseFetch(url, { ...init, signal: AbortSignal.timeout(commitTimeoutMs) });
+    } catch (error) {
+      if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        throw new Error(`Clockify request timed out after ${commitTimeoutMs}ms (${url}).`);
+      }
+      throw error;
+    }
+  }
   const authHeader: Record<string, string> =
     "addonToken" in opts.auth
       ? { "X-Addon-Token": opts.auth.addonToken }

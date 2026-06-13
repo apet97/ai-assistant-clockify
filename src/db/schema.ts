@@ -86,10 +86,14 @@ const SCHEMA_STATEMENTS: string[] = [
     ON pending_confirmations(session_id, status, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_workspace_admin_created
     ON audit_events(workspace_id, admin_user_id, created_at)`,
+  // Atomic-claim ledger (r1-concurrency-races-01). receipt_json is NULLABLE: a
+  // CLAIMED row (claim taken BEFORE the commit await) carries no receipt yet;
+  // committed_at fills only on success; claimed_at backs the dead-claim sweep.
   `CREATE TABLE IF NOT EXISTS idempotency_keys (
     key TEXT PRIMARY KEY,
-    receipt_json TEXT NOT NULL,
-    committed_at INTEGER NOT NULL
+    receipt_json TEXT,
+    committed_at INTEGER,
+    claimed_at INTEGER
   )`,
   `CREATE TABLE IF NOT EXISTS undo_records (
     id TEXT PRIMARY KEY,
@@ -133,6 +137,48 @@ export function migrate(db: Database.Database): void {
   // Additive column for DBs created before the durable agentic resume (Phase 3):
   // a NULL agent_state_json row confirms exactly as before.
   addColumnIfMissing(db, "pending_confirmations", "agent_state_json", "TEXT");
+  // Atomic-claim ledger (r1-concurrency-races-01): old DBs have idempotency_keys
+  // with `receipt_json NOT NULL` and no `claimed_at`. Add the column additively,
+  // then relax receipt_json via a guarded, crash-idempotent rebuild.
+  addColumnIfMissing(db, "idempotency_keys", "claimed_at", "INTEGER");
+  relaxIdempotencyReceiptNullable(db);
+}
+
+/**
+ * Relax `idempotency_keys.receipt_json` from NOT NULL to NULLABLE on an existing
+ * DB. better-sqlite3 (SQLite) can't drop NOT NULL via ALTER, so we rebuild the
+ * table — but only when the old constraint is still present (PRAGMA notnull=1).
+ *
+ * Crash-safety: the rebuild is wrapped in ONE transaction (atomic) and prefixed
+ * with `DROP TABLE IF EXISTS idempotency_keys_new`, so a leftover scratch table
+ * from a crashed prior rebuild cannot wedge startup (a re-CREATE of an existing
+ * table throws "table already exists" — probed). Fires at most once per DB.
+ */
+function relaxIdempotencyReceiptNullable(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{
+    name: string;
+    notnull: number;
+  }>;
+  const receipt = cols.find((c) => c.name === "receipt_json");
+  if (!receipt || receipt.notnull !== 1) return; // already nullable (or table absent)
+
+  db.transaction(() => {
+    db.prepare("DROP TABLE IF EXISTS idempotency_keys_new").run();
+    db.prepare(
+      `CREATE TABLE idempotency_keys_new (
+         key TEXT PRIMARY KEY,
+         receipt_json TEXT,
+         committed_at INTEGER,
+         claimed_at INTEGER
+       )`,
+    ).run();
+    db.prepare(
+      `INSERT INTO idempotency_keys_new (key, receipt_json, committed_at, claimed_at)
+         SELECT key, receipt_json, committed_at, claimed_at FROM idempotency_keys`,
+    ).run();
+    db.prepare("DROP TABLE idempotency_keys").run();
+    db.prepare("ALTER TABLE idempotency_keys_new RENAME TO idempotency_keys").run();
+  })();
 }
 
 function addColumnIfMissing(

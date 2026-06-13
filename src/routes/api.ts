@@ -10,7 +10,7 @@ import {
   executeAction,
 } from "../harness/actions.js";
 import type { ActionContext, ActionResult, ConfirmableOperation, PreviewCard } from "../harness/action.js";
-import type { IdempotencyLedger } from "../harness/idempotency.js";
+import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
 import { reverseCreation, reversibleCreations, firstDeniedGroup } from "../harness/undo.js";
 import { buildMetrics, buildUsageMetrics } from "../metrics/metrics.js";
 import { catalogForModel, getAction } from "../harness/catalog.js";
@@ -37,6 +37,7 @@ import { planConversation, runAgentConversation } from "../assistant/planner.js"
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
 import type { Installation } from "../db/store.js";
+import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
 
 /**
@@ -685,11 +686,23 @@ export function apiRouter(deps: AppDeps): Router {
         message: "The add-on is not active for this workspace.",
       });
     } else {
-      // A store-backed idempotency ledger (10-min window) so re-confirming the
-      // same intent (e.g. the same invoice) can't create a duplicate.
-      const idempotency: IdempotencyLedger = {
+      // A store-backed ATOMIC idempotency ledger (10-min window) so re-confirming
+      // the same intent (e.g. the same invoice) can't create a duplicate — even
+      // under CONCURRENT confirms: claim is taken before the commit await, so two
+      // simultaneous confirms reach the host at most once (r1-concurrency-races-01).
+      const idempotency: AtomicIdempotencyLedger = {
         lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
         record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+        claim: (key) =>
+          deps.store.claimIdempotency(
+            key,
+            now().getTime(),
+            now().getTime() - IDEMPOTENCY_WINDOW_MS,
+            now().getTime() - CLAIM_TTL_MS,
+          ),
+        lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key),
+        fill: (key, r) => deps.store.fillIdempotency(key, r, now().getTime()),
+        release: (key) => deps.store.releaseIdempotency(key),
       };
       receipt = await commitConfirmedOperation(
         { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },

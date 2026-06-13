@@ -6,6 +6,7 @@ import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harn
 import type { RiskLabel } from "../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../harness/receipts.js";
+import type { ClaimState } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
 
 /**
@@ -123,6 +124,15 @@ const CONFIRMATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** Must stay comfortably above routes/api.ts IDEMPOTENCY_WINDOW_MS (10 min). */
 export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
+/**
+ * Dead-claim TTL (r1-concurrency-races-01). An atomic claim older than this is
+ * treated as crashed and swept (by the next same-key claim AND by pruneExpired).
+ * Set STRICTLY above the commit-latency ceiling (COMMIT_TIMEOUT_MS, 120s) so a
+ * LIVE commit's claim is provably never swept, yet well below
+ * IDEMPOTENCY_WINDOW_MS (10 min) and IDEMPOTENCY_RETENTION_MS (60 min). A crash
+ * mid-commit thus blocks that key's retries for at most CLAIM_TTL_MS.
+ */
+export const CLAIM_TTL_MS = 5 * 60 * 1000;
 
 export interface PruneCounts {
   pendingConfirmations: number;
@@ -172,6 +182,27 @@ export interface Store {
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
   lookupIdempotency(key: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
+
+  /**
+   * Atomic-claim ledger (r1-concurrency-races-01). One synchronous
+   * better-sqlite3 transaction: sweep a stale COMPLETED row (committed_at <
+   * completedNotBefore) or a dead CLAIM (claimed_at < claimNotBefore), then
+   * INSERT...ON CONFLICT DO NOTHING. Returns `'won'` for the single winner,
+   * `'replay'` when an in-window completed row already exists, `'in_flight'`
+   * when a live claim is held by another request.
+   */
+  claimIdempotency(
+    key: string,
+    claimedAtEpochMs: number,
+    completedNotBeforeEpochMs: number,
+    claimNotBeforeEpochMs: number,
+  ): ClaimState;
+  /** The completed receipt for a key the claim reported as `replay`. */
+  claimIdempotencyReceipt(key: string): SuccessReceipt | undefined;
+  /** Complete the OWN claim (guarded on receipt_json IS NULL — fills once). */
+  fillIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
+  /** Release the OWN claim (guarded on receipt_json IS NULL — never drops a completed row). */
+  releaseIdempotency(key: string): void;
 
   /** Undo ledger (Phase 5b): a reversible action and its one-use status. */
   recordUndoable(input: UndoRecordInput): string;
@@ -684,17 +715,71 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     },
 
     recordIdempotency(key, receipt, committedAtEpochMs) {
+      // Legacy/best-effort path (non-atomic ledger). Stamp claimed_at too so the
+      // row is prune-able by BOTH prune arms.
       db.prepare(
-        `INSERT INTO idempotency_keys (key, receipt_json, committed_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET receipt_json = excluded.receipt_json, committed_at = excluded.committed_at`,
-      ).run(key, JSON.stringify(receipt), committedAtEpochMs);
+        `INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET receipt_json = excluded.receipt_json, committed_at = excluded.committed_at, claimed_at = excluded.claimed_at`,
+      ).run(key, JSON.stringify(receipt), committedAtEpochMs, committedAtEpochMs);
     },
 
     lookupIdempotency(key, notBeforeEpochMs) {
+      // `receipt_json IS NOT NULL` so an in-flight CLAIM is never returned as a
+      // completed receipt (it also can't JSON.parse).
       const row = db
-        .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ? AND committed_at >= ?")
+        .prepare(
+          "SELECT receipt_json FROM idempotency_keys WHERE key = ? AND committed_at >= ? AND receipt_json IS NOT NULL",
+        )
         .get(key, notBeforeEpochMs) as { receipt_json: string } | undefined;
       return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
+    },
+
+    claimIdempotency(key, claimedAtEpochMs, completedNotBeforeEpochMs, claimNotBeforeEpochMs) {
+      // ONE synchronous transaction (better-sqlite3 is sync, so no JS
+      // interleaving): sweep a stale-completed OR dead-claim row, then race the
+      // INSERT. ON CONFLICT DO NOTHING gives changes===1 to exactly one winner.
+      return db.transaction((): ClaimState => {
+        db.prepare(
+          `DELETE FROM idempotency_keys
+             WHERE key = ?
+               AND ((receipt_json IS NOT NULL AND committed_at < ?)
+                 OR (receipt_json IS NULL AND claimed_at < ?))`,
+        ).run(key, completedNotBeforeEpochMs, claimNotBeforeEpochMs);
+        const ins = db
+          .prepare(
+            `INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at)
+               VALUES (?, NULL, NULL, ?) ON CONFLICT(key) DO NOTHING`,
+          )
+          .run(key, claimedAtEpochMs);
+        if (ins.changes === 1) return "won";
+        const row = db
+          .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ?")
+          .get(key) as { receipt_json: string | null } | undefined;
+        // The row vanished mid-transaction (a concurrent release won the row):
+        // the key is free again, so report a fresh win — the caller commits.
+        if (!row) return "won";
+        return row.receipt_json !== null ? "replay" : "in_flight";
+      })();
+    },
+
+    claimIdempotencyReceipt(key) {
+      const row = db
+        .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ? AND receipt_json IS NOT NULL")
+        .get(key) as { receipt_json: string } | undefined;
+      return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
+    },
+
+    fillIdempotency(key, receipt, committedAtEpochMs) {
+      // Guarded on receipt_json IS NULL: fills only the OWN (still-claimed) row;
+      // a re-fill or a fill of an already-completed row no-ops.
+      db.prepare(
+        "UPDATE idempotency_keys SET receipt_json = ?, committed_at = ? WHERE key = ? AND receipt_json IS NULL",
+      ).run(JSON.stringify(receipt), committedAtEpochMs, key);
+    },
+
+    releaseIdempotency(key) {
+      // Guarded on receipt_json IS NULL: a release can NEVER drop a COMPLETED row.
+      db.prepare("DELETE FROM idempotency_keys WHERE key = ? AND receipt_json IS NULL").run(key);
     },
 
     recordUndoable(input) {
@@ -807,6 +892,11 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       const undoCutoff = new Date(nowMs - UNDO_RETENTION_MS).toISOString();
       const telemetryCutoff = new Date(nowMs - TELEMETRY_RETENTION_MS).toISOString();
       const idempotencyCutoff = nowMs - IDEMPOTENCY_RETENTION_MS;
+      // Crashed-claim backstop (r1-concurrency-races-01): a NULL-receipt claim
+      // for a key that never recurs would leak forever — the committed_at-only
+      // prune NEVER matches it (NULL < n is NULL/falsy in SQLite, proven by
+      // execution). Sweep dead claims independently on the CLAIM_TTL clock.
+      const claimCutoff = nowMs - CLAIM_TTL_MS;
       // One transaction — operational tables ONLY. ISO-string comparison is
       // safe: every writer stamps via toISOString().
       const run = db.transaction((): PruneCounts => {
@@ -818,8 +908,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           )
           .run(confirmationCutoff, confirmationCutoff).changes;
         const idempotency = db
-          .prepare("DELETE FROM idempotency_keys WHERE committed_at < ?")
-          .run(idempotencyCutoff).changes;
+          .prepare(
+            `DELETE FROM idempotency_keys
+               WHERE (committed_at IS NOT NULL AND committed_at < ?)
+                  OR (receipt_json IS NULL AND claimed_at < ?)`,
+          )
+          .run(idempotencyCutoff, claimCutoff).changes;
         const undo = db
           .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
           .run(undoCutoff).changes;

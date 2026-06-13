@@ -1,4 +1,5 @@
 import { getAction } from "./catalog.js";
+import { isAtomicLedger } from "./action.js";
 import type { ActionContext, ActionResult, ConfirmableOperation } from "./action.js";
 import { canRead, canWrite } from "./permissions.js";
 import type { FeatureGroup } from "./permissions.js";
@@ -134,20 +135,59 @@ export async function commitConfirmedOperation(
     }
   }
 
-  // Idempotency (opt-in per action): if this exact intent was committed within the
-  // window, return the prior receipt rather than mutating again (no duplicate).
+  // Idempotency (opt-in per action): if this exact intent was committed within
+  // the window, return the prior receipt rather than mutating again. Two paths:
+  //  - ATOMIC (the production store-backed ledger wires claim/fill/release): the
+  //    claim is taken BEFORE the commit await, so two concurrent confirms of one
+  //    intent can't both reach the host (r1-concurrency-races-01).
+  //  - LEGACY (a 2-method lookup/record ledger, e.g. tests): the unchanged
+  //    lookup→await→record best-effort path.
+  const commit = action.commit;
   const semantic = action.idempotencyKey?.(operation);
-  let scopedKey: string | undefined;
-  if (semantic && ctx.idempotency) {
-    scopedKey = idempotencyScopeKey(ctx.workspaceId, ctx.adminUserId, operation, semantic);
-    const prior = ctx.idempotency.lookup(scopedKey);
+  const ledger = ctx.idempotency;
+
+  // No idempotency for this action/context — the bare commit (unchanged).
+  if (!semantic || !ledger) return runCommit(commit, ctx, operation);
+
+  const scopedKey = idempotencyScopeKey(ctx.workspaceId, ctx.adminUserId, operation, semantic);
+
+  if (!isAtomicLedger(ledger)) {
+    // LEGACY PATH — byte-identical to the pre-change behavior for 2-method ledgers.
+    const prior = ledger.lookup(scopedKey);
     if (prior) return markReplayed(prior);
+    const receipt = await runCommit(commit, ctx, operation);
+    if (receipt.ok) ledger.record(scopedKey, receipt);
+    return receipt;
   }
 
+  // ATOMIC PATH — the claim is the cross-row serialization point.
+  const state = ledger.claim(scopedKey);
+  if (state === "replay") {
+    const prior = ledger.lookupCompleted(scopedKey);
+    return prior ? markReplayed(prior) : commitInProgress(operation.actionName);
+  }
+  if (state === "in_flight") return commitInProgress(operation.actionName);
+
+  // state === "won": WE OWN THE CLAIM. Commit exactly once; fill on success,
+  // release on failure/throw so a legitimate retry can re-claim (a failed commit
+  // never blocks the window — the existing "failed commit is retryable" invariant).
+  const receipt = await runCommit(commit, ctx, operation);
+  if (receipt.ok) {
+    ledger.fill(scopedKey, receipt);
+  } else {
+    ledger.release(scopedKey);
+  }
+  return receipt;
+}
+
+/** Run a commit, mapping a thrown error to an execution_error receipt. Never throws. */
+async function runCommit(
+  commit: (ctx: ActionContext, operation: ConfirmableOperation) => Promise<SuccessReceipt | ErrorReceipt>,
+  ctx: ActionContext,
+  operation: ConfirmableOperation,
+): Promise<SuccessReceipt | ErrorReceipt> {
   try {
-    const receipt = await action.commit(ctx, operation);
-    if (receipt.ok && scopedKey && ctx.idempotency) ctx.idempotency.record(scopedKey, receipt);
-    return receipt;
+    return await commit(ctx, operation);
   } catch (error) {
     return errorReceipt({
       action: operation.actionName,
@@ -156,6 +196,22 @@ export async function commitConfirmedOperation(
       recovery: { hint: "The action failed during execution.", retryable: true },
     });
   }
+}
+
+/**
+ * Benign result for the loser of a concurrent confirm while the winner's commit
+ * is genuinely in flight (claim held, receipt not yet filled). Honest about the
+ * live-vs-resolve ambiguity — it asserts NO completion (the winner may still
+ * fail and release, in which case a later confirm re-claims and commits for real).
+ */
+function commitInProgress(actionName: string): ErrorReceipt {
+  return errorReceipt({
+    action: actionName,
+    code: "commit_in_progress",
+    message:
+      "This change is currently being applied in another request; nothing was duplicated — re-check in a moment or run a fresh preview.",
+    recovery: { hint: "Wait a moment, then re-check or run a fresh preview.", retryable: true },
+  });
 }
 
 function policyDenied(
