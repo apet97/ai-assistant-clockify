@@ -3,6 +3,70 @@
 Moved out of CLAUDE.md on 2026-06-10 to keep the per-session context small.
 Newest first. The durable rules/facts distilled from these live in CLAUDE.md.
 
+## Handoff note — 2026-06-13 (the goated-audit arc: 43 findings fixed, 1 wont_fix)
+
+A fresh-eyes "find what every previous pass missed" audit + full backlog
+implementation. Three runs:
+
+1. **Audit + first fixes.** A multi-agent Workflow (8 parallel subsystem readers →
+   a 15-dimension loop-until-dry hunt over 4 rounds → 3-skeptic majority
+   verification) surfaced **82 findings, 52 confirmed**. The run correctly REFUSED
+   all live Clockify probes (the `.env` `LIVE_WORKSPACE_ID` didn't equal the
+   sanctioned sacrificial workspace) — findings came from the OpenAPI spec +
+   pinning tests. The automated fix phase was cut off by an account session limit,
+   so the highest-value confirmed fixes were landed directly: **10 TDD commits** —
+   a CRITICAL (async route rejections hung the request AND crashed the server on a
+   mid-turn DB error → `asyncHandler` + a headers-sent-aware terminal error
+   middleware + a process-level net) and two HIGHs (`projects_from_template` sent
+   `templateId` not the spec's required `templateProjectId`+`name`, so every
+   from-template create 400'd; `/component/assistant` minted a NEW session every
+   load so session-restore was dead in prod — now reuses the cookie-bound session).
+   Plus: per-tool-call `thoughtSignature` survives the confirm-resume round-trip
+   (Gemini 3.x no longer 400s); a total-failure undo reports failure not a false
+   "Undone"; holidays dates resolve server-side; the time-off preview shows the
+   deducted day count; `tasks_rate_update` previews the REAL task name
+   (`resolveEntityRef` gained `verifyId`); the NUL-byte sentinel removed from
+   `api.ts` (grep treated the safety-critical file as binary); catalog corrected to
+   137 actions.
+
+2. **Resume sweep — 7 more fixes.** confirmPending/rotatePendingNonce check
+   ownership BEFORE status (no cross-tenant lifecycle leak) and fail CLOSED on a
+   NaN `expiresAt`; schedule single-project totals use `GET /{projectId}` (the POST
+   body's `projectId` was silently dropped → all projects); the typed-consent guard
+   catches approval idioms ("ship it"/"make it so") without swallowing new-entity
+   phrases; an idempotent replay no longer mints a second undo handle;
+   `/component/assistant` requires an ACTIVE installation before minting a session;
+   undo failures surface the route's real reason.
+
+3. **Backlog implementation — 26 fixed, 1 wont_fix, 0 blocked** (a dedicated
+   Workflow). The deferred headline `concurrency-races-01` (idempotency
+   check-then-act → duplicate invoice) was first DESIGNED, then **rejected 0/3 by
+   adversarial skeptics**, revised, **approved 2/3**, and implemented as an
+   **atomic-claim idempotency ledger**: `store.claimIdempotency` does a stale-sweep
+   + `INSERT … ON CONFLICT(key) DO NOTHING` in one synchronous better-sqlite3
+   transaction, claimed BEFORE the commit await so two concurrent confirms can't
+   both create; `rest/core.ts` gained a 120s `COMMIT_TIMEOUT_MS` and the ledger a
+   `CLAIM_TTL_MS` set STRICTLY above it, so a crashed-mid-commit claim frees within
+   5 min and a legitimate commit can never run long enough to hit the TTL;
+   release-on-failure/throw + lookup-skips-NULL complete it; the safety boundary is
+   untouched and madge stays 0. Also landed: cross-tab nonce re-arm, per-card
+   pending restore (no merged "Confirm all"), focus-return + honest cancel/undo
+   copy, CSP + clickjacking backstop on the embedded HTML (frame-ancestors keeps
+   the Clockify/CAKE origins), confirm-resume rate-limit, JSON-mode token telemetry,
+   gemini-cli timeout forwarding, transcript-unique tool-call ids, index-seek prune,
+   memoized `catalogForModel`, "this `<weekday>`" date resolution, and named
+   transport-fetch errors. The ONE `wont_fix` is `authz-surface-01` (admin role
+   gated only at session creation, not re-verified per request) — honest, a
+   session-TTL/posture decision since chat requests carry only the signed cookie,
+   no fresh Clockify token to re-verify a role against.
+
+**Net:** 43 confirmed findings fixed across the arc, 1 wont_fix, 0 unaddressed.
+Tests 1095 → **1184** (+89). Planner held **100%** (108/108 repeat=2, DeepSeek +
+both Gemini tiers); agentic **14/14**, 0 safety violations; madge **0**. All
+pushed to `main`. Full per-finding tables (incl. the idempotency design verdict)
+in `~/Downloads/ai-assistant-goated-audit-NOTES.md`. Open product call:
+`authz-surface-01` session-TTL posture.
+
 ## Handoff note — 2026-06-13 (audit/dogfood/identity/harvest/elevate/Gemini arcs + Railway)
 
 Six arcs landed between 2026-06-11 and 2026-06-13 (details distilled into

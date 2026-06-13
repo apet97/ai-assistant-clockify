@@ -6,172 +6,54 @@ Read this first in every Claude Code session. History/journals: `docs/HISTORY.md
 
 ## Current state (2026-06-13)
 
-Everything buildable is DONE and live-verified: V1 + full REST parity (137
-typed actions, 16 areas, 3 hosts) + the trust-lives-in-the-code roadmap + the
-durable agentic loop (default ON) + the 322-prompt live-loop fix arc + a live
-regression re-run in the embedded chat (all fixed flows passed; verified vs UI
-AND the audit DB) + a measured quality pass (2026-06-10: truth/dead-code/fake
-drift) + a full-angle live investigation (2026-06-11: safety 16/16, agentic
-10/10 + 21/21, live-full 115/115, planner 98.6%, chat-tour clean — one stale
-live fixture fixed, no product defect; notes in
-`~/Downloads/ai-assistant-quality-pass-NOTES.md` +
-`…-investigation-NOTES.md`) + a full-angle audit fix run (2026-06-11,
-fix-only of the `e538561` audit): 34 fixes landed across security (lifecycle
-workspaceId now trusts the token claim, not the body), safety invariants
-(resume tool-result cap, nonce never persisted), API drift (webhook-logs
-POST-only, invoice has no note/subject/status), truthfulness (preview cards
-show chosen values), efficiency, dead-code, test-gaps, and docs — 0
-wont_fix/blocked/deferred; gate green; notes in
-`~/Downloads/ai-assistant-full-angle-audit-NOTES.md`) + an adversarial codebase
-review (2026-06-11) whose actionable findings landed as three duplication
-consolidations — the major/minor amount mapping (`src/harness/money.ts`),
-day-based time spans (`src/durations.ts`), and the pagination limits (exported
-from `rest/core.ts`) — plus a dead-param cleanup; the larger `routes/api.ts` and
-`db/store.ts` structural decompositions were reviewed and DEFERRED (both <1000
-LOC and cohesive; the api.ts splits touch safety-critical flow — not worth the
-regression risk yet).
-A live-dogfooding + live-bug-fix arc (2026-06-11/12) followed: Sonnet agents
-drive `scripts/repro-chat.ts` (real route + live model + fake) and the user's
-live screenshots surfaced ~22 fixes — custom-field/webhook refuse up-front,
-clarify renders once, prefer-existing-entity grounding, amounts in major units,
-year/stale-date narration, whitespace-input guard, `'me'`→adminUserId on rate
-updates, expense-for-another-user, the live-verified role-grant contract, and a
-fake-fidelity fix (deleteEntity truly removes). The Clockify rate model is now
-fully covered (live-verified 2026-06-12): project DEFAULT rate on project
-create/update; per-project MEMBER rate (`clockify_projects_rate_update`,
-membership-validated); TASK rate (`clockify_tasks_rate_update`, now
-task-validated + major-unit preview); and the Team-section workspace MEMBER
-rate (`clockify_users_rate_update`). Tasks can also assign members inline on
-create + update (`assigneeIds` takes ids, exact names, or 'me' — resolved via
-`resolve.ts` `resolveUserRefs`, clarifies on ambiguous/unknown; spec +
-live-verified). The same identity-resolution arc then swept the remaining
-user/group slots (2026-06-12): group add accepts a member LIST; holidays
-(`userIds`+`userGroupIds`), time-off balance (`userIds`), and scheduling create
-(`userId`/`projectId`) all resolve names; and time-off POLICIES can now be
-scoped to groups/users (`userIds`/`userGroupIds`, a NEW capability — the API
-supported it, the addon didn't). Approvals + scheduling are per-user only (no
-group target in the API). Single-member resolution lives in `resolveUserRef`,
-lists in `resolveUserRefs`/`resolveGroupRefs` (one `resolveRefList` core).
-Reusable: `scripts/repro-chat.ts`
-+ `.claude/workflows/dogfood-and-fix.js`.
-A follow-up sweep (2026-06-12) finished the ENTITY side of the same invariant:
-the optional project/task slot pair (expenses create/update, fix_entry,
-start_timer, log_work, entries_list, scheduling project_totals) resolves via
-one `resolveProjectTaskRefs`; `projects_create` resolves `clientName`;
-`invoices_create` resolves a non-hex `clientId`; `expenses_update` gains
-`categoryName`. Plus: every HTTP model request now carries
-`AbortSignal.timeout` (`LLM_TIMEOUT_MS`, default 120s). Post-sweep planner
-eval: 97.8% (135/138) — the one hard fail, `time_tracking/start` choosing
-`clockify_status` for a bare "start a timer", reproduces IDENTICALLY at
-pre-sweep commit `3261a1c` (DeepSeek provider drift, not a regression).
-The USER side then closed too: all 7 read-filter `userId` slots resolve
-id/name/'me' via `resolveUserFilter`, and `users_deactivate` resolves +
-verifies the member (the self-guard now holds on the RESOLVED id — 'me'/
-own-name used to slip past it).
-A final harvest arc (2026-06-12) closed the rest: relative DATES on
-invoices_create (`issuedDate`/`dueDate`), approvals `periodStart` (which used
-to parse "June 1" via `new Date` → year 2001!), and holidays in_period (+ its
-missed `assignedTo` user slot); NAME resolution for time-off request policies,
-project templates, and entry TAGS (`resolveTagRefs`; start_timer/log_work/
-fix_entry take `tagNames` or names in `tagIds`); scalar-coercion absorption
-(`src/harness/arg-shapes.ts` — `zStringList`/`zNumberLike` across ~25 fields;
-tool schemas stay canonical) + field-path-prefixed invalid_args; and the OPS
-layer: per-session chat rate limit (`src/routes/rate-limit.ts`,
-`CHAT_RATE_LIMIT_MAX`/`_WINDOW_MS`, 429 + Retry-After), retention pruning
-(`store.pruneExpired` hourly — audit_events/chat_messages NEVER), model 429/5xx
-single-retry + error-body snippet, SIGTERM graceful shutdown
-(`createShutdownHandler`), and honest UI errors (401 → "reload" copy; the
-routes' own JSON copy reaches the chat error bar). A start_timer description
-nudge recovered the provider-drift eval case — planner eval reached
-**138/138 (100%)**, stable-pass 46/46.
-An "elevate the product" arc followed (2026-06-13): **session restore**
-(`GET /api/chat/history` replays the last 50 messages + re-serves LIVE pending
-previews with a ROTATED one-use nonce — `rotatePendingNonce`, old plaintext
-dies, TTL never extended; the UI restores on mount), **live progress**
-(`{type:"status", action, label}` NDJSON lines before each tool execution —
-labels from `action-labels.ts`, NEVER args; the typing bubble shows them),
-**cost/latency telemetry** (`turn_telemetry` table + `trackUsage` wrapper;
-`GET /api/metrics` gains `usage` totals + last-24h — the cost review has data),
-**eval lock-in** (8 new planner cases for the capability arcs; baseline now
-**162/162 (100%)**, 54 cases, stable-pass 54/54), **undo extension**
-(group/holiday/assignment now reversible; time_off_request can't be — its
-delete needs the policy id), broader welcome prompts, and **GitHub Actions CI**
-(verify + madge on every push/PR).
-A Gemini-readiness arc (2026-06-13) followed: the model client now speaks
-Gemini 3.x (per-tool-call `thought_signature` echo — REQUIRED on continuation
-or the loop 400s — and `LLM_REASONING_EFFORT`, both inert for DeepSeek,
-pinned), and four harness improvements took BOTH Gemini tiers to 100% without
-denting DeepSeek: time-off `requests_create` anchors 'N days next/this week'
-to the first N workdays (the resolveLogTimes pattern; preview shows the
-dates), report descriptions teach the existing last-7-days default, the
-tool prompt gained a call-don't-ask rule for defaulted args, and `log_work`'s
-`description` is OPTIONAL (an honest blank — lite was the only model
-correctly refusing to invent one). Measured: **planner 108/108 on
-gemini-3.1-flash-lite(low) AND gemini-3.5-flash(low), 162/162 on DeepSeek
-v4-pro; agentic 7/7 on all three, 0 safety violations.** Backend swap is
-env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT=low`); prod stays DeepSeek
-until decided.
-A goated-audit run (2026-06-13, fresh-eyes "find what every pass missed":
-8 subsystem maps → 15-dimension loop-until-dry hunt → 3-skeptic majority verify;
-82 findings, 52 confirmed) landed **17 TDD fixes** across security, safety
-invariants, API drift, and truthfulness — incl. a CRITICAL (async route
-rejections hung the request AND crashed the server on any mid-turn DB error →
-`asyncHandler` + terminal error middleware + process net) and two HIGHs
-(`projects_from_template` sent `templateId` not the spec's required
-`templateProjectId`+`name`; `/component/assistant` minted a NEW session every
-load so session-restore was dead in prod — now reuses the cookie-bound session).
-Plus: per-tool-call `thoughtSignature` now survives the confirm-resume
-round-trip (Gemini 3.x no longer 400s); a total-failure undo reports failure not
-a false "Undone"; holidays dates resolve server-side; the time-off preview shows
-the deducted day count; `tasks_rate_update` previews the REAL task name
-(`resolveEntityRef` gained `verifyId`); NUL bytes removed from `api.ts` (grep
-treated the safety-critical file as binary); catalog is 137 actions. The resume
-sweep added: confirmPending/rotatePendingNonce check ownership BEFORE status (no
-cross-tenant lifecycle leak) and fail CLOSED on a NaN `expiresAt`; schedule
-single-project totals use `GET /{projectId}`; the typed-consent guard catches
-approval idioms ("ship it"/"make it so") without swallowing new-entity phrases;
-an idempotent replay no longer mints a second undo handle; `/component/assistant`
-requires an ACTIVE installation before minting a session; undo failures surface
-the route's real reason. A backlog-implementation run (2026-06-13) then cleared
-the remaining 27 deferred findings: **26 fixed, 1 wont_fix, 0 blocked**. The
-deferred headline `concurrency-races-01` LANDED as a real fix — an
-**atomic-claim idempotency ledger** (`store.claimIdempotency` does sweep + `INSERT
-… ON CONFLICT DO NOTHING` in one better-sqlite3 transaction, claimed BEFORE the
-commit await; rest-core gained a 120s `COMMIT_TIMEOUT_MS` and `CLAIM_TTL_MS`
-strictly above it so the dead-claim sweep only frees a provably-crashed claim;
-safety boundary untouched, madge stays 0). Also landed: cross-tab nonce re-arm,
-per-card pending restore, focus-return + honest cancel/undo copy, CSP +
-clickjacking backstop, confirm-resume rate-limit, telemetry token surfacing,
-gemini-cli timeout, transcript-unique tool-call ids, index-seek prune, memoized
-catalog, "this <weekday>" resolution, and named transport-fetch errors. The ONE
-**wont_fix is `authz-surface-01`** (admin role gated only at session creation,
-not re-verified per request) — honest, deferred as a session-TTL/posture
-decision, not a mechanical fix. Planner held 100% (108/108 repeat=2) and agentic
-14/14 with 0 safety violations. Full per-finding table in
-`~/Downloads/ai-assistant-goated-audit-NOTES.md`.
-`npm run verify` = **1184 tests** (was 1116), `npx madge --circular
---extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
-to `main`.
+Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
+buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
+`docs/HISTORY.md`; this is the current snapshot.
 
-**DEPLOYED on Railway (2026-06-12) and installed + working in Clockify.**
-Stable hosting is SOLVED — the quick tunnel is retired. Live at
-`https://ai-assistant-production-c2e6.up.railway.app` (project
-`ai-assistant-clockify`, service `ai-assistant`). The SDK
-(`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
-tarball at `vendor/` (npm 2FA blocked publishing) so `npm ci` is self-contained;
-prod build = `tsconfig.build.json` → `dist/server/server.js`, `npm start`; a 5GB
+**Verified gate:** `npm run verify` = **1184 tests**; `npx madge --circular
+--extensions ts --ts-config tsconfig.json src` = **0** (keep both green). 137
+typed actions, 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND
+both Gemini tiers (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop
+7/7 ×3, 0 safety violations. Gemini-ready: backend swap is env-only (`LLM_MODEL`
++ `LLM_REASONING_EFFORT=low`); prod stays DeepSeek until decided.
+
+**Deployed on Railway**, installed + working in Clockify (the dev quick-tunnel is
+retired). Live at `https://ai-assistant-production-c2e6.up.railway.app` (project
+`ai-assistant-clockify`, env `production`, service `ai-assistant`). Redeploy =
+`railway up` from this dir (Nixpacks → `npm run build` → `npm start`, healthcheck
+`/manifest`). The SDK (`@apet97/clockify-addon-sdk`, on the request path) is
+vendored as an in-repo tarball at `vendor/` so `npm ci` is self-contained; a
 Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
-installs survive redeploys. Full checklist: `DEPLOYMENT.md`. Remaining work is
-**human-gated only**:
-1. **Prod security review + token rotation** (the `.env.server` LLM creds were
-   reused on Railway — rotate for real prod; review before real users).
-2. **Prod AUDIT-host `X-Addon-Token` clearance** — now unblocked: run
-   `scripts/host-auth-spike.ts` against the live Railway install with a captured
-   prod `LIVE_ADDON_TOKEN` (dev cleanly reports "audit log not available").
+installs survive redeploys. Env vars + volume live in Railway — never commit
+tokens. Full checklist: `DEPLOYMENT.md`.
 
-Local dev still uses `scripts/dev-tunnel.sh` (quick tunnel + server on :3001);
-prod no longer depends on it. **Never `dev-tunnel.sh restart`** for the local
-flow (it rotates the URL); a colleague may share `:3001` via a second tunnel.
+**Latest — the goated-audit arc (2026-06-13):** a fresh-eyes multi-agent audit
+(82 findings → 52 confirmed via 3-skeptic majority) whose backlog was then fully
+implemented — **43 confirmed findings fixed across three runs, 1 wont_fix, 0
+blocked**, each a failing-test-first TDD commit. Highlights: a CRITICAL server
+crash/hang on a mid-turn DB error (`asyncHandler` + terminal error middleware +
+process net); session-restore was dead in prod (every `/component/assistant` load
+minted a NEW session — now reuses the cookie-bound one); the concurrent-confirm
+duplicate-invoice race closed with an **atomic-claim idempotency ledger**
+(`store.claimIdempotency`: stale-sweep + `INSERT … ON CONFLICT DO NOTHING` in one
+better-sqlite3 txn, claimed BEFORE the commit await; `COMMIT_TIMEOUT_MS` 120s +
+`CLAIM_TTL_MS` strictly above it bound crash recovery; safety boundary untouched).
+The ONE `wont_fix` is `authz-surface-01` (admin role gated only at session
+creation, not re-verified per request) — a session-TTL/posture decision, not a
+mechanical fix. Per-finding tables: `~/Downloads/ai-assistant-goated-audit-NOTES.md`.
+
+**Human-gated only** (unchanged by this work):
+1. **Prod security review + token rotation** — the `.env.server` LLM creds were
+   reused on Railway; rotate for real prod and review before real users.
+2. **Prod AUDIT-host `X-Addon-Token` clearance** — run `scripts/host-auth-spike.ts`
+   against the live install with a captured prod `LIVE_ADDON_TOKEN` (dev cleanly
+   reports "audit log not available").
+3. **`authz-surface-01`** — decide the session-TTL / per-request-role posture
+   (the one audit `wont_fix`).
+
+Local dev uses `scripts/dev-tunnel.sh` (quick tunnel + server on :3001); prod no
+longer depends on it. **Never `dev-tunnel.sh restart`** for the local flow (it
+rotates the URL); a colleague may share `:3001` via a second tunnel.
 
 ## Product contract
 

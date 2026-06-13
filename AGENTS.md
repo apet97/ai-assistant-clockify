@@ -11,7 +11,9 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **1095 tests**, 0 circular deps. Done + on `main`:
+verify` is green at **1184 tests**, 0 circular deps. **DEPLOYED on Railway**
+(project `ai-assistant-clockify`, service `ai-assistant`; redeploy = `railway up`;
+see `DEPLOYMENT.md`). Done + on `main`:
 - **Full Clockify REST parity** (137 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
@@ -33,6 +35,13 @@ verify` is green at **1095 tests**, 0 circular deps. Done + on `main`:
   typed-consent guard, preview-time platform restrictions), then re-verified live
   in the embedded chat. `CLAUDE.md` → "Safety & planner invariants" +
   "Clockify API facts"; journals in `docs/HISTORY.md`.
+- **The goated-audit arc (2026-06-13)** — a fresh-eyes multi-agent audit (82
+  findings → 52 confirmed) + full backlog implementation: **43 confirmed findings
+  fixed, 1 wont_fix** (`authz-surface-01`, a session-TTL call), 0 blocked. Closed a
+  CRITICAL server crash/hang on a mid-turn DB error, prod-dead session-restore, and
+  the concurrent-confirm duplicate-invoice race (an atomic-claim idempotency
+  ledger). Planner held 100%, agentic 7/7, madge 0. Detail: the goated-audit
+  handoff note in `docs/HISTORY.md`.
 
 **Ground truth, not the code:** this codebase was built fast and its Clockify-API
 assumptions have repeatedly been WRONG (invoice item types, instant formats, host
