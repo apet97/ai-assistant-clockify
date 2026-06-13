@@ -323,4 +323,11 @@ describe("catalog", () => {
       expect(entry.args.length).toBeGreaterThan(0);
     }
   });
+
+  it("catalogForModel is memoized — same reference on repeated calls (catalog is static, like toolsForModel)", () => {
+    // The catalog is built once at module load and summarizeArgs is deterministic,
+    // so the model-view is invariant; recomputing it every JSON-mode turn is wasted
+    // allocation + 137 schema summaries. Mirror toolsForModel's memoization.
+    expect(catalogForModel()).toBe(catalogForModel());
+  });
 });

@@ -65,12 +65,18 @@ export function getAction(name: string): ActionDefinition | undefined {
   return CATALOG_BY_NAME.get(name);
 }
 
+let cachedModelView: ActionCatalogEntry[] | undefined;
+
+/** The model-visible catalog view. Memoized (catalog is static, like toolsForModel). */
 export function catalogForModel(): ActionCatalogEntry[] {
-  return ACTION_CATALOG.map((action) => ({
-    name: action.name,
-    description: action.description,
-    featureGroup: action.featureGroup,
-    risks: action.risks,
-    args: summarizeArgs(action.schema),
-  }));
+  if (!cachedModelView) {
+    cachedModelView = ACTION_CATALOG.map((action) => ({
+      name: action.name,
+      description: action.description,
+      featureGroup: action.featureGroup,
+      risks: action.risks,
+      args: summarizeArgs(action.schema),
+    }));
+  }
+  return cachedModelView;
 }
