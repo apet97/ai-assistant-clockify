@@ -22,7 +22,7 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { runAgentTurn, type AgentTurnResult } from "../src/assistant/agent-loop.js";
-import { resumeMessages, type AgentState } from "../src/assistant/agent-state.js";
+import type { AgentState } from "../src/assistant/agent-state.js";
 import type { ModelClient, ToolCall } from "../src/assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../src/assistant/planner.js";
 import { selectModelClient, type ModelClientSelection } from "../src/assistant/select-model-client.js";
@@ -35,6 +35,7 @@ import { requiresConfirmation } from "../src/harness/risk.js";
 import { toolsForModel } from "../src/harness/tools.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
 import { AGENTIC_CASES, type AgenticCase, type AgenticOutcome } from "./eval/agentic-cases.js";
+import { persistAndResume } from "./eval/persist-resume.js";
 
 interface Flags {
   repeat: number;
@@ -119,9 +120,15 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
       const receipt = await commitConfirmedOperation(ctx, turn.operation);
       committed.push(turn.operation.actionName);
       const state: AgentState = { transcript: turn.transcript, call: { id: turn.call.id, name: turn.call.name } };
+      // Route the resume through the PRODUCTION suspension boundary
+      // (capAgentState → JSON persist → parseAgentState), not the live in-memory
+      // state — so persistence-schema drift (a stripped thoughtSignature, any
+      // future contract field) fails the eval here instead of only in prod.
+      const messages = persistAndResume(state, receipt);
+      if (!messages) break; // production would not resume → the turn stays interrupted (a failure)
       turn = await runAgentTurn({
         modelClient,
-        messages: resumeMessages(state, receipt),
+        messages,
         tools: toolsForModel(),
         runAction,
       });
