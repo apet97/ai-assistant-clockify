@@ -75,7 +75,7 @@ not set it.
 | `DATABASE_PATH` | `/data/ai-assistant.sqlite` (must be inside the mounted volume) |
 | `CLOCKIFY_ADDON_KEY` | `ai-assistant` |
 | `SESSION_SECRET` | a long random string — `openssl rand -hex 32` |
-| `DATA_ENCRYPTION_KEY` | 64 hex chars (32 bytes) — `openssl rand -hex 32` |
+| `DATA_ENCRYPTION_KEY` | a strong random passphrase, **min 32 chars** (SHA-256-derived to the AES-256-GCM key — not raw hex) — `openssl rand -hex 32` gives 64 chars |
 | `LLM_BASE_URL` | your OpenAI-compatible endpoint |
 | `LLM_API_KEY` | the model API key |
 | `LLM_MODEL` | the model name |

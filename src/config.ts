@@ -49,7 +49,9 @@ const envObjectSchema = z.object({
   CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
   CLOCKIFY_ADDON_KEY: z.string().min(1),
   SESSION_SECRET: z.string().min(1),
-  DATA_ENCRYPTION_KEY: z.string().min(1).optional(),
+  // A passphrase, SHA-256-derived to the AES-256-GCM key (src/db/encryption.ts);
+  // NOT raw hex bytes. Require real entropy (>=32 chars), not a 1-char value.
+  DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   DATABASE_PATH: z.string().min(1),
   // The HTTP provider needs base/key/model; the gemini-cli provider needs none
   // (it uses the authenticated CLI), so these are optional here and enforced

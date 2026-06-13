@@ -80,6 +80,20 @@ describe("loadConfig", () => {
     expect(cfg.nodeEnv).toBe("test");
   });
 
+  it("rejects a too-short DATA_ENCRYPTION_KEY but accepts a >=32-char passphrase", () => {
+    // The key is a passphrase SHA-256-derived to 32 bytes (src/db/encryption.ts);
+    // a 1-char value was previously accepted. Require real entropy (>=32 chars).
+    expect(() =>
+      loadConfig({ NODE_ENV: "production", ...baseEnv, DATA_ENCRYPTION_KEY: "tooshort" }),
+    ).toThrow();
+    const cfg = loadConfig({
+      NODE_ENV: "production",
+      ...baseEnv,
+      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef", // 32 chars
+    });
+    expect(cfg.dataEncryptionKey).toBe("0123456789abcdef0123456789abcdef");
+  });
+
   it("rejects missing required env", () => {
     expect(() => loadConfig({ PORT: "3001" })).toThrow();
   });
