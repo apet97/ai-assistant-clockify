@@ -35,6 +35,21 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
     expect(fake.counts.createTimeEntry).toBe(1);
   });
 
+  // live-dogfood-04: "log work to Apollo from 5pm to 9am today" produced an
+  // entry whose end (09:00) was BEFORE its start (17:00) — a negative-length
+  // entry, committed silently (log_work is a safe write, no preview). An
+  // explicit end at/*before* the start must clarify, never log a reversed span.
+  it("clarifies when an explicit end is at or before the start (negative-length entry), never logs it", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Apollo" }] });
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: { projectName: "Apollo", start: "2026-06-05T17:00:00.000Z", end: "2026-06-05T09:00:00.000Z" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+  });
+
   it("resolves a relative day word ('yesterday') against ctx.now — the model needn't know the date", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({

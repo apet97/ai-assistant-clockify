@@ -192,20 +192,34 @@ function resolveLogTimes(
   const addMinutes = (iso: string, minutes: number): string =>
     new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 
+  let start: string;
+  let end: string | undefined;
   if (args.start) {
-    const end = args.end ?? (durationMinutes !== undefined ? addMinutes(args.start, durationMinutes) : undefined);
-    return { kind: "ok", start: args.start, end };
+    start = args.start;
+    end = args.end ?? (durationMinutes !== undefined ? addMinutes(args.start, durationMinutes) : undefined);
+  } else {
+    if (durationMinutes === undefined) {
+      return {
+        kind: "clarify",
+        message: "How long was it (e.g. 2 hours), or what start and end times should I use?",
+      };
+    }
+    const day = resolveDay(ctx, args);
+    if (day === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
+    start = `${day}T09:00:00.000Z`;
+    end = args.end ?? addMinutes(start, durationMinutes);
   }
-  if (durationMinutes === undefined) {
+  // An explicit end at or before the start is a negative-length entry (e.g.
+  // "5pm to 9am" resolved same-day). log_work is a SAFE write — it commits
+  // immediately with no preview to catch it — so clarify rather than log a
+  // reversed span; an overnight entry must name the next day explicitly.
+  if (end !== undefined && Date.parse(end) <= Date.parse(start)) {
     return {
       kind: "clarify",
-      message: "How long was it (e.g. 2 hours), or what start and end times should I use?",
+      message:
+        "The end time is at or before the start, which would be a negative-length entry. For an overnight entry, give the end as the next day (a full date/time); otherwise double-check the start and end.",
     };
   }
-  const day = resolveDay(ctx, args);
-  if (day === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
-  const start = `${day}T09:00:00.000Z`;
-  const end = args.end ?? addMinutes(start, durationMinutes);
   return { kind: "ok", start, end };
 }
 
