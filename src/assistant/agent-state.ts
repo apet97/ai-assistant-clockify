@@ -21,7 +21,17 @@ const modelMessageSchema = z.object({
   role: z.enum(["system", "user", "assistant", "tool"]),
   content: z.string(),
   toolCalls: z
-    .array(z.object({ id: z.string().min(1), name: z.string().min(1), arguments: z.record(z.string(), z.unknown()) }))
+    .array(
+      z.object({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        arguments: z.record(z.string(), z.unknown()),
+        // Gemini 3.x requires extra_content.google.thought_signature echoed back
+        // verbatim on the continuation — same contract class as reasoningContent.
+        // Stripping it here silently 400s every risky-write resume on a Gemini backend.
+        thoughtSignature: z.string().min(1).optional(),
+      }),
+    )
     .optional(),
   toolCallId: z.string().optional(),
   // Thinking-mode reasoning must survive the suspension round-trip — the

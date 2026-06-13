@@ -36,6 +36,29 @@ describe("agent-state (durable agentic suspension)", () => {
     expect(parseAgentState({ transcript: state.transcript, call: { id: "", name: "y" } })).toBeUndefined();
   });
 
+  it("preserves a Gemini per-tool-call thoughtSignature through parseAgentState (continuation needs it back, or 400)", () => {
+    // Gemini 3.x rejects a tool-call continuation that drops
+    // extra_content.google.thought_signature, exactly like DeepSeek's
+    // reasoning_content. The persisted state must keep it through the confirm
+    // round-trip — the zod schema was silently stripping it, so every Gemini
+    // risky-write resume 400'd.
+    const geminiState: AgentState = {
+      transcript: [
+        { role: "user", content: "delete the urgent tag" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            { id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" }, thoughtSignature: "sig-abc123" },
+          ],
+        },
+      ],
+      call: { id: "r1", name: "clockify_tags_delete" },
+    };
+    const restored = parseAgentState(JSON.parse(JSON.stringify(geminiState)));
+    expect(restored?.transcript[1]?.toolCalls?.[0]?.thoughtSignature).toBe("sig-abc123");
+  });
+
   it("resumeMessages appends the committed receipt as the risky call's tool result", () => {
     const receipt = successReceipt({ action: "clockify_tags_delete", entity: "tag" });
     const messages = resumeMessages(state, receipt);
