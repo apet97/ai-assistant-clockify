@@ -27,6 +27,31 @@ describe("expense actions", () => {
     else throw new Error("expected policy_denied");
   });
 
+  it("clockify_expenses_list resolves relative start/end server-side (no raw date word on the wire)", async () => {
+    // NOW is 2026-06-06. A planner emits date WORDS; they must resolve like
+    // entries_list, not reach Clockify raw (which silently returns empty).
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_expenses_list",
+      args: { start: "yesterday", end: "today" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error(`expected a success receipt, got ${result.kind}`);
+    const window = (result.receipt.data as any).window;
+    expect(window.start).toBe("2026-06-05T00:00:00.000Z");
+    expect(window.end).toBe("2026-06-06T23:59:59.999Z");
+  });
+
+  it("clockify_expenses_list clarifies on an unparseable date instead of sending it raw", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_expenses_list",
+      args: { start: "whenever it suits" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+  });
+
   it("clockify_expenses_get fetches one expense", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({ actionName: "clockify_expenses_get", args: { id: "x1" }, context: makeContext(fake) });

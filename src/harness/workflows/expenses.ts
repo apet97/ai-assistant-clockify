@@ -1,9 +1,9 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
-import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveInstant, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
@@ -40,19 +40,44 @@ interface StoredExpense {
   taskId?: string;
 }
 
-const listExpenses = defineReadAction({
+const listExpenses = defineAction({
   name: "clockify_expenses_list",
-  description: "List expenses (optional start/end date range).",
-  group: EXP,
+  description:
+    "List expenses. `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day/period (today, yesterday, last month — resolved server-side; never guess a calendar date).",
+  featureGroup: EXP,
+  risks: ["read"],
   schema: z.object({ start: z.string().optional(), end: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listExpenses(args);
-    return successReceipt({
-      action: "clockify_expenses_list",
-      entity: "expense",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
-    });
+    // The wire wants yyyy-MM-ddThh:mm:ssZ instants — a raw date word silently
+    // returns an empty list (not a 400). Resolve here (from→start-of-day,
+    // to→end-of-day), clarify on garbage. Mirrors clockify_entries_list.
+    const now = (ctx.now ?? (() => new Date()))();
+    const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
+    const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
+    const bad = [
+      args.start !== undefined && start === undefined ? args.start : undefined,
+      args.end !== undefined && end === undefined ? args.end : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (bad.length) {
+      return {
+        kind: "clarify",
+        message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last month.`,
+      };
+    }
+    const items = await ctx.clockify.listExpenses({ start, end });
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_expenses_list",
+        entity: "expense",
+        ids: { workspaceId: ctx.workspaceId },
+        data: {
+          count: items.length,
+          items,
+          ...(start !== undefined || end !== undefined ? { window: { start, end } } : {}),
+        },
+      }),
+    };
   },
 });
 
