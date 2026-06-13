@@ -17,6 +17,10 @@ const ADMIN_ONLY_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>AI Assistant</title></head>
 <body><main><h1>AI Assistant</h1><p>This add-on is available to Clockify admins and owners only.</p></main></body></html>`;
 
+const NOT_INSTALLED_PAGE = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>AI Assistant</title></head>
+<body><main><h1>AI Assistant</h1><p>This add-on is not installed for this workspace. Install it from the Clockify marketplace to continue.</p></main></body></html>`;
+
 function shellHtml(): string {
   if (existsSync(BUILT_INDEX)) return readFileSync(BUILT_INDEX, "utf8");
   // Dev/test fallback shell (the built bundle is served from /ui/ in production).
@@ -45,6 +49,16 @@ export function componentRouter(deps: AppDeps): Router {
     const adminUserId = claims.user;
     if (!workspaceId || !adminUserId) {
       return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
+    }
+
+    // Active-installation gate: a valid admin token for a workspace where the
+    // add-on was never installed (or was uninstalled) must NOT mint a session —
+    // that cookie would otherwise reach /permissions, /metrics, and /chat/history
+    // for an uninstalled workspace. The lifecycle install always precedes the
+    // first component load, so an active row is expected here.
+    const installation = deps.store.getInstallation(workspaceId);
+    if (!installation || installation.status !== "active") {
+      return res.status(409).type("html").send(NOT_INSTALLED_PAGE);
     }
 
     // Refresh environment hosts from the freshest token. The install/lifecycle

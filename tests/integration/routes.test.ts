@@ -156,6 +156,20 @@ describe("routes", () => {
     expect(Array.isArray(setCookie) && setCookie[0]).toContain("SameSite=None");
   });
 
+  it("component route rejects an admin whose workspace has no active installation (no session minted)", async () => {
+    // The add-on was never installed (or was uninstalled) for this workspace. A
+    // valid admin token must NOT mint a privileged session/cookie — that session
+    // would otherwise read permissions/metrics/history for an uninstalled workspace.
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-not-installed",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+    });
+    const res = await request(app).get("/component/assistant").query({ auth_token: token });
+    expect(res.status).toBe(409);
+    expect(res.headers["set-cookie"]).toBeUndefined();
+  });
+
   it("chat route requires a session", async () => {
     const res = await request(app).post("/api/chat/messages").send({ message: "hi" });
     expect(res.status).toBe(401);
