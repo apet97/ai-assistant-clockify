@@ -170,15 +170,18 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
   const { record } = input;
   const now = input.now ?? new Date();
 
-  if (record.status !== "pending") {
-    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
-  }
+  // Binding BEFORE status (matches cancelPending): a non-owner must always get
+  // "forbidden", never the preview's lifecycle state — the route fetches the
+  // record by id with no scoping, so confirmPending is the only tenant boundary.
   if (
     record.sessionId !== input.sessionId ||
     record.workspaceId !== input.workspaceId ||
     record.adminUserId !== input.adminUserId
   ) {
     return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
+  }
+  if (record.status !== "pending") {
+    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
   }
   if (now.getTime() >= new Date(record.expiresAt).getTime()) {
     return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
@@ -231,15 +234,17 @@ export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
   const { record } = input;
   const now = input.now ?? new Date();
 
-  if (record.status !== "pending") {
-    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
-  }
+  // Binding BEFORE status (matches confirmPending/cancelPending): a non-owner
+  // must get "forbidden", never the lifecycle state.
   if (
     record.sessionId !== input.sessionId ||
     record.workspaceId !== input.workspaceId ||
     record.adminUserId !== input.adminUserId
   ) {
     return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
+  }
+  if (record.status !== "pending") {
+    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
   }
   if (now.getTime() >= new Date(record.expiresAt).getTime()) {
     return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };

@@ -101,6 +101,25 @@ describe("confirmations", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("checks ownership BEFORE status: a non-owner gets 'forbidden', not the lifecycle state", () => {
+    const now = new Date("2026-06-05T00:00:00.000Z");
+    const created = makePending(now);
+    // A settled (used/cancelled) preview probed by a DIFFERENT admin must not leak
+    // that it exists or its status — binding is checked first, like cancelPending.
+    const settled: PendingConfirmationRecord = { ...created.record, status: "used" };
+    const result = confirmPending({
+      record: settled,
+      sessionId: "sess-1",
+      workspaceId: "ws-1",
+      adminUserId: "attacker",
+      nonce: created.nonce,
+      sessionSecret: SECRET,
+      now,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("forbidden");
+  });
+
   it("rejects an expired preview", () => {
     const now = new Date("2026-06-05T00:00:00.000Z");
     const created = makePending(now, { ttlMs: 5 * 60 * 1000 });
