@@ -158,9 +158,20 @@ function parseUsage(usage: ChatCompletionResponse["usage"]): TokenUsage | undefi
   return undefined;
 }
 
-function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
+/**
+ * Map raw tool calls to {@link ToolCall}, synthesizing an id for any backend
+ * that omits one. `nextSyntheticSeq` is a per-client monotonic allocator: the
+ * tool_call_id is load-bearing (a tool result keys back to the call it answers,
+ * and the agentic resume keys the committed receipt purely on it), so a
+ * synthesized id must be unique across the WHOLE transcript, not just within one
+ * completion's array — an id-omitting OpenAI-compatible backend (e.g. some
+ * Gemini compat layers) on a multi-step turn would otherwise emit "call_0" on
+ * every step, yielding duplicate, ambiguous keys. Providers that supply ids are
+ * untouched (the allocator never advances for them).
+ */
+function parseToolCalls(rawCalls: RawToolCall[], nextSyntheticSeq: () => number): ToolCall[] {
   const calls: ToolCall[] = [];
-  rawCalls.forEach((call, index) => {
+  rawCalls.forEach((call) => {
     const name = call?.function?.name;
     if (!name) return;
     let args: Record<string, unknown> = {};
@@ -173,9 +184,9 @@ function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
         args = {};
       }
     }
-    // Most OpenAI-compatible providers return an id; synthesize a stable one if not,
-    // so the loop can always correlate a tool result back to its call.
-    const id = typeof call.id === "string" && call.id ? call.id : `call_${index}`;
+    // Most OpenAI-compatible providers return an id; synthesize a transcript-unique
+    // one if not, so the loop can always correlate a tool result back to its call.
+    const id = typeof call.id === "string" && call.id ? call.id : `call_${nextSyntheticSeq()}`;
     const thoughtSignature = call.extra_content?.google?.thought_signature;
     calls.push({ id, name, arguments: args, ...(thoughtSignature ? { thoughtSignature } : {}) });
   });
@@ -223,6 +234,11 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const sleep = config.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const retryable = (status: number): boolean => status === 429 || status >= 500;
+  // Per-client monotonic counter for SYNTHESIZED tool-call ids (id-omitting
+  // backends only). Spans every completion this client makes, so a multi-step
+  // turn never reuses "call_0"; first synthesized id stays "call_0".
+  let syntheticSeq = 0;
+  const nextSyntheticSeq = (): number => syntheticSeq++;
 
   /**
    * POST one chat-completion body with the abort timeout (the signal also
@@ -313,7 +329,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
       const usage = parseUsage(data.usage);
       return {
         text: message?.content ?? "",
-        toolCalls: parseToolCalls(message?.tool_calls ?? []),
+        toolCalls: parseToolCalls(message?.tool_calls ?? [], nextSyntheticSeq),
         ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
         ...(usage ? { usage } : {}),
       };

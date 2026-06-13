@@ -108,6 +108,20 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
     expect(result.toolCalls[0].id).toBe("call_0");
   });
 
+  it("synthesizes UNIQUE ids across a multi-step turn when an id-less backend omits them on every step", async () => {
+    // tool_call_id is load-bearing: a tool result must key back to the call it
+    // answers. A per-completion counter would emit "call_0" on every step, so a
+    // multi-step turn on an id-omitting OpenAI-compatible backend produces
+    // duplicate ids in one transcript — ambiguous resume/correlation keys.
+    const payload = {
+      choices: [{ message: { tool_calls: [{ function: { name: "clockify_status", arguments: "{}" } }] } }],
+    };
+    const c = client(payload);
+    const first = await c.completeWithTools!([{ role: "user", content: "x" }], tools);
+    const second = await c.completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(first.toolCalls[0].id).not.toBe(second.toolCalls[0].id);
+  });
+
   it("serializes an assistant tool-call turn and a tool-result message to OpenAI wire format", async () => {
     const captured: { body?: string } = {};
     const payload = { choices: [{ message: { content: "done", tool_calls: [] } }] };
