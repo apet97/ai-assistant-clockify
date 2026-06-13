@@ -8,7 +8,7 @@ import {
   type ConfirmStreamApi,
   type StreamEvent,
 } from "../../src/ui/main.js";
-import { cancelOutcome, undoFailureMessage } from "../../src/ui/shared.js";
+import { cancelOutcome, runConfirmStreamLive, undoFailureMessage } from "../../src/ui/shared.js";
 
 /**
  * Phase 4: settle confirm responses TRUTHFULLY. A failed confirm must never
@@ -280,6 +280,86 @@ describe("submitConfirmStream (streaming single confirm)", () => {
     );
     expect(events).toContain("error:This preview has expired.");
     expect(events.some((e) => e.startsWith("stale:"))).toBe(false);
+  });
+});
+
+describe("runConfirmStreamLive (confirm-resume shows the working affordance + streams status)", () => {
+  // r1-ux-copy-a11y-03: a confirmed risky write's durable resume can run 30-120s.
+  // The chat path shows the typing/working affordance + per-step status labels;
+  // the confirm-resume path used to run INVISIBLY (no working toggle, status
+  // labels dropped). This orchestrator makes the two symmetric.
+  function liveRecorder() {
+    const events: string[] = [];
+    const hooks: ConfirmHooks = {
+      onAssistant: (t) => events.push(`assistant:${t}`),
+      onResults: (r) => events.push(`results:${r.map((x) => x.kind).join(",")}`),
+      onError: (m) => events.push(`error:${m}`),
+      onStale: (m) => events.push(`stale:${m}`),
+    };
+    return {
+      hooks,
+      events,
+      onWorking: (w: boolean) => events.push(`working:${w}`),
+      onStatus: (label: string) => events.push(`status:${label}`),
+      removeCard: () => events.push("removeCard"),
+    };
+  }
+
+  it("toggles working before/after and forwards each streamed status label", async () => {
+    const rec = liveRecorder();
+    await runConfirmStreamLive(
+      streamApi([
+        { type: "receipt", receipt: { ok: true, action: "clockify_invoices_create" } },
+        { type: "status", action: "clockify_clients_list", label: "Listing clients" },
+        { type: "status", action: "clockify_invoices_items_add", label: "Adding the line item" },
+        { type: "reply", kind: "answer", text: "Invoice created." },
+        { type: "done" },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      rec.hooks,
+      { onWorking: rec.onWorking, onStatus: rec.onStatus, removeCard: rec.removeCard },
+    );
+    // working is announced BEFORE the stream and ALWAYS cleared after (mirrors
+    // the chat path's submitStreaming contract).
+    expect(rec.events[0]).toBe("working:true");
+    expect(rec.events[rec.events.length - 1]).toBe("working:false");
+    // per-step status labels are no longer dropped
+    expect(rec.events).toContain("status:Listing clients");
+    expect(rec.events).toContain("status:Adding the line item");
+    // the card is removed exactly once, on the first real outcome (the receipt)
+    expect(rec.events.filter((e) => e === "removeCard")).toEqual(["removeCard"]);
+    expect(rec.events).toContain("results:receipt");
+    expect(rec.events).toContain("assistant:Invoice created.");
+  });
+
+  it("clears working even when the stream errors", async () => {
+    const rec = liveRecorder();
+    await runConfirmStreamLive(
+      streamApi([
+        { type: "receipt", receipt: { ok: true, action: "clockify_tags_delete" } },
+        { type: "error", code: "resume_error", message: "The follow-up couldn't complete." },
+        { type: "done" },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      rec.hooks,
+      { onWorking: rec.onWorking, onStatus: rec.onStatus, removeCard: rec.removeCard },
+    );
+    expect(rec.events[0]).toBe("working:true");
+    expect(rec.events[rec.events.length - 1]).toBe("working:false");
+    expect(rec.events).toContain("error:The follow-up couldn't complete.");
+  });
+
+  it("a stale-nonce 400 re-arms in place and does NOT remove the card", async () => {
+    const rec = liveRecorder();
+    await runConfirmStreamLive(
+      streamApi([{ type: "error", code: "invalid_confirmation", message: "Confirmation does not match this preview." }]),
+      { previewId: "p1", nonce: "n1" },
+      rec.hooks,
+      { onWorking: rec.onWorking, onStatus: rec.onStatus, removeCard: rec.removeCard },
+    );
+    expect(rec.events).toContain("stale:Confirmation does not match this preview.");
+    expect(rec.events).not.toContain("removeCard"); // the card stays for the re-arm
+    expect(rec.events[rec.events.length - 1]).toBe("working:false");
   });
 });
 

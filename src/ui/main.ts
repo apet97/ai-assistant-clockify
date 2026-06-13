@@ -26,7 +26,7 @@ import {
 // public/test import surface (`featureGroupRows` et al. from `./main.js`) is
 // unchanged. They live in the leaf so `render.ts` can use them without importing
 // from main (which imports render's builders) — that would be a circular dep.
-export { featureGroupRows, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
+export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
 export type {
   PolicyShape,
   ChatController,
@@ -35,6 +35,7 @@ export type {
   ConfirmResponse,
   ConfirmHooks,
   ConfirmStreamApi,
+  ConfirmStreamLive,
   StreamEvent,
 } from "./shared.js";
 export {
@@ -491,6 +492,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
           // After Confirm/Cancel removes the card, return focus to the composer
           // (not <body>) — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04.
           returnFocus: () => focusComposer(),
+          // r1-ux-copy-a11y-03: drive the SAME working/typing affordance + status
+          // labels the chat path uses, so a confirmed risky write's durable resume
+          // (30-120s) shows progress instead of running invisibly.
+          setWorking: (working) => setWorking(working),
+          setStatusLabel: (label) => setStatusLabel(label),
         }),
       );
     for (const result of results) {

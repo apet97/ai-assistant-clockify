@@ -16,8 +16,8 @@ import {
   featureGroupRows,
   removeCardReturningFocus,
   reservedPendingFor,
+  runConfirmStreamLive,
   settleConfirmOutcome,
-  submitConfirmStream,
   undoFailureMessage,
   type ChatController,
   type ChatResult,
@@ -300,10 +300,22 @@ export interface PreviewDeps {
    * post-turn focus return on the chat path. Optional: absent ⇒ removal only.
    */
   returnFocus?: () => void;
+  /**
+   * Toggle the chat's "working" affordance (the typing bubble + the polite
+   * "Assistant is working…" announcement) around a confirmed risky write's
+   * durable resume — that resume can run 30-120s and used to run invisibly
+   * (r1-ux-copy-a11y-03). Mount points these at the SAME `setWorking` /
+   * `setStatusLabel` the chat path uses, so the confirm-resume is symmetric
+   * with a normal turn. Optional: absent ⇒ the resume runs without the
+   * affordance (the prior behavior; the streamed receipt still renders first).
+   */
+  setWorking?: (working: boolean) => void;
+  /** Show the latest streamed per-step progress label (e.g. "Adding the line item"). */
+  setStatusLabel?: (label: string) => void;
 }
 
 export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
-  const { controller, showError, appendMessage, renderResults, getHistory, returnFocus } = deps;
+  const { controller, showError, appendMessage, renderResults, getHistory, returnFocus, setWorking, setStatusLabel } = deps;
   const batch = previews.length > 1;
   const card = el("div", "preview-card");
   card.setAttribute("role", "group");
@@ -403,6 +415,9 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     onAssistant: (text) => appendMessage("assistant", text),
     onResults: renderResults,
     onError: showError,
+    // r1-ux-copy-a11y-03: the durable resume streams per-step status labels; drive
+    // the SAME typing-bubble label the chat path uses so they're not dropped.
+    onStatus: (label) => setStatusLabel?.(label),
     // r1-concurrency-races-02: this tab's nonce was rotated by another tab's
     // session restore, so the confirm 400'd on a STILL-pending preview. Re-fetch
     // history, re-render the re-served card (its rotated nonce re-arms THIS tab),
@@ -476,24 +491,23 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     // it exactly as before (the button still never feels dead). If the whole
     // stream is a single stale event, `rearmed` is set and the card is kept.
     stopTimer();
-    let cardRemoved = false;
-    const removeCardOnce = (): void => {
-      if (!cardRemoved && !rearmed) {
-        cardRemoved = true;
+    const removeCard = (): void => {
+      if (!rearmed) {
         // Focus sits on the just-clicked Confirm button INSIDE the card; pair the
         // removal with a focus return so it lands on the composer, not <body>
         // (WCAG 2.4.3, r1-ux-copy-a11y-04).
         removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
       }
     };
-    const streamHooks: ConfirmHooks = {
-      onAssistant: (text) => { removeCardOnce(); confirmHooks.onAssistant(text); },
-      onResults: (results) => { removeCardOnce(); confirmHooks.onResults(results); },
-      onError: (m) => { removeCardOnce(); confirmHooks.onError(m); },
-      onStatus: (label) => confirmHooks.onStatus?.(label),
-      onStale: (m) => confirmHooks.onStale?.(m), // re-arm in place — never remove the card
-    };
-    await submitConfirmStream(controller, refs[0], streamHooks);
+    // r1-ux-copy-a11y-03: drive the working/typing affordance + the streamed
+    // per-step status labels around the durable resume (which can run 30-120s),
+    // symmetric with a normal chat turn. `runConfirmStreamLive` removes the card
+    // once on the first real outcome (never on a stale-nonce re-arm).
+    await runConfirmStreamLive(controller, refs[0], confirmHooks, {
+      onWorking: (working) => setWorking?.(working),
+      onStatus: (label) => setStatusLabel?.(label),
+      removeCard,
+    });
   });
   cancelButton.addEventListener("click", async () => {
     setButtons(true);

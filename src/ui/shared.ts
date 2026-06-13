@@ -163,6 +163,66 @@ export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef
 }
 
 /**
+ * The "live" affordances a confirm-resume drives, injected by `mount` so the
+ * (untested) DOM glue stays thin. Symmetric with the chat path's `ComposerHooks`
+ * `onWorking`/`onStatus`: a confirmed risky write's durable resume can run
+ * 30-120s, so the UI must show the working/typing affordance and announce the
+ * per-step progress labels the loop streams — not run invisibly
+ * (r1-ux-copy-a11y-03). `removeCard` retires the preview card exactly once, on
+ * the FIRST real (non-stale) outcome — a stale-nonce 400 must keep the card so
+ * `onStale` can re-arm it in place.
+ */
+export interface ConfirmStreamLive {
+  onWorking(working: boolean): void;
+  onStatus(label: string): void;
+  removeCard(): void;
+}
+
+/**
+ * Run a streamed single confirm WITH the working affordance (r1-ux-copy-a11y-03).
+ * Mirrors the chat path's `submitStreaming`: `onWorking(true)` fires BEFORE the
+ * stream (the typing bubble + "Assistant is working…" announcement) and is
+ * ALWAYS cleared after (even on error/throw, via finally). Per-step `status`
+ * labels the durable resume streams drive `onStatus` (previously dropped because
+ * the confirm hooks carried no `onStatus`). The preview card is removed once, on
+ * the first real outcome (receipt/result/reply/error), but NOT on a stale-nonce
+ * re-arm — that keeps the card so `onStale` can re-render it in place.
+ *
+ * The base `hooks` keep their existing roles (render results / append the reply /
+ * surface errors / re-arm on stale); this only ADDS the live affordances around
+ * them, so the truthful-preview + stale-nonce contracts are unchanged.
+ */
+export async function runConfirmStreamLive(
+  api: ConfirmStreamApi,
+  ref: PreviewRef,
+  hooks: ConfirmHooks,
+  live: ConfirmStreamLive,
+): Promise<void> {
+  let removed = false;
+  const removeOnce = (): void => {
+    if (!removed) {
+      removed = true;
+      live.removeCard();
+    }
+  };
+  const wrapped: ConfirmHooks = {
+    onAssistant: (text) => { removeOnce(); hooks.onAssistant(text); },
+    onResults: (results) => { removeOnce(); hooks.onResults(results); },
+    onError: (message) => { removeOnce(); hooks.onError(message); },
+    onStatus: (label) => live.onStatus(label),
+    // A stale-nonce 400 keeps the card (no removeOnce) so the caller can re-arm
+    // it in place; fall back to onError when the caller supplied no onStale.
+    onStale: (message) => { if (hooks.onStale) hooks.onStale(message); else { removeOnce(); hooks.onError(message); } },
+  };
+  live.onWorking(true);
+  try {
+    await submitConfirmStream(api, ref, wrapped);
+  } finally {
+    live.onWorking(false);
+  }
+}
+
+/**
  * Settle confirm responses TRUTHFULLY (Phase 4). A failed confirm surfaces the
  * server's message — never "Confirmed."; a committed preview whose agentic turn
  * RESUMED renders the loop's follow-up results (receipts, even a chained
