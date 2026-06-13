@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { ClockifyQueryParams, verifyAddonToken } from "../addon/verify.js";
 import { isAdminRole } from "../auth/roles.js";
 import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
@@ -12,6 +12,43 @@ import { buildSessionCookie, resolveSession, type AppDeps } from "./deps.js";
  * a signed HTTP-only session cookie and serves the chat shell.
  */
 const BUILT_INDEX = resolve("dist/ui/index.html");
+
+/**
+ * Defense-in-depth for the embedded chat HTML, which renders attacker-influenced
+ * workspace data (project/client names, time-entry descriptions, model reply
+ * text). The render layer is already XSS-safe by convention (textContent /
+ * createElementNS, never innerHTML — see ui/render.ts), so these headers are a
+ * BACKSTOP, not the only control: they neutralise a future regression to
+ * innerHTML and add a header-level clickjacking control.
+ *
+ * The shell loads ONLY external same-origin module script + stylesheet (no
+ * inline script/style), so the policy can be strict without 'unsafe-inline'.
+ * `connect-src 'self'` covers the same-origin /api chat fetches (incl. NDJSON).
+ *
+ * frame-ancestors MUST keep the Clockify/CAKE embedding origins — the component
+ * renders inside Clockify's cross-site iframe; omitting them would break the
+ * embed. Clockify hosts the iframe from *.clockify.me (app + developer console)
+ * and the marketplace from *.cake.com.
+ */
+const FRAME_ANCESTORS = "https://*.clockify.me https://*.cake.com";
+const CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'none'",
+  "form-action 'self'",
+  `frame-ancestors ${FRAME_ANCESTORS}`,
+].join("; ");
+
+/** Apply the HTML-response security headers (idempotent, value-stable). */
+function setComponentSecurityHeaders(res: Response): void {
+  res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Referrer-Policy", "no-referrer");
+}
 
 const ADMIN_ONLY_PAGE = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>AI Assistant</title></head>
@@ -35,6 +72,10 @@ export function componentRouter(deps: AppDeps): Router {
   const secure = deps.config.baseUrl.startsWith("https://");
 
   router.get("/component/assistant", async (req, res) => {
+    // Set the HTML security backstop on EVERY response path (rejection pages and
+    // the chat shell alike) before branching, so no render surface ships bare.
+    setComponentSecurityHeaders(res);
+
     const token = req.query[ClockifyQueryParams.AUTH_TOKEN];
     const claims = await verifyAddonToken(deps.parser, typeof token === "string" ? token : undefined);
 
