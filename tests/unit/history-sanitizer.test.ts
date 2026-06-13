@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { previewReplyText, sanitizeStoredReplyForModel } from "../../src/routes/api.js";
 
@@ -26,6 +27,15 @@ describe("sanitizeStoredReplyForModel", () => {
     expect(out).not.toBe(previewReplyText(3));
     expect(out).not.toContain('click "Confirm all"');
     expect(out).toContain("button confirmation");
+  });
+
+  it("keeps the route source free of NUL bytes (so grep/rg don't skip it as binary)", () => {
+    // The COUNT_SENTINEL used \x00…\x00 — two literal NUL bytes that made grep, rg,
+    // and `file` treat the most safety-critical source as BINARY and silently skip
+    // it. The sentinel must stay printable; the plural-count match above proves the
+    // swap still works.
+    const src = readFileSync(new URL("../../src/routes/api.ts", import.meta.url), "utf8");
+    expect(src.includes("\u0000")).toBe(false);
   });
 
   it("leaves ordinary assistant replies byte-identical", () => {
