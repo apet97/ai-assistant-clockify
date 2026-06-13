@@ -4,7 +4,7 @@ Read this first in every Claude Code session. History/journals: `docs/HISTORY.md
 (handoff archive); live-test state: `~/Downloads/ai-assistant-loop-checklist.md`
 (322/322 closed) + `…-loop-failures.md` (root causes + resolutions).
 
-## Current state (2026-06-12)
+## Current state (2026-06-13)
 
 Everything buildable is DONE and live-verified: V1 + full REST parity (136
 typed actions, 16 areas, 3 hosts) + the trust-lives-in-the-code roadmap + the
@@ -182,7 +182,9 @@ such bug was found against the REAL API, not by reading the code.
 - **`main`** (curated): `src/`, `tests/`, `scripts/`, this file, `AGENTS.md`,
   `README.md`, `NEXT_SESSION_PROMPT.md` (live-test kickoff) + `NEXT_SESSION_PLAN.md`
   (the executed trust-lives-in-the-code roadmap, archived), `docs/HISTORY.md`,
-  `.claude/workflows/` (the full-angle audit-and-fix workflow).
+  `.claude/workflows/` (reusable Claude Code workflow scripts:
+  `full-angle-audit.js` — the 7-phase audit→verify→fix orchestration — and
+  `dogfood-and-fix.js` — agents drive `scripts/repro-chat.ts` and fix what they find).
 - **`slopbranch`**: the design docs (`PRD/SPEC/ARCHITECTURE/DATA_MODEL/
   SAFETY_AND_PERMISSIONS/IMPLEMENTATION_PLAN*/TESTING_AND_ACCEPTANCE/
   API_COVERAGE_PLAN/REFERENCES`, `.claude/`). Read via `git show slopbranch:SPEC.md`.

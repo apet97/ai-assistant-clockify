@@ -71,9 +71,15 @@ stays a thin, replaceable translator:
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
   reaches for instead of scrambling 136 primitives.
-- **Operational metrics** (`GET /api/metrics`) and a **planner eval harness**
-  (`scripts/eval-planner.ts`) that scores the planner's accuracy *and* run-to-run
-  consistency over a real corpus.
+- **Operational metrics** (`GET /api/metrics`, incl. per-turn token/latency
+  telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
+  `scripts/eval-agentic.ts`) that score planner accuracy *and* run-to-run
+  consistency over a real corpus — measured at 100% on three backends
+  (DeepSeek v4-pro, gemini-3.1-flash-lite, gemini-3.5-flash).
+- **Backend-agnostic model client** — any OpenAI-compatible endpoint via
+  `LLM_BASE_URL`/`LLM_MODEL`; provider quirks (DeepSeek `reasoning_content`,
+  Gemini 3.x `thought_signature`, `reasoning_effort`) are handled in one place
+  and inert elsewhere. Swapping backends is an env change, not a code change.
 - **Streaming** — `POST /api/chat/stream` streams the harness's results as they execute
   (never the model's narration, which would conflict with the safety override).
 
@@ -122,6 +128,10 @@ npm run build            # -> dist/server, dist/ui
 npm run verify           # type-check + test + build (the gate)
 npm run dev              # tsx src/server.ts (needs .env)
 ```
+
+CI runs `npm run verify` + a circular-dependency check (madge) on every push and
+PR (`.github/workflows/ci.yml`). Production deploys to Railway with the SQLite
+database on a persistent volume — see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 `GET /manifest` serves the admin-only Clockify add-on manifest — a **sidebar**
 component (`/component/assistant`) plus an add-on icon at `/icon.svg`. It installs

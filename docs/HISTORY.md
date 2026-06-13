@@ -3,6 +3,50 @@
 Moved out of CLAUDE.md on 2026-06-10 to keep the per-session context small.
 Newest first. The durable rules/facts distilled from these live in CLAUDE.md.
 
+## Handoff note — 2026-06-13 (audit/dogfood/identity/harvest/elevate/Gemini arcs + Railway)
+
+Six arcs landed between 2026-06-11 and 2026-06-13 (details distilled into
+CLAUDE.md → "Current state"; this is the journal pointer):
+
+1. **Full-angle audit fix run (06-11):** 34 fixes from the `e538561` audit —
+   security (lifecycle workspaceId from the token claim), safety (resume
+   tool-result cap, nonce never persisted), API drift, truthfulness, dead code,
+   test gaps. 0 deferred. Then an adversarial codebase review whose actionable
+   findings became three duplication consolidations (`money.ts`, `durations.ts`,
+   pagination limits); the api.ts/store.ts decompositions were DEFERRED.
+2. **Live dogfood + fix arc (06-11/12):** Sonnet agents drove
+   `scripts/repro-chat.ts` + the user's screenshots → ~22 fixes (clarify-once,
+   grounding, major units, role-grant contract, rate model fully covered,
+   fake-fidelity). Reusable: `.claude/workflows/dogfood-and-fix.js`.
+3. **Identity-resolution sweep (06-12):** every user/group/entity/tag/policy/
+   template slot resolves names at preview via ONE core per shape
+   (`resolveUserRef`/`resolveUserRefs`/`resolveGroupRefs`/`resolveUserFilter`/
+   `resolveProjectTaskRefs`/`resolveTagRefs`); `users_deactivate` self-guard
+   holds on the RESOLVED id; time-off policies gained group/user scoping (new
+   capability).
+4. **Harvest arc (06-12):** relative dates everywhere (incl. the approvals
+   `new Date("June 1")` → year-2001 bug), scalar-coercion absorption
+   (`arg-shapes.ts`), per-session rate limit, retention pruning, model retry +
+   timeout, SIGTERM, honest UI errors. Planner eval 138/138.
+5. **Elevate arc (06-13):** session restore (rotated one-use nonce), status
+   streaming, per-turn usage telemetry, undo extension, eval lock-in
+   (54 cases, 162/162), GitHub Actions CI.
+6. **Gemini-readiness arc (06-13):** model client speaks Gemini 3.x
+   (`thought_signature` echo on continuations, `LLM_REASONING_EFFORT`; inert for
+   DeepSeek, pinned) + four harness improvements (workday anchoring for "N days
+   next week" time-off, report-default teaching, call-don't-ask prompt rule,
+   optional log_work description) → planner 108/108 on BOTH
+   gemini-3.1-flash-lite(low) and gemini-3.5-flash(low), 162/162 held on
+   DeepSeek; agentic 7/7 ×3, 0 safety violations. Cost analysis: 75.98M DeepSeek
+   tokens over 4 days = $1.40 (~98% cache-hit); pricing recommendation
+   $9.99/workspace/mo flat + fair-use turn cap.
+
+**DEPLOYED on Railway (06-12)** — `ai-assistant-production-c2e6.up.railway.app`,
+vendored SDK tarball, SQLite on a `/data` volume; quick tunnel retired to
+local-dev-only. Gate: `npm run verify` = **1095 tests**, madge 0, CI green.
+Remaining human-gated: prod security review + token rotation, prod AUDIT-host
+clearance, prod backend decision (DeepSeek vs Gemini — swap is env-only).
+
 ## Handoff note — 2026-06-10 PM (loop-failure resolution: ALL 322 items closed)
 
 The full triage+fix pass over `~/Downloads/ai-assistant-loop-failures.md` is

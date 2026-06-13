@@ -11,7 +11,7 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **885 tests**, 0 circular deps. Done + on `main`:
+verify` is green at **1095 tests**, 0 circular deps. Done + on `main`:
 - **Full Clockify REST parity** (136 typed catalog actions, 16 areas, 3 hosts).
 - **"Trust lives in the code" roadmap** (eval harness; native tool-calling default;
   atomic composition; grounding; idempotency+undo; curated actions; metrics; a11y;
@@ -19,8 +19,14 @@ verify` is green at **885 tests**, 0 circular deps. Done + on `main`:
 - **Durable approval-gated agentic loop, default ON** (`LLM_AGENTIC`, `=0` rolls
   back): reads + safe-writes auto-chain; a risky write interrupts → button-confirm →
   durable **resume** across the HTTP round-trip (the confirm streams the resume so the
-  button never blocks). Eval: 90.5% multi-step task completion vs 57.1% single-turn.
-  `src/assistant/agent-loop.ts` + `agent-state.ts`.
+  button never blocks). `src/assistant/agent-loop.ts` + `agent-state.ts`.
+- **Backend-agnostic model client, measured at 100%** (2026-06-13): planner eval
+  162/162 on DeepSeek v4-pro AND 108/108 on gemini-3.1-flash-lite(low) AND
+  gemini-3.5-flash(low); agentic eval 7/7 on all three, 0 safety violations. The
+  client speaks Gemini 3.x (per-tool-call `thought_signature` echo on
+  continuations, `LLM_REASONING_EFFORT`) — both inert for DeepSeek, pinned. A
+  backend swap is env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT`); prod stays
+  DeepSeek until the user decides.
 - **Ground-truth adapter audit + the 322-prompt live-loop fix arc** — every wire
   shape and every loop failure closed (name→id resolution incl. archived,
   server-side dates incl. forward ranges, bounded model input, audit-log recaps,
@@ -35,8 +41,11 @@ spec** (`https://docs.clockify.me/openapi.json`), the read-only sibling refs
 (`../goclmcp`, `../clockify-ts-sdk`), and a **live probe** on a sacrificial workspace.
 See `CLAUDE.md` → "Ground truth & verification discipline."
 
-What remains is human-gated (stable hosting, prod security review, prod AUDIT-host
-clearance) — `CLAUDE.md` → "Current state".
+**DEPLOYED on Railway** (2026-06-12, `https://ai-assistant-production-c2e6.up.railway.app`,
+SQLite on a `/data` volume) and installed + working in Clockify — stable hosting is
+SOLVED. What remains is human-gated (prod security review + token rotation, prod
+AUDIT-host clearance) — `CLAUDE.md` → "Current state"; deploy checklist in
+`DEPLOYMENT.md`.
 
 **Live end-to-end PROVEN (2026-06-08):** installed on a real Clockify dev
 workspace and driven through the embedded chat — sidebar component → DeepSeek →
@@ -57,10 +66,11 @@ no-op, wrong/cross-batch/replayed nonce rejected, one-shot execute, policy
 re-checked at confirm. The embedded chat was also exercised live (reads,
 permissions, safe write, risky write, audit clean-error — all good).
 
-**Live dev hosting:** `scripts/dev-tunnel.sh {up|status|sync|restart|down}` manages
-the Cloudflare quick tunnel + server as one unit (writes `BASE_URL`, restarts the
-server; `up` is idempotent). The quick-tunnel URL is random per `cloudflared` start —
-on a URL change, re-register the manifest in the dev console (restore the session via
+**Hosting:** prod runs on Railway (above) — the tunnel is LOCAL DEV ONLY.
+`scripts/dev-tunnel.sh {up|status|sync|restart|down}` manages the Cloudflare quick
+tunnel + server as one unit (writes `BASE_URL`, restarts the server; `up` is
+idempotent, prefer `sync` — `restart` ROTATES the URL). On a URL change, re-register
+the manifest in the dev console (restore the session via
 `developer.marketplace.cake.com/test-accounts` → "Log in as" John Owner). **To
 continue/test in a fresh session, start from `NEXT_SESSION_PROMPT.md`.**
 
@@ -130,9 +140,10 @@ npm run dev           # tsx src/server.ts (needs env)
   `src/clockify/rest-workspace.ts` — the live REST adapter (`X-Addon-Token` or
   API-key auth); I/O only.
 - `src/assistant/` — model client (HTTP OpenAI-compatible **or** the `gemini-cli`
-  backend via `LLM_PROVIDER`), prompt builder, planner (native tool-calling default,
-  JSON + one repair retry as fallback), `agent-loop.ts`/`agent-state.ts` (durable
-  agentic loop).
+  backend via `LLM_PROVIDER`; handles Gemini 3.x `thought_signature` +
+  `LLM_REASONING_EFFORT`, both inert elsewhere), prompt builder, planner (native
+  tool-calling default, JSON + one repair retry as fallback),
+  `agent-loop.ts`/`agent-state.ts` (durable agentic loop).
 - `src/harness/` — the safety boundary: `action.ts` (contracts + `defineAction`),
   `actions.ts` (executor + confirm/batch commit), `catalog.ts`, `permissions.ts`,
   `risk.ts`, `receipts.ts`, `confirmations.ts`, `tools.ts` (Zod→JSON-schema tools for

@@ -1,29 +1,35 @@
 # Takeover / next-session kickoff — AI Assistant add-on
 
-> **Read `CLAUDE.md` → "Handoff note" first** (it's the source of truth for where this
+> **Read `CLAUDE.md` → "Current state" first** (it's the source of truth for where this
 > stands). `NEXT_SESSION_PLAN.md` is the forward plan (Phases 1–7 — all done in-repo).
 > **This file** is the live-environment kickoff: how to bring the tunnel + install back
 > up and drive the chat. Runtime values (tunnel URL especially) are **ephemeral** —
 > verify them first.
 
-## Where this stands (2026-06-11)
+## Where this stands (2026-06-13)
 
 Everything buildable is complete: V1 + full REST parity + the "trust lives in the
 code" roadmap + the **durable agentic loop (default ON)** + the 322-prompt
-live-loop fix arc, all re-verified by a live regression run in the embedded chat,
-plus the 2026-06-11 full-angle live investigation (safety 16/16, agentic 10/10 +
-21/21, live-full 115/115, planner 98.6%, chat-tour clean — no product defect).
-`npm run verify` is green at **881 tests** (madge 0), all pushed to `main`.
-Highlights live: native **tool-calling**, atomic **composition**, **idempotency**
-+ **undo**, preview-time **constraint surfacing** (incl. add-on platform
-restrictions), name→id resolution (incl. **archived**), server-side dates (incl.
-forward ranges), audit-log **recaps** (`assistant_recent_outcomes`), the
-typed-consent guard, **metrics**, a11y, NDJSON streaming. See `CLAUDE.md`;
-journals in `docs/HISTORY.md`.
+live-loop fix arc + the dogfood/identity/harvest/elevate arcs + the
+Gemini-readiness arc. **DEPLOYED on Railway**
+(`https://ai-assistant-production-c2e6.up.railway.app`) and installed + working
+in Clockify — stable hosting is solved. Eval scoreboard: planner **162/162** on
+DeepSeek v4-pro and **108/108** on gemini-3.1-flash-lite(low) AND
+gemini-3.5-flash(low); agentic **7/7** on all three, 0 safety violations.
+`npm run verify` is green at **1095 tests** (madge 0), all pushed to `main`,
+CI on every push. Highlights live: native **tool-calling**, atomic
+**composition**, **idempotency** + **undo**, preview-time **constraint
+surfacing** (incl. add-on platform restrictions), name→id resolution (incl.
+**archived**, users/groups/tags/policies/templates), server-side dates (incl.
+forward ranges + workday anchoring), audit-log **recaps**
+(`assistant_recent_outcomes`), the typed-consent guard, **session restore**,
+**status streaming**, **usage telemetry**, **metrics**, a11y, NDJSON streaming.
+See `CLAUDE.md`; journals in `docs/HISTORY.md`.
 
-**There are no open implementation tasks.** What remains is human-gated (hosting, prod
-security review, prod AUDIT-host clearance — see the bottom). So a fresh session is for
-**live dogfooding / regression** or **net-new scope with the user**.
+**There are no open implementation tasks.** What remains is human-gated (prod
+security review + token rotation, prod AUDIT-host clearance — see the bottom). So a
+fresh session is for **live dogfooding / regression** or **net-new scope with the
+user**.
 
 ---
 
@@ -32,10 +38,10 @@ Clockify "AI Assistant" add-on.
 
 Continue the Clockify "AI Assistant" add-on. Repo:
 `/Users/15x/Downloads/WORKING/addons-me/ai-assistant-addon` (branch `main`, pushed).
-Read `CLAUDE.md` (Handoff note + Current Status) + `AGENTS.md` first, and recall the
+Read `CLAUDE.md` (Current state + invariants) + `AGENTS.md` first, and recall the
 project memories (`clockify-addon-public-key-builtin`, `clockify-api-base-resolution`,
 `clockify-dev-console-login-and-reinstall`, `streaming-conflicts-truthful-previews`).
-`npm run verify` is green at **881 tests**. Keep the discipline: failing test first,
+`npm run verify` is green at **1095 tests**. Keep the discipline: failing test first,
 verify green, focused commits, no new deps without my OK, never print/commit tokens.
 
 ## Bring the live environment up (do this first)
@@ -106,10 +112,15 @@ POST messages (no secrets printed):
 
 ## Human-gated / deferred (the only "open work" — needs the user)
 
-1. **Stable hosting** — a fixed URL needs the named-tunnel-on-a-domain route (Cloudflare
-   zone + `cloudflared tunnel login/create/route dns`) or a real deploy. User declined the
-   zone for now.
-2. **Prod security review + token rotation.**
-3. **Prod AUDIT host `X-Addon-Token` clearance** — needs a captured prod token; run
-   `scripts/host-auth-spike.ts` with `LIVE_ADDON_TOKEN`/`LIVE_BACKEND_URL` to settle it
-   (dev cleanly reports "audit log not available", so this is prod-only).
+1. **Prod security review + token rotation** (the `.env.server` LLM creds were reused
+   on Railway — rotate before real users).
+2. **Prod AUDIT host `X-Addon-Token` clearance** — now unblocked by the Railway
+   install: run `scripts/host-auth-spike.ts` with a captured prod
+   `LIVE_ADDON_TOKEN`/`LIVE_BACKEND_URL` to settle it (dev cleanly reports "audit log
+   not available", so this is prod-only).
+3. **Prod model backend decision** — DeepSeek today; both Gemini tiers measured 100%
+   and the swap is env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT=low`), with one
+   dogfood pass first.
+
+~~Stable hosting~~ — SOLVED 2026-06-12 (Railway, SQLite on a `/data` volume; see
+`DEPLOYMENT.md`). The quick tunnel is local-dev only now.
