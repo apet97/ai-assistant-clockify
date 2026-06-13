@@ -283,6 +283,25 @@ describe("createModelClient token usage", () => {
     const absent = await client(noUsage).completeWithTools!([{ role: "user", content: "x" }], tools);
     expect(absent.usage).toBeUndefined();
   });
+
+  it("reports JSON-mode (complete) usage through the onUsage sink", async () => {
+    const withUsage = {
+      choices: [{ message: { content: "{}" } }],
+      usage: { prompt_tokens: 1234, completion_tokens: 56 },
+    };
+    let seen: { promptTokens: number; completionTokens: number } | undefined;
+    await client(withUsage).complete([{ role: "user", content: "x" }], (u) => {
+      seen = u;
+    });
+    expect(seen).toEqual({ promptTokens: 1234, completionTokens: 56 });
+
+    const noUsage = { choices: [{ message: { content: "{}" } }] };
+    let calls = 0;
+    await client(noUsage).complete([{ role: "user", content: "x" }], () => {
+      calls += 1;
+    });
+    expect(calls).toBe(0); // absence ≠ zero: the sink never fires without a usage block
+  });
 });
 
 describe("createModelClient retry + provider error detail", () => {

@@ -59,6 +59,15 @@ export interface TokenUsage {
   completionTokens: number;
 }
 
+/**
+ * Sink for usage reported by the JSON-mode {@link ModelClient.complete} path,
+ * whose return type is a bare string (the planner only needs the text). The HTTP
+ * client invokes it ONLY when the provider actually reported a usage block, so a
+ * sink that never fires means "no counts" — never a fabricated zero. The
+ * gemini-cli backend genuinely reports none and never calls it.
+ */
+export type UsageSink = (usage: TokenUsage) => void;
+
 /** The result of a tool-calling completion: assistant text and/or tool calls. */
 export interface ToolCompletion {
   text: string;
@@ -70,7 +79,13 @@ export interface ToolCompletion {
 }
 
 export interface ModelClient {
-  complete(messages: ModelMessage[]): Promise<string>;
+  /**
+   * JSON-mode completion. Returns the raw text (the planner owns validation).
+   * `onUsage` is an optional sink the implementation invokes when the provider
+   * reported token counts — the bare-string return can't carry them, but cost
+   * telemetry still needs them (see {@link UsageSink}).
+   */
+  complete(messages: ModelMessage[], onUsage?: UsageSink): Promise<string>;
   /**
    * Optional native tool-calling. When present, the planner prefers it: the model
    * calls typed tools whose args the provider validates against the JSON schema,
@@ -253,11 +268,13 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   }
 
   return {
-    async complete(messages: ModelMessage[]): Promise<string> {
+    async complete(messages: ModelMessage[], onUsage?: UsageSink): Promise<string> {
       const data = await postChat({
         messages: messages.map(toWireMessage),
         response_format: { type: "json_object" },
       });
+      const usage = parseUsage(data.usage);
+      if (usage) onUsage?.(usage);
       return data.choices?.[0]?.message?.content ?? "";
     },
 

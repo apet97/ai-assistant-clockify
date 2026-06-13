@@ -1,10 +1,11 @@
-import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.js";
+import type { ModelClient, ModelMessage, TokenUsage, ToolDefinition } from "./model-client.js";
 
 /**
  * Per-turn model telemetry, accumulated by {@link trackUsage}: how many model
  * calls a turn made, what they cost (when the provider reports usage), and the
  * wall-clock spent inside the model. `usageReported` distinguishes "this
- * backend reports no token counts" (gemini-cli, JSON mode) from a genuine zero.
+ * backend reports no token counts" (gemini-cli) from a genuine zero — the HTTP
+ * client surfaces usage on BOTH paths (tool-calling and JSON mode).
  */
 export interface TurnUsage {
   modelCalls: number;
@@ -34,18 +35,28 @@ export function trackUsage(client: ModelClient, now: () => Date): { client: Mode
     }
   };
 
+  const accumulate = (reported: TokenUsage): void => {
+    usage.usageReported = true;
+    usage.promptTokens += reported.promptTokens;
+    usage.completionTokens += reported.completionTokens;
+  };
+
   const wrapped: ModelClient = {
-    complete: (messages: ModelMessage[]) => timed(() => client.complete(messages)),
+    // The inner sink fires only when the provider reported usage, so JSON-mode
+    // turns now feed telemetry too (caller-supplied sinks are also honored).
+    complete: (messages: ModelMessage[], onUsage) =>
+      timed(() =>
+        client.complete(messages, (reported) => {
+          accumulate(reported);
+          onUsage?.(reported);
+        }),
+      ),
   };
   if (typeof client.completeWithTools === "function") {
     wrapped.completeWithTools = (messages: ModelMessage[], tools: ToolDefinition[]) =>
       timed(async () => {
         const completion = await client.completeWithTools!(messages, tools);
-        if (completion.usage) {
-          usage.usageReported = true;
-          usage.promptTokens += completion.usage.promptTokens;
-          usage.completionTokens += completion.usage.completionTokens;
-        }
+        if (completion.usage) accumulate(completion.usage);
         return completion;
       });
   }

@@ -45,6 +45,20 @@ describe("trackUsage", () => {
     expect(tracked.usage.modelMs).toBe(100);
   });
 
+  it("sums usage reported by complete() (JSON mode), not only completeWithTools", async () => {
+    const inner: ModelClient = {
+      complete: async (_messages, onUsage) => {
+        onUsage?.({ promptTokens: 1234, completionTokens: 56 });
+        return "{}";
+      },
+    };
+    const tracked = trackUsage(inner, steppingNow(1));
+    await tracked.client.complete([]);
+    expect(tracked.usage.usageReported).toBe(true);
+    expect(tracked.usage.promptTokens).toBe(1234);
+    expect(tracked.usage.completionTokens).toBe(56);
+  });
+
   it("keeps usageReported false when the backend reports no token counts", async () => {
     const inner: ModelClient = {
       complete: async () => "{}",
