@@ -39,6 +39,7 @@ import { toolsForModel } from "../harness/tools.js";
 import type { Installation } from "../db/store.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
+import { THIRTY_DAYS_MS } from "../durations.js";
 
 /**
  * JSON API (SPEC "Chat Flow", "Confirmation Rules", "Permissions Inside Chat").
@@ -758,11 +759,18 @@ export function apiRouter(deps: AppDeps): Router {
 
   // Operational metrics (Phase 7): per-action success/failure, error taxonomy, and
   // confirm/cancel/expire rates — scoped to the caller's own actions (privacy).
-  // Optional ?since=<ISO> windows the report.
+  // Optional ?since=<ISO> windows the report. Absent ?since DEFAULTS to the last
+  // 30 days (matching the telemetry/confirmation retention horizon): audit_events
+  // is NEVER pruned, so an unbounded read would scan the admin's entire lifetime
+  // history and aggregate every row in JS. An explicit ?since override still
+  // reaches all-time for ops (r1-efficiency-01).
   router.get("/metrics", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;
-    const since = typeof req.query.since === "string" ? req.query.since : undefined;
+    const since =
+      typeof req.query.since === "string"
+        ? req.query.since
+        : new Date(now().getTime() - THIRTY_DAYS_MS).toISOString();
     const nowIsoStamp = now().toISOString();
     const outcomes = deps.store.listActionOutcomes(claims.workspaceId, claims.adminUserId, since);
     const confirmations = deps.store.listConfirmationOutcomes(claims.workspaceId, claims.adminUserId, since);
