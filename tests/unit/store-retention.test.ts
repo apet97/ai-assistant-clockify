@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createStore, IDEMPOTENCY_RETENTION_MS } from "../../src/db/store.js";
+import { createStore, IDEMPOTENCY_RETENTION_MS, type TestStore } from "../../src/db/store.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/api.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 
@@ -97,6 +97,19 @@ describe("store.pruneExpired", () => {
     const counts = store.pruneExpired(NOW.toISOString());
     expect(counts.turnTelemetry).toBe(1);
     expect(store.listTurnTelemetry("ws-1", "admin-1")).toHaveLength(1);
+    store.close();
+  });
+
+  it("prune DELETEs use an index, not a full table scan (hourly + at-startup sweep cost ~O(rows-to-delete))", () => {
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW }) as TestStore;
+    const plan = store.explainPrunePlan();
+    // Every retention DELETE must SEARCH/USING an index on its retention column,
+    // never SCAN the whole table — turn_telemetry + idempotency_keys grow without
+    // bound on a long-lived single instance, and the at-startup prune gates listen.
+    expect(plan.pendingConfirmations).not.toMatch(/SCAN pending_confirmations/);
+    expect(plan.idempotencyKeys).not.toMatch(/SCAN idempotency_keys/);
+    expect(plan.undoRecords).not.toMatch(/SCAN undo_records/);
+    expect(plan.turnTelemetry).not.toMatch(/SCAN turn_telemetry/);
     store.close();
   });
 

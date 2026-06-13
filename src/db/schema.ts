@@ -125,6 +125,36 @@ const SCHEMA_STATEMENTS: string[] = [
     ON turn_telemetry(workspace_id, admin_user_id, created_at)`,
 ];
 
+/**
+ * Retention-prune index seeks (r2-new-ops-layer-03). The hourly prune (and the
+ * at-startup prune) deletes on the bare retention columns — none of the lookup
+ * indexes above lead with them, so each DELETE was a full table SCAN that grows
+ * with table size on a long-lived instance. These narrow indexes let each prune
+ * DELETE SEARCH its retention predicate (pinned by explainPrunePlan in
+ * store-retention.test.ts). The two OR predicates are split by pruneExpired into
+ * one single-predicate DELETE per disjunct, each seeking a matching index here
+ * (SQLite won't OR-union a low-cardinality `status` index).
+ *
+ * Created AFTER the additive migration steps below, not in SCHEMA_STATEMENTS: the
+ * `claimed_at` column is ADDed (and idempotency_keys is rebuilt to relax
+ * receipt_json) by the migrate() steps, so an index referencing claimed_at must
+ * run after those — indexing a not-yet-added column throws on an OLD DB.
+ */
+const PRUNE_INDEX_STATEMENTS: string[] = [
+  `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_prune_created
+    ON pending_confirmations(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_prune_expires
+    ON pending_confirmations(status, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_idempotency_keys_prune_committed
+    ON idempotency_keys(committed_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_idempotency_keys_prune_claimed
+    ON idempotency_keys(claimed_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_undo_records_prune
+    ON undo_records(status, undone_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_telemetry_prune_created
+    ON turn_telemetry(created_at)`,
+];
+
 export function migrate(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
@@ -142,6 +172,11 @@ export function migrate(db: Database.Database): void {
   // then relax receipt_json via a guarded, crash-idempotent rebuild.
   addColumnIfMissing(db, "idempotency_keys", "claimed_at", "INTEGER");
   relaxIdempotencyReceiptNullable(db);
+  // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
+  // in its final (rebuilt) shape, so indexing those columns can't throw.
+  for (const statement of PRUNE_INDEX_STATEMENTS) {
+    db.prepare(statement).run();
+  }
 }
 
 /**

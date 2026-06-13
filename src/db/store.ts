@@ -249,6 +249,9 @@ export interface TestStore extends Store {
   /** EXPLAIN QUERY PLAN of the exact `listActionOutcomes` statement (for the
    *  index-seek regression test); `detail` lines only. */
   explainActionOutcomesPlan(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
+  /** EXPLAIN QUERY PLAN of each `pruneExpired` DELETE, keyed by table (for the
+   *  retention index-seek regression test); joined `detail` lines per table. */
+  explainPrunePlan(): Record<"pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry", string>;
 }
 
 interface InstallationRow {
@@ -900,20 +903,24 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       // One transaction — operational tables ONLY. ISO-string comparison is
       // safe: every writer stamps via toISOString().
       const run = db.transaction((): PruneCounts => {
-        const confirmations = db
-          .prepare(
-            `DELETE FROM pending_confirmations
-              WHERE (status != 'pending' AND created_at < ?)
-                 OR (status  = 'pending' AND expires_at < ?)`,
-          )
-          .run(confirmationCutoff, confirmationCutoff).changes;
-        const idempotency = db
-          .prepare(
-            `DELETE FROM idempotency_keys
-               WHERE (committed_at IS NOT NULL AND committed_at < ?)
-                  OR (receipt_json IS NULL AND claimed_at < ?)`,
-          )
-          .run(idempotencyCutoff, claimCutoff).changes;
+        // Each retention DELETE is split into single-predicate statements so the
+        // planner can SEARCH a narrow index instead of full-SCANning the table:
+        // SQLite won't OR-union a low-cardinality `status` index, and a combined
+        // OR over two columns is one SCAN (pinned by explainPrunePlan).
+        const confirmations =
+          db
+            .prepare("DELETE FROM pending_confirmations WHERE status != 'pending' AND created_at < ?")
+            .run(confirmationCutoff).changes +
+          db
+            .prepare("DELETE FROM pending_confirmations WHERE status = 'pending' AND expires_at < ?")
+            .run(confirmationCutoff).changes;
+        const idempotency =
+          db
+            .prepare("DELETE FROM idempotency_keys WHERE committed_at IS NOT NULL AND committed_at < ?")
+            .run(idempotencyCutoff).changes +
+          db
+            .prepare("DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?")
+            .run(claimCutoff).changes;
         const undo = db
           .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
           .run(undoCutoff).changes;
@@ -946,6 +953,41 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         detail: string;
       }>;
       return rows.map((r) => r.detail);
+    },
+
+    explainPrunePlan() {
+      // The exact prune DELETEs (mirror pruneExpired); EXPLAIN takes the WHERE
+      // bind values verbatim, so the planner sees the real predicate shapes. The
+      // OR-predicate prunes are split into one DELETE per disjunct (as pruneExpired
+      // runs them); the joined plan must SEARCH an index for each.
+      const explain = (sqls: string[], ...params: unknown[]): string =>
+        sqls
+          .map((sql) =>
+            (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>)
+              .map((r) => r.detail)
+              .join(" | "),
+          )
+          .join(" | ");
+      return {
+        pendingConfirmations: explain(
+          [
+            "DELETE FROM pending_confirmations WHERE status != 'pending' AND created_at < ?",
+            "DELETE FROM pending_confirmations WHERE status = 'pending' AND expires_at < ?",
+          ],
+          "x",
+        ),
+        idempotencyKeys: explain(
+          [
+            "DELETE FROM idempotency_keys WHERE committed_at IS NOT NULL AND committed_at < ?",
+            "DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?",
+          ],
+          0,
+        ),
+        undoRecords: explain([
+          "DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?",
+        ], "x"),
+        turnTelemetry: explain(["DELETE FROM turn_telemetry WHERE created_at < ?"], "x"),
+      };
     },
 
     close() {

@@ -187,13 +187,16 @@ export function start(): void {
       console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
     }
   };
-  prune();
   const pruneTimer = setInterval(prune, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 
   const server = app.listen(config.port, () => {
     // Intentionally minimal, non-secret startup log.
     console.log(`AI Assistant add-on listening on port ${config.port}`);
+    // Run the at-startup backlog sweep AFTER listen so readiness isn't gated by
+    // it — the prune now seeks narrow retention indexes, but on a long-lived
+    // instance the first sweep should never delay accepting connections.
+    prune();
   });
 
   // Railway redeploys SIGTERM the container — drain instead of dropping
