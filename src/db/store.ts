@@ -109,16 +109,26 @@ export interface UndoRecord extends UndoRecordInput {
 export interface StoreOptions {
   encryptionKey?: string;
   now?: () => Date;
+  /** Retention (days) for chat_messages + audit_events; defaults to 90. */
+  retentionDays?: number;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 /**
- * Operational-table retention. audit_events and chat_messages are NEVER pruned
- * (the audit log and durable history are product features). Settled/expired
- * confirmations age out on a 30d clock so listConfirmationOutcomes metrics
- * keep a generous recent window; the committed receipts live forever in
- * audit_events regardless.
+ * Chat/audit retention (marketplace data-minimization). chat_messages and
+ * audit_events used to be kept forever; they now age out on a configurable
+ * window (default 90 days, env RETENTION_DAYS, floor 30). 90d is well above the
+ * recap (24h default / 30d max) and metrics (30d default) read windows, so those
+ * features keep their full data. The committed receipts also live in the audit
+ * log within the window.
+ */
+const DEFAULT_RETENTION_DAYS = 90;
+
+/**
+ * Operational-table retention. Settled/expired confirmations age out on a 30d
+ * clock so listConfirmationOutcomes metrics keep a generous recent window.
  */
 const CONFIRMATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
@@ -139,6 +149,8 @@ export interface PruneCounts {
   idempotencyKeys: number;
   undoRecords: number;
   turnTelemetry: number;
+  chatMessages: number;
+  auditEvents: number;
 }
 
 /** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
@@ -251,7 +263,10 @@ export interface TestStore extends Store {
   explainActionOutcomesPlan(workspaceId: string, adminUserId: string, sinceIso?: string): string[];
   /** EXPLAIN QUERY PLAN of each `pruneExpired` DELETE, keyed by table (for the
    *  retention index-seek regression test); joined `detail` lines per table. */
-  explainPrunePlan(): Record<"pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry", string>;
+  explainPrunePlan(): Record<
+    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents",
+    string
+  >;
 }
 
 interface InstallationRow {
@@ -365,6 +380,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const now = options.now ?? (() => new Date());
   const nowIso = (): string => now().toISOString();
   const encryptionKey = options.encryptionKey;
+  const chatAuditRetentionMs = (options.retentionDays ?? DEFAULT_RETENTION_DAYS) * DAY_MS;
 
   const sealToken = (token: string): string =>
     encryptionKey ? encryptSecret(token, encryptionKey) : token;
@@ -894,6 +910,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       const confirmationCutoff = new Date(nowMs - CONFIRMATION_RETENTION_MS).toISOString();
       const undoCutoff = new Date(nowMs - UNDO_RETENTION_MS).toISOString();
       const telemetryCutoff = new Date(nowMs - TELEMETRY_RETENTION_MS).toISOString();
+      const chatAuditCutoff = new Date(nowMs - chatAuditRetentionMs).toISOString();
       const idempotencyCutoff = nowMs - IDEMPOTENCY_RETENTION_MS;
       // Crashed-claim backstop (r1-concurrency-races-01): a NULL-receipt claim
       // for a key that never recurs would leak forever — the committed_at-only
@@ -927,7 +944,21 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         const telemetry = db
           .prepare("DELETE FROM turn_telemetry WHERE created_at < ?")
           .run(telemetryCutoff).changes;
-        return { pendingConfirmations: confirmations, idempotencyKeys: idempotency, undoRecords: undo, turnTelemetry: telemetry };
+        // Chat transcripts + audit log past the retention window (data-minimization).
+        const chatMessages = db
+          .prepare("DELETE FROM chat_messages WHERE created_at < ?")
+          .run(chatAuditCutoff).changes;
+        const auditEvents = db
+          .prepare("DELETE FROM audit_events WHERE created_at < ?")
+          .run(chatAuditCutoff).changes;
+        return {
+          pendingConfirmations: confirmations,
+          idempotencyKeys: idempotency,
+          undoRecords: undo,
+          turnTelemetry: telemetry,
+          chatMessages,
+          auditEvents,
+        };
       });
       return run();
     },
@@ -987,6 +1018,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           "DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?",
         ], "x"),
         turnTelemetry: explain(["DELETE FROM turn_telemetry WHERE created_at < ?"], "x"),
+        chatMessages: explain(["DELETE FROM chat_messages WHERE created_at < ?"], "x"),
+        auditEvents: explain(["DELETE FROM audit_events WHERE created_at < ?"], "x"),
       };
     },
 

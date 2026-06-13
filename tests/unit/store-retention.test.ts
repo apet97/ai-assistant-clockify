@@ -110,25 +110,55 @@ describe("store.pruneExpired", () => {
     expect(plan.idempotencyKeys).not.toMatch(/SCAN idempotency_keys/);
     expect(plan.undoRecords).not.toMatch(/SCAN undo_records/);
     expect(plan.turnTelemetry).not.toMatch(/SCAN turn_telemetry/);
+    // The chat/audit retention DELETEs (added for marketplace data-minimization)
+    // delete on the bare created_at column — they need their own narrow index.
+    expect(plan.chatMessages).not.toMatch(/SCAN chat_messages/);
+    expect(plan.auditEvents).not.toMatch(/SCAN audit_events/);
     store.close();
   });
 
-  it("NEVER touches audit_events or chat_messages, even with a far-future clock", () => {
-    const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
+  it("prunes chat_messages + audit_events older than the default 90d window, keeps recent rows", () => {
+    // Data-retention (marketplace/GDPR): chat transcripts + the audit log are no
+    // longer kept forever. Default window is 90 days — well above the recap (24h /
+    // 30d max) and metrics (30d default) read windows, so those features are intact.
+    const clock = { value: new Date(NOW.getTime() - 100 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
-    store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "hi" });
-    store.addAuditEvent({
+    const audit = {
       workspaceId: "ws-1",
       adminUserId: "admin-1",
       actionName: "clockify_tags_create",
-      risk: ["safe_write"],
+      risk: ["safe_write" as const],
       receipt: successReceipt({ action: "clockify_tags_create" }),
-    });
+    };
+    // Old rows (100d ago) — past the 90d window.
+    store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "old" });
+    store.addAuditEvent(audit);
+    // Recent rows (today) — within the window.
+    clock.value = NOW;
+    store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "new" });
+    store.addAuditEvent(audit);
 
-    const tenYears = new Date(NOW.getTime() + 3650 * DAY_MS).toISOString();
-    store.pruneExpired(tenYears);
-    expect(store.getRecentMessages(session.id, 10)).toHaveLength(1);
+    const counts = store.pruneExpired(NOW.toISOString());
+    expect(counts.chatMessages).toBe(1);
+    expect(counts.auditEvents).toBe(1);
+    expect(store.getRecentMessages(session.id, 10)).toHaveLength(1); // only "new" survives
     expect(store.listActionOutcomes("ws-1", "admin-1")).toHaveLength(1);
+    store.close();
+  });
+
+  it("honors a custom retentionDays window", () => {
+    // A 45d-old message is KEPT under the 90d default but PRUNED under a 30d override.
+    const clock = { value: new Date(NOW.getTime() - 45 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value, retentionDays: 30 });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "45d-old" });
+    clock.value = NOW;
+    store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "today" });
+
+    const counts = store.pruneExpired(NOW.toISOString());
+    expect(counts.chatMessages).toBe(1); // 45d > 30d → pruned
+    expect(store.getRecentMessages(session.id, 10)).toHaveLength(1);
     store.close();
   });
 });

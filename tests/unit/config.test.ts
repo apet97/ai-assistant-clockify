@@ -65,6 +65,14 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, COMMIT_TIMEOUT_MS: "not-a-number" })).toThrow();
   });
 
+  it("parses RETENTION_DAYS, leaves it undefined when absent (store default 90 applies), and enforces the >=30 floor", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).retentionDays).toBeUndefined();
+    expect(loadConfig({ ...base, RETENTION_DAYS: "120" }).retentionDays).toBe(120);
+    // Below the floor: the 30-day metrics default must never silently truncate.
+    expect(() => loadConfig({ ...base, RETENTION_DAYS: "10" })).toThrow();
+  });
+
   it("rejects production without data encryption key", () => {
     expect(() =>
       loadConfig({

@@ -153,6 +153,13 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON undo_records(status, undone_at)`,
   `CREATE INDEX IF NOT EXISTS idx_turn_telemetry_prune_created
     ON turn_telemetry(created_at)`,
+  // Chat/audit retention sweep (marketplace data-minimization). The lookup
+  // indexes above lead with session_id / workspace_id, so a bare created_at
+  // DELETE would full-SCAN; these created_at-leading indexes let it SEARCH.
+  `CREATE INDEX IF NOT EXISTS idx_chat_messages_prune_created
+    ON chat_messages(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_events_prune_created
+    ON audit_events(created_at)`,
 ];
 
 export function migrate(db: Database.Database): void {

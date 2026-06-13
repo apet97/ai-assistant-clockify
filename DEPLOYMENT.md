@@ -85,8 +85,9 @@ CLI equivalent: `railway variables --set "BASE_URL=https://…" --set
 
 Optional knobs (defaults are fine): `LLM_PROVIDER=http`, `LLM_MODE=tool`,
 `LLM_AGENTIC=1`, `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
-120000 — **must be < 290000** so it stays below the idempotency claim TTL).
-Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform
+120000 — **must be < 290000** so it stays below the idempotency claim TTL),
+`RETENTION_DAYS` (chat-transcript + audit-log retention in days, default 90,
+**min 30**; see `PRIVACY.md`). Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform
 RS256 key is built in. Never set a real token here; the add-on receives its
 install token from Clockify at runtime.
 

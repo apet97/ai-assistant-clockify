@@ -175,7 +175,10 @@ export function start(): void {
   });
 
   const config = loadConfig();
-  const store = createStore(config.databasePath, { encryptionKey: config.dataEncryptionKey });
+  const store = createStore(config.databasePath, {
+    encryptionKey: config.dataEncryptionKey,
+    retentionDays: config.retentionDays,
+  });
   const parser = createSignatureParser(config.clockifyAddonKey, config.clockifyAddonPublicKeyPem);
   const modelClient = selectModelClient(config);
 
@@ -192,10 +195,16 @@ export function start(): void {
   const prune = (): void => {
     try {
       const counts = store.pruneExpired(new Date().toISOString());
-      const total = counts.pendingConfirmations + counts.idempotencyKeys + counts.undoRecords;
+      const total =
+        counts.pendingConfirmations +
+        counts.idempotencyKeys +
+        counts.undoRecords +
+        counts.turnTelemetry +
+        counts.chatMessages +
+        counts.auditEvents;
       if (total > 0) {
         console.log(
-          `retention prune: confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords}`,
+          `retention prune: confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents}`,
         );
       }
     } catch (error) {

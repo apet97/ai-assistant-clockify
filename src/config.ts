@@ -33,6 +33,8 @@ export interface AppConfig {
   llmTimeoutMs?: number;
   /** Clockify commit/IO timeout (ms); defaults to 120000. Must stay < CLAIM_TTL_MS (300000). */
   commitTimeoutMs?: number;
+  /** Retention window (days) for chat transcripts + the audit log; defaults to 90. Floor 30. */
+  retentionDays?: number;
   /** Provider thinking control passed through as reasoning_effort. */
   llmReasoningEffort?: string;
   /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
@@ -68,6 +70,9 @@ const envObjectSchema = z.object({
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   /** Clockify commit/IO timeout (ms). Must be < 290000 (strictly below CLAIM_TTL_MS=300000). */
   COMMIT_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  /** Retention (days) for chat_messages + audit_events. Min 30 so the 30-day metrics
+   *  default never silently truncates; defaults to 90 in the store when unset. */
+  RETENTION_DAYS: z.coerce.number().int().min(30).optional(),
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   LLM_REASONING_EFFORT: z.string().min(1).optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
@@ -133,6 +138,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmModel: parsed.LLM_MODEL,
     llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
     commitTimeoutMs: parsed.COMMIT_TIMEOUT_MS,
+    retentionDays: parsed.RETENTION_DAYS,
     llmReasoningEffort: parsed.LLM_REASONING_EFFORT,
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,
