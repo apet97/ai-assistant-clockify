@@ -47,6 +47,31 @@ export function createApp(deps: AppDeps): Express {
   // Built UI assets (present after `npm run build`); harmless if absent.
   app.use("/ui", express.static(resolve("dist/ui")));
 
+  // Terminal error handler: async route rejections (e.g. a store write that
+  // throws SQLITE_BUSY mid-turn) are routed here by the route asyncHandler.
+  // Without it Express 4 leaves the request hanging AND the rejection becomes a
+  // fatal unhandledRejection — one bad turn would take down every session. We
+  // log (no secrets — the error message only, never headers/tokens) and return a
+  // calm response so the server stays up. If an NDJSON stream already started,
+  // emit a terminal error line instead of trying to set a status on sent headers.
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("request error:", err instanceof Error ? err.message : String(err));
+    if (res.headersSent) {
+      try {
+        res.write(`${JSON.stringify({ type: "error", code: "server_error", message: "Something went wrong." })}\n`);
+      } catch {
+        // Socket may already be torn down — nothing more to do.
+      }
+      try {
+        res.end();
+      } catch {
+        // Same — best-effort terminal flush.
+      }
+      return;
+    }
+    res.status(500).json({ ok: false, code: "server_error", message: "Something went wrong on our side. Please try again." });
+  });
+
   return app;
 }
 
@@ -117,6 +142,18 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => v
 }
 
 export function start(): void {
+  // Last-resort process net: the route asyncHandler + terminal error middleware
+  // catch route-scoped rejections, but a stray floating promise anywhere (e.g. a
+  // best-effort telemetry write) must not crash the whole server and drop every
+  // in-flight turn. Log and keep serving; a truly wedged process is restarted by
+  // the platform health check. Never log secrets — the reason/message only.
+  process.on("unhandledRejection", (reason) => {
+    console.error("unhandledRejection:", reason instanceof Error ? reason.message : String(reason));
+  });
+  process.on("uncaughtException", (error) => {
+    console.error("uncaughtException:", error instanceof Error ? error.message : String(error));
+  });
+
   const config = loadConfig();
   const store = createStore(config.databasePath, { encryptionKey: config.dataEncryptionKey });
   const parser = createSignatureParser(config.clockifyAddonKey, config.clockifyAddonPublicKeyPem);

@@ -111,4 +111,66 @@ describe("chat route resilience", () => {
     const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "again" });
     expect(res.status).toBe(200);
   });
+
+  it("returns 5xx (not a hang/crash) when a store write throws mid-turn, and stays up", async () => {
+    // The user-message persist (store.addMessage) is the FIRST thing executeChatTurn
+    // does and is awaited OUTSIDE any try/catch. Express 4 does not catch async
+    // rejections, so a throwing store write hung the request forever AND crashed the
+    // process — taking down every concurrent session. asyncHandler + the terminal
+    // error middleware must turn it into a calm 5xx with the server still serving.
+    const flaky = createStore(":memory:", { encryptionKey: "test-key" });
+    flaky.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "addon-token",
+    });
+    const realAddMessage = flaky.addMessage.bind(flaky);
+    let failNext = true;
+    flaky.addMessage = (msg) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("SQLITE_BUSY: database is locked");
+      }
+      return realAddMessage(msg);
+    };
+    const config: AppConfig = {
+      nodeEnv: "test",
+      port: 3998,
+      baseUrl: "https://example.com/ai-assistant",
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      sessionSecret: "test-session-secret",
+      databasePath: ":memory:",
+      llmBaseUrl: "https://llm.example.com",
+      llmApiKey: "llm-key",
+      llmModel: "cheap-model",
+      llmProvider: "http",
+    };
+    const flakyApp = createApp({
+      config,
+      store: flaky,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: throwingClient,
+    });
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+      addonId: "addon-1",
+    });
+    const compRes = await request(flakyApp).get("/component/assistant").query({ auth_token: token });
+    const sc = compRes.headers["set-cookie"];
+    const cookie = Array.isArray(sc) ? sc[0].split(";")[0] : "";
+
+    // Before the fix this hangs (supertest times out) and the process crashes.
+    const res = await request(flakyApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "hi" });
+    expect(res.status).toBeGreaterThanOrEqual(500);
+
+    // The server stayed up: a second turn (addMessage works now) completes normally.
+    const res2 = await request(flakyApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "again" });
+    expect(res2.status).toBe(200);
+    flaky.close();
+  });
 });
