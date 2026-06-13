@@ -8,6 +8,7 @@ import {
   type ConfirmStreamApi,
   type StreamEvent,
 } from "../../src/ui/main.js";
+import { undoFailureMessage } from "../../src/ui/shared.js";
 
 /**
  * Phase 4: settle confirm responses TRUTHFULLY. A failed confirm must never
@@ -25,6 +26,23 @@ function recorder() {
 }
 
 const okReceipt = { ok: true, receipt: { ok: true, action: "clockify_tags_delete" } } as ConfirmResponse;
+
+describe("undoFailureMessage (undo failures surface the route's real reason)", () => {
+  it("prefers the top-level message (policy denial / not-found)", () => {
+    expect(undoFailureMessage({ ok: false, message: "Undo needs write access to work_structure." })).toBe(
+      "Undo needs write access to work_structure.",
+    );
+  });
+  it("falls back to the receipt message (a failed reversal — fix #4's honest error)", () => {
+    expect(undoFailureMessage({ ok: false, receipt: { message: "Couldn't undo — none of the items could be removed." } })).toBe(
+      "Couldn't undo — none of the items could be removed.",
+    );
+  });
+  it("uses a safe fallback when the response carries no reason", () => {
+    expect(undoFailureMessage({ ok: false })).toBe("Couldn't undo — please try again.");
+    expect(undoFailureMessage(undefined)).toBe("Couldn't undo — please try again.");
+  });
+});
 
 describe("settleConfirmOutcome (truthful confirm flow)", () => {
   it("surfaces the server's message on a failed confirm — never 'Confirmed.'", () => {

@@ -15,6 +15,7 @@ import {
   featureGroupRows,
   settleConfirmOutcome,
   submitConfirmStream,
+  undoFailureMessage,
   type ChatController,
   type ChatResult,
   type ClarifyResult,
@@ -233,7 +234,7 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
     undoButton.addEventListener("click", async () => {
       undoButton.disabled = true;
       try {
-        const res = (await controller.undo(undoId)) as { ok?: boolean };
+        const res = (await controller.undo(undoId)) as { ok?: boolean; message?: string; receipt?: { message?: string } };
         if (res?.ok) {
           const done = el("span", "undo-done");
           done.appendChild(svgIcon(ICON_CHECK));
@@ -243,11 +244,13 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
           card.appendChild(el("p", "sr-only", "Undo complete"));
         } else {
           undoButton.disabled = false;
-          showError("Undo failed.");
+          // Surface the route's honest reason (policy denial, failed reversal),
+          // not a generic "Undo failed." that throws the actionable copy away.
+          showError(undoFailureMessage(res));
         }
       } catch {
         undoButton.disabled = false;
-        showError("Undo failed.");
+        showError("Couldn't undo — please try again.");
       }
     });
     card.appendChild(undoButton);

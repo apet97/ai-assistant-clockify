@@ -180,6 +180,20 @@ export function settleConfirmOutcome(responses: ConfirmResponse[], hooks: Confir
   return committed;
 }
 
+/**
+ * The honest failure reason from an /api/undo response — the route's own copy
+ * (top-level `message` for policy denials / not-found, `receipt.message` for a
+ * failed reversal), never a generic "Undo failed." that throws the reason away.
+ * Mirrors settleConfirmOutcome's extraction order.
+ */
+export function undoFailureMessage(
+  res: { ok?: boolean; message?: string; receipt?: { message?: string } } | null | undefined,
+): string {
+  if (res && typeof res.message === "string") return res.message;
+  if (res && typeof res.receipt?.message === "string") return res.receipt.message;
+  return "Couldn't undo — please try again.";
+}
+
 // --- Session restore (GET /api/chat/history) --------------------------------
 
 export interface HistoryMessage {
