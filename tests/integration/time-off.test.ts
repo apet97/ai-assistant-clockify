@@ -159,6 +159,75 @@ describe("time-off actions", () => {
     expect((bySlot.operation.payload as any).policyId).toBe("pol1");
   });
 
+  it("requests_create anchors 'N days next week' to the first N workdays (visible dates, no guessing)", async () => {
+    // NOW is Sat 2026-06-06 → next week's Monday is 2026-06-08.
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", week: "next_week", days: 2 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const input = (preview.operation.payload as any).input;
+    expect(input.start).toBe("2026-06-08"); // Monday
+    expect(input.end).toBe("2026-06-09"); // Tuesday
+    // Truthful preview: the anchored dates are what the admin confirms.
+    expect(preview.preview.expectedChanges.join(" ")).toContain("2026-06-08");
+  });
+
+  it("requests_create: week alone = 1 day; long spans skip weekends", async () => {
+    const fake = createFakeWorkspace(seed());
+    const oneDay = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", week: "next_week" },
+      context: makeContext(fake),
+    });
+    if (oneDay.kind !== "preview") throw new Error(`expected a preview, got ${oneDay.kind}`);
+    expect((oneDay.operation.payload as any).input).toMatchObject({ start: "2026-06-08", end: "2026-06-08" });
+
+    const sevenDays = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", week: "next_week", days: 7 },
+      context: makeContext(fake),
+    });
+    if (sevenDays.kind !== "preview") throw new Error(`expected a preview, got ${sevenDays.kind}`);
+    // Mon 06-08 … Fri 06-12 (5 workdays), then Mon 06-15, Tue 06-16.
+    expect((sevenDays.operation.payload as any).input).toMatchObject({ start: "2026-06-08", end: "2026-06-16" });
+  });
+
+  it("requests_create clarifies for 'this week' when no workdays remain (NOW is Saturday)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", week: "this_week", days: 2 },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+  });
+
+  it("requests_create: explicit start/end still wins over the week anchor", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO", start: "2026-06-10", end: "2026-06-11", week: "next_week", days: 5 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as any).input).toMatchObject({ start: "2026-06-10", end: "2026-06-11" });
+  });
+
+  it("requests_create with neither dates nor a week is invalid_args", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "PTO" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || result.receipt.ok) throw new Error("expected an error receipt");
+    expect(result.receipt.code).toBe("invalid_args");
+  });
+
   it("requests_create clarifies on an unknown policy with the real options", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({

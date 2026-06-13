@@ -9,7 +9,7 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolveGroupRefs, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolveGroupRefs, resolvePeriod, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /**
  * Resolve a time-off policy's scope — `userIds` (ids/names/'me') and
@@ -36,6 +36,31 @@ async function resolvePolicyScope(
     labels.push(...r.labels);
   }
   return { ok: true, userIds, userGroupIds, labels };
+}
+
+/** Step a YYYY-MM-DD day forward by n calendar days. */
+function addCalendarDays(day: string, n: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Sat/Sun are not workdays. */
+function isWorkday(day: string): boolean {
+  const dow = new Date(`${day}T00:00:00Z`).getUTCDay();
+  return dow !== 0 && dow !== 6;
+}
+
+/** The first workday on or after `day`. */
+function nextWorkday(day: string): string {
+  let d = day;
+  while (!isWorkday(d)) d = addCalendarDays(d, 1);
+  return d;
+}
+
+/** The day reached after `extra` additional workdays beyond `day` (weekends skipped). */
+function addWorkdays(day: string, extra: number): string {
+  let d = day;
+  for (let i = 0; i < extra; i += 1) d = nextWorkday(addCalendarDays(d, 1));
+  return d;
 }
 
 /**
@@ -274,7 +299,7 @@ const getRequest = defineReadAction({
 const createRequest = defineRiskyAction({
   name: "clockify_time_off_requests_create",
   description:
-    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…), resolved server-side. External side effect (notifies approvers) — previews and requires confirmation.",
+    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. External side effect (notifies approvers) — previews and requires confirmation.",
   group: TOA,
   risks: ["external_side_effect"],
   schema: z
@@ -282,14 +307,19 @@ const createRequest = defineRiskyAction({
       policyId: z.string().min(1).optional(),
       /** The policy's exact name, resolved to an id server-side. */
       policyName: z.string().min(1).optional(),
-      start: z.string().min(1),
-      end: z.string().min(1),
+      start: z.string().min(1).optional(),
+      end: z.string().min(1).optional(),
+      /** 'N days off next week' — the harness anchors to the first N workdays. */
+      week: z.enum(["this_week", "next_week"]).optional(),
       days: zNumberLike(z.number().positive()).optional(),
       halfDay: z.boolean().optional(),
       note: z.string().optional(),
     })
     .refine((v) => v.policyId !== undefined || v.policyName !== undefined, {
       message: "Provide the time-off policy id or its exact name.",
+    })
+    .refine((v) => (v.start !== undefined && v.end !== undefined) || v.week !== undefined, {
+      message: "Provide start+end dates, or a week ('this_week'/'next_week') with the number of days.",
     }),
   async preview(ctx, args) {
     // The policy ref resolves by name in either slot (balance_update precedent) —
@@ -299,12 +329,30 @@ const createRequest = defineRiskyAction({
       { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
     );
     if (!policy.ok) return policy.clarify;
+    const now = (ctx.now ?? (() => new Date()))();
+    // 'N days next week' anchors deterministically to the first N WORKDAYS of
+    // that week (the resolveLogTimes pattern: the harness defaults, the preview
+    // shows the chosen dates, the admin confirms). Explicit start/end wins.
+    let startRef = args.start;
+    let endRef = args.end;
+    if ((startRef === undefined || endRef === undefined) && args.week) {
+      const dayCount = Math.max(1, Math.round(args.days ?? 1));
+      const monday = resolvePeriod(now, args.week).dateRangeStart.slice(0, 10);
+      const today = now.toISOString().slice(0, 10);
+      const anchor = nextWorkday(args.week === "this_week" && today > monday ? today : monday);
+      if (args.week === "this_week" && anchor > addCalendarDays(monday, 6)) {
+        return {
+          clarify: "There are no workdays left this week — should I request the days for next week instead?",
+        };
+      }
+      startRef = anchor;
+      endRef = addWorkdays(anchor, dayCount - 1);
+    }
     // The wire wants bare YYYY-MM-DD days; the live loop sent the literal
     // string "next Monday". Resolve here, clarify on anything unparseable.
-    const now = (ctx.now ?? (() => new Date()))();
-    const start = resolveRelativeDay(now, { date: args.start });
-    const end = resolveRelativeDay(now, { date: args.end });
-    const bad = [start === undefined ? args.start : undefined, end === undefined ? args.end : undefined].filter(
+    const start = resolveRelativeDay(now, { date: startRef });
+    const end = resolveRelativeDay(now, { date: endRef });
+    const bad = [start === undefined ? startRef : undefined, end === undefined ? endRef : undefined].filter(
       (value): value is string => value !== undefined,
     );
     if (bad.length || start === undefined || end === undefined) {
