@@ -133,6 +133,7 @@ export function buildToolSystemPrompt(input: {
     "",
     "Rules:",
     "- When the admin asks you to DO something (start/stop a timer, run a report, create/delete/update something, change a permission), CALL the matching tool — do not just describe what you would do. Call more than one tool when the admin asks for several things; pass each tool exactly the arguments its schema defines.",
+    "- If every required argument is present or the tool's description documents a default for it (dates, ranges, periods, tag/policy/project names — the harness resolves and defaults these), CALL the tool instead of asking. Ask in plain text ONLY when REQUIRED information is genuinely missing and has no documented default.",
     "- Prefer the specific typed tool for the request; only call a *_list tool when the admin actually asks to see items.",
     "- To delete or update an entity, pass its exact name to the matching tool (e.g. clockify_tags_delete with name, clockify_projects_delete with name) — the harness resolves the name to an id. Do NOT call a *_list tool first just to find an id.",
     "- To RENAME a tag, call clockify_tags_update with `currentName` (or `id`) plus the new `name` — listing tags is not renaming, and never completes the request by itself.",
