@@ -158,6 +158,12 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
 export function migrate(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
   db.pragma("foreign_keys = ON");
+  // Make the concurrency-critical busy_timeout EXPLICIT rather than silently
+  // relying on better-sqlite3's 5000ms default: two admins writing the /data
+  // volume at once should wait-and-retry within the window, never 500 on an
+  // immediate SQLITE_BUSY. Pinned by a store test so a library-default change
+  // (or a stray `new Database(path, { timeout: 0 })`) can't regress it.
+  db.pragma("busy_timeout = 5000");
   for (const statement of SCHEMA_STATEMENTS) {
     db.prepare(statement).run();
   }

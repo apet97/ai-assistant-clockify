@@ -5,6 +5,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStore, type TestStore } from "../../src/db/store.js";
+import { migrate } from "../../src/db/schema.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import {
   FEATURE_GROUPS,
@@ -38,6 +39,17 @@ describe("store", () => {
     ]) {
       expect(tables).toContain(t);
     }
+  });
+
+  it("sets a non-zero busy_timeout so concurrent writers retry instead of an immediate SQLITE_BUSY 500", () => {
+    // WAL is on, but better-sqlite3 defaults busy_timeout to 0 — a write-lock
+    // collision (two concurrent admins on the Railway /data volume) then
+    // surfaces as an instant SQLITE_BUSY → 500. A non-zero timeout makes the
+    // second writer wait-and-retry within the window instead.
+    const db = new Database(":memory:");
+    migrate(db);
+    expect(db.pragma("busy_timeout", { simple: true })).toBe(5000);
+    db.close();
   });
 
   it("returns undefined for missing policy", () => {
