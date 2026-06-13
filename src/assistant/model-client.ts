@@ -45,6 +45,12 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Gemini 3.x attaches an opaque thought signature to each tool call and
+   * REQUIRES it echoed back verbatim on continuation (400 otherwise) — the
+   * same contract class as DeepSeek's reasoning_content. Absent elsewhere.
+   */
+  thoughtSignature?: string;
 }
 
 /** Token counts the provider reported for one completion (cost telemetry). */
@@ -108,6 +114,7 @@ const ERROR_BODY_SNIPPET_CHARS = 200;
 interface RawToolCall {
   id?: string;
   function?: { name?: string; arguments?: string };
+  extra_content?: { google?: { thought_signature?: string } };
 }
 
 interface ChatCompletionResponse {
@@ -143,7 +150,8 @@ function parseToolCalls(rawCalls: RawToolCall[]): ToolCall[] {
     // Most OpenAI-compatible providers return an id; synthesize a stable one if not,
     // so the loop can always correlate a tool result back to its call.
     const id = typeof call.id === "string" && call.id ? call.id : `call_${index}`;
-    calls.push({ id, name, arguments: args });
+    const thoughtSignature = call.extra_content?.google?.thought_signature;
+    calls.push({ id, name, arguments: args, ...(thoughtSignature ? { thoughtSignature } : {}) });
   });
   return calls;
 }
@@ -171,6 +179,9 @@ function toWireMessage(message: ModelMessage): Record<string, unknown> {
         id: call.id,
         type: "function",
         function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+        // Gemini 3.x continuation contract: echo the opaque signature verbatim
+        // or the provider 400s; emit nothing for signature-less backends.
+        ...(call.thoughtSignature ? { extra_content: { google: { thought_signature: call.thoughtSignature } } } : {}),
       })),
     };
   }

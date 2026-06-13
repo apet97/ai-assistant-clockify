@@ -187,6 +187,62 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
   });
 });
 
+describe("createModelClient thought signatures (Gemini 3.x continuation contract)", () => {
+  it("captures per-tool-call thought_signature from the response", async () => {
+    const payload = {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              {
+                id: "c1",
+                function: { name: "clockify_status", arguments: "{}" },
+                extra_content: { google: { thought_signature: "SIG_ABC" } },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const result = await client(payload).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(result.toolCalls[0].thoughtSignature).toBe("SIG_ABC");
+  });
+
+  it("echoes the signature back on continuation tool_calls (Gemini 400s without it) and omits it when absent", async () => {
+    const captured: { body?: string } = {};
+    const payload = { choices: [{ message: { content: "ok", tool_calls: [] } }] };
+    await client(payload, true, captured).completeWithTools!(
+      [
+        { role: "user", content: "do it" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "c1", name: "clockify_status", arguments: {}, thoughtSignature: "SIG_ABC" }],
+        },
+        { role: "tool", toolCallId: "c1", content: "{}" },
+      ],
+      tools,
+    );
+    const body = JSON.parse(captured.body ?? "{}");
+    expect(body.messages[1].tool_calls[0].extra_content).toEqual({ google: { thought_signature: "SIG_ABC" } });
+
+    // A signature-less call (DeepSeek et al.) emits NO extra_content key.
+    await client(payload, true, captured).completeWithTools!(
+      [
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "c1", name: "clockify_status", arguments: {} }],
+        },
+        { role: "tool", toolCallId: "c1", content: "{}" },
+      ],
+      tools,
+    );
+    expect("extra_content" in JSON.parse(captured.body ?? "{}").messages[0].tool_calls[0]).toBe(false);
+  });
+});
+
 describe("createModelClient reasoning effort", () => {
   it("sends reasoning_effort on BOTH paths when configured, omits it otherwise", async () => {
     const captured: { body?: string } = {};
