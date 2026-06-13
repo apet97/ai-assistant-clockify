@@ -79,7 +79,7 @@ function reportReceipt(action: string, workspaceId: string, data: unknown) {
 
 const summary = defineAction({
   name: "clockify_reports_summary",
-  description: "Run a summary report for a date range (grouped, defaults to PROJECT).",
+  description: "Run a summary report (grouped, defaults to PROJECT). The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],
   schema: rangeSchema.extend({ groups: z.array(z.enum(["PROJECT", "CLIENT", "TASK", "TAG", "USER", "DATE"])).optional() }),
@@ -93,7 +93,7 @@ const summary = defineAction({
 
 const detailed = defineAction({
   name: "clockify_reports_detailed",
-  description: "Run a detailed (entry-level) report for a date range.",
+  description: "Run a detailed (entry-level) report. The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],
   schema: rangeSchema,
@@ -107,7 +107,7 @@ const detailed = defineAction({
 
 const weekly = defineAction({
   name: "clockify_reports_weekly",
-  description: "Run a weekly report for a date range.",
+  description: "Run a weekly report. The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],
   schema: rangeSchema,
