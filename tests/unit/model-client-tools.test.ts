@@ -436,6 +436,50 @@ describe("createModelClient request timeout", () => {
     );
   });
 
+  it("maps a timeout abort DURING the success-path body read to the clean error (undici aborts the body on the same signal)", async () => {
+    const bodyTimeoutFetch = vi.fn(async () => {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw Object.assign(new Error("The operation was aborted due to timeout"), { name: "TimeoutError" });
+        },
+        text: async () => "",
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "test-model",
+      timeoutMs: 5,
+      fetchImpl: bodyTimeoutFetch,
+    });
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/timed out after 5ms/);
+    await expect(c.completeWithTools!([{ role: "user", content: "hi" }], tools)).rejects.toThrow(
+      /timed out after 5ms/,
+    );
+  });
+
+  it("a malformed 200 body throws a diagnosable error naming the status AND a body snippet", async () => {
+    const malformedFetch = vi.fn(async () => {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError(`Unexpected token '<', "<html>gateway"... is not valid JSON`);
+        },
+        text: async () => "<html>gateway error</html>",
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "test-model",
+      fetchImpl: malformedFetch,
+    });
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/status 200.*gateway error/);
+  });
+
   it("defaults the timeout to 120s and leaves non-abort errors untouched", async () => {
     const failFetch = vi.fn(async () => {
       throw new Error("ECONNREFUSED");

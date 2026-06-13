@@ -126,6 +126,17 @@ const RETRY_BACKOFF_MS = 750;
  *  our key rides the request header, never the response). */
 const ERROR_BODY_SNIPPET_CHARS = 200;
 
+/** Read a clamped, whitespace-collapsed snippet of the response body; an
+ *  unreadable body (e.g. already consumed by a failed json()) yields "" — the
+ *  status alone still beats silence. */
+async function readBodySnippet(response: Response): Promise<string> {
+  try {
+    return (await response.text()).replace(/\s+/g, " ").trim().slice(0, ERROR_BODY_SNIPPET_CHARS);
+  } catch {
+    return "";
+  }
+}
+
 interface RawToolCall {
   id?: string;
   function?: { name?: string; arguments?: string };
@@ -247,14 +258,25 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         throw error;
       }
 
-      if (response.ok) return (await response.json()) as ChatCompletionResponse;
-
-      let snippet = "";
-      try {
-        snippet = (await response.text()).replace(/\s+/g, " ").trim().slice(0, ERROR_BODY_SNIPPET_CHARS);
-      } catch {
-        // Body unreadable — the status alone still beats silence.
+      if (response.ok) {
+        // The body read shares the request's abort signal (undici aborts a
+        // stuck read on timeout), so map that abort to the SAME clean message
+        // the fetch-level catch produces — and turn a malformed 2xx body into
+        // a diagnosable error naming the status + a body snippet, matching the
+        // non-2xx treatment instead of a context-free parser error.
+        try {
+          return (await response.json()) as ChatCompletionResponse;
+        } catch (error) {
+          const name = (error as { name?: string } | null)?.name;
+          if (name === "TimeoutError" || name === "AbortError") {
+            throw new Error(`Model request timed out after ${timeoutMs}ms`);
+          }
+          const snippet = await readBodySnippet(response);
+          throw new Error(`Model request failed with status ${response.status}${snippet ? `: ${snippet}` : ""}`);
+        }
       }
+
+      const snippet = await readBodySnippet(response);
       const willRetry = attempt === 0 && retryable(response.status);
       console.warn(
         `model request failed: status=${response.status}${snippet ? ` body=${snippet}` : ""}${willRetry ? " (retrying once)" : ""}`,
