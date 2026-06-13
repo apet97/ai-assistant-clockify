@@ -44,7 +44,12 @@ export interface ProjectPort {
   archiveProject(id: string): Promise<ProjectSummary>;
   /** Archive-then-delete (Clockify rejects deleting an active project). */
   deleteProject(id: string): Promise<void>;
-  createProjectFromTemplate(input: { templateId: string; name?: string }): Promise<ProjectSummary>;
+  /**
+   * Spec CreateProjectFromTemplateV1 requires BOTH `name` and `templateProjectId`
+   * (there is no `templateId` field; additionalProperties is not relaxed). The
+   * caller resolves the template to its project id and supplies a name.
+   */
+  createProjectFromTemplate(input: { templateProjectId: string; name: string }): Promise<ProjectSummary>;
   updateProjectRate(input: UpdateProjectRateInput): Promise<void>;
   updateProjectEstimate(id: string, patch: Record<string, unknown>): Promise<void>;
   updateProjectMemberships(id: string, patch: Record<string, unknown>): Promise<void>;

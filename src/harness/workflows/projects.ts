@@ -134,7 +134,7 @@ const createProject = defineAction({
 const createFromTemplate = defineAction({
   name: "clockify_projects_from_template",
   description:
-    "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list).",
+    "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list), plus the new project's `name` (required by the API).",
   featureGroup: PROJECT_GROUP,
   risks: ["safe_write"],
   schema: z
@@ -142,7 +142,8 @@ const createFromTemplate = defineAction({
       templateId: z.string().min(1).optional(),
       /** The template's exact name, resolved to an id server-side. */
       templateName: z.string().min(1).optional(),
-      name: z.string().optional(),
+      /** Required by CreateProjectFromTemplateV1 (name + templateProjectId). */
+      name: z.string().min(1),
     })
     .refine((v) => v.templateId !== undefined || v.templateName !== undefined, {
       message: "Provide the template id or its exact name.",
@@ -158,8 +159,8 @@ const createFromTemplate = defineAction({
       return { kind: "clarify", message: template.clarify.clarify, options: template.clarify.options };
     }
     const project = await ctx.clockify.createProjectFromTemplate({
-      templateId: template.id,
-      ...(args.name !== undefined ? { name: args.name } : {}),
+      templateProjectId: template.id,
+      name: args.name,
     });
     return {
       kind: "receipt",

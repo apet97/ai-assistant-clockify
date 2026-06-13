@@ -127,16 +127,20 @@ describe("project rest", () => {
     expect((f as any).mock.calls[2][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1");
   });
 
-  it("createProjectFromTemplate POSTs to /projects/from-template", async () => {
+  it("createProjectFromTemplate POSTs templateProjectId + name (spec CreateProjectFromTemplateV1)", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "p2", name: "Cloned" }));
     const p = await rest(f as unknown as typeof fetch).createProjectFromTemplate({
-      templateId: "t1",
+      templateProjectId: "t1",
       name: "Cloned",
     });
     expect(p.id).toBe("p2");
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/from-template");
-    expect(JSON.parse(init.body)).toEqual({ templateId: "t1", name: "Cloned" });
+    const body = JSON.parse(init.body);
+    // Ground truth (openapi.json CreateProjectFromTemplateV1): required = [name, templateProjectId];
+    // there is NO `templateId` field — sending it 400s under the spec's shape.
+    expect(body).toEqual({ templateProjectId: "t1", name: "Cloned" });
+    expect(body).not.toHaveProperty("templateId");
   });
 
   it("updateProjectRate PUTs amount (minor units) to the hourly-rate endpoint", async () => {

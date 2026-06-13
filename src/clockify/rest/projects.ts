@@ -56,9 +56,10 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       await core.call("api", "DELETE", `${ws}/projects/${id}`);
     },
     async createProjectFromTemplate(input) {
+      // CreateProjectFromTemplateV1: required [name, templateProjectId]; no `templateId` key.
       const p = await core.call("api", "POST", `${ws}/projects/from-template`, {
-        templateId: input.templateId,
-        ...(input.name ? { name: input.name } : {}),
+        templateProjectId: input.templateProjectId,
+        name: input.name,
       });
       return map(p);
     },

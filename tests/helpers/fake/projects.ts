@@ -70,9 +70,9 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
       state.projects = state.projects.filter((p) => p.id !== id);
       state.deleted.push({ entityType: "project", id });
     },
-    async createProjectFromTemplate({ templateId, name }) {
+    async createProjectFromTemplate({ templateProjectId, name }) {
       bump("createProjectFromTemplate");
-      const p: ProjectSummary = { id: nextId("project"), name: name ?? `from-${templateId}` };
+      const p: ProjectSummary = { id: nextId("project"), name: name || `from-${templateProjectId}` };
       state.projects.push(p);
       return p;
     },
