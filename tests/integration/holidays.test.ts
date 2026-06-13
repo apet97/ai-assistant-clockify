@@ -124,6 +124,29 @@ describe("holiday actions", () => {
     expect(fake.counts.createHoliday ?? 0).toBe(0);
   });
 
+  it("holidays_create resolves a relative startDate server-side and clarifies on a non-date", async () => {
+    // Dates server-side: the model must never compute a calendar date. A relative
+    // day resolves; a fabricated/non-date string clarifies instead of fabricating a
+    // value that 400s (or silently mis-dates) at the wire.
+    const fake = createFakeWorkspace();
+    const rel = await executeAction({
+      actionName: "clockify_holidays_create",
+      args: { name: "AIASSIST_SMOKE_rel", startDate: "tomorrow", userIds: ["me"] },
+      context: makeContext(fake),
+    });
+    if (rel.kind !== "receipt" || !rel.receipt.ok) throw new Error(`expected an ok receipt, got ${rel.kind}`);
+    // NOW = 2026-06-06 → tomorrow = 2026-06-07 (resolved by the harness, not the model).
+    expect(fake.state.holidays.find((h) => h.name === "AIASSIST_SMOKE_rel")?.startDate).toBe("2026-06-07");
+
+    const bad = await executeAction({
+      actionName: "clockify_holidays_create",
+      args: { name: "X", startDate: "Christmas", userIds: ["me"] },
+      context: makeContext(fake),
+    });
+    expect(bad.kind).toBe("clarify");
+    expect(fake.counts.createHoliday).toBe(1); // the non-date never reached the wire
+  });
+
   it("holidays_update resolves group NAMES to ids", async () => {
     const fake = createFakeWorkspace({ ...directory(), holidays: [{ id: "h1", name: "Xmas", startDate: "2026-12-25" }] });
     const result = await executeAction({

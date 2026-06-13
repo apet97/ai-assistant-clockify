@@ -9,7 +9,7 @@ import {
   type ActionResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveGroupRefs, resolveInstant, resolveUserFilter, resolveUserRefs } from "./resolve.js";
+import { resolveGroupRefs, resolveInstant, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /**
  * Resolve a holiday's `userIds` (names/'me'/ids) and `userGroupIds` (names/ids) to
@@ -34,6 +34,38 @@ async function resolveHolidayAssignment(
     userGroupIds = r.groupIds;
   }
   return { ok: true, userIds, userGroupIds };
+}
+
+/**
+ * Resolve a holiday's `startDate`/`endDate` server-side (CLAUDE.md "dates
+ * server-side" invariant) — the model must never compute a calendar date. Each
+ * provided value resolves to a real YYYY-MM-DD via resolveRelativeDay (absolute
+ * dates pass through, relative days like "next monday" resolve, a real-day check
+ * rejects 2026-02-30); an unparseable/fabricated value clarifies instead of
+ * sending a string the wire would reject (or silently mis-date). Undefined inputs
+ * stay undefined (update may change neither).
+ */
+function resolveHolidayDates(
+  ctx: ActionContext,
+  startDate: string | undefined,
+  endDate: string | undefined,
+): { ok: true; startDate?: string; endDate?: string } | { ok: false; clarify: ActionResult } {
+  const now = (ctx.now ?? (() => new Date()))();
+  const bad: string[] = [];
+  const resolvedStart = startDate !== undefined ? resolveRelativeDay(now, { date: startDate }) : undefined;
+  if (startDate !== undefined && resolvedStart === undefined) bad.push(`start date "${startDate}"`);
+  const resolvedEnd = endDate !== undefined ? resolveRelativeDay(now, { date: endDate }) : undefined;
+  if (endDate !== undefined && resolvedEnd === undefined) bad.push(`end date "${endDate}"`);
+  if (bad.length) {
+    return {
+      ok: false,
+      clarify: {
+        kind: "clarify",
+        message: `I couldn't make sense of the ${bad.join(" or ")}. Use a real date like 2026-12-25 or a relative day like "next monday".`,
+      },
+    };
+  }
+  return { ok: true, startDate: resolvedStart, endDate: resolvedEnd };
 }
 
 /**
@@ -142,10 +174,19 @@ const createHoliday = defineAction({
   async handler(ctx, args) {
     const assign = await resolveHolidayAssignment(ctx, args);
     if (!assign.ok) return assign.clarify;
+    // Dates server-side (CLAUDE.md invariant): the model never computes calendar
+    // dates. Resolve relative/absolute days to a real YYYY-MM-DD; an unparseable
+    // value clarifies rather than fabricating a date the wire would reject.
+    const dates = resolveHolidayDates(ctx, args.startDate, args.endDate);
+    if (!dates.ok) return dates.clarify;
+    if (dates.startDate === undefined) {
+      // The schema requires startDate; this also guards a whitespace-only value.
+      return { kind: "clarify", message: 'A holiday needs a start date like 2026-12-25 or "next monday".' };
+    }
     const holiday = await ctx.clockify.createHoliday({
       name: args.name,
-      startDate: args.startDate,
-      ...(args.endDate !== undefined ? { endDate: args.endDate } : {}),
+      startDate: dates.startDate,
+      ...(dates.endDate !== undefined ? { endDate: dates.endDate } : {}),
       ...(args.occursAnnually !== undefined ? { occursAnnually: args.occursAnnually } : {}),
       ...(assign.userIds?.length ? { userIds: assign.userIds } : {}),
       ...(assign.userGroupIds?.length ? { userGroupIds: assign.userGroupIds } : {}),
@@ -191,9 +232,15 @@ const updateHoliday = defineAction({
   async handler(ctx, args) {
     const assign = await resolveHolidayAssignment(ctx, args);
     if (!assign.ok) return assign.clarify;
-    const { id, userIds: _userIds, userGroupIds: _userGroupIds, ...rest } = args;
+    // Dates server-side: resolve a relative/absolute change to a real day; an
+    // unparseable value clarifies (never reaches the wire as-is).
+    const dates = resolveHolidayDates(ctx, args.startDate, args.endDate);
+    if (!dates.ok) return dates.clarify;
+    const { id, userIds: _userIds, userGroupIds: _userGroupIds, startDate: _startDate, endDate: _endDate, ...rest } = args;
     const holiday = await ctx.clockify.updateHoliday(id, {
       ...rest,
+      ...(dates.startDate !== undefined ? { startDate: dates.startDate } : {}),
+      ...(dates.endDate !== undefined ? { endDate: dates.endDate } : {}),
       ...(assign.userIds?.length ? { userIds: assign.userIds } : {}),
       ...(assign.userGroupIds?.length ? { userGroupIds: assign.userGroupIds } : {}),
     });
