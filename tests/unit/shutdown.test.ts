@@ -72,4 +72,16 @@ describe("createShutdownHandler", () => {
     expect(deps.exit).toHaveBeenCalledWith(1);
     clearInterval(deps.pruneTimer);
   });
+
+  it("a store.close throw on the clean-drain path still exits (no hang)", async () => {
+    const { deps } = makeDeps({ drainCompletes: true });
+    deps.store.close.mockImplementation(() => {
+      throw new Error("db busy");
+    });
+    const shutdown = createShutdownHandler(deps);
+    shutdown("SIGTERM");
+    await vi.runAllTimersAsync();
+    expect(deps.exit).toHaveBeenCalled();
+    clearInterval(deps.pruneTimer);
+  });
 });

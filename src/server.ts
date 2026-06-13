@@ -135,7 +135,12 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => v
     deps.server.closeIdleConnections?.();
     deps.server.close(() => {
       clearTimeout(force);
-      deps.store.close();
+      try {
+        deps.store.close();
+      } catch {
+        // A statement may still be open — exit cleanly regardless (the force
+        // timer is already cleared, so a throw here would otherwise hang).
+      }
       exit(0);
     });
   };
