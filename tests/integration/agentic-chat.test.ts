@@ -887,6 +887,15 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     "apply the change",
     "run it",
     "please go ahead and apply the pending change",
+    // r1-safety-invariants-01 / live-dogfood-02: common approval idioms also
+    // express consent and must NOT reach the planner (they re-ran the risky write
+    // and stacked a SECOND duplicate preview).
+    "approve",
+    "approve the change",
+    "go for it",
+    "make it so",
+    "ship it",
+    "do the thing",
   ])("a consent-adjacent '%s' while a preview is pending is answered deterministically (no second preview)", async (phrase) => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     // If the guard misses, the message reaches the planner; script a second

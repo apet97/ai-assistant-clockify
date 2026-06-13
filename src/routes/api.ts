@@ -170,14 +170,18 @@ export function sanitizeStoredReplyForModel(content: string): string {
  *    "run the report") falls outside the closed object set and is NOT swallowed;
  *  - the two shapes joined ("please go ahead and apply the pending change").
  */
-const CONSENT_AFFIRMATION = "(?:yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|proceed|apply|confirm(?:ed)?)";
+// Whole-message approval words/idioms (no new instruction). "go for it",
+// "make it so", "ship it" etc. are pure consent; anything naming a NEW entity
+// ("approve the discount on invoice 5") falls outside the closed filler set below.
+const CONSENT_AFFIRMATION =
+  "(?:yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|go for it|proceed|approve(?:d)?|apply|make it so|ship it|send it|confirm(?:ed)?)";
 // Polite/connective filler that carries no new instruction.
 const CONSENT_FILLER = "(?:please|just|now|already|then|and|go ahead|do it|proceed|for me|that|it)";
 // Imperative verb that means "apply the thing you previewed".
-const CONSENT_APPLY_VERB = "(?:apply|execute|run|do|perform|commit|go ahead with|proceed with|confirm)";
+const CONSENT_APPLY_VERB = "(?:apply|execute|run|do|perform|commit|approve|go ahead with|proceed with|confirm)";
 // The ONLY allowed object — a self-reference to the pending change, never a new entity.
 const CONSENT_PENDING_OBJECT =
-  "(?:it|this|that|the (?:change|changes|edit|update|action|operation|pending (?:change|changes|edit|update|action|operation)))";
+  "(?:it|this|that|the (?:change|changes|edit|update|action|operation|thing|pending (?:change|changes|edit|update|action|operation)))";
 const TYPED_CONSENT = new RegExp(
   "^\\s*" +
     "(?:please\\s+|just\\s+)*" +
