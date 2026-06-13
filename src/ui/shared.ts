@@ -310,6 +310,43 @@ export function reservedPendingFor(history: HistoryResponse, previewId: string):
 }
 
 /**
+ * A one-shot "restore is in flight" gate (r1-new-session-restore-04). The
+ * composer goes live the moment `renderChat()` runs, but `restoreHistory()`
+ * then awaits a same-origin GET before appending the replayed conversation. On
+ * a slow round-trip (cold dyno) a message typed in that window would otherwise
+ * append its live turn ABOVE the history that lands later — a scrambled
+ * transcript in the one feature whose whole point is a faithful replay.
+ *
+ * A live send `await`s `waitUntilSettled()` before touching the log, and
+ * `restoreHistory` calls `settle()` AFTER appending its items (in BOTH its
+ * success and catch paths — restore is best-effort, so a failure must still
+ * release the gate or the composer would wedge forever). `settle()` is
+ * idempotent; a send started after settle resolves immediately.
+ */
+export interface RestoreGate {
+  /** Resolves once restore has settled (resolved or rejected). */
+  waitUntilSettled(): Promise<void>;
+  /** Open the gate — idempotent; releases any pending `waitUntilSettled`. */
+  settle(): void;
+}
+
+export function createRestoreGate(): RestoreGate {
+  let release!: () => void;
+  let settled = false;
+  const settledPromise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return {
+    waitUntilSettled: () => settledPromise,
+    settle: () => {
+      if (settled) return;
+      settled = true;
+      release();
+    },
+  };
+}
+
+/**
  * Remove a focused card AND return focus in lock-step (WCAG 2.4.3 Focus Order,
  * r1-ux-copy-a11y-04). When a Confirm/Cancel button is clicked, keyboard focus
  * sits on that button INSIDE the card. `card.remove()` would drop focus to

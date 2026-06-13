@@ -11,12 +11,14 @@ import {
   svgIcon,
 } from "./render.js";
 import {
+  createRestoreGate,
   historyRestoreItems,
   type ChatController,
   type ChatResult,
   type HistoryResponse,
   type PolicyShape,
   type PreviewResult,
+  type RestoreGate,
   type StreamEvent,
 } from "./shared.js";
 
@@ -446,6 +448,16 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // path as typed text — never to a confirmation endpoint.
   let sendText: (text: string) => Promise<void> = async () => {};
 
+  // r1-new-session-restore-04: the composer goes live the moment renderChat()
+  // runs, but restoreHistory() then awaits a GET before appending the replayed
+  // conversation. A message typed in that window must NOT jump ahead of the
+  // history. Live sends await this gate; restoreHistory settles it after
+  // appending (success AND failure — best-effort restore must never wedge the
+  // composer). Default is already-settled so paths with no restore (first-run
+  // permissions save) never block.
+  let restoreGate: RestoreGate = createRestoreGate();
+  restoreGate.settle();
+
   // Assigned in renderChat (points at the composer input). Confirm/Cancel remove
   // their card with focus on the clicked button INSIDE it, which would drop focus
   // to <body>; this returns focus to the composer so the next Tab continues from
@@ -510,6 +522,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
     // confirmation endpoint.
     sendText = async (text: string): Promise<void> => {
       if (busy || !text) return; // one-at-a-time guard (Enter/chip while working can't double-submit)
+      // Wait for session restore to settle (r1-new-session-restore-04) so a
+      // fast first message never renders ABOVE the replayed history. The gate
+      // is already-settled outside the restore window, so this is a no-op then.
+      await restoreGate.waitUntilSettled();
       chat.querySelector(".welcome")?.remove(); // the conversation has started
       appendMessage("user", text);
       messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
@@ -629,6 +645,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
       messages.scrollTop = messages.scrollHeight;
     } catch {
       showError("Couldn't restore the conversation history — you can keep chatting.");
+    } finally {
+      // Release the composer AFTER the replayed history has appended (success
+      // OR failure) so a fast first message can never scramble the transcript
+      // (r1-new-session-restore-04). A failure still settles — restore is
+      // best-effort and the composer must stay usable.
+      restoreGate.settle();
     }
   }
 
@@ -637,8 +659,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
       const perms = (await api.getPermissions()) as PermissionsResponse;
       if (perms.firstRun) await openPermissions(true);
       else {
+        // Arm the restore gate BEFORE the composer goes live so a message typed
+        // during the history fetch waits for the replay (r1-new-session-restore-04).
+        restoreGate = createRestoreGate();
         renderChat();
-        await restoreHistory();
+        await restoreHistory(); // settles the gate when the replay is appended
       }
     } catch {
       showError("Could not load the assistant.");
