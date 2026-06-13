@@ -71,6 +71,34 @@ describe("historyRestoreItems", () => {
     expect(items.at(-1)).toEqual({ kind: "results", results: [preview] });
   });
 
+  it("restores each live pending as its OWN card — never one merged Confirm-all batch", () => {
+    // r1-new-session-restore-02: two pendings from UNRELATED turns must each
+    // become a single-preview results item (one streaming Confirm each), not a
+    // merged batch ("Confirm all applies only to the exact previewed batch").
+    const p1 = {
+      kind: "preview" as const,
+      previewId: "p1",
+      nonce: "n1",
+      preview: { actionLabel: "Delete tag", expectedChanges: ["a"], reversibility: "", warnings: [] },
+    };
+    const p2 = {
+      kind: "preview" as const,
+      previewId: "p2",
+      nonce: "n2",
+      preview: { actionLabel: "Delete client", expectedChanges: ["b"], reversibility: "", warnings: [] },
+    };
+    const items = historyRestoreItems({
+      messages: [{ role: "user", content: "do two unrelated things" }],
+      pendingPreviews: [p1, p2],
+    });
+    const resultsItems = items.filter((i) => i.kind === "results");
+    // One results item PER pending preview, in created-at order — never merged.
+    expect(resultsItems).toEqual([
+      { kind: "results", results: [p1] },
+      { kind: "results", results: [p2] },
+    ]);
+  });
+
   it("ignores roles other than user/assistant and blank bubbles", () => {
     const items = historyRestoreItems({
       messages: [

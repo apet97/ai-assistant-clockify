@@ -264,6 +264,14 @@ export type RestoreItem =
  * Defensive even against an older server: preview-kind results and `undo`
  * handles inside stored messages are dropped here too — history is a record,
  * not a control surface; live previews arrive only via `pendingPreviews`.
+ *
+ * Each live pending is its OWN results item (server returns them created-at
+ * ASC, so order is preserved) — NEVER one merged batch. A merged item would
+ * render as a single "Confirm all" card spanning unrelated turns, violating
+ * "Confirm all applies only to the exact previewed batch" AND routing agentic
+ * pendings through the JSON confirmAll path (the streaming single-confirm path
+ * resumes the suspended loop; confirmAll is single-turn only) — r1-new-session-
+ * restore-02.
  */
 export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
   const items: RestoreItem[] = [];
@@ -283,8 +291,8 @@ export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
       });
     if (results.length > 0) items.push({ kind: "results", results });
   }
-  if (history.pendingPreviews?.length) {
-    items.push({ kind: "results", results: history.pendingPreviews });
+  for (const pending of history.pendingPreviews ?? []) {
+    items.push({ kind: "results", results: [pending] });
   }
   return items;
 }
