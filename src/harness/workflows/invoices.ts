@@ -761,27 +761,42 @@ const deleteInvoicePayment = defineRiskyAction({
 const importInvoiceTime = defineRiskyAction({
   name: "clockify_invoices_import_time",
   description:
-    "Import billable time entries into an invoice by date range. Billing action — previews and requires confirmation.",
+    "Import billable time entries into an invoice by date range. `from`/`to` accept YYYY-MM-DD or a relative day/period (today, last week, this month — resolved server-side; never guess a calendar date). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
   schema: z.object({
     invoiceId: z.string().min(1),
-    from: z.string().min(1), // full ISO or YYYY-MM-DD
-    to: z.string().min(1), // full ISO or YYYY-MM-DD
+    from: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
+    to: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
     projectIds: z.array(z.string().min(1)).optional(),
   }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "import time into");
     if (!invoice.ok) return invoice.clarify;
+    // A billing wire must never see "today"/"this_month" raw — Clockify 400s
+    // "[to] can't be null". from→start-of-day, to→end-of-day (Clockify wants `to`
+    // strictly after `from`); unparseable ⇒ clarify, never send.
+    const now = nowDate(ctx);
+    const from = resolveInstant(now, args.from, "start");
+    const to = resolveInstant(now, args.to, "end");
+    const badDates = [
+      from === undefined ? `start date "${args.from}"` : undefined,
+      to === undefined ? `end date "${args.to}"` : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (badDates.length || from === undefined || to === undefined) {
+      return {
+        clarify: `I couldn't make sense of the ${badDates.join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, last week, or this month.`,
+      };
+    }
     const range = {
-      from: args.from,
-      to: args.to,
+      from,
+      to,
       ...(args.projectIds !== undefined ? { projectIds: args.projectIds } : {}),
     };
     return {
       actionLabel: "Import time into invoice",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
-      expectedChanges: [`Import billable time from ${args.from} to ${args.to}`],
+      expectedChanges: [`Import billable time from ${from.slice(0, 10)} to ${to.slice(0, 10)}`],
       reversibility: "Delete the imported line items to revert.",
       warnings: ["This adds billable time as invoice line items."],
       payload: { invoiceId: invoice.id, range },

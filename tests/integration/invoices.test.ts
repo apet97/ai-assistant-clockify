@@ -489,6 +489,37 @@ describe("invoice actions", () => {
     expect(receipt.ok).toBe(true);
     expect(fake.counts.importInvoiceTime).toBe(1);
   });
+
+  it("clockify_invoices_import_time resolves RELATIVE dates server-side (billing must never wire raw 'today' → Clockify 400 '[to] can't be null')", async () => {
+    // NOW is 2026-06-06. "import all time entries" makes the planner invent a
+    // from/to, and it's encouraged to emit date WORDS; they must resolve or the
+    // import endpoint rejects `to` as null. from→start-of-day, to→end-of-day
+    // (Clockify wants `to` strictly after `from`).
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_import_time",
+      args: { invoiceId: "inv1", from: "today", to: "today" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const range = (preview.operation.payload as { range: { from: string; to: string } }).range;
+    expect(range.from).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(range.to).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(range.from).toBe("2026-06-06T00:00:00.000Z");
+    expect(range.to).toBe("2026-06-06T23:59:59.999Z");
+    expect(range.to > range.from).toBe(true);
+  });
+
+  it("clockify_invoices_import_time clarifies on an unparseable date instead of wiring it", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_import_time",
+      args: { invoiceId: "inv1", from: "today", to: "whenever it suits" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.importInvoiceTime ?? 0).toBe(0);
+  });
 });
 
 describe("invoice actions — number→id resolution at preview time (live-loop FIX 1: every invoice call used the NUMBER)", () => {
