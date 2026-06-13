@@ -109,6 +109,9 @@ describe("time-off actions", () => {
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("external_side_effect");
+    // Truthfulness: the deducted day count (what Clockify charges against the
+    // balance) must be visible on the card — days can differ from the date span.
+    expect(preview.preview.expectedChanges.join(" ")).toContain("3 day");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.createTimeOffRequest).toBe(1);

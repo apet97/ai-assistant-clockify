@@ -386,10 +386,16 @@ const createRequest = defineRiskyAction({
     } catch {
       // Balance unavailable — submit as before; Clockify itself remains the gate.
     }
+    // Truthful preview: state how many days will be DEDUCTED (the wire `days`),
+    // not just the calendar range — they can differ (an explicit days override, or
+    // a half day). What the admin confirms must equal what Clockify charges.
+    const dayCountLabel = args.halfDay
+      ? "a half day"
+      : `${requestedDays} day${requestedDays === 1 ? "" : "s"}`;
     return {
       actionLabel: "Submit time-off request",
       targets: [{ type: "time_off_policy", id: policy.id, name: policy.name }],
-      expectedChanges: [`Request time off ${start} → ${end} under policy ${policy.name ?? policy.id}`],
+      expectedChanges: [`Request ${dayCountLabel} off ${start} → ${end} under policy ${policy.name ?? policy.id}`],
       reversibility: "You can delete the request afterward.",
       warnings,
       payload: { policyId: policy.id, input },
