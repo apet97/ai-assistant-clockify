@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { selectModelClient } from "../../src/assistant/select-model-client.js";
 
 describe("selectModelClient", () => {
@@ -31,5 +31,14 @@ describe("selectModelClient", () => {
       llmTimeoutMs: 60_000,
     });
     expect(typeof client.complete).toBe("function");
+  });
+
+  it("threads llmTimeoutMs (and the model) into the gemini-cli client", () => {
+    const geminiFactory = vi.fn(() => ({ complete: async () => "" }));
+    selectModelClient(
+      { llmProvider: "gemini-cli", geminiModel: "gemini-x", llmTimeoutMs: 45_000 },
+      { createGeminiCli: geminiFactory },
+    );
+    expect(geminiFactory).toHaveBeenCalledWith({ model: "gemini-x", timeoutMs: 45_000 });
   });
 });

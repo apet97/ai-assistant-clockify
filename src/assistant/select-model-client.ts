@@ -21,9 +21,21 @@ export interface ModelClientSelection {
   geminiModel?: string;
 }
 
-export function selectModelClient(config: ModelClientSelection): ModelClient {
+/** Factory seam (defaults to the real builders) so tests can observe what is wired. */
+export interface ModelClientFactories {
+  createGeminiCli?: typeof createGeminiCliModelClient;
+}
+
+export function selectModelClient(
+  config: ModelClientSelection,
+  factories: ModelClientFactories = {},
+): ModelClient {
   if (config.llmProvider === "gemini-cli") {
-    return createGeminiCliModelClient({ model: config.geminiModel });
+    // `LLM_TIMEOUT_MS` applies to the dev CLI's subprocess kill timer too; forward it
+    // (the CLI default stands in when unset). `LLM_REASONING_EFFORT` has no `gemini`
+    // CLI flag, so it is intentionally not threaded here.
+    const createGeminiCli = factories.createGeminiCli ?? createGeminiCliModelClient;
+    return createGeminiCli({ model: config.geminiModel, timeoutMs: config.llmTimeoutMs });
   }
   if (!config.llmBaseUrl || !config.llmApiKey || !config.llmModel) {
     throw new Error("LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required when LLM_PROVIDER=http");
