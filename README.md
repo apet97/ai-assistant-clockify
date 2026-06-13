@@ -75,7 +75,8 @@ stays a thin, replaceable translator:
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy *and* run-to-run
   consistency over a real corpus — measured at 100% on three backends
-  (DeepSeek v4-pro, gemini-3.1-flash-lite, gemini-3.5-flash).
+  (DeepSeek v4-pro, gemini-3.1-flash-lite, gemini-3.5-flash) via the opt-in
+  eval battery (`scripts/eval-*.ts`); results are not committed or CI-gated.
 - **Backend-agnostic model client** — any OpenAI-compatible endpoint via
   `LLM_BASE_URL`/`LLM_MODEL`; provider quirks (DeepSeek `reasoning_content`,
   Gemini 3.x `thought_signature`, `reasoning_effort`) are handled in one place
