@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
+import { defineAction, defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch } from "./resolve.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed custom-field workflows (goclmcp §2.8). Reads (list/get) execute
@@ -45,19 +45,35 @@ const listCustomFields = defineReadAction({
   },
 });
 
-const getCustomField = defineReadAction({
+const getCustomField = defineAction({
   name: "clockify_custom_fields_get",
-  description: "Fetch a single custom field by id.",
-  group: CF,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single custom field by id, or by its exact `name` (resolved server-side).",
+  featureGroup: CF,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the custom field id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getCustomField(args.id);
-    return successReceipt({
-      action: "clockify_custom_fields_get",
-      entity: "custom_field",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { entity },
+    const resolved = await resolveEntityRef(args, {
+      noun: "custom field",
+      verb: "fetch",
+      list: () => ctx.clockify.listCustomFields(),
     });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getCustomField(resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_custom_fields_get",
+        entity: "custom_field",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { entity },
+      }),
+    };
   },
 });
 

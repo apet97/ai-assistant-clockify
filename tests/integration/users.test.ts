@@ -27,6 +27,15 @@ describe("user & group actions", () => {
     else throw new Error("expected policy_denied");
   });
 
+  it("clockify_groups_get resolves by exact name (not just id), clarifies on unknown", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({ actionName: "clockify_groups_get", args: { name: "Devs" }, context: makeContext(fake) });
+    if (byName.kind === "receipt" && byName.receipt.ok) expect((byName.receipt.data as any).entity).toMatchObject({ id: "g1" });
+    else throw new Error(`expected a success receipt, got ${byName.kind}`);
+    const ghost = await executeAction({ actionName: "clockify_groups_get", args: { name: "Ghosts" }, context: makeContext(fake) });
+    expect(ghost.kind).toBe("clarify");
+  });
+
   it("invite previews external_side_effect (no email by default) then commits", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({ actionName: "clockify_users_invite", args: { email: "new@x.com" }, context: makeContext(fake) });

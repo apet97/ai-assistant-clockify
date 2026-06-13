@@ -31,6 +31,15 @@ describe("tag actions", () => {
     else throw new Error("expected receipt");
   });
 
+  it("clockify_tags_get resolves by exact name (not just id), clarifies on unknown", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({ actionName: "clockify_tags_get", args: { name: "Deep Work" }, context: makeContext(fake) });
+    if (byName.kind === "receipt" && byName.receipt.ok) expect((byName.receipt.data as any).entity).toMatchObject({ id: "t1" });
+    else throw new Error(`expected a success receipt, got ${byName.kind}`);
+    const ghost = await executeAction({ actionName: "clockify_tags_get", args: { name: "Nope" }, context: makeContext(fake) });
+    expect(ghost.kind).toBe("clarify");
+  });
+
   it("clockify_tags_create creates a tag (safe write)", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({ actionName: "clockify_tags_create", args: { name: "AIASSIST_SMOKE_t" }, context: makeContext(fake) });

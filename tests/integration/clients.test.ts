@@ -31,6 +31,15 @@ describe("client actions", () => {
     else throw new Error("expected receipt");
   });
 
+  it("clockify_clients_get resolves by exact name (not just id), clarifies on unknown", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({ actionName: "clockify_clients_get", args: { name: "Acme" }, context: makeContext(fake) });
+    if (byName.kind === "receipt" && byName.receipt.ok) expect((byName.receipt.data as any).entity).toMatchObject({ id: "c1" });
+    else throw new Error(`expected a success receipt, got ${byName.kind}`);
+    const ghost = await executeAction({ actionName: "clockify_clients_get", args: { name: "Ghost Co" }, context: makeContext(fake) });
+    expect(ghost.kind).toBe("clarify");
+  });
+
   it("clockify_clients_create creates a client (safe write)", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({ actionName: "clockify_clients_create", args: { name: "AIASSIST_SMOKE_c" }, context: makeContext(fake) });

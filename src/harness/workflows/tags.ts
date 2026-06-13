@@ -31,19 +31,35 @@ const listTags = defineReadAction({
   },
 });
 
-const getTag = defineReadAction({
+const getTag = defineAction({
   name: "clockify_tags_get",
-  description: "Fetch a single tag by id.",
-  group: WORK,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single tag by id, or by its exact `name` (resolved server-side).",
+  featureGroup: WORK,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the tag id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getTag(args.id);
-    return successReceipt({
-      action: "clockify_tags_get",
-      entity: "tag",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { entity },
+    const resolved = await resolveEntityRef(args, {
+      noun: "tag",
+      verb: "fetch",
+      list: () => ctx.clockify.listTags(),
     });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getTag(resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_tags_get",
+        entity: "tag",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { entity },
+      }),
+    };
   },
 });
 

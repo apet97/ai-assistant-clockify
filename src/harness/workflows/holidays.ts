@@ -9,7 +9,7 @@ import {
   type ActionResult,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveGroupRefs, resolveInstant, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
+import { resolveEntityRef, resolveGroupRefs, resolveInstant, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /**
  * Resolve a holiday's `userIds` (names/'me'/ids) and `userGroupIds` (names/ids) to
@@ -94,19 +94,35 @@ const listHolidays = defineReadAction({
   },
 });
 
-const getHoliday = defineReadAction({
+const getHoliday = defineAction({
   name: "clockify_holidays_get",
-  description: "Fetch a single holiday by id.",
-  group: TOA,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single holiday by id, or by its exact `name` (resolved server-side).",
+  featureGroup: TOA,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the holiday id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getHoliday(args.id);
-    return successReceipt({
-      action: "clockify_holidays_get",
-      entity: "holiday",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { entity },
+    const resolved = await resolveEntityRef(args, {
+      noun: "holiday",
+      verb: "fetch",
+      list: () => ctx.clockify.listHolidays(),
     });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getHoliday(resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_holidays_get",
+        entity: "holiday",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { entity },
+      }),
+    };
   },
 });
 

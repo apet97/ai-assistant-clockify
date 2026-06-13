@@ -33,19 +33,35 @@ const listClients = defineReadAction({
   },
 });
 
-const getClient = defineReadAction({
+const getClient = defineAction({
   name: "clockify_clients_get",
-  description: "Fetch a single client by id.",
-  group: WORK,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single client by id, or by its exact `name` (resolved server-side).",
+  featureGroup: WORK,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the client id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getClient(args.id);
-    return successReceipt({
-      action: "clockify_clients_get",
-      entity: "client",
-      ids: { workspaceId: ctx.workspaceId },
-      data: { entity },
+    const resolved = await resolveEntityRef(args, {
+      noun: "client",
+      verb: "fetch",
+      list: () => ctx.clockify.listClients(),
     });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getClient(resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_clients_get",
+        entity: "client",
+        ids: { workspaceId: ctx.workspaceId },
+        data: { entity },
+      }),
+    };
   },
 });
 

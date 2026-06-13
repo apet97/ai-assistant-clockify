@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
+import { resolveEntityRef } from "./resolve.js";
 
 /**
  * Typed workspace & project-template workflows (goclmcp §2.16–2.17). All reads.
@@ -35,12 +36,24 @@ const listTemplates = defineAction({
 
 const getTemplate = defineAction({
   name: "clockify_templates_get",
-  description: "Fetch a single project template by id.",
+  description: "Fetch a single project template by id, or by its exact `name` (resolved server-side).",
   featureGroup: "work_structure",
   risks: ["read"],
-  schema: z.object({ id: z.string().min(1) }),
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the template id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getTemplate(args.id);
+    const resolved = await resolveEntityRef(args, {
+      noun: "template",
+      verb: "fetch",
+      list: () => ctx.clockify.listTemplates(),
+    });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getTemplate(resolved.id);
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_templates_get", entity: "template", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };
   },
 });

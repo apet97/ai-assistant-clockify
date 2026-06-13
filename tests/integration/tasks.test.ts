@@ -50,6 +50,24 @@ describe("task actions", () => {
     } else throw new Error("expected receipt");
   });
 
+  it("clockify_tasks_get resolves task + project by name (not just ids), clarifies on unknown", async () => {
+    const fake = createFakeWorkspace(seed());
+    const byName = await executeAction({
+      actionName: "clockify_tasks_get",
+      args: { projectName: "Website", name: "Design" },
+      context: makeContext(fake),
+    });
+    if (byName.kind === "receipt" && byName.receipt.ok) {
+      expect((byName.receipt.data as any).entity).toMatchObject({ id: "t1", name: "Design" });
+    } else throw new Error(`expected a success receipt, got ${byName.kind}`);
+    const ghost = await executeAction({
+      actionName: "clockify_tasks_get",
+      args: { projectName: "Website", name: "Ghost Task" },
+      context: makeContext(fake),
+    });
+    expect(ghost.kind).toBe("clarify");
+  });
+
   it("clockify_tasks_create creates a task (safe write)", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({

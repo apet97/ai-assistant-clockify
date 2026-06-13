@@ -271,14 +271,27 @@ const listGroups = defineReadAction({
   },
 });
 
-const getGroup = defineReadAction({
+const getGroup = defineAction({
   name: "clockify_groups_get",
-  description: "Fetch a single user group by id.",
-  group: UG,
-  schema: z.object({ id: z.string().min(1) }),
+  description: "Fetch a single user group by id, or by its exact `name` (resolved server-side).",
+  featureGroup: UG,
+  risks: ["read"],
+  schema: z
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the group id or its exact name.",
+    }),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getGroup(args.id);
-    return successReceipt({ action: "clockify_groups_get", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { entity } });
+    const resolved = await resolveEntityRef(args, {
+      noun: "group",
+      verb: "fetch",
+      list: () => ctx.clockify.listGroups(),
+    });
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getGroup(resolved.id);
+    return { kind: "receipt", receipt: successReceipt({ action: "clockify_groups_get", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };
   },
 });
 

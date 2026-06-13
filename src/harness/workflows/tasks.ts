@@ -72,19 +72,40 @@ const listTasks = defineReadAction({
   },
 });
 
-const getTask = defineReadAction({
+const getTask = defineAction({
   name: "clockify_tasks_get",
-  description: "Fetch a single task by id within a project.",
-  group: WORK,
-  schema: z.object({ projectId: z.string().min(1), id: z.string().min(1) }),
+  description:
+    "Fetch a single task within a project — by id or exact `name`, in a project given by `projectId` or `projectName` (resolved server-side).",
+  featureGroup: WORK,
+  risks: ["read"],
+  schema: z
+    .object({
+      projectId: z.string().min(1).optional(),
+      projectName: z.string().min(1).optional(),
+      id: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+    })
+    .refine(
+      (v) =>
+        (v.projectId !== undefined || v.projectName !== undefined) &&
+        (v.id !== undefined || v.name !== undefined),
+      { message: "Provide the project (id or name) and the task (id or name)." },
+    ),
   async handler(ctx, args) {
-    const entity = await ctx.clockify.getTask(args.projectId, args.id);
-    return successReceipt({
-      action: "clockify_tasks_get",
-      entity: "task",
-      ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
-      data: { entity },
-    });
+    const resolved = await resolveTaskRef(ctx, args, "fetch");
+    if (!resolved.ok) {
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+    }
+    const entity = await ctx.clockify.getTask(resolved.projectId, resolved.id);
+    return {
+      kind: "receipt",
+      receipt: successReceipt({
+        action: "clockify_tasks_get",
+        entity: "task",
+        ids: { workspaceId: ctx.workspaceId, projectId: resolved.projectId },
+        data: { entity },
+      }),
+    };
   },
 });
 
