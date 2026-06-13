@@ -308,3 +308,24 @@ export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
 export function reservedPendingFor(history: HistoryResponse, previewId: string): PreviewResult | undefined {
   return (history.pendingPreviews ?? []).find((p) => p.previewId === previewId);
 }
+
+/**
+ * Remove a focused card AND return focus in lock-step (WCAG 2.4.3 Focus Order,
+ * r1-ux-copy-a11y-04). When a Confirm/Cancel button is clicked, keyboard focus
+ * sits on that button INSIDE the card. `card.remove()` would drop focus to
+ * `document.body`, so the next Tab restarts from the page top — disorienting for
+ * keyboard and AT users mid-conversation. This pairs the removal with a
+ * `returnFocus` callback (mount points it at the composer input, mirroring the
+ * post-turn `input.focus()` on main.ts's chat path) so focus always lands on a
+ * stable, logical location. `returnFocus` runs AFTER the removal so the focus
+ * target is settled by the time it fires; a throwing `returnFocus` never blocks
+ * the removal (best-effort focus, the card is gone regardless).
+ */
+export function removeCardReturningFocus(remove: () => void, returnFocus: () => void): void {
+  remove();
+  try {
+    returnFocus();
+  } catch {
+    /* focus return is best-effort — the card is already gone */
+  }
+}

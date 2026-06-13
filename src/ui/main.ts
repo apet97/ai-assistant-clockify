@@ -429,6 +429,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // path as typed text — never to a confirmation endpoint.
   let sendText: (text: string) => Promise<void> = async () => {};
 
+  // Assigned in renderChat (points at the composer input). Confirm/Cancel remove
+  // their card with focus on the clicked button INSIDE it, which would drop focus
+  // to <body>; this returns focus to the composer so the next Tab continues from
+  // a logical place (WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04). Mirrors the
+  // post-turn `input.focus()` on the chat path.
+  let focusComposer: () => void = () => {};
+
   function appendMessage(role: string, text: string): void {
     // Stickiness is decided BEFORE appending: someone reading older history is
     // never yanked back down by streamed results; at the bottom the log follows.
@@ -452,6 +459,9 @@ function mount(root: HTMLElement, api: ChatApi): void {
           // session's live pendings so a tab whose nonce was rotated by another
           // tab can re-render the re-served card.
           getHistory: () => api.getHistory() as Promise<HistoryResponse>,
+          // After Confirm/Cancel removes the card, return focus to the composer
+          // (not <body>) — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04.
+          returnFocus: () => focusComposer(),
         }),
       );
     for (const result of results) {
@@ -475,6 +485,9 @@ function mount(root: HTMLElement, api: ChatApi): void {
     send.type = "submit";
     form.appendChild(input);
     form.appendChild(send);
+    // Confirm/Cancel returns focus here after removing its card (avoids dropping
+    // focus to <body> — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04).
+    focusComposer = () => input.focus();
     let busy = false;
     // The ONE path into chat for typed text AND clarify chips — never a
     // confirmation endpoint.

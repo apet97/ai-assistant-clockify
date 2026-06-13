@@ -14,6 +14,7 @@ import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./pres
 import {
   cancelOutcome,
   featureGroupRows,
+  removeCardReturningFocus,
   reservedPendingFor,
   settleConfirmOutcome,
   submitConfirmStream,
@@ -291,10 +292,18 @@ export interface PreviewDeps {
    * just surfaces an honest error (the prior dead-end behavior).
    */
   getHistory?: () => Promise<HistoryResponse>;
+  /**
+   * Move keyboard focus to a stable location (the composer input) after a
+   * Confirm/Cancel click removes this card — otherwise focus collapses to
+   * <body> and the next Tab restarts from the page top (WCAG 2.4.3 Focus Order,
+   * r1-ux-copy-a11y-04). Mount points it at `input.focus()`, mirroring the
+   * post-turn focus return on the chat path. Optional: absent ⇒ removal only.
+   */
+  returnFocus?: () => void;
 }
 
 export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
-  const { controller, showError, appendMessage, renderResults, getHistory } = deps;
+  const { controller, showError, appendMessage, renderResults, getHistory, returnFocus } = deps;
   const batch = previews.length > 1;
   const card = el("div", "preview-card");
   card.setAttribute("role", "group");
@@ -471,7 +480,10 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     const removeCardOnce = (): void => {
       if (!cardRemoved && !rearmed) {
         cardRemoved = true;
-        card.remove();
+        // Focus sits on the just-clicked Confirm button INSIDE the card; pair the
+        // removal with a focus return so it lands on the composer, not <body>
+        // (WCAG 2.4.3, r1-ux-copy-a11y-04).
+        removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
       }
     };
     const streamHooks: ConfirmHooks = {
@@ -506,7 +518,10 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
       return;
     }
     stopTimer();
-    card.remove();
+    // Focus sits on the just-clicked Cancel button INSIDE the card; pair the
+    // removal with a focus return so it lands on the composer, not <body>
+    // (WCAG 2.4.3, r1-ux-copy-a11y-04).
+    removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
     appendMessage("assistant", "Cancelled.");
   });
   actions.appendChild(confirmButton);
