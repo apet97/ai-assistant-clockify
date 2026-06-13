@@ -100,12 +100,22 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
       });
     },
     async getProjectScheduleTotals(input) {
-      const body: Record<string, unknown> = {
+      // A single project's totals live at GET …/projects/totals/{projectId}?start&end.
+      // The POST search body (ProjectTotalsRequestV1) has NO projectId field — sending
+      // it was silently dropped, returning ALL projects instead of the one requested.
+      if (input.projectId !== undefined) {
+        const qs = new URLSearchParams({ start: input.start, end: input.end });
+        const one = (await core.call(
+          "api",
+          "GET",
+          `${ws}/scheduling/assignments/projects/totals/${input.projectId}?${qs.toString()}`,
+        )) as unknown;
+        return Array.isArray(one) ? one : one ? [one] : [];
+      }
+      const out = (await core.call("api", "POST", `${ws}/scheduling/assignments/projects/totals`, {
         start: input.start,
         end: input.end,
-        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-      };
-      const out = (await core.call("api", "POST", `${ws}/scheduling/assignments/projects/totals`, body)) as unknown;
+      })) as unknown;
       return Array.isArray(out) ? out : out ? [out] : [];
     },
     async getUserScheduleTotals(userId, range) {

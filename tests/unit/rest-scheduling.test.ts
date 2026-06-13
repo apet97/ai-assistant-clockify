@@ -95,14 +95,31 @@ describe("scheduling rest", () => {
     expect(JSON.parse(init.body)).toEqual({ start: "2026-06-01", end: "2026-06-07", notifyUsers: true });
   });
 
-  it("getProjectScheduleTotals POSTs the totals search", async () => {
-    const f = vi.fn(async () => jsonResponse([{ projectId: "p1", total: 40 }]));
+  it("getProjectScheduleTotals GETs /{projectId} for a single project (the POST body has no projectId field)", async () => {
+    // Spec: ProjectTotalsRequestV1 (the POST body) has NO projectId — sending it was
+    // silently ignored, returning ALL projects. A single project's totals live at
+    // GET …/projects/totals/{projectId}?start&end (single object → wrapped in array).
+    const f = vi.fn(async () => jsonResponse({ projectId: "p1", total: 40 }));
     const out = await rest(f as unknown as typeof fetch).getProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07", projectId: "p1" });
+    expect(out).toEqual([{ projectId: "p1", total: 40 }]);
+    const [url, init] = (f as any).mock.calls[0];
+    expect(init.method).toBe("GET");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/scheduling/assignments/projects/totals/p1");
+    expect(parsed.searchParams.get("start")).toBe("2026-06-01");
+    expect(parsed.searchParams.get("end")).toBe("2026-06-07");
+  });
+
+  it("getProjectScheduleTotals POSTs the all-projects search (no bogus projectId) when none is given", async () => {
+    const f = vi.fn(async () => jsonResponse([{ projectId: "p1", total: 40 }]));
+    const out = await rest(f as unknown as typeof fetch).getProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07" });
     expect(out).toEqual([{ projectId: "p1", total: 40 }]);
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/projects/totals");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toMatchObject({ start: "2026-06-01", end: "2026-06-07", projectId: "p1" });
+    const body = JSON.parse(init.body);
+    expect(body).toEqual({ start: "2026-06-01", end: "2026-06-07" });
+    expect(body).not.toHaveProperty("projectId");
   });
 
   it("getUserScheduleTotals GETs the user totals", async () => {
