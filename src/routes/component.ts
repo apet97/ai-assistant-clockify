@@ -4,7 +4,7 @@ import { Router } from "express";
 import { ClockifyQueryParams, verifyAddonToken } from "../addon/verify.js";
 import { isAdminRole } from "../auth/roles.js";
 import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
-import { buildSessionCookie, type AppDeps } from "./deps.js";
+import { buildSessionCookie, resolveSession, type AppDeps } from "./deps.js";
 
 /**
  * Admin-only component route (ARCHITECTURE "Component Load"). Verifies the
@@ -57,7 +57,21 @@ export function componentRouter(deps: AppDeps): Router {
       reportsUrl: claims.reportsUrl,
     });
 
-    const session = deps.store.createSession({ workspaceId, adminUserId });
+    // Reuse the SAME session across an iframe RELOAD so the conversation history
+    // and the still-live pending previews survive it. resolveSession already
+    // verifies the incoming cookie is signed AND backs a live (non-expired) session
+    // row; we additionally require it to belong to THIS freshly-verified admin +
+    // workspace, so a stale/foreign/expired cookie can never bind another session
+    // (admin-rejection-before-session and the per-admin/workspace binding both
+    // still hold). Anything else mints a fresh session.
+    const existing = resolveSession(req, deps);
+    const reuse =
+      existing !== undefined &&
+      existing.workspaceId === workspaceId &&
+      existing.adminUserId === adminUserId;
+    const session = reuse
+      ? { id: existing.sessionId, expiresAt: existing.expiresAt }
+      : deps.store.createSession({ workspaceId, adminUserId });
     const sessionClaims: SessionClaims = {
       sessionId: session.id,
       workspaceId,

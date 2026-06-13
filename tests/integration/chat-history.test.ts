@@ -24,7 +24,10 @@ afterEach(() => {
   stores = [];
 });
 
-async function makeApp(script: ToolCompletion[], fake: FakeWorkspace): Promise<{ app: Express; cookie: string }> {
+async function makeApp(
+  script: ToolCompletion[],
+  fake: FakeWorkspace,
+): Promise<{ app: Express; cookie: string; loadComponent: (priorCookie?: string) => Promise<string> }> {
   const keys = await testing.generateTestKeys();
   const config: AppConfig = {
     nodeEnv: "test",
@@ -50,15 +53,24 @@ async function makeApp(script: ToolCompletion[], fake: FakeWorkspace): Promise<{
     modelClient: scriptedToolModel(script),
     clockifyForWorkspace: () => fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return { app, cookie: Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "" };
+  // A fresh component load (mirrors an iframe (re)load: a new signed Clockify token
+  // for the SAME admin+workspace). On a real reload the browser also re-sends the
+  // session cookie it holds for this origin (SameSite=None; Partitioned), so a
+  // prior cookie may be forwarded to exercise the reuse path.
+  const loadComponent = async (priorCookie?: string): Promise<string> => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+      addonId: "addon-1",
+    });
+    let pending = request(app).get("/component/assistant").query({ auth_token: token });
+    if (priorCookie) pending = pending.set("Cookie", priorCookie);
+    const res = await pending;
+    const setCookie = res.headers["set-cookie"];
+    return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  };
+  return { app, cookie: await loadComponent(), loadComponent };
 }
 
 describe("GET /api/chat/history (session restore)", () => {
@@ -133,6 +145,28 @@ describe("GET /api/chat/history (session restore)", () => {
       .send({ nonce: recovered.nonce });
     expect(fresh.status).toBe(200);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
+  });
+
+  it("survives an iframe RELOAD: a second component load replays the conversation and the live pending", async () => {
+    // Production reload path: the iframe re-requests /component/assistant with a
+    // fresh Clockify token for the same admin+workspace. The session (and thus the
+    // history + live pendings) must survive — minting a brand-new session on every
+    // load made restore dead outside tests (which reused one cookie). The reload
+    // cookie must replay the SAME session.
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie, loadComponent } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "c1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] }],
+      fake,
+    );
+    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+
+    // The iframe reloads — a SECOND component load, with the browser re-sending the
+    // session cookie it holds (as it does for the working /api/chat/* calls).
+    const reloadCookie = await loadComponent(cookie);
+    const history = await request(app).get("/api/chat/history").set("Cookie", reloadCookie);
+    expect(history.status).toBe(200);
+    expect((history.body.messages as unknown[]).length).toBeGreaterThan(0); // conversation survived
+    expect((history.body.pendingPreviews as unknown[]).length).toBe(1); // the pending preview survived
   });
 
   it("does not re-serve cancelled previews", async () => {
