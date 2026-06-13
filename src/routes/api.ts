@@ -152,6 +152,27 @@ export function sanitizeStoredReplyForModel(content: string): string {
 }
 
 /**
+ * A transient model/transport failure is persisted as a role=assistant row with
+ * `payload.kind === "error"` (see `modelUnavailable`) only so the turn isn't lost
+ * mid-session — but it is an OUT-OF-BAND notice the admin already saw live (the
+ * 502 the client surfaced), NOT a genuine assistant reply
+ * (finding r2-new-session-restore-05). It must be dropped from BOTH:
+ *  - the model window (re-feeding the model its own "I'm unavailable" turn can
+ *    degrade subsequent planning — the model "remembers" claiming unavailability);
+ *  - the GET /chat/history restore replay (else every iframe reload resurrects a
+ *    stale "temporarily unavailable" bubble against an already-answered question).
+ * Identifying it by payload kind keeps the check robust to any reword of the text.
+ */
+export function isTransientErrorMessage(message: { payload?: unknown }): boolean {
+  const payload = message.payload;
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { kind?: unknown }).kind === "error"
+  );
+}
+
+/**
  * A bare typed consent ("yes", "confirm", "do it", …) OR a consent-adjacent
  * "apply the pending change" imperative ("just do it already", "execute it
  * now", "apply the change", "run it", "please go ahead and apply the pending
@@ -883,9 +904,12 @@ export function apiRouter(deps: AppDeps): Router {
     }
 
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
-    const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES);
+    // includePayload so transient model-failure rows (payload.kind="error") can be
+    // dropped — the model must never re-read its own "I'm unavailable" turn as
+    // conversational fact (finding r2-new-session-restore-05).
+    const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES, true);
     const messages: ModelMessage[] = history
-      .filter((m) => m.role !== "system")
+      .filter((m) => m.role !== "system" && !isTransientErrorMessage(m))
       .map((m) =>
         m.role === "assistant"
           ? { role: "assistant" as const, content: sanitizeStoredReplyForModel(m.content) }
@@ -1060,7 +1084,10 @@ export function apiRouter(deps: AppDeps): Router {
     if (!claims) return;
     const messages = deps.store
       .getRecentMessages(claims.sessionId, CHAT_HISTORY_LIMIT, true)
-      .filter((m) => m.role === "user" || m.role === "assistant")
+      // Drop transient model-failure rows (payload.kind="error"): they are an
+      // out-of-band notice the admin already saw live, not a reply to resurrect
+      // on reload (finding r2-new-session-restore-05).
+      .filter((m) => (m.role === "user" || m.role === "assistant") && !isTransientErrorMessage(m))
       .map((m) => ({
         role: m.role,
         content: m.content,
