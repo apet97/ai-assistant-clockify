@@ -132,12 +132,24 @@ single-project totals use `GET /{projectId}`; the typed-consent guard catches
 approval idioms ("ship it"/"make it so") without swallowing new-entity phrases;
 an idempotent replay no longer mints a second undo handle; `/component/assistant`
 requires an ACTIVE installation before minting a session; undo failures surface
-the route's real reason. **DEFERRED (too risky solo):** concurrency-races-01
-(idempotency check-then-act → atomic claim rewrite of the commit choke point) —
-design rec in NOTES. Planner held 100% on the one schema-affecting change. Full
-findings + remaining backlog in
+the route's real reason. A backlog-implementation run (2026-06-13) then cleared
+the remaining 27 deferred findings: **26 fixed, 1 wont_fix, 0 blocked**. The
+deferred headline `concurrency-races-01` LANDED as a real fix — an
+**atomic-claim idempotency ledger** (`store.claimIdempotency` does sweep + `INSERT
+… ON CONFLICT DO NOTHING` in one better-sqlite3 transaction, claimed BEFORE the
+commit await; rest-core gained a 120s `COMMIT_TIMEOUT_MS` and `CLAIM_TTL_MS`
+strictly above it so the dead-claim sweep only frees a provably-crashed claim;
+safety boundary untouched, madge stays 0). Also landed: cross-tab nonce re-arm,
+per-card pending restore, focus-return + honest cancel/undo copy, CSP +
+clickjacking backstop, confirm-resume rate-limit, telemetry token surfacing,
+gemini-cli timeout, transcript-unique tool-call ids, index-seek prune, memoized
+catalog, "this <weekday>" resolution, and named transport-fetch errors. The ONE
+**wont_fix is `authz-surface-01`** (admin role gated only at session creation,
+not re-verified per request) — honest, deferred as a session-TTL/posture
+decision, not a mechanical fix. Planner held 100% (108/108 repeat=2) and agentic
+14/14 with 0 safety violations. Full per-finding table in
 `~/Downloads/ai-assistant-goated-audit-NOTES.md`.
-`npm run verify` = **1116 tests**, `npx madge --circular
+`npm run verify` = **1184 tests** (was 1116), `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
