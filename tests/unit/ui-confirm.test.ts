@@ -21,6 +21,7 @@ function recorder() {
     onAssistant: (t) => events.push(`assistant:${t}`),
     onResults: (r) => events.push(`results:${r.map((x) => x.kind).join(",")}`),
     onError: (m) => events.push(`error:${m}`),
+    onStale: (m) => events.push(`stale:${m}`),
   };
   return { hooks, events };
 }
@@ -204,6 +205,35 @@ describe("submitConfirmStream (streaming single confirm)", () => {
     const failing: ConfirmStreamApi = { confirmStream: async () => { throw new Error("network"); } };
     await submitConfirmStream(failing, { previewId: "p1", nonce: "n1" }, hooks);
     expect(events.some((e) => e.startsWith("error:"))).toBe(true);
+  });
+
+  it("routes a stale-nonce 400 (another tab rotated the nonce) to onStale, NOT onError", async () => {
+    // r1-concurrency-races-02: when two restored tabs each hold a pending card,
+    // the later GET /api/chat/history rotates the nonce, so the earlier tab's
+    // Confirm 400s with code 'invalid_confirmation'. That tab must be RE-ARMED
+    // (re-fetch history + re-render the live card), not dead-ended on onError —
+    // so the admin can retry from the tab they're looking at.
+    const { hooks, events } = recorder();
+    await submitConfirmStream(
+      streamApi([
+        { type: "error", code: "invalid_confirmation", message: "Confirmation does not match this preview." },
+      ]),
+      { previewId: "p1", nonce: "n1" },
+      hooks,
+    );
+    expect(events.some((e) => e.startsWith("stale:"))).toBe(true);
+    expect(events.some((e) => e.startsWith("error:"))).toBe(false);
+  });
+
+  it("still routes a generic (non-stale) confirm error to onError", async () => {
+    const { hooks, events } = recorder();
+    await submitConfirmStream(
+      streamApi([{ type: "error", code: "expired", message: "This preview has expired." }]),
+      { previewId: "p1", nonce: "n1" },
+      hooks,
+    );
+    expect(events).toContain("error:This preview has expired.");
+    expect(events.some((e) => e.startsWith("stale:"))).toBe(false);
   });
 });
 

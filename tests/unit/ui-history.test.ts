@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { historyRestoreItems, type HistoryResponse } from "../../src/ui/shared.js";
+import { historyRestoreItems, reservedPendingFor, type HistoryResponse } from "../../src/ui/shared.js";
 
 /**
  * Pure mapping from GET /api/chat/history to renderable restore items: bubbles
@@ -79,5 +79,28 @@ describe("historyRestoreItems", () => {
       ],
     });
     expect(items).toEqual([]);
+  });
+});
+
+/**
+ * r1-concurrency-races-02: the onStale re-arm path re-fetches history and pulls
+ * the re-served LIVE pending (rotated nonce) for the stale tab's preview id.
+ */
+describe("reservedPendingFor (re-arm the stale tab from a fresh history fetch)", () => {
+  const preview = (previewId: string, nonce: string) => ({
+    kind: "preview" as const,
+    previewId,
+    nonce,
+    preview: { actionLabel: "Delete tag", expectedChanges: ["x"], reversibility: "", warnings: [] },
+  });
+
+  it("returns the re-served pending (with its rotated nonce) for the matching id", () => {
+    const history: HistoryResponse = { pendingPreviews: [preview("p1", "rotated-nonce")] };
+    expect(reservedPendingFor(history, "p1")?.nonce).toBe("rotated-nonce");
+  });
+
+  it("returns undefined when the preview is no longer pending (another tab settled it)", () => {
+    expect(reservedPendingFor({ pendingPreviews: [preview("p2", "n2")] }, "p1")).toBeUndefined();
+    expect(reservedPendingFor({}, "p1")).toBeUndefined();
   });
 });

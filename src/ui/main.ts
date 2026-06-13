@@ -292,14 +292,23 @@ export function createFetchApi(): ChatApi {
       });
       if (!res.ok || !res.body) {
         // A non-OK confirm is a JSON error (validation/policy/expired) — surface
-        // it; a 401 gets the session-expired copy.
+        // it; a 401 gets the session-expired copy. Carry the server's `code`
+        // through so a stale-nonce 400 (a cross-tab nonce rotation) can re-arm
+        // this tab instead of dead-ending — see submitConfirmStream/onStale.
         let serverMessage: string | undefined;
+        let serverCode: string | undefined;
         try {
-          serverMessage = ((await res.json()) as { message?: string })?.message;
+          const body = (await res.json()) as { message?: string; code?: string };
+          serverMessage = body?.message;
+          serverCode = body?.code;
         } catch {
           /* keep the default */
         }
-        onEvent({ type: "error", message: httpErrorMessage(res.status, serverMessage, "Confirmation failed.") });
+        onEvent({
+          type: "error",
+          ...(serverCode ? { code: serverCode } : {}),
+          message: httpErrorMessage(res.status, serverMessage, "Confirmation failed."),
+        });
         return;
       }
       const reader = res.body.getReader();
@@ -433,7 +442,18 @@ function mount(root: HTMLElement, api: ChatApi): void {
     const stick = isNearBottom(messages);
     const previews = results.filter((r): r is PreviewResult => r.kind === "preview");
     if (previews.length > 0)
-      messages.appendChild(renderPreview(previews, { controller, showError, appendMessage, renderResults }));
+      messages.appendChild(
+        renderPreview(previews, {
+          controller,
+          showError,
+          appendMessage,
+          renderResults,
+          // The stale-nonce re-arm path (r1-concurrency-races-02): re-fetch the
+          // session's live pendings so a tab whose nonce was rotated by another
+          // tab can re-render the re-served card.
+          getHistory: () => api.getHistory() as Promise<HistoryResponse>,
+        }),
+      );
     for (const result of results) {
       if (result.kind === "receipt") messages.appendChild(renderReceipt(result, { controller, showError }));
       else if (result.kind === "clarify")

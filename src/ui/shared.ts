@@ -80,7 +80,24 @@ export interface ConfirmHooks {
   onError(message: string): void;
   /** Latest progress label ("Starting the timer") — purely cosmetic, optional. */
   onStatus?(label: string): void;
+  /**
+   * The nonce this tab held was rotated out from under it — another restored tab
+   * (or a session-history fetch) re-armed the SAME live pending with a fresh
+   * one-use nonce, so this confirm 400s with code 'invalid_confirmation' even
+   * though the preview is STILL pending. This is a re-armable retry, not a dead
+   * end: the caller should re-fetch the live pending and re-render its card.
+   * Falls back to `onError` when not supplied (existing callers are unchanged).
+   */
+  onStale?(message: string): void;
 }
+
+/**
+ * The confirm route returns this code (`commitConfirmation` → `confirmPending`)
+ * when the supplied nonce doesn't match a still-pending preview — the
+ * cross-tab nonce-rotation race (r1-concurrency-races-02), distinct from an
+ * expired/already-used/policy-denied confirm.
+ */
+export const STALE_NONCE_CODE = "invalid_confirmation";
 
 /** One event from a streaming chat OR confirm endpoint (NDJSON, one per line). */
 export interface StreamEvent {
@@ -126,7 +143,14 @@ export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef
         flush();
         if (event.text) hooks.onAssistant(event.text);
       } else if (event.type === "error") {
-        hooks.onError(typeof event.message === "string" ? event.message : "The follow-up couldn't complete.");
+        const message = typeof event.message === "string" ? event.message : "The follow-up couldn't complete.";
+        // A stale-nonce 400 (another tab rotated this preview's nonce) is a
+        // RE-ARMABLE retry — route it to onStale so this tab can re-fetch + re-
+        // render the still-live card, never a dead-end error. The preview is NOT
+        // burned on this path (api.ts returns JSON BEFORE any commit), so the
+        // freshly re-served nonce will validate.
+        if (event.code === STALE_NONCE_CODE && hooks.onStale) hooks.onStale(message);
+        else hooks.onError(message);
       } else if (event.type === "status") {
         if (typeof event.label === "string") hooks.onStatus?.(event.label);
       }
@@ -242,4 +266,16 @@ export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
     items.push({ kind: "results", results: history.pendingPreviews });
   }
   return items;
+}
+
+/**
+ * The re-served LIVE pending for `previewId` from a fresh GET /api/chat/history
+ * — its nonce has been rotated, so it RE-ARMS the stale tab. Returns `undefined`
+ * when the preview is no longer pending in the response (another tab confirmed
+ * or cancelled it, or it expired): the stale card should then simply retire, not
+ * re-render a card that would 404/already-used on its next Confirm.
+ * Used by the onStale re-arm path (r1-concurrency-races-02).
+ */
+export function reservedPendingFor(history: HistoryResponse, previewId: string): PreviewResult | undefined {
+  return (history.pendingPreviews ?? []).find((p) => p.previewId === previewId);
 }

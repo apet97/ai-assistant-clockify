@@ -81,10 +81,22 @@ describe("createFetchApi error surfacing", () => {
     expect(result.message).toContain("expired");
   });
 
-  it("confirmStream maps a 401 to the session copy", async () => {
+  it("confirmStream maps a 401 to the session copy (and carries the server code through)", async () => {
     stubFetch(401, { ok: false, code: "unauthorized", message: "No valid session." });
     const events: StreamEvent[] = [];
     await createFetchApi().confirmStream({ previewId: "p1", nonce: "n1" }, (e) => events.push(e));
-    expect(events).toEqual([{ type: "error", message: SESSION_EXPIRED_MESSAGE }]);
+    // The error event now CARRIES the server `code` (r1-concurrency-races-02 needs
+    // `code:'invalid_confirmation'` to drive the stale-nonce re-arm); a 401 still
+    // shows the session copy and a non-stale code routes to onError, not re-arm.
+    expect(events).toEqual([{ type: "error", code: "unauthorized", message: SESSION_EXPIRED_MESSAGE }]);
+  });
+
+  it("confirmStream carries code:'invalid_confirmation' on a stale-nonce 400 (the re-arm signal)", async () => {
+    stubFetch(400, { ok: false, code: "invalid_confirmation", message: "Confirmation does not match this preview." });
+    const events: StreamEvent[] = [];
+    await createFetchApi().confirmStream({ previewId: "p1", nonce: "n1" }, (e) => events.push(e));
+    expect(events).toEqual([
+      { type: "error", code: "invalid_confirmation", message: "Confirmation does not match this preview." },
+    ]);
   });
 });

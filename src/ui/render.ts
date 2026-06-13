@@ -13,6 +13,7 @@
 import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
 import {
   featureGroupRows,
+  reservedPendingFor,
   settleConfirmOutcome,
   submitConfirmStream,
   undoFailureMessage,
@@ -21,6 +22,7 @@ import {
   type ClarifyResult,
   type ConfirmHooks,
   type ConfirmResponse,
+  type HistoryResponse,
   type PolicyShape,
   type PreviewRef,
   type PreviewResult,
@@ -281,10 +283,17 @@ export interface PreviewDeps {
   appendMessage: (role: string, text: string) => void;
   /** Render follow-up results from a resumed agentic turn (receipts, even a CHAINED preview). */
   renderResults: (results: ChatResult[]) => void;
+  /**
+   * Re-fetch GET /api/chat/history — used by the stale-nonce re-arm path so a tab
+   * whose nonce was rotated by another tab can pull the re-served LIVE pending
+   * (rotated nonce) and re-render its card. Optional: absent ⇒ a stale confirm
+   * just surfaces an honest error (the prior dead-end behavior).
+   */
+  getHistory?: () => Promise<HistoryResponse>;
 }
 
 export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
-  const { controller, showError, appendMessage, renderResults } = deps;
+  const { controller, showError, appendMessage, renderResults, getHistory } = deps;
   const batch = previews.length > 1;
   const card = el("div", "preview-card");
   card.setAttribute("role", "group");
@@ -376,10 +385,45 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     }
   }
 
+  // True once the stale-nonce re-arm has re-rendered a fresh card for this
+  // preview — the post-stream cleanup must then leave THIS (now-defunct) card
+  // alone instead of double-removing / racing the re-armed replacement.
+  let rearmed = false;
   const confirmHooks: ConfirmHooks = {
     onAssistant: (text) => appendMessage("assistant", text),
     onResults: renderResults,
     onError: showError,
+    // r1-concurrency-races-02: this tab's nonce was rotated by another tab's
+    // session restore, so the confirm 400'd on a STILL-pending preview. Re-fetch
+    // history, re-render the re-served card (its rotated nonce re-arms THIS tab),
+    // and retire the stale card — the admin keeps a working Confirm/Cancel right
+    // where they're looking, instead of a dead card. The preview was NOT burned
+    // (the route rejects pre-commit), so the re-served nonce will validate.
+    onStale: (message) => {
+      void (async () => {
+        const previewId = refs[0]?.previewId;
+        let reserved: PreviewResult | undefined;
+        if (getHistory && previewId) {
+          try {
+            reserved = reservedPendingFor(await getHistory(), previewId);
+          } catch {
+            reserved = undefined; // a failed re-fetch falls through to the honest error
+          }
+        }
+        if (reserved) {
+          rearmed = true;
+          stopTimer();
+          card.remove();
+          renderResults([reserved]);
+          appendMessage("assistant", "This card was refreshed in another window — please confirm it again.");
+        } else {
+          // No longer pending (another tab confirmed/cancelled it, or it expired)
+          // or no re-fetch path — surface the honest reason, don't loop.
+          showError(message);
+          setButtons(false);
+        }
+      })();
+    },
   };
   confirmButton.addEventListener("click", async () => {
     // One-use: neither button may fire again (or cross-fire) once clicked.
@@ -415,9 +459,28 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     // Single confirm STREAMS: the committed receipt renders immediately (the
     // button never feels dead), then the durable resume streams its continuation
     // — receipts, a chained preview, and the truthful reply — as it runs.
+    //
+    // The card is removed LAZILY on the first non-stale outcome (not up-front):
+    // a stale-nonce 400 (another tab rotated this preview's nonce) must NOT lose
+    // the card — onStale re-arms it in place. A real receipt/reply/error removes
+    // it exactly as before (the button still never feels dead). If the whole
+    // stream is a single stale event, `rearmed` is set and the card is kept.
     stopTimer();
-    card.remove();
-    await submitConfirmStream(controller, refs[0], confirmHooks);
+    let cardRemoved = false;
+    const removeCardOnce = (): void => {
+      if (!cardRemoved && !rearmed) {
+        cardRemoved = true;
+        card.remove();
+      }
+    };
+    const streamHooks: ConfirmHooks = {
+      onAssistant: (text) => { removeCardOnce(); confirmHooks.onAssistant(text); },
+      onResults: (results) => { removeCardOnce(); confirmHooks.onResults(results); },
+      onError: (m) => { removeCardOnce(); confirmHooks.onError(m); },
+      onStatus: (label) => confirmHooks.onStatus?.(label),
+      onStale: (m) => confirmHooks.onStale?.(m), // re-arm in place — never remove the card
+    };
+    await submitConfirmStream(controller, refs[0], streamHooks);
   });
   cancelButton.addEventListener("click", async () => {
     setButtons(true);
