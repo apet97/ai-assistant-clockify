@@ -239,13 +239,16 @@ export function isTransientErrorMessage(message: { payload?: unknown }): boolean
 // ("approve the discount on invoice 5") falls outside the closed filler set below.
 const CONSENT_AFFIRMATION =
   "(?:yes|yep|yeah|yup|ok|okay|sure|do it|go ahead|go for it|proceed|approve(?:d)?|apply|make it so|ship it|send it|confirm(?:ed)?)";
-// Polite/connective filler that carries no new instruction.
-const CONSENT_FILLER = "(?:please|just|now|already|then|and|go ahead|do it|proceed|for me|that|it)";
+// Polite/connective filler that carries no new instruction. "all"/"everything"
+// cover batch consent ("confirm all" — a literal UI button label — "approve
+// all"); they only match TRAILING (a new noun like "approve all expenses" still
+// falls through to the planner).
+const CONSENT_FILLER = "(?:please|just|now|already|then|and|all|everything|go ahead|do it|proceed|for me|that|it)";
 // Imperative verb that means "apply the thing you previewed".
 const CONSENT_APPLY_VERB = "(?:apply|execute|run|do|perform|commit|approve|go ahead with|proceed with|confirm)";
 // The ONLY allowed object — a self-reference to the pending change, never a new entity.
 const CONSENT_PENDING_OBJECT =
-  "(?:it|this|that|the (?:change|changes|edit|update|action|operation|thing|pending (?:change|changes|edit|update|action|operation)))";
+  "(?:it|this|that|them|those|the (?:change|changes|edit|update|action|operation|thing|pending (?:change|changes|edit|update|action|operation)))";
 const TYPED_CONSENT = new RegExp(
   "^\\s*" +
     "(?:please\\s+|just\\s+)*" +

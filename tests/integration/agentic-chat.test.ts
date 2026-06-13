@@ -896,6 +896,15 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     "make it so",
     "ship it",
     "do the thing",
+    // live-dogfood-03: "Confirm all" is a literal UI button label; typed in chat
+    // (with "everything"/"them"/"those" siblings) it is pure batch-consent and
+    // must redirect to the button, not re-plan a SECOND preview. The filler set
+    // lacked "all"/"everything"; the pending-object set lacked "them"/"those".
+    "confirm all",
+    "confirm everything",
+    "confirm them",
+    "confirm those",
+    "approve all",
   ])("a consent-adjacent '%s' while a preview is pending is answered deterministically (no second preview)", async (phrase) => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     // If the guard misses, the message reaches the planner; script a second
