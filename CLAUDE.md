@@ -113,7 +113,7 @@ env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT=low`); prod stays DeepSeek
 until decided.
 A goated-audit run (2026-06-13, fresh-eyes "find what every pass missed":
 8 subsystem maps → 15-dimension loop-until-dry hunt → 3-skeptic majority verify;
-82 findings, 52 confirmed) landed **10 TDD fixes** across security, safety
+82 findings, 52 confirmed) landed **17 TDD fixes** across security, safety
 invariants, API drift, and truthfulness — incl. a CRITICAL (async route
 rejections hung the request AND crashed the server on any mid-turn DB error →
 `asyncHandler` + terminal error middleware + process net) and two HIGHs
@@ -125,11 +125,19 @@ round-trip (Gemini 3.x no longer 400s); a total-failure undo reports failure not
 a false "Undone"; holidays dates resolve server-side; the time-off preview shows
 the deducted day count; `tasks_rate_update` previews the REAL task name
 (`resolveEntityRef` gained `verifyId`); NUL bytes removed from `api.ts` (grep
-treated the safety-critical file as binary); catalog is 137 actions. Planner held
-100% on the one schema-affecting change. Backlog of confirmed mediums/lows (races,
-per-request authz, typed-consent paraphrases, a11y) in
+treated the safety-critical file as binary); catalog is 137 actions. The resume
+sweep added: confirmPending/rotatePendingNonce check ownership BEFORE status (no
+cross-tenant lifecycle leak) and fail CLOSED on a NaN `expiresAt`; schedule
+single-project totals use `GET /{projectId}`; the typed-consent guard catches
+approval idioms ("ship it"/"make it so") without swallowing new-entity phrases;
+an idempotent replay no longer mints a second undo handle; `/component/assistant`
+requires an ACTIVE installation before minting a session; undo failures surface
+the route's real reason. **DEFERRED (too risky solo):** concurrency-races-01
+(idempotency check-then-act → atomic claim rewrite of the commit choke point) —
+design rec in NOTES. Planner held 100% on the one schema-affecting change. Full
+findings + remaining backlog in
 `~/Downloads/ai-assistant-goated-audit-NOTES.md`.
-`npm run verify` = **1102 tests**, `npx madge --circular
+`npm run verify` = **1116 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
