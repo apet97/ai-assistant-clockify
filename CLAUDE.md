@@ -10,12 +10,12 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1205 tests**; `npx madge --circular
---extensions ts --ts-config tsconfig.json src` = **0** (keep both green). 137
-typed actions, 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND
-both Gemini tiers (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop
-7/7 ×3, 0 safety violations. Gemini-ready: backend swap is env-only (`LLM_MODEL`
-+ `LLM_REASONING_EFFORT=low`); prod stays DeepSeek until decided.
+**Verified gate:** `npm run verify` = **1216 tests**; `npm run cycles` (= `madge
+--circular …`, now a pinned devDep) = **0** (keep both green). 137 typed actions,
+16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
+(gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
+violations. Gemini-ready: backend swap is env-only (`LLM_MODEL` +
+`LLM_REASONING_EFFORT=low`); prod stays DeepSeek until decided.
 
 **Deployed on Railway**, installed + working in Clockify (the dev quick-tunnel is
 retired). Live at `https://ai-assistant-production-c2e6.up.railway.app` (project
@@ -27,28 +27,37 @@ Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
 installs survive redeploys. Env vars + volume live in Railway — never commit
 tokens. Full checklist: `DEPLOYMENT.md`.
 
-**Latest — live-fix + dogfood pass (2026-06-14):** seven failing-test-first
-fixes from a live-chat dogfooding + multi-perspective code-review sweep
-(1184→1205 tests). **Invoice tax works end-to-end now:** `taxPercent`/
-`tax2Percent`/`discountPercent` are exposed on `invoices_create`/`invoices_update`
-(the adapter already mapped them via `INVOICE_PERCENT_FIELDS`; the schemas didn't),
-line items default to taxed when a rate is set, and `invoices_items_add` inherits
-the invoice's current rate (`tax`/`tax2` now surfaced on `InvoiceSummary`).
-`invoices_import_time` and `expenses_list` resolve relative dates server-side
-(a raw "today"/"last month" was a 400 / silent-empty — same class as the
-date-resolution invariant). Every named-entity `*_get` read
-(clients/tags/groups/tasks/holidays/custom-fields/time-off-policies/templates)
-now resolves by NAME, not just a 24-hex id (the `projects_get` pattern; reads
-switched `defineReadAction`→`defineAction` so they can clarify). The typed-consent
-guard catches "confirm all"/"approve all"/"confirm them" (batch words added to
-`CONSENT_FILLER`/`CONSENT_PENDING_OBJECT`). `log_work` clarifies on an
-end-at/before-start (negative-length) entry. `busy_timeout=5000` pinned explicit
-(hardening; better-sqlite3's default — not a bug). The dogfood/review sweep
-(11 adversarial chat sessions + security/silent-failure/concurrency reviews)
-found NO further bugs; two flagged concurrency items were FALSE POSITIVES (the
-busy_timeout default above; the nonce-rotation "TOCTOU" is the intended
-reload-invalidation — `confirmPending` validates the record snapshot, not a
-DB re-read). Per-finding detail in git log (`3c4f064`…`8e1c447`).
+**Latest — external-review remediation pass (2026-06-14):** seven
+failing-test-first fixes from an external 7.5/10 code review, one commit each
+(`7f3be68`…`36c940f`), 1205→1216 tests. (A) `COMMIT_TIMEOUT_MS` moved out of a
+raw `process.env` read in `rest/core.ts` into validated config, bounded
+`< 290000` so it stays strictly below the idempotency `CLAIM_TTL_MS` (300000) —
+an operator can no longer set a timeout that lets a slow commit's claim be swept
+(double-commit). (B) Request hardening: `express.json({limit:"32kb"})`, chat
+`message` `.max(4000)` + nonce `.max(256)` at parse (rejected before any
+persist), and the terminal error middleware honors a body-parser 4xx (413/400)
+instead of masking it 500 — a bare server error (no `.status`) still 500s. (C)
+`DATA_ENCRYPTION_KEY` config min `.min(1)`→`.min(32)` + docs corrected to the
+SHA-256-passphrase reality (`encryption.ts` derivation UNTOUCHED — changing it
+would orphan already-deployed ciphertext). (D) `madge` pinned as a devDep +
+`npm run cycles` (CI off bare `npx`). (E) README Node 20→22 + `.nvmrc`. (F)
+GET-only bounded retry on transient 429/5xx in `rest/core.ts` (≤2, 300→600ms,
+`Retry-After`-capped — writes AND thrown timeouts NEVER retried). Deliberate
+deviation: the message schema keeps NO `.trim()`, so a whitespace-only turn still
+reaches the friendly new-6 handler (never a 400, never the planner). An
+independent adversarial diff review found 0 issues. The review's heavier asks
+(release-gate CI, retention/erasure, tagged releases, dep-scanning) were
+REJECTED as overengineering for a solo private add-on.
+
+**Prior — live-fix + dogfood pass (2026-06-14):** seven fixes from a live-chat
+dogfood + code-review sweep (1184→1205 tests): invoice tax end-to-end
+(`taxPercent`/`tax2Percent`/`discountPercent` on `invoices_create`/`_update`,
+items default taxed); `invoices_import_time`/`expenses_list` resolve relative
+dates server-side; every named-entity `*_get` resolves by NAME; the typed-consent
+guard catches batch words ("confirm all"); `log_work` clarifies a negative-length
+entry; `busy_timeout=5000` pinned. No further bugs found (two concurrency flags
+were FALSE POSITIVES — the busy_timeout default + the intended nonce
+reload-invalidation). Detail in git log (`3c4f064`…`8e1c447`).
 
 **Prior — the goated-audit arc (2026-06-13):** a fresh-eyes multi-agent audit
 (82 findings → 52 confirmed via 3-skeptic majority) whose backlog was then fully
@@ -336,7 +345,7 @@ npm test               # vitest run (fakes only; no network)
 npm run build          # tsc + vite -> dist/server, dist/ui
 npm run verify         # type-check + test + build (the gate)
 npm run dev            # tsx src/server.ts (needs env)
-npx madge --circular --extensions ts --ts-config tsconfig.json src   # keep 0
+npm run cycles         # madge --circular … (pinned devDep) — keep 0
 ```
 
 ## Local dev hosting (tunnel)

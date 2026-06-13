@@ -11,7 +11,8 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **1205 tests**, 0 circular deps. **DEPLOYED on Railway**
+verify` is green at **1216 tests**, 0 circular deps (`npm run cycles`).
+**DEPLOYED on Railway**
 (project `ai-assistant-clockify`, service `ai-assistant`; redeploy = `railway up`;
 see `DEPLOYMENT.md`). Done + on `main`:
 - **Full Clockify REST parity** (137 typed catalog actions, 16 areas, 3 hosts).
