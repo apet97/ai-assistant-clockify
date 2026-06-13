@@ -85,6 +85,26 @@ export const MAX_PAGES = 50;
  */
 export const COMMIT_TIMEOUT_MS = 120_000;
 
+/**
+ * Transient HTTP statuses worth a bounded retry on an IDEMPOTENT read. A
+ * transient 429/5xx on a GET otherwise surfaces straight to the admin even
+ * though a moment's wait would have succeeded. Writes are NEVER retried (not
+ * safe to replay), and a thrown timeout/transport error is NEVER retried (so
+ * total latency stays bounded) — only a RETURNED retryable status on a GET.
+ */
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const MAX_GET_RETRIES = 2;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+/** Backoff for a retryable GET: honor a sane `Retry-After` (capped 5s), else 300ms→600ms. */
+function retryDelayMs(res: Response, attempt: number): number {
+  const ra = res.headers.get("retry-after");
+  if (ra) {
+    const secs = Number(ra);
+    if (Number.isFinite(secs) && secs >= 0) return Math.min(secs * 1000, 5_000);
+  }
+  return Math.min(300 * 2 ** attempt, 2_000); // 300ms, 600ms
+}
+
 function hostsFor(apiBase: string): { api: string; reports: string; audit: string | undefined } {
   // https://api.clockify.me/api/v1 -> reports.api.clockify.me/v1, auditlog-api.api.clockify.me/v1
   const u = new URL(apiBase);
@@ -178,11 +198,23 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     // multipart/form-data bodies must NOT carry a JSON content-type — fetch/undici
     // sets the multipart boundary itself when the body is a FormData.
     const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-    const res = await doFetch(method, path, `${baseHost}${path}`, {
-      method,
-      headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
-      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-    });
+    // GET-only bounded retry: a transient 429/5xx on a read is retried up to
+    // MAX_GET_RETRIES with a short backoff. Writes break out on the first
+    // response (never replayed); a thrown timeout/transport error from doFetch
+    // propagates without retry (latency stays bounded). GETs carry no body, so
+    // there is no body-reuse concern across attempts.
+    let res: Response;
+    for (let attempt = 0; ; attempt++) {
+      res = await doFetch(method, path, `${baseHost}${path}`, {
+        method,
+        headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
+        body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+      });
+      const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < MAX_GET_RETRIES;
+      if (!willRetry) break;
+      await res.text().catch(() => undefined); // drain the body before retrying
+      await sleep(retryDelayMs(res, attempt));
+    }
     if (res.status === 404 && allow404) return null;
     if (!res.ok) {
       const text = await res.text();

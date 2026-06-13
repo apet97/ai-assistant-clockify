@@ -294,6 +294,68 @@ describe("rest core host routing + auth", () => {
     );
   });
 
+  it("retries a GET on a transient 503 then resolves with the 200 body (bounded read retry)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(res({ message: "unavailable" }, 503))
+      .mockResolvedValueOnce(res({ ok: true }, 200));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await core.call("api", "GET", "/workspaces/ws-1/projects")).toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a GET 429 and respects a Retry-After: 0 header", async () => {
+    const retryAfter = new Response(JSON.stringify({ message: "slow down" }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "0" },
+    });
+    const fetchImpl = vi.fn().mockResolvedValueOnce(retryAfter).mockResolvedValueOnce(res({ ok: true }, 200));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(await core.call("api", "GET", "/x")).toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does NOT retry a GET on a non-retryable status (400 throws immediately)", async () => {
+    const fetchImpl = vi.fn(async () => res({ message: "bad" }, 400));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "GET", "/x")).rejects.toThrow(/400/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("NEVER retries a non-GET (a POST 503 throws immediately — writes are not safe to replay)", async () => {
+    const fetchImpl = vi.fn(async () => res({ message: "unavailable" }, 503));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toThrow(/503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after 1 + MAX_GET_RETRIES attempts on a persistent 503", async () => {
+    const fetchImpl = vi.fn(async () => res({ message: "unavailable" }, 503));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "GET", "/x")).rejects.toThrow(/503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+  });
+
   it("postForm sends a FormData body without a JSON content-type", async () => {
     const fetchImpl = vi.fn(async () => res({ id: "x1" }));
     const core = createRestCore({
