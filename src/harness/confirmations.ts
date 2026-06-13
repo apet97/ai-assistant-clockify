@@ -183,7 +183,10 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
   if (record.status !== "pending") {
     return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
   }
-  if (now.getTime() >= new Date(record.expiresAt).getTime()) {
+  const expiresAtMs = new Date(record.expiresAt).getTime();
+  if (Number.isNaN(expiresAtMs) || now.getTime() >= expiresAtMs) {
+    // Fail CLOSED on an unparseable expiry — `now >= NaN` is false, which would
+    // otherwise leave a corrupt/tampered TTL confirmable forever.
     return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
   }
   // Tamper tripwire: the stored operation must still hash to the stored hash
@@ -246,7 +249,10 @@ export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
   if (record.status !== "pending") {
     return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
   }
-  if (now.getTime() >= new Date(record.expiresAt).getTime()) {
+  const expiresAtMs = new Date(record.expiresAt).getTime();
+  if (Number.isNaN(expiresAtMs) || now.getTime() >= expiresAtMs) {
+    // Fail CLOSED on an unparseable expiry — `now >= NaN` is false, which would
+    // otherwise leave a corrupt/tampered TTL confirmable forever.
     return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
   }
   if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {

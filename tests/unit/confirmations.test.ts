@@ -137,6 +137,27 @@ describe("confirmations", () => {
     if (!result.ok) expect(result.code).toBe("expired");
   });
 
+  it("fails CLOSED on an unparseable expiresAt (NaN must never read as not-expired)", () => {
+    // expiresAt sits outside the operation-hash integrity envelope, so a corrupt/
+    // tampered value reaches the gate. `now >= new Date("garbage").getTime()` is
+    // `now >= NaN` === false → the OLD code treated it as NOT expired → confirmable
+    // forever. A safety boundary must fail closed.
+    const now = new Date("2026-06-05T00:00:00.000Z");
+    const created = makePending(now);
+    const corrupt: PendingConfirmationRecord = { ...created.record, expiresAt: "not-a-date" };
+    const result = confirmPending({
+      record: corrupt,
+      sessionId: "sess-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      nonce: created.nonce,
+      sessionSecret: SECRET,
+      now,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("expired");
+  });
+
   it("cannot be confirmed twice", () => {
     const now = new Date("2026-06-05T00:00:00.000Z");
     const created = makePending(now);
