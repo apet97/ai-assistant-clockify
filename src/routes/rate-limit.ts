@@ -1,9 +1,12 @@
 /**
- * Hand-rolled per-key sliding-window rate limiter for the chat routes — each
- * chat turn drives a paid model loop plus Clockify calls, and nothing else
- * bounds it (the confirm/cancel/undo routes are button-driven and one-use).
- * In-memory and per-process by design: a single Railway instance, and the goal
- * is paid-loop abuse damping, not security. No new dependencies.
+ * Hand-rolled per-key sliding-window rate limiter for the paid model loops — each
+ * chat turn drives a paid model loop plus Clockify calls, and the confirm-time
+ * RESUME drives one too (a chain of confirm→resume→preview→confirm would
+ * otherwise run unbounded). Both are charged against the same per-session budget
+ * so the limiter actually bounds the paid-loop cost it exists to damp; cancel and
+ * undo stay button-driven + one-use (no model call). In-memory and per-process by
+ * design: a single Railway instance, and the goal is paid-loop abuse damping, not
+ * security. No new dependencies.
  */
 
 export const DEFAULT_CHAT_RATE_LIMIT_MAX = 30;

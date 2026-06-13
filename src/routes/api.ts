@@ -612,6 +612,16 @@ export function apiRouter(deps: AppDeps): Router {
     ) {
       return undefined;
     }
+    // r2-new-ops-layer-04: the resume is a PAID model loop (up to DEFAULT_MAX_STEPS
+    // round-trips), and a chain of confirm→resume→preview→confirm could otherwise
+    // keep it running with the chat limiter never seeing it. Charge it against the
+    // SAME per-session budget so the limiter's "paid-loop damping" purpose holds.
+    // The commit already happened and its receipt is returned regardless — an
+    // over-budget resume only loses the follow-up narration (the same outcome as a
+    // model failure mid-resume), never the commit.
+    if (!chatLimiter.check(claims.sessionId, now().getTime()).allowed) {
+      return undefined;
+    }
     const m = createTurnMachinery(claims, installation, onResult, onStatus);
     const resumeStartMs = now().getTime();
     const tracked = trackUsage(deps.modelClient, now);
