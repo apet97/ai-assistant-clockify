@@ -113,4 +113,17 @@ describe("reverseCreation", () => {
       expect((receipt.warnings ?? []).some((w) => w.code === "undo_failed")).toBe(true);
     }
   });
+
+  it("returns an honest FAILURE (not a silent 'Undone') when EVERY delete fails", async () => {
+    // The host rejected every delete (addon policy already passed) — the entities
+    // persist, so the undo is a failure. It must come back ok:false so the route
+    // returns 400 and the UI re-enables the button instead of showing "Undone".
+    const fake = createFakeWorkspace({ failDeleteIds: ["p1", "g1"] });
+    const receipt = await reverseCreation(ctx(fake), [
+      { type: "project", id: "p1", name: "Phoenix" },
+      { type: "tag", id: "g1", name: "Urgent" },
+    ]);
+    expect(receipt.ok).toBe(false);
+    if (!receipt.ok) expect(receipt.code).toBe("undo_failed");
+  });
 });

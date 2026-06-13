@@ -82,6 +82,25 @@ export async function reverseCreation(
     }
   }
 
+  if (undone.length === 0) {
+    // Every delete failed (the host rejected them — the addon policy was already
+    // re-checked above). The entities persist, so this is a FAILURE, not a silent
+    // success: return an error receipt so the route responds 400 and the UI
+    // re-enables the button with the real reason, instead of showing "Undone"
+    // over changes that are still live. (A PARTIAL failure stays a success-with-
+    // warnings below — some entities really were removed.)
+    const detail = warnings.map((w) => w.message).join("; ");
+    return errorReceipt({
+      action: "undo",
+      code: "undo_failed",
+      message:
+        refs.length === 1
+          ? `Couldn't undo — the change could not be reversed. ${detail}`.trim()
+          : `Couldn't undo — none of the ${refs.length} created items could be removed. ${detail}`.trim(),
+      recovery: { hint: "Nothing was removed; remove them manually if needed.", retryable: false },
+    });
+  }
+
   return successReceipt({
     action: "undo",
     entity: "undo",
