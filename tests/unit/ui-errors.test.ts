@@ -61,6 +61,29 @@ describe("createFetchApi error surfacing", () => {
     expect(working).toBe(false); // always cleared
   });
 
+  it("submitMessage surfaces a non-401 turn failure ({ok:false}) instead of rendering nothing", async () => {
+    // The POST /chat/messages route returns 502 {ok:false,code,message} on a
+    // failed turn; json() only THROWS on 401, so a non-401 error body comes
+    // back as a return value. submitMessage must detect ok===false and route
+    // the server's honest copy to onError — never silently render nothing.
+    stubFetch(502, { ok: false, code: "model_error", message: "The assistant is temporarily unavailable." });
+    const api = createFetchApi();
+    const errors: string[] = [];
+    const assistant: string[] = [];
+    let working = false;
+    await submitMessage(api as never, "hi", {
+      onWorking: (w) => {
+        working = w;
+      },
+      onAssistant: (t) => assistant.push(t),
+      onResults: () => {},
+      onError: (m) => errors.push(m),
+    });
+    expect(errors).toEqual(["The assistant is temporarily unavailable."]);
+    expect(assistant).toEqual([]); // never rendered an (empty) assistant bubble
+    expect(working).toBe(false); // always cleared
+  });
+
   it("streamMessage surfaces the route's 429 copy verbatim (and the session copy on 401)", async () => {
     stubFetch(429, { ok: false, code: "rate_limited", message: "You're sending messages too quickly — please wait a moment and try again." });
     const api = createFetchApi();

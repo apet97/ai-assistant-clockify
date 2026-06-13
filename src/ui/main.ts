@@ -140,10 +140,27 @@ export function httpErrorMessage(status: number, serverMessage?: string, fallbac
   return serverMessage && serverMessage.trim() ? serverMessage : fallback;
 }
 
+/**
+ * The non-streaming send flow over POST /api/chat/messages. The mounted UI uses
+ * `submitStreaming` (+ /chat/stream) instead — this is the maintained, unit-tested
+ * fallback/test surface (a simple request/response shape the responsiveness +
+ * error-surfacing contracts are pinned against). Kept deliberately so the
+ * non-streaming route has a tested client; do not wire it into mount() without
+ * a reason.
+ *
+ * `sendMessage` → `json()` only THROWS on 401 (an expired session); a non-401
+ * turn failure (the route's 502 `{ok:false,code,message}`) comes back as the
+ * return body, so we must inspect `ok === false` and surface the server's honest
+ * copy via onError — otherwise a failed turn would render nothing.
+ */
 export async function submitMessage(api: ChatApiLike, message: string, hooks: ComposerHooks): Promise<void> {
   hooks.onWorking(true);
   try {
-    const response = (await api.sendMessage(message)) as ChatResponse;
+    const response = (await api.sendMessage(message)) as ChatResponse & { code?: string; message?: string };
+    if (response.ok === false) {
+      hooks.onError(response.message?.trim() ? response.message : "Message failed to send.");
+      return;
+    }
     if (response.reply?.text) hooks.onAssistant(response.reply.text);
     hooks.onResults(response.results ?? []);
   } catch (error) {

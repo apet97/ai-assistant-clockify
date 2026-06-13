@@ -1179,6 +1179,10 @@ export function apiRouter(deps: AppDeps): Router {
     res.json({ ok: true, messages, pendingPreviews });
   });
 
+  // Non-streaming turn (request/response). The mounted UI uses /chat/stream
+  // below; this is the tested fallback surface (its client is `submitMessage`).
+  // A failed turn returns 502 {ok:false,code,message} — the client surfaces that
+  // copy (json() only throws on 401), it never silently renders nothing.
   router.post("/chat/messages", asyncHandler(async (req, res) => {
     const pre = chatPreconditions(req, res);
     if (!pre) return;
