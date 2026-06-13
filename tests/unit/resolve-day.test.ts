@@ -22,6 +22,18 @@ describe("resolveRelativeDay", () => {
     expect(resolveRelativeDay(NOW, { date: "monday" })).toBe("2026-06-15");
   });
 
+  it("resolves 'this <weekday>' like the bare weekday — the upcoming occurrence, today included (live: 'log 4 hours this friday' dead-ended in a 'couldn't make sense of the date' clarify)", () => {
+    // From Wednesday: 'this friday' = this week's Friday (same as bare 'friday');
+    // 'this wednesday' = today; 'this monday' = the upcoming Monday (next week).
+    expect(resolveRelativeDay(NOW, { date: "this friday" })).toBe("2026-06-12");
+    expect(resolveRelativeDay(NOW, { date: "This Wednesday" })).toBe("2026-06-10");
+    expect(resolveRelativeDay(NOW, { date: "this monday" })).toBe("2026-06-15");
+    // The finding's exact probe: now = Saturday 2026-06-13; 'this saturday' = today.
+    const SAT = new Date("2026-06-13T12:00:00.000Z");
+    expect(resolveRelativeDay(SAT, { date: "this saturday" })).toBe("2026-06-13");
+    expect(resolveRelativeDay(SAT, { date: "this friday" })).toBe("2026-06-19");
+  });
+
   it("resolves 'next <weekday>' strictly after today (live: time-off sent the literal 'next Monday')", () => {
     expect(resolveRelativeDay(NOW, { date: "next Monday" })).toBe("2026-06-15");
     expect(resolveRelativeDay(NOW, { date: "next wednesday" })).toBe("2026-06-17");

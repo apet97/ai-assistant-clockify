@@ -562,9 +562,10 @@ function parseMonthNameDay(now: Date, raw: string): string | undefined {
  * Resolve a day (YYYY-MM-DD) server-side. The model knows "yesterday" or "next
  * Monday" but not the calendar date (its own clock is unreliable — live it sent
  * the literal strings "today" and "next Monday" to the wire), so this accepts a
- * relative word (`today`/`yesterday`/`tomorrow`), a weekday (bare = the next
- * occurrence, today counts; `next <weekday>` = strictly after today; `last
- * <weekday>` = strictly before), or a numeric `dayOffset` (0=today,
+ * relative word (`today`/`yesterday`/`tomorrow`), a weekday (bare AND
+ * `this <weekday>` = the next occurrence, today counts; `next <weekday>` =
+ * strictly after today; `last <weekday>` = strictly before), or a numeric
+ * `dayOffset` (0=today,
  * -1=yesterday), and the harness — which has `ctx.now` — does the math. A
  * literal `YYYY-MM-DD…` still wins; absent everything, today. Anything else
  * returns `undefined`: callers must CLARIFY — an unresolved date may never
@@ -585,7 +586,7 @@ export function resolveRelativeDay(
   if (raw === "today" || raw === "now") return today;
   if (raw === "yesterday") return addDays(today, -1);
   if (raw === "tomorrow") return addDays(today, 1);
-  const weekday = raw.match(/^(?:(next|last|previous)\s+)?([a-z]+)$/);
+  const weekday = raw.match(/^(?:(this|next|last|previous)\s+)?([a-z]+)$/);
   if (weekday) {
     const target = WEEKDAYS.indexOf(weekday[2]);
     if (target >= 0) {
