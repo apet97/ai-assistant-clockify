@@ -117,14 +117,20 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // error instead of running past the idempotency claim TTL (a slow commit's
   // live claim must never be swept — r1-concurrency-races-01). AbortSignal.timeout
   // fires a TimeoutError; remap it so the receipt names the host, not a DOMException.
-  async function doFetch(url: string, init: RequestInit): Promise<Response> {
+  // A transport-level rejection (ECONNRESET, DNS failure, socket hangup) is named
+  // the same way every other core failure is — `Clockify ${method} ${path} failed:
+  // <reason>` — so the receipt/model/admin can tell WHICH call broke instead of a
+  // context-free "fetch failed" (r1-error-handling-03). Only method/path are added;
+  // no secrets (the url/header are never put in the message).
+  async function doFetch(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
     try {
       return await baseFetch(url, { ...init, signal: AbortSignal.timeout(commitTimeoutMs) });
     } catch (error) {
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new Error(`Clockify request timed out after ${commitTimeoutMs}ms (${url}).`);
+        throw new Error(`Clockify request timed out after ${commitTimeoutMs}ms (${method} ${path}).`);
       }
-      throw error;
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Clockify ${method} ${path} failed: ${reason}`);
     }
   }
   const authHeader: Record<string, string> =
@@ -172,7 +178,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     // multipart/form-data bodies must NOT carry a JSON content-type — fetch/undici
     // sets the multipart boundary itself when the body is a FormData.
     const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-    const res = await doFetch(`${baseHost}${path}`, {
+    const res = await doFetch(method, path, `${baseHost}${path}`, {
       method,
       headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
@@ -244,7 +250,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     host: ClockifyHost,
     path: string,
   ): Promise<{ contentType: string; bytes: Uint8Array }> {
-    const res = await doFetch(`${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
+    const res = await doFetch("GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
     if (!res.ok) {
       const text = await res.text();
       mapAddonRestriction(res.status, "GET", path, text);

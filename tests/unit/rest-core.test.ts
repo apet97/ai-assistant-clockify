@@ -118,6 +118,39 @@ describe("rest core host routing + auth", () => {
     await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(/non-JSON/i);
   });
 
+  it("names the request when a transport-level fetch rejects (ECONNRESET / DNS / socket hangup) instead of a context-free 'fetch failed'", async () => {
+    // r1-error-handling-03: doFetch let raw transport rejections propagate, so the
+    // receipt/model/admin saw a bare 'fetch failed' with no clue WHICH call broke —
+    // the exact context-free failure the non-JSON branch was added to prevent.
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(
+      /GET \/workspaces\/ws-1\/projects/,
+    );
+    // The underlying reason is preserved alongside the named request.
+    await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(
+      /fetch failed/,
+    );
+  });
+
+  it("also names the request on a transport rejection from getBinary", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => {
+        throw new TypeError("fetch failed");
+      }) as unknown as typeof fetch,
+    });
+    await expect(core.getBinary("api", "/workspaces/ws-1/invoices/x/export")).rejects.toThrow(
+      /GET \/workspaces\/ws-1\/invoices\/x\/export/,
+    );
+  });
+
   it("maps the add-on token's 401 'API is not accessible' to an actionable restriction message (probed live: webhooks + custom-field management are outside the add-on token's reach regardless of scopes)", async () => {
     const core = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",
