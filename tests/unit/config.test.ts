@@ -50,6 +50,21 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, LLM_TIMEOUT_MS: "not-a-number" })).toThrow();
   });
 
+  it("parses COMMIT_TIMEOUT_MS, leaves it undefined when absent (adapter default applies), and bounds it below CLAIM_TTL_MS", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    // Unset → undefined so the REST adapter's COMMIT_TIMEOUT_MS default applies.
+    expect(loadConfig(base).commitTimeoutMs).toBeUndefined();
+    // A valid override is coerced to a number.
+    expect(loadConfig({ ...base, COMMIT_TIMEOUT_MS: "60000" }).commitTimeoutMs).toBe(60000);
+    // At/above the safety upper bound it must fail at startup: a commit slower than
+    // the idempotency claim TTL (300000ms) could have its live claim swept → double-commit.
+    expect(() => loadConfig({ ...base, COMMIT_TIMEOUT_MS: "290000" })).toThrow(/CLAIM_TTL_MS/);
+    expect(() => loadConfig({ ...base, COMMIT_TIMEOUT_MS: "400000" })).toThrow(/CLAIM_TTL_MS/);
+    // Non-positive / non-integer values are rejected by the schema.
+    expect(() => loadConfig({ ...base, COMMIT_TIMEOUT_MS: "0" })).toThrow();
+    expect(() => loadConfig({ ...base, COMMIT_TIMEOUT_MS: "not-a-number" })).toThrow();
+  });
+
   it("rejects production without data encryption key", () => {
     expect(() =>
       loadConfig({

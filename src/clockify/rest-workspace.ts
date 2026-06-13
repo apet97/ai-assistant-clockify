@@ -38,6 +38,8 @@ export interface RestWorkspaceOptions {
   workspaceId: string;
   auth: ClockifyAuth;
   fetchImpl?: typeof fetch; // injectable for tests
+  /** Clockify commit/IO timeout (ms); defaults to COMMIT_TIMEOUT_MS. */
+  commitTimeoutMs?: number;
 }
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
@@ -52,6 +54,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     auditBase: opts.auditBase,
     auth: opts.auth,
     fetchImpl: opts.fetchImpl,
+    commitTimeoutMs: opts.commitTimeoutMs,
   });
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);

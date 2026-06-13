@@ -81,13 +81,14 @@ export function createApp(deps: AppDeps): Express {
  * base URL is resolved from the install context (apiUrl/backendUrl + /v1) so dev
  * and regional environments work — see resolveClockifyApiBase. No token is logged.
  */
-function liveClockifyForWorkspace(installation: Installation): WorkspaceClient {
+function liveClockifyForWorkspace(installation: Installation, commitTimeoutMs?: number): WorkspaceClient {
   return createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
     reportsBase: resolveClockifyReportsBase(installation),
     auditBase: resolveClockifyAuditBase(installation),
     workspaceId: installation.workspaceId,
     auth: { addonToken: installation.addonToken },
+    commitTimeoutMs,
   });
 }
 
@@ -169,7 +170,7 @@ export function start(): void {
     store,
     parser,
     modelClient,
-    clockifyForWorkspace: liveClockifyForWorkspace,
+    clockifyForWorkspace: (installation) => liveClockifyForWorkspace(installation, config.commitTimeoutMs),
   });
 
   // Retention: prune expired operational rows at startup (catches backlog

@@ -31,6 +31,8 @@ export interface AppConfig {
   llmModel?: string;
   /** Per-request model timeout (ms); the HTTP client defaults to 120s when unset. */
   llmTimeoutMs?: number;
+  /** Clockify commit/IO timeout (ms); defaults to 120000. Must stay < CLAIM_TTL_MS (300000). */
+  commitTimeoutMs?: number;
   /** Provider thinking control passed through as reasoning_effort. */
   llmReasoningEffort?: string;
   /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
@@ -62,6 +64,8 @@ const envObjectSchema = z.object({
   LLM_MODEL: z.string().min(1).optional(),
   /** Per-request model timeout (ms); the client defaults to 120s when unset. */
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  /** Clockify commit/IO timeout (ms). Must be < 290000 (strictly below CLAIM_TTL_MS=300000). */
+  COMMIT_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   LLM_REASONING_EFFORT: z.string().min(1).optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
@@ -77,6 +81,14 @@ const envSchema = envObjectSchema.superRefine((v, ctx) => {
         ctx.addIssue({ code: z.ZodIssueCode.custom, message: `${key} is required when LLM_PROVIDER=http`, path: [key] });
       }
     }
+  }
+  if (v.COMMIT_TIMEOUT_MS !== undefined && v.COMMIT_TIMEOUT_MS >= 290_000) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["COMMIT_TIMEOUT_MS"],
+      message:
+        "COMMIT_TIMEOUT_MS must be < 290000ms — it has to stay strictly below the idempotency CLAIM_TTL_MS (300000ms, src/db/store.ts) so a slow live commit's claim is never swept.",
+    });
   }
 });
 
@@ -118,6 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
     llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
+    commitTimeoutMs: parsed.COMMIT_TIMEOUT_MS,
     llmReasoningEffort: parsed.LLM_REASONING_EFFORT,
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,

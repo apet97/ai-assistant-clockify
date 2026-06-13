@@ -75,15 +75,15 @@ export const PAGE_SIZE = 200;
 export const MAX_PAGES = 50;
 /**
  * Default per-request commit/IO timeout (ms). Mirrors LLM_TIMEOUT_MS but is a
- * DISTINCT knob (it bounds the Clockify wire, not the model). Env-overridable
- * via COMMIT_TIMEOUT_MS. Bounds commit latency so the idempotency CLAIM_TTL (5
- * min) is provably above worst-case (r1-concurrency-races-01).
+ * DISTINCT knob (it bounds the Clockify wire, not the model). The operator
+ * override is validated in src/config.ts (COMMIT_TIMEOUT_MS, bounded strictly
+ * below CLAIM_TTL_MS) and threaded in as opts.commitTimeoutMs — never read
+ * process.env here. Bounds commit latency so the idempotency CLAIM_TTL (5 min)
+ * is provably above worst-case (r1-concurrency-races-01). Kept as an exported
+ * const because tests/unit/idempotency-store.test.ts imports it for the
+ * CLAIM_TTL_MS > COMMIT_TIMEOUT_MS invariant.
  */
-export const COMMIT_TIMEOUT_MS: number = (() => {
-  const raw = process.env.COMMIT_TIMEOUT_MS;
-  const n = raw ? Number(raw) : NaN;
-  return Number.isInteger(n) && n > 0 ? n : 120_000;
-})();
+export const COMMIT_TIMEOUT_MS = 120_000;
 
 function hostsFor(apiBase: string): { api: string; reports: string; audit: string | undefined } {
   // https://api.clockify.me/api/v1 -> reports.api.clockify.me/v1, auditlog-api.api.clockify.me/v1
