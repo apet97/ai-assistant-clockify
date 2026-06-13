@@ -218,6 +218,27 @@ export function undoFailureMessage(
   return "Couldn't undo — please try again.";
 }
 
+/**
+ * The truthful outcome of a cancel click. POST /confirmations/:id/cancel returns
+ * `{ ok:false, code, message }` (NOT a throw — `json()` only throws on 401) when
+ * the preview is no longer pending: a 409 because another tab CONFIRMED or
+ * cancelled it (the risky change may already have COMMITTED), a 403 wrong-session,
+ * or a 404 not-found. Those bodies must NOT be read as a successful cancel — the
+ * card stays and the admin sees the server's verbatim reason, never a false
+ * "Cancelled." (r1-ux-copy-a11y-01). Only when EVERY response is `ok:true` does
+ * the card retire and "Cancelled." appear.
+ */
+export function cancelOutcome(
+  responses: Array<{ ok?: boolean; code?: string; message?: string } | null | undefined>,
+): { ok: true } | { ok: false; error: string } {
+  for (const response of responses) {
+    if (response?.ok === true) continue;
+    const error = typeof response?.message === "string" ? response.message : "Couldn't cancel — it may have already been confirmed.";
+    return { ok: false, error };
+  }
+  return { ok: true };
+}
+
 // --- Session restore (GET /api/chat/history) --------------------------------
 
 export interface HistoryMessage {

@@ -8,7 +8,7 @@ import {
   type ConfirmStreamApi,
   type StreamEvent,
 } from "../../src/ui/main.js";
-import { undoFailureMessage } from "../../src/ui/shared.js";
+import { cancelOutcome, undoFailureMessage } from "../../src/ui/shared.js";
 
 /**
  * Phase 4: settle confirm responses TRUTHFULLY. A failed confirm must never
@@ -42,6 +42,52 @@ describe("undoFailureMessage (undo failures surface the route's real reason)", (
   it("uses a safe fallback when the response carries no reason", () => {
     expect(undoFailureMessage({ ok: false })).toBe("Couldn't undo — please try again.");
     expect(undoFailureMessage(undefined)).toBe("Couldn't undo — please try again.");
+  });
+});
+
+describe("cancelOutcome (cancel surfaces the route's truth — never a false 'Cancelled.')", () => {
+  it("reports ok when every cancel returned ok:true", () => {
+    expect(cancelOutcome([{ ok: true }])).toEqual({ ok: true });
+    expect(cancelOutcome([{ ok: true }, { ok: true }])).toEqual({ ok: true });
+  });
+
+  it("surfaces the server's verbatim message on a concurrent-confirm 409 — does NOT claim 'Cancelled.'", () => {
+    // r1-ux-copy-a11y-01: the cancel route returns { ok:false } (not a throw)
+    // when the preview was already confirmed/cancelled in another tab. The card
+    // must NOT be removed and the admin must NOT be told it was cancelled — the
+    // risky change may already have COMMITTED.
+    expect(cancelOutcome([{ ok: false, code: "not_pending", message: "This preview is no longer pending." }])).toEqual({
+      ok: false,
+      error: "This preview is no longer pending.",
+    });
+  });
+
+  it("surfaces a 403 wrong-session message verbatim", () => {
+    expect(cancelOutcome([{ ok: false, code: "forbidden", message: "This preview belongs to a different session." }])).toEqual({
+      ok: false,
+      error: "This preview belongs to a different session.",
+    });
+  });
+
+  it("falls back honestly when a failure carries no message", () => {
+    expect(cancelOutcome([{ ok: false }])).toEqual({
+      ok: false,
+      error: "Couldn't cancel — it may have already been confirmed.",
+    });
+  });
+
+  it("a single failure in a batch fails the whole cancel (no half-truth)", () => {
+    expect(cancelOutcome([{ ok: true }, { ok: false, message: "This preview is no longer pending." }])).toEqual({
+      ok: false,
+      error: "This preview is no longer pending.",
+    });
+  });
+
+  it("a missing/undefined response never invents a successful cancel", () => {
+    expect(cancelOutcome([undefined])).toEqual({
+      ok: false,
+      error: "Couldn't cancel — it may have already been confirmed.",
+    });
   });
 });
 

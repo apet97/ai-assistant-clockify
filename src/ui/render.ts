@@ -12,6 +12,7 @@
 
 import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
 import {
+  cancelOutcome,
   featureGroupRows,
   reservedPendingFor,
   settleConfirmOutcome,
@@ -484,10 +485,23 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   });
   cancelButton.addEventListener("click", async () => {
     setButtons(true);
+    let outcomes: Array<{ ok?: boolean; message?: string } | null | undefined>;
     try {
-      for (const ref of refs) await controller.cancel(ref.previewId);
+      // controller.cancel resolves the route's JSON body (only a 401 throws). A
+      // 409/403/404 comes back as { ok:false, message } — inspect it instead of
+      // assuming success, so a concurrent-confirm never reads a false "Cancelled."
+      outcomes = (await Promise.all(refs.map((ref) => controller.cancel(ref.previewId)))) as typeof outcomes;
     } catch {
       showError("Cancel failed.");
+      setButtons(false);
+      return;
+    }
+    const result = cancelOutcome(outcomes);
+    if (!result.ok) {
+      // The change may already have COMMITTED — surface the server's verbatim
+      // reason, keep the card, and re-enable the buttons (mirrors the confirm/undo
+      // discipline). r1-ux-copy-a11y-01.
+      showError(result.error);
       setButtons(false);
       return;
     }
