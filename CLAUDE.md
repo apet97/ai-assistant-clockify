@@ -97,7 +97,21 @@ labels from `action-labels.ts`, NEVER args; the typing bubble shows them),
 (group/holiday/assignment now reversible; time_off_request can't be — its
 delete needs the policy id), broader welcome prompts, and **GitHub Actions CI**
 (verify + madge on every push/PR).
-`npm run verify` = **1086 tests**, `npx madge --circular
+A Gemini-readiness arc (2026-06-13) followed: the model client now speaks
+Gemini 3.x (per-tool-call `thought_signature` echo — REQUIRED on continuation
+or the loop 400s — and `LLM_REASONING_EFFORT`, both inert for DeepSeek,
+pinned), and four harness improvements took BOTH Gemini tiers to 100% without
+denting DeepSeek: time-off `requests_create` anchors 'N days next/this week'
+to the first N workdays (the resolveLogTimes pattern; preview shows the
+dates), report descriptions teach the existing last-7-days default, the
+tool prompt gained a call-don't-ask rule for defaulted args, and `log_work`'s
+`description` is OPTIONAL (an honest blank — lite was the only model
+correctly refusing to invent one). Measured: **planner 108/108 on
+gemini-3.1-flash-lite(low) AND gemini-3.5-flash(low), 162/162 on DeepSeek
+v4-pro; agentic 7/7 on all three, 0 safety violations.** Backend swap is
+env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT=low`); prod stays DeepSeek
+until decided.
+`npm run verify` = **1095 tests**, `npx madge --circular
 --extensions ts --ts-config tsconfig.json src` = **0** (keep both). All pushed
 to `main`.
 
