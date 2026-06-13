@@ -382,6 +382,53 @@ describe("invoice actions", () => {
     expect(fake.state.invoices[0].items).toHaveLength(2);
   });
 
+  const taxedInvoiceSeed = () => ({
+    invoices: [
+      {
+        id: "invT",
+        number: "INV-T",
+        clientId: "c1",
+        currency: "USD",
+        status: "UNSENT" as const,
+        tax: 300, // 3% (×100 ints, as the GET returns)
+        items: [{ order: 0, description: "Discovery", quantity: 1, unitPrice: 10000, itemType: "TIME" }],
+      },
+    ],
+  });
+
+  it("items_add defaults a new item to taxed when the invoice already has a tax rate (Clockify item-based default)", async () => {
+    const fake = createFakeWorkspace(taxedInvoiceSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "invT", unitPrice: 50 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as any).item.applyTaxes).toBe("TAX1");
+  });
+
+  it("items_add does NOT add a tax flag to a new item on an untaxed invoice", async () => {
+    const fake = createFakeWorkspace(seed()); // inv1 has no tax rate
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "inv1", unitPrice: 50 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as any).item.applyTaxes).toBeUndefined();
+  });
+
+  it("items_add honors an explicit applyTaxes over the invoice's tax default", async () => {
+    const fake = createFakeWorkspace(taxedInvoiceSeed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_add",
+      args: { invoiceId: "invT", unitPrice: 50, applyTaxes: "NONE" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect((preview.operation.payload as any).item.applyTaxes).toBe("NONE");
+  });
+
   it("items_add SHOWS the unit price (and quantity) on the preview card — the admin confirms a billing amount, so it must be catchable before Confirm", async () => {
     const fake = createFakeWorkspace(typedSeed());
     const preview = await executeAction({

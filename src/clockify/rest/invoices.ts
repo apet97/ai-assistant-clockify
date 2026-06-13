@@ -69,6 +69,8 @@ function mapSummary(raw: any): InvoiceSummary {
   if (raw.currency !== undefined) out.currency = raw.currency;
   if (raw.amount !== undefined) out.amount = raw.amount;
   if (raw.balance !== undefined) out.balance = raw.balance;
+  if (typeof raw.tax === "number") out.tax = raw.tax;
+  if (typeof raw.tax2 === "number") out.tax2 = raw.tax2;
   return out;
 }
 

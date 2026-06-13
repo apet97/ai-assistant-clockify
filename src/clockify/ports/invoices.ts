@@ -18,6 +18,9 @@ export interface InvoiceSummary {
   amount?: number;
   /** Outstanding balance in minor units. */
   balance?: number;
+  /** Tax 1 / Tax 2 rate as the GET's ×100 integer (PUT taxPercent=3 reads back as tax=300). */
+  tax?: number;
+  tax2?: number;
 }
 
 /** A line item on an invoice. `order` is the index used by the delete-item path. */

@@ -68,6 +68,14 @@ describe("invoice rest", () => {
     expect(await rest(miss as unknown as typeof fetch).getInvoice("inv9")).toBeNull();
   });
 
+  it("getInvoice surfaces the tax/tax2 rate (×100 ints from the GET) so item-add can default the tax flag", async () => {
+    const f = vi.fn(async () =>
+      jsonResponse({ id: "inv1", number: "INV-1", currency: "USD", status: "UNSENT", tax: 300, tax2: 0, items: [] }),
+    );
+    const detail = await rest(f as unknown as typeof fetch).getInvoice("inv1");
+    expect(detail).toMatchObject({ id: "inv1", tax: 300, tax2: 0 });
+  });
+
   it("listInvoiceItems reads items from the single-GET (GET /items 405s)", async () => {
     const f = vi.fn(async () =>
       jsonResponse({ id: "inv1", items: [{ order: 0, description: "A" }, { order: 1, description: "B" }] }),

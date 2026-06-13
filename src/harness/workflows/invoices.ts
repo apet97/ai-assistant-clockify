@@ -636,6 +636,16 @@ const addInvoiceItem = defineRiskyAction({
     const quantity = args.quantity ?? 1;
     const unitPriceMinor =
       args.unitPrice !== undefined ? toMinor(args.unitPrice, args.unitPriceUnit) : undefined;
+    // Item-based tax: a new item on an already-taxed invoice is taxed by default
+    // (Clockify's TAX/TAX2 columns default checked) — but never flag tax on an
+    // invoice with NO rate. Read the current rate from the detail; explicit wins.
+    let applyTaxes = args.applyTaxes;
+    if (applyTaxes === undefined) {
+      const detail = await ctx.clockify.getInvoice(invoice.id);
+      const hasTax1 = typeof detail?.tax === "number" && detail.tax > 0;
+      const hasTax2 = typeof detail?.tax2 === "number" && detail.tax2 > 0;
+      applyTaxes = hasTax1 && hasTax2 ? "TAX1TAX2" : hasTax2 ? "TAX2" : hasTax1 ? "TAX1" : undefined;
+    }
     const item: Record<string, unknown> = {
       itemType,
       // Clockify REQUIRES description + quantity on the items POST (live: 400
@@ -643,7 +653,7 @@ const addInvoiceItem = defineRiskyAction({
       description: args.description ?? itemType,
       quantity,
       ...(unitPriceMinor !== undefined ? { unitPriceMinor } : {}),
-      ...(args.applyTaxes !== undefined ? { applyTaxes: args.applyTaxes } : {}),
+      ...(applyTaxes !== undefined ? { applyTaxes } : {}),
     };
     // Show the quantity AND the unit price (the human/major figure, never the
     // 100x wire integer) on the card — the admin confirms a billing amount, so a
