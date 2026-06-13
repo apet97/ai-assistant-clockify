@@ -112,7 +112,7 @@ scripts/               opt-in live smokes (sacrificial workspace)
 
 ## Getting started
 
-Requires Node 20+.
+Requires Node 22.x (matches `package.json` `engines` and the Railway runtime).
 
 ```bash
 npm install
