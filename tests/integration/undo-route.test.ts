@@ -229,4 +229,61 @@ describe("undo route", () => {
     const res = await request(app).post("/api/undo/whatever").send({});
     expect(res.status).toBe(401);
   });
+
+  it("an idempotent replay does NOT mint a SECOND undo record (one entity, one undo handle)", async () => {
+    // Confirming the same reversible+idempotency-keyed creation twice within the
+    // window returns the ORIGINAL commit's receipt (changed.created survives, tagged
+    // idempotent_replay). That first commit already minted the undo record, so the
+    // replay must NOT mint a second — else one invoice gets two live undo handles.
+    const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
+    isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const isoFake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const invoiceModel: ModelClient = {
+      async complete() {
+        return JSON.stringify({
+          kind: "actions",
+          text: "Creating the invoice.",
+          actions: [{ name: "clockify_invoices_create", arguments: { clientName: "Acme" } }],
+        });
+      },
+    };
+    const isoApp = createApp({
+      config: {
+        nodeEnv: "test",
+        port: 3994,
+        baseUrl: "https://example.com/ai-assistant",
+        clockifyAddonPublicKeyPem: keys.pem,
+        clockifyAddonKey: ADDON_KEY,
+        sessionSecret: "test-session-secret",
+        databasePath: ":memory:",
+        llmBaseUrl: "https://llm.example.com",
+        llmApiKey: "llm-key",
+        llmModel: "cheap-model",
+        llmProvider: "http",
+      },
+      store: isoStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient: invoiceModel,
+      clockifyForWorkspace: () => isoFake.client,
+    });
+    const cookie = await adminCookieFor(isoApp, "admin-1");
+
+    const confirmInvoice = async () => {
+      const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for Acme" });
+      const preview = (chat.body.results as Array<{ kind: string; previewId?: string; nonce?: string }>).find((r) => r.kind === "preview");
+      if (!preview?.previewId || !preview.nonce) throw new Error(`expected an invoice preview, got ${JSON.stringify(chat.body.results)}`);
+      return request(isoApp).post(`/api/confirmations/${preview.previewId}/confirm`).set("Cookie", cookie).send({ nonce: preview.nonce });
+    };
+
+    const first = await confirmInvoice();
+    expect(first.status).toBe(200);
+    expect(first.body.undo?.id).toBeTruthy(); // the first commit gets an undo handle
+
+    const second = await confirmInvoice(); // same intent within the window → idempotent replay
+    expect(second.status).toBe(200);
+    expect(second.body.undo).toBeUndefined(); // NO second undo handle on the replay
+    expect(isoFake.counts.createInvoice).toBe(1); // and no duplicate invoice was created
+
+    isoStore.close();
+  });
 });

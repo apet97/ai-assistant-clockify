@@ -300,6 +300,11 @@ export function apiRouter(deps: AppDeps): Router {
     receipt: SuccessReceipt | ErrorReceipt,
   ): string | undefined {
     if (!receipt.ok) return undefined;
+    // An idempotent replay returns the ORIGINAL commit's receipt (with a replay
+    // warning) — its changed.created survives, but that first commit ALREADY minted
+    // an undo record. Minting a second here would give one entity two live undo
+    // handles. Suppress on replay (markReplayed tags the warning).
+    if (receipt.warnings?.some((w) => w.code === "idempotent_replay")) return undefined;
     const reversal = reversibleCreations(receipt);
     if (reversal.length === 0) return undefined;
     return deps.store.recordUndoable({
