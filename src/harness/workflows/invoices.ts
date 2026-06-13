@@ -274,7 +274,7 @@ const invoiceItemSchema = z.object({
 const createInvoice = defineRiskyAction({
   name: "clockify_invoices_create",
   description:
-    "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `issuedDate`/`dueDate` accept YYYY-MM-DD or a relative day/period (today, next monday, next month — resolved server-side; never guess a calendar date); `number`, dates, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Billing action — previews and requires confirmation.",
+    "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `issuedDate`/`dueDate` accept YYYY-MM-DD or a relative day/period (today, next monday, next month — resolved server-side; never guess a calendar date); `number`, dates, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Set the invoice tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` (whole percents, e.g. 3 for 3%) — when a tax rate is set, the line items you add are taxed by default (Clockify item-based tax). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
   schema: z
@@ -288,6 +288,11 @@ const createInvoice = defineRiskyAction({
       note: z.string().optional(),
       subject: z.string().optional(),
       items: z.array(invoiceItemSchema).optional(),
+      // Invoice-level tax/discount as whole percents (Clockify item-based tax —
+      // the RATE lives on the invoice; items carry the apply flag). "3" → 3.
+      taxPercent: zNumberLike(z.number().min(0).max(100)).optional(),
+      tax2Percent: zNumberLike(z.number().min(0).max(100)).optional(),
+      discountPercent: zNumberLike(z.number().min(0).max(100)).optional(),
     })
     .refine((v) => v.clientId !== undefined || v.clientName !== undefined, {
       message: "Provide the client id or its exact name.",
@@ -344,6 +349,17 @@ const createInvoice = defineRiskyAction({
     // configured types — if a named type isn't configured (and some ARE), clarify
     // with the real list instead of creating a doomed $0 invoice.
     const discovered = args.items?.length ? await discoverItemTypes(ctx) : [];
+    // Item-based tax: when the create sets a rate, its items default to taxed
+    // (matches Clockify's checked-by-default TAX/TAX2 columns). An explicit
+    // per-item applyTaxes still wins.
+    const defaultApplyTaxes =
+      args.taxPercent !== undefined && args.tax2Percent !== undefined
+        ? "TAX1TAX2"
+        : args.tax2Percent !== undefined
+          ? "TAX2"
+          : args.taxPercent !== undefined
+            ? "TAX1"
+            : undefined;
     const items: Array<{ itemType: string; description?: string; quantity?: number; unitPriceMinor?: number; applyTaxes?: string }> = [];
     for (const it of args.items ?? []) {
       const resolved = resolveItemType(discovered, it.itemType);
@@ -355,9 +371,19 @@ const createInvoice = defineRiskyAction({
         description: it.description ?? resolved.itemType,
         quantity: it.quantity ?? 1,
         ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
-        ...(it.applyTaxes !== undefined ? { applyTaxes: it.applyTaxes } : {}),
+        ...(it.applyTaxes !== undefined
+          ? { applyTaxes: it.applyTaxes }
+          : defaultApplyTaxes !== undefined
+            ? { applyTaxes: defaultApplyTaxes }
+            : {}),
       });
     }
+    // Invoice-level tax/discount live on the invoice doc (POST /invoices ignores
+    // them) — applied in commit via the verified GET-then-PUT update path.
+    const percentPatch: Record<string, number> = {};
+    if (args.taxPercent !== undefined) percentPatch.taxPercent = args.taxPercent;
+    if (args.tax2Percent !== undefined) percentPatch.tax2Percent = args.tax2Percent;
+    if (args.discountPercent !== undefined) percentPatch.discountPercent = args.discountPercent;
 
     const defaulted = [
       args.number === undefined ? "number" : null,
@@ -376,6 +402,9 @@ const createInvoice = defineRiskyAction({
           `${it.unitPriceMinor !== undefined ? ` @ ${(it.unitPriceMinor / 100).toFixed(2)} ${currency}` : ""}`,
       ),
     ];
+    if (args.taxPercent !== undefined) expectedChanges.push(`Tax ${args.taxPercent}%`);
+    if (args.tax2Percent !== undefined) expectedChanges.push(`Tax 2 ${args.tax2Percent}%`);
+    if (args.discountPercent !== undefined) expectedChanges.push(`Discount ${args.discountPercent}%`);
 
     return {
       actionLabel: "Create invoice",
@@ -395,19 +424,32 @@ const createInvoice = defineRiskyAction({
           : []),
         ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
       ],
-      payload: { input, items },
+      payload: { input, items, ...(Object.keys(percentPatch).length ? { percentPatch } : {}) },
     };
   },
   async commit(ctx, payload) {
-    const { input, items } = payload as {
+    const { input, items, percentPatch } = payload as {
       input: Parameters<typeof ctx.clockify.createInvoice>[0];
       items?: Array<Parameters<typeof ctx.clockify.addInvoiceItem>[1]>;
+      percentPatch?: Record<string, number>;
     };
     const invoice = await ctx.clockify.createInvoice(input);
     // Add the line items onto the just-created invoice. A failed item is reported
     // (partial failure is never hidden), not silently dropped — the invoice exists.
     const warnings: Warning[] = [];
     let added = 0;
+    // Apply invoice-level tax/discount via the verified GET-then-PUT update path
+    // (POST /invoices silently drops these, like note/subject). Failure ⇒ warning.
+    if (percentPatch && Object.keys(percentPatch).length > 0) {
+      try {
+        await ctx.clockify.updateInvoice(invoice.id, { patch: percentPatch });
+      } catch (error) {
+        warnings.push({
+          code: "tax_not_applied",
+          message: `Tax/discount could not be applied: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`,
+        });
+      }
+    }
     for (const item of items ?? []) {
       try {
         await ctx.clockify.addInvoiceItem(invoice.id, item);
@@ -456,7 +498,7 @@ const createInvoice = defineRiskyAction({
 const updateInvoice = defineRiskyAction({
   name: "clockify_invoices_update",
   description:
-    "Update an invoice (note/subject/number/dates/currency/client, or status). `id` accepts the invoice id or its NUMBER (resolved server-side); `number` sets a NEW number. Billing action — previews and requires confirmation.",
+    "Update an invoice (note/subject/number/dates/currency/client, status, or tax/discount). `id` accepts the invoice id or its NUMBER (resolved server-side); `number` sets a NEW number. Set tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` (whole percents, e.g. 3 for 3%). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
   schema: z
@@ -470,6 +512,10 @@ const updateInvoice = defineRiskyAction({
       subject: z.string().optional(),
       clientId: z.string().optional(),
       status: invoiceStatusSchema.optional(),
+      // Whole percents (Clockify item-based tax — the rate lives on the invoice). "3" → 3.
+      taxPercent: zNumberLike(z.number().min(0).max(100)).optional(),
+      tax2Percent: zNumberLike(z.number().min(0).max(100)).optional(),
+      discountPercent: zNumberLike(z.number().min(0).max(100)).optional(),
     })
     .refine(
       (v) =>
@@ -480,7 +526,10 @@ const updateInvoice = defineRiskyAction({
         v.note !== undefined ||
         v.subject !== undefined ||
         v.clientId !== undefined ||
-        v.status !== undefined,
+        v.status !== undefined ||
+        v.taxPercent !== undefined ||
+        v.tax2Percent !== undefined ||
+        v.discountPercent !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
@@ -494,6 +543,9 @@ const updateInvoice = defineRiskyAction({
       ...(args.note !== undefined ? { note: args.note } : {}),
       ...(args.subject !== undefined ? { subject: args.subject } : {}),
       ...(args.clientId !== undefined ? { clientId: args.clientId } : {}),
+      ...(args.taxPercent !== undefined ? { taxPercent: args.taxPercent } : {}),
+      ...(args.tax2Percent !== undefined ? { tax2Percent: args.tax2Percent } : {}),
+      ...(args.discountPercent !== undefined ? { discountPercent: args.discountPercent } : {}),
     };
     const changes = describePatch(patch);
     if (args.status !== undefined) changes.push(`set status → ${args.status}`);

@@ -520,6 +520,44 @@ describe("invoice actions", () => {
     expect(result.kind).toBe("clarify");
     expect(fake.counts.importInvoiceTime ?? 0).toBe(0);
   });
+
+  it("clockify_invoices_update forwards tax/discount percents into the patch ('tax 3' lands on the invoice; subtax no ⇒ no tax2)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", taxPercent: "3", discountPercent: 10 }, // planner's flat "3"
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const patch = (preview.operation.payload as { patch: Record<string, unknown> }).patch;
+    expect(patch.taxPercent).toBe(3);
+    expect(patch.discountPercent).toBe(10);
+    expect(patch.tax2Percent).toBeUndefined(); // "subtax no" — no second tax
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect((fake.state.invoices.find((i) => i.id === "inv1") as any).taxPercent).toBe(3);
+  });
+
+  it("clockify_invoices_create applies a tax % and defaults its line items to taxed (Clockify item-based tax)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_create",
+      args: { clientId: "c1", taxPercent: 3, items: [{ amount: 200, quantity: 1 }] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const payload = preview.operation.payload as {
+      percentPatch?: Record<string, number>;
+      items: Array<{ applyTaxes?: string }>;
+    };
+    expect(payload.percentPatch?.taxPercent).toBe(3);
+    expect(payload.items[0].applyTaxes).toBe("TAX1"); // rate set ⇒ item taxed by default
+    expect(preview.preview.expectedChanges.join(" ")).toContain("Tax 3%"); // truthful preview
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.updateInvoice).toBe(1); // rate applied via the verified update path
+    expect((fake.state.invoices[fake.state.invoices.length - 1] as any).taxPercent).toBe(3);
+  });
 });
 
 describe("invoice actions — number→id resolution at preview time (live-loop FIX 1: every invoice call used the NUMBER)", () => {
