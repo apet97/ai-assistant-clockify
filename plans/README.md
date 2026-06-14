@@ -15,7 +15,7 @@ tidy-ups, not a defect pile.
 | Plan | Title | Priority | Effort | Depends on | Status |
 |------|-------|----------|--------|------------|--------|
 | 001 | Fold the cycles check into `npm run verify` (local gate = CI gate) | P1 | S | — | DONE |
-| 002 | Extract the history-sanitizer helpers out of `api.ts` | P2 | S | — | TODO |
+| 002 | Extract the history-sanitizer helpers out of `api.ts` | P2 | S | — | DONE |
 | 003 | Isolate post-commit bookkeeping so a DB hiccup can't drop a committed receipt's audit trail | P2 | S | — | TODO |
 | 004 | Signal pagination truncation instead of silently capping lists at 10k | P1 | M | — | TODO |
 | 005 | Incrementally decompose the 1394-line `api.ts` god-file | P3 | M (L for Phase 2) | 002 | TODO |

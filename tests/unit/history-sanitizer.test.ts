@@ -5,7 +5,7 @@ import {
   previewReplyText,
   pruneHistoryResult,
   sanitizeStoredReplyForModel,
-} from "../../src/routes/api.js";
+} from "../../src/routes/history-sanitizer.js";
 
 /**
  * Live item 318: a long session saturated with the deterministic
