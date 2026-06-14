@@ -16,7 +16,7 @@ export const meta = {
 // ---------------------------------------------------------------- constants
 
 const REPO = '/Users/15x/Downloads/WORKING/addons-me/ai-assistant-addon'
-const WORKSPACE_ID = '69bda6b317a0c5babe34b4ff' // the sacrificial "Marketplace Workspace" — the ONLY workspace live tests may hit
+const WORKSPACE_ID = '65b382b606de527a7ee2b60e' // the sacrificial workspace ("WORKSPACE", a dev/test account) — the ONLY workspace live tests may hit
 
 const RULES = `
 Repo: ${REPO} — run every command from this directory; paths are relative to it. This is a deployed Clockify marketplace add-on; the preview->confirm safety boundary (src/harness/*) is sacred.
