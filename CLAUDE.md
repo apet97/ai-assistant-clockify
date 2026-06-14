@@ -10,8 +10,8 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1224 tests**; `npm run cycles` (= `madge
---circular …`, now a pinned devDep) = **0** (keep both green). 137 typed actions,
+**Verified gate:** `npm run verify` = **1269 tests** (now folds in `npm run
+cycles` — plan 001) = **0** circular deps (keep both green). 137 typed actions,
 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
 (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
 violations. Gemini-ready: backend swap is env-only (`LLM_MODEL` +
@@ -43,6 +43,25 @@ secrets + an `if:always()` sweep (proven green live). `main` requires the `verif
 check (no forced PR). Detail in git log.
 
 **Recent arcs (detail in git log + `docs/HISTORY.md`):**
+- **plans-backlog + chat-history switcher (2026-06-14, `775ea77`…`d37e18b`):** the
+  `improve`-skill backlog (`plans/001-008`) landed on main via three resumable CC
+  Workflows (`ship-plans-and-review` → `finish-plans-and-fixes` →
+  `implement-chat-history-switcher`; each commits one green change per step, HEAD-gated).
+  Plans: 001 (cycles folded into `verify`), 002 (history-sanitizer module extracted),
+  003 (post-commit bookkeeping isolated best-effort — a DB hiccup can't drop a committed
+  receipt), 004 (pagination-truncation SIGNAL: `core.paginateWithMeta` + a `list_truncated`
+  caveat on `entries_list` AND `review_day`/`review_week`, where a truncated list understates
+  the total), 005 Phase-1 (api.ts → `request-schemas`/`consent-guard`/`async-handler`),
+  006 (graceful history restore — a benign/failed restore degrades quietly, 401 still surfaces).
+  Adversarial review added F3 (safe-write receipt-loss/502 fix — same class as 003 on the
+  safe-write path), F10 (never relay an unbacked "Done!/renamed" success), F2/F6/F7
+  (truthful comment + post-commit/​reply-persist robustness + tests). **Chat-history
+  switcher**: a header **"Chats ▾"** dropdown reopens the admin's live, owned, non-empty
+  sessions — `store.listSessions` + index, `GET /api/chat/sessions`, `POST
+  /api/chat/sessions/:id/open`. IDOR-guarded (foreign admin/workspace → 404, NO cookie;
+  re-cookie carries the target's UNEXTENDED expiry — Option A, no session-TTL change;
+  titles via `textContent`). Live-verified on the sacrificial WS (confirm-flow 16/16,
+  live-full FAIL=0, planner 162/162).
 - **external-review remediation (2026-06-14, `7f3be68`…`36c940f`):** 7 fixes —
   `COMMIT_TIMEOUT_MS` into validated config (bounded `< CLAIM_TTL_MS`); request
   hardening (32kb body cap; message `.max(4000)`/nonce `.max(256)`; body-parser 4xx
@@ -162,9 +181,14 @@ such bug was found against the REAL API, not by reading the code.
 - `src/routes/api.ts` — chat (JSON + NDJSON stream), confirm/cancel/undo/
   metrics + `POST /chat/new` (mints a fresh session/cookie → empty transcript;
   the prior session's messages are NOT deleted — kept under retention + the audit
-  log, so its cookie still replays; pinned by `chat-new.test.ts`);
+  log, so its cookie still replays; pinned by `chat-new.test.ts`) + the chat-history
+  switcher (`GET /chat/sessions` lists the admin's live, owned, non-empty sessions,
+  `current` marked from `claims.sessionId`; `POST /chat/sessions/:id/open` re-cookies
+  to an OWNED target — IDOR-guarded 404 + no cookie for a foreign admin/workspace,
+  the target's unextended expiry; `chat-sessions.test.ts`);
   `executeChatTurn` is the single turn pipeline. `src/ui/` vanilla TS chat (a11y;
-  previews batched so "Confirm all" stays one card; a header **"New chat"** button).
+  previews batched so "Confirm all" stays one card; header **"New chat"** + **"Chats ▾"**
+  history dropdown — `renderChatsMenu`, titles via `textContent`, full keyboard nav).
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 
