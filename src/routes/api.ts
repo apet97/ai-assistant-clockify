@@ -26,7 +26,7 @@ import {
   createPendingConfirmation,
   rotatePendingNonce,
 } from "../harness/confirmations.js";
-import { errorReceipt, successReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
+import { errorReceipt, hasChanges, successReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
 import { capAgentState, parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
 import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
@@ -350,16 +350,32 @@ export function apiRouter(deps: AppDeps): Router {
         return failureReplyText(failed, receipts.length);
       }
     }
-    // truthfulness (F10): a turn that produced NO results at all (no receipt, no
-    // preview, no clarify — the model ran zero tool calls) cannot have changed
-    // anything: a risky write only ever reaches the host through the
-    // preview→button-confirm flow, and a safe write would have left a receipt.
-    // Live (tour turn 30), the model nonetheless answered "Done! … has been
-    // renamed …" for an unbacked rename — telling the admin a write succeeded that
-    // never ran. Mirror the truthful-preview discipline: refuse to relay an
-    // unbacked completion claim, replacing it with a neutral "no changes made"
-    // note (stored too, so it can't re-enter history as if it had happened).
-    if (results.length === 0 && claimsCompletedMutation(baseText)) {
+    // truthfulness (F10): a completion claim ("Done! … deleted/created/renamed …")
+    // is truthful only if THIS turn actually applied a mutation. A risky write
+    // only ever reaches the host through the preview→button-confirm flow, and a
+    // safe write leaves a SUCCESS receipt carrying a `changed` set. Live (tour
+    // turn 30), the model answered "Done! … has been renamed …" for an unbacked
+    // rename — telling the admin a write succeeded that never ran.
+    //   The earlier guard checked `results.length === 0`, but a READ pushes a
+    // {kind:"receipt"} result carrying `data` (not `changed`), so the common
+    // read-then-fabricate shape left `results` non-empty and slipped a false
+    // "Done!" through. Gate instead on whether any SUCCESSFUL MUTATION receipt was
+    // produced: reads (and failed writes) no longer suppress the guard, while a
+    // genuine safe-write completion still narrates normally. The replacement is
+    // stored too, so it can't re-enter history as if it had happened.
+    const isReceipt = (r: unknown): r is { kind: "receipt"; receipt: SuccessReceipt | ErrorReceipt } =>
+      (r as { kind?: string }).kind === "receipt";
+    const appliedAnyChange = results.some(
+      (r) => isReceipt(r) && r.receipt.ok === true && hasChanges((r.receipt as SuccessReceipt).changed),
+    );
+    // A FAILED receipt means the model is (truthfully) reporting an attempt that
+    // didn't apply — e.g. "That tool isn't available; nothing was changed." Don't
+    // second-guess that honest report (claimsCompletedMutation mis-reads the
+    // past-tense "was changed"); only step in when the completion claim is backed
+    // by NEITHER a successful mutation NOR a failed action to report — i.e. the
+    // turn produced only reads (or nothing), the read-then-fabricate shape.
+    const reportedFailure = results.some((r) => isReceipt(r) && r.receipt.ok === false);
+    if (!appliedAnyChange && !reportedFailure && claimsCompletedMutation(baseText)) {
       return NO_CHANGE_MADE_REPLY;
     }
     return baseText;

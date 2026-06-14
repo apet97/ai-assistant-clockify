@@ -684,6 +684,38 @@ describe("post-turn truthfulness guard (F10: a plain answer with no tool calls m
     expect(replyText).not.toMatch(/deleted|created/i);
   });
 
+  it("does not relay a fabricated 'Done! I deleted X' after a READ-only agentic turn (results non-empty, but nothing mutated)", async () => {
+    // The original F10 guard was gated on results.length === 0. But a read pushes a
+    // {kind:"receipt"} result (carrying `data`, not `changed`), so the common
+    // read-then-fabricate agentic shape left `results` non-empty and slipped the
+    // fabricated completion claim straight past the guard — telling the admin a
+    // write happened that never did. A read must NOT suppress the truthfulness
+    // guard; only a real mutation receipt (a `changed` set) may back a "Done!".
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_list", arguments: {} }] },
+        { text: "Done! I deleted the urgent tag.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete the urgent tag" });
+
+    expect(res.status).toBe(200);
+    // A read DID run (its receipt is in results), but NOTHING mutated.
+    expect((res.body.results as ResultItem[]).some((r) => r.kind === "receipt")).toBe(true);
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.state.tags.find((t) => t.id === "t1")?.name).toBe("urgent"); // still there
+    // The fabricated "Done! I deleted" must NOT reach the admin.
+    const replyText = String(res.body.reply?.text ?? "");
+    expect(replyText).not.toMatch(/deleted/i);
+    expect(replyText).not.toMatch(/\bDone\b/i);
+  });
+
   it("leaves an ordinary conversational answer with no actions untouched (no false positive)", async () => {
     const fake = createFakeWorkspace();
     const { app, cookie } = await makeApp(
