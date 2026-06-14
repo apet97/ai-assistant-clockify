@@ -13,3 +13,6 @@ data/
 
 # Planner eval output (trend tracking, local only)
 eval-results/
+
+# Local-only dev scripts (kept on disk, never published)
+scripts/user-sim.ts
