@@ -630,6 +630,98 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
   });
 });
 
+// F10-truthfulness-assistant-falsely-claims-a-t: live tour turn 30 — the model
+// answered "Done! The tag … has been renamed …" for a RENAME (a high_risk_write)
+// while making ZERO tool calls. No preview, no receipt, no DB write — the rename
+// never happened (the next-turn delete couldn't find the renamed tag), yet the
+// admin was told it succeeded. A risky write can only ever be applied through the
+// preview→button-confirm flow; a plain-answer turn that ran no actions can NEVER
+// have mutated anything, so the route must not relay a fabricated success claim.
+describe("post-turn truthfulness guard (F10: a plain answer with no tool calls must not claim a completed write)", () => {
+  it("does not relay 'Done! … has been renamed' when the model ran no tool calls", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "AIASSIST_SMOKE_tour" }] });
+    const { app, model, cookie } = await makeApp(
+      // The exact live failure shape: free text claiming the rename succeeded, but
+      // ZERO tool calls — so nothing previewed, nothing committed.
+      [{ text: "Done! The tag **AIASSIST_SMOKE_tour** has been renamed to **AIASSIST_SMOKE_tour_renamed**.", toolCalls: [] }],
+      fake,
+    );
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "Rename the tag AIASSIST_SMOKE_tour to AIASSIST_SMOKE_tour_renamed." });
+
+    expect(res.status).toBe(200);
+    // The turn truly ran no actions: no receipts, no previews, nothing changed.
+    expect(res.body.results).toEqual([]);
+    expect(fake.counts.updateTag ?? 0).toBe(0);
+    expect(fake.state.tags.find((t) => t.id === "t1")?.name).toBe("AIASSIST_SMOKE_tour"); // un-renamed
+    // The user-visible reply must NOT carry the fabricated success claim.
+    const replyText = String(res.body.reply?.text ?? "");
+    expect(replyText).not.toMatch(/renamed/i);
+    expect(replyText).not.toMatch(/\bDone\b/i);
+    expect(model.completeWithTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not relay a fabricated 'I deleted'/'created'/'updated' claim with no tool calls", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [{ text: "I've deleted the urgent tag and created a new one called done.", toolCalls: [] }],
+      fake,
+    );
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete urgent and create done" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([]);
+    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.createTag ?? 0).toBe(0);
+    const replyText = String(res.body.reply?.text ?? "");
+    expect(replyText).not.toMatch(/deleted|created/i);
+  });
+
+  it("leaves an ordinary conversational answer with no actions untouched (no false positive)", async () => {
+    const fake = createFakeWorkspace();
+    const { app, cookie } = await makeApp(
+      [{ text: "I can rename tags for you — which tag would you like to rename, and to what?", toolCalls: [] }],
+      fake,
+    );
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "can you rename tags?" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.results).toEqual([]);
+    // A future/conditional offer (no completed-mutation framing) passes through verbatim.
+    expect(res.body.reply.text).toBe("I can rename tags for you — which tag would you like to rename, and to what?");
+  });
+
+  it("leaves a real 'Done — the tag was created.' reply that DID run a successful write untouched", async () => {
+    const fake = createFakeWorkspace();
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "new-tag" } }] },
+        { text: "Done — the tag was created.", toolCalls: [] },
+      ],
+      fake,
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a tag called new-tag" });
+
+    expect(res.status).toBe(200);
+    // A genuine safe write produced a success receipt; the claim is BACKED by a result.
+    expect((res.body.results as ResultItem[]).filter((r) => r.kind === "receipt" && r.receipt?.ok)).toHaveLength(1);
+    expect(fake.counts.createTag).toBe(1);
+    expect(res.body.reply.text).toBe("Done — the tag was created.");
+  });
+});
+
 describe("durable resume after the button-confirm (Phase 3)", () => {
   it("completes the headline flow: list clients → invoice preview → confirm → resumed truthful summary", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "cl1", name: "qwen" }] });

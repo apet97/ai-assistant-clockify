@@ -102,6 +102,69 @@ export function failedAttemptNote(failed: number): string {
   return ` (${failed} earlier ${subject} failed — see the receipts below.)`;
 }
 
+/**
+ * Past-tense / passive completion of a write verb. The vocabulary covers the
+ * mutations the harness can perform (rename/delete/create/update/add/remove/
+ * archive/log/start/stop/assign/grant/revoke/schedule/submit/approve/deny …),
+ * each in its committed form. Built from a closed verb set so a bare future or
+ * conditional ("I can rename", "should I delete") never matches.
+ */
+const COMPLETED_WRITE_VERB =
+  "(?:renamed|deleted|removed|created|added|updated|changed|modified|edited|archived|unarchived|logged|started|stopped|set|assigned|unassigned|granted|revoked|scheduled|unscheduled|submitted|resubmitted|approved|denied|cancelled|canceled|applied|moved|merged|saved|recorded|imported|exported|generated|sent|marked|completed|reverted|restored|enabled|disabled)";
+
+/**
+ * A claim that a mutation has ALREADY happened. Two anchored shapes:
+ *  - a "Done"/"Successfully"/"All set"-style completion lead, or
+ *  - a past-tense / passive framing of a write verb ("has been renamed",
+ *    "was deleted", "I've created", "I created", "successfully updated").
+ * Future / conditional framing ("I can rename", "would you like me to delete",
+ * "I'll create", "should I update") is deliberately NOT matched — those verbs
+ * carry no completion auxiliary.
+ *
+ * truthfulness (F10): used ONLY when a turn produced ZERO results (no receipt,
+ * no preview, no clarify) — i.e. the model ran no tool calls, so nothing could
+ * possibly have changed. A risky write reaches the host only via the
+ * preview→button-confirm flow; a plain-answer turn that ran no action can never
+ * have mutated anything, so such a "Done!/renamed" claim is always fabricated.
+ */
+const COMPLETED_MUTATION_CLAIM = new RegExp(
+  "(?:" +
+    // A "Done"/"All set"-style completion OPENER (anchored to the reply start so a
+    // stray "done" mid-sentence — e.g. a tag literally NAMED "done" — never trips it).
+    "^\\s*(?:done|all set|all done)\\b" +
+    "|" +
+    // "successfully <verb-ed>" — the adverb is a completion marker on the verb.
+    `\\bsuccessfully\\s+(?:just\\s+|now\\s+)*${COMPLETED_WRITE_VERB}\\b` +
+    "|" +
+    // Passive completion: "has/have/had/was/were/been/is now/are now … <verb-ed>".
+    `\\b(?:has|have|had|was|were|been|is now|are now)\\b[^.!?\\n]{0,40}?\\b${COMPLETED_WRITE_VERB}\\b` +
+    "|" +
+    // First-person completion: "I('ve)/we('ve) (just/now/successfully) <verb-ed>".
+    `\\b(?:i|i've|i have|we|we've|we have)\\b\\s+(?:just\\s+|now\\s+|successfully\\s+)*${COMPLETED_WRITE_VERB}\\b` +
+    ")",
+  "i",
+);
+
+/**
+ * Does this plain-answer text assert a completed mutation? See
+ * COMPLETED_MUTATION_CLAIM. The caller gates this on a turn that produced no
+ * results, so a `true` here means the model fabricated a success claim with no
+ * backing action.
+ */
+export function claimsCompletedMutation(text: string): boolean {
+  return COMPLETED_MUTATION_CLAIM.test(text);
+}
+
+/**
+ * Deterministic, neutral reply for a turn that produced NO actions yet whose
+ * model text claimed a completed mutation (truthfulness F10). It replaces the
+ * fabricated "Done!/renamed" claim — and is stored as the turn's assistant
+ * content — so the false success can never reach the admin OR re-enter the
+ * model-visible history as if it had happened.
+ */
+export const NO_CHANGE_MADE_REPLY =
+  "I didn't actually make any changes there — nothing ran. Could you tell me again exactly what you'd like me to do?";
+
 /** Escape a literal string for safe embedding in a RegExp source. */
 function escapeRegExp(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

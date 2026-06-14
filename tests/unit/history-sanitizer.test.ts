@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   HISTORY_RESULT_MAX_BYTES,
+  claimsCompletedMutation,
   previewReplyText,
   pruneHistoryResult,
   sanitizeStoredReplyForModel,
@@ -109,5 +110,43 @@ describe("pruneHistoryResult (byte backstop for session restore)", () => {
   it("leaves a non-receipt result untouched", () => {
     const clarify = { kind: "clarify", message: "Which project?", options: [{ label: "A", value: "a" }] };
     expect(pruneHistoryResult(clarify)).toEqual(clarify);
+  });
+});
+
+/**
+ * F10-truthfulness-assistant-falsely-claims-a-t: a plain-answer turn that ran
+ * ZERO tool calls cannot have mutated anything (risky writes only land via the
+ * preview→button-confirm flow; a safe write leaves a receipt). The route uses
+ * this predicate — gated on a no-results turn — to refuse to relay a fabricated
+ * completion claim. It must match completed-mutation framing yet leave future /
+ * conditional offers and pure read answers untouched.
+ */
+describe("claimsCompletedMutation (truthfulness guard predicate)", () => {
+  it("matches a fabricated completion claim", () => {
+    const claims = [
+      "Done! The tag **AIASSIST_SMOKE_tour** has been renamed to **AIASSIST_SMOKE_tour_renamed**.",
+      "I've deleted the urgent tag and created a new one called done.",
+      "The project was archived.",
+      "Successfully updated the client.",
+      "I created the invoice for qwen.",
+      "All set — the tag was removed.",
+      "I've logged 2 hours on Acme for today.",
+      "The role has been granted.",
+    ];
+    for (const text of claims) expect(claimsCompletedMutation(text)).toBe(true);
+  });
+
+  it("does NOT match a future / conditional offer or a read-only answer", () => {
+    const safe = [
+      "I can rename tags for you — which tag would you like to rename, and to what?",
+      "Would you like me to delete the urgent tag?",
+      "I'll create the invoice once you confirm the amount.",
+      "Should I update the client's address?",
+      "Here are your tags: urgent, stale, done.",
+      "I found 3 clients matching that name.",
+      "Could you say more about what you'd like changed?",
+      "I couldn't find an active project named \"X\".",
+    ];
+    for (const text of safe) expect(claimsCompletedMutation(text)).toBe(false);
   });
 });

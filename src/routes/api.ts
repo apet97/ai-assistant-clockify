@@ -45,6 +45,8 @@ import {
   failedAttemptNote,
   sanitizeStoredReplyForModel,
   isTransientErrorMessage,
+  claimsCompletedMutation,
+  NO_CHANGE_MADE_REPLY,
 } from "./history-sanitizer.js";
 import {
   groupsPatchSchema,
@@ -70,6 +72,8 @@ export {
   failedAttemptNote,
   sanitizeStoredReplyForModel,
   isTransientErrorMessage,
+  claimsCompletedMutation,
+  NO_CHANGE_MADE_REPLY,
 } from "./history-sanitizer.js";
 
 /**
@@ -345,6 +349,18 @@ export function apiRouter(deps: AppDeps): Router {
       if (receipts.length > 0 && failed === receipts.length) {
         return failureReplyText(failed, receipts.length);
       }
+    }
+    // truthfulness (F10): a turn that produced NO results at all (no receipt, no
+    // preview, no clarify — the model ran zero tool calls) cannot have changed
+    // anything: a risky write only ever reaches the host through the
+    // preview→button-confirm flow, and a safe write would have left a receipt.
+    // Live (tour turn 30), the model nonetheless answered "Done! … has been
+    // renamed …" for an unbacked rename — telling the admin a write succeeded that
+    // never ran. Mirror the truthful-preview discipline: refuse to relay an
+    // unbacked completion claim, replacing it with a neutral "no changes made"
+    // note (stored too, so it can't re-enter history as if it had happened).
+    if (results.length === 0 && claimsCompletedMutation(baseText)) {
+      return NO_CHANGE_MADE_REPLY;
     }
     return baseText;
   }
