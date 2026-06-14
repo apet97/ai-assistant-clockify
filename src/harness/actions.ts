@@ -202,7 +202,32 @@ export async function commitConfirmedOperation(
   // blocks the window — the existing "failed commit is retryable" invariant). By
   // the time fill/release run the host write has ALREADY happened, so a throw
   // here is bookkept best-effort and the committed receipt is returned regardless.
-  const receipt = await runCommit(commit, ctx, operation);
+  //
+  // Heartbeat the claim while the commit is in flight (r1-concurrency-races-01
+  // follow-up): a single createInvoice commit issues POST+GET+PUT+tax+N item
+  // POSTs, each bounded only PER-CALL by COMMIT_TIMEOUT_MS — their SUM can exceed
+  // the dead-claim CLAIM_TTL_MS, so without a heartbeat a concurrent re-confirm
+  // could sweep the still-LIVE claim and double-commit (a duplicate invoice).
+  // Refreshing claimed_at on CLAIM_HEARTBEAT_MS keeps a live claim from aging
+  // out; a crashed process stops heartbeating, so a genuinely dead claim still
+  // ages out on the CLAIM_TTL clock (crash recovery preserved). The interval is
+  // unref'd (never keeps the process alive) and cleared in finally.
+  const heartbeat = ledger.touch
+    ? setInterval(() => {
+        try {
+          ledger.touch?.(scopedKey);
+        } catch {
+          // Best-effort: a failed heartbeat only risks a sweep, never a crash.
+        }
+      }, CLAIM_HEARTBEAT_MS)
+    : undefined;
+  heartbeat?.unref?.();
+  let receipt: SuccessReceipt | ErrorReceipt;
+  try {
+    receipt = await runCommit(commit, ctx, operation);
+  } finally {
+    if (heartbeat) clearInterval(heartbeat);
+  }
   try {
     if (receipt.ok) ledger.fill(scopedKey, receipt);
     else ledger.release(scopedKey);
@@ -211,6 +236,14 @@ export async function commitConfirmedOperation(
   }
   return receipt;
 }
+
+/**
+ * Heartbeat cadence (ms) for refreshing a live idempotency claim during a long
+ * multi-call commit. Must stay comfortably below the store's CLAIM_TTL_MS (5
+ * min) so a live claim is refreshed well before the dead-claim sweep would fire
+ * — pinned `< CLAIM_TTL_MS` by tests/unit/idempotency-store.test.ts.
+ */
+export const CLAIM_HEARTBEAT_MS = 90_000;
 
 /** Log a post-commit ledger write failure (message only — never secrets). */
 function logLedgerBookkeepingFailure(error: unknown): void {

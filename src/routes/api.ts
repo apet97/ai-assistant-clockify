@@ -622,6 +622,9 @@ export function apiRouter(deps: AppDeps): Router {
         lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key),
         fill: (key, r) => deps.store.fillIdempotency(key, r, now().getTime()),
         release: (key) => deps.store.releaseIdempotency(key),
+        // Heartbeat a long multi-call commit's live claim so it is never swept
+        // mid-flight and double-committed (r1-concurrency-races-01 follow-up).
+        touch: (key) => deps.store.touchIdempotencyClaim(key, now().getTime()),
       };
       receipt = await commitConfirmedOperation(
         { ...actionContext(claims.workspaceId, claims.adminUserId, installation), idempotency },

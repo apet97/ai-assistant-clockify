@@ -70,6 +70,13 @@ export interface AtomicIdempotencyLedger extends IdempotencyLedger {
   fill(scopedKey: string, receipt: SuccessReceipt): void;
   /** Release the OWN claim (commit failed/threw) so a retry can re-claim. */
   release(scopedKey: string): void;
+  /**
+   * Heartbeat: refresh the OWN live claim's timestamp during a long commit so
+   * the dead-claim sweep can't fire on a still-in-flight multi-call commit and
+   * let a concurrent re-confirm double-commit. Optional — a ledger without it
+   * simply gets no heartbeat (the legacy/test path).
+   */
+  touch?(scopedKey: string): void;
 }
 
 /**

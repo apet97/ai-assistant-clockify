@@ -253,6 +253,15 @@ export interface Store {
   fillIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
   /** Release the OWN claim (guarded on receipt_json IS NULL — never drops a completed row). */
   releaseIdempotency(key: string): void;
+  /**
+   * Heartbeat a LIVE claim: refresh `claimed_at` so a long multi-call commit's
+   * claim is never swept as dead while it is still in flight (a single
+   * createInvoice commit issues POST+GET+PUT+tax+N items, whose summed latency
+   * can exceed CLAIM_TTL_MS — only the per-call timeout bounds each one).
+   * Guarded on receipt_json IS NULL — never touches a completed row, and a
+   * missing key no-ops.
+   */
+  touchIdempotencyClaim(key: string, claimedAtEpochMs: number): void;
 
   /** Undo ledger (Phase 5b): a reversible action and its one-use status. */
   recordUndoable(input: UndoRecordInput): string;
@@ -893,6 +902,14 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     releaseIdempotency(key) {
       // Guarded on receipt_json IS NULL: a release can NEVER drop a COMPLETED row.
       db.prepare("DELETE FROM idempotency_keys WHERE key = ? AND receipt_json IS NULL").run(key);
+    },
+
+    touchIdempotencyClaim(key, claimedAtEpochMs) {
+      // Guarded on receipt_json IS NULL: only refreshes a still-in-flight claim.
+      // A completed (filled) row is never disturbed; a missing key no-ops.
+      db.prepare(
+        "UPDATE idempotency_keys SET claimed_at = ? WHERE key = ? AND receipt_json IS NULL",
+      ).run(claimedAtEpochMs, key);
     },
 
     recordUndoable(input) {

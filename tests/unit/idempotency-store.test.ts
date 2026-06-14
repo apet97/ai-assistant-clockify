@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createStore, CLAIM_TTL_MS, type Store } from "../../src/db/store.js";
+import { CLAIM_HEARTBEAT_MS } from "../../src/harness/actions.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 
 const receipt: SuccessReceipt = { ok: true, action: "clockify_invoices_create", entity: "invoice" };
@@ -111,6 +112,50 @@ describe("store atomic idempotency claim", () => {
   it("CLAIM_TTL_MS is strictly above the commit-timeout ceiling so a live claim is provably not swept", async () => {
     const { COMMIT_TIMEOUT_MS } = await import("../../src/clockify/rest/core.js");
     expect(CLAIM_TTL_MS).toBeGreaterThan(COMMIT_TIMEOUT_MS);
+  });
+});
+
+describe("claim heartbeat keeps a long multi-call commit's claim from being swept (touchIdempotencyClaim)", () => {
+  // A single createInvoice commit issues POST+GET+PUT+tax+N item POSTs; their
+  // summed latency can exceed CLAIM_TTL_MS (only the per-call timeout bounds
+  // each). Without a heartbeat, a re-confirm past CLAIM_TTL would sweep the
+  // still-LIVE claim and double-commit. The heartbeat refreshes claimed_at.
+  const T = 1_000_000;
+  const WINDOW = 10 * 60 * 1000;
+  const claim = (key: string, claimedAt: number, claimNotBefore: number) =>
+    store!.claimIdempotency(key, claimedAt, T - WINDOW, claimNotBefore);
+
+  it("CLAIM_HEARTBEAT_MS refreshes well before CLAIM_TTL_MS (margin for a delayed beat)", () => {
+    expect(CLAIM_HEARTBEAT_MS).toBeLessThan(CLAIM_TTL_MS);
+    expect(CLAIM_HEARTBEAT_MS * 2).toBeLessThan(CLAIM_TTL_MS);
+  });
+
+  it("a HEARTBEATED claim is NOT swept past CLAIM_TTL_MS — a re-confirm sees in_flight, never a duplicate", () => {
+    store = createStore(":memory:");
+    expect(claim("hb", T, T - 1)).toBe("won"); // long commit wins the claim at T0
+    // It heartbeats partway through (within CLAIM_TTL), refreshing claimed_at.
+    store.touchIdempotencyClaim("hb", T + CLAIM_TTL_MS - 60_000);
+    // A re-confirm AFTER T0 + CLAIM_TTL_MS: the refreshed claim is still LIVE.
+    const reconfirmAt = T + CLAIM_TTL_MS + 10_000;
+    expect(claim("hb", reconfirmAt, reconfirmAt - CLAIM_TTL_MS)).toBe("in_flight");
+  });
+
+  it("WITHOUT a heartbeat the same in-flight claim WOULD be swept (the duplicate-invoice bug the heartbeat closes)", () => {
+    store = createStore(":memory:");
+    expect(claim("nohb", T, T - 1)).toBe("won");
+    // No touch: the re-confirm past CLAIM_TTL sweeps the stale claim and RE-WINS →
+    // a second host commit (the confirmed duplicate-invoice path).
+    const reconfirmAt = T + CLAIM_TTL_MS + 10_000;
+    expect(claim("nohb", reconfirmAt, reconfirmAt - CLAIM_TTL_MS)).toBe("won");
+  });
+
+  it("touchIdempotencyClaim never disturbs a COMPLETED row (guarded on receipt_json IS NULL)", () => {
+    store = createStore(":memory:");
+    expect(claim("done", T, T - 1)).toBe("won");
+    store.fillIdempotency("done", receipt, T);
+    store.touchIdempotencyClaim("done", T + 999_999); // no-op on a filled row
+    expect(store.claimIdempotencyReceipt("done")?.action).toBe("clockify_invoices_create");
+    expect(claim("done", T + 1, T)).toBe("replay"); // still a normal completed replay
   });
 });
 

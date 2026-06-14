@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { executeAction, commitConfirmedOperation } from "../../src/harness/actions.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { executeAction, commitConfirmedOperation, CLAIM_HEARTBEAT_MS } from "../../src/harness/actions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createStore, CLAIM_TTL_MS, type Store } from "../../src/db/store.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
@@ -164,5 +164,35 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     expect(r2.ok).toBe(true);
     if (r2.ok) expect((r2.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(false);
     expect(fake.counts.createInvoice).toBe(1); // exactly one invoice (the failure created none)
+  });
+
+  it("HEARTBEAT WIRING: a long in-flight commit refreshes its claim via ledger.touch (so it is never swept mid-flight)", async () => {
+    // A multi-call commit (createInvoice = POST+GET+PUT+tax+N items) can run past
+    // CLAIM_TTL_MS; without a heartbeat its still-LIVE claim would be swept and a
+    // re-confirm would double-commit. commitConfirmedOperation must touch the
+    // claim on CLAIM_HEARTBEAT_MS while the commit is in flight, and stop after.
+    vi.useFakeTimers();
+    try {
+      store = createStore(":memory:");
+      const touched: string[] = [];
+      const ledger: AtomicIdempotencyLedger = { ...atomicLedger(store), touch: (k) => touched.push(k) };
+      const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+      const deferred = deferredCreateInvoice(fake);
+      const ctx = ctxWith(fake, ledger, deferred.client);
+      const op = await previewInvoice(ctx, "qwen");
+
+      const commit = commitConfirmedOperation(ctx, op); // claims, then blocks on the gate
+      await vi.advanceTimersByTimeAsync(CLAIM_HEARTBEAT_MS * 2 + 1_000); // ~2 beats in flight
+      expect(touched.length).toBeGreaterThanOrEqual(2); // the live claim is being refreshed
+
+      deferred.resolve();
+      expect((await commit).ok).toBe(true);
+
+      const afterCommit = touched.length;
+      await vi.advanceTimersByTimeAsync(CLAIM_HEARTBEAT_MS * 3); // interval was cleared in finally
+      expect(touched.length).toBe(afterCommit); // no further beats after the commit settles
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
