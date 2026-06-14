@@ -3,12 +3,14 @@ import { isNearBottom } from "./presentation.js";
 import {
   el,
   ICON_GEAR,
+  renderChatsMenu,
   renderClarify,
   renderPermissionTable,
   renderPreview,
   renderReceipt,
   renderWelcome,
   svgIcon,
+  type ChatSessionSummary,
 } from "./render.js";
 import {
   createRestoreGate,
@@ -245,6 +247,50 @@ export async function submitStreaming(api: StreamingApi, message: string, hooks:
   }
 }
 
+/** Minimal API surface the switch flow needs (so it's trivial to test). */
+export interface SwitchApiLike {
+  switchSession(id: string): Promise<unknown>;
+}
+
+/**
+ * Hooks the switch flow plugs into. `onSwitched(id)` fires ONLY after the cookie
+ * was re-bound to the target session (so the host can reset the transcript and
+ * replay the switched-to conversation); on ANY failure it fires `onError` and
+ * NEVER `onSwitched` — the current chat must stay intact when the switch didn't
+ * happen.
+ */
+export interface SwitchHooks {
+  onSwitched(id: string): void;
+  onError(message: string): void;
+}
+
+/** Honest fallback copy when opening a past conversation fails (non-401). */
+export const SWITCH_FAILED_MESSAGE = "Could not open that conversation. Please try again.";
+
+/**
+ * The chat-history switch flow over POST /api/chat/sessions/:id/open. Mirrors the
+ * send/new-chat error discipline: `switchSession` → `json()` only THROWS on 401
+ * (an expired session → the reload copy); a non-401 failure (the route's 404
+ * `{ok:false,code,message}` for a foreign/expired id) comes back as the return
+ * body, so we inspect `ok === false` and surface the server's honest copy. ON
+ * SUCCESS we hand the id to `onSwitched` (the host re-cookied already on the
+ * server) so it can reset + replay; on failure the current chat is LEFT INTACT.
+ */
+export async function switchToSession(api: SwitchApiLike, id: string, hooks: SwitchHooks): Promise<void> {
+  try {
+    const response = (await api.switchSession(id)) as { ok?: boolean; message?: string };
+    if (response?.ok === false) {
+      hooks.onError(response.message?.trim() ? response.message : SWITCH_FAILED_MESSAGE);
+      return;
+    }
+    hooks.onSwitched(id);
+  } catch (error) {
+    // A 401 always means "reload" (httpErrorMessage maps it); any other thrown
+    // failure shows the friendly switch fallback. The current chat stays intact.
+    hooks.onError(error instanceof ApiError ? httpErrorMessage(error.status, error.message, SWITCH_FAILED_MESSAGE) : SWITCH_FAILED_MESSAGE);
+  }
+}
+
 /** Real fetch-backed API client (same-origin; the session cookie authenticates). */
 export function createFetchApi(): ChatApi {
   async function json(path: string, init?: RequestInit): Promise<unknown> {
@@ -375,6 +421,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
   root.replaceChildren();
   const header = el("header", "app-header");
   header.appendChild(el("h1", undefined, "AI Assistant"));
+  // The chat-history switcher: a "Chats ▾" dropdown (the renderChatsMenu widget,
+  // which owns its own toggle/open/close + a11y) listing the admin's recent
+  // conversations. Hidden until the chat is up (same as the other header
+  // controls). refreshChatsMenu() rebuilds it with the current list whenever
+  // that list can change (chat-up, New chat, after a turn) so it stays fresh.
+  const chatsSlot = el("div", "chats-slot hidden");
+  header.appendChild(chatsSlot);
   // Start a fresh conversation. Hidden until the chat is up (same as settings).
   // The previous chat stays on the server (retention + the audit log keep it);
   // this only resets the visible transcript to an empty session.
@@ -562,7 +615,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
           send.disabled = working;
           input.disabled = working;
           form.setAttribute("aria-busy", String(working));
-          if (!working) input.focus(); // return focus to the composer after the turn
+          if (!working) {
+            input.focus(); // return focus to the composer after the turn
+            void refreshChatsMenu(); // a fresh session now has its first message → appears in the list
+          }
         },
         onAssistant: (assistantText) => appendMessage("assistant", assistantText),
         onResults: (results) => renderResults(results),
@@ -587,6 +643,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
     chat.classList.remove("hidden");
     settingsButton.classList.remove("hidden");
     newChatButton.classList.remove("hidden");
+    chatsSlot.classList.remove("hidden");
+    void refreshChatsMenu(); // populate the history dropdown with the current list
     input.focus();
   }
 
@@ -670,6 +728,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     messages.replaceChildren(); // drop the transcript + any pending preview cards
     chat.querySelector(".welcome")?.remove();
     chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+    void refreshChatsMenu(); // the prior conversation is now reopenable from the dropdown
     focusComposer();
   }
   newChatButton.addEventListener("click", () => void startNewChat());
@@ -708,6 +767,57 @@ function mount(root: HTMLElement, api: ChatApi): void {
       // best-effort and the composer must stay usable.
       restoreGate.settle();
     }
+  }
+
+  /**
+   * Switch to a past conversation. The server re-cookies to the target session
+   * (an owned, live id only — the route 404s a foreign/expired one); ON SUCCESS
+   * we mirror startNewChat's reset (drop the transcript + any pending cards),
+   * then re-arm the restore gate and replay the switched-to session via
+   * restoreHistory(). ON FAILURE the current chat is LEFT INTACT and the error
+   * is surfaced honestly. Focus returns to the Chats toggle either way (WCAG
+   * 2.4.3 Focus Order — like Confirm/Cancel's focus return).
+   */
+  async function selectSession(id: string): Promise<void> {
+    await switchToSession(api, id, {
+      onSwitched: async () => {
+        clearError();
+        setWorking(false);
+        messages.replaceChildren(); // drop the previous transcript + any preview cards
+        chat.querySelector(".welcome")?.remove();
+        // Arm the gate so a message typed during the replay can't jump ahead
+        // (r1-new-session-restore-04); restoreHistory settles it when done.
+        restoreGate = createRestoreGate();
+        await restoreHistory();
+        if (messages.childElementCount === 0) {
+          // The switched-to session replayed nothing visible — show the welcome.
+          chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+        }
+      },
+      onError: (message) => showError(message),
+    });
+    // Return focus to the toggle (the widget was rebuilt on open).
+    (chatsSlot.querySelector(".chats-toggle") as HTMLElement | null)?.focus();
+  }
+
+  /**
+   * (Re)build the chat-history dropdown with a FRESH list. The `renderChatsMenu`
+   * widget owns its own toggle/open/close + a11y; we just feed it the current
+   * sessions and wire `onSelect` to the switch flow. We rebuild whenever the
+   * list can change (chat-up, New chat, after the first message of a fresh
+   * session) so the menu stays current. A failed list is non-fatal — show an
+   * honest error and leave the slot's prior widget usable.
+   */
+  async function refreshChatsMenu(): Promise<void> {
+    let sessions: ChatSessionSummary[] = [];
+    try {
+      const body = (await api.listSessions()) as { ok?: boolean; sessions?: ChatSessionSummary[] };
+      sessions = body?.sessions ?? [];
+    } catch (error) {
+      showError(error instanceof ApiError ? error.message : "Could not load your conversations.");
+      return;
+    }
+    chatsSlot.replaceChildren(renderChatsMenu(sessions, { onSelect: (id) => void selectSession(id) }));
   }
 
   async function init(): Promise<void> {
