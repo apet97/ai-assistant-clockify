@@ -199,15 +199,30 @@ export function apiRouter(deps: AppDeps): Router {
     // Every executed action — success or error, single-turn or agentic — is
     // audited under the catalog's risk labels and offered an undo if reversible.
     const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt): void => {
-      deps.store.addAuditEvent({
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        sessionId: claims.sessionId,
-        actionName,
-        risk: getAction(actionName)?.risks ?? [],
-        receipt,
-      });
-      const undoId = recordUndoIfReversible(claims, receipt);
+      // Post-execution bookkeeping is best-effort: a safe write executes
+      // immediately (no confirm round-trip), so by the time we audit it the
+      // change has ALREADY happened on the host. A transient DB error here (e.g.
+      // a microsecond SQLITE_BUSY) must NOT throw the turn — that would 502
+      // (agentic) / 500 (single-turn), drop the committed receipt, and invite a
+      // duplicate write. Mirror the confirm-tail fix: log (message only, no
+      // secrets) and still emit the receipt for the change that already ran.
+      let undoId: string | undefined;
+      try {
+        deps.store.addAuditEvent({
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          sessionId: claims.sessionId,
+          actionName,
+          risk: getAction(actionName)?.risks ?? [],
+          receipt,
+        });
+        undoId = recordUndoIfReversible(claims, receipt);
+      } catch (error) {
+        console.error(
+          "post-execution bookkeeping failed (action already applied; receipt preserved):",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       emit({ kind: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
     };
 
