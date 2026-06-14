@@ -532,7 +532,15 @@ export function apiRouter(deps: AppDeps): Router {
       return undefined;
     }
     const { replyKind, baseText } = settleAgentTurn(m, turn);
-    const replyText = truthfulReplyText(m.results, baseText, replyKind);
+    // The receipt that TRIGGERED this resume is a mutation this turn already
+    // applied (the confirmed risky write). Include it in the truthfulness check so
+    // a genuine post-confirm completion ("Done!", "I've created …", "has been …")
+    // is NOT wrongly replaced by NO_CHANGE_MADE_REPLY — the F10 guard is for
+    // read-then-fabricate, not for a real completion whose receipt lives outside
+    // the resume turn's own results. Only the CHECK sees it; persistence/streaming
+    // keep using m.results so the committed receipt is never double-counted.
+    const resultsForTruthfulness = receipt.ok ? [{ kind: "receipt" as const, receipt }, ...m.results] : m.results;
+    const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind);
     persistAssistantReply(claims, replyKind, replyText, m.results);
     recordTurnTelemetrySafely(claims, "resume", tracked.usage, now().getTime() - resumeStartMs);
     return { replyKind, replyText, results: m.results };

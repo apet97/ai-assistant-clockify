@@ -848,6 +848,39 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(history.some((m) => m.role === "assistant" && m.content.includes("qwen"))).toBe(true);
   });
 
+  // F10 false-positive on resume (live): after a confirmed write, the resume's
+  // truthful completion narration ("Done! …", "I've created …", "has been …") was
+  // wrongly REPLACED with the NO_CHANGE_MADE_REPLY ("nothing ran") because the
+  // just-committed receipt isn't in the resume turn's own results, so the guard saw
+  // "no mutation this turn" and fired. The committed write IS the mutation; the
+  // resume must relay the truthful completion. (The headline test above dodged this
+  // only because "Created the invoice …" doesn't match the completion-claim regex;
+  // real models say "Done!"/"I've …", which do.)
+  it("a post-confirm resume that narrates completion ('Done! …') is relayed, NOT replaced with 'nothing ran'", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [
+        { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        // The resume narrates completion with wording that DOES match the F10 regex.
+        { text: "Done! I've deleted the urgent tag.", toolCalls: [] },
+      ],
+      fake,
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(fake.counts.deleteTag).toBe(1); // the mutation really happened
+    // The resumed reply is the model's truthful completion — never "nothing ran".
+    expect(confirm.body.resume.reply.text).toBe("Done! I've deleted the urgent tag.");
+    expect(String(confirm.body.resume.reply.text)).not.toMatch(/nothing ran/i);
+  });
+
   it("chains a second interrupt: the resumed loop may return another preview, confirmable in turn", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }, { id: "t2", name: "stale" }] });
     const { app, cookie } = await makeApp(
