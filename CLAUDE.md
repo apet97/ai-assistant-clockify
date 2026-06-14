@@ -186,7 +186,10 @@ such bug was found against the REAL API, not by reading the code.
   `current` marked from `claims.sessionId`; `POST /chat/sessions/:id/open` re-cookies
   to an OWNED target — IDOR-guarded 404 + no cookie for a foreign admin/workspace,
   the target's unextended expiry; `chat-sessions.test.ts`);
-  `executeChatTurn` is the single turn pipeline. `src/ui/` vanilla TS chat (a11y;
+  `executeChatTurn` is the single turn pipeline. Pure helpers split into sibling
+  modules (plans 002/005): `history-sanitizer.ts` (model-visible-history rewrite +
+  truthful-preview text), `request-schemas.ts` (Zod bodies), `consent-guard.ts`
+  (typed-consent), `async-handler.ts`. `src/ui/` vanilla TS chat (a11y;
   previews batched so "Confirm all" stays one card; header **"New chat"** + **"Chats ▾"**
   history dropdown — `renderChatsMenu`, titles via `textContent`, full keyboard nav).
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
@@ -359,9 +362,9 @@ npm install
 npm run type-check     # tsc --noEmit
 npm test               # vitest run (fakes only; no network)
 npm run build          # tsc + vite -> dist/server, dist/ui
-npm run verify         # type-check + test + build (the gate)
+npm run verify         # type-check + cycles + test + build (the gate; cycles folded in by plan 001)
 npm run dev            # tsx src/server.ts (needs env)
-npm run cycles         # madge --circular … (pinned devDep) — keep 0
+npm run cycles         # madge --circular … (pinned devDep) — keep 0 (now also runs inside verify)
 ```
 
 ## Local dev hosting (tunnel)
@@ -399,6 +402,11 @@ npx tsx --env-file=.env.server scripts/live-chat-tour.ts                        
 LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts                                             # prod add-on-token path (needs LIVE_ADDON_TOKEN)
 ```
 
-Dev workspace: "Marketplace Workspace" `69bda6b317a0c5babe34b4ff`, owner member
-id `69bda6b317a0c5babe34b4fe` (use THAT for the user-token exchange, not the
-install token's `user` claim). Always finish with the sweep at 0 leftovers.
+Two sacrificial workspaces are in play (both dev/test accounts; never a real
+tenant): the **install-token / dev-console** workspace "Marketplace Workspace"
+`69bda6b317a0c5babe34b4ff` (owner member id `69bda6b317a0c5babe34b4fe` — use THAT
+for the user-token exchange, not the install token's `user` claim; this is what
+`live-confirm-flow` / the addon path hit) and the **API-key** workspace in `.env`
+`LIVE_WORKSPACE_ID` (currently `65b382b606de527a7ee2b60e`, "WORKSPACE", owner user
+`64621faec4d2cc53b91fce6c` — what `live-full` / `live-sweep` hit). Always finish
+with the sweep at 0 leftovers.

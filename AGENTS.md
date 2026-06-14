@@ -146,7 +146,7 @@ npm install
 npm run type-check    # tsc --noEmit
 npm test              # vitest run (fakes only, no network)
 npm run build         # -> dist/server, dist/ui
-npm run verify        # type-check + test + build (the gate)
+npm run verify        # type-check + cycles + test + build (the gate)
 npm run dev           # tsx src/server.ts (needs env)
 ```
 
@@ -174,7 +174,8 @@ npm run dev           # tsx src/server.ts (needs env)
 - `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts` (incl. `POST /chat/new`
   = fresh session; old chats kept under retention), shared `deps.ts`.
   `src/server.ts` — `createApp(deps)` + `start()`.
-- `src/ui/` — vanilla TS chat UI (header **"New chat"** button). `tests/` — unit +
+- `src/ui/` — vanilla TS chat UI (header **"New chat"** + **"Chats ▾"** history
+  dropdown to reopen live owned sessions). `tests/` — unit +
   integration (fakes via `tests/helpers/fake-clockify.ts`). `scripts/` — opt-in
   live exercisers.
 
