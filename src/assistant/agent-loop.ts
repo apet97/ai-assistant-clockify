@@ -1,5 +1,5 @@
 /**
- * The durable, approval-gated agentic tool-loop (NEXT_SESSION_PLAN Phase 2/3).
+ * The durable, approval-gated agentic tool-loop.
  *
  * A vanilla agent loop runs a turn to completion; ours is interruptible because a
  * risky write must pause for a button-confirm that arrives as a SEPARATE HTTP
