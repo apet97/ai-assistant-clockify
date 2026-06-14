@@ -811,6 +811,99 @@ button:disabled {
   gap: var(--sp-2);
 }
 
+/* ----- 13b. Chat-history switcher ("Chats" dropdown) ---------------------------- */
+/* The toggle anchors the absolutely-positioned menu panel below it. */
+.chats-menu {
+  position: relative;
+}
+
+.chats-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.chats-toggle svg {
+  width: 14px;
+  height: 14px;
+  /* Point the chevron downward (the icon is a rightward "›"). */
+  transform: rotate(90deg);
+}
+
+.chats-toggle[aria-expanded="true"] svg {
+  transform: rotate(-90deg);
+}
+
+/* The dropdown panel: a card-shadowed list anchored under the toggle. */
+.chats-list {
+  position: absolute;
+  top: calc(100% + var(--sp-1));
+  right: 0;
+  z-index: 20;
+  min-width: 240px;
+  max-width: 340px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--sp-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-card);
+}
+
+.chats-list[hidden] {
+  display: none;
+}
+
+.chats-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-sm);
+}
+
+.chats-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.chats-item.current {
+  background: var(--surface-2);
+}
+
+.chats-check {
+  display: inline-flex;
+  color: var(--ok);
+}
+
+.chats-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chats-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.chats-time {
+  flex: 0 0 auto;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+
+.chats-empty {
+  padding: var(--sp-2) var(--sp-3);
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+}
+
 /* ----- 14. Focus & motion ------------------------------------------------------ */
 /* A clearly visible keyboard-focus indicator (WCAG 2.4.7). */
 :focus-visible {

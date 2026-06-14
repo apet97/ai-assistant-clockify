@@ -122,6 +122,148 @@ export function renderPermissionTable(
   return wrapper;
 }
 
+/**
+ * One conversation in the chat-history switcher: the route's `SessionSummary`
+ * plus the server-set `current` flag (which session the cookie is on — the
+ * client can never spoof this; it comes from `claims.sessionId`).
+ */
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  lastMessageAt: string;
+  createdAt: string;
+  current: boolean;
+}
+
+/** Dependencies `renderChatsMenu` needs from the host `mount`. */
+export interface ChatsMenuDeps {
+  /** Switch to the picked conversation (never called for the CURRENT one). */
+  onSelect: (id: string) => void;
+}
+
+const TITLE_MAX = 48;
+
+/** Truncate a (untrusted) title for the menu label; whole-string via textContent. */
+function truncateTitle(title: string): string {
+  const trimmed = title.trim() || "Conversation";
+  return trimmed.length > TITLE_MAX ? `${trimmed.slice(0, TITLE_MAX - 1)}…` : trimmed;
+}
+
+/** A coarse "5m ago" / "2h ago" / "3d ago" label for the last-activity time. */
+export function relativeTime(iso: string, nowMs: number): string {
+  const then = Date.parse(iso);
+  if (Number.isNaN(then)) return "";
+  const sec = Math.max(0, Math.round((nowMs - then) / 1000));
+  if (sec < 60) return "just now";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.round(hr / 24);
+  return `${day}d ago`;
+}
+
+/**
+ * The "Chats" history-switcher dropdown: a toggle button plus a `role="menu"`
+ * list of the admin's recent conversations (newest-first as supplied). Selecting
+ * a NON-current item calls `deps.onSelect(id)`; the current one is marked
+ * `aria-current="true"` and is a no-op (it's already open) — clicking it just
+ * closes the menu.
+ *
+ * SAFETY: titles are the first user message = untrusted workspace data, so every
+ * label is set via `textContent` (the repo's XSS convention) — markup can never
+ * be parsed. The menu is a WCAG menu widget: `aria-haspopup`/`aria-expanded` on
+ * the toggle, `role="menuitem"` items, Enter/Space to select, Escape to close,
+ * Arrow Up/Down to move focus (wrapping). An empty list shows a non-selectable
+ * "No past conversations" item.
+ */
+export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuDeps): HTMLElement {
+  const wrap = el("div", "chats-menu");
+
+  const toggle = el("button", "secondary chats-toggle") as HTMLButtonElement;
+  toggle.type = "button";
+  toggle.setAttribute("aria-haspopup", "menu");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.appendChild(document.createTextNode("Chats"));
+  toggle.appendChild(svgIcon(ICON_CHEVRON));
+
+  const menu = el("div", "chats-list");
+  menu.setAttribute("role", "menu");
+  menu.setAttribute("aria-label", "Recent conversations");
+  menu.hidden = true;
+
+  const close = (): void => {
+    menu.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+  };
+  const open = (): void => {
+    menu.hidden = false;
+    toggle.setAttribute("aria-expanded", "true");
+  };
+  toggle.addEventListener("click", () => {
+    if (menu.hidden) open();
+    else close();
+  });
+
+  const items: HTMLButtonElement[] = [];
+  const moveFocus = (from: number, delta: number): void => {
+    if (items.length === 0) return;
+    const next = (from + delta + items.length) % items.length;
+    items[next].focus();
+  };
+
+  if (sessions.length === 0) {
+    const empty = el("div", "chats-empty", "No past conversations");
+    menu.appendChild(empty);
+  } else {
+    const now = Date.now();
+    sessions.forEach((s, index) => {
+      const item = el("button", `chats-item${s.current ? " current" : ""}`) as HTMLButtonElement;
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      if (s.current) {
+        item.setAttribute("aria-current", "true");
+        const check = el("span", "chats-check");
+        check.appendChild(svgIcon(ICON_CHECK));
+        item.appendChild(check);
+      }
+      // Title and time are untrusted/data — textContent only, never innerHTML.
+      item.appendChild(el("span", "chats-title", truncateTitle(s.title)));
+      const when = relativeTime(s.lastMessageAt, now);
+      if (when) item.appendChild(el("span", "chats-time", when));
+
+      const select = (): void => {
+        close();
+        if (!s.current) deps.onSelect(s.id);
+      };
+      item.addEventListener("click", select);
+      item.addEventListener("keydown", (event) => {
+        const e = event as KeyboardEvent;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          select();
+        } else if (e.key === "Escape") {
+          close();
+          toggle.focus();
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          moveFocus(index, 1);
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          moveFocus(index, -1);
+        }
+      });
+      items.push(item);
+      menu.appendChild(item);
+    });
+  }
+
+  wrap.appendChild(toggle);
+  wrap.appendChild(menu);
+  return wrap;
+}
+
 /** Dependencies `renderClarify` needs from the host `mount`. */
 export interface ClarifyDeps {
   /** Send text through the NORMAL chat path (same function the composer uses). */
