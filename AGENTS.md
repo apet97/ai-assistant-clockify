@@ -11,7 +11,7 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **1220 tests**, 0 circular deps (`npm run cycles`).
+verify` is green at **1222 tests**, 0 circular deps (`npm run cycles`).
 Data handling/retention is documented in `PRIVACY.md` (chat + audit retained
 `RETENTION_DAYS`, default 90; full per-workspace erasure on uninstall).
 **DEPLOYED on Railway**
@@ -171,10 +171,12 @@ npm run dev           # tsx src/server.ts (needs env)
   `idempotency.ts` (dedup confirmed commits), `undo.ts` (reverse the last creation),
   `money.ts` (the one major↔minor amount mapping), `workflows/*` (time-tracking,
   work-structure, admin/risky, resolve). Shared day-spans: `src/durations.ts`.
-- `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts`, shared `deps.ts`.
+- `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts` (incl. `POST /chat/new`
+  = fresh session; old chats kept under retention), shared `deps.ts`.
   `src/server.ts` — `createApp(deps)` + `start()`.
-- `src/ui/` — vanilla TS chat UI. `tests/` — unit + integration (fakes via
-  `tests/helpers/fake-clockify.ts`). `scripts/` — opt-in live exercisers.
+- `src/ui/` — vanilla TS chat UI (header **"New chat"** button). `tests/` — unit +
+  integration (fakes via `tests/helpers/fake-clockify.ts`). `scripts/` — opt-in
+  live exercisers.
 
 ## Runtime constraints
 

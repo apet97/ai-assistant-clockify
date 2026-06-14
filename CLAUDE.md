@@ -10,7 +10,7 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1220 tests**; `npm run cycles` (= `madge
+**Verified gate:** `npm run verify` = **1222 tests**; `npm run cycles` (= `madge
 --circular …`, now a pinned devDep) = **0** (keep both green). 137 typed actions,
 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
 (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
@@ -159,8 +159,11 @@ such bug was found against the REAL API, not by reading the code.
   DeepSeek default, or `gemini-cli`), `prompts.ts`, `planner.ts`,
   `agent-loop.ts` + `agent-state.ts` (the durable agentic loop).
 - `src/routes/api.ts` — chat (JSON + NDJSON stream), confirm/cancel/undo/
-  metrics; `executeChatTurn` is the single turn pipeline. `src/ui/` vanilla TS
-  chat (a11y; previews batched so "Confirm all" stays one card).
+  metrics + `POST /chat/new` (mints a fresh session/cookie → empty transcript;
+  the prior session's messages are NOT deleted — kept under retention + the audit
+  log, so its cookie still replays; pinned by `chat-new.test.ts`);
+  `executeChatTurn` is the single turn pipeline. `src/ui/` vanilla TS chat (a11y;
+  previews batched so "Confirm all" stays one card; a header **"New chat"** button).
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 
