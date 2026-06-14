@@ -80,7 +80,7 @@ function parsePlan(raw: string): ParseResult {
 }
 
 export interface AgentConversationInput
-  extends Pick<RunAgentTurnInput, "modelClient" | "messages" | "runAction" | "onStep" | "maxSteps"> {
+  extends Pick<RunAgentTurnInput, "modelClient" | "messages" | "runAction" | "onStep" | "maxSteps" | "signal"> {
   policy: AdminPolicy;
   /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
   tools?: ToolDefinition[];
@@ -110,6 +110,7 @@ export async function runAgentConversation(input: AgentConversationInput): Promi
     runAction: input.runAction,
     onStep: input.onStep,
     maxSteps: input.maxSteps,
+    signal: input.signal,
   });
 }
 

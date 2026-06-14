@@ -96,7 +96,11 @@ export type AgentTurnResult =
       operation: ConfirmableOperation;
       transcript: ModelMessage[];
     }
-  | { kind: "exhausted"; text: string; transcript: ModelMessage[] };
+  | { kind: "exhausted"; text: string; transcript: ModelMessage[] }
+  // The client disconnected mid-turn (the route aborted the signal). The loop
+  // stops at its next boundary so it issues no further model calls or writes for
+  // a turn nobody is watching. The caller discards this (no reply is sent).
+  | { kind: "aborted"; transcript: ModelMessage[] };
 
 export interface RunAgentTurnInput {
   /** Must expose completeWithTools (the loop is native-tool-calling only). */
@@ -110,6 +114,12 @@ export interface RunAgentTurnInput {
   onStep?: (step: AgentStep) => void;
   maxSteps?: number;
   maxToolCallsPerStep?: number;
+  /**
+   * Cooperative cancellation. When this aborts (the route fires it on client
+   * disconnect), the loop stops at its next boundary and returns `aborted` —
+   * no further model calls, no further tool executions.
+   */
+  signal?: AbortSignal;
 }
 
 function assistantToolCallTurn(completion: ToolCompletion, calls: ToolCall[]): ModelMessage {
@@ -141,6 +151,8 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   const transcript: ModelMessage[] = [...input.messages];
 
   for (let step = 0; step < maxSteps; step += 1) {
+    // Client gone → stop BEFORE the next (paid) model call.
+    if (input.signal?.aborted) return { kind: "aborted", transcript };
     const completion = await input.modelClient.completeWithTools(transcript, input.tools);
     const calls = completion.toolCalls.slice(0, maxCalls);
 
@@ -156,6 +168,8 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     const toolResults: ModelMessage[] = [];
 
     for (const call of calls) {
+      // Client gone → stop BEFORE running another action (e.g. a safe write).
+      if (input.signal?.aborted) return { kind: "aborted", transcript };
       const result = await input.runAction(call);
       honored.push(call);
 

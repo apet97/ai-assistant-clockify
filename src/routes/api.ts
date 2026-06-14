@@ -305,6 +305,8 @@ export function apiRouter(deps: AppDeps): Router {
     // message into reply.text too would render it twice in the UI (the clarify
     // bubble AND the assistant reply bubble). fix-clarify-double-render.
     if (turn.kind === "clarify") return { replyKind: "clarify", baseText: "" };
+    // The client disconnected mid-turn: no reply is sent (the socket is gone).
+    if (turn.kind === "aborted") return { replyKind: "aborted", baseText: "" };
     // "final" and "exhausted" both carry truthful text from the loop.
     return { replyKind: "answer", baseText: turn.text };
   }
@@ -488,6 +490,7 @@ export function apiRouter(deps: AppDeps): Router {
     receipt: SuccessReceipt | ErrorReceipt,
     onResult?: (result: unknown) => void,
     onStatus?: (status: { action: string; label: string }) => void,
+    signal?: AbortSignal,
   ): Promise<{ replyKind: string; replyText: string; results: unknown[] } | undefined> {
     if (
       !agentState ||
@@ -520,6 +523,7 @@ export function apiRouter(deps: AppDeps): Router {
         tools: toolsForModel(),
         runAction: m.runAction,
         onStep: m.onStep,
+        signal,
       });
     } catch {
       // The commit already happened and its receipt is returned regardless; a
@@ -778,6 +782,7 @@ export function apiRouter(deps: AppDeps): Router {
     message: string,
     onResult?: (result: unknown) => void,
     onStatus?: (status: { action: string; label: string }) => void,
+    signal?: AbortSignal,
   ): Promise<ChatTurnOutcome> {
     deps.store.addMessage({
       sessionId: claims.sessionId,
@@ -888,6 +893,7 @@ export function apiRouter(deps: AppDeps): Router {
           currentDate: now().toISOString().slice(0, 10),
           runAction: m.runAction,
           onStep: m.onStep,
+          signal,
         });
       } catch {
         return modelUnavailable();
@@ -1140,6 +1146,14 @@ export function apiRouter(deps: AppDeps): Router {
     res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
+    // Stop the agentic loop if the client (iframe/proxy) drops the connection
+    // mid-turn — no further model calls or writes for a turn nobody is watching.
+    // res.on("close") fires on a normal end too, but aborting after we've ended
+    // is a harmless no-op (the turn already finished).
+    const ac = new AbortController();
+    res.on("close", () => {
+      if (!res.writableEnded) ac.abort();
+    });
     const write = (event: unknown): void => {
       res.write(`${JSON.stringify(event)}\n`);
     };
@@ -1150,6 +1164,7 @@ export function apiRouter(deps: AppDeps): Router {
         pre.message,
         (result) => write({ type: "result", result }),
         (status) => write({ type: "status", ...status }),
+        ac.signal,
       );
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
       else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
@@ -1191,6 +1206,11 @@ export function apiRouter(deps: AppDeps): Router {
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
       res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("X-Accel-Buffering", "no");
+      // Stop the resumed loop if the client drops mid-resume (see /chat/stream).
+      const ac = new AbortController();
+      res.on("close", () => {
+        if (!res.writableEnded) ac.abort();
+      });
       const write = (event: unknown): void => {
         res.write(`${JSON.stringify(event)}\n`);
       };
@@ -1203,6 +1223,7 @@ export function apiRouter(deps: AppDeps): Router {
           receipt,
           (result) => write({ type: "result", result }),
           (status) => write({ type: "status", ...status }),
+          ac.signal,
         );
         if (resumed) write({ type: "reply", kind: resumed.replyKind, text: resumed.replyText });
       } catch {

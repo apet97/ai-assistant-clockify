@@ -628,6 +628,51 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(toolMsg.content).toContain('"ok":false');
     expect(res.body.reply.text).toBe("That tool isn't available; nothing was changed.");
   });
+
+  // plan-009 client-disconnect cancellation: when the admin closes the iframe (or a
+  // proxy times out) mid-turn, the streaming route must stop the agentic loop — no
+  // further model calls or writes for a turn nobody is watching.
+  //
+  // DETERMINISM (deliberately NOT a wall-clock `setTimeout(req.abort)` race): the
+  // scripted model + fake client + sync SQLite all resolve on MICROTASKS, so once
+  // the handler starts the loop runs to its 6-step budget in one uninterrupted
+  // microtask burst — a timer-scheduled abort always loses that race (it fires after
+  // res.end()). Instead the disconnect is driven FROM INSIDE the first model call:
+  // we abort the request, then park that call on a real timer long enough for the
+  // server's `res.on("close")` → `ac.abort()` to fire (loopback close-propagation is
+  // sub-ms; 100ms is a vast margin). The loop is provably parked at that model await
+  // when the signal flips, so it hits the abort guard before the NEXT boundary. The
+  // unit test (tests/unit/agent-loop-abort.test.ts) covers the loop logic directly;
+  // THIS test only proves the route wires the signal end-to-end.
+  it("aborts the agentic loop when the client disconnects mid-stream (no runaway model calls)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const reqHolder: { abort: () => void } = { abort: () => undefined };
+    let calls = 0;
+    const disconnectingModel: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
+        calls += 1;
+        if (calls === 1) {
+          reqHolder.abort(); // the iframe/proxy drops the connection mid-turn
+          await new Promise((r) => setTimeout(r, 100)); // let the server abort the signal first
+        }
+        // Always propose another read, so ONLY the disconnect can stop the loop.
+        return { text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_tags_list", arguments: {} }] };
+      }),
+    };
+    const { app, cookie } = await makeApp([], fake, { modelClient: disconnectingModel });
+
+    const req = request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "list tags repeatedly" });
+    reqHolder.abort = () => req.abort();
+    await req.catch(() => undefined); // the aborted request rejects; ignore it
+    await new Promise((r) => setTimeout(r, 20)); // let the loop settle past the abort guard
+
+    // The loop stopped at the boundary right after the disconnect: exactly the one
+    // model call that triggered it (far below the 6-step budget), and the read it
+    // proposed never executed (the guard sits BEFORE runAction).
+    expect((disconnectingModel.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    expect(fake.counts.listTags ?? 0).toBe(0);
+  });
 });
 
 // F10-truthfulness-assistant-falsely-claims-a-t: live tour turn 30 — the model
