@@ -153,6 +153,17 @@ export interface PruneCounts {
   auditEvents: number;
 }
 
+/** Rows deleted per table by {@link Store.eraseWorkspace}. */
+export interface EraseCounts {
+  adminPolicies: number;
+  chatSessions: number;
+  chatMessages: number;
+  pendingConfirmations: number;
+  auditEvents: number;
+  undoRecords: number;
+  turnTelemetry: number;
+}
+
 /** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
 const TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -164,6 +175,12 @@ export interface Store {
   /** Refresh environment URLs from the latest token; only provided fields change. */
   updateInstallationEnv(workspaceId: string, env: InstallationEnv): void;
   setInstallationStatus(workspaceId: string, status: InstallationStatus): void;
+  /**
+   * Erase ALL of a workspace's stored data (GDPR / uninstall): deletes every
+   * workspace-scoped row and tombstones the installation with the token wiped.
+   * Atomic; safe to call on an unknown workspace (no-op zero counts).
+   */
+  eraseWorkspace(workspaceId: string): EraseCounts;
 
   createSession(input: NewSessionInput): ChatSession;
   getSession(id: string): ChatSession | undefined;
@@ -499,6 +516,31 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         nowIso(),
         workspaceId,
       );
+    },
+
+    eraseWorkspace(workspaceId) {
+      const del = (sql: string): number => db.prepare(sql).run(workspaceId).changes;
+      const run = db.transaction((): EraseCounts => {
+        // FK-children of chat_sessions (chat_messages, pending_confirmations) MUST
+        // be deleted before chat_sessions (foreign_keys = ON). undo_records and
+        // turn_telemetry carry session_id but no FK; admin_policies is independent.
+        const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
+        const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
+        const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
+        const undoRecords = del("DELETE FROM undo_records WHERE workspace_id = ?");
+        const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
+        const adminPolicies = del("DELETE FROM admin_policies WHERE workspace_id = ?");
+        const chatSessions = del("DELETE FROM chat_sessions WHERE workspace_id = ?");
+        // Tombstone the installation: keep the row but mark it deleted and wipe the
+        // token to an empty (still-decryptable) secret, so no usable credential
+        // remains at rest. idempotency_keys is a global, PII-free ledger with no
+        // workspace_id — intentionally left to its own short TTL.
+        db.prepare(
+          "UPDATE installations SET status = 'deleted', addon_token_ciphertext = ?, updated_at = ? WHERE workspace_id = ?",
+        ).run(sealToken(""), nowIso(), workspaceId);
+        return { adminPolicies, chatSessions, chatMessages, pendingConfirmations, auditEvents, undoRecords, turnTelemetry };
+      });
+      return run();
     },
 
     createSession(input) {

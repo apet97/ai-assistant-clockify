@@ -92,7 +92,11 @@ export function lifecycleRouter(deps: AppDeps): Router {
     }
     if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
 
-    deps.store.setInstallationStatus(workspaceId, "deleted");
+    // Uninstall = full data erasure (GDPR / data-minimization): every
+    // workspace-scoped row is deleted and the installation is tombstoned with the
+    // token wiped. The cross-workspace guard above ensures only the token's own
+    // workspace can be erased.
+    deps.store.eraseWorkspace(workspaceId);
     return res.status(200).json({ ok: true });
   });
 

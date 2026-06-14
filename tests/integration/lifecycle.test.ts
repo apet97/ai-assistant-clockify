@@ -175,6 +175,30 @@ describe("POST /lifecycle/installed", () => {
 });
 
 describe("POST /lifecycle/deleted", () => {
+  it("erases the workspace's data and tombstones the token on a valid uninstall", async () => {
+    store.saveInstallation({
+      workspaceId: "ws-erase",
+      addonId: "addon-erase",
+      addonUserId: "u",
+      addonToken: "erase-real-token",
+      status: "active",
+    });
+    const session = store.createSession({ workspaceId: "ws-erase", adminUserId: "admin-1" });
+    store.addMessage({ sessionId: session.id, workspaceId: "ws-erase", adminUserId: "admin-1", role: "user", content: "hi" });
+
+    const token = await lifecycleToken({ workspaceId: "ws-erase", addonId: "addon-erase" });
+    const res = await request(app)
+      .post("/lifecycle/deleted")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ workspaceId: "ws-erase" });
+
+    expect(res.status).toBe(200);
+    const inst = store.getInstallation("ws-erase");
+    expect(inst?.status).toBe("deleted");
+    expect(inst?.addonToken).toBe(""); // token wiped on uninstall
+    expect(store.getRecentMessages(session.id, 10)).toHaveLength(0); // data erased
+  });
+
   it("rejects a token signed for workspace A that disables a different workspace B (cross-tenant DoS)", async () => {
     store.saveInstallation({
       workspaceId: "ws-victim-delete",

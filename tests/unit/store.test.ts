@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createStore, type TestStore } from "../../src/db/store.js";
 import { migrate } from "../../src/db/schema.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
+import { successReceipt } from "../../src/harness/receipts.js";
 import {
   FEATURE_GROUPS,
   adminPolicySchema,
@@ -104,6 +105,66 @@ describe("store", () => {
     expect(raw).toBeDefined();
     expect(raw).not.toContain("secret-addon-token");
     expect(raw?.startsWith("v1:")).toBe(true);
+  });
+
+  it("eraseWorkspace deletes all workspace-scoped data + tombstones the token, leaving other workspaces intact", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY }) as TestStore;
+    const seed = (ws: string) => {
+      store.saveInstallation({ workspaceId: ws, addonId: "a", addonUserId: "u", addonToken: `tok-${ws}`, status: "active" });
+      store.upsertAdminPolicy(ws, "admin-1", defaultAdminPolicy());
+      const session = store.createSession({ workspaceId: ws, adminUserId: "admin-1" });
+      store.addMessage({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", role: "user", content: "hi" });
+      store.addAuditEvent({
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        actionName: "clockify_tags_create",
+        risk: ["safe_write"],
+        receipt: successReceipt({ action: "clockify_tags_create" }),
+      });
+      const pc = createPendingConfirmation({
+        sessionId: session.id,
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        risk: ["destructive"],
+        preview: { summary: "x" },
+        operation: { actionName: "projects_delete", featureGroup: "work_structure", risks: ["destructive"], payload: {} },
+        sessionSecret: "s",
+      });
+      store.savePendingConfirmation(pc.record);
+      store.recordUndoable({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", actionName: "x", reversal: [] });
+      store.recordTurnTelemetry({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", kind: "chat", modelCalls: 1, turnMs: 10, modelMs: 5 });
+      return session;
+    };
+    const s1 = seed("ws-1");
+    const s2 = seed("ws-2");
+
+    const counts = store.eraseWorkspace("ws-1");
+    expect(counts.chatMessages).toBe(1);
+    expect(counts.auditEvents).toBe(1);
+    expect(counts.pendingConfirmations).toBe(1);
+    expect(counts.undoRecords).toBe(1);
+    expect(counts.turnTelemetry).toBe(1);
+    expect(counts.chatSessions).toBe(1);
+    expect(counts.adminPolicies).toBe(1);
+
+    // ws-1 fully erased; the install is tombstoned with the token wiped (no decrypt throw).
+    const inst1 = store.getInstallation("ws-1");
+    expect(inst1?.status).toBe("deleted");
+    expect(inst1?.addonToken).toBe(""); // token wiped to an empty secret, still decryptable
+    expect(store.getRecentMessages(s1.id, 10)).toHaveLength(0);
+    expect(store.listActionOutcomes("ws-1", "admin-1")).toHaveLength(0);
+    expect(store.getAdminPolicy("ws-1", "admin-1")).toBeUndefined();
+    expect(store.getSession(s1.id)).toBeUndefined();
+    expect(store.listTurnTelemetry("ws-1", "admin-1")).toHaveLength(0);
+
+    // ws-2 is completely untouched.
+    expect(store.getInstallation("ws-2")?.addonToken).toBe("tok-ws-2");
+    expect(store.getInstallation("ws-2")?.status).toBe("active");
+    expect(store.getRecentMessages(s2.id, 10)).toHaveLength(1);
+    expect(store.listActionOutcomes("ws-2", "admin-1")).toHaveLength(1);
+    expect(store.getAdminPolicy("ws-2", "admin-1")).toBeDefined();
+    expect(store.getSession(s2.id)).toBeDefined();
+    store.close();
   });
 
   it("back-fills feature groups added after a policy was stored (defaults to read_write)", () => {
