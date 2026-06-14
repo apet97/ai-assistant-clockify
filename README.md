@@ -183,3 +183,6 @@ The model is treated as untrusted: it proposes, the harness disposes. Secrets
 never reach the model or the logs, installation tokens are encrypted at rest,
 and risky writes can only execute through an explicit button confirmation. See
 the inline documentation in `src/harness/` for the enforcement details.
+
+What data is stored, retention windows (chat + audit log default 90 days), and how
+to have a workspace's data erased are documented in [`PRIVACY.md`](./PRIVACY.md).
