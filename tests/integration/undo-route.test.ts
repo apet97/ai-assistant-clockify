@@ -8,6 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { mintAdminCookie } from "../helpers/session.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 const ADDON_KEY = "ai-assistant";
@@ -28,20 +29,20 @@ const modelClient: ModelClient = {
   },
 };
 
-async function adminCookieFor(targetApp: Express, user = "admin-1"): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user,
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(targetApp).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+// Mint the admin session cookie IN-PROCESS (no flaky HTTP /component/assistant
+// round-trip). Under full-suite parallel load that round-trip intermittently
+// failed to yield a capturable Set-Cookie — a cross-process supertest/ephemeral-
+// server contention flake, NOT a product bug — and the old
+// `Array.isArray(setCookie) ? … : ""` fallback then silently produced an EMPTY
+// cookie, so the next request 401'd (the intermittent "expected 401 to be 200").
+// mintAdminCookie builds the SAME signed cookie the component route issues,
+// deterministically. The component route's own gating stays covered by its tests.
+function adminCookieFor(targetStore: Store, user = "admin-1"): string {
+  return mintAdminCookie(targetStore, "test-session-secret", { adminUserId: user });
 }
 
-async function adminCookie(): Promise<string> {
-  return adminCookieFor(app);
+function adminCookie(): string {
+  return adminCookieFor(store);
 }
 
 beforeAll(async () => {
@@ -70,7 +71,7 @@ afterAll(() => store.close());
 
 describe("undo route", () => {
   it("attaches an undo handle to a create receipt and reverses it on POST /undo/:id", async () => {
-    const cookie = await adminCookie();
+    const cookie = adminCookie();
     const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a tag" });
     expect(chat.status).toBe(200);
     const receiptResult = (chat.body.results as Array<{ kind: string; receipt?: { ok: boolean }; undo?: { id: string } }>).find(
@@ -120,15 +121,7 @@ describe("undo route", () => {
       clockifyForWorkspace: () => isoFake.client,
     });
 
-    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-      workspaceId: "ws-1",
-      user: "admin-1",
-      workspaceRole: "ADMIN",
-      addonId: "addon-1",
-    });
-    const auth = await request(isoApp).get("/component/assistant").query({ auth_token: token });
-    const setCookie = auth.headers["set-cookie"];
-    const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    const cookie = mintAdminCookie(isoStore, "test-session-secret", { adminUserId: "admin-1" });
 
     const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a tag" });
     expect(chat.status).toBe(200);
@@ -192,7 +185,7 @@ describe("undo route", () => {
     });
 
     // admin-1 creates a tag -> gets an undo handle bound to admin-1.
-    const adminOne = await adminCookieFor(isoApp, "admin-1");
+    const adminOne = adminCookieFor(isoStore, "admin-1");
     const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", adminOne).send({ message: "create a tag" });
     expect(chat.status).toBe(200);
     const receiptResult = (chat.body.results as Array<{ kind: string; undo?: { id: string } }>).find(
@@ -203,7 +196,7 @@ describe("undo route", () => {
     expect(isoFake.state.deleted.length).toBe(0);
 
     // admin-2 (valid session, same workspace, ADMIN) tries to undo admin-1's record.
-    const adminTwo = await adminCookieFor(isoApp, "admin-2");
+    const adminTwo = adminCookieFor(isoStore, "admin-2");
     const foreign = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", adminTwo).send({});
     expect(foreign.status).toBe(404);
     expect(foreign.body.code).toBe("not_found");
@@ -220,7 +213,7 @@ describe("undo route", () => {
   });
 
   it("404s an unknown undo id", async () => {
-    const cookie = await adminCookie();
+    const cookie = adminCookie();
     const res = await request(app).post("/api/undo/does-not-exist").set("Cookie", cookie).send({});
     expect(res.status).toBe(404);
   });
@@ -266,7 +259,7 @@ describe("undo route", () => {
       modelClient: invoiceModel,
       clockifyForWorkspace: () => isoFake.client,
     });
-    const cookie = await adminCookieFor(isoApp, "admin-1");
+    const cookie = adminCookieFor(isoStore, "admin-1");
 
     const confirmInvoice = async () => {
       const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for Acme" });
