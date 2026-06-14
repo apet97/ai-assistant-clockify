@@ -10,7 +10,7 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1269 tests** (now folds in `npm run
+**Verified gate:** `npm run verify` = **1279 tests** (now folds in `npm run
 cycles` — plan 001) = **0** circular deps (keep both green). 137 typed actions,
 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
 (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
@@ -43,6 +43,30 @@ secrets + an `if:always()` sweep (proven green live). `main` requires the `verif
 check (no forced PR). Detail in git log.
 
 **Recent arcs (detail in git log + `docs/HISTORY.md`):**
+- **inherited-codebase adversarial audit + fixes (2026-06-14, `5b0fcda`…`6f3d132`):**
+  a 10-dimension adversarial audit (find→skeptic-refute) → 8 confirmed; 4 fixed TDD,
+  1 refuted live, 1 documented residual. Fixes: (1) `commitConfirmedOperation` ledger
+  ops (claim/fill/release) are now guarded so a post-commit `fillIdempotency` throw
+  (cross-process SQLITE_BUSY / disk error) can't 500 and drop a committed money
+  receipt — the function's "Never throws" contract is now true (same class as F3, on
+  the confirm path). (2) F10 truthfulness: a READ-then-fabricate agentic turn (prod
+  default) no longer relays a false "Done! I deleted X" — gate on a successful
+  *mutation* receipt, not `results.length===0` (a read pushes a receipt). (3) Lifecycle
+  binds workspace to the verified CLAIM only (drop the `claimWs ?? bodyWs` fallback;
+  normalize legacy `activeWs`) — a no-workspace-claim token can no longer erase/hijack
+  a victim named in the body. (4) Idempotency-claim HEARTBEAT (`touchIdempotencyClaim`
+  on `CLAIM_HEARTBEAT_MS`=90s): a multi-call commit (createInvoice POST+GET+PUT+tax+N
+  items) whose summed latency exceeds `CLAIM_TTL_MS` is no longer swept mid-flight and
+  double-committed. **Refuted live:** expense `total` IS minor on the wire (probed:
+  $100→10000), so the `/100` read is CORRECT — the OpenAPI example (10500.5) + the SDK
+  "expenses major" note are about the create INPUT amount, not the read total; removing
+  `/100` would 100×-overbill (see memory `expense-total-is-minor-on-wire`). **Residual
+  (LOW, accepted):** a process crash in the sub-ms gap between a host write and
+  `fillIdempotency` can allow one duplicate of an *identical* re-issue 5–10 min later —
+  inherent to a claim→commit→fill ledger without Clockify create-idempotency; undo +
+  receipt review cover it. 1269→1279 tests. **Known flake:** `undo-route` can 401 once
+  under full-suite parallel load (passes isolated/on rerun) — timing in the component
+  session mint, not a product bug.
 - **plans-backlog + chat-history switcher (2026-06-14, `775ea77`…`d37e18b`):** the
   `improve`-skill backlog (`plans/001-008`) landed on main via three resumable CC
   Workflows (`ship-plans-and-review` → `finish-plans-and-fixes` →
