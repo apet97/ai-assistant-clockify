@@ -65,6 +65,8 @@ export interface ChatApi {
   savePermissions(groups: Record<string, string>): Promise<unknown>;
   /** Session restore: prior messages + live pending previews (rotated nonces). */
   getHistory(): Promise<unknown>;
+  /** Start a fresh conversation (new session); the old chat stays on the server. */
+  newChat(): Promise<unknown>;
   sendMessage(message: string): Promise<unknown>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -264,6 +266,7 @@ export function createFetchApi(): ChatApi {
     savePermissions: (groups) =>
       json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
     getHistory: () => json("/api/chat/history"),
+    newChat: () => json("/api/chat/new", { method: "POST" }),
     sendMessage: (message) =>
       json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
     streamMessage: async (message, onEvent) => {
@@ -365,6 +368,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
   root.replaceChildren();
   const header = el("header", "app-header");
   header.appendChild(el("h1", undefined, "AI Assistant"));
+  // Start a fresh conversation. Hidden until the chat is up (same as settings).
+  // The previous chat stays on the server (retention + the audit log keep it);
+  // this only resets the visible transcript to an empty session.
+  const newChatButton = el("button", "secondary hidden") as HTMLButtonElement;
+  newChatButton.type = "button";
+  newChatButton.textContent = "New chat";
+  newChatButton.setAttribute("aria-label", "Start a new chat");
+  header.appendChild(newChatButton);
   // Settings (assistant permissions). Hidden until the chat is up, so the
   // first-run setup flow can't be bypassed mid-way.
   const settingsButton = el("button", "icon-button hidden") as HTMLButtonElement;
@@ -568,6 +579,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     }
     chat.classList.remove("hidden");
     settingsButton.classList.remove("hidden");
+    newChatButton.classList.remove("hidden");
     input.focus();
   }
 
@@ -632,6 +644,28 @@ function mount(root: HTMLElement, api: ChatApi): void {
     if (setup.classList.contains("hidden")) void openPermissions(false);
     else closePermissions();
   });
+
+  /**
+   * Start a new conversation: mint a fresh session server-side, then reset the
+   * visible transcript to an empty welcome. The previous chat is NOT deleted (it
+   * stays on the server under retention; the audit log keeps the actions) — only
+   * the UI resets. A failed call surfaces honestly and leaves the chat intact.
+   */
+  async function startNewChat(): Promise<void> {
+    try {
+      await api.newChat();
+    } catch (error) {
+      showError(error instanceof ApiError ? error.message : "Could not start a new chat. Please try again.");
+      return;
+    }
+    clearError();
+    setWorking(false);
+    messages.replaceChildren(); // drop the transcript + any pending preview cards
+    chat.querySelector(".welcome")?.remove();
+    chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+    focusComposer();
+  }
+  newChatButton.addEventListener("click", () => void startNewChat());
 
   /**
    * Session restore: replay the stored conversation + the session's still-live

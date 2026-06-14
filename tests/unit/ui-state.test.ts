@@ -20,6 +20,10 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("getHistory");
       return { ok: true, messages: [], pendingPreviews: [] };
     },
+    async newChat() {
+      bump("newChat");
+      return { ok: true };
+    },
     async sendMessage() {
       bump("sendMessage");
       return { ok: true, reply: { kind: "answer", text: "" }, results: [] };

@@ -38,7 +38,8 @@ import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
 import type { Installation } from "../db/store.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
-import { resolveSession, type AppDeps } from "./deps.js";
+import { resolveSession, buildSessionCookie, type AppDeps } from "./deps.js";
+import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
 import { THIRTY_DAYS_MS } from "../durations.js";
 
 /**
@@ -1187,6 +1188,33 @@ export function apiRouter(deps: AppDeps): Router {
       });
     }
     res.json({ ok: true, messages, pendingPreviews });
+  });
+
+  // Start a new conversation: mint a FRESH session for the same admin+workspace
+  // and re-cookie. The previous session's messages are NOT deleted (they remain
+  // under retention; the audit log keeps the actions) — only the transcript the
+  // UI shows resets. Mirrors the cookie the component route issues so subsequent
+  // chat calls bind the new session.
+  router.post("/chat/new", (req, res) => {
+    const claims = requireSession(req, res);
+    if (!claims) return;
+    const session = deps.store.createSession({
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+    });
+    const sessionClaims: SessionClaims = {
+      sessionId: session.id,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      workspaceRole: claims.workspaceRole,
+      expiresAt: session.expiresAt,
+    };
+    const secure = deps.config.baseUrl.startsWith("https://");
+    res.setHeader(
+      "Set-Cookie",
+      buildSessionCookie(signSessionCookie(sessionClaims, deps.config.sessionSecret), secure),
+    );
+    res.json({ ok: true });
   });
 
   // Non-streaming turn (request/response). The mounted UI uses /chat/stream
