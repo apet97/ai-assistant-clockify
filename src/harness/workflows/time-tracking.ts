@@ -1,16 +1,17 @@
 import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
-import { defineAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
+import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
 import { resolveProjectTaskRefs, resolveRelativeDay, resolveTagRefs, resolveUserFilter } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
- * Time-tracking read + safe-write workflows (SPEC "Safe Writes"): status, start
- * timer, stop timer, log work, review day/week (reads), and fix entry (safe
- * write). All execute immediately when policy allows; none are risky. Ambiguous
- * project/task identity stops and asks the admin.
+ * Time-tracking read + write workflows (SPEC "Safe Writes"): status, start timer,
+ * stop timer, log work, review day/week (reads) — these execute immediately when
+ * policy allows. fix entry EDITS an existing entry, so it is a high_risk_write:
+ * it previews + requires confirmation like every other update action (editing
+ * existing data has no undo). Ambiguous project/task identity stops and asks.
  */
 
 function nowIso(ctx: ActionContext): string {
@@ -392,12 +393,12 @@ const reviewWeek = defineAction({
   },
 });
 
-const fixEntry = defineAction({
+const fixEntry = defineRiskyAction({
   name: "clockify_fix_entry",
   description:
-    "Update fields of a known time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Pass the project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — resolved server-side, clarifies on an unknown one. Safe — the entry id is already resolved.",
-  featureGroup: "time_tracking",
-  risks: ["safe_write"],
+    "Update fields of an existing time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Pass the project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — resolved server-side, clarifies on an unknown one. Elevated write — editing an existing entry previews and requires confirmation.",
+  group: "time_tracking",
+  risks: ["high_risk_write"],
   schema: z
     .object({
       id: z.string().min(1),
@@ -423,36 +424,66 @@ const fixEntry = defineAction({
         v.billable !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async handler(ctx, args) {
-    // A name in either project/task slot resolves to a verified id first — a
-    // mistaken identity clarifies, it never reaches the wire.
+  async preview(ctx, args) {
+    // Resolve identity at PREVIEW time: a name in either project/task slot becomes
+    // a verified id, and a mistaken identity clarifies here — it never reaches the
+    // wire (and never gets stored in the confirmable payload).
     const refs = await resolveProjectTaskRefs(args, {
       verb: "move the entry to",
       listProjects: (f) => ctx.clockify.listProjects(f),
       listTasks: (projectId) => ctx.clockify.listTasks(projectId),
     });
-    if (!refs.ok) {
-      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
-    }
+    if (!refs.ok) return refs.clarify;
     const tags = await resolveEntryTags(ctx, args);
-    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
-    const entry = await ctx.clockify.updateTimeEntry({
-      id: args.id,
-      description: args.description,
-      projectId: refs.projectId,
-      taskId: refs.taskId,
-      tagIds: tags.tagIds,
-      billable: args.billable,
-    });
+    if (!tags.ok) return { clarify: tags.message, options: tags.options };
+
+    // Human-readable change list for the preview (resolved NAMES, not raw ids).
+    const expectedChanges: string[] = [];
+    if (args.description !== undefined) expectedChanges.push(`Description → "${args.description}"`);
+    if (refs.projectId !== undefined) expectedChanges.push(`Project → ${refs.projectName ?? refs.projectId}`);
+    if (refs.taskId !== undefined) expectedChanges.push(`Task → ${refs.taskName ?? refs.taskId}`);
+    if (tags.tagIds !== undefined) expectedChanges.push(`Tags → ${tags.tagIds.length} tag(s)`);
+    if (args.billable !== undefined) expectedChanges.push(`Billable → ${args.billable ? "billable" : "non-billable"}`);
+
     return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_fix_entry",
-        entity: "time_entry",
-        ids: { workspaceId: ctx.workspaceId },
-        changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
-      }),
+      actionLabel: "Update time entry",
+      targets: [{ type: "time_entry", id: args.id }],
+      expectedChanges,
+      reversibility: "Editing replaces these fields on the existing entry; there is no automatic undo — re-edit to change them back.",
+      warnings: ["Updating a time entry changes live workspace data and can affect billing and reports."],
+      payload: {
+        id: args.id,
+        description: args.description,
+        projectId: refs.projectId,
+        taskId: refs.taskId,
+        tagIds: tags.tagIds,
+        billable: args.billable,
+      },
     };
+  },
+  async commit(ctx, payload) {
+    const p = payload as {
+      id: string;
+      description?: string;
+      projectId?: string;
+      taskId?: string;
+      tagIds?: string[];
+      billable?: boolean;
+    };
+    const entry = await ctx.clockify.updateTimeEntry({
+      id: p.id,
+      description: p.description,
+      projectId: p.projectId,
+      taskId: p.taskId,
+      tagIds: p.tagIds,
+      billable: p.billable,
+    });
+    return successReceipt({
+      action: "clockify_fix_entry",
+      entity: "time_entry",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+    });
   },
 });
 

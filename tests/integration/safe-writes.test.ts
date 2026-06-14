@@ -604,95 +604,12 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     expect(garbage.kind).toBe("clarify");
   });
 
-  it("fix_entry updates a known time entry without confirmation", async () => {
-    const fake = createFakeWorkspace({
-      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "old" }],
-    });
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", description: "new" },
-      context: makeContext(fake),
-    });
-    expect(result.kind).toBe("receipt");
-    if (result.kind === "receipt" && result.receipt.ok) {
-      expect(result.receipt.changed?.updated?.[0].id).toBe("e1");
-    } else {
-      throw new Error("expected a success receipt");
-    }
-    expect(fake.counts.updateTimeEntry).toBe(1);
-  });
-
-  it("fix_entry can flip an entry's billable flag (live ask: 'update the billability' had no supported path)", async () => {
-    const fake = createFakeWorkspace({
-      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work", billable: false }],
-    });
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", billable: true },
-      context: makeContext(fake),
-    });
-    expect(result.kind).toBe("receipt");
-    if (result.kind === "receipt" && !result.receipt.ok) throw new Error("expected success");
-    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.billable).toBe(true);
-  });
-
-  it("fix_entry resolves projectName/taskName to ids before the wire write", async () => {
-    const fake = createFakeWorkspace({
-      projects: [{ id: "p-acme", name: "Acme Corp" }],
-      tasks: [{ id: "t-design", name: "Design", projectId: "p-acme" }],
-      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
-    });
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", projectName: "Acme Corp", taskName: "Design" },
-      context: makeContext(fake),
-    });
-    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
-    const entry = fake.state.timeEntries.find((e) => e.id === "e1");
-    expect(entry?.projectId).toBe("p-acme");
-    expect(entry?.taskId).toBe("t-design");
-  });
-
-  it("fix_entry resolves a project NAME placed in the projectId SLOT", async () => {
-    const fake = createFakeWorkspace({
-      projects: [{ id: "p-acme", name: "Acme Corp" }],
-      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
-    });
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", projectId: "Acme Corp" },
-      context: makeContext(fake),
-    });
-    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
-    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.projectId).toBe("p-acme");
-  });
-
-  it("fix_entry clarifies on an unknown project name and writes NOTHING", async () => {
-    const fake = createFakeWorkspace({
-      projects: [{ id: "p-acme", name: "Acme Corp" }],
-      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
-    });
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", projectName: "Acme Crp" },
-      context: makeContext(fake),
-    });
-    expect(result.kind).toBe("clarify");
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
-  });
-
-  it("fix_entry is blocked when time_tracking is read-only", async () => {
-    const fake = createFakeWorkspace({ entries: [{ id: "e1", start: "x", description: "old" }] });
-    const policy = defaultAdminPolicy();
-    policy.groups.time_tracking = "read";
-    const result = await executeAction({
-      actionName: "clockify_fix_entry",
-      args: { id: "e1", description: "new" },
-      context: makeContext(fake, policy),
-    });
-    expect(result.kind === "receipt" && !(result as any).receipt.ok).toBe(true);
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
-  });
+  // clockify_fix_entry was reclassified safe_write -> high_risk_write: editing an
+  // existing time entry now previews + requires confirmation (it was the lone
+  // safe_write update outlier, and edits have no undo). Its full coverage —
+  // preview→commit, billable flip, project/task name resolution at preview,
+  // name-in-id-slot, clarify-on-unknown, and the policy gate — moved to
+  // risky-preview.test.ts where the other update actions live.
 
   it("list_entities lists tags as a read", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "Deep Work" }] });

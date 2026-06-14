@@ -293,6 +293,113 @@ describe("expanded risky actions (Phase 3)", () => {
     expect(fake.counts.createExpense).toBe(1);
   });
 
+  // clockify_fix_entry EDITS an existing time entry (description/project/task/tags/
+  // billable). Editing existing data — including the billing-relevant `billable`
+  // flag — is high_risk_write: it previews + requires confirmation like every other
+  // *_update action (it had been the lone safe_write outlier, and an update has no
+  // undo). [product decision: editing an existing entry must be confirmed]
+  it("fix_entry previews an edit and only mutates after confirmation", async () => {
+    const fake = createFakeWorkspace({
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "old" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", description: "new" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(preview.operation.risks).toContain("high_risk_write");
+    expect(preview.operation.featureGroup).toBe("time_tracking");
+    expect(fake.counts.updateTimeEntry ?? 0).toBe(0); // nothing mutated on preview
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.updateTimeEntry).toBe(1);
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.description).toBe("new");
+  });
+
+  it("fix_entry flipping billable previews first, then flips only on confirmation", async () => {
+    const fake = createFakeWorkspace({
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work", billable: false }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", billable: true },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.billable).toBe(false); // not flipped yet
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.billable).toBe(true);
+  });
+
+  it("fix_entry resolves projectName/taskName at PREVIEW time and commits the resolved ids", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      tasks: [{ id: "t-design", name: "Design", projectId: "p-acme" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectName: "Acme Corp", taskName: "Design" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    const entry = fake.state.timeEntries.find((e) => e.id === "e1");
+    expect(entry?.projectId).toBe("p-acme");
+    expect(entry?.taskId).toBe("t-design");
+  });
+
+  it("fix_entry resolves a project NAME placed in the projectId SLOT (preview → commit)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectId: "Acme Corp" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.timeEntries.find((e) => e.id === "e1")?.projectId).toBe("p-acme");
+  });
+
+  it("fix_entry clarifies on an unknown project name and writes NOTHING (resolution at preview)", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p-acme", name: "Acme Corp" }],
+      entries: [{ id: "e1", start: "2026-06-05T09:00:00.000Z", description: "work" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", projectName: "Acme Crp" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+  });
+
+  it("fix_entry is blocked when time_tracking is read-only (no preview, no mutation)", async () => {
+    const fake = createFakeWorkspace({ entries: [{ id: "e1", start: "x", description: "old" }] });
+    const policy = defaultAdminPolicy();
+    policy.groups.time_tracking = "read";
+    const result = await executeAction({
+      actionName: "clockify_fix_entry",
+      args: { id: "e1", description: "new" },
+      context: makeContext(fake, policy),
+    });
+    if (result.kind !== "receipt") throw new Error("expected a policy_denied receipt");
+    expect(result.receipt.ok).toBe(false);
+    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+  });
+
   it("expenses_delete previews as destructive", async () => {
     const fake = createFakeWorkspace();
     const preview = await executeAction({
