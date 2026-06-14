@@ -45,6 +45,14 @@ see `DEPLOYMENT.md`). Done + on `main`:
   the concurrent-confirm duplicate-invoice race (an atomic-claim idempotency
   ledger). Planner held 100%, agentic 7/7, madge 0. Detail: the goated-audit
   handoff note in `docs/HISTORY.md`.
+- **Marketplace-submission hardening (2026-06-14)** — chat/audit **retention**
+  (`RETENTION_DAYS`, default 90; reverses the prior "never pruned" stance), full
+  per-workspace **erasure** on uninstall (`store.eraseWorkspace`) + the offline
+  `scripts/erase-workspace.ts`, public `PRIVACY.md`, CI `npm audit` + Dependabot,
+  a **manual** `live-smoke.yml` (`workflow_dispatch`, proven green vs a live WS),
+  and a required `verify` CI check on `main` (no forced PR). Plus the earlier
+  external-review pass (config-validated `COMMIT_TIMEOUT_MS`, request hardening,
+  `DATA_ENCRYPTION_KEY` `.min(32)`, GET-only bounded retry).
 
 **Ground truth, not the code:** this codebase was built fast and its Clockify-API
 assumptions have repeatedly been WRONG (invoice item types, instant formats, host

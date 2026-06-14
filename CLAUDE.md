@@ -27,71 +27,38 @@ Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
 installs survive redeploys. Env vars + volume live in Railway — never commit
 tokens. Full checklist: `DEPLOYMENT.md`.
 
-**Latest — marketplace-submission hardening (2026-06-14):** six items from a
-submission-readiness review, TDD per item. **Chat/audit retention** (REVERSES the
-prior "never pruned" stance, deliberately): `chat_messages` + `audit_events` now
-age out via the hourly sweep on `RETENTION_DAYS` (default 90, floor 30 so the
-30-day metrics view never truncates; two created_at prune-indexes pinned by
-`explainPrunePlan`). **Workspace erasure**: `store.eraseWorkspace` deletes every
+**Latest — marketplace-submission hardening (2026-06-14):** six TDD items.
+**Chat/audit retention** (REVERSES the prior "never pruned" stance): `chat_messages`
++ `audit_events` age out via the hourly sweep on `RETENTION_DAYS` (default 90, floor
+30 so the 30-day metrics view never truncates; two `created_at` prune-indexes pinned
+by `explainPrunePlan`). **Workspace erasure**: `store.eraseWorkspace` deletes every
 workspace-scoped row in one atomic txn (FK-children before `chat_sessions`) +
-tombstones the install (status='deleted', token wiped to `encryptSecret("")`);
-`POST /lifecycle/deleted` now ERASES (was: mark-deleted-only) and
-`scripts/erase-workspace.ts` (offline, double-gated) does it on request.
-`idempotency_keys` (global, PII-free) is intentionally skipped. **`PRIVACY.md`**
-(public data-handling/retention/erasure doc, linked from README+DEPLOYMENT).
-**CI**: `npm audit --omit=dev --audit-level=high` + `.github/dependabot.yml`
-(npm + github-actions weekly); a **manual** `live-smoke.yml`
-(`workflow_dispatch` only — never push/PR) drives the real flow against a
-sacrificial workspace via `LIVE_*` repo secrets + an `if:always()` sweep.
-`main` carries a required `verify` CI status check (no forced PR). Per-item
-detail in git log.
+tombstones the install (status='deleted', token → `encryptSecret("")`); `POST
+/lifecycle/deleted` now ERASES (was mark-only), `scripts/erase-workspace.ts` does it
+on request (`idempotency_keys` is global/PII-free → skipped). **`PRIVACY.md`** (public
+data/retention/erasure doc). **CI**: `npm audit --omit=dev --audit-level=high` +
+Dependabot; a **manual** `live-smoke.yml` (`workflow_dispatch` only) drives the real
+read→safe-write→preview→confirm→commit→cleanup flow vs a sacrificial WS via `LIVE_*`
+secrets + an `if:always()` sweep (proven green live). `main` requires the `verify` CI
+check (no forced PR). Detail in git log.
 
-**Prior — external-review remediation pass (2026-06-14):** seven
-failing-test-first fixes from an external 7.5/10 code review, one commit each
-(`7f3be68`…`36c940f`), 1205→1216 tests. (A) `COMMIT_TIMEOUT_MS` moved out of a
-raw `process.env` read in `rest/core.ts` into validated config, bounded
-`< 290000` so it stays strictly below the idempotency `CLAIM_TTL_MS` (300000) —
-an operator can no longer set a timeout that lets a slow commit's claim be swept
-(double-commit). (B) Request hardening: `express.json({limit:"32kb"})`, chat
-`message` `.max(4000)` + nonce `.max(256)` at parse (rejected before any
-persist), and the terminal error middleware honors a body-parser 4xx (413/400)
-instead of masking it 500 — a bare server error (no `.status`) still 500s. (C)
-`DATA_ENCRYPTION_KEY` config min `.min(1)`→`.min(32)` + docs corrected to the
-SHA-256-passphrase reality (`encryption.ts` derivation UNTOUCHED — changing it
-would orphan already-deployed ciphertext). (D) `madge` pinned as a devDep +
-`npm run cycles` (CI off bare `npx`). (E) README Node 20→22 + `.nvmrc`. (F)
-GET-only bounded retry on transient 429/5xx in `rest/core.ts` (≤2, 300→600ms,
-`Retry-After`-capped — writes AND thrown timeouts NEVER retried). Deliberate
-deviation: the message schema keeps NO `.trim()`, so a whitespace-only turn still
-reaches the friendly new-6 handler (never a 400, never the planner). An
-independent adversarial diff review found 0 issues. The review's heavier asks
-(release-gate CI, retention/erasure, tagged releases, dep-scanning) were
-REJECTED as overengineering for a solo private add-on.
-
-**Prior — live-fix + dogfood pass (2026-06-14):** seven fixes from a live-chat
-dogfood + code-review sweep (1184→1205 tests): invoice tax end-to-end
-(`taxPercent`/`tax2Percent`/`discountPercent` on `invoices_create`/`_update`,
-items default taxed); `invoices_import_time`/`expenses_list` resolve relative
-dates server-side; every named-entity `*_get` resolves by NAME; the typed-consent
-guard catches batch words ("confirm all"); `log_work` clarifies a negative-length
-entry; `busy_timeout=5000` pinned. No further bugs found (two concurrency flags
-were FALSE POSITIVES — the busy_timeout default + the intended nonce
-reload-invalidation). Detail in git log (`3c4f064`…`8e1c447`).
-
-**Prior — the goated-audit arc (2026-06-13):** a fresh-eyes multi-agent audit
-(82 findings → 52 confirmed via 3-skeptic majority) whose backlog was then fully
-implemented — **43 confirmed findings fixed across three runs, 1 wont_fix, 0
-blocked**, each a failing-test-first TDD commit. Highlights: a CRITICAL server
-crash/hang on a mid-turn DB error (`asyncHandler` + terminal error middleware +
-process net); session-restore was dead in prod (every `/component/assistant` load
-minted a NEW session — now reuses the cookie-bound one); the concurrent-confirm
-duplicate-invoice race closed with an **atomic-claim idempotency ledger**
-(`store.claimIdempotency`: stale-sweep + `INSERT … ON CONFLICT DO NOTHING` in one
-better-sqlite3 txn, claimed BEFORE the commit await; `COMMIT_TIMEOUT_MS` 120s +
-`CLAIM_TTL_MS` strictly above it bound crash recovery; safety boundary untouched).
-The ONE `wont_fix` is `authz-surface-01` (admin role gated only at session
-creation, not re-verified per request) — a session-TTL/posture decision, not a
-mechanical fix. Per-finding tables: `~/Downloads/ai-assistant-goated-audit-NOTES.md`.
+**Recent arcs (detail in git log + `docs/HISTORY.md`):**
+- **external-review remediation (2026-06-14, `7f3be68`…`36c940f`):** 7 fixes —
+  `COMMIT_TIMEOUT_MS` into validated config (bounded `< CLAIM_TTL_MS`); request
+  hardening (32kb body cap; message `.max(4000)`/nonce `.max(256)`; body-parser 4xx
+  honored, not masked 500); `DATA_ENCRYPTION_KEY` `.min(32)` (derivation UNTOUCHED);
+  `madge` pinned; GET-only bounded retry on transient 429/5xx (writes/timeouts NEVER
+  retried). NO `.trim()` on the message schema is deliberate (whitespace → friendly
+  new-6 handler, never the planner).
+- **live-fix + dogfood (2026-06-14, `3c4f064`…`8e1c447`):** invoice tax end-to-end;
+  `invoices_import_time`/`expenses_list` server-side dates; every `*_get` resolves by
+  NAME; typed-consent catches batch words; `log_work` negative-length clarify.
+- **goated-audit (2026-06-13):** 82 findings → 52 confirmed (3-skeptic) → 43 fixed, 1
+  `wont_fix`. Closed a CRITICAL mid-turn-DB-error crash/hang, prod-dead session-restore,
+  and the concurrent-confirm duplicate-invoice race (atomic-claim idempotency ledger:
+  `store.claimIdempotency`, claim BEFORE commit await, `CLAIM_TTL_MS > COMMIT_TIMEOUT_MS`).
+  `wont_fix` = `authz-surface-01` (see Human-gated). Tables:
+  `~/Downloads/ai-assistant-goated-audit-NOTES.md`.
 
 **Human-gated only** (unchanged by this work):
 1. **Prod security review + token rotation** — the `.env.server` LLM creds were
