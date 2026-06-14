@@ -252,3 +252,65 @@ describe("POST /lifecycle/status-changed", () => {
     expect(store.getInstallation("ws-victim-status")?.status).toBe("active");
   });
 });
+
+describe("lifecycle workspace binding: an absent workspaceId claim must NEVER fall back to the attacker-controlled body", () => {
+  // The mismatch tests above cover claim-PRESENT-but-different (403). This is the
+  // claim-ABSENT hole: ClockifyAddonClaims.workspaceId is OPTIONAL, so the parser
+  // accepts a validly-signed token with no workspace claim. resolveWorkspaceId
+  // must bind to the verified claim ONLY — never the body — or a token with no
+  // workspace claim could erase / hijack a victim named only in the body.
+  it("/lifecycle/deleted with NO workspaceId claim does not erase a victim named only in the body", async () => {
+    store.saveInstallation({
+      workspaceId: "ws-victim-noclaim-del",
+      addonId: "addon-victim",
+      addonUserId: "victim-user",
+      addonToken: "victim-token-del",
+      status: "active",
+    });
+    const sess = store.createSession({ workspaceId: "ws-victim-noclaim-del", adminUserId: "admin-1" });
+    store.addMessage({ sessionId: sess.id, workspaceId: "ws-victim-noclaim-del", adminUserId: "admin-1", role: "user", content: "secret" });
+
+    const token = await lifecycleToken({ addonId: "addon-attacker" }); // NO workspaceId / activeWs
+    const res = await request(app)
+      .post("/lifecycle/deleted")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ workspaceId: "ws-victim-noclaim-del" });
+
+    expect(res.status).not.toBe(200);
+    const inst = store.getInstallation("ws-victim-noclaim-del");
+    expect(inst?.status).toBe("active"); // NOT erased
+    expect(inst?.addonToken).toBe("victim-token-del"); // token intact
+    expect(store.getRecentMessages(sess.id, 10)).toHaveLength(1); // data intact
+  });
+
+  it("/lifecycle/installed with NO workspaceId claim does not overwrite a victim's install token named only in the body", async () => {
+    store.saveInstallation({
+      workspaceId: "ws-victim-noclaim-inst",
+      addonId: "addon-victim",
+      addonUserId: "victim-user",
+      addonToken: "victim-real-token",
+      status: "active",
+    });
+    const token = await lifecycleToken({ addonId: "addon-attacker" }); // NO workspaceId / activeWs
+    const res = await request(app)
+      .post("/lifecycle/installed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ workspaceId: "ws-victim-noclaim-inst", authToken: "attacker-token" });
+
+    expect(res.status).not.toBe(200);
+    // The victim's stored install token must NOT be overwritten with the attacker's.
+    expect(store.getInstallation("ws-victim-noclaim-inst")?.addonToken).toBe("victim-real-token");
+  });
+
+  it("accepts a legacy token that carries the workspace as `activeWs` (claim-sourced, normalized to workspaceId)", async () => {
+    const token = await lifecycleToken({ activeWs: "ws-legacy-activews", addonId: "addon-legacy" });
+    const res = await request(app)
+      .post("/lifecycle/installed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ authToken: "legacy-install-token" }); // body carries NO workspaceId
+
+    expect(res.status).toBe(200);
+    // Resolved from the claim's activeWs, not the body.
+    expect(store.getInstallation("ws-legacy-activews")?.status).toBe("active");
+  });
+});

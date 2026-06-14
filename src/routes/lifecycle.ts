@@ -14,21 +14,40 @@ function getLifecycleToken(req: Request): string | undefined {
 }
 
 /**
- * Bind the workspace to the VERIFIED token claim. A valid lifecycle token must
- * only ever mutate the workspace it was signed for, so the attacker-controlled
- * request body can never select a different (victim) workspace. Returns the
- * authoritative workspaceId, or `"mismatch"` when the body names a workspace
- * that disagrees with the claim (cross-workspace install hijack / DoS).
+ * Resolve the authoritative workspaceId from the VERIFIED token claim ONLY. A
+ * lifecycle token must only ever mutate the workspace it was signed for, so the
+ * workspace is bound to the claim and the attacker-controlled request body can
+ * NEVER select it: the body is accepted purely as a redundant echo that must
+ * AGREE with the claim. `ClockifyAddonClaims.workspaceId` is OPTIONAL, and legacy
+ * developer-portal tokens carry the workspace as `activeWs` instead — normalize
+ * that here (mirrors the canonical reference add-ons) so a legitimate token still
+ * resolves from its CLAIM. Returns the authoritative id, `undefined` when the
+ * claim carries no workspace at all (caller MUST fail closed — never trust the
+ * body), or `"mismatch"` when a present body disagrees with the claim.
+ *
+ * SECURITY (do not regress): the previous `claimWs ?? bodyWs` fallback let a
+ * validly-signed token with NO workspace claim erase / hijack a victim workspace
+ * named only in the body. The claim is the sole source of authority.
  */
 function resolveWorkspaceId(
   claimWorkspaceId: unknown,
+  claimActiveWs: unknown,
   bodyWorkspaceId: unknown,
 ): string | undefined | "mismatch" {
-  const claimWs = typeof claimWorkspaceId === "string" ? claimWorkspaceId : undefined;
-  const bodyWs = typeof bodyWorkspaceId === "string" ? bodyWorkspaceId : undefined;
+  const claimWs =
+    typeof claimWorkspaceId === "string" && claimWorkspaceId
+      ? claimWorkspaceId
+      : typeof claimActiveWs === "string" && claimActiveWs
+        ? claimActiveWs
+        : undefined;
+  const bodyWs = typeof bodyWorkspaceId === "string" && bodyWorkspaceId ? bodyWorkspaceId : undefined;
   if (claimWs && bodyWs && claimWs !== bodyWs) return "mismatch";
-  // Prefer the verified claim; fall back to the body only when the claim omits it.
-  return claimWs ?? bodyWs;
+  return claimWs;
+}
+
+/** Read the legacy `activeWs` claim (not modelled by the SDK's claims type). */
+function activeWsClaim(claims: unknown): unknown {
+  return (claims as { activeWs?: unknown }).activeWs;
 }
 
 export function lifecycleRouter(deps: AppDeps): Router {
@@ -43,7 +62,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
     // apiUrl, addonUserId, webhooks }. Only the installation token + workspace
     // are essential — capture the rest opportunistically. Requiring optional
     // metadata (e.g. addonUserId) would reject otherwise-valid installs.
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
     if (workspaceId === "mismatch") {
       return res.status(403).json({ ok: false, code: "workspace_mismatch" });
     }
@@ -70,7 +89,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
     if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
     const body = req.body ?? {};
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
     if (workspaceId === "mismatch") {
       return res.status(403).json({ ok: false, code: "workspace_mismatch" });
     }
@@ -86,7 +105,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
     if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
     const body = req.body ?? {};
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, body.workspaceId);
+    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
     if (workspaceId === "mismatch") {
       return res.status(403).json({ ok: false, code: "workspace_mismatch" });
     }
