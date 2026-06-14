@@ -20,5 +20,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Fail on a HIGH/CRITICAL advisory in the shipped (runtime) deps. Dev-only
+      # tooling is excluded; Dependabot PRs handle lower-severity transitive bumps.
+      - run: npm audit --omit=dev --audit-level=high
       - run: npm run verify
       - run: npm run cycles
