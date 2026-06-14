@@ -356,6 +356,36 @@ describe("rest core host routing + auth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
   });
 
+  it("getBinary retries a transient 503 then returns the bytes (GET retry parity with call)", async () => {
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(res({ message: "unavailable" }, 503))
+      .mockResolvedValueOnce(
+        new Response(pdf.buffer as ArrayBuffer, { status: 200, headers: { "content-type": "application/pdf" } }),
+      );
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const out = await core.getBinary("api", "/workspaces/ws-1/invoices/inv1/export?format=PDF");
+    expect(Array.from(out.bytes)).toEqual([0x25, 0x50, 0x44, 0x46]);
+    expect(out.contentType).toBe("application/pdf");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("getBinary gives up after 1 + MAX_GET_RETRIES attempts on a persistent 503", async () => {
+    const fetchImpl = vi.fn(async () => res({ message: "unavailable" }, 503));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.getBinary("api", "/x")).rejects.toThrow(/503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // 1 initial + 2 retries
+  });
+
   it("postForm sends a FormData body without a JSON content-type", async () => {
     const fetchImpl = vi.fn(async () => res({ id: "x1" }));
     const core = createRestCore({

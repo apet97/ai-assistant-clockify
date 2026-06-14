@@ -187,6 +187,23 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return base;
   }
 
+  // GET-only bounded retry shared by call() + getBinary(): a transient 429/5xx on
+  // a read is retried up to MAX_GET_RETRIES with a short backoff. Non-GET requests
+  // break out on the first response (writes are never replayed); a thrown
+  // timeout/transport error from doFetch propagates without retry (latency stays
+  // bounded). GETs carry no body, so there is no body-reuse concern across attempts.
+  async function fetchWithRetry(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
+    let res: Response;
+    for (let attempt = 0; ; attempt++) {
+      res = await doFetch(method, path, url, init);
+      const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < MAX_GET_RETRIES;
+      if (!willRetry) break;
+      await res.text().catch(() => undefined); // drain the body before retrying
+      await sleep(retryDelayMs(res, attempt));
+    }
+    return res;
+  }
+
   async function call(
     host: ClockifyHost,
     method: string,
@@ -198,23 +215,11 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     // multipart/form-data bodies must NOT carry a JSON content-type — fetch/undici
     // sets the multipart boundary itself when the body is a FormData.
     const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-    // GET-only bounded retry: a transient 429/5xx on a read is retried up to
-    // MAX_GET_RETRIES with a short backoff. Writes break out on the first
-    // response (never replayed); a thrown timeout/transport error from doFetch
-    // propagates without retry (latency stays bounded). GETs carry no body, so
-    // there is no body-reuse concern across attempts.
-    let res: Response;
-    for (let attempt = 0; ; attempt++) {
-      res = await doFetch(method, path, `${baseHost}${path}`, {
-        method,
-        headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
-        body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-      });
-      const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < MAX_GET_RETRIES;
-      if (!willRetry) break;
-      await res.text().catch(() => undefined); // drain the body before retrying
-      await sleep(retryDelayMs(res, attempt));
-    }
+    const res = await fetchWithRetry(method, path, `${baseHost}${path}`, {
+      method,
+      headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+    });
     if (res.status === 404 && allow404) return null;
     if (!res.ok) {
       const text = await res.text();
@@ -282,7 +287,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     host: ClockifyHost,
     path: string,
   ): Promise<{ contentType: string; bytes: Uint8Array }> {
-    const res = await doFetch("GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
+    const res = await fetchWithRetry("GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
     if (!res.ok) {
       const text = await res.text();
       mapAddonRestriction(res.status, "GET", path, text);
