@@ -93,6 +93,14 @@ const DELETE_TAG: ToolCompletion = {
   toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }],
 };
 
+// A reversible RISKY create (an invoice — `invoice` is a REVERSIBLE_ENTITY_GROUP
+// type). Unlike a delete, a successful invoice commit reaches the THIRD post-commit
+// write, `recordUndoIfReversible` -> `store.recordUndoable`, to mint an undo handle.
+const CREATE_INVOICE: ToolCompletion = {
+  text: "Creating the invoice now.",
+  toolCalls: [{ id: "r1", name: "clockify_invoices_create", arguments: { clientName: "Acme" } }],
+};
+
 describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a committed receipt)", () => {
   it("addAuditEvent throwing at confirm does NOT 500: the receipt returns and the commit ran exactly once", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
@@ -146,5 +154,48 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
     expect(fake.counts.deleteTag).toBe(1);
+  });
+
+  it("recordUndoIfReversible (the 3rd write) throwing at confirm does NOT 500: the committed receipt returns and the commit ran exactly once", async () => {
+    // The first two writes are covered above; this pins the THIRD post-commit
+    // bookkeeping write. `recordUndoIfReversible` calls `store.recordUndoable`,
+    // which is reached ONLY by a successful REVERSIBLE create — so we drive a
+    // risky invoice create (not a delete) through preview -> confirm and wrap
+    // the store so `recordUndoable` throws once at confirm time. The invoice has
+    // ALREADY committed by then, so the throw must NOT 500 / drop the receipt.
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    let undoableThrows = 0;
+    const { app, cookie } = await makeApp([CREATE_INVOICE], fake, (store) => ({
+      ...store,
+      recordUndoable: () => {
+        undoableThrows += 1;
+        throw new Error("db busy");
+      },
+    }));
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create an invoice for Acme" });
+    expect(chat.status).toBe(200);
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+    expect(preview).toBeDefined();
+    // Nothing committed at preview time.
+    expect(fake.counts.createInvoice ?? 0).toBe(0);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    // The undo-bookkeeping write threw AFTER the commit. The confirm must still
+    // be a 200 carrying the committed receipt — not a 500 that swallows it.
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(confirm.body.receipt.action).toBe("clockify_invoices_create");
+    // The throwing path WAS exercised (sanity: the 3rd write actually ran), and
+    // the commit happened exactly once on the underlying host.
+    expect(undoableThrows).toBe(1);
+    expect(fake.counts.createInvoice).toBe(1);
   });
 });
