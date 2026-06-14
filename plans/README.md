@@ -19,7 +19,7 @@ tidy-ups, not a defect pile.
 | 003 | Isolate post-commit bookkeeping so a DB hiccup can't drop a committed receipt's audit trail | P2 | S | — | DONE |
 | 004 | Signal pagination truncation instead of silently capping lists at 10k | P1 | M | — | DONE (core `paginateWithMeta` + `list_truncated` caveat on entries_list AND review_day/review_week) |
 | 005 | Incrementally decompose the 1394-line `api.ts` god-file | P3 | M (L for Phase 2) | 002 | PHASE 1 DONE (request-schemas/consent-guard/async-handler extracted); Phase 2 deferred |
-| 006 | Don't alarm on a benign/failed chat-history restore (found live) | P2 | S | — | TODO |
+| 006 | Don't alarm on a benign/failed chat-history restore (found live) | P2 | S | — | DONE (historyRestoreItems shape-safe; restoreHistory degrades quietly on non-401, still surfaces 401, gate always settles) |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED (one-line rationale)
 

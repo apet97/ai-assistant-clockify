@@ -683,8 +683,17 @@ function mount(root: HTMLElement, api: ChatApi): void {
         else renderResults(item.results);
       }
       messages.scrollTop = messages.scrollHeight;
-    } catch {
-      showError("Couldn't restore the conversation history — you can keep chatting.");
+    } catch (error) {
+      // A failed/empty restore is non-blocking — the composer works and a fresh
+      // session has nothing to replay. Only a genuine session expiry (401) is
+      // worth surfacing (its fix is a reload); anything else degrades quietly so
+      // we never throw an alarming red bar over a benign first-load restore
+      // (plan 006).
+      if (error instanceof ApiError && error.status === 401) {
+        showError(error.message);
+      } else {
+        console.warn("history restore skipped:", error instanceof Error ? error.message : String(error));
+      }
     } finally {
       // Release the composer AFTER the replayed history has appended (success
       // OR failure) so a fast first message can never scramble the transcript

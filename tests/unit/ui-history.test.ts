@@ -14,6 +14,15 @@ describe("historyRestoreItems", () => {
     expect(historyRestoreItems({ ok: true, messages: [], pendingPreviews: [] })).toEqual([]);
   });
 
+  it("is shape-safe: undefined/missing/empty input yields [] (never throws)", () => {
+    // A fresh load or a transient non-OK GET resolves to `undefined` (json() only
+    // throws on 401); historyRestoreItems must degrade to [] so the route can
+    // skip the replay quietly instead of throwing an alarming red alert (plan 006).
+    expect(historyRestoreItems(undefined as unknown as HistoryResponse)).toEqual([]);
+    expect(historyRestoreItems({})).toEqual([]);
+    expect(historyRestoreItems({ messages: [], pendingPreviews: [] })).toEqual([]);
+  });
+
   it("emits bubbles for non-empty content and results items for non-empty results, in order", () => {
     const items = historyRestoreItems({
       ok: true,

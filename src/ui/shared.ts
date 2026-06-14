@@ -333,9 +333,14 @@ export type RestoreItem =
  * resumes the suspended loop; confirmAll is single-turn only) — r1-new-session-
  * restore-02.
  */
-export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
+export function historyRestoreItems(history: HistoryResponse | null | undefined): RestoreItem[] {
   const items: RestoreItem[] = [];
-  for (const message of history.messages ?? []) {
+  // Shape-safe against an undefined/malformed response: a fresh load or a
+  // transient non-OK GET resolves to `undefined` (json() only throws on 401),
+  // and a missing `messages`/`pendingPreviews` must coerce to [] — never throw
+  // (which would surface as an alarming red restore alert; plan 006).
+  const safe = history ?? {};
+  for (const message of safe.messages ?? []) {
     if (message.role !== "user" && message.role !== "assistant") continue;
     if (message.content.trim().length > 0) {
       items.push({ kind: "bubble", role: message.role, text: message.content });
@@ -351,7 +356,7 @@ export function historyRestoreItems(history: HistoryResponse): RestoreItem[] {
       });
     if (results.length > 0) items.push({ kind: "results", results });
   }
-  for (const pending of history.pendingPreviews ?? []) {
+  for (const pending of safe.pendingPreviews ?? []) {
     items.push({ kind: "results", results: [pending] });
   }
   return items;
