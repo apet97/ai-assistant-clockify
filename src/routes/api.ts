@@ -1066,6 +1066,39 @@ export function apiRouter(deps: AppDeps): Router {
     res.json({ ok: true });
   });
 
+  // Switch the cookie to a PAST conversation (the chat-history switcher). `:id` is
+  // attacker-controlled, so this is the IDOR-guarded re-cookie: the target must be
+  // a LIVE session owned by THIS workspace+admin. getSession already drops expired
+  // sessions (so an expired/unknown id 404s for free, no TTL revival); the ownership
+  // check mirrors resolveSession / the component reuse gate. A foreign/other-admin
+  // target returns 404 (NOT 403 — existence is never confirmed) and sets no cookie.
+  // The re-cookie carries the TARGET session's own expiry — never extended.
+  router.post("/chat/sessions/:id/open", (req, res) => {
+    const claims = requireSession(req, res);
+    if (!claims) return;
+    const target = deps.store.getSession(req.params.id);
+    if (
+      !target ||
+      target.workspaceId !== claims.workspaceId ||
+      target.adminUserId !== claims.adminUserId
+    ) {
+      return res.status(404).json({ ok: false, code: "not_found", message: "Conversation not found." });
+    }
+    const sessionClaims: SessionClaims = {
+      sessionId: target.id,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      workspaceRole: claims.workspaceRole,
+      expiresAt: target.expiresAt,
+    };
+    const secure = deps.config.baseUrl.startsWith("https://");
+    res.setHeader(
+      "Set-Cookie",
+      buildSessionCookie(signSessionCookie(sessionClaims, deps.config.sessionSecret), secure),
+    );
+    res.json({ ok: true });
+  });
+
   // Non-streaming turn (request/response). The mounted UI uses /chat/stream
   // below; this is the tested fallback surface (its client is `submitMessage`).
   // A failed turn returns 502 {ok:false,code,message} — the client surfaces that
