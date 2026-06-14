@@ -1,0 +1,38 @@
+# Manual, opt-in live smoke against a sacrificial Clockify workspace. NEVER runs
+# on push/PR (the normal CI is fakes-only, no network, no creds) — only when an
+# operator triggers it. It drives the real preview -> confirm -> commit -> cleanup
+# flow with a personal API key, creating only AIASSIST_SMOKE_* resources and
+# deleting them; a final sweep runs even on failure so nothing is left behind.
+#
+# Requires two repo secrets (Settings -> Secrets and variables -> Actions):
+#   LIVE_CLOCKIFY_API_KEY  — a Clockify API key for the sacrificial workspace
+#   LIVE_WORKSPACE_ID      — that workspace's id
+# The key is never committed; it exists only as an encrypted Actions secret.
+name: Live smoke (manual)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  live-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Live smoke
+        run: npx tsx scripts/live-smoke.ts
+        env:
+          LIVE_CLOCKIFY: "1"
+          LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
+          LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
+      - name: Sweep leftovers (always)
+        if: always()
+        run: npx tsx scripts/live-sweep.ts
+        env:
+          LIVE_CLOCKIFY: "1"
+          LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
+          LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
