@@ -123,3 +123,42 @@ describe("createFetchApi error surfacing", () => {
     ]);
   });
 });
+
+/**
+ * The chat-history switcher's client methods: `listSessions()` GETs the list and
+ * `switchSession(id)` POSTs the open route with the id URL-encoded (the id comes
+ * from the authenticated list endpoint, but encodeURIComponent keeps the path
+ * safe and mirrors the confirm/undo callers). We pin the exact path + method via
+ * a recording fetch mock so a wrong verb or unencoded id can't slip through.
+ */
+describe("createFetchApi chat-history switcher methods", () => {
+  function recordFetch(): { calls: Array<{ path: string; init?: RequestInit }> } {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (path: string, init?: RequestInit) => {
+        calls.push({ path, init });
+        return { ok: true, status: 200, body: null, json: async () => ({ ok: true }) };
+      }),
+    );
+    return { calls };
+  }
+
+  it("listSessions GETs /api/chat/sessions", async () => {
+    const { calls } = recordFetch();
+    const body = (await createFetchApi().listSessions()) as { ok: boolean };
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe("/api/chat/sessions");
+    // json() defaults to GET — no explicit method override.
+    expect(calls[0].init?.method).toBeUndefined();
+    expect(body.ok).toBe(true);
+  });
+
+  it("switchSession POSTs /api/chat/sessions/<encoded id>/open with an encoded id", async () => {
+    const { calls } = recordFetch();
+    await createFetchApi().switchSession("a b/../c?d");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].path).toBe(`/api/chat/sessions/${encodeURIComponent("a b/../c?d")}/open`);
+    expect(calls[0].init?.method).toBe("POST");
+  });
+});

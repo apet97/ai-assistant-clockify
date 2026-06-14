@@ -24,6 +24,14 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("newChat");
       return { ok: true };
     },
+    async listSessions() {
+      bump("listSessions");
+      return { ok: true, sessions: [] };
+    },
+    async switchSession() {
+      bump("switchSession");
+      return { ok: true };
+    },
     async sendMessage() {
       bump("sendMessage");
       return { ok: true, reply: { kind: "answer", text: "" }, results: [] };

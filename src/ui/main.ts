@@ -67,6 +67,10 @@ export interface ChatApi {
   getHistory(): Promise<unknown>;
   /** Start a fresh conversation (new session); the old chat stays on the server. */
   newChat(): Promise<unknown>;
+  /** List the admin's live, owned, non-empty conversations (the history switcher). */
+  listSessions(): Promise<unknown>;
+  /** Switch the session cookie to an owned conversation; then restoreHistory replays it. */
+  switchSession(id: string): Promise<unknown>;
   sendMessage(message: string): Promise<unknown>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -267,6 +271,9 @@ export function createFetchApi(): ChatApi {
       json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
     getHistory: () => json("/api/chat/history"),
     newChat: () => json("/api/chat/new", { method: "POST" }),
+    listSessions: () => json("/api/chat/sessions"),
+    switchSession: (id) =>
+      json(`/api/chat/sessions/${encodeURIComponent(id)}/open`, { method: "POST", body: JSON.stringify({}) }),
     sendMessage: (message) =>
       json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
     streamMessage: async (message, onEvent) => {
