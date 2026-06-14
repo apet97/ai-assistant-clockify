@@ -172,6 +172,32 @@ describe("time-entry actions — reads", () => {
     } else throw new Error("expected policy_denied");
   });
 
+  it("clockify_entries_list surfaces a list_truncated warning + data.truncated when the page backstop truncates", async () => {
+    // The fake's getEntries reports truncated when the seeded flag is set — a
+    // real workspace exceeding the 10k pagination cap is the live equivalent.
+    const fake = createFakeWorkspace({ ...seedEntries(), entriesTruncated: true });
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBe(true);
+    expect(result.receipt.warnings?.map((w) => w.code)).toContain("list_truncated");
+  });
+
+  it("clockify_entries_list emits no truncation caveat on a complete list", async () => {
+    const fake = createFakeWorkspace(seedEntries());
+    const result = await executeAction({
+      actionName: "clockify_entries_list",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBeUndefined();
+    expect(result.receipt.warnings).toBeUndefined();
+  });
+
   it("clockify_entries_get fetches one entry by id", async () => {
     const fake = createFakeWorkspace(seedEntries());
     const result = await executeAction({

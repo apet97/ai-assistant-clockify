@@ -55,6 +55,12 @@ export interface RestCore {
     path: string,
     params?: Record<string, string>,
   ): Promise<unknown[]>;
+  /** Like {@link paginate}, but reports whether the MAX_PAGES backstop truncated the list. */
+  paginateWithMeta(
+    host: ClockifyHost,
+    path: string,
+    params?: Record<string, string>,
+  ): Promise<{ rows: unknown[]; truncated: boolean }>;
   getThenPut(
     host: ClockifyHost,
     path: string,
@@ -242,11 +248,17 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     }
   }
 
-  async function paginate(
+  // Loop list endpoints up to the MAX_PAGES backstop and report whether the
+  // backstop (rather than a natural short page) ended the loop. `truncated: true`
+  // means every one of the MAX_PAGES pages came back full, so there is almost
+  // certainly more — the caller must surface that the list is incomplete rather
+  // than reason over a silently-capped result. Warns once per truncated list so
+  // the truncation is operator-visible even for callers that ignore the flag.
+  async function paginateWithMeta(
     host: ClockifyHost,
     path: string,
     params: Record<string, string> = {},
-  ): Promise<unknown[]> {
+  ): Promise<{ rows: unknown[]; truncated: boolean }> {
     const out: unknown[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const qs = new URLSearchParams({
@@ -258,9 +270,21 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       const rows = (await call(host, "GET", `${path}${sep}${qs.toString()}`)) as unknown[] | null;
       const arr = Array.isArray(rows) ? rows : [];
       out.push(...arr);
-      if (arr.length < PAGE_SIZE) break;
+      if (arr.length < PAGE_SIZE) return { rows: out, truncated: false }; // short page = natural end
     }
-    return out;
+    // Reached only if all MAX_PAGES pages were full → there is almost certainly more.
+    console.warn(
+      `Clockify list ${path} hit the ${MAX_PAGES}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
+    );
+    return { rows: out, truncated: true };
+  }
+
+  async function paginate(
+    host: ClockifyHost,
+    path: string,
+    params: Record<string, string> = {},
+  ): Promise<unknown[]> {
+    return (await paginateWithMeta(host, path, params)).rows;
   }
 
   async function getThenPut(
@@ -297,5 +321,5 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 
-  return { call, paginate, getThenPut, postForm, getBinary };
+  return { call, paginate, paginateWithMeta, getThenPut, postForm, getBinary };
 }

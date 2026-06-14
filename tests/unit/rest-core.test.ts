@@ -205,16 +205,18 @@ describe("rest core host routing + auth", () => {
     expect(url).toContain("page=1");
   });
 
-  it("paginate stops at the MAX_PAGES backstop (50) and truncates a runaway list to 10k rows", async () => {
+  it("paginate stops at the MAX_PAGES backstop (50) and paginateWithMeta reports truncated=true", async () => {
     // Every page returns a FULL page (200 rows) so the short-page break never
     // fires — the only thing that can stop the loop is the MAX_PAGES ceiling.
     // This pins BOTH the runaway backstop (never loops unbounded against the live
-    // host) AND the truncation point: a workspace with > 10k rows is silently
-    // cut off at 50 * 200 = 10000 rows with no warning marker. An off-by-one in
-    // the loop bound or a regression in the short-page condition would change
-    // either the call count or the row total and fail here.
+    // host) AND the truncation SIGNAL: a workspace with > 10k rows is cut off at
+    // 50 * 200 = 10000 rows, and `paginateWithMeta` reports `truncated: true` so
+    // the list is no longer silently incomplete. An off-by-one in the loop bound
+    // or a regression in the short-page condition would change either the call
+    // count, the row total, or the truncated flag and fail here.
     const fullPage = Array.from({ length: 200 }, (_, i) => ({ id: i }));
     const fetchImpl = vi.fn(async () => res(fullPage));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const core = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",
       auth: { apiKey: "k" },
@@ -222,11 +224,43 @@ describe("rest core host routing + auth", () => {
     });
     const rows = await core.paginate("api", "/workspaces/ws-1/time-entries");
     expect(fetchImpl).toHaveBeenCalledTimes(50); // MAX_PAGES — no 51st request
-    expect(rows).toHaveLength(10000); // PAGE_SIZE * MAX_PAGES, truncated silently
+    expect(rows).toHaveLength(10000); // PAGE_SIZE * MAX_PAGES
     // The last request asked for page 50; there is no page 51 (the backstop, not
     // a short page, ended the loop).
     const lastUrl = (fetchImpl as any).mock.calls[49][0] as string;
     expect(lastUrl).toContain("page=50");
+
+    // paginateWithMeta exposes the truncation that paginate hides, and warns once.
+    fetchImpl.mockClear();
+    warn.mockClear();
+    const meta = await core.paginateWithMeta("api", "/workspaces/ws-1/time-entries");
+    expect(meta.truncated).toBe(true);
+    expect(meta.rows).toHaveLength(10000);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect((warn.mock.calls[0][0] as string)).toContain("/workspaces/ws-1/time-entries");
+    warn.mockRestore();
+  });
+
+  it("paginateWithMeta reports truncated=false when the final page is short", async () => {
+    // A full first page then a short second page = the natural end of the list,
+    // not the backstop — so the result is complete and truncated must be false.
+    const page1 = Array.from({ length: 200 }, (_, i) => ({ id: i }));
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(res(page1))
+      .mockResolvedValueOnce(res([{ id: "tail" }]));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const meta = await core.paginateWithMeta("api", "/workspaces/ws-1/time-entries");
+    expect(meta.truncated).toBe(false);
+    expect(meta.rows).toHaveLength(201);
+    expect(fetchImpl).toHaveBeenCalledTimes(2); // stopped on the short page, not the backstop
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("getThenPut GETs the resource, merges the patch, and PUTs the full body", async () => {

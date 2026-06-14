@@ -149,7 +149,7 @@ describe("rest workspace client", () => {
         { id: "e2", timeInterval: { start: "2026-06-02T00:00:00Z", end: null } },
       ]),
     );
-    const entries = await client(f as any).getEntries({
+    const { entries } = await client(f as any).getEntries({
       userId: "u1",
       start: "2026-06-01T00:00:00Z",
       end: "2026-06-30T00:00:00Z",

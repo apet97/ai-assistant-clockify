@@ -51,6 +51,8 @@ export interface FakeWorkspaceSeed {
   projectMemberships?: Record<string, Array<Record<string, unknown>>>;
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
+  /** getEntries reports `truncated: true` (simulates the 10k pagination backstop). */
+  entriesTruncated?: boolean;
   /** addInvoiceItem throws (simulates a workspace with no matching invoice item type). */
   failAddInvoiceItem?: boolean;
 }

@@ -1,7 +1,7 @@
 import type { TimeEntrySummary, WorkspaceClient } from "../../../src/clockify/client.js";
 import type { FakeContext } from "./state.js";
 
-export function makeFakeTimeEntries({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "getRunningTimeEntry"
   | "startTimeEntry"
@@ -57,13 +57,15 @@ export function makeFakeTimeEntries({ state, bump, nextId }: FakeContext): Pick<
     async getEntries({ start, end, projectId, taskId }) {
       bump("getEntries");
       // ISO-8601 UTC strings sort lexicographically, so range filtering works.
-      return state.timeEntries.filter((e) => {
+      const entries = state.timeEntries.filter((e) => {
         if (start && e.start < start) return false;
         if (end && e.start >= end) return false;
         if (projectId && e.projectId !== projectId) return false;
         if (taskId && e.taskId !== taskId) return false;
         return true;
       });
+      // `entriesTruncated` simulates the real adapter hitting the 10k page backstop.
+      return { entries, truncated: seed.entriesTruncated ?? false };
     },
     async getEntry(id) {
       bump("getEntry");

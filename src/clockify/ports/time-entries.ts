@@ -14,14 +14,18 @@ export interface TimeEntryPort {
   startTimeEntry(input: StartTimeEntryInput): Promise<TimeEntrySummary>;
   stopTimeEntry(input: { userId: string; end: string }): Promise<TimeEntrySummary | null>;
   createTimeEntry(input: CreateTimeEntryInput): Promise<TimeEntrySummary>;
-  /** Read/list coverage for the broader action catalog (paginated, user-scoped). */
+  /**
+   * Read/list coverage for the broader action catalog (paginated, user-scoped).
+   * Returns `truncated: true` when the list hit the pagination backstop (more
+   * rows exist than were fetched) so callers can caveat an incomplete result.
+   */
   getEntries(input: {
     userId: string;
     start?: string;
     end?: string;
     projectId?: string;
     taskId?: string;
-  }): Promise<TimeEntrySummary[]>;
+  }): Promise<{ entries: TimeEntrySummary[]; truncated: boolean }>;
   /** Fetch a single time entry by id. */
   getEntry(id: string): Promise<TimeEntrySummary | null>;
   /** Update known time-entry fields (safe write — entry id is already resolved). */

@@ -434,6 +434,53 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     expect(fake.counts.getEntries).toBe(1);
   });
 
+  it("review_day flags a truncated entry list (the total is understated) with a list_truncated warning", async () => {
+    // A truncated list means totalMinutes is computed on an incomplete set — the
+    // caveat must say the total is understated, not just that rows are missing.
+    const fake = createFakeWorkspace({
+      entriesTruncated: true,
+      entries: [{ id: "in1", start: "2026-06-05T09:00:00.000Z", end: "2026-06-05T10:00:00.000Z", description: "a" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "2026-06-05" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBe(true);
+    expect(result.receipt.warnings?.map((w) => w.code)).toContain("list_truncated");
+    expect(result.receipt.warnings?.[0].message.toLowerCase()).toContain("understated");
+  });
+
+  it("review_week flags a truncated entry list with a list_truncated warning", async () => {
+    const fake = createFakeWorkspace({
+      entriesTruncated: true,
+      entries: [{ id: "w1", start: "2026-06-01T09:00:00.000Z", description: "a" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_review_week",
+      args: { start: "2026-06-01" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBe(true);
+    expect(result.receipt.warnings?.map((w) => w.code)).toContain("list_truncated");
+  });
+
+  it("review_day emits no truncation caveat on a complete list", async () => {
+    const fake = createFakeWorkspace({
+      entries: [{ id: "in1", start: "2026-06-05T09:00:00.000Z", end: "2026-06-05T10:00:00.000Z", description: "a" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_review_day",
+      args: { date: "2026-06-05" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBeUndefined();
+    expect(result.receipt.warnings).toBeUndefined();
+  });
+
   it("review_week summarizes the 7-day window from the given start", async () => {
     const fake = createFakeWorkspace({
       entries: [
