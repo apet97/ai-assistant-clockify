@@ -1,4 +1,4 @@
-import { Router, type Request, type Response, type NextFunction } from "express";
+import { Router, type Request, type Response } from "express";
 import {
   createSlidingWindowLimiter,
   DEFAULT_CHAT_RATE_LIMIT_MAX,
@@ -56,6 +56,7 @@ import {
   BARE_AFFIRMATIVE,
   lastTurnCompletedAWrite,
 } from "./consent-guard.js";
+import { asyncHandler } from "./async-handler.js";
 
 // Re-export the history-sanitizer/truthful-preview helpers (extracted to
 // ./history-sanitizer.ts) so existing importers of api.ts keep resolving — the
@@ -98,21 +99,6 @@ export const CHAT_HISTORY_LIMIT = 50;
 
 /** Idempotency window: re-confirming the same intent within this is deduped. */
 export const IDEMPOTENCY_WINDOW_MS = 10 * 60 * 1000;
-
-/**
- * Express 4 does NOT catch rejections from async route handlers: a store write
- * that throws mid-turn (e.g. SQLITE_BUSY) would otherwise leave the request
- * hanging forever AND surface as a fatal unhandledRejection. asyncHandler routes
- * any rejection to next(err) so the terminal error middleware (createApp) returns
- * a calm 5xx and the server stays up for every other admin.
- */
-function asyncHandler(
-  handler: (req: Request, res: Response) => Promise<unknown>,
-): (req: Request, res: Response, next: NextFunction) => void {
-  return (req, res, next) => {
-    handler(req, res).catch(next);
-  };
-}
 
 export function apiRouter(deps: AppDeps): Router {
   const router = Router();
