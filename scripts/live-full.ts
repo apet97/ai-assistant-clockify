@@ -847,10 +847,26 @@ async function runUsers(h: LiveHarness): Promise<void> {
   try {
     await h.read("clockify_users_list", {});
     await h.read("clockify_groups_list", {});
-    // High-blast-radius user writes: preview-only (never committed live).
+    // High-blast-radius user writes: preview-only (never committed live). The
+    // recipient/target must be a REAL workspace member so the resolver produces a
+    // clean preview rather than a (correct) did-you-mean clarify — resolve members
+    // dynamically off the live workspace instead of hardcoded placeholders.
+    const members = ((await h.call("GET", `${wsPath}/users`, undefined, true)) as
+      | Array<{ id: string }>
+      | null) ?? [];
+    // A real member who is NOT the admin (the deactivate self-guard refuses 'me').
+    const otherMemberId = members.map((m) => m.id).find((id) => id !== h.ctx.adminUserId);
     await h.previewOnly("clockify_users_invite", { email: `aiassist_smoke_${h.sfx}@example.com` });
-    await h.previewOnly("clockify_users_role_update", { userId: h.ctx.adminUserId, role: "TEAM_MANAGER", entityId: "smoke-team" });
-    await h.previewOnly("clockify_users_deactivate", { userId: "smoke-user" });
+    // WORKSPACE_ADMIN scopes to the whole workspace (entityId = workspaceId is set
+    // server-side; no scope arg needed), so a real recipient previews cleanly.
+    await h.previewOnly("clockify_users_role_update", { userId: h.ctx.adminUserId, role: "WORKSPACE_ADMIN" });
+    if (otherMemberId) {
+      await h.previewOnly("clockify_users_deactivate", { userId: otherMemberId });
+    } else {
+      // Single-member sacrificial workspace — can't deactivate without targeting
+      // self (correctly refused), so skip rather than count a guard hit as FAIL.
+      h.record("clockify_users_deactivate", "SKIP", "no non-admin member to deactivate on sac workspace");
+    }
     // Groups: real round-trip (self-cleaning).
     const created = await h.risky("clockify_groups_create", { name });
     groupId = created?.changed?.created?.[0]?.id;
