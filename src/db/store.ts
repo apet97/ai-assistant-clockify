@@ -65,6 +65,20 @@ export interface NewSessionInput {
   ttlMs?: number;
 }
 
+/**
+ * A summary of one chat session for the history switcher: the session id, a
+ * display title (the first USER message), the total message count, and the
+ * last-activity timestamp. Only live (non-expired), owned, non-empty sessions
+ * are surfaced (see {@link Store.listSessions}).
+ */
+export interface SessionSummary {
+  id: string;
+  title: string;
+  messageCount: number;
+  lastMessageAt: string;
+  createdAt: string;
+}
+
 export type ChatRole = "user" | "assistant" | "system";
 
 export interface NewMessageInput {
@@ -184,6 +198,13 @@ export interface Store {
 
   createSession(input: NewSessionInput): ChatSession;
   getSession(id: string): ChatSession | undefined;
+  /**
+   * This admin's live (non-expired), non-empty chat sessions in THIS workspace,
+   * newest-first (by last message). Each summary carries the first user message
+   * as a title + the message count. Scoped by workspace + admin (tenant
+   * isolation): never enumerates another tenant's sessions.
+   */
+  listSessions(workspaceId: string, adminUserId: string, nowIso: string): SessionSummary[];
 
   addMessage(input: NewMessageInput): void;
   /**
@@ -591,6 +612,37 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         lastSeenAt: row.last_seen_at,
         expiresAt: row.expires_at,
       };
+    },
+
+    listSessions(workspaceId, adminUserId, nowIso) {
+      const rows = db
+        .prepare(
+          `SELECT s.id AS id, s.created_at AS created_at,
+             (SELECT m.content FROM chat_messages m
+                WHERE m.session_id = s.id AND m.role = 'user'
+                ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1) AS title,
+             (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count,
+             (SELECT MAX(m.created_at) FROM chat_messages m WHERE m.session_id = s.id) AS last_message_at
+           FROM chat_sessions s
+           WHERE s.workspace_id = ? AND s.admin_user_id = ? AND s.expires_at > ?
+           ORDER BY last_message_at DESC`,
+        )
+        .all(workspaceId, adminUserId, nowIso) as Array<{
+        id: string;
+        created_at: string;
+        title: string | null;
+        message_count: number;
+        last_message_at: string | null;
+      }>;
+      return rows
+        .filter((r) => r.message_count > 0 && r.last_message_at)
+        .map((r) => ({
+          id: r.id,
+          title: r.title ?? "Conversation",
+          messageCount: r.message_count,
+          lastMessageAt: r.last_message_at as string,
+          createdAt: r.created_at,
+        }));
     },
 
     addMessage(input) {

@@ -77,6 +77,12 @@ const SCHEMA_STATEMENTS: string[] = [
   )`,
   `CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
     ON chat_messages(session_id, created_at)`,
+  // History-switcher seek: list a workspace admin's live (non-expired) sessions
+  // (store.listSessions). Without it the WHERE workspace_id+admin_user_id+
+  // expires_at filter is a full SCAN of an append-only, unpruned table; the
+  // per-row title/count subqueries ride idx_chat_messages_session_created above.
+  `CREATE INDEX IF NOT EXISTS idx_chat_sessions_workspace_admin_expires
+    ON chat_sessions(workspace_id, admin_user_id, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_confirmations_lookup
     ON pending_confirmations(workspace_id, admin_user_id, status, expires_at)`,
   // Session-scoped seek for the typed-consent guard's countPendingConfirmations
