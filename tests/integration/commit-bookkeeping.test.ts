@@ -198,4 +198,50 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     expect(undoableThrows).toBe(1);
     expect(fake.counts.createInvoice).toBe(1);
   });
+
+  it("fillIdempotency throwing at confirm does NOT 500: the ledger write is post-commit too, so the committed receipt must survive", async () => {
+    // The three writes above live in the ISOLATED post-commit try in
+    // commitConfirmation. But the atomic idempotency ledger's `fill` runs one
+    // layer deeper — INSIDE commitConfirmedOperation (src/harness/actions.ts),
+    // AFTER the host commit already happened and BEFORE that isolated try. A
+    // risky create that defines idempotencyKey (clockify_invoices_create) takes
+    // the atomic path: claim -> runCommit (invoice created in Clockify) -> fill.
+    // A transient SQLITE_BUSY on that fill (the hourly retention prune txn or
+    // scripts/erase-workspace.ts holding the /data write lock past busy_timeout)
+    // must NOT escape as a 500 and drop the committed invoice's receipt/audit/
+    // undo — with the nonce already burned, that loss is permanent and the money
+    // already moved. commitConfirmedOperation is even documented "Never throws".
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
+    let fillThrows = 0;
+    const { app, cookie } = await makeApp([CREATE_INVOICE], fake, (store) => ({
+      ...store,
+      fillIdempotency: () => {
+        fillThrows += 1;
+        throw new Error("db busy");
+      },
+    }));
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create an invoice for Acme" });
+    expect(chat.status).toBe(200);
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+    expect(preview).toBeDefined();
+    expect(fake.counts.createInvoice ?? 0).toBe(0);
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    // The ledger fill threw AFTER the invoice committed. The confirm must still
+    // be a 200 carrying the committed receipt — not a 500 that swallows it.
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt.ok).toBe(true);
+    expect(confirm.body.receipt.action).toBe("clockify_invoices_create");
+    // The throwing ledger path WAS exercised, and the commit ran exactly once.
+    expect(fillThrows).toBe(1);
+    expect(fake.counts.createInvoice).toBe(1);
+  });
 });

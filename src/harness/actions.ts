@@ -1,6 +1,6 @@
 import { getAction } from "./catalog.js";
 import { isAtomicLedger } from "./action.js";
-import type { ActionContext, ActionResult, ConfirmableOperation } from "./action.js";
+import type { ActionContext, ActionResult, ClaimState, ConfirmableOperation } from "./action.js";
 import { canRead, canWrite } from "./permissions.js";
 import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
@@ -152,32 +152,87 @@ export async function commitConfirmedOperation(
   const scopedKey = idempotencyScopeKey(ctx.workspaceId, ctx.adminUserId, operation, semantic);
 
   if (!isAtomicLedger(ledger)) {
-    // LEGACY PATH — byte-identical to the pre-change behavior for 2-method ledgers.
+    // LEGACY PATH (2-method ledgers, tests only — the route always wires the
+    // atomic ledger). `record` runs AFTER the commit, so it is best-effort for
+    // the same reason as the atomic `fill` below: the host write already
+    // happened, and a ledger write hiccup must not discard the receipt.
     const prior = ledger.lookup(scopedKey);
     if (prior) return markReplayed(prior);
     const receipt = await runCommit(commit, ctx, operation);
-    if (receipt.ok) ledger.record(scopedKey, receipt);
+    if (receipt.ok) {
+      try {
+        ledger.record(scopedKey, receipt);
+      } catch (error) {
+        logLedgerBookkeepingFailure(error);
+      }
+    }
     return receipt;
   }
 
-  // ATOMIC PATH — the claim is the cross-row serialization point.
-  const state = ledger.claim(scopedKey);
+  // ATOMIC PATH — the claim is the cross-row serialization point. Every ledger op
+  // is a synchronous DB write that CAN throw a transient SQLITE_BUSY (the hourly
+  // retention prune txn or scripts/erase-workspace.ts holding the /data write
+  // lock past busy_timeout). This function is documented "Never throws", and a
+  // ledger hiccup must never escalate to a 500: pre-commit it fails closed (no
+  // host write happened yet), post-commit it is best-effort (the host write has
+  // already happened, so the receipt is the source of truth and MUST survive —
+  // dropping it would leave an applied, money-moving change with no receipt, no
+  // audit entry, and no undo handle, the nonce already burned).
+  let state: ClaimState;
+  try {
+    state = ledger.claim(scopedKey);
+  } catch {
+    return ledgerUnavailable(operation.actionName);
+  }
   if (state === "replay") {
-    const prior = ledger.lookupCompleted(scopedKey);
+    let prior: SuccessReceipt | undefined;
+    try {
+      prior = ledger.lookupCompleted(scopedKey);
+    } catch {
+      // The completed row exists but is momentarily unreadable; the prior commit
+      // already happened and is recorded — report in-progress, never re-commit.
+      return commitInProgress(operation.actionName);
+    }
     return prior ? markReplayed(prior) : commitInProgress(operation.actionName);
   }
   if (state === "in_flight") return commitInProgress(operation.actionName);
 
   // state === "won": WE OWN THE CLAIM. Commit exactly once; fill on success,
-  // release on failure/throw so a legitimate retry can re-claim (a failed commit
-  // never blocks the window — the existing "failed commit is retryable" invariant).
+  // release on failure so a legitimate retry can re-claim (a failed commit never
+  // blocks the window — the existing "failed commit is retryable" invariant). By
+  // the time fill/release run the host write has ALREADY happened, so a throw
+  // here is bookkept best-effort and the committed receipt is returned regardless.
   const receipt = await runCommit(commit, ctx, operation);
-  if (receipt.ok) {
-    ledger.fill(scopedKey, receipt);
-  } else {
-    ledger.release(scopedKey);
+  try {
+    if (receipt.ok) ledger.fill(scopedKey, receipt);
+    else ledger.release(scopedKey);
+  } catch (error) {
+    logLedgerBookkeepingFailure(error);
   }
   return receipt;
+}
+
+/** Log a post-commit ledger write failure (message only — never secrets). */
+function logLedgerBookkeepingFailure(error: unknown): void {
+  console.error(
+    "idempotency ledger bookkeeping failed (commit already applied; receipt preserved):",
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+/**
+ * A PRE-commit ledger failure (the claim itself threw): nothing was sent to the
+ * host, so fail closed to a retryable error rather than a 500. Generic message —
+ * a storage hiccup is infra, not an actionable action error, and carries no
+ * action detail worth surfacing to the model/admin.
+ */
+function ledgerUnavailable(actionName: string): ErrorReceipt {
+  return errorReceipt({
+    action: actionName,
+    code: "commit_unavailable",
+    message: "The change could not be started due to a temporary storage issue — nothing was applied. Please try again in a moment.",
+    recovery: { hint: "Try again in a moment.", retryable: true },
+  });
 }
 
 /** Run a commit, mapping a thrown error to an execution_error receipt. Never throws. */
