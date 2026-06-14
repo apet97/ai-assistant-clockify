@@ -23,5 +23,6 @@ jobs:
       # Fail on a HIGH/CRITICAL advisory in the shipped (runtime) deps. Dev-only
       # tooling is excluded; Dependabot PRs handle lower-severity transitive bumps.
       - run: npm audit --omit=dev --audit-level=high
+      # `npm run verify` now runs the cycles check (madge) itself, so no
+      # separate cycles step is needed — the local gate equals the CI gate.
       - run: npm run verify
-      - run: npm run cycles
