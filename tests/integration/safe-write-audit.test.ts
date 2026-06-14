@@ -105,6 +105,22 @@ const throwingAudit = (store: Store): Store => ({
   },
 });
 
+// F7: the assistant-reply persistence (`persistAssistantReply` -> `addMessage`)
+// runs AFTER the turn's action(s) executed. Make ONLY the assistant-role write
+// throw — the user-message write (start of the turn) and the safe write itself
+// still succeed, so the change has already happened on the host by the time the
+// reply persistence throws. The wrapper delegates every other addMessage call to
+// the real store so the user message + history are intact.
+const throwingAssistantReplyPersist = (store: Store): Store => ({
+  ...store,
+  addMessage: (input) => {
+    if (input.role === "assistant") {
+      throw new Error("db busy");
+    }
+    store.addMessage(input);
+  },
+});
+
 describe("safe-write post-execution bookkeeping is best-effort (a DB hiccup can't drop a committed receipt)", () => {
   it("a throwing addAuditEvent on a SAFE-write turn (agentic default) still returns the receipt 200 and does not 502", async () => {
     const fake = createFakeWorkspace({ tags: [] });
@@ -126,6 +142,40 @@ describe("safe-write post-execution bookkeeping is best-effort (a DB hiccup can'
   it("a throwing addAuditEvent on a SAFE-write turn (single-turn) still returns the receipt 200 and does not 500", async () => {
     const fake = createFakeWorkspace({ tags: [] });
     const { app, cookie } = await makeApp([CREATE_TAG], fake, throwingAudit, false);
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create a tag called newtag" });
+
+    expect(chat.status).toBe(200);
+    expect(fake.counts.createTag).toBe(1);
+    const receipts = (chat.body.results as ResultItem[]).filter((r) => r.kind === "receipt");
+    expect(receipts.length).toBeGreaterThan(0);
+  });
+});
+
+describe("F7: assistant-reply persistence is best-effort (a throwing addMessage can't 500 a turn whose write already ran)", () => {
+  it("a throwing assistant-reply addMessage on a SAFE-write turn (agentic default) still returns the receipt 200 and does not 502", async () => {
+    const fake = createFakeWorkspace({ tags: [] });
+    const { app, cookie } = await makeApp([CREATE_TAG, DONE], fake, throwingAssistantReplyPersist, true);
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create a tag called newtag" });
+
+    // The safe write ALREADY ran on the host; persisting the assistant reply threw
+    // AFTER it. The turn must be a 200 carrying the committed receipt — not a 502.
+    expect(chat.status).toBe(200);
+    expect(fake.counts.createTag).toBe(1);
+    const receipts = (chat.body.results as ResultItem[]).filter((r) => r.kind === "receipt");
+    expect(receipts.length).toBeGreaterThan(0);
+  });
+
+  it("a throwing assistant-reply addMessage on a SAFE-write turn (single-turn) still returns the receipt 200 and does not 500", async () => {
+    const fake = createFakeWorkspace({ tags: [] });
+    const { app, cookie } = await makeApp([CREATE_TAG], fake, throwingAssistantReplyPersist, false);
 
     const chat = await request(app)
       .post("/api/chat/messages")

@@ -408,14 +408,29 @@ export function apiRouter(deps: AppDeps): Router {
   }
 
   function persistAssistantReply(claims: Claims, replyKind: string, replyText: string, results: unknown[]): void {
-    deps.store.addMessage({
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      role: "assistant",
-      content: storedContentForReply(replyText, results),
-      payload: { kind: replyKind, results: redactNonceForStorage(results) },
-    });
+    // Persisting the assistant reply is post-execution bookkeeping: it runs AFTER
+    // the turn's action(s) executed (a safe write already hit the host; a risky one
+    // is already a stored pending preview). A transient DB error on this write
+    // (e.g. a microsecond SQLITE_BUSY) must NOT throw the turn — that would 502
+    // (agentic) / 500 (single-turn) a turn whose change already happened, dropping
+    // the committed receipt and inviting a duplicate write. Mirror the safe-write
+    // (auditAndEmitReceipt) and confirm-tail isolation: log (message only, no
+    // secrets) and continue so the receipt/reply still reaches the admin.
+    try {
+      deps.store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        role: "assistant",
+        content: storedContentForReply(replyText, results),
+        payload: { kind: replyKind, results: redactNonceForStorage(results) },
+      });
+    } catch (error) {
+      console.error(
+        "assistant-reply persistence failed (turn already executed; reply preserved):",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
   }
 
   /** Telemetry must never break a turn — best-effort write, swallow failures. */
