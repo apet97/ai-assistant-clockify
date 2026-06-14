@@ -673,16 +673,29 @@ export function apiRouter(deps: AppDeps): Router {
       );
     }
 
-    deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);
-    deps.store.addAuditEvent({
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      sessionId: claims.sessionId,
-      actionName: operation.actionName,
-      risk: operation.risks,
-      receipt,
-    });
-    const undoId = recordUndoIfReversible(claims, receipt);
+    let undoId: string | undefined;
+    try {
+      // Post-commit bookkeeping is best-effort: the commit already happened and
+      // is durably recorded in the idempotency ledger. A DB hiccup here (e.g. a
+      // transient SQLITE_BUSY) must NOT drop the receipt on the floor or 500 the
+      // turn — log (message only, no secrets) and still return the receipt. A
+      // later re-confirm replays idempotently and re-attempts the bookkeeping.
+      deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);
+      deps.store.addAuditEvent({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        actionName: operation.actionName,
+        risk: operation.risks,
+        receipt,
+      });
+      undoId = recordUndoIfReversible(claims, receipt);
+    } catch (error) {
+      console.error(
+        "post-commit bookkeeping failed (commit already applied; receipt preserved):",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
     const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
     return { ok: true, receipt, undoId, agentState, installation };
   }
