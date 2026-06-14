@@ -10,7 +10,7 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1216 tests**; `npm run cycles` (= `madge
+**Verified gate:** `npm run verify` = **1220 tests**; `npm run cycles` (= `madge
 --circular …`, now a pinned devDep) = **0** (keep both green). 137 typed actions,
 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
 (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
@@ -27,7 +27,26 @@ Railway **volume at `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so
 installs survive redeploys. Env vars + volume live in Railway — never commit
 tokens. Full checklist: `DEPLOYMENT.md`.
 
-**Latest — external-review remediation pass (2026-06-14):** seven
+**Latest — marketplace-submission hardening (2026-06-14):** six items from a
+submission-readiness review, TDD per item. **Chat/audit retention** (REVERSES the
+prior "never pruned" stance, deliberately): `chat_messages` + `audit_events` now
+age out via the hourly sweep on `RETENTION_DAYS` (default 90, floor 30 so the
+30-day metrics view never truncates; two created_at prune-indexes pinned by
+`explainPrunePlan`). **Workspace erasure**: `store.eraseWorkspace` deletes every
+workspace-scoped row in one atomic txn (FK-children before `chat_sessions`) +
+tombstones the install (status='deleted', token wiped to `encryptSecret("")`);
+`POST /lifecycle/deleted` now ERASES (was: mark-deleted-only) and
+`scripts/erase-workspace.ts` (offline, double-gated) does it on request.
+`idempotency_keys` (global, PII-free) is intentionally skipped. **`PRIVACY.md`**
+(public data-handling/retention/erasure doc, linked from README+DEPLOYMENT).
+**CI**: `npm audit --omit=dev --audit-level=high` + `.github/dependabot.yml`
+(npm + github-actions weekly); a **manual** `live-smoke.yml`
+(`workflow_dispatch` only — never push/PR) drives the real flow against a
+sacrificial workspace via `LIVE_*` repo secrets + an `if:always()` sweep.
+`main` carries a required `verify` CI status check (no forced PR). Per-item
+detail in git log.
+
+**Prior — external-review remediation pass (2026-06-14):** seven
 failing-test-first fixes from an external 7.5/10 code review, one commit each
 (`7f3be68`…`36c940f`), 1205→1216 tests. (A) `COMMIT_TIMEOUT_MS` moved out of a
 raw `process.env` read in `rest/core.ts` into validated config, bounded
@@ -140,6 +159,8 @@ such bug was found against the REAL API, not by reading the code.
 - **`slopbranch`**: the design docs (`PRD/SPEC/ARCHITECTURE/DATA_MODEL/
   SAFETY_AND_PERMISSIONS/IMPLEMENTATION_PLAN*/TESTING_AND_ACCEPTANCE/
   API_COVERAGE_PLAN/REFERENCES`, `.claude/`). Read via `git show slopbranch:SPEC.md`.
+- `main` carries a **required `verify` CI status check** (branch protection, no
+  forced PR — admins can still direct-push). CI = verify + cycles + `npm audit`.
 
 ## Architecture
 

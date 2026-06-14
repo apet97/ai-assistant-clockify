@@ -821,9 +821,10 @@ export function apiRouter(deps: AppDeps): Router {
   // confirm/cancel/expire rates — scoped to the caller's own actions (privacy).
   // Optional ?since=<ISO> windows the report. Absent ?since DEFAULTS to the last
   // 30 days (matching the telemetry/confirmation retention horizon): audit_events
-  // is NEVER pruned, so an unbounded read would scan the admin's entire lifetime
-  // history and aggregate every row in JS. An explicit ?since override still
-  // reaches all-time for ops (r1-efficiency-01).
+  // is retained for RETENTION_DAYS (default 90), so even an unbounded read scans
+  // at most that window — the 30-day default still avoids aggregating every
+  // retained row in JS. An explicit ?since override reaches the full retained
+  // history for ops (r1-efficiency-01).
   router.get("/metrics", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;

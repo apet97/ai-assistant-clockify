@@ -190,8 +190,9 @@ export function start(): void {
     clockifyForWorkspace: (installation) => liveClockifyForWorkspace(installation, config.commitTimeoutMs),
   });
 
-  // Retention: prune expired operational rows at startup (catches backlog
-  // after long-idle deploys) and hourly. Never audit_events/chat_messages.
+  // Retention: prune expired operational rows + chat transcripts/audit log past
+  // the retention window at startup (catches backlog after long-idle deploys) and
+  // hourly. chat_messages/audit_events age out on RETENTION_DAYS (default 90).
   const prune = (): void => {
     try {
       const counts = store.pruneExpired(new Date().toISOString());

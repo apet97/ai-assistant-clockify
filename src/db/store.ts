@@ -260,7 +260,7 @@ export interface Store {
   }): void;
   listTurnTelemetry(workspaceId: string, adminUserId: string, sinceIso?: string): TurnTelemetry[];
 
-  /** Delete operational rows past retention. NEVER touches audit_events/chat_messages. */
+  /** Delete operational rows + chat_messages/audit_events past their retention windows. */
   pruneExpired(nowIso: string): PruneCounts;
 
   close(): void;
