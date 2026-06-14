@@ -1026,6 +1026,19 @@ export function apiRouter(deps: AppDeps): Router {
     res.json({ ok: true, messages, pendingPreviews });
   });
 
+  // List this admin's live, non-empty conversations (the chat-history switcher).
+  // Session-gated and tenant-scoped (listSessions filters by workspace+admin), so
+  // it can never enumerate another tenant's sessions. `current` is decided HERE
+  // from the cookie's claims — the UI can't know its own (HttpOnly) session id.
+  router.get("/chat/sessions", (req, res) => {
+    const claims = requireSession(req, res);
+    if (!claims) return;
+    const sessions = deps.store
+      .listSessions(claims.workspaceId, claims.adminUserId, now().toISOString())
+      .map((s) => ({ ...s, current: s.id === claims.sessionId }));
+    res.json({ ok: true, sessions });
+  });
+
   // Start a new conversation: mint a FRESH session for the same admin+workspace
   // and re-cookie. The previous session's messages are NOT deleted (they remain
   // under retention; the audit log keeps the actions) — only the transcript the
