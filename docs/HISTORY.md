@@ -3,6 +3,59 @@
 Moved out of CLAUDE.md on 2026-06-10 to keep the per-session context small.
 Newest first. The durable rules/facts distilled from these live in CLAUDE.md.
 
+## Handoff note — 2026-06-14 (inherited-codebase adversarial audit: 4 fixes, 1 refuted-live, 1 residual)
+
+A fresh "senior engineer inheriting this" pass: verified the headline claims by
+running them (build + 1269 tests genuinely green; failure paths really exercised),
+booted the server and probed the unauth surface (clean 401/413/400, no leaks),
+then ran a 10-dimension adversarial audit (10 finders → per-finding skeptic).
+8 confirmed. 4 fixed TDD (one focused commit each, `5b0fcda`…`6f3d132`), 1269→1279.
+
+1. **`5b0fcda` ledger-receipt-loss** — `commitConfirmedOperation` is documented
+   "Never throws", but its ledger ops (claim/fill/release; legacy record) were
+   bare. A post-commit `fillIdempotency` throw (cross-process SQLITE_BUSY from
+   `scripts/erase-workspace.ts` or an overlapping deploy, or a disk error) escaped
+   as a 500 AFTER a successful host write → committed money write lost its
+   receipt/audit/undo, nonce already burned. Now pre-commit fails closed
+   (commit_unavailable / commit_in_progress), post-commit is best-effort. Same
+   class as F3, on the confirm path.
+2. **`3f70136` F10 read-then-fabricate** — the truthfulness guard was gated on
+   `results.length===0`, but a READ pushes a receipt, so the prod-default agentic
+   loop relayed a false "Done! I deleted X" after a read. Reproduced at runtime.
+   Now gates on a successful MUTATION receipt (`hasChanges`), with the honest
+   "nothing was changed" failure report left intact via a structural check (a
+   failed receipt present) rather than widening `claimsCompletedMutation`.
+3. **`7d42095` lifecycle workspace binding** — `resolveWorkspaceId` fell back to
+   `claimWs ?? bodyWs`; a validly-signed token with NO workspace claim (it is
+   optional; legacy tokens carry `activeWs`) made the attacker-controlled
+   `body.workspaceId` authoritative → arbitrary-workspace erase (`/deleted`) /
+   install-token overwrite (`/installed`). Now binds to the verified claim ONLY
+   (normalizing `activeWs`); fails closed when the claim has no workspace.
+4. **`6f3d132` claim heartbeat** — the atomic claim is held for the WHOLE commit,
+   but `CLAIM_TTL_MS` (300s) was sized per-CALL; a multi-call `createInvoice`
+   (POST+GET+PUT+tax+N items) under a slow host can outlive it, get swept
+   mid-flight, and a re-confirm double-commits. `store.touchIdempotencyClaim`
+   heartbeats `claimed_at` on `CLAIM_HEARTBEAT_MS` (90s) so a live claim is never
+   swept; a crash stops the beat so a dead claim still ages out.
+
+**Refuted live (the important one):** the audit flagged a HIGH "expense `total`
+is MAJOR, the `/100` read is a 100× bug" — backed by the OpenAPI example
+(`10500.5`) AND the SDK money.ts ("expenses are major"). A throwaway live probe
+(create $100 → GET `total=10000`) proved `total` is MINOR on the wire and the
+addon is CORRECT; the "major" fact is about the create INPUT amount. Removing the
+`/100` would have billed $10,000 for a $100 expense. Spec example + sibling SDK
+were both wrong — only the live API settled it (memory: `expense-total-is-minor-on-wire`).
+
+**Residual (LOW, accepted):** a process crash in the sub-ms gap between a host
+write and `fillIdempotency` can allow ONE duplicate of an *identical* re-issue in
+the 5–10 min window — inherent to a claim→commit→fill ledger without Clockify
+create-idempotency; undo + receipt review cover it. **Open items for the next
+session** live in `plans/009` (client-disconnect cancellation — fully spec'd for an
+executor model) + the kickoff prompt: the crash-before-fill residual (needs a
+thinking model), the `fix_entry` safe-write classification (product call), and an
+`undo-route` 401 flake under full-suite parallel load (timing in the component
+session mint, not a product bug; passes isolated/on rerun).
+
 ## Handoff note — 2026-06-14 (external-review remediation + marketplace hardening + New chat + review follow-ups)
 
 Four arcs landed 2026-06-14, all TDD (failing test first), one focused commit each,
