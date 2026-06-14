@@ -19,6 +19,7 @@ Repo: ${REPO} — run everything from here. This is a deployed Clockify marketpl
 - READ FIRST: ${REPO}/CLAUDE.md ("Engineering rules" + "Safety & planner invariants"), ${REPO}/plans/007-chat-history-switcher-INVESTIGATION.md (session model + scope ruling + safety analysis), ${REPO}/plans/008-chat-history-switcher-IMPLEMENTATION.md (per-phase steps + exact code shapes).
 - GATE: "npm run verify" (judge by its EXIT CODE, never "verify | grep") AND "npx madge --circular --extensions ts --ts-config tsconfig.json src" (= 0 cycles). Run one test file with "npx vitest run <path>".
 - TDD: failing test FIRST, confirm it fails for the stated reason, then the minimal change, then the gate, then ONE Conventional-Commit. ESM (.js import suffixes). UI text via textContent ONLY (never innerHTML).
+- COMMIT DIRECTLY TO main. NEVER create or switch git branches (no "git checkout -b/-B", "git switch -c", "git branch <name>"). Any "Branch advisor/… / create a feature branch" line in a plan or doc is OVERRIDDEN for this run — you are on main and stay on main.
 - HARD SCOPE FENCE (out of bounds — if a phase seems to need any of these, STOP with status="blocked_safety", git reset --hard, do NOT improvise): changing DEFAULT_SESSION_TTL_MS or the session expiry checks; reviving expired sessions (that is "Option B", gated on the human-only authz-surface-01 decision); editing src/harness/*, src/assistant/*, or any money path. This feature is route + UI + ONE store method ONLY.
 - NEVER print values from .env/.env.server. NEVER "git add" .env*, data/, eval-results/, dist/.`
 

@@ -24,6 +24,7 @@ HARD PROHIBITIONS (no exceptions, even if it would "help"):
 - NEVER print, echo, log, or quote VALUES from .env / .env.server / any token / secret / auth header. Check key PRESENCE only (e.g. grep -c '^LLM_API_KEY=' .env.server). Never "git add" .env*, data/, eval-results/, or dist/.
 - NEVER run scripts/dev-tunnel.sh with any subcommand other than "status" (restart/up rotate the tunnel URL and break the install). If something needs the server and it's down, record it skipped — do NOT start anything.
 - Judge gates by EXIT CODE, never by piping through grep. Cautionary tale from this repo: a "verify | grep" pipeline once masked a real tsc failure. Run "npm run verify > /tmp/x.log 2>&1; echo EXIT=$?".
+- COMMIT DIRECTLY TO main. NEVER create or switch git branches (no "git checkout -b/-B", "git switch -c", "git branch <name>"). Any "Branch advisor/… / direct-commit per your workflow" line in a plan's Git-workflow section is OVERRIDDEN — this run commits to main and stays on main. (A prior run leaked work onto an advisor/ branch by obeying that line.)
 - Verify counts/claims BY EXECUTION, not by grep alone. Your final output is consumed by an orchestrator SCRIPT, not a human — return exactly the structured shape requested.`
 
 const READ_ONLY = `
