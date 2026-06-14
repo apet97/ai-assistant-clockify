@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createStore, CLAIM_TTL_MS, type Store } from "../../src/db/store.js";
+import { createStore, CLAIM_TTL_MS, IDEMPOTENCY_RETENTION_MS, type Store } from "../../src/db/store.js";
 import { CLAIM_HEARTBEAT_MS } from "../../src/harness/actions.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 
@@ -96,15 +96,23 @@ describe("store atomic idempotency claim", () => {
     expect(claim("k", T + 100, T)).toBe("replay");
   });
 
-  it("DEAD-CLAIM SWEEP: a claim older than CLAIM_TTL is swept and re-claimed; a LIVE claim is never swept", () => {
+  it("DEAD-CLAIM: a crash-orphaned claim within the dedup window is 'stale_unknown' (never silently re-won); past the window it re-claims; a LIVE claim is in_flight", () => {
     store = createStore(":memory:");
-    // A dangling crashed CLAIM stamped at T0.
+    // A dangling crashed CLAIM stamped at T0 (NULL receipt, no heartbeat).
     const T0 = T;
     expect(claim("dead", T0)).toBe("won"); // writes a NULL-receipt claim at T0
-    // A later same-key claim whose claimNotBefore is AFTER T0 sweeps the dead claim.
-    expect(claim("dead", T0 + 100, T, T0 + 1)).toBe("won");
+    // Past CLAIM_TTL (claimNotBefore after T0) but STILL within the dedup window
+    // (completedNotBefore <= T0): the crash's host-side outcome is unknown, so it
+    // must NOT be silently re-won — that would double-commit a money write whose
+    // commit died between the host write and fill. [crash-before-fill residual]
+    expect(claim("dead", T0 + 100, T0, T0 + 1)).toBe("stale_unknown");
+    // The orphaned claim is left untouched — still a NULL-receipt claim, not re-won.
+    expect(store.claimIdempotencyReceipt("dead")).toBeUndefined();
+    // Past the dedup window (completedNotBefore after T0): the intent no longer
+    // dedupes, so the orphaned claim is swept and a deliberate re-issue wins.
+    expect(claim("dead", T0 + 100, T0 + 1, T0 + 1)).toBe("won");
 
-    // A LIVE claim (claimNotBefore strictly before the claim's stamp) is never swept.
+    // A LIVE claim (claimNotBefore strictly before the claim's stamp) is in_flight.
     expect(claim("live", T0)).toBe("won");
     expect(claim("live", T0 + 100, T, T0 - 1)).toBe("in_flight");
   });
@@ -118,8 +126,11 @@ describe("store atomic idempotency claim", () => {
 describe("claim heartbeat keeps a long multi-call commit's claim from being swept (touchIdempotencyClaim)", () => {
   // A single createInvoice commit issues POST+GET+PUT+tax+N item POSTs; their
   // summed latency can exceed CLAIM_TTL_MS (only the per-call timeout bounds
-  // each). Without a heartbeat, a re-confirm past CLAIM_TTL would sweep the
-  // still-LIVE claim and double-commit. The heartbeat refreshes claimed_at.
+  // each). The heartbeat refreshes claimed_at so a long but LIVE commit stays
+  // classified as in_flight. It is the LIVE-vs-crashed discriminator: a beating
+  // claim is in_flight; a claim that stopped beating (a crash) ages past
+  // CLAIM_TTL and becomes stale_unknown (crash-before-fill) — never a silent
+  // re-win/double-commit.
   const T = 1_000_000;
   const WINDOW = 10 * 60 * 1000;
   const claim = (key: string, claimedAt: number, claimNotBefore: number) =>
@@ -140,13 +151,15 @@ describe("claim heartbeat keeps a long multi-call commit's claim from being swep
     expect(claim("hb", reconfirmAt, reconfirmAt - CLAIM_TTL_MS)).toBe("in_flight");
   });
 
-  it("WITHOUT a heartbeat the same in-flight claim WOULD be swept (the duplicate-invoice bug the heartbeat closes)", () => {
+  it("WITHOUT a heartbeat (an un-refreshed claim) a re-confirm past CLAIM_TTL is 'stale_unknown', NOT a silent re-win", () => {
     store = createStore(":memory:");
     expect(claim("nohb", T, T - 1)).toBe("won");
-    // No touch: the re-confirm past CLAIM_TTL sweeps the stale claim and RE-WINS →
-    // a second host commit (the confirmed duplicate-invoice path).
+    // No touch: the re-confirm past CLAIM_TTL finds the un-refreshed claim still
+    // inside the dedup window. Pre-fix this RE-WON and double-committed (the
+    // confirmed duplicate-invoice path); now the outcome is unknown, so it is
+    // stale_unknown and the caller must not re-run it. [crash-before-fill]
     const reconfirmAt = T + CLAIM_TTL_MS + 10_000;
-    expect(claim("nohb", reconfirmAt, reconfirmAt - CLAIM_TTL_MS)).toBe("won");
+    expect(claim("nohb", reconfirmAt, reconfirmAt - CLAIM_TTL_MS)).toBe("stale_unknown");
   });
 
   it("touchIdempotencyClaim never disturbs a COMPLETED row (guarded on receipt_json IS NULL)", () => {
@@ -161,18 +174,23 @@ describe("claim heartbeat keeps a long multi-call commit's claim from being swep
 
 describe("store pruneExpired backstop for crashed claims", () => {
   const NOW = new Date("2026-06-06T00:00:00.000Z");
-  it("sweeps orphaned NULL-receipt claims past CLAIM_TTL but keeps a live one", () => {
+  it("sweeps an orphaned NULL claim past the RETENTION window but KEEPS one still inside it (so a re-claim is stale_unknown, never a silent re-win)", () => {
     store = createStore(":memory:", { now: () => NOW });
     const nowMs = NOW.getTime();
-    // A crashed claim, stamped well past CLAIM_TTL (committed_at NULL — the old
-    // committed_at-only prune NEVER matched these, proven by execution).
-    store.claimIdempotency("crashed", nowMs - CLAIM_TTL_MS - 1, nowMs, nowMs - CLAIM_TTL_MS);
-    // A live claim, stamped recently.
-    store.claimIdempotency("live", nowMs - 1_000, nowMs, nowMs - CLAIM_TTL_MS);
+    const win = nowMs - IDEMPOTENCY_RETENTION_MS;
+    const ttl = nowMs - CLAIM_TTL_MS;
+    // A crashed claim older than the FULL retention window — safe to reclaim now.
+    store.claimIdempotency("old", nowMs - IDEMPOTENCY_RETENTION_MS - 1, win, ttl);
+    // A crashed claim past CLAIM_TTL but STILL inside the retention/dedup window:
+    // pruneExpired must KEEP it — sweeping at CLAIM_TTL would reopen the
+    // crash-before-fill duplicate window from this hourly prune.
+    store.claimIdempotency("recent-crash", nowMs - CLAIM_TTL_MS - 1, win, ttl);
 
     const counts = store.pruneExpired(NOW.toISOString());
-    expect(counts.idempotencyKeys).toBe(1); // only the crashed claim
-    expect(store.claimIdempotency("crashed", nowMs, nowMs, nowMs - CLAIM_TTL_MS)).toBe("won"); // gone → re-claimable
-    expect(store.claimIdempotency("live", nowMs, nowMs, nowMs - CLAIM_TTL_MS)).toBe("in_flight"); // kept
+    expect(counts.idempotencyKeys).toBe(1); // only the past-retention claim
+    // The past-retention claim is gone → a fresh claim wins (recovery is bounded).
+    expect(store.claimIdempotency("old", nowMs, win, ttl)).toBe("won");
+    // The within-window crash is still there → a re-claim is stale_unknown.
+    expect(store.claimIdempotency("recent-crash", nowMs, win, ttl)).toBe("stale_unknown");
   });
 });

@@ -196,6 +196,10 @@ export async function commitConfirmedOperation(
     return prior ? markReplayed(prior) : commitInProgress(operation.actionName);
   }
   if (state === "in_flight") return commitInProgress(operation.actionName);
+  // A crash-orphaned claim within the dedup window: a prior commit died between
+  // the host write and `fill`, so the host-side outcome is UNKNOWN. Never re-run
+  // it (that could duplicate a money write) — surface "verify in Clockify".
+  if (state === "stale_unknown") return commitOutcomeUnknown(operation.actionName);
 
   // state === "won": WE OWN THE CLAIM. Commit exactly once; fill on success,
   // release on failure so a legitimate retry can re-claim (a failed commit never
@@ -299,6 +303,29 @@ function commitInProgress(actionName: string): ErrorReceipt {
     message:
       "This change is currently being applied in another request; nothing was duplicated — re-check in a moment or run a fresh preview.",
     recovery: { hint: "Wait a moment, then re-check or run a fresh preview.", retryable: true },
+  });
+}
+
+/**
+ * crash-before-fill residual: a claim whose process DIED between the host write
+ * and `fill` (no heartbeat for CLAIM_TTL_MS) is found again within the dedup
+ * window. The host-side outcome is genuinely UNKNOWN — the write may or may not
+ * have landed — so re-running the commit could duplicate a money write. Refuse to
+ * re-run and tell the admin to verify in Clockify. After the dedup window the
+ * orphaned claim is swept and a deliberate re-issue commits normally (recovery is
+ * bounded, not permanent). This can't be made fully airtight without Clockify
+ * create-idempotency, but it converts a SILENT duplicate into an honest prompt.
+ */
+function commitOutcomeUnknown(actionName: string): ErrorReceipt {
+  return errorReceipt({
+    action: actionName,
+    code: "commit_outcome_unknown",
+    message:
+      "A previous attempt to apply this change was interrupted, so its result is unknown — it may or may not have gone through. Please check Clockify before retrying; I won't re-run it automatically, to avoid creating a duplicate.",
+    recovery: {
+      hint: "Check Clockify to see whether the change applied; if it didn't, try again in a few minutes.",
+      retryable: true,
+    },
   });
 }
 

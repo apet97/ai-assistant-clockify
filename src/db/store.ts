@@ -149,12 +149,18 @@ const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 /** Must stay comfortably above routes/api.ts IDEMPOTENCY_WINDOW_MS (10 min). */
 export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
 /**
- * Dead-claim TTL (r1-concurrency-races-01). An atomic claim older than this is
- * treated as crashed and swept (by the next same-key claim AND by pruneExpired).
- * Set STRICTLY above the commit-latency ceiling (COMMIT_TIMEOUT_MS, 120s) so a
- * LIVE commit's claim is provably never swept, yet well below
- * IDEMPOTENCY_WINDOW_MS (10 min) and IDEMPOTENCY_RETENTION_MS (60 min). A crash
- * mid-commit thus blocks that key's retries for at most CLAIM_TTL_MS.
+ * Dead-claim TTL (r1-concurrency-races-01). The LIVE-vs-crashed threshold: an
+ * atomic claim NOT heartbeated within this window is treated as crashed. Set
+ * STRICTLY above the commit-latency ceiling (COMMIT_TIMEOUT_MS, 120s) so a LIVE
+ * commit's claim is provably never mis-read as crashed, yet well below
+ * IDEMPOTENCY_WINDOW_MS (10 min) and IDEMPOTENCY_RETENTION_MS (60 min).
+ *
+ * crash-before-fill residual: a crashed claim is NOT swept-and-re-won here (that
+ * silently double-committed a money write whose commit died between the host
+ * write and `fill`). Instead `claimIdempotency` returns `stale_unknown` for it
+ * throughout the dedup window — the caller surfaces "verify in Clockify, don't
+ * retry" — and it is only swept (by the next same-key claim AND by pruneExpired)
+ * once past the dedup/retention window, after which a deliberate re-issue commits.
  */
 export const CLAIM_TTL_MS = 5 * 60 * 1000;
 
@@ -858,15 +864,22 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
 
     claimIdempotency(key, claimedAtEpochMs, completedNotBeforeEpochMs, claimNotBeforeEpochMs) {
       // ONE synchronous transaction (better-sqlite3 is sync, so no JS
-      // interleaving): sweep a stale-completed OR dead-claim row, then race the
+      // interleaving): sweep a row that is OUT of the dedup window, then race the
       // INSERT. ON CONFLICT DO NOTHING gives changes===1 to exactly one winner.
+      //
+      // crash-before-fill residual: a NULL-receipt claim is swept ONLY once it is
+      // older than the dedup window (completedNotBefore), NOT at CLAIM_TTL. A claim
+      // orphaned by a crash between the host write and `fill` is therefore retained
+      // for the whole window, so a re-claim returns `stale_unknown` (below) instead
+      // of silently re-winning and double-committing a money write whose outcome is
+      // unknown. (Sweeping it at CLAIM_TTL was the silent-duplicate window.)
       return db.transaction((): ClaimState => {
         db.prepare(
           `DELETE FROM idempotency_keys
              WHERE key = ?
                AND ((receipt_json IS NOT NULL AND committed_at < ?)
                  OR (receipt_json IS NULL AND claimed_at < ?))`,
-        ).run(key, completedNotBeforeEpochMs, claimNotBeforeEpochMs);
+        ).run(key, completedNotBeforeEpochMs, completedNotBeforeEpochMs);
         const ins = db
           .prepare(
             `INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at)
@@ -875,12 +888,18 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           .run(key, claimedAtEpochMs);
         if (ins.changes === 1) return "won";
         const row = db
-          .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ?")
-          .get(key) as { receipt_json: string | null } | undefined;
+          .prepare("SELECT receipt_json, claimed_at FROM idempotency_keys WHERE key = ?")
+          .get(key) as { receipt_json: string | null; claimed_at: number } | undefined;
         // The row vanished mid-transaction (a concurrent release won the row):
         // the key is free again, so report a fresh win — the caller commits.
         if (!row) return "won";
-        return row.receipt_json !== null ? "replay" : "in_flight";
+        if (row.receipt_json !== null) return "replay";
+        // NULL receipt = an UNcompleted claim still inside the dedup window. A LIVE
+        // commit heartbeats, so claimed_at stays >= claimNotBefore → a genuine
+        // concurrent in-flight claim. A claim NOT refreshed within CLAIM_TTL means
+        // its process died mid-commit: the host-side outcome is unknown, so report
+        // `stale_unknown` — the caller must not re-commit (crash-before-fill).
+        return row.claimed_at < claimNotBeforeEpochMs ? "stale_unknown" : "in_flight";
       })();
     },
 
@@ -1026,8 +1045,11 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       // Crashed-claim backstop (r1-concurrency-races-01): a NULL-receipt claim
       // for a key that never recurs would leak forever — the committed_at-only
       // prune NEVER matches it (NULL < n is NULL/falsy in SQLite, proven by
-      // execution). Sweep dead claims independently on the CLAIM_TTL clock.
-      const claimCutoff = nowMs - CLAIM_TTL_MS;
+      // execution). It is swept on the SAME retention clock as a completed row,
+      // NOT at CLAIM_TTL: a claim orphaned by a crash between the host write and
+      // `fill` must survive the whole dedup window so a re-claim sees
+      // `stale_unknown` (crash-before-fill), never a silent re-commit. Sweeping it
+      // at CLAIM_TTL would reopen that duplicate window from this hourly prune.
       // One transaction — operational tables ONLY. ISO-string comparison is
       // safe: every writer stamps via toISOString().
       const run = db.transaction((): PruneCounts => {
@@ -1048,7 +1070,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             .run(idempotencyCutoff).changes +
           db
             .prepare("DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?")
-            .run(claimCutoff).changes;
+            .run(idempotencyCutoff).changes;
         const undo = db
           .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
           .run(undoCutoff).changes;

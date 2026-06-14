@@ -49,8 +49,11 @@ export interface IdempotencyLedger {
 }
 
 /** Outcome of an atomic claim: this caller won the claim, found a completed
- *  receipt to replay, or found a live in-flight claim held by another request. */
-export type ClaimState = "won" | "replay" | "in_flight";
+ *  receipt to replay, found a live in-flight claim held by another request, or
+ *  found a crash-orphaned claim within the dedup window whose host-side outcome
+ *  is UNKNOWN (a prior commit died between the host write and fill) — which must
+ *  never be silently re-committed (crash-before-fill residual). */
+export type ClaimState = "won" | "replay" | "in_flight" | "stale_unknown";
 
 /**
  * Atomic-claim extension of {@link IdempotencyLedger} (r1-concurrency-races-01).

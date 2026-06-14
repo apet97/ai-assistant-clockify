@@ -196,3 +196,79 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     }
   });
 });
+
+/**
+ * crash-before-fill residual — the only remaining money-integrity gap. The claim
+ * is taken, the host write happens, then fillIdempotency runs. If the PROCESS
+ * CRASHES in the sub-ms gap between the host write and the fill, the claim row is
+ * left NULL. The heartbeat does NOT help — that's a crash, not a slow commit. The
+ * fix: a crash-orphaned claim within the idempotency window is reported
+ * `stale_unknown` (outcome unknown — verify in Clockify), NEVER silently re-won.
+ * Only past the window (a deliberate re-issue, same as normal idempotency) does it
+ * re-claim. Cannot be made fully airtight without Clockify create-idempotency.
+ */
+describe("crash-before-fill residual (a crash between the host write and fill must not silently double-commit)", () => {
+  // A mutable-clock atomic ledger, wired exactly like routes/api.ts. `fill` is
+  // toggled off for the crashing confirm to simulate a process death in the gap
+  // between the host write and fillIdempotency (the claim row is left NULL).
+  function clockLedger(s: Store, clock: { ms: number }, fillOn: boolean): AtomicIdempotencyLedger {
+    const WINDOW = 10 * 60 * 1000;
+    return {
+      lookup: (k) => s.lookupIdempotency(k, clock.ms - WINDOW),
+      record: (k, r) => s.recordIdempotency(k, r, clock.ms),
+      claim: (k) => s.claimIdempotency(k, clock.ms, clock.ms - WINDOW, clock.ms - CLAIM_TTL_MS),
+      lookupCompleted: (k) => s.claimIdempotencyReceipt(k),
+      fill: fillOn ? (k, r) => s.fillIdempotency(k, r, clock.ms) : () => undefined,
+      release: (k) => s.releaseIdempotency(k),
+    };
+  }
+  function clockCtx(fake: FakeWorkspace, clock: { ms: number }, ledger: AtomicIdempotencyLedger): ActionContext {
+    return {
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      policy: defaultAdminPolicy(),
+      clockify: fake.client,
+      now: () => new Date(clock.ms),
+      idempotency: ledger,
+    };
+  }
+
+  it("a crash-orphaned claim is NOT silently re-committed within the window — outcome unknown, host hit EXACTLY ONCE", async () => {
+    store = createStore(":memory:");
+    const clock = { ms: NOW.getTime() };
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const op = await previewInvoice(clockCtx(fake, clock, clockLedger(store, clock, true)), "qwen");
+
+    // The host write succeeds, but the process CRASHES before fillIdempotency runs
+    // (fill is a no-op) — the claim row is left NULL at NOW.
+    const crashed = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, false)), op);
+    expect(crashed.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(1);
+
+    // 6 minutes later: past CLAIM_TTL (5m), still inside the IDEMPOTENCY_WINDOW (10m).
+    clock.ms = NOW.getTime() + 6 * 60 * 1000;
+
+    // Re-confirm the SAME intent. The crash outcome is unknown, so it must NOT be
+    // silently re-committed — the host stays at exactly one call.
+    const reconfirm = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, true)), op);
+    expect(fake.counts.createInvoice).toBe(1);
+    expect(reconfirm.ok).toBe(false);
+    if (!reconfirm.ok) expect(reconfirm.code).toBe("commit_outcome_unknown");
+  });
+
+  it("past the idempotency window a crash-orphaned claim no longer blocks — a deliberate re-issue commits (recovery is bounded, not permanent)", async () => {
+    store = createStore(":memory:");
+    const clock = { ms: NOW.getTime() };
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const op = await previewInvoice(clockCtx(fake, clock, clockLedger(store, clock, true)), "qwen");
+    await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, false)), op); // crash → NULL claim
+    expect(fake.counts.createInvoice).toBe(1);
+
+    // 11 minutes later: PAST the dedup window — a re-confirm is a deliberate new
+    // intent (same as re-issuing any invoice past the window) and commits.
+    clock.ms = NOW.getTime() + 11 * 60 * 1000;
+    const reissue = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, true)), op);
+    expect(reissue.ok).toBe(true);
+    expect(fake.counts.createInvoice).toBe(2);
+  });
+});
