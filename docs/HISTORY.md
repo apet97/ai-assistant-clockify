@@ -3,6 +3,51 @@
 Moved out of CLAUDE.md on 2026-06-10 to keep the per-session context small.
 Newest first. The durable rules/facts distilled from these live in CLAUDE.md.
 
+## Handoff note — 2026-06-14 (external-review remediation + marketplace hardening + New chat + review follow-ups)
+
+Four arcs landed 2026-06-14, all TDD (failing test first), one focused commit each,
+1095→1224 tests, madge 0. Durable facts live in CLAUDE.md → "Current state".
+
+**External-review remediation (`7f3be68`…`36c940f`, 1205→1216):** 7 fixes from an
+external 7.5/10 review. (A) `COMMIT_TIMEOUT_MS` moved out of a raw `process.env`
+read into validated config, bounded `< 290000` (strictly below the idempotency
+`CLAIM_TTL_MS` 300000) so an operator can't set a timeout that lets a slow commit's
+claim be swept. (B) Request hardening: `express.json({limit:"32kb"})`, chat
+`message.max(4000)`/nonce `.max(256)` at parse, terminal error middleware honors a
+body-parser 4xx (413/400) not a masked 500. (C) `DATA_ENCRYPTION_KEY` config
+`.min(1)`→`.min(32)` (encryption.ts derivation UNTOUCHED — changing it orphans
+already-deployed ciphertext). (D) `madge` pinned + `npm run cycles`. (E) README
+Node 20→22 + `.nvmrc`. (F) GET bounded retry on transient 429/5xx. Deliberate: NO
+`.trim()` on the message schema (whitespace → friendly new-6 handler). An
+independent adversarial diff review found 0 issues.
+
+**Marketplace-submission hardening (1216→1220):** six items. **Chat/audit retention**
+(REVERSES the prior "never pruned" stance, deliberately): `chat_messages` +
+`audit_events` age out via the hourly `pruneExpired` sweep on `RETENTION_DAYS`
+(default 90, floor 30 so the 30-day metrics view never truncates; two `created_at`
+prune-indexes pinned by `explainPrunePlan`). **Workspace erasure**:
+`store.eraseWorkspace` deletes every workspace-scoped row in one atomic txn
+(FK-children before `chat_sessions`) + tombstones the install (status='deleted',
+token → `encryptSecret("")`); `POST /lifecycle/deleted` now ERASES (was mark-only),
+`scripts/erase-workspace.ts` (offline, double-gated) does it on request;
+`idempotency_keys` (global, PII-free) skipped. **`PRIVACY.md`** (public
+data/retention/erasure doc). **CI**: `npm audit --omit=dev --audit-level=high` +
+`.github/dependabot.yml`; a **manual** `live-smoke.yml` (`workflow_dispatch` only —
+never push/PR) drives the real read→safe-write→preview→confirm→commit→cleanup flow
+vs a sacrificial WS via `LIVE_*` repo secrets + an `if:always()` sweep (proven green
+live against the owner's account). `main` got a required `verify` CI status check
+(no forced PR; `enforce_admins=false`).
+
+**New chat + review follow-ups (1220→1224):** `POST /api/chat/new` mints a fresh
+session (re-cookie) → empty transcript; prior messages are KEPT (retention + audit
+log), so the old session's cookie still replays (`chat-new.test.ts`). UI gained a
+header "New chat" button. A past-conversations browser was intentionally NOT built
+(demand-driven; ~$0 infra since the data's already retained, but added UI surface).
+Then two review nits: `scripts/user-sim.ts` untracked + gitignored (a blanket
+`git add -A` had re-committed the local-only sim tool); and the GET-retry loop
+extracted into one `fetchWithRetry` shared by `call()` AND `getBinary()`
+(invoice/report exports now retry too — GET behavior uniform).
+
 ## Handoff note — 2026-06-13 (the goated-audit arc: 43 findings fixed, 1 wont_fix)
 
 A fresh-eyes "find what every previous pass missed" audit + full backlog

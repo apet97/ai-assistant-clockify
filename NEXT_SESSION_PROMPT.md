@@ -6,17 +6,19 @@
 > up and drive the chat. Runtime values (tunnel URL especially) are **ephemeral** —
 > verify them first.
 
-## Where this stands (2026-06-13)
+## Where this stands (2026-06-14)
 
 Everything buildable is complete: V1 + full REST parity + the "trust lives in the
 code" roadmap + the **durable agentic loop (default ON)** + the 322-prompt
 live-loop fix arc + the dogfood/identity/harvest/elevate arcs + the
-Gemini-readiness arc. **DEPLOYED on Railway**
+Gemini-readiness arc + the **goated-audit, external-review, and
+marketplace-submission hardening arcs** (retention, workspace erasure, PRIVACY.md,
+CI npm-audit/Dependabot, required CI check, a "New chat" button). **DEPLOYED on Railway**
 (`https://ai-assistant-production-c2e6.up.railway.app`) and installed + working
 in Clockify — stable hosting is solved. Eval scoreboard: planner **162/162** on
 DeepSeek v4-pro and **108/108** on gemini-3.1-flash-lite(low) AND
 gemini-3.5-flash(low); agentic **7/7** on all three, 0 safety violations.
-`npm run verify` is green at **1095 tests** (madge 0), all pushed to `main`,
+`npm run verify` is green at **1224 tests** (madge 0), all pushed to `main`,
 CI on every push. Highlights live: native **tool-calling**, atomic
 **composition**, **idempotency** + **undo**, preview-time **constraint
 surfacing** (incl. add-on platform restrictions), name→id resolution (incl.
@@ -41,7 +43,7 @@ Continue the Clockify "AI Assistant" add-on. Repo:
 Read `CLAUDE.md` (Current state + invariants) + `AGENTS.md` first, and recall the
 project memories (`clockify-addon-public-key-builtin`, `clockify-api-base-resolution`,
 `clockify-dev-console-login-and-reinstall`, `streaming-conflicts-truthful-previews`).
-`npm run verify` is green at **1095 tests**. Keep the discipline: failing test first,
+`npm run verify` is green at **1224 tests**. Keep the discipline: failing test first,
 verify green, focused commits, no new deps without my OK, never print/commit tokens.
 
 ## Bring the live environment up (do this first)

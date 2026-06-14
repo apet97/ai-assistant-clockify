@@ -10,7 +10,7 @@ Admin-only embedded Clockify chat + an MCP-shaped action harness. Everything
 buildable is DONE, live-verified, and DEPLOYED. The arc-by-arc history is in
 `docs/HISTORY.md`; this is the current snapshot.
 
-**Verified gate:** `npm run verify` = **1222 tests**; `npm run cycles` (= `madge
+**Verified gate:** `npm run verify` = **1224 tests**; `npm run cycles` (= `madge
 --circular …`, now a pinned devDep) = **0** (keep both green). 137 typed actions,
 16 areas, 3 hosts. Planner eval **100%** on DeepSeek v4-pro AND both Gemini tiers
 (gemini-3.1-flash-lite / 3.5-flash, low effort); agentic loop 7/7 ×3, 0 safety
@@ -47,7 +47,8 @@ check (no forced PR). Detail in git log.
   `COMMIT_TIMEOUT_MS` into validated config (bounded `< CLAIM_TTL_MS`); request
   hardening (32kb body cap; message `.max(4000)`/nonce `.max(256)`; body-parser 4xx
   honored, not masked 500); `DATA_ENCRYPTION_KEY` `.min(32)` (derivation UNTOUCHED);
-  `madge` pinned; GET-only bounded retry on transient 429/5xx (writes/timeouts NEVER
+  `madge` pinned; bounded retry on transient 429/5xx for every idempotent GET —
+  `call()` AND `getBinary()` share one `fetchWithRetry` (writes/timeouts NEVER
   retried). NO `.trim()` on the message schema is deliberate (whitespace → friendly
   new-6 handler, never the planner).
 - **live-fix + dogfood (2026-06-14, `3c4f064`…`8e1c447`):** invoice tax end-to-end;

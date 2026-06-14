@@ -11,7 +11,7 @@ file is the short map. Handoff journals: `docs/HISTORY.md`.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes actions; a deterministic harness
 validates policy/schema/risk and executes; the backend owns all state. `npm run
-verify` is green at **1222 tests**, 0 circular deps (`npm run cycles`).
+verify` is green at **1224 tests**, 0 circular deps (`npm run cycles`).
 Data handling/retention is documented in `PRIVACY.md` (chat + audit retained
 `RETENTION_DAYS`, default 90; full per-workspace erasure on uninstall).
 **DEPLOYED on Railway**
@@ -52,7 +52,7 @@ see `DEPLOYMENT.md`). Done + on `main`:
   a **manual** `live-smoke.yml` (`workflow_dispatch`, proven green vs a live WS),
   and a required `verify` CI check on `main` (no forced PR). Plus the earlier
   external-review pass (config-validated `COMMIT_TIMEOUT_MS`, request hardening,
-  `DATA_ENCRYPTION_KEY` `.min(32)`, GET-only bounded retry).
+  `DATA_ENCRYPTION_KEY` `.min(32)`, bounded GET retry shared by call+getBinary).
 
 **Ground truth, not the code:** this codebase was built fast and its Clockify-API
 assumptions have repeatedly been WRONG (invoice item types, instant formats, host
