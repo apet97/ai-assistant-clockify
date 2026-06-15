@@ -1,11 +1,34 @@
-import { randomUUID } from "node:crypto";
 import Database from "better-sqlite3";
 import { migrate } from "./schema.js";
 import { decryptSecret, encryptSecret } from "./encryption.js";
-import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
-import type { RiskLabel } from "../harness/risk.js";
+import type {
+  StoreContext,
+  InstallationStatus,
+  InstallationInput,
+  Installation,
+  InstallationEnv,
+  ChatSession,
+  NewSessionInput,
+  SessionSummary,
+  NewMessageInput,
+  ChatMessage,
+  AuditEventInput,
+  UndoRecordInput,
+  UndoRecord,
+  EraseCounts,
+} from "./store/context.js";
+import { buildAdminPolicyStore } from "./store/admin-policies.js";
+import { buildTelemetryStore } from "./store/telemetry.js";
+import { actionOutcomesSql, buildAuditMetricsStore } from "./store/audit-metrics.js";
+import { buildMessageStore } from "./store/messages.js";
+import { buildSessionStore } from "./store/sessions.js";
+import { buildUndoStore } from "./store/undo.js";
+import { buildInstallationStore } from "./store/installations.js";
+import { buildConfirmationStore } from "./store/confirmations.js";
+import { buildIdempotencyStore } from "./store/idempotency.js";
+import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
-import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../harness/receipts.js";
+import type { SuccessReceipt } from "../harness/receipts.js";
 import type { ClaimState } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
 
@@ -13,112 +36,29 @@ import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
  * The single SQLite access module (backend rule: all DB access goes through
  * src/db/store.ts). Owns config/policy/installation, chat sessions and messages,
  * pending confirmations (with an ATOMIC one-use transition), and audit events.
+ *
+ * The shared data-shape types live in the leaf `./store/context.ts` (so the
+ * per-concern builder modules can import them without a `store.ts ↔ concern`
+ * cycle); they are re-exported here so every `../db/store.js` import is
+ * byte-identical.
  */
 
-export type InstallationStatus = "active" | "inactive" | "deleted";
-
-export interface InstallationInput {
-  workspaceId: string;
-  addonId: string;
-  addonUserId: string;
-  addonToken: string;
-  apiUrl?: string;
-  backendUrl?: string;
-  reportsUrl?: string;
-  status?: InstallationStatus;
-  installedByUserId?: string;
-}
-
-export interface Installation {
-  workspaceId: string;
-  addonId: string;
-  addonUserId: string;
-  addonToken: string;
-  apiUrl?: string;
-  backendUrl?: string;
-  reportsUrl?: string;
-  status: InstallationStatus;
-  installedByUserId?: string;
-  installedAt: string;
-  updatedAt: string;
-}
-
-/** Environment URLs refreshed from the latest verified token (component load). */
-export interface InstallationEnv {
-  apiUrl?: string;
-  backendUrl?: string;
-  reportsUrl?: string;
-}
-
-export interface ChatSession {
-  id: string;
-  workspaceId: string;
-  adminUserId: string;
-  createdAt: string;
-  lastSeenAt: string;
-  expiresAt: string;
-}
-
-export interface NewSessionInput {
-  workspaceId: string;
-  adminUserId: string;
-  ttlMs?: number;
-}
-
-/**
- * A summary of one chat session for the history switcher: the session id, a
- * display title (the first USER message), the total message count, and the
- * last-activity timestamp. Only live (non-expired), owned, non-empty sessions
- * are surfaced (see {@link Store.listSessions}).
- */
-export interface SessionSummary {
-  id: string;
-  title: string;
-  messageCount: number;
-  lastMessageAt: string;
-  createdAt: string;
-}
-
-export type ChatRole = "user" | "assistant" | "system";
-
-export interface NewMessageInput {
-  sessionId: string;
-  workspaceId: string;
-  adminUserId: string;
-  role: ChatRole;
-  content: string;
-  payload?: unknown;
-}
-
-export interface ChatMessage {
-  role: ChatRole;
-  content: string;
-  payload?: unknown;
-}
-
-export interface AuditEventInput {
-  workspaceId: string;
-  adminUserId: string;
-  sessionId?: string;
-  actionName: string;
-  risk: RiskLabel[];
-  receipt: SuccessReceipt | ErrorReceipt | Record<string, unknown>;
-}
-
-export interface UndoRecordInput {
-  sessionId: string;
-  workspaceId: string;
-  adminUserId: string;
-  actionName: string;
-  reversal: EntityRef[];
-}
-
-export interface UndoRecord extends UndoRecordInput {
-  id: string;
-  status: "available" | "undone";
-  createdAt: string;
-  undoneAt?: string;
-}
+export type {
+  InstallationStatus,
+  InstallationInput,
+  Installation,
+  InstallationEnv,
+  ChatSession,
+  NewSessionInput,
+  SessionSummary,
+  ChatRole,
+  NewMessageInput,
+  ChatMessage,
+  AuditEventInput,
+  UndoRecordInput,
+  UndoRecord,
+  EraseCounts,
+} from "./store/context.js";
 
 export interface StoreOptions {
   encryptionKey?: string;
@@ -128,7 +68,6 @@ export interface StoreOptions {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 /**
  * Chat/audit retention (marketplace data-minimization). chat_messages and
@@ -171,17 +110,6 @@ export interface PruneCounts {
   turnTelemetry: number;
   chatMessages: number;
   auditEvents: number;
-}
-
-/** Rows deleted per table by {@link Store.eraseWorkspace}. */
-export interface EraseCounts {
-  adminPolicies: number;
-  chatSessions: number;
-  chatMessages: number;
-  pendingConfirmations: number;
-  auditEvents: number;
-  undoRecords: number;
-  turnTelemetry: number;
 }
 
 /** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
@@ -322,110 +250,6 @@ export interface TestStore extends Store {
   >;
 }
 
-interface InstallationRow {
-  workspace_id: string;
-  addon_id: string;
-  addon_user_id: string;
-  addon_token_ciphertext: string;
-  api_url: string | null;
-  backend_url: string | null;
-  reports_url: string | null;
-  status: InstallationStatus;
-  installed_by_user_id: string | null;
-  installed_at: string;
-  updated_at: string;
-}
-
-interface PendingRow {
-  id: string;
-  session_id: string;
-  workspace_id: string;
-  admin_user_id: string;
-  status: PendingStatus;
-  risk_json: string;
-  preview_json: string;
-  operation_json: string;
-  operation_hash: string;
-  nonce_hash: string;
-  expires_at: string;
-  created_at: string;
-  used_at: string | null;
-  result_json: string | null;
-  agent_state_json: string | null;
-}
-
-/**
- * Parse the persisted agentic suspension defensively. A truncated/corrupt
- * agent_state_json must never throw out of getPendingConfirmation — the
- * confirm/cancel routes call that getter with no try/catch, so a raw JSON.parse
- * SyntaxError would escape as an unhandled rejection and leave the preview
- * permanently unconfirmable AND uncancellable. Returning undefined honours the
- * agentic-loop invariant ("agent_state_json … malformed ⇒ no resume"): the
- * confirm commits the receipt with no resume, the same fate parseAgentState
- * gives a structurally-malformed (but parseable) value. Only this column is
- * tolerant; risk/preview/operation stay strict because corrupting them is an
- * integrity failure, not a lost resume.
- */
-function parseStoredAgentState(value: string | null): unknown {
-  if (!value) return undefined;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Map a pending_confirmations row to its record — shared by the single getter
- * and the per-session list. Fail-soft ONLY for the agentic suspension column
- * (see {@link parseStoredAgentState}); risk/preview/operation parse strictly
- * because corrupting them is a real integrity failure, not a lost resume.
- */
-function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
-  return {
-    id: row.id,
-    sessionId: row.session_id,
-    workspaceId: row.workspace_id,
-    adminUserId: row.admin_user_id,
-    status: row.status,
-    risk: JSON.parse(row.risk_json) as RiskLabel[],
-    preview: JSON.parse(row.preview_json),
-    operation: JSON.parse(row.operation_json),
-    operationHash: row.operation_hash,
-    nonceHash: row.nonce_hash,
-    expiresAt: row.expires_at,
-    createdAt: row.created_at,
-    usedAt: row.used_at ?? undefined,
-    result: row.result_json ? JSON.parse(row.result_json) : undefined,
-    agentState: parseStoredAgentState(row.agent_state_json),
-  };
-}
-
-/**
- * SQL for {@link Store.listActionOutcomes}. The `created_at >= ?` predicate is
- * appended ONLY when a `since` bound is supplied. The previous
- * `(? IS NULL OR created_at >= ?)` form silently disabled the range column of
- * `idx_audit_events_workspace_admin_created` (the optimizer can't use a range
- * seek behind an OR on a bind param), turning every since-bounded recap/metrics
- * read into a workspace+admin partial-index SCAN. `json_extract` pulls the two
- * scalars the caller reads (`ok`, `code`) so SQLite never materializes the full
- * multi-KB receipt as a JS document just to read a boolean and a code string.
- * Single source of truth for both the query and the test-only EXPLAIN helper.
- */
-function actionOutcomesSql(bounded: boolean): string {
-  return `SELECT action_name,
-            json_extract(receipt_json, '$.ok') AS ok,
-            json_extract(receipt_json, '$.code') AS code
-          FROM audit_events
-          WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
-}
-
-/** SQL for {@link Store.listConfirmationOutcomes}; same conditional-bound shape. */
-function confirmationOutcomesSql(bounded: boolean): string {
-  return `SELECT status, expires_at FROM pending_confirmations
-          WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
-}
-
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
   const db = new Database(databasePath);
   migrate(db);
@@ -440,600 +264,22 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const openToken = (value: string): string =>
     encryptionKey ? decryptSecret(value, encryptionKey) : value;
 
+  // The shared primitives each concern builder needs (Step 1). Built once here,
+  // exactly as the inline methods used them.
+  const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
+
   // Built as TestStore (the concrete object implements the test-only methods),
   // returned as the narrower Store so production callers never see them.
   const store: TestStore = {
-    getAdminPolicy(workspaceId, adminUserId) {
-      const row = db
-        .prepare(
-          "SELECT policy_json FROM admin_policies WHERE workspace_id = ? AND admin_user_id = ?",
-        )
-        .get(workspaceId, adminUserId) as { policy_json: string } | undefined;
-      if (!row) return undefined;
-      // Back-compat migration: feature groups added after this policy was written
-      // are absent from the stored JSON, but `adminPolicySchema` is `.strict()`
-      // and requires every current group. Fill any missing key with the locked
-      // full-access default (`read_write`) before validating, preserving any
-      // non-default values the admin set on the groups that were stored.
-      const stored = JSON.parse(row.policy_json) as {
-        version?: number;
-        groups?: Record<string, unknown>;
-      };
-      const merged = {
-        version: stored.version ?? 1,
-        groups: { ...defaultAdminPolicy().groups, ...(stored.groups ?? {}) },
-      };
-      return adminPolicySchema.parse(merged);
-    },
-
-    upsertAdminPolicy(workspaceId, adminUserId, policy) {
-      const validated = adminPolicySchema.parse(policy);
-      const timestamp = nowIso();
-      db.prepare(
-        `INSERT INTO admin_policies (id, workspace_id, admin_user_id, policy_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(workspace_id, admin_user_id)
-         DO UPDATE SET policy_json = excluded.policy_json, updated_at = excluded.updated_at`,
-      ).run(randomUUID(), workspaceId, adminUserId, JSON.stringify(validated), timestamp, timestamp);
-    },
-
-    saveInstallation(input) {
-      const timestamp = nowIso();
-      db.prepare(
-        `INSERT INTO installations (
-           workspace_id, addon_id, addon_user_id, addon_token_ciphertext,
-           api_url, backend_url, reports_url, status, installed_by_user_id, installed_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(workspace_id) DO UPDATE SET
-           addon_id = excluded.addon_id,
-           addon_user_id = excluded.addon_user_id,
-           addon_token_ciphertext = excluded.addon_token_ciphertext,
-           api_url = excluded.api_url,
-           backend_url = excluded.backend_url,
-           reports_url = COALESCE(excluded.reports_url, installations.reports_url),
-           status = excluded.status,
-           installed_by_user_id = excluded.installed_by_user_id,
-           updated_at = excluded.updated_at`,
-      ).run(
-        input.workspaceId,
-        input.addonId,
-        input.addonUserId,
-        sealToken(input.addonToken),
-        input.apiUrl ?? null,
-        input.backendUrl ?? null,
-        input.reportsUrl ?? null,
-        input.status ?? "active",
-        input.installedByUserId ?? null,
-        timestamp,
-        timestamp,
-      );
-    },
-
-    updateInstallationEnv(workspaceId, env) {
-      db.prepare(
-        `UPDATE installations SET
-           api_url = COALESCE(?, api_url),
-           backend_url = COALESCE(?, backend_url),
-           reports_url = COALESCE(?, reports_url),
-           updated_at = ?
-         WHERE workspace_id = ?`,
-      ).run(
-        env.apiUrl ?? null,
-        env.backendUrl ?? null,
-        env.reportsUrl ?? null,
-        nowIso(),
-        workspaceId,
-      );
-    },
-
-    getInstallation(workspaceId) {
-      const row = db
-        .prepare("SELECT * FROM installations WHERE workspace_id = ?")
-        .get(workspaceId) as InstallationRow | undefined;
-      if (!row) return undefined;
-      return {
-        workspaceId: row.workspace_id,
-        addonId: row.addon_id,
-        addonUserId: row.addon_user_id,
-        addonToken: openToken(row.addon_token_ciphertext),
-        apiUrl: row.api_url ?? undefined,
-        backendUrl: row.backend_url ?? undefined,
-        reportsUrl: row.reports_url ?? undefined,
-        status: row.status,
-        installedByUserId: row.installed_by_user_id ?? undefined,
-        installedAt: row.installed_at,
-        updatedAt: row.updated_at,
-      };
-    },
-
-    setInstallationStatus(workspaceId, status) {
-      db.prepare("UPDATE installations SET status = ?, updated_at = ? WHERE workspace_id = ?").run(
-        status,
-        nowIso(),
-        workspaceId,
-      );
-    },
-
-    eraseWorkspace(workspaceId) {
-      const del = (sql: string): number => db.prepare(sql).run(workspaceId).changes;
-      const run = db.transaction((): EraseCounts => {
-        // FK-children of chat_sessions (chat_messages, pending_confirmations) MUST
-        // be deleted before chat_sessions (foreign_keys = ON). undo_records and
-        // turn_telemetry carry session_id but no FK; admin_policies is independent.
-        const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
-        const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
-        const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
-        const undoRecords = del("DELETE FROM undo_records WHERE workspace_id = ?");
-        const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
-        const adminPolicies = del("DELETE FROM admin_policies WHERE workspace_id = ?");
-        const chatSessions = del("DELETE FROM chat_sessions WHERE workspace_id = ?");
-        // Tombstone the installation: keep the row but mark it deleted and wipe the
-        // token to an empty (still-decryptable) secret, so no usable credential
-        // remains at rest. idempotency_keys is a global, PII-free ledger with no
-        // workspace_id — intentionally left to its own short TTL.
-        db.prepare(
-          "UPDATE installations SET status = 'deleted', addon_token_ciphertext = ?, updated_at = ? WHERE workspace_id = ?",
-        ).run(sealToken(""), nowIso(), workspaceId);
-        return { adminPolicies, chatSessions, chatMessages, pendingConfirmations, auditEvents, undoRecords, turnTelemetry };
-      });
-      return run();
-    },
-
-    createSession(input) {
-      const timestamp = nowIso();
-      const expiresAt = new Date(
-        now().getTime() + (input.ttlMs ?? DEFAULT_SESSION_TTL_MS),
-      ).toISOString();
-      const session: ChatSession = {
-        id: randomUUID(),
-        workspaceId: input.workspaceId,
-        adminUserId: input.adminUserId,
-        createdAt: timestamp,
-        lastSeenAt: timestamp,
-        expiresAt,
-      };
-      db.prepare(
-        `INSERT INTO chat_sessions (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).run(
-        session.id,
-        session.workspaceId,
-        session.adminUserId,
-        session.createdAt,
-        session.lastSeenAt,
-        session.expiresAt,
-      );
-      return session;
-    },
-
-    getSession(id) {
-      const row = db.prepare("SELECT * FROM chat_sessions WHERE id = ?").get(id) as
-        | {
-            id: string;
-            workspace_id: string;
-            admin_user_id: string;
-            created_at: string;
-            last_seen_at: string;
-            expires_at: string;
-          }
-        | undefined;
-      if (!row) return undefined;
-      if (new Date(row.expires_at).getTime() <= now().getTime()) return undefined;
-      return {
-        id: row.id,
-        workspaceId: row.workspace_id,
-        adminUserId: row.admin_user_id,
-        createdAt: row.created_at,
-        lastSeenAt: row.last_seen_at,
-        expiresAt: row.expires_at,
-      };
-    },
-
-    listSessions(workspaceId, adminUserId, nowIso) {
-      const rows = db
-        .prepare(
-          `SELECT s.id AS id, s.created_at AS created_at,
-             (SELECT m.content FROM chat_messages m
-                WHERE m.session_id = s.id AND m.role = 'user'
-                ORDER BY m.created_at ASC, m.rowid ASC LIMIT 1) AS title,
-             (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id) AS message_count,
-             (SELECT MAX(m.created_at) FROM chat_messages m WHERE m.session_id = s.id) AS last_message_at
-           FROM chat_sessions s
-           WHERE s.workspace_id = ? AND s.admin_user_id = ? AND s.expires_at > ?
-           ORDER BY last_message_at DESC`,
-        )
-        .all(workspaceId, adminUserId, nowIso) as Array<{
-        id: string;
-        created_at: string;
-        title: string | null;
-        message_count: number;
-        last_message_at: string | null;
-      }>;
-      return rows
-        .filter((r) => r.message_count > 0 && r.last_message_at)
-        .map((r) => ({
-          id: r.id,
-          title: r.title ?? "Conversation",
-          messageCount: r.message_count,
-          lastMessageAt: r.last_message_at as string,
-          createdAt: r.created_at,
-        }));
-    },
-
-    addMessage(input) {
-      db.prepare(
-        `INSERT INTO chat_messages (id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        randomUUID(),
-        input.sessionId,
-        input.workspaceId,
-        input.adminUserId,
-        input.role,
-        input.content,
-        input.payload === undefined ? null : JSON.stringify(input.payload),
-        nowIso(),
-      );
-    },
-
-    getRecentMessages(sessionId, limit, includePayload = false) {
-      // The model-visible window (the sole request-path consumer) needs only
-      // role + content; the stored payload can be a fat list/report receipt
-      // (100KB+), so fetching + JSON.parsing it per windowed row is wasted work.
-      // It is loaded only when a caller explicitly opts in.
-      const columns = includePayload ? "role, content, payload_json" : "role, content";
-      const rows = db
-        .prepare(
-          `SELECT ${columns} FROM chat_messages WHERE session_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?`,
-        )
-        .all(sessionId, limit) as Array<{
-        role: ChatRole;
-        content: string;
-        payload_json?: string | null;
-      }>;
-      return rows.reverse().map((r) =>
-        includePayload
-          ? {
-              role: r.role,
-              content: r.content,
-              payload: r.payload_json ? JSON.parse(r.payload_json) : undefined,
-            }
-          : { role: r.role, content: r.content },
-      );
-    },
-
-    savePendingConfirmation(record) {
-      db.prepare(
-        `INSERT INTO pending_confirmations (
-           id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
-           operation_json, operation_hash, nonce_hash, expires_at, created_at, used_at, result_json,
-           agent_state_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        record.id,
-        record.sessionId,
-        record.workspaceId,
-        record.adminUserId,
-        record.status,
-        JSON.stringify(record.risk),
-        JSON.stringify(record.preview),
-        JSON.stringify(record.operation),
-        record.operationHash,
-        record.nonceHash,
-        record.expiresAt,
-        record.createdAt,
-        record.usedAt ?? null,
-        record.result === undefined ? null : JSON.stringify(record.result),
-        record.agentState === undefined ? null : JSON.stringify(record.agentState),
-      );
-    },
-
-    getPendingConfirmation(id) {
-      const row = db.prepare("SELECT * FROM pending_confirmations WHERE id = ?").get(id) as
-        | PendingRow
-        | undefined;
-      if (!row) return undefined;
-      return pendingRowToRecord(row);
-    },
-
-    listPendingConfirmations(sessionId, nowIsoArg) {
-      // Rides idx_pending_confirmations_session(session_id, status, expires_at).
-      const rows = db
-        .prepare(
-          `SELECT * FROM pending_confirmations
-            WHERE session_id = ? AND status = 'pending' AND expires_at > ?
-            ORDER BY created_at ASC`,
-        )
-        .all(sessionId, nowIsoArg) as PendingRow[];
-      return rows.map(pendingRowToRecord);
-    },
-
-    updateConfirmationNonceHash(id, nonceHash) {
-      const info = db
-        .prepare("UPDATE pending_confirmations SET nonce_hash = ? WHERE id = ? AND status = 'pending'")
-        .run(nonceHash, id);
-      return info.changes === 1;
-    },
-
-    markConfirmationUsed(id) {
-      const info = db
-        .prepare(
-          "UPDATE pending_confirmations SET status = 'used', used_at = ? WHERE id = ? AND status = 'pending'",
-        )
-        .run(nowIso(), id);
-      return info.changes === 1;
-    },
-
-    cancelConfirmation(id) {
-      const info = db
-        .prepare(
-          "UPDATE pending_confirmations SET status = 'cancelled', used_at = ? WHERE id = ? AND status = 'pending'",
-        )
-        .run(nowIso(), id);
-      return info.changes === 1;
-    },
-
-    setConfirmationResult(id, status, result) {
-      db.prepare("UPDATE pending_confirmations SET status = ?, result_json = ? WHERE id = ?").run(
-        status,
-        result === undefined ? null : JSON.stringify(result),
-        id,
-      );
-    },
-
-    countPendingConfirmations(sessionId, nowIso) {
-      const row = db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM pending_confirmations WHERE session_id = ? AND status = 'pending' AND expires_at > ?",
-        )
-        .get(sessionId, nowIso) as { n: number };
-      return row.n;
-    },
-
-    addAuditEvent(input) {
-      db.prepare(
-        `INSERT INTO audit_events (id, workspace_id, admin_user_id, session_id, action_name, risk_json, receipt_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        randomUUID(),
-        input.workspaceId,
-        input.adminUserId,
-        input.sessionId ?? null,
-        input.actionName,
-        JSON.stringify(input.risk),
-        JSON.stringify(input.receipt),
-        nowIso(),
-      );
-    },
-
-    listActionOutcomes(workspaceId, adminUserId, sinceIso) {
-      const sql = actionOutcomesSql(sinceIso !== undefined);
-      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
-      const rows = db.prepare(sql).all(...params) as Array<{
-        action_name: string;
-        // SQLite json_extract returns the JSON value as a native scalar: 1/0 for
-        // booleans, a string (or NULL) for code. Extracting the two scalars in
-        // SQLite avoids JSON.parse'ing the (potentially multi-KB) receipt per row.
-        ok: number | null;
-        code: string | null;
-      }>;
-      return rows.map((row) => {
-        const outcome: ActionOutcome = { actionName: row.action_name, ok: row.ok === 1 };
-        if (!outcome.ok && typeof row.code === "string") outcome.code = row.code;
-        return outcome;
-      });
-    },
-
-    listConfirmationOutcomes(workspaceId, adminUserId, sinceIso) {
-      const sql = confirmationOutcomesSql(sinceIso !== undefined);
-      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
-      const rows = db.prepare(sql).all(...params) as Array<{
-        status: string;
-        expires_at: string;
-      }>;
-      // A preview never gets an 'expired' status written to the DB (the safety
-      // paths read expires_at directly); derive it here so metrics/recaps don't
-      // report a lapsed preview as eternally pending.
-      const nowMs = now().getTime();
-      return rows.map((row) =>
-        row.status === "pending" && new Date(row.expires_at).getTime() <= nowMs
-          ? "expired"
-          : row.status,
-      );
-    },
-
-    recordIdempotency(key, receipt, committedAtEpochMs) {
-      // Legacy/best-effort path (non-atomic ledger). Stamp claimed_at too so the
-      // row is prune-able by BOTH prune arms.
-      db.prepare(
-        `INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET receipt_json = excluded.receipt_json, committed_at = excluded.committed_at, claimed_at = excluded.claimed_at`,
-      ).run(key, JSON.stringify(receipt), committedAtEpochMs, committedAtEpochMs);
-    },
-
-    lookupIdempotency(key, notBeforeEpochMs) {
-      // `receipt_json IS NOT NULL` so an in-flight CLAIM is never returned as a
-      // completed receipt (it also can't JSON.parse).
-      const row = db
-        .prepare(
-          "SELECT receipt_json FROM idempotency_keys WHERE key = ? AND committed_at >= ? AND receipt_json IS NOT NULL",
-        )
-        .get(key, notBeforeEpochMs) as { receipt_json: string } | undefined;
-      return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
-    },
-
-    claimIdempotency(key, claimedAtEpochMs, completedNotBeforeEpochMs, claimNotBeforeEpochMs) {
-      // ONE synchronous transaction (better-sqlite3 is sync, so no JS
-      // interleaving): sweep a row that is OUT of the dedup window, then race the
-      // INSERT. ON CONFLICT DO NOTHING gives changes===1 to exactly one winner.
-      //
-      // crash-before-fill residual: a NULL-receipt claim is swept ONLY once it is
-      // older than the dedup window (completedNotBefore), NOT at CLAIM_TTL. A claim
-      // orphaned by a crash between the host write and `fill` is therefore retained
-      // for the whole window, so a re-claim returns `stale_unknown` (below) instead
-      // of silently re-winning and double-committing a money write whose outcome is
-      // unknown. (Sweeping it at CLAIM_TTL was the silent-duplicate window.)
-      return db.transaction((): ClaimState => {
-        db.prepare(
-          `DELETE FROM idempotency_keys
-             WHERE key = ?
-               AND ((receipt_json IS NOT NULL AND committed_at < ?)
-                 OR (receipt_json IS NULL AND claimed_at < ?))`,
-        ).run(key, completedNotBeforeEpochMs, completedNotBeforeEpochMs);
-        const ins = db
-          .prepare(
-            `INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at)
-               VALUES (?, NULL, NULL, ?) ON CONFLICT(key) DO NOTHING`,
-          )
-          .run(key, claimedAtEpochMs);
-        if (ins.changes === 1) return "won";
-        const row = db
-          .prepare("SELECT receipt_json, claimed_at FROM idempotency_keys WHERE key = ?")
-          .get(key) as { receipt_json: string | null; claimed_at: number } | undefined;
-        // The row vanished mid-transaction (a concurrent release won the row):
-        // the key is free again, so report a fresh win — the caller commits.
-        if (!row) return "won";
-        if (row.receipt_json !== null) return "replay";
-        // NULL receipt = an UNcompleted claim still inside the dedup window. A LIVE
-        // commit heartbeats, so claimed_at stays >= claimNotBefore → a genuine
-        // concurrent in-flight claim. A claim NOT refreshed within CLAIM_TTL means
-        // its process died mid-commit: the host-side outcome is unknown, so report
-        // `stale_unknown` — the caller must not re-commit (crash-before-fill).
-        return row.claimed_at < claimNotBeforeEpochMs ? "stale_unknown" : "in_flight";
-      })();
-    },
-
-    claimIdempotencyReceipt(key) {
-      const row = db
-        .prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ? AND receipt_json IS NOT NULL")
-        .get(key) as { receipt_json: string } | undefined;
-      return row ? (JSON.parse(row.receipt_json) as SuccessReceipt) : undefined;
-    },
-
-    fillIdempotency(key, receipt, committedAtEpochMs) {
-      // Guarded on receipt_json IS NULL: fills only the OWN (still-claimed) row;
-      // a re-fill or a fill of an already-completed row no-ops.
-      db.prepare(
-        "UPDATE idempotency_keys SET receipt_json = ?, committed_at = ? WHERE key = ? AND receipt_json IS NULL",
-      ).run(JSON.stringify(receipt), committedAtEpochMs, key);
-    },
-
-    releaseIdempotency(key) {
-      // Guarded on receipt_json IS NULL: a release can NEVER drop a COMPLETED row.
-      db.prepare("DELETE FROM idempotency_keys WHERE key = ? AND receipt_json IS NULL").run(key);
-    },
-
-    touchIdempotencyClaim(key, claimedAtEpochMs) {
-      // Guarded on receipt_json IS NULL: only refreshes a still-in-flight claim.
-      // A completed (filled) row is never disturbed; a missing key no-ops.
-      db.prepare(
-        "UPDATE idempotency_keys SET claimed_at = ? WHERE key = ? AND receipt_json IS NULL",
-      ).run(claimedAtEpochMs, key);
-    },
-
-    recordUndoable(input) {
-      const id = randomUUID();
-      db.prepare(
-        `INSERT INTO undo_records (id, session_id, workspace_id, admin_user_id, action_name, reversal_json, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'available', ?)`,
-      ).run(
-        id,
-        input.sessionId,
-        input.workspaceId,
-        input.adminUserId,
-        input.actionName,
-        JSON.stringify(input.reversal),
-        nowIso(),
-      );
-      return id;
-    },
-
-    getUndoRecord(id) {
-      const row = db.prepare("SELECT * FROM undo_records WHERE id = ?").get(id) as
-        | {
-            id: string;
-            session_id: string;
-            workspace_id: string;
-            admin_user_id: string;
-            action_name: string;
-            reversal_json: string;
-            status: "available" | "undone";
-            created_at: string;
-            undone_at: string | null;
-          }
-        | undefined;
-      if (!row) return undefined;
-      return {
-        id: row.id,
-        sessionId: row.session_id,
-        workspaceId: row.workspace_id,
-        adminUserId: row.admin_user_id,
-        actionName: row.action_name,
-        reversal: JSON.parse(row.reversal_json) as EntityRef[],
-        status: row.status,
-        createdAt: row.created_at,
-        undoneAt: row.undone_at ?? undefined,
-      };
-    },
-
-    markUndone(id) {
-      const info = db
-        .prepare("UPDATE undo_records SET status = 'undone', undone_at = ? WHERE id = ? AND status = 'available'")
-        .run(nowIso(), id);
-      return info.changes > 0;
-    },
-
-    recordTurnTelemetry(input) {
-      db.prepare(
-        `INSERT INTO turn_telemetry (
-           id, session_id, workspace_id, admin_user_id, kind, model_calls,
-           prompt_tokens, completion_tokens, turn_ms, model_ms, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        randomUUID(),
-        input.sessionId,
-        input.workspaceId,
-        input.adminUserId,
-        input.kind,
-        input.modelCalls,
-        input.promptTokens ?? null,
-        input.completionTokens ?? null,
-        input.turnMs,
-        input.modelMs,
-        nowIso(),
-      );
-    },
-
-    listTurnTelemetry(workspaceId, adminUserId, sinceIso) {
-      // Conditional bound, same shape as actionOutcomesSql: appending the range
-      // predicate only when bounded keeps the index seek (see that comment).
-      const bounded = sinceIso !== undefined;
-      const rows = db
-        .prepare(
-          `SELECT kind, model_calls, prompt_tokens, completion_tokens, turn_ms, model_ms, created_at
-             FROM turn_telemetry
-            WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}
-            ORDER BY created_at ASC`,
-        )
-        .all(...(bounded ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId])) as Array<{
-        kind: "chat" | "resume";
-        model_calls: number;
-        prompt_tokens: number | null;
-        completion_tokens: number | null;
-        turn_ms: number;
-        model_ms: number;
-        created_at: string;
-      }>;
-      return rows.map((row) => ({
-        kind: row.kind,
-        modelCalls: row.model_calls,
-        promptTokens: row.prompt_tokens ?? undefined,
-        completionTokens: row.completion_tokens ?? undefined,
-        turnMs: row.turn_ms,
-        modelMs: row.model_ms,
-        createdAt: row.created_at,
-      }));
-    },
+    ...buildAdminPolicyStore(ctx),
+    ...buildTelemetryStore(ctx),
+    ...buildAuditMetricsStore(ctx),
+    ...buildMessageStore(ctx),
+    ...buildSessionStore(ctx),
+    ...buildUndoStore(ctx),
+    ...buildInstallationStore(ctx),
+    ...buildConfirmationStore(ctx),
+    ...buildIdempotencyStore(ctx),
 
     pruneExpired(nowIsoArg) {
       const nowMs = Date.parse(nowIsoArg);
