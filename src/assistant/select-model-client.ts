@@ -18,6 +18,8 @@ export interface ModelClientSelection {
   llmTimeoutMs?: number;
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   llmReasoningEffort?: string;
+  /** Optional sampling seed for the HTTP client (reproducibility on weak models). */
+  llmSeed?: number;
   geminiModel?: string;
 }
 
@@ -46,5 +48,6 @@ export function selectModelClient(
     model: config.llmModel,
     timeoutMs: config.llmTimeoutMs,
     reasoningEffort: config.llmReasoningEffort,
+    ...(config.llmSeed !== undefined ? { seed: config.llmSeed } : {}),
   });
 }

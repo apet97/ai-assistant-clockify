@@ -117,6 +117,12 @@ export interface ModelClientConfig {
    * from the wire when unset, so existing backends see byte-identical bodies.
    */
   reasoningEffort?: string;
+  /**
+   * Optional sampling seed (OpenAI-compatible `seed`). Providers that honor it make
+   * temperature-0 runs more reproducible — an extra nudge toward run-to-run
+   * consistency on weak models. Omitted from the wire when unset (byte-identical).
+   */
+  seed?: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -262,6 +268,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           model: config.model,
           temperature: 0,
           ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
+          ...(config.seed !== undefined ? { seed: config.seed } : {}),
           ...body,
         }),
           signal: AbortSignal.timeout(timeoutMs),

@@ -138,6 +138,7 @@ async function main(): Promise<void> {
     llmApiKey: process.env.LLM_API_KEY,
     llmModel: process.env.LLM_MODEL,
     llmReasoningEffort: process.env.LLM_REASONING_EFFORT,
+    llmSeed: process.env.LLM_SEED ? Number(process.env.LLM_SEED) : undefined,
     geminiModel: process.env.GEMINI_MODEL,
   };
 

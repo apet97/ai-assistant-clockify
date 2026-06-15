@@ -284,6 +284,47 @@ describe("createModelClient reasoning effort", () => {
   });
 });
 
+describe("createModelClient seed", () => {
+  it("sends seed on BOTH paths when configured, omits it otherwise", async () => {
+    const captured: { body?: string } = {};
+    const payload = { choices: [{ message: { content: "{}", tool_calls: [] } }] };
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      seed: 7,
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await c.complete([{ role: "user", content: "hi" }]);
+    expect(JSON.parse(captured.body ?? "{}").seed).toBe(7);
+    await c.completeWithTools!([{ role: "user", content: "hi" }], tools);
+    expect(JSON.parse(captured.body ?? "{}").seed).toBe(7);
+
+    const plain = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await plain.complete([{ role: "user", content: "hi" }]);
+    expect("seed" in JSON.parse(captured.body ?? "{}")).toBe(false);
+  });
+
+  it("sends seed 0 (a falsy-but-valid seed must not be dropped)", async () => {
+    const captured: { body?: string } = {};
+    const payload = { choices: [{ message: { content: "{}", tool_calls: [] } }] };
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      seed: 0,
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await c.complete([{ role: "user", content: "hi" }]);
+    expect(JSON.parse(captured.body ?? "{}").seed).toBe(0);
+  });
+});
+
 describe("createModelClient token usage", () => {
   it("maps the provider's usage onto the completion (and omits it when absent)", async () => {
     const withUsage = {

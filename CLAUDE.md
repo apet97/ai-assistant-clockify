@@ -27,6 +27,13 @@ workspace, and deployed.
   3.x supported). A backend swap is env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT`).
   Planner + agentic evals last measured 100% on DeepSeek v4-pro and both Gemini
   tiers (opt-in `scripts/eval-*.ts`; results are not committed or CI-gated).
+- **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
+  an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT=1`
+  shows the model only the message-relevant actions (+ an always-on core) instead of
+  all 139 — deterministic, `src/harness/tool-select.ts`, default OFF until the matrix
+  proves it; `LLM_SEED` adds a sampling seed for reproducibility. `unknown_action`
+  errors carry a "did you mean" (`src/harness/action-suggest.ts`). Measure with
+  `scripts/eval-matrix.ts` (per-model pass-rate + consistency + spread).
 - **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, healthcheck
   `/manifest`). Redeploy = `railway up` from this dir. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
@@ -367,8 +374,9 @@ checks are opt-in, gated by env (`LIVE_CLOCKIFY=1` + the relevant tokens/IDs), a
 ```bash
 LIVE_CLOCKIFY=1 LIVE_CLOCKIFY_API_KEY=… LIVE_WORKSPACE_ID=… npx tsx scripts/live-full.ts   # every action, self-cleaning
 LIVE_CLOCKIFY=1 npx tsx scripts/live-sweep.ts                                              # leftover sweep → must report 0
-npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3                          # planner meter (pass-rate + consistency)
+npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3                          # planner meter (pass-rate + consistency + spread)
 npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3 [--single-turn]          # agentic loop meter
+npx tsx scripts/eval-matrix.ts --repeat=5                                                  # weak-model MATRIX: planner+agentic × N models (eval-models.json, gitignored)
 npx tsx --env-file=.env.server scripts/live-confirm-flow.ts                                # confirm safety over HTTP
 LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-agentic-flow.ts                # loop vs real host
 npx tsx --env-file=.env.server scripts/live-chat-tour.ts                                   # broad dogfood tour

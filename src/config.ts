@@ -42,6 +42,9 @@ export interface AppConfig {
   retentionDays?: number;
   /** Provider thinking control passed through as reasoning_effort. */
   llmReasoningEffort?: string;
+  /** Optional sampling seed (OpenAI-compatible `seed`) for run-to-run reproducibility
+   *  on weak models. Unset ⇒ not sent (byte-identical). */
+  llmSeed?: number;
   /** Optional Gemini model for the gemini-cli provider (else the CLI router picks). */
   geminiModel?: string;
   /** Chat rate limit per admin session; the route defaults apply when unset. */
@@ -84,6 +87,8 @@ const envObjectSchema = z.object({
   RETENTION_DAYS: z.coerce.number().int().min(30).optional(),
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   LLM_REASONING_EFFORT: z.string().min(1).optional(),
+  /** Optional sampling seed (OpenAI-compatible `seed`) for reproducible weak-model runs. */
+  LLM_SEED: z.coerce.number().int().optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
   /** Chat rate limit per admin session (each turn drives a paid model loop). */
   CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
@@ -150,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     commitTimeoutMs: parsed.COMMIT_TIMEOUT_MS,
     retentionDays: parsed.RETENTION_DAYS,
     llmReasoningEffort: parsed.LLM_REASONING_EFFORT,
+    llmSeed: parsed.LLM_SEED,
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,
     chatRateLimitWindowMs: parsed.CHAT_RATE_LIMIT_WINDOW_MS,
