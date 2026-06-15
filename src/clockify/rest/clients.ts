@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { ClientPort } from "../ports/clients.js";
-import type { EntitySummary } from "../types.js";
+import { mapEntitySummary } from "./common.js";
 
 /**
  * Typed client REST module (goclmcp §2.4). `updateClient` is GET-then-merge-PUT
@@ -10,7 +10,7 @@ import type { EntitySummary } from "../types.js";
  */
 export function makeClientRest(core: RestCore, workspaceId: string): ClientPort {
   const ws = `/workspaces/${workspaceId}`;
-  const map = (c: any): EntitySummary => ({ id: c.id, name: c.name, archived: c.archived });
+  const map = mapEntitySummary;
 
   return {
     async listClients(filter) {

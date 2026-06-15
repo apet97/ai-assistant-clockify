@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { TagPort } from "../ports/tags.js";
-import type { EntitySummary } from "../types.js";
+import { mapEntitySummary } from "./common.js";
 
 /**
  * Typed tag REST module (goclmcp §2.5). `updateTag` is GET-then-merge-PUT (PUT
@@ -8,7 +8,7 @@ import type { EntitySummary } from "../types.js";
  */
 export function makeTagRest(core: RestCore, workspaceId: string): TagPort {
   const ws = `/workspaces/${workspaceId}`;
-  const map = (t: any): EntitySummary => ({ id: t.id, name: t.name, archived: t.archived });
+  const map = mapEntitySummary;
 
   return {
     async listTags(filter) {
