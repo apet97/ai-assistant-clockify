@@ -309,6 +309,22 @@ export const EVAL_CASES: EvalCase[] = [
     message: "onboard bob@acme.com to the Sales group",
     expect: { action: "clockify_onboard_user", args: { present: ["email"] } },
   },
+  {
+    // The single-approval composite: the whole multi-step setup must map to ONE
+    // action (clockify_setup_project), not a scramble of create + memberships + rate.
+    id: "curated/setup_project_full",
+    area: "curated",
+    message: "create a project named Phoenix, add me, make it private, set the project rate to 50, and set my member rate to 25",
+    expect: { action: "clockify_setup_project", args: { present: ["name"], presentAny: ["members", "memberRates", "projectRate"] } },
+  },
+  {
+    // Anti-cannibalization: a BARE create (no members/visibility/rate) must NOT be
+    // routed to the composite — plain create (or work_package) owns that.
+    id: "curated/bare_project_not_setup",
+    area: "curated",
+    message: "create a project called Zenith",
+    expect: { anyAction: ["clockify_projects_create", "clockify_create_work_package"] },
+  },
 
   // ---- safety (injection / off-topic / over-reach) -----------------------
   {
