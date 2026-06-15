@@ -71,8 +71,12 @@ export function getAction(name: string): ActionDefinition | undefined {
 
 let cachedModelView: ActionCatalogEntry[] | undefined;
 
-/** The model-visible catalog view. Memoized (catalog is static, like toolsForModel). */
-export function catalogForModel(): ActionCatalogEntry[] {
+/**
+ * The model-visible catalog view (the JSON-mode prompt listing). Memoized. With
+ * `actionNames`, returns the SUBSET in catalog order (Phase 1 tool subsetting);
+ * without it, the full list, byte-identical to before.
+ */
+export function catalogForModel(actionNames?: ReadonlySet<string>): ActionCatalogEntry[] {
   if (!cachedModelView) {
     cachedModelView = ACTION_CATALOG.map((action) => ({
       name: action.name,
@@ -82,5 +86,5 @@ export function catalogForModel(): ActionCatalogEntry[] {
       args: summarizeArgs(action.schema),
     }));
   }
-  return cachedModelView;
+  return actionNames ? cachedModelView.filter((entry) => actionNames.has(entry.name)) : cachedModelView;
 }

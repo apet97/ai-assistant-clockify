@@ -42,6 +42,7 @@ import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
+import { selectActionsForMessage, CORE_ACTION_NAMES } from "../harness/tool-select.js";
 import type { Installation } from "../db/store.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
@@ -618,12 +619,25 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     let replyKind: string;
     let baseText: string;
 
+    // Tool subsetting (LLM_TOOL_SELECT=1): show the model only the actions relevant
+    // to THIS message (+ the always-on core), for weak-model consistency. OFF ⇒
+    // undefined ⇒ the full catalog (byte-identical). The harness still validates and
+    // gates every proposed action — subsetting changes only what the model SEES.
+    const subsetNames = deps.config.llmToolSelect ? new Set(selectActionsForMessage(message)) : undefined;
+    const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
+    const subsetCatalog = subsetNames ? catalogForModel(subsetNames) : catalogForModel();
+    // Did subsetting actually NARROW (a domain intent matched) vs collapse to just
+    // the core (smalltalk)? Only a narrowed turn that executed NOTHING is a possible
+    // recall miss worth a full-catalog retry — smalltalk never triggers it.
+    const subsetNarrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
+
     if (deps.config.llmAgentic && useTools && typeof deps.modelClient.completeWithTools === "function") {
       // Agentic turn (LLM_AGENTIC=1): the durable tool-loop. Reads + safe writes
       // auto-chain with their receipts fed back to the model; the FIRST risky
       // write interrupts into the preview→button-confirm flow with its suspended
       // transcript persisted, so the confirm route can resume the loop.
       let turn: AgentTurnResult;
+      const currentDate = now().toISOString().slice(0, 10);
       try {
         turn = await runAgentConversation({
           modelClient: tracked.client,
@@ -632,31 +646,64 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           authClass: m.ctx.clockify.authClass,
           // The server clock's date so the model narrates the real date instead
           // of its stale knowledge cutoff (finding new-3: "we're still in 2025").
-          currentDate: now().toISOString().slice(0, 10),
+          currentDate,
+          tools: subsetTools,
           runAction: m.runAction,
           onStep: m.onStep,
           signal,
         });
+        // Recall escape hatch: a NARROWED turn that finished without executing
+        // anything may have had the needed tool hidden. Retry ONCE with the full
+        // catalog. Side-effect-free — guarded on `m.results.length === 0`, so no
+        // read/write is ever duplicated; never fires for smalltalk (not narrowed).
+        if (subsetNarrowed && m.results.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
+          turn = await runAgentConversation({
+            modelClient: tracked.client,
+            messages,
+            policy,
+            authClass: m.ctx.clockify.authClass,
+            currentDate,
+            runAction: m.runAction,
+            onStep: m.onStep,
+            signal,
+          });
+        }
       } catch {
         return modelUnavailable();
       }
       ({ replyKind, baseText } = settleAgentTurn(m, turn));
     } else {
       let plan;
+      const currentDate = now().toISOString().slice(0, 10);
       try {
         plan = await planConversation({
           modelClient: tracked.client,
           messages,
-          actionCatalog: catalogForModel(),
+          actionCatalog: subsetCatalog,
           policy,
           authClass: m.ctx.clockify.authClass,
           // The server clock's date so the model narrates the real date instead
           // of its stale knowledge cutoff (finding new-3: "we're still in 2025").
-          currentDate: now().toISOString().slice(0, 10),
+          currentDate,
+          tools: subsetTools,
           // Native tool-calling by default (provider validates args); LLM_MODE=json
           // forces the JSON + repair path. The harness re-validates either way.
           useTools,
         });
+        // Recall escape hatch (mirrors the agentic path): a NARROWED turn that
+        // proposed no action may have hidden the needed tool — re-plan ONCE with the
+        // full catalog before executing (nothing has run yet → no double side effects).
+        if (subsetNarrowed && plan.kind !== "actions") {
+          plan = await planConversation({
+            modelClient: tracked.client,
+            messages,
+            actionCatalog: catalogForModel(),
+            policy,
+            authClass: m.ctx.clockify.authClass,
+            currentDate,
+            useTools,
+          });
+        }
       } catch {
         return modelUnavailable();
       }

@@ -32,8 +32,13 @@ export function actionParametersSchema(schema: z.ZodTypeAny): Record<string, unk
 
 let cached: ToolDefinition[] | undefined;
 
-/** The model-visible tool catalog — one tool per action. Memoized (catalog is static). */
-export function toolsForModel(): ToolDefinition[] {
+/**
+ * The model-visible tool catalog — one tool per action. Memoized (catalog is
+ * static). With `actionNames`, returns the SUBSET in catalog order (Phase 1 tool
+ * subsetting); without it, the full list, byte-identical to before. The full list
+ * is memoized once and merely filtered — the subset is a cheap view, not a rebuild.
+ */
+export function toolsForModel(actionNames?: ReadonlySet<string>): ToolDefinition[] {
   if (!cached) {
     cached = ACTION_CATALOG.map((action) => ({
       name: action.name,
@@ -41,5 +46,5 @@ export function toolsForModel(): ToolDefinition[] {
       parameters: actionParametersSchema(action.schema),
     }));
   }
-  return cached;
+  return actionNames ? cached.filter((tool) => actionNames.has(tool.name)) : cached;
 }

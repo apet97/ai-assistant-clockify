@@ -26,6 +26,11 @@ export interface AppConfig {
    *  (read-then-act + resume across the confirm round-trip). Default ON after the
    *  live acceptance proof; set LLM_AGENTIC=0 to roll back to single-turn. */
   llmAgentic?: boolean;
+  /** Tool subsetting: when true, each chat turn shows the model only the actions
+   *  relevant to the message (+ an always-on core) instead of all 139, for weak-model
+   *  consistency. Default OFF until the eval matrix proves the win; LLM_TOOL_SELECT=1
+   *  enables it. The harness still validates + gates every proposed action. */
+  llmToolSelect?: boolean;
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;
@@ -63,6 +68,10 @@ const envObjectSchema = z.object({
   // Default ON: the durable agentic loop is the proven default (live PASS=10,
   // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
   LLM_AGENTIC: z.enum(["0", "1"]).default("1"),
+  // Default OFF: deterministic tool subsetting (Phase 1 — weak-model consistency).
+  // Enable once the eval matrix shows pass-rate held + consistency up. =0 is
+  // byte-identical to showing the full catalog.
+  LLM_TOOL_SELECT: z.enum(["0", "1"]).default("0"),
   LLM_BASE_URL: z.string().min(1).optional(),
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_MODEL: z.string().min(1).optional(),
@@ -133,6 +142,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmProvider: parsed.LLM_PROVIDER,
     llmMode: parsed.LLM_MODE,
     llmAgentic: parsed.LLM_AGENTIC === "1",
+    llmToolSelect: parsed.LLM_TOOL_SELECT === "1",
     llmBaseUrl: parsed.LLM_BASE_URL,
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
