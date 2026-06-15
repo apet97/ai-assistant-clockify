@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   defineAction,
+  type ActionContext,
   type ActionDefinition,
   type ActionResult,
   type ClarifyOption,
@@ -117,11 +118,18 @@ const setupProject = defineAction({
         orderedUserIds.push(userId);
       }
     };
+    // The workspace user list is identical for member resolution AND every
+    // per-member rate. Fetch it at most once (lazy single-flight) instead of
+    // 1 + N times — mirrors clockify_onboard_user's getGroups (curated.ts).
+    let usersPromise: ReturnType<ActionContext["clockify"]["listUsers"]> | undefined;
+    const listUsers = (): ReturnType<ActionContext["clockify"]["listUsers"]> =>
+      (usersPromise ??= ctx.clockify.listUsers());
+
     if (args.members?.length) {
       const m = await resolveUserRefs(args.members, {
         verb: "add to the project",
         adminUserId: ctx.adminUserId,
-        listUsers: () => ctx.clockify.listUsers(),
+        listUsers,
         verifyIds: true,
       });
       if (!m.ok) return asClarify(m.clarify);
@@ -133,7 +141,7 @@ const setupProject = defineAction({
     for (const r of args.memberRates ?? []) {
       const member = await resolveUserRef(
         { id: r.member, name: r.member },
-        { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+        { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers },
       );
       if (!member.ok) return asClarify(member.clarify);
       addMember(member.userId, member.label);

@@ -127,6 +127,28 @@ describe("clockify_setup_project — risk, policy, confirmation, idempotency", (
     expect(fake.counts.createProject).toBe(1); // the replay did not create a second project
   });
 
+  it("resolves members + every per-member rate from ONE listUsers fetch (no N+1)", async () => {
+    // Members block resolves once; without the single-flight each memberRate would
+    // re-fetch, so 3 rates here would be 1 + 3 = 4 fetches. The lazy thunk pins it to 1.
+    const fake = createFakeWorkspace({
+      users: [
+        { id: "admin-1", name: "Ada" },
+        { id: "u-2", name: "Bo" },
+        { id: "u-3", name: "Cy" },
+      ],
+    });
+    await preview(makeContext(fake), {
+      name: "test-n-plus-1",
+      members: ["me"],
+      memberRates: [
+        { member: "Ada", amount: 25 },
+        { member: "Bo", amount: 30 },
+        { member: "Cy", amount: 35 },
+      ],
+    });
+    expect(fake.counts.listUsers).toBe(1);
+  });
+
   it("invalid args (no name) are rejected before any preview", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({ actionName: "clockify_setup_project", args: {}, context: makeContext(fake) });
