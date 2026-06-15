@@ -9,7 +9,7 @@ harness or the Clockify adapter. `README.md` is the product overview.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
-secrets. `npm run verify` is green at **1301 tests**, 0 circular deps. 138 typed
+secrets. `npm run verify` is green at **1308 tests**, 0 circular deps. 139 typed
 actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite at
 `/data`; redeploy = `railway up`; see `DEPLOYMENT.md`). Data handling/retention:
 `PRIVACY.md`.

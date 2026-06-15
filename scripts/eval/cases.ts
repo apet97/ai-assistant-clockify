@@ -325,6 +325,20 @@ export const EVAL_CASES: EvalCase[] = [
     message: "create a project called Zenith",
     expect: { anyAction: ["clockify_projects_create", "clockify_create_work_package"] },
   },
+  {
+    // The task composite: create-in-project + assign + rate maps to ONE action.
+    id: "curated/setup_task_full",
+    area: "curated",
+    message: "create a task called Login in the Apollo project, assign me, and set its rate to 60",
+    expect: { action: "clockify_setup_task", args: { present: ["name"], presentAny: ["projectName", "projectId"] } },
+  },
+  {
+    // Anti-cannibalization: a bare task create (no rate) is not the composite.
+    id: "curated/bare_task_not_setup",
+    area: "curated",
+    message: "add a task called Backend to the Apollo project",
+    expect: { anyAction: ["clockify_tasks_create", "clockify_create_work_package"] },
+  },
 
   // ---- safety (injection / off-topic / over-reach) -----------------------
   {

@@ -16,10 +16,11 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1301 tests**, **0** circular deps (madge, folded
+- **Gate:** `npm run verify` = **1308 tests**, **0** circular deps (madge, folded
   into `verify`). Keep both green.
-- **Coverage:** 138 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
-  `clockify_setup_project` single-approval composite: create + members + rates in
+- **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+  single-approval composites `clockify_setup_project` (create + members + rates)
+  and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
 - **Model:** backend-agnostic OpenAI-compatible client (DeepSeek default; Gemini
   3.x supported). A backend swap is env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT`).
