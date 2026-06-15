@@ -16,8 +16,9 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1313 tests**, **0** circular deps (madge, folded
-  into `verify`). Keep both green.
+- **Gate:** `npm run verify` = **1317 tests**, **0** circular deps (madge), and a
+  typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
+  all folded into `verify`. Keep them green.
 - **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
@@ -71,8 +72,9 @@ bug was found against the REAL API, not by reading the code.
 
 ## Engineering rules
 
-- TypeScript, Express, vanilla Vite UI, SQLite, Zod, Vitest, Supertest. No
-  React/Next/Prisma/queues/Redis/vector DBs/workers unless the user asks.
+- TypeScript, Express, vanilla Vite UI, SQLite, Zod, Vitest, Supertest, ESLint
+  (typed, async-safety rules). No React/Next/Prisma/queues/Redis/vector DBs/workers
+  unless the user asks.
 - Small files, one responsibility. Failing test first; `npm run verify` before
   claiming done; one focused commit per fix; madge stays at 0 cycles.
 - The REST adapter is **I/O only** — all risk/policy/confirmation/resolution logic
@@ -84,8 +86,10 @@ bug was found against the REAL API, not by reading the code.
 
 ## Architecture
 
-- `src/config.ts` env (Zod) · `src/db/store.ts` single SQLite module + token
-  encryption (AES-256-GCM) · `src/auth/` admin check + signed session cookie
+- `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
+  per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
+  ledger, undo, audit/metrics, telemetry, installations) + token encryption
+  (AES-256-GCM) · `src/auth/` admin check + signed session cookie
   (`SameSite=None; Secure; Partitioned` — required in the cross-site iframe).
 - `src/addon/` manifest + token verification. Inbound add-on JWTs are RS256 with
   ONE platform-wide key, embedded default in `src/addon/clockify-public-key.ts`
@@ -117,10 +121,13 @@ bug was found against the REAL API, not by reading the code.
   chat-history switcher (`GET /chat/sessions` lists the admin's live, owned,
   non-empty sessions; `POST /chat/sessions/:id/open` re-cookies to an OWNED target
   — IDOR-guarded 404 + no cookie for a foreign admin/workspace, the target's
-  unextended expiry). `executeChatTurn` is the single turn pipeline. Pure helpers
-  split into sibling modules: `history-sanitizer.ts` (model-visible-history rewrite
-  + truthful-preview text), `request-schemas.ts` (Zod bodies), `consent-guard.ts`
-  (typed-consent), `async-handler.ts`. `src/ui/` vanilla TS chat (a11y; previews
+  unextended expiry). the 14 route handlers stay in `api.ts`; the turn/confirm/commit
+  machinery (`executeChatTurn`, `runResume`, `commitConfirmation`,
+  `createTurnMachinery`) lives in `chat-pipeline.ts` (`createChatPipeline(deps)`),
+  pure result transforms + guards in `chat-results.ts`, shared constants in
+  `chat-constants.ts`. Earlier sibling helpers: `history-sanitizer.ts`
+  (model-visible-history rewrite + truthful-preview text), `request-schemas.ts`
+  (Zod bodies), `consent-guard.ts` (typed-consent), `async-handler.ts`. `src/ui/` vanilla TS chat (a11y; previews
   batched so "Confirm all" stays one card; header **"New chat"** + **"Chats ▾"**
   history dropdown — titles via `textContent`, full keyboard nav).
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
@@ -320,7 +327,8 @@ npm install
 npm run type-check     # tsc --noEmit
 npm test               # vitest run (fakes only; no network)
 npm run build          # tsc + vite -> dist/server, dist/ui
-npm run verify         # type-check + cycles + test + build (the gate)
+npm run lint           # eslint src (typed async-safety rules; in verify)
+npm run verify         # type-check + lint + cycles + test + build (the gate)
 npm run dev            # tsx src/server.ts (needs env)
 npm run cycles         # madge --circular … (pinned devDep) — keep 0
 ```

@@ -126,7 +126,8 @@ cp .env.example .env     # then fill in real values
 npm run type-check       # tsc --noEmit
 npm test                 # vitest run (fakes only; no network)
 npm run build            # -> dist/server, dist/ui
-npm run verify           # type-check + test + build (the gate)
+npm run lint             # eslint src (typed async-safety rules)
+npm run verify           # type-check + lint + cycles + test + build (the gate)
 npm run dev              # tsx src/server.ts (needs .env)
 ```
 

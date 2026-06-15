@@ -9,7 +9,8 @@ harness or the Clockify adapter. `README.md` is the product overview.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
-secrets. `npm run verify` is green at **1313 tests**, 0 circular deps. 139 typed
+secrets. `npm run verify` is green at **1317 tests**, 0 circular deps, and a typed
+ESLint gate (`no-floating-promises`/`no-misused-promises` as errors). 139 typed
 actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite at
 `/data`; redeploy = `railway up`; see `DEPLOYMENT.md`). Data handling/retention:
 `PRIVACY.md`.
@@ -46,14 +47,17 @@ npm install
 npm run type-check    # tsc --noEmit
 npm test              # vitest run (fakes only, no network)
 npm run build         # -> dist/server, dist/ui
-npm run verify        # type-check + cycles + test + build (the gate)
+npm run lint          # eslint src (typed async-safety rules)
+npm run verify        # type-check + lint + cycles + test + build (the gate)
 npm run dev           # tsx src/server.ts (needs env)
 ```
 
 ## Layout
 
-- `src/config.ts` — env config (Zod). `src/db/` — SQLite schema, store (single DB
-  module), token encryption. `src/auth/` — admin role check, signed session cookie.
+- `src/config.ts` — env config (Zod). `src/db/` — SQLite schema; `store.ts` is a
+  thin facade composing per-concern builders in `store/` (sessions, confirmations,
+  idempotency ledger, undo, audit/metrics, telemetry, installations + AES-256-GCM
+  token encryption). `src/auth/` — admin role check, signed session cookie.
 - `src/addon/` — manifest + Clockify token verification (RS256, one platform key
   built in).
 - `src/clockify/` — `client.ts` (the `WorkspaceClient` port, the seam),
@@ -69,9 +73,11 @@ npm run dev           # tsx src/server.ts (needs env)
   `receipts.ts`, `confirmations.ts`, `tools.ts`, `compose.ts` (atomic
   multi-step/rollback), `idempotency.ts` (dedup confirmed commits), `undo.ts`,
   `money.ts` (the one major↔minor mapping), `workflows/*` (+ `resolve.ts`).
-- `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts` (chat + stream + confirm
-  + undo + metrics + new chat + history switcher), shared `deps.ts`. `server.ts` —
-  `createApp(deps)` + `start()`.
+- `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts` (the route handlers for
+  chat + stream + confirm + undo + metrics + new chat + history switcher). The
+  turn/confirm/commit machinery lives in `chat-pipeline.ts` (`createChatPipeline`),
+  pure result transforms + guards in `chat-results.ts`; shared `deps.ts`. `server.ts`
+  — `createApp(deps)` + `start()`.
 - `src/ui/` — vanilla TS chat UI (a11y; "New chat" + "Chats ▾" history dropdown).
   `tests/` — unit + integration (fakes via `tests/helpers/fake-clockify.ts`;
   `tests/helpers/session.ts` mints an admin cookie in-process). `scripts/` — opt-in
