@@ -1,5 +1,6 @@
 import type { ActionCatalogEntry, ActionDefinition } from "./action.js";
 import { summarizeArgs } from "./arg-summary.js";
+import { nearestNames } from "./action-suggest.js";
 import { TIME_TRACKING_ACTIONS } from "./workflows/time-tracking.js";
 import { ENTRY_ACTIONS } from "./workflows/entries.js";
 import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
@@ -67,6 +68,14 @@ const CATALOG_BY_NAME = new Map<string, ActionDefinition>(
 
 export function getAction(name: string): ActionDefinition | undefined {
   return CATALOG_BY_NAME.get(name);
+}
+
+/**
+ * Closest real action names to a non-catalog name (Phase 3 weak-model recovery) —
+ * powers the `unknown_action` "did you mean". Empty when nothing is genuinely close.
+ */
+export function suggestActionNames(query: string, limit = 3): string[] {
+  return nearestNames(query, [...CATALOG_BY_NAME.keys()], limit);
 }
 
 let cachedModelView: ActionCatalogEntry[] | undefined;

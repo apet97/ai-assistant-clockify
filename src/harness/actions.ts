@@ -1,4 +1,4 @@
-import { getAction } from "./catalog.js";
+import { getAction, suggestActionNames } from "./catalog.js";
 import { isAtomicLedger } from "./action.js";
 import type { ActionContext, ActionResult, ClaimState, ConfirmableOperation } from "./action.js";
 import { canRead, canWrite } from "./permissions.js";
@@ -25,13 +25,20 @@ export interface ExecuteActionInput {
 export async function executeAction(input: ExecuteActionInput): Promise<ActionResult> {
   const action = getAction(input.actionName);
   if (!action) {
+    // "Did you mean" (Phase 3): name the closest real actions so a weak model that
+    // typos/scrambles a name self-corrects on the next step instead of dead-ending.
+    // Mark retryable only when we actually have a lead to offer.
+    const suggestions = suggestActionNames(input.actionName);
+    const hint = suggestions.length
+      ? `Did you mean: ${suggestions.join(", ")}? Use only catalog action names.`
+      : "Use only the actions in the catalog.";
     return {
       kind: "receipt",
       receipt: errorReceipt({
         action: input.actionName,
         code: "unknown_action",
         message: `Unknown action: ${input.actionName}`,
-        recovery: { hint: "Use only the actions in the catalog.", retryable: false },
+        recovery: { hint, retryable: suggestions.length > 0 },
       }),
     };
   }
