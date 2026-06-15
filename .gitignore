@@ -16,3 +16,6 @@ eval-results/
 
 # Local-only dev scripts (kept on disk, never published)
 scripts/user-sim.ts
+
+# Advisor improvement plans (local handoff docs, never published)
+plans/
