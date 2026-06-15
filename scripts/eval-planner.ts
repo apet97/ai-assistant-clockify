@@ -20,6 +20,7 @@
  * Flags: --repeat=N (default 1), --only=<area>, --concurrency=N (default 6).
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { selectModelClient, type ModelClientSelection } from "../src/assistant/select-model-client.js";
 import type { ModelClient } from "../src/assistant/model-client.js";
 import { planConversation, type ModelPlan } from "../src/assistant/planner.js";
@@ -27,6 +28,7 @@ import { buildSystemPrompt } from "../src/assistant/prompts.js";
 import { catalogForModel, getAction } from "../src/harness/catalog.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { scoreCase } from "../src/eval/score.js";
+import { consistencyStats, mean } from "../src/eval/consistency.js";
 import { EVAL_CASES, type EvalCase } from "./eval/cases.js";
 
 interface Flags {
@@ -38,6 +40,8 @@ interface Flags {
   noArgs: boolean;
   /** Force the JSON + repair path instead of native tool-calling (Phase 2 A/B). */
   jsonMode: boolean;
+  /** Explicit output path (the matrix runner sets this per model); default timestamped. */
+  out?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -46,9 +50,11 @@ function parseFlags(argv: string[]): Flags {
     const repeat = arg.match(/^--repeat=(\d+)$/);
     const only = arg.match(/^--only=(.+)$/);
     const conc = arg.match(/^--concurrency=(\d+)$/);
+    const out = arg.match(/^--out=(.+)$/);
     if (repeat) flags.repeat = Math.max(1, Number(repeat[1]));
     else if (only) flags.only = only[1];
     else if (conc) flags.concurrency = Math.max(1, Number(conc[1]));
+    else if (out) flags.out = out[1];
     else if (arg === "--no-args") flags.noArgs = true;
     else if (arg === "--json-mode") flags.jsonMode = true;
   }
@@ -114,6 +120,8 @@ interface CaseReport {
   repeat: number;
   consistency: number; // modal-signature fraction in [0,1]
   modalSignature: string;
+  distinct: number; // # of DIFFERENT signatures seen (1 = stable)
+  normalizedEntropy: number; // spread in [0,1] (0 = stable; 1 = every run differed)
   signatures: Record<string, number>;
   sampleReasons: string[];
 }
@@ -202,7 +210,7 @@ async function main(): Promise<void> {
     const passCount = runs.filter((r) => r.pass).length;
     const sigCounts: Record<string, number> = {};
     for (const r of runs) sigCounts[r.signature] = (sigCounts[r.signature] ?? 0) + 1;
-    const modal = Object.entries(sigCounts).sort((a, b) => b[1] - a[1])[0] ?? ["", 0];
+    const stats = consistencyStats(sigCounts);
     const sampleReasons = runs.find((r) => !r.pass)?.reasons ?? [];
     return {
       id: c.id,
@@ -210,8 +218,10 @@ async function main(): Promise<void> {
       expected: describeExpect(c),
       passCount,
       repeat: runs.length,
-      consistency: runs.length ? modal[1] / runs.length : 0,
-      modalSignature: modal[0],
+      consistency: stats.modalFraction,
+      modalSignature: stats.modal,
+      distinct: stats.distinct,
+      normalizedEntropy: stats.normalizedEntropy,
       signatures: sigCounts,
       sampleReasons,
     };
@@ -220,7 +230,8 @@ async function main(): Promise<void> {
   const totalRuns = outcomes.length;
   const passRuns = outcomes.filter((o) => o.pass).length;
   const passRate = totalRuns ? passRuns / totalRuns : 0;
-  const meanConsistency = reports.length ? reports.reduce((s, r) => s + r.consistency, 0) / reports.length : 0;
+  const meanConsistency = mean(reports.map((r) => r.consistency));
+  const meanNormalizedEntropy = mean(reports.map((r) => r.normalizedEntropy));
   const stablePass = reports.filter((r) => r.passCount === r.repeat).length;
 
   // Failures / variance table (worst first).
@@ -242,15 +253,15 @@ async function main(): Promise<void> {
   }
 
   console.log(
-    `\nPLANNER EVAL: ${passRuns}/${totalRuns} (${pct(passRate)}) | consistency ${pct(meanConsistency)}  ` +
+    `\nPLANNER EVAL: ${passRuns}/${totalRuns} (${pct(passRate)}) | consistency ${pct(meanConsistency)} | ` +
+      `spread ${meanNormalizedEntropy.toFixed(2)}  ` +
       `[cases=${cases.length} repeat=${flags.repeat} stable-pass=${stablePass}/${cases.length}]`,
   );
 
-  // Persist for trend tracking (gitignored).
+  // Persist for trend tracking (gitignored). The matrix runner pins --out per model.
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const outDir = "eval-results";
-  mkdirSync(outDir, { recursive: true });
-  const outFile = `${outDir}/${stamp}.json`;
+  const outFile = flags.out ?? `eval-results/${stamp}.json`;
+  mkdirSync(dirname(outFile), { recursive: true });
   writeFileSync(
     outFile,
     JSON.stringify(
@@ -264,7 +275,15 @@ async function main(): Promise<void> {
         only: flags.only ?? null,
         systemPromptChars: systemPrompt.length,
         systemPromptTokensEst: promptTokensEst,
-        summary: { totalRuns, passRuns, passRate, meanConsistency, stablePass, cases: cases.length },
+        summary: {
+          totalRuns,
+          passRuns,
+          passRate,
+          meanConsistency,
+          meanNormalizedEntropy,
+          stablePass,
+          cases: cases.length,
+        },
         reports,
       },
       null,

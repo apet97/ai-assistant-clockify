@@ -21,6 +21,7 @@
  *   npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3 --single-turn
  */
 import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { runAgentTurn, type AgentTurnResult } from "../src/assistant/agent-loop.js";
 import type { AgentState } from "../src/assistant/agent-state.js";
 import type { ModelClient, ToolCall } from "../src/assistant/model-client.js";
@@ -42,6 +43,8 @@ interface Flags {
   only?: string;
   concurrency: number;
   singleTurn: boolean;
+  /** Explicit output path (the matrix runner sets this per model); default timestamped. */
+  out?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -50,9 +53,11 @@ function parseFlags(argv: string[]): Flags {
     const repeat = arg.match(/^--repeat=(\d+)$/);
     const only = arg.match(/^--only=(.+)$/);
     const conc = arg.match(/^--concurrency=(\d+)$/);
+    const out = arg.match(/^--out=(.+)$/);
     if (repeat) flags.repeat = Math.max(1, Number(repeat[1]));
     else if (only) flags.only = only[1];
     else if (conc) flags.concurrency = Math.max(1, Number(conc[1]));
+    else if (out) flags.out = out[1];
     else if (arg === "--single-turn") flags.singleTurn = true;
   }
   return flags;
@@ -134,7 +139,13 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
       });
     }
     const kind: AgenticOutcome["kind"] =
-      turn.kind === "interrupt" ? "interrupted" : turn.kind === "final" ? "final" : turn.kind;
+      turn.kind === "interrupt"
+        ? "interrupted"
+        : turn.kind === "final"
+          ? "final"
+          : turn.kind === "aborted"
+            ? "error" // eval passes no abort signal, so this is unreachable here; keep the type sound
+            : turn.kind;
     if (turn.kind === "interrupt") interrupts += 1;
     const finalText =
       turn.kind === "final" || turn.kind === "exhausted" ? turn.text : turn.kind === "clarify" ? turn.message : "";
@@ -332,8 +343,8 @@ async function main(): Promise<void> {
   for (const v of safetyViolations) console.log(`  !! SAFETY: ${v}`);
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  mkdirSync("eval-results", { recursive: true });
-  const outFile = `eval-results/agentic-${mode}-${stamp}.json`;
+  const outFile = flags.out ?? `eval-results/agentic-${mode}-${stamp}.json`;
+  mkdirSync(dirname(outFile), { recursive: true });
   writeFileSync(
     outFile,
     JSON.stringify(

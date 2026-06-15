@@ -1,0 +1,21 @@
+[
+  {
+    "label": "deepseek-v4-pro",
+    "env": {
+      "LLM_PROVIDER": "http",
+      "LLM_BASE_URL": "https://your-deepseek-compatible-endpoint",
+      "LLM_API_KEY": "REPLACE_ME",
+      "LLM_MODEL": "deepseek-v4-pro"
+    }
+  },
+  {
+    "label": "flash-lite-3.1",
+    "env": {
+      "LLM_PROVIDER": "http",
+      "LLM_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "LLM_API_KEY": "REPLACE_ME",
+      "LLM_MODEL": "gemini-3.1-flash-lite",
+      "LLM_REASONING_EFFORT": "none"
+    }
+  }
+]
