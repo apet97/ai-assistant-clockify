@@ -277,4 +277,50 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
     const toolMsg = model.calls[1].messages.find((m) => m.role === "tool");
     expect(toolMsg?.content).toBe(JSON.stringify(small));
   });
+
+  it("truncates a step's tool calls to maxToolCallsPerStep, silently dropping the extras", async () => {
+    // The loop slices each step's tool calls to maxCalls (input.maxToolCallsPerStep
+    // ?? DEFAULT). A model that proposes MORE than the cap in one step must have the
+    // surplus dropped: only the first `maxCalls` run, only they are declared in the
+    // assistant turn, and the extras never reach runAction or the tool results.
+    const model = scriptedToolModel([
+      {
+        text: "",
+        toolCalls: [
+          { id: "k1", name: "clockify_tags_list", arguments: {} },
+          { id: "k2", name: "clockify_clients_list", arguments: {} },
+          { id: "k3", name: "clockify_projects_list", arguments: {} }, // dropped (> cap)
+          { id: "k4", name: "clockify_users_list", arguments: {} }, // dropped (> cap)
+        ],
+      },
+      { text: "Done.", toolCalls: [] }, // ends the loop on the next step
+    ]);
+    const runAction = vi.fn(async (call: { id: string; name: string }): Promise<ActionResult> => ({
+      kind: "receipt",
+      receipt: successReceipt({ action: call.name, data: { items: [] } }),
+    }));
+
+    const result = await runAgentTurn({
+      modelClient: model,
+      messages: userTurn("list everything"),
+      tools: NO_TOOLS,
+      runAction,
+      maxToolCallsPerStep: 2,
+    });
+
+    expect(result.kind).toBe("final");
+    // Only the first two calls were honored — the extras (k3, k4) were dropped.
+    expect(runAction).toHaveBeenCalledTimes(2);
+    expect(runAction.mock.calls.map((c) => c[0].id)).toEqual(["k1", "k2"]);
+    // The assistant tool-call turn declares ONLY the honored calls (so every
+    // declared tool_call_id gets a reply); the dropped ids appear nowhere.
+    const assistant = model.calls[1].messages.find((m) => m.role === "assistant" && m.toolCalls);
+    expect(assistant?.toolCalls?.map((t) => t.id)).toEqual(["k1", "k2"]);
+    const toolReplyIds = model.calls[1].messages.filter((m) => m.role === "tool").map((m) => m.toolCallId);
+    expect(toolReplyIds).toEqual(["k1", "k2"]);
+    // The extras are not present in the transcript the model sees on the next step.
+    expect(model.calls[1].messages.some((m) => (m.toolCalls ?? []).some((t) => t.id === "k3" || t.id === "k4"))).toBe(false);
+    expect(toolReplyIds).not.toContain("k3");
+    expect(toolReplyIds).not.toContain("k4");
+  });
 });

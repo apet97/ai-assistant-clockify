@@ -195,6 +195,44 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("PRE-COMMIT FAIL-CLOSED: a claim() that throws (transient SQLITE_BUSY) returns commit_unavailable and never reaches the host", async () => {
+    // The atomic claim is taken BEFORE the commit await. If that synchronous DB
+    // write throws (the retention prune / erase-workspace holding the /data lock
+    // past busy_timeout), commitConfirmedOperation MUST fail CLOSED — no host call
+    // happened yet, so it returns a clean retryable receipt, never a 500, and the
+    // commit closure must NOT run. (Documented "Never throws".)
+    store = createStore(":memory:");
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    // A deferred host wrapper lets us assert the host was never even invoked: if
+    // the commit closure ran, deferred.calls() would be 1 (and it would hang on the
+    // unresolved barrier). A throwing claim must short-circuit before that.
+    const deferred = deferredCreateInvoice(fake);
+    // Preview with a healthy ledger so the operation is well-formed...
+    const previewCtx = ctxWith(fake, atomicLedger(store), deferred.client);
+    const op = await previewInvoice(previewCtx, "qwen");
+    // ...then commit with a ledger whose claim() throws (everything else intact).
+    const throwing: AtomicIdempotencyLedger = {
+      ...atomicLedger(store),
+      claim: () => {
+        throw new Error("SQLITE_BUSY: database is locked");
+      },
+    };
+    const commitCtx = ctxWith(fake, throwing, deferred.client);
+
+    const receipt = await commitConfirmedOperation(commitCtx, op);
+
+    // Fail CLOSED: a clean, retryable error receipt — not a throw, not an ok.
+    expect(receipt.ok).toBe(false);
+    expect((receipt as { code?: string }).code).toBe("commit_unavailable");
+    expect((receipt as { recovery?: { retryable?: boolean } }).recovery?.retryable).toBe(true);
+    // The important half: the commit closure was NEVER invoked — the host was not
+    // touched. The fake only registers a count key once a method runs, so an
+    // untouched host leaves createInvoice unrecorded (the deferred wrapper is the
+    // primary witness: its barrier would still be pending had the closure run).
+    expect(deferred.calls()).toBe(0);
+    expect(fake.counts.createInvoice ?? 0).toBe(0);
+  });
 });
 
 /**
