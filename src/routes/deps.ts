@@ -1,10 +1,10 @@
-import type { Request } from "express";
+import type { Request, Response } from "express";
 import type { ClockifySignatureParser } from "@apet97/clockify-addon-sdk";
 import type { AppConfig } from "../config.js";
 import type { Installation, Store } from "../db/store.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ModelClient } from "../assistant/model-client.js";
-import { verifySessionCookie, type SessionClaims } from "../auth/sessions.js";
+import { signSessionCookie, verifySessionCookie, type SessionClaims } from "../auth/sessions.js";
 
 /**
  * Shared app dependencies and request helpers. Leaf module so route modules and
@@ -75,4 +75,14 @@ export function resolveSession(req: Request, deps: AppDeps): SessionClaims | und
     return undefined;
   }
   return claims;
+}
+
+/**
+ * Sign `claims` and write the session cookie header (ARCH-04). The two
+ * re-cookie routes (`POST /chat/new`, `POST /chat/sessions/:id/open`) build a
+ * route-specific `SessionClaims`, then share this exact sign+set step so the
+ * cookie attributes can never drift between them.
+ */
+export function setSessionCookie(res: Response, claims: SessionClaims, sessionSecret: string, secure: boolean): void {
+  res.setHeader("Set-Cookie", buildSessionCookie(signSessionCookie(claims, sessionSecret), secure));
 }
