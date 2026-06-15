@@ -227,7 +227,12 @@ bug was found against the REAL API, not by reading the code.
   the single-turn JSON path is unchanged.
 - **Idempotent commits** (intent hash; invoices key on client+items+currency,
   excluding auto number/dates) + **undo** for creations (one-use, re-checks policy,
-  reverse order). `compose.ts` rolls back required-step failures. The atomic-claim
+  reverse order). A created TASK ref carries its `projectId` on the `EntityRef`
+  (a task delete is project-scoped), so `reverseCreation` can delete it; a task
+  ref missing its `projectId` can't be reversed and returns an honest
+  `undo_failed`, never a silent success (the fake mirrors this — it no longer
+  "deletes" a task without a projectId). `compose.ts` rolls back required-step
+  failures. The atomic-claim
   ledger is the cross-row serialization point: the claim is taken BEFORE the commit
   await, so two concurrent confirms reach the host at most once. A long multi-call
   commit **heartbeats** its claim (`touchIdempotencyClaim` on `CLAIM_HEARTBEAT_MS`)
@@ -303,7 +308,10 @@ bug was found against the REAL API, not by reading the code.
   unique `AIASSIST_SMOKE_*` / `AIASSIST_LOOP_*` names. `name` filters are
   contains+case-insensitive → exact `matchByName` client-side is correct.
 - Deletes archive first (projects/clients/expense categories); tasks mark DONE
-  first.
+  first. A task delete is **project-scoped**: the generic
+  `deleteEntity({entityType:"task", id, projectId})` routes to the typed
+  `deleteTask` (mark DONE → DELETE under the project) and REQUIRES the projectId —
+  it throws without one rather than guess (so a created-task undo must carry it).
 
 ## Build, test, run
 

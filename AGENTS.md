@@ -85,4 +85,7 @@ npm run dev           # tsx src/server.ts (needs env)
 - Invoice `issuedDate`/`dueDate` and expense `date` need full ISO datetimes.
 - Expense create/update is `multipart/form-data` and requires `userId`.
 - Webhook create requires `webhookEvent` + HTTPS url + a trigger source.
+- A task delete is **project-scoped**: `deleteEntity` for a `task` needs its
+  `projectId` (it routes to the typed `deleteTask`), so an undo of a created task
+  carries `projectId` on the `EntityRef`.
 - Full set + the money/rate/scoping subtleties: `CLAUDE.md` → "Clockify API facts".
