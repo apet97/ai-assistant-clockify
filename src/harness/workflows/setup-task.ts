@@ -22,10 +22,10 @@ import { zNumberLike, zStringList } from "../arg-shapes.js";
  * Note vs setup_project: a task's assignees ride in the createTask body (one
  * work_structure write) and a task's rate is task-wide (no per-member rate), so
  * there are at most two steps and only `invoices` (the rate) needs a sub-group
- * pre-check beyond the outer `work_structure` gate. Rollback uses the typed
- * `deleteTask` (deleteEntity has no task case), and the created task is reported in
- * `data` rather than `changed.created` so we never offer a one-click undo that
- * would fail (tasks aren't route-undoable); the mid-commit rollback still works.
+ * pre-check beyond the outer `work_structure` gate. The created task is reported
+ * in `changed.created` WITH its projectId, so the standard one-click undo
+ * (reverseCreation → project-scoped deleteTask) removes it (and its rate). The
+ * mid-commit rollback uses the same typed deleteTask compensator.
  */
 
 const rateKindEnum = z.enum(["hourly", "cost"]);
@@ -120,7 +120,7 @@ const setupTask = defineAction({
         riskLabels: ["high_risk_write", "billing"],
         targets: [{ type: "project", id: project.id, ...(projectName ? { name: projectName } : {}) }],
         expectedChanges,
-        reversibility: "To reverse it, delete the task from its project (a one-click undo isn't available for tasks).",
+        reversibility: "Undo removes the created task (and its rate) from the project.",
         warnings: ["This creates a task, sets its assignees, and sets a billable rate."],
       },
       operation: {
@@ -147,11 +147,12 @@ const setupTask = defineAction({
           ...(p.assigneeIds.length ? { assigneeIds: p.assigneeIds } : {}),
         });
         ids.taskId = created.id;
-        // deleteEntity has no `task` case (a task delete needs the projectId), so
-        // the rollback compensator uses the typed deleteTask directly.
+        // The created task rides in changed.created WITH its projectId so the
+        // post-commit one-click undo can delete it; the in-step rollback
+        // compensator uses the same typed deleteTask directly.
         return {
           kind: "done",
-          created: [{ type: "task", id: created.id, name: created.name }],
+          created: [{ type: "task", id: created.id, name: created.name, projectId: p.projectId }],
           undo: async () => {
             await ctx.clockify.deleteTask(p.projectId, created.id);
           },
@@ -197,10 +198,9 @@ const setupTask = defineAction({
       action: "clockify_setup_task",
       entity: "task",
       ids: { workspaceId: ctx.workspaceId, projectId: p.projectId },
-      // Reported in `data` (not `changed.created`) — tasks aren't route-undoable, so
-      // we never surface a one-click undo that would fail. Rollback on a mid-commit
-      // failure still works via the step's deleteTask compensator above.
-      data: { created: outcome.created, projectId: p.projectId, ...(p.projectName ? { projectName: p.projectName } : {}) },
+      // The created task carries its projectId in changed.created, so the standard
+      // one-click undo (reverseCreation → project-scoped deleteTask) removes it.
+      changed: { created: outcome.created },
       warnings: outcome.warnings.length ? outcome.warnings : undefined,
     });
   },

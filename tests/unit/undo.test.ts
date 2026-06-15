@@ -76,15 +76,39 @@ describe("reverseCreation — extended types", () => {
 describe("reverseCreation", () => {
   it("deletes the created entities in REVERSE order and reports them deleted", async () => {
     const fake = createFakeWorkspace();
+    // A created-task ref carries its projectId — a task delete is project-scoped
+    // on the wire (the real adapter/fake both reject a task delete without it).
     const refs = [
       { type: "client", id: "c1", name: "Globex" },
       { type: "project", id: "p1", name: "Phoenix" },
-      { type: "task", id: "t1", name: "Login" },
+      { type: "task", id: "t1", name: "Login", projectId: "p1" },
     ];
     const receipt = await reverseCreation(ctx(fake), refs);
     expect(receipt.ok).toBe(true);
     expect(fake.state.deleted.map((d) => d.id)).toEqual(["t1", "p1", "c1"]);
     if (receipt.ok) expect(receipt.changed?.deleted?.map((d) => d.id)).toEqual(["t1", "p1", "c1"]);
+  });
+
+  it("reverses a created task within its project (projectId on the ref) and removes it", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Apollo" }],
+      tasks: [{ id: "t1", name: "Login", projectId: "p1" }],
+    });
+    const receipt = await reverseCreation(ctx(fake), [{ type: "task", id: "t1", name: "Login", projectId: "p1" }]);
+    expect(receipt.ok).toBe(true);
+    expect(fake.state.tasks.some((t) => t.id === "t1")).toBe(false); // really removed
+    expect(fake.state.deleted.map((d) => d.id)).toEqual(["t1"]);
+  });
+
+  it("returns an honest FAILURE for a created task ref WITHOUT its projectId (never a silent 'Undone')", async () => {
+    // A task delete needs the projectId; a ref that lost it can't be reversed.
+    // It must come back ok:false (undo_failed) so the route 400s and the button
+    // re-enables — not a false "Undone" over a task that's still live.
+    const fake = createFakeWorkspace();
+    const receipt = await reverseCreation(ctx(fake), [{ type: "task", id: "t1", name: "Login" }]);
+    expect(receipt.ok).toBe(false);
+    if (!receipt.ok) expect(receipt.code).toBe("undo_failed");
+    expect(fake.state.deleted).toHaveLength(0);
   });
 
   it("denies the undo when write access to a created entity's group is disabled", async () => {

@@ -143,7 +143,9 @@ const createTask = defineAction({
         action: "clockify_tasks_create",
         entity: "task",
         ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
-        changed: { created: [{ type: "task", id: task.id, name: task.name }] },
+        // projectId rides on the ref so an undo (reverseCreation) can delete the
+        // task — a task delete is project-scoped on the wire.
+        changed: { created: [{ type: "task", id: task.id, name: task.name, projectId: args.projectId }] },
       }),
     };
   },

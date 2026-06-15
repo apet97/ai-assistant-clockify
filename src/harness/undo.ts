@@ -72,7 +72,11 @@ export async function reverseCreation(
   const warnings: Warning[] = [];
   for (const ref of [...refs].reverse()) {
     try {
-      await ctx.clockify.deleteEntity({ entityType: ref.type, id: ref.id });
+      await ctx.clockify.deleteEntity({
+        entityType: ref.type,
+        id: ref.id,
+        ...(ref.projectId ? { projectId: ref.projectId } : {}),
+      });
       undone.push(ref);
     } catch (err) {
       warnings.push({

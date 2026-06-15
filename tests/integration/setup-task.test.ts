@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { executeAction, commitConfirmedOperation } from "../../src/harness/actions.js";
+import { reverseCreation, reversibleCreations } from "../../src/harness/undo.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { ActionContext, ConfirmableOperation, IdempotencyLedger } from "../../src/harness/catalog.js";
@@ -75,6 +76,24 @@ describe("clockify_setup_task — single-approval task composite", () => {
     expect(task?.assigneeIds).toEqual(expect.arrayContaining(["admin-1", "u2"]));
     expect(s.rate).toHaveLength(1);
     expect(s.rate[0]).toMatchObject({ projectId: "p1", taskId: task?.id, rateKind: "HOURLY", amountMinor: 6000 });
+  });
+
+  it("reports the created task in changed.created (with projectId) so it can be one-click undone", async () => {
+    const fake = createFakeWorkspace(SEED);
+    const ctx = ctxWith(fake);
+    const op = await previewSetup(ctx);
+    const receipt = await commitConfirmedOperation(ctx, op);
+    expect(receipt.ok).toBe(true);
+    if (!receipt.ok) return;
+    expect(receipt.changed?.created).toEqual([
+      expect.objectContaining({ type: "task", projectId: "p1" }),
+    ]);
+
+    // The created task is genuinely reversible — reverseCreation deletes it
+    // (project-scoped deleteTask), removing the task and its rate.
+    const undo = await reverseCreation(ctx, reversibleCreations(receipt));
+    expect(undo.ok).toBe(true);
+    expect(fake.state.tasks.some((t) => t.name === "Login")).toBe(false);
   });
 
   it("rolls back the created task when the rate step fails — nothing left behind", async () => {

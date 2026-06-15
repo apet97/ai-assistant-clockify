@@ -40,6 +40,12 @@ export function makeFakeMiscRisky({ state, seed, bump }: FakeContext): Pick<
       if ((seed.failDeleteIds ?? []).includes(input.id)) {
         throw new Error(`Clockify refused to delete ${input.entityType} ${input.id}`);
       }
+      // Mirror the real adapter: a task delete is project-scoped and throws
+      // without its projectId. The fake must not silently "succeed" here, or an
+      // undo test passes against a delete live Clockify would reject.
+      if (input.entityType === "task" && !input.projectId) {
+        throw new Error("delete not supported for a task without its projectId");
+      }
       const key = DELETE_COLLECTION[input.entityType];
       if (key) {
         const rows = state[key] as unknown as Array<{ id: string }>;

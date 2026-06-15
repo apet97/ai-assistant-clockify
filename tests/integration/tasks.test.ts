@@ -76,7 +76,8 @@ describe("task actions", () => {
       context: makeContext(fake),
     });
     if (result.kind === "receipt" && result.receipt.ok) {
-      expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "task" });
+      // projectId rides on the created ref so the task is one-click undoable.
+      expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "task", projectId: "p1" });
     } else throw new Error("expected receipt");
     expect(fake.counts.createTask).toBe(1);
   });

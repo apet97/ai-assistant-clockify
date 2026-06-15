@@ -11,6 +11,12 @@ export interface EntityRef {
   type: string;
   id: string;
   name?: string;
+  /**
+   * Project scope for a `task` ref. A task delete (undo of a created task) is
+   * project-scoped, so a created-task ref must carry its projectId for
+   * `reverseCreation` to delete it; ignored for every other type.
+   */
+  projectId?: string;
 }
 
 export interface ChangeSet {

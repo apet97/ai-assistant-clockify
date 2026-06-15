@@ -9,8 +9,12 @@ import type { EntitySummary } from "../types.js";
  * by the typed `InvoicePort` in Phase 6.)
  */
 export interface MiscRiskyPort {
-  /** Risky-write methods (used only at confirm time, after button confirmation). */
-  deleteEntity?(input: { entityType: string; id: string }): Promise<void>;
+  /**
+   * Risky-write methods (used only at confirm time, after button confirmation).
+   * `projectId` is REQUIRED for a `task` delete (Clockify scopes tasks under a
+   * project); it is ignored for every other type.
+   */
+  deleteEntity?(input: { entityType: string; id: string; projectId?: string }): Promise<void>;
   /** Generic entity update (risky — committed only after button confirmation). */
   updateEntity?(input: {
     entityType: string;

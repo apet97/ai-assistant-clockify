@@ -127,8 +127,10 @@ const createWorkPackage = defineAction({
     // ambiguous name STOPS with a clarify (not a failure — prior creates are kept,
     // matching the pre-composition behavior). `runComposition` owns these semantics.
     const del = ctx.clockify.deleteEntity?.bind(ctx.clockify);
-    const undoFor = (entityType: string, id: string): (() => Promise<void>) | undefined =>
-      del ? () => del({ entityType, id }) : undefined;
+    // projectId is only needed (and only passed) for a `task` delete — it's
+    // project-scoped on the wire; every other type ignores it.
+    const undoFor = (entityType: string, id: string, projectId?: string): (() => Promise<void>) | undefined =>
+      del ? () => del({ entityType, id, ...(projectId ? { projectId } : {}) }) : undefined;
 
     // Shared, forward-flowing ids (client → project → task → timer).
     const ids: { clientId?: string; projectId?: string; taskId?: string } = {};
@@ -231,7 +233,7 @@ const createWorkPackage = defineAction({
           if (match.kind === "many") return { kind: "stop", result: ambiguous("task", task.name, match.matches) };
           const created = await ctx.clockify.createTask({ projectId: ids.projectId, name: task.name });
           ids.taskId = created.id;
-          return { kind: "done", created: [{ type: "task", id: created.id, name: created.name }], undo: undoFor("task", created.id) };
+          return { kind: "done", created: [{ type: "task", id: created.id, name: created.name, projectId: ids.projectId }], undo: undoFor("task", created.id, ids.projectId) };
         },
       });
     }

@@ -129,6 +129,32 @@ describe("rest workspace client", () => {
     );
   });
 
+  it("deleteEntity deletes a task within its project (marks DONE, then DELETE)", async () => {
+    // A created task must be one-click undoable. A task delete is project-scoped
+    // (the typed deleteTask: mark DONE via PUT, then DELETE) — the generic
+    // deleteEntity needs the projectId to route it. Without a task case the undo
+    // throws ("delete not supported"), so this is the live bug it pins.
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "GET") return jsonResponse({ id: "t1", name: "Login", status: "ACTIVE" });
+      if (init.method === "PUT") return jsonResponse({ id: "t1", name: "Login", status: "DONE" });
+      return jsonResponse(null, 204); // DELETE
+    });
+    await client(f as any).deleteEntity!({ entityType: "task", id: "t1", projectId: "p1" });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT", "DELETE"]);
+    expect(JSON.parse((f as any).mock.calls[1][1].body).status).toBe("DONE");
+    expect((f as any).mock.calls[2][0]).toBe(
+      "https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/tasks/t1",
+    );
+  });
+
+  it("deleteEntity for a task WITHOUT its projectId throws and issues no request", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    await expect(
+      client(f as any).deleteEntity!({ entityType: "task", id: "t1" }),
+    ).rejects.toThrow(/task/i);
+    expect((f as any).mock.calls.length).toBe(0);
+  });
+
   it("throws a clear error for an unsupported delete entity type", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await expect(

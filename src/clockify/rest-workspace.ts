@@ -97,11 +97,19 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...reportRest,
     ...auditRest,
     ...workspaceRest,
-    async deleteEntity({ entityType, id }) {
+    async deleteEntity({ entityType, id, projectId }) {
       // Projects and clients cannot be deleted while active — Clockify rejects a
       // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.
       // The typed project module owns the project path; clients archive inline
       // until the Clients phase adds a typed module.
+      if (entityType === "task") {
+        // Tasks are project-scoped; the typed deleteTask marks DONE then DELETEs.
+        // Without the projectId we cannot route the delete, so fail loudly rather
+        // than guess (a created-task undo always carries its projectId).
+        if (!projectId) throw new Error("delete not supported for a task without its projectId");
+        await taskRest.deleteTask(projectId, id);
+        return;
+      }
       if (entityType === "project") {
         await projectRest.deleteProject(id); // archive-then-delete
         return;
