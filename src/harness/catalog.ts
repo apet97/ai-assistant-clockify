@@ -21,6 +21,7 @@ import { AUDIT_ACTIONS } from "./workflows/audit.js";
 import { WORKSPACE_ACTIONS } from "./workflows/workspace.js";
 import { ADMIN_ACTIONS } from "./workflows/admin.js";
 import { CURATED_ACTIONS } from "./workflows/curated.js";
+import { SETUP_PROJECT_ACTIONS } from "./workflows/setup-project.js";
 
 /**
  * MCP-shaped action catalog (SPEC "Action Catalog Strategy"). Each action maps
@@ -55,6 +56,7 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...WORKSPACE_ACTIONS,
   ...ADMIN_ACTIONS,
   ...CURATED_ACTIONS,
+  ...SETUP_PROJECT_ACTIONS,
 ];
 
 const CATALOG_BY_NAME = new Map<string, ActionDefinition>(
