@@ -4,6 +4,7 @@ import { Router, type Response } from "express";
 import { ClockifyQueryParams, verifyAddonToken } from "../addon/verify.js";
 import { isAdminRole } from "../auth/roles.js";
 import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
+import { asyncHandler } from "./async-handler.js";
 import { buildSessionCookie, resolveSession, type AppDeps } from "./deps.js";
 
 /**
@@ -71,73 +72,76 @@ export function componentRouter(deps: AppDeps): Router {
   const router = Router();
   const secure = deps.config.baseUrl.startsWith("https://");
 
-  router.get("/component/assistant", async (req, res) => {
-    // Set the HTML security backstop on EVERY response path (rejection pages and
-    // the chat shell alike) before branching, so no render surface ships bare.
-    setComponentSecurityHeaders(res);
+  router.get(
+    "/component/assistant",
+    asyncHandler(async (req, res) => {
+      // Set the HTML security backstop on EVERY response path (rejection pages and
+      // the chat shell alike) before branching, so no render surface ships bare.
+      setComponentSecurityHeaders(res);
 
-    const token = req.query[ClockifyQueryParams.AUTH_TOKEN];
-    const claims = await verifyAddonToken(deps.parser, typeof token === "string" ? token : undefined);
+      const token = req.query[ClockifyQueryParams.AUTH_TOKEN];
+      const claims = await verifyAddonToken(deps.parser, typeof token === "string" ? token : undefined);
 
-    if (!claims) {
-      return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
-    }
-    if (!isAdminRole(claims.workspaceRole)) {
-      return res.status(403).type("html").send(ADMIN_ONLY_PAGE);
-    }
+      if (!claims) {
+        return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
+      }
+      if (!isAdminRole(claims.workspaceRole)) {
+        return res.status(403).type("html").send(ADMIN_ONLY_PAGE);
+      }
 
-    const workspaceId = claims.workspaceId;
-    const adminUserId = claims.user;
-    if (!workspaceId || !adminUserId) {
-      return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
-    }
+      const workspaceId = claims.workspaceId;
+      const adminUserId = claims.user;
+      if (!workspaceId || !adminUserId) {
+        return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
+      }
 
-    // Active-installation gate: a valid admin token for a workspace where the
-    // add-on was never installed (or was uninstalled) must NOT mint a session —
-    // that cookie would otherwise reach /permissions, /metrics, and /chat/history
-    // for an uninstalled workspace. The lifecycle install always precedes the
-    // first component load, so an active row is expected here.
-    const installation = deps.store.getInstallation(workspaceId);
-    if (!installation || installation.status !== "active") {
-      return res.status(409).type("html").send(NOT_INSTALLED_PAGE);
-    }
+      // Active-installation gate: a valid admin token for a workspace where the
+      // add-on was never installed (or was uninstalled) must NOT mint a session —
+      // that cookie would otherwise reach /permissions, /metrics, and /chat/history
+      // for an uninstalled workspace. The lifecycle install always precedes the
+      // first component load, so an active row is expected here.
+      const installation = deps.store.getInstallation(workspaceId);
+      if (!installation || installation.status !== "active") {
+        return res.status(409).type("html").send(NOT_INSTALLED_PAGE);
+      }
 
-    // Refresh environment hosts from the freshest token. The install/lifecycle
-    // token often omits backendUrl/reportsUrl, so the user token loaded here is
-    // the reliable source of which Clockify hosts to call (api + reports differ
-    // by environment — see resolveClockify*Base). Only present fields change.
-    deps.store.updateInstallationEnv(workspaceId, {
-      apiUrl: claims.backendUrl,
-      backendUrl: claims.backendUrl,
-      reportsUrl: claims.reportsUrl,
-    });
+      // Refresh environment hosts from the freshest token. The install/lifecycle
+      // token often omits backendUrl/reportsUrl, so the user token loaded here is
+      // the reliable source of which Clockify hosts to call (api + reports differ
+      // by environment — see resolveClockify*Base). Only present fields change.
+      deps.store.updateInstallationEnv(workspaceId, {
+        apiUrl: claims.backendUrl,
+        backendUrl: claims.backendUrl,
+        reportsUrl: claims.reportsUrl,
+      });
 
-    // Reuse the SAME session across an iframe RELOAD so the conversation history
-    // and the still-live pending previews survive it. resolveSession already
-    // verifies the incoming cookie is signed AND backs a live (non-expired) session
-    // row; we additionally require it to belong to THIS freshly-verified admin +
-    // workspace, so a stale/foreign/expired cookie can never bind another session
-    // (admin-rejection-before-session and the per-admin/workspace binding both
-    // still hold). Anything else mints a fresh session.
-    const existing = resolveSession(req, deps);
-    const reuse =
-      existing !== undefined &&
-      existing.workspaceId === workspaceId &&
-      existing.adminUserId === adminUserId;
-    const session = reuse
-      ? { id: existing.sessionId, expiresAt: existing.expiresAt }
-      : deps.store.createSession({ workspaceId, adminUserId });
-    const sessionClaims: SessionClaims = {
-      sessionId: session.id,
-      workspaceId,
-      adminUserId,
-      workspaceRole: String(claims.workspaceRole),
-      expiresAt: session.expiresAt,
-    };
-    const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);
-    res.setHeader("Set-Cookie", buildSessionCookie(cookie, secure));
-    return res.status(200).type("html").send(shellHtml());
-  });
+      // Reuse the SAME session across an iframe RELOAD so the conversation history
+      // and the still-live pending previews survive it. resolveSession already
+      // verifies the incoming cookie is signed AND backs a live (non-expired) session
+      // row; we additionally require it to belong to THIS freshly-verified admin +
+      // workspace, so a stale/foreign/expired cookie can never bind another session
+      // (admin-rejection-before-session and the per-admin/workspace binding both
+      // still hold). Anything else mints a fresh session.
+      const existing = resolveSession(req, deps);
+      const reuse =
+        existing !== undefined &&
+        existing.workspaceId === workspaceId &&
+        existing.adminUserId === adminUserId;
+      const session = reuse
+        ? { id: existing.sessionId, expiresAt: existing.expiresAt }
+        : deps.store.createSession({ workspaceId, adminUserId });
+      const sessionClaims: SessionClaims = {
+        sessionId: session.id,
+        workspaceId,
+        adminUserId,
+        workspaceRole: String(claims.workspaceRole),
+        expiresAt: session.expiresAt,
+      };
+      const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);
+      res.setHeader("Set-Cookie", buildSessionCookie(cookie, secure));
+      return res.status(200).type("html").send(shellHtml());
+    }),
+  );
 
   return router;
 }

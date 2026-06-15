@@ -1,5 +1,6 @@
 import { Router, type Request } from "express";
 import { ClockifyHeaders, verifyAddonToken } from "../addon/verify.js";
+import { asyncHandler } from "./async-handler.js";
 import type { AppDeps } from "./deps.js";
 
 /**
@@ -53,71 +54,80 @@ function activeWsClaim(claims: unknown): unknown {
 export function lifecycleRouter(deps: AppDeps): Router {
   const router = Router();
 
-  router.post("/lifecycle/installed", async (req, res) => {
-    const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
-    if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
+  router.post(
+    "/lifecycle/installed",
+    asyncHandler(async (req, res) => {
+      const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
+      if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
-    const body = req.body ?? {};
-    // INSTALLED payload (Clockify): { addonId, authToken, workspaceId, asUser,
-    // apiUrl, addonUserId, webhooks }. Only the installation token + workspace
-    // are essential — capture the rest opportunistically. Requiring optional
-    // metadata (e.g. addonUserId) would reject otherwise-valid installs.
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
-    if (workspaceId === "mismatch") {
-      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
-    }
-    const addonToken = body.authToken;
-    if (!workspaceId || !addonToken) {
-      return res.status(400).json({ ok: false, code: "invalid_payload" });
-    }
+      const body = req.body ?? {};
+      // INSTALLED payload (Clockify): { addonId, authToken, workspaceId, asUser,
+      // apiUrl, addonUserId, webhooks }. Only the installation token + workspace
+      // are essential — capture the rest opportunistically. Requiring optional
+      // metadata (e.g. addonUserId) would reject otherwise-valid installs.
+      const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
+      if (workspaceId === "mismatch") {
+        return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+      }
+      const addonToken = body.authToken;
+      if (!workspaceId || !addonToken) {
+        return res.status(400).json({ ok: false, code: "invalid_payload" });
+      }
 
-    deps.store.saveInstallation({
-      workspaceId,
-      addonId: body.addonId ?? claims.addonId ?? "",
-      addonUserId: body.addonUserId ?? "",
-      addonToken,
-      apiUrl: body.apiUrl,
-      backendUrl: claims.backendUrl,
-      status: "active",
-      installedByUserId: body.asUser,
-    });
-    return res.status(200).json({ ok: true });
-  });
+      deps.store.saveInstallation({
+        workspaceId,
+        addonId: body.addonId ?? claims.addonId ?? "",
+        addonUserId: body.addonUserId ?? "",
+        addonToken,
+        apiUrl: body.apiUrl,
+        backendUrl: claims.backendUrl,
+        status: "active",
+        installedByUserId: body.asUser,
+      });
+      return res.status(200).json({ ok: true });
+    }),
+  );
 
-  router.post("/lifecycle/status-changed", async (req, res) => {
-    const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
-    if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
+  router.post(
+    "/lifecycle/status-changed",
+    asyncHandler(async (req, res) => {
+      const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
+      if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
-    const body = req.body ?? {};
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
-    if (workspaceId === "mismatch") {
-      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
-    }
-    if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
+      const body = req.body ?? {};
+      const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
+      if (workspaceId === "mismatch") {
+        return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+      }
+      if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
 
-    const status = String(body.status ?? "").toUpperCase() === "ACTIVE" ? "active" : "inactive";
-    deps.store.setInstallationStatus(workspaceId, status);
-    return res.status(200).json({ ok: true });
-  });
+      const status = String(body.status ?? "").toUpperCase() === "ACTIVE" ? "active" : "inactive";
+      deps.store.setInstallationStatus(workspaceId, status);
+      return res.status(200).json({ ok: true });
+    }),
+  );
 
-  router.post("/lifecycle/deleted", async (req, res) => {
-    const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
-    if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
+  router.post(
+    "/lifecycle/deleted",
+    asyncHandler(async (req, res) => {
+      const claims = await verifyAddonToken(deps.parser, getLifecycleToken(req));
+      if (!claims) return res.status(401).json({ ok: false, code: "unauthorized" });
 
-    const body = req.body ?? {};
-    const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
-    if (workspaceId === "mismatch") {
-      return res.status(403).json({ ok: false, code: "workspace_mismatch" });
-    }
-    if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
+      const body = req.body ?? {};
+      const workspaceId = resolveWorkspaceId(claims.workspaceId, activeWsClaim(claims), body.workspaceId);
+      if (workspaceId === "mismatch") {
+        return res.status(403).json({ ok: false, code: "workspace_mismatch" });
+      }
+      if (!workspaceId) return res.status(400).json({ ok: false, code: "invalid_payload" });
 
-    // Uninstall = full data erasure (GDPR / data-minimization): every
-    // workspace-scoped row is deleted and the installation is tombstoned with the
-    // token wiped. The cross-workspace guard above ensures only the token's own
-    // workspace can be erased.
-    deps.store.eraseWorkspace(workspaceId);
-    return res.status(200).json({ ok: true });
-  });
+      // Uninstall = full data erasure (GDPR / data-minimization): every
+      // workspace-scoped row is deleted and the installation is tombstoned with the
+      // token wiped. The cross-workspace guard above ensures only the token's own
+      // workspace can be erased.
+      deps.store.eraseWorkspace(workspaceId);
+      return res.status(200).json({ ok: true });
+    }),
+  );
 
   return router;
 }
