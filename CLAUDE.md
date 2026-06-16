@@ -16,7 +16,7 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1411 tests**, **0** circular deps (madge), and a
+- **Gate:** `npm run verify` = **1418 tests**, **0** circular deps (madge), and a
   typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
   all folded into `verify`. Keep them green.
 - **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
