@@ -23,4 +23,10 @@ describe("buildSessionCookie", () => {
     expect(cookie).not.toContain("SameSite=None");
     expect(cookie).not.toContain("Secure");
   });
+
+  it("sets Max-Age to the supplied TTL seconds (T50: cookie tracks sessionTtlMs, not a hard-coded 8h)", () => {
+    // 2h default session TTL -> 7200s, not the old 28800 (8h).
+    expect(buildSessionCookie("abc", true, 7200)).toContain("Max-Age=7200");
+    expect(buildSessionCookie("abc", true, 7200)).not.toContain("Max-Age=28800");
+  });
 });

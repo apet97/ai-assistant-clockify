@@ -37,12 +37,21 @@ function parseCookies(header: string | undefined): Record<string, string> {
   return out;
 }
 
-export function buildSessionCookie(value: string, secure: boolean): string {
+/** Cookie Max-Age fallback (seconds) when no TTL is threaded (e.g. the in-process
+ *  test cookie helper); matches the store's own 8h session fallback. Real routes
+ *  pass `sessionTtlMs/1000` so the cookie expiry tracks the authoritative TTL. */
+const DEFAULT_COOKIE_MAX_AGE_SECONDS = 8 * 60 * 60;
+
+export function buildSessionCookie(
+  value: string,
+  secure: boolean,
+  maxAgeSeconds: number = DEFAULT_COOKIE_MAX_AGE_SECONDS,
+): string {
   const attributes = [
     `${SESSION_COOKIE}=${value}`,
     "HttpOnly",
     "Path=/",
-    `Max-Age=${8 * 60 * 60}`,
+    `Max-Age=${maxAgeSeconds}`,
   ];
   if (secure) {
     // The component renders inside Clockify's cross-site iframe, so the session
@@ -86,7 +95,16 @@ export function resolveSession(req: Request, deps: AppDeps): SessionClaims | und
  * https base means the cross-site iframe cookie (SameSite=None; Secure;
  * Partitioned); local http dev/tests fall back to SameSite=Lax.
  */
-export function setSessionCookie(res: Response, claims: SessionClaims, sessionSecret: string, baseUrl: string): void {
+export function setSessionCookie(
+  res: Response,
+  claims: SessionClaims,
+  sessionSecret: string,
+  baseUrl: string,
+  sessionTtlMs: number,
+): void {
   const secure = baseUrl.startsWith("https://");
-  res.setHeader("Set-Cookie", buildSessionCookie(signSessionCookie(claims, sessionSecret), secure));
+  res.setHeader(
+    "Set-Cookie",
+    buildSessionCookie(signSessionCookie(claims, sessionSecret), secure, Math.floor(sessionTtlMs / 1000)),
+  );
 }

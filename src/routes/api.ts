@@ -247,7 +247,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceRole: claims.workspaceRole,
       expiresAt: session.expiresAt,
     };
-    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
+    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl, deps.config.sessionTtlMs);
     res.json({ ok: true });
   }));
 
@@ -277,7 +277,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceRole: claims.workspaceRole,
       expiresAt: target.expiresAt,
     };
-    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
+    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl, deps.config.sessionTtlMs);
     res.json({ ok: true });
   }));
 

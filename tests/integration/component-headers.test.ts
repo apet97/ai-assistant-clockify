@@ -78,6 +78,20 @@ describe("component HTML security headers (injection/clickjacking backstop)", ()
     expect(res.headers["referrer-policy"]).toBeTruthy();
   });
 
+  it("sets the session cookie Max-Age to sessionTtlMs/1000 (T50: 7200 for the 2h default, not 28800)", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+    });
+    const res = await request(app).get("/component/assistant").query({ auth_token: token });
+    expect(res.status).toBe(200);
+    const setCookie = res.headers["set-cookie"];
+    const cookie = Array.isArray(setCookie) ? setCookie[0] : String(setCookie);
+    expect(cookie).toContain("Max-Age=7200");
+    expect(cookie).not.toContain("Max-Age=28800");
+  });
+
   it("also sets the headers on the non-admin rejection page (no render surface left bare)", async () => {
     const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
       workspaceId: "ws-1",

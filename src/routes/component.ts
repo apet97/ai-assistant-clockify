@@ -137,7 +137,14 @@ export function componentRouter(deps: AppDeps): Router {
         expiresAt: session.expiresAt,
       };
       const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);
-      res.setHeader("Set-Cookie", buildSessionCookie(cookie, deps.config.baseUrl.startsWith("https://")));
+      res.setHeader(
+        "Set-Cookie",
+        buildSessionCookie(
+          cookie,
+          deps.config.baseUrl.startsWith("https://"),
+          Math.floor(deps.config.sessionTtlMs / 1000),
+        ),
+      );
       return res.status(200).type("html").send(shellHtml());
     }),
   );
