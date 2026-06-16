@@ -163,7 +163,13 @@ async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
   return { kind: "answer", text: completion.text ?? "" };
 }
 
-/** Validated JSON-mode path (the original flow; one repair retry). */
+/**
+ * Validated JSON-mode path (the original flow; one repair retry). NOT dead:
+ * reached whenever the model client lacks `completeWithTools` — i.e. the
+ * `gemini-cli` backend (LLM_PROVIDER=gemini-cli) or useTools:false/LLM_MODE=json.
+ * Also imported directly by scripts/eval-planner.ts (via buildSystemPrompt).
+ * Pinned by tests/unit/planner.test.ts + planner-tools.test.ts:61-80 — keep green.
+ */
 async function planWithJson(input: PlanConversationInput): Promise<ModelPlan> {
   const system = buildSystemPrompt({
     actionCatalog: input.actionCatalog,
