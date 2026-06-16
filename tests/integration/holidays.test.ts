@@ -147,24 +147,30 @@ describe("holiday actions", () => {
     expect(fake.counts.createHoliday).toBe(1); // the non-date never reached the wire
   });
 
-  it("holidays_update resolves group NAMES to ids", async () => {
+  it("holidays_update resolves group NAMES to ids at PREVIEW time (no commit yet)", async () => {
     const fake = createFakeWorkspace({ ...directory(), holidays: [{ id: "h1", name: "Xmas", startDate: "2026-12-25" }] });
     const result = await executeAction({
       actionName: "clockify_holidays_update",
       args: { id: "h1", userGroupIds: ["Devs"] },
       context: makeContext(fake),
     });
-    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
-    const updated = fake.state.holidays.find((h) => h.id === "h1") as { userGroupIds?: string[] } | undefined;
-    expect(updated?.userGroupIds).toEqual(["g1"]);
+    if (result.kind !== "preview") throw new Error("expected a preview — editing live data requires confirmation");
+    // The name resolves to an id in the previewed payload; the live holiday is untouched until confirm.
+    expect((result.operation.payload as { body: { userGroupIds?: string[] } }).body.userGroupIds).toEqual(["g1"]);
+    const live = fake.state.holidays.find((h) => h.id === "h1") as { userGroupIds?: string[] } | undefined;
+    expect(live?.userGroupIds).toBeUndefined();
   });
 
-  it("holidays_update is a SAFE write (executes immediately)", async () => {
+  it("holidays_update PREVIEWS then commit applies it (editing live data is high_risk_write)", async () => {
     const fake = createFakeWorkspace(seed());
-    const result = await executeAction({ actionName: "clockify_holidays_update", args: { id: "h1", name: "Christmas" }, context: makeContext(fake) });
-    if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.updated?.[0]).toMatchObject({ type: "holiday" });
-    else throw new Error("expected receipt");
-    expect(fake.state.holidays[0].name).toBe("Christmas");
+    const ctx = makeContext(fake);
+    const result = await executeAction({ actionName: "clockify_holidays_update", args: { id: "h1", name: "Christmas" }, context: ctx });
+    if (result.kind !== "preview") throw new Error("expected a preview, not an immediate write");
+    expect(fake.state.holidays[0].name).toBe("Xmas"); // NOT applied before confirm
+    const receipt = await commitConfirmedOperation(ctx, result.operation);
+    expect(receipt.ok).toBe(true);
+    if (receipt.ok) expect(receipt.changed?.updated?.[0]).toMatchObject({ type: "holiday" });
+    expect(fake.state.holidays[0].name).toBe("Christmas"); // applied only after confirm
   });
 
   it("holidays_delete previews destructive then deletes once", async () => {

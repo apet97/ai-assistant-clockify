@@ -7,6 +7,7 @@ import {
   type ActionContext,
   type ActionDefinition,
   type ActionResult,
+  type ClarifyOption,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { resolveEntityRef, resolveGroupRefs, resolveInstant, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
@@ -219,12 +220,23 @@ const createHoliday = defineAction({
   },
 });
 
-const updateHoliday = defineAction({
+// Map a clarify-shaped ActionResult from the resolvers into the risky-preview
+// clarify shape (the preview callback returns { clarify, options? }, not a receipt).
+function toRiskyClarify(result: ActionResult): { clarify: string; options?: ClarifyOption[] } {
+  return result.kind === "clarify"
+    ? { clarify: result.message, ...(result.options ? { options: result.options } : {}) }
+    : { clarify: "Please clarify the holiday details." };
+}
+
+const updateHoliday = defineRiskyAction({
   name: "clockify_holidays_update",
   description:
-    "Update a workspace holiday. `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Safe write — executes immediately when policy allows.",
-  featureGroup: TOA,
-  risks: ["safe_write"],
+    "Update a workspace holiday (name, dates, recurrence, or who it applies to). `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
+  group: TOA,
+  // Editing an existing holiday overwrites live data for everyone assigned and has no
+  // undo — same class as every other *_update, so preview→button-confirm (was wrongly
+  // shipping as safe_write / immediate; enterprise-audit safety fix).
+  risks: ["high_risk_write"],
   schema: z
     .object({
       id: z.string().min(1),
@@ -245,30 +257,47 @@ const updateHoliday = defineAction({
         v.userGroupIds !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async handler(ctx, args) {
+  async preview(ctx, args) {
     const assign = await resolveHolidayAssignment(ctx, args);
-    if (!assign.ok) return assign.clarify;
+    if (!assign.ok) return toRiskyClarify(assign.clarify);
     // Dates server-side: resolve a relative/absolute change to a real day; an
     // unparseable value clarifies (never reaches the wire as-is).
     const dates = resolveHolidayDates(ctx, args.startDate, args.endDate);
-    if (!dates.ok) return dates.clarify;
+    if (!dates.ok) return toRiskyClarify(dates.clarify);
     const { id, userIds: _userIds, userGroupIds: _userGroupIds, startDate: _startDate, endDate: _endDate, ...rest } = args;
-    const holiday = await ctx.clockify.updateHoliday(id, {
+    const body: Record<string, unknown> = {
       ...rest,
       ...(dates.startDate !== undefined ? { startDate: dates.startDate } : {}),
       ...(dates.endDate !== undefined ? { endDate: dates.endDate } : {}),
       ...(assign.userIds?.length ? { userIds: assign.userIds } : {}),
       ...(assign.userGroupIds?.length ? { userGroupIds: assign.userGroupIds } : {}),
-    });
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_holidays_update",
-        entity: "holiday",
-        ids: { workspaceId: ctx.workspaceId },
-        changed: { updated: [{ type: "holiday", id: holiday.id, name: holiday.name }] },
-      }),
     };
+    const changes: string[] = [];
+    if (rest.name !== undefined) changes.push(`Rename to "${rest.name}"`);
+    if (dates.startDate !== undefined) changes.push(`Start date → ${dates.startDate}`);
+    if (dates.endDate !== undefined) changes.push(`End date → ${dates.endDate}`);
+    if (rest.occursAnnually !== undefined) changes.push(`Recurs annually → ${rest.occursAnnually}`);
+    if (assign.userIds?.length || assign.userGroupIds?.length) {
+      changes.push(`Reassign to ${assign.userIds?.length ?? 0} user(s) + ${assign.userGroupIds?.length ?? 0} group(s)`);
+    }
+    return {
+      actionLabel: "Update holiday",
+      targets: [{ type: "holiday", id, name: args.name }],
+      expectedChanges: changes.length ? changes : ["Update holiday"],
+      reversibility: "Editing overwrites the holiday's current values; there is no undo.",
+      warnings: ["This affects everyone assigned to the holiday."],
+      payload: { id, body },
+    };
+  },
+  async commit(ctx, payload) {
+    const { id, body } = payload as { id: string; body: Record<string, unknown> };
+    const holiday = await ctx.clockify.updateHoliday(id, body);
+    return successReceipt({
+      action: "clockify_holidays_update",
+      entity: "holiday",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: [{ type: "holiday", id: holiday.id, name: holiday.name }] },
+    });
   },
 });
 
