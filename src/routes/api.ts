@@ -50,12 +50,13 @@ export {
 export { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 
 /**
- * How many stored messages GET /api/chat/history replays to the UI after an
- * iframe reload. Distinct from the MODEL window above — this is the human's
- * restored view (a marathon session stores 100s of messages; 50 is plenty to
- * re-anchor without shipping megabytes of payloads).
+ * How many stored messages GET /api/chat/history replays to the UI after an iframe
+ * reload. Distinct from the MODEL context window (`HISTORY_WINDOW_MESSAGES`, 12) —
+ * this is the human's restored VIEW (a marathon session stores 100s of messages; 50
+ * is plenty to re-anchor without shipping megabytes of payloads). Named *_RESTORE_*
+ * so it is never mistaken for the LLM window.
  */
-export const CHAT_HISTORY_LIMIT = 50;
+export const CHAT_HISTORY_RESTORE_LIMIT = 50;
 
 export function apiRouter(deps: AppDeps): Router {
   const router = Router();
@@ -177,7 +178,7 @@ export function apiRouter(deps: AppDeps): Router {
     const claims = requireSession(req, res);
     if (!claims) return;
     const messages = deps.store
-      .getRecentMessages(claims.sessionId, CHAT_HISTORY_LIMIT, true)
+      .getRecentMessages(claims.sessionId, CHAT_HISTORY_RESTORE_LIMIT, true)
       // Drop transient model-failure rows (payload.kind="error"): they are an
       // out-of-band notice the admin already saw live, not a reply to resurrect
       // on reload (finding r2-new-session-restore-05).

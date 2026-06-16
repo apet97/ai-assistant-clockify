@@ -11,7 +11,7 @@
 
 /**
  * Per-replayed-result byte budget for GET /api/chat/history. The 50-message
- * COUNT cap (CHAT_HISTORY_LIMIT) bounds how MANY turns replay, not how big each
+ * COUNT cap (CHAT_HISTORY_RESTORE_LIMIT) bounds how MANY turns replay, not how big each
  * one is — a read-action receipt carries its entire `data` blob (a summary
  * report or a 1000-row list), so 50 fat reads still ship megabytes on every
  * iframe reload (r2-new-session-restore-06). This backstops the count cap by

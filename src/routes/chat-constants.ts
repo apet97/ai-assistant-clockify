@@ -6,12 +6,13 @@
  */
 
 /**
- * How many stored chat messages (user + assistant turns, newest first) are sent
- * to the model each turn. The STORED history is complete — this only bounds the
- * model-visible window, so a marathon session (the live loop stored 650
- * messages in one session) keeps a constant-size prompt. Receipts/payloads are
- * never part of this history; the agent loop separately byte-caps tool results
- * (see TOOL_RESULT_MAX_BYTES).
+ * The LLM CONTEXT WINDOW: how many stored chat messages (user + assistant turns,
+ * newest first) are sent to the MODEL each turn. The STORED history is complete —
+ * this only bounds the model-visible window, so a marathon session (the live loop
+ * stored 650 messages in one session) keeps a constant-size prompt. Distinct from
+ * the UI restore count (`CHAT_HISTORY_RESTORE_LIMIT`, 50, routes/api.ts). Receipts/
+ * payloads are never part of this history; the agent loop separately byte-caps tool
+ * results (see TOOL_RESULT_MAX_BYTES).
  */
 export const HISTORY_WINDOW_MESSAGES = 12;
 
