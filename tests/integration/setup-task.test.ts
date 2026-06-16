@@ -78,6 +78,17 @@ describe("clockify_setup_task — single-approval task composite", () => {
     expect(s.rate[0]).toMatchObject({ projectId: "p1", taskId: task?.id, rateKind: "HOURLY", amountMinor: 6000 });
   });
 
+  it("a drifted stored payload (e.g. a deploy during a pending preview) fails with an honest receipt, not a silent wrong commit", async () => {
+    const fake = createFakeWorkspace(SEED);
+    const op = await previewSetup(ctxWith(fake));
+    // Simulate a persisted payload that no longer matches the expected shape.
+    const drifted = { ...op, payload: { projectId: "p1" } };
+    const receipt = await commitConfirmedOperation(ctxWith(fake), drifted);
+    expect(receipt.ok).toBe(false);
+    expect((receipt as { code?: string }).code).toBe("invalid_payload");
+    expect(fake.counts.createTask ?? 0).toBe(0); // nothing was created
+  });
+
   it("reports the created task in changed.created (with projectId) so it can be one-click undone", async () => {
     const fake = createFakeWorkspace(SEED);
     const ctx = ctxWith(fake);

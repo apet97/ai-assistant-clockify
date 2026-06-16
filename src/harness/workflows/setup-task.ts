@@ -29,15 +29,19 @@ import { zNumberLike, zStringList } from "../arg-shapes.js";
  */
 
 const rateKindEnum = z.enum(["hourly", "cost"]);
-type RateKind = z.infer<typeof rateKindEnum>;
 
-interface SetupTaskPayload {
-  projectId: string;
-  projectName?: string;
-  name: string;
-  assigneeIds: string[];
-  rate?: { amountMinor: number; kind: RateKind };
-}
+// The resolved composition payload, persisted to the pending confirmation and read
+// back at commit/idempotency time. A Zod schema (not just a cast) so a stored-shape
+// drift — e.g. a pending preview that spans a deploy which changed this shape — fails
+// LOUDLY at commit instead of a silent wrong-field cast. z.infer keeps the type in sync.
+const setupTaskPayloadSchema = z.object({
+  projectId: z.string(),
+  projectName: z.string().optional(),
+  name: z.string(),
+  assigneeIds: z.array(z.string()),
+  rate: z.object({ amountMinor: z.number(), kind: rateKindEnum }).optional(),
+});
+type SetupTaskPayload = z.infer<typeof setupTaskPayloadSchema>;
 
 function asClarify(c: { clarify: string; options?: ClarifyOption[] }): ActionResult {
   return { kind: "clarify", message: c.clarify, options: c.options };
@@ -132,7 +136,16 @@ const setupTask = defineAction({
     };
   },
   async commit(ctx, operation) {
-    const p = operation.payload as unknown as SetupTaskPayload;
+    const parsed = setupTaskPayloadSchema.safeParse(operation.payload);
+    if (!parsed.success) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "invalid_payload",
+        message:
+          "The saved task-setup details no longer match the expected shape — nothing was changed. Please re-issue the request.",
+      });
+    }
+    const p = parsed.data;
     const rate = p.rate;
     const ids: { taskId?: string } = {};
     const steps: CompositionStep[] = [];
@@ -205,7 +218,12 @@ const setupTask = defineAction({
     });
   },
   idempotencyKey(operation: ConfirmableOperation) {
-    const p = operation.payload as unknown as SetupTaskPayload;
+    // A drifted payload must not throw here (this runs BEFORE commit, to claim the
+    // dedup key); a stable raw key keeps dedup deterministic, and commit then surfaces
+    // the honest invalid_payload receipt.
+    const parsed = setupTaskPayloadSchema.safeParse(operation.payload);
+    if (!parsed.success) return JSON.stringify(operation.payload);
+    const p = parsed.data;
     return JSON.stringify({
       projectId: p.projectId,
       name: p.name,

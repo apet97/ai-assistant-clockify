@@ -38,14 +38,19 @@ const rateKindEnum = z.enum(["hourly", "cost"]);
 type RateKind = z.infer<typeof rateKindEnum>;
 type ResolvedRate = { userId: string; amountMinor: number; kind: RateKind };
 
-interface SetupPayload {
-  name: string;
-  isPublic?: boolean;
-  clientId?: string;
-  addUserIds: string[];
-  projectRate?: { amountMinor: number; kind: RateKind };
-  memberRates: ResolvedRate[];
-}
+// The resolved composition payload, persisted to the pending confirmation and read back
+// at commit/idempotency time. A Zod schema (not just a cast) so a stored-shape drift —
+// e.g. a pending preview that spans a deploy which changed this shape — fails LOUDLY at
+// commit instead of a silent wrong-field cast. z.infer keeps the type in sync.
+const setupPayloadSchema = z.object({
+  name: z.string(),
+  isPublic: z.boolean().optional(),
+  clientId: z.string().optional(),
+  addUserIds: z.array(z.string()),
+  projectRate: z.object({ amountMinor: z.number(), kind: rateKindEnum }).optional(),
+  memberRates: z.array(z.object({ userId: z.string(), amountMinor: z.number(), kind: rateKindEnum })),
+});
+type SetupPayload = z.infer<typeof setupPayloadSchema>;
 
 function asClarify(c: { clarify: string; options?: ClarifyOption[] }): ActionResult {
   return { kind: "clarify", message: c.clarify, options: c.options };
@@ -209,7 +214,16 @@ const setupProject = defineAction({
     };
   },
   async commit(ctx, operation) {
-    const p = operation.payload as unknown as SetupPayload;
+    const parsed = setupPayloadSchema.safeParse(operation.payload);
+    if (!parsed.success) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "invalid_payload",
+        message:
+          "The saved project-setup details no longer match the expected shape — nothing was changed. Please re-issue the request.",
+      });
+    }
+    const p = parsed.data;
     const del = ctx.clockify.deleteEntity?.bind(ctx.clockify);
     const undoFor = (entityType: string, id: string): (() => Promise<void>) | undefined =>
       del ? () => del({ entityType, id }) : undefined;
@@ -305,7 +319,12 @@ const setupProject = defineAction({
     });
   },
   idempotencyKey(operation: ConfirmableOperation) {
-    const p = operation.payload as unknown as SetupPayload;
+    // A drifted payload must not throw here (this runs BEFORE commit, to claim the
+    // dedup key); a stable raw key keeps dedup deterministic, and commit then surfaces
+    // the honest invalid_payload receipt.
+    const parsed = setupPayloadSchema.safeParse(operation.payload);
+    if (!parsed.success) return JSON.stringify(operation.payload);
+    const p = parsed.data;
     return JSON.stringify({
       name: p.name,
       isPublic: p.isPublic ?? null,

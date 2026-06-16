@@ -96,6 +96,16 @@ describe("clockify_setup_project — single-approval composite", () => {
     expect(receipt.ok && receipt.changed?.created).toHaveLength(1);
   });
 
+  it("a drifted stored payload (e.g. a deploy during a pending preview) fails with an honest receipt, not a silent wrong commit", async () => {
+    const fake = createFakeWorkspace({ users: [{ id: "admin-1", name: "Ada" }] });
+    const op = await previewSetup(ctxWith(fake), { name: "drifty", members: ["me"] });
+    const drifted = { ...op, payload: { name: "drifty" } }; // missing addUserIds/memberRates
+    const receipt = await commitConfirmedOperation(ctxWith(fake), drifted);
+    expect(receipt.ok).toBe(false);
+    expect((receipt as { code?: string }).code).toBe("invalid_payload");
+    expect(fake.counts.createProject ?? 0).toBe(0); // nothing was created
+  });
+
   it("rolls back the created project when a required step (the rate) fails — nothing left behind", async () => {
     const fake = createFakeWorkspace({ users: [{ id: "admin-1", name: "Ada" }] });
     const client: WorkspaceClient = {
