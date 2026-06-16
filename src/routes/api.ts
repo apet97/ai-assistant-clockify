@@ -247,6 +247,7 @@ export function apiRouter(deps: AppDeps): Router {
     const session = deps.store.createSession({
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
+      ttlMs: deps.config.sessionTtlMs,
     });
     const sessionClaims: SessionClaims = {
       sessionId: session.id,

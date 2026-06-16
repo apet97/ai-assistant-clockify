@@ -47,6 +47,14 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, LLM_AGENTIC: "0" }).llmAgentic).toBe(false);
   });
 
+  it("defaults sessionTtlMs to 2h (authz-surface-01 staleness bound) and honors SESSION_TTL_HOURS", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).sessionTtlMs).toBe(2 * 60 * 60 * 1000);
+    expect(loadConfig({ ...base, SESSION_TTL_HOURS: "1" }).sessionTtlMs).toBe(60 * 60 * 1000);
+    expect(loadConfig({ ...base, SESSION_TTL_HOURS: "8" }).sessionTtlMs).toBe(8 * 60 * 60 * 1000);
+    expect(() => loadConfig({ ...base, SESSION_TTL_HOURS: "0" })).toThrow(); // below the 0.1h floor
+  });
+
   it("defaults llmToolSelect ON (post-eval flip: DeepSeek 100% held, -61% prompt tokens, 0 safety) and honors LLM_TOOL_SELECT=0 for rollback", () => {
     const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
     expect(loadConfig(base).llmToolSelect).toBe(true);

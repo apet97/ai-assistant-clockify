@@ -129,7 +129,7 @@ export function componentRouter(deps: AppDeps): Router {
         existing.adminUserId === adminUserId;
       const session = reuse
         ? { id: existing.sessionId, expiresAt: existing.expiresAt }
-        : deps.store.createSession({ workspaceId, adminUserId });
+        : deps.store.createSession({ workspaceId, adminUserId, ttlMs: deps.config.sessionTtlMs });
       const sessionClaims: SessionClaims = {
         sessionId: session.id,
         workspaceId,

@@ -10,6 +10,7 @@ import type { ToolCompletion } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 import { testKeys } from "../helpers/test-keys.js";
+import { verifySessionCookie } from "../../src/auth/sessions.js";
 
 /**
  * POST /api/chat/new starts a fresh conversation: it mints a NEW session (new
@@ -125,5 +126,21 @@ describe("POST /api/chat/new", () => {
     expect(limited.status).toBe(429);
     expect(limited.body.code).toBe("rate_limited");
     expect(limited.headers["retry-after"]).toBeDefined();
+  });
+
+  // authz-surface-01: the route threads config.sessionTtlMs into the minted session, so
+  // the role-staleness window (= session TTL) is the configured value, not the store's 8h.
+  it("mints sessions with the configured TTL (the authz-surface-01 staleness bound)", async () => {
+    const { app, cookie } = await makeApp([], createFakeWorkspace(), { sessionTtlMs: 60 * 60 * 1000 });
+    const res = await request(app).post("/api/chat/new").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    const setCookie = res.headers["set-cookie"];
+    const newCookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    const claims = verifySessionCookie(decodeURIComponent(newCookie.split("=").slice(1).join("=")), "test-session-secret");
+    expect(claims).toBeTruthy();
+    const ttlMs = new Date(claims!.expiresAt).getTime() - Date.now();
+    // ~1h (a few seconds of slack for test execution) — NOT the store's 8h default.
+    expect(ttlMs).toBeGreaterThan(59 * 60 * 1000);
+    expect(ttlMs).toBeLessThanOrEqual(60 * 60 * 1000 + 5_000);
   });
 });
