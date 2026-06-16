@@ -47,6 +47,13 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, LLM_AGENTIC: "0" }).llmAgentic).toBe(false);
   });
 
+  it("defaults llmToolSelect ON (post-eval flip: DeepSeek 100% held, -61% prompt tokens, 0 safety) and honors LLM_TOOL_SELECT=0 for rollback", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).llmToolSelect).toBe(true);
+    expect(loadConfig({ ...base, LLM_TOOL_SELECT: "1" }).llmToolSelect).toBe(true);
+    expect(loadConfig({ ...base, LLM_TOOL_SELECT: "0" }).llmToolSelect).toBe(false);
+  });
+
   it("parses LLM_TIMEOUT_MS to a number and leaves it undefined when absent (client default applies)", () => {
     const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
     expect(loadConfig(base).llmTimeoutMs).toBeUndefined();

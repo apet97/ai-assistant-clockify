@@ -28,12 +28,18 @@ workspace, and deployed.
   Planner + agentic evals last measured 100% on DeepSeek v4-pro and both Gemini
   tiers (opt-in `scripts/eval-*.ts`; results are not committed or CI-gated).
 - **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
-  an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT=1`
-  shows the model only the message-relevant actions (+ an always-on core) instead of
-  all 139 — deterministic, `src/harness/tool-select.ts`, default OFF until the matrix
-  proves it; `LLM_SEED` adds a sampling seed for reproducibility. `unknown_action`
-  errors carry a "did you mean" (`src/harness/action-suggest.ts`). Measure with
-  `scripts/eval-matrix.ts` (per-model pass-rate + consistency + spread).
+  an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
+  **default ON**, `=0` rolls back) shows the model only the message-relevant actions
+  (+ an always-on core) instead of all 139, on BOTH the chat turn and its confirm
+  resume — deterministic, `src/harness/tool-select.ts`. The agentic eval flipped it:
+  DeepSeek held 100% pass / 0 safety OFF and ON (11 cases × 5) with ~61% fewer prompt
+  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; a recall
+  escape hatch retries the full catalog when a narrowed CHAT turn does nothing (fired
+  9.1% of narrowed runs; net still −61%). `LLM_SEED` adds a sampling seed for
+  reproducibility. `unknown_action` errors carry a "did you mean"
+  (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
+  pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
+  (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
 - **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, healthcheck
   `/manifest`). Redeploy = `railway up` from this dir. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
