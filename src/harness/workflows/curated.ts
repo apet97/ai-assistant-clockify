@@ -1,10 +1,15 @@
 import { z } from "zod";
 import { zStringList } from "../arg-shapes.js";
-import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import {
+  defineAction,
+  defineRiskyAction,
+  type ActionContext,
+  type ActionDefinition,
+} from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
-import { DAY_MS } from "../../durations.js";
+import { DAY_MS, nowDate } from "../../durations.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -17,10 +22,6 @@ import { DAY_MS } from "../../durations.js";
  * ONE preview, committed atomically via the composition layer (invite required,
  * group adds best-effort).
  */
-
-function nowDate(ctx: ActionContext): Date {
-  return (ctx.now ?? (() => new Date()))();
-}
 
 const periodReport = defineAction({
   name: "clockify_period_report",
@@ -77,54 +78,44 @@ const periodReport = defineAction({
   },
 });
 
-const onboardUser = defineAction({
+const onboardUser = defineRiskyAction({
   name: "clockify_onboard_user",
   description:
     'Onboard a teammate: invite them by email AND add them to one or more groups (by name) in one step. Use this for "invite ada@acme.com and add her to Engineering". Sends a real invitation email — previews and requires confirmation.',
-  featureGroup: "users_groups",
+  group: "users_groups",
   risks: ["external_side_effect"],
   schema: z.object({
     email: z.string().min(1),
     groups: zStringList().optional(),
     sendEmail: z.boolean().optional(),
   }),
-  async handler(_ctx, args) {
+  async preview(_ctx, args) {
     const groups = args.groups ?? [];
     return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Onboard user",
-        featureGroup: "users_groups",
-        riskLabels: ["external_side_effect"],
-        targets: [],
-        expectedChanges: [
-          `Invite ${args.email}${args.sendEmail === false ? " (without sending an email)" : ""}`,
-          ...groups.map((g) => `Add ${args.email} to group "${g}"`),
-        ],
-        reversibility: "An invited user can be deactivated; group membership can be removed.",
-        warnings: [
-          args.sendEmail === false
-            ? "The user is added without an invitation email."
-            : "This sends a real invitation.",
-        ],
-      },
-      operation: {
-        actionName: "clockify_onboard_user",
-        featureGroup: "users_groups",
-        risks: ["external_side_effect"],
-        payload: { email: args.email, groups, sendEmail: args.sendEmail ?? true },
-      },
+      actionLabel: "Onboard user",
+      targets: [],
+      expectedChanges: [
+        `Invite ${args.email}${args.sendEmail === false ? " (without sending an email)" : ""}`,
+        ...groups.map((g) => `Add ${args.email} to group "${g}"`),
+      ],
+      reversibility: "An invited user can be deactivated; group membership can be removed.",
+      warnings: [
+        args.sendEmail === false
+          ? "The user is added without an invitation email."
+          : "This sends a real invitation.",
+      ],
+      payload: { email: args.email, groups, sendEmail: args.sendEmail ?? true },
     };
   },
-  async commit(ctx, operation) {
-    const payload = operation.payload as { email: string; groups: string[]; sendEmail: boolean };
+  async commit(ctx, payload) {
+    const p = payload as { email: string; groups: string[]; sendEmail: boolean };
     const ids: { userId?: string } = {};
     const steps: CompositionStep[] = [
       {
         label: "invite",
         required: true,
         run: async () => {
-          const user = await ctx.clockify.inviteUser(payload.email, payload.sendEmail);
+          const user = await ctx.clockify.inviteUser(p.email, p.sendEmail);
           ids.userId = user.id;
           return { kind: "done", created: [{ type: "user", id: user.id, name: user.name }] };
         },
@@ -138,7 +129,7 @@ const onboardUser = defineAction({
     let groupsPromise: ReturnType<ActionContext["clockify"]["listGroups"]> | undefined;
     const getGroups = (): ReturnType<ActionContext["clockify"]["listGroups"]> =>
       (groupsPromise ??= ctx.clockify.listGroups());
-    for (const groupName of payload.groups) {
+    for (const groupName of p.groups) {
       steps.push({
         label: `group:${groupName}`,
         required: false, // a group problem must not undo a successful invite
@@ -166,7 +157,7 @@ const onboardUser = defineAction({
       return errorReceipt({
         action: "clockify_onboard_user",
         code: "onboard_failed",
-        message: `Couldn't invite ${payload.email}: ${outcome.status.message}. ${leftBehindNote(outcome.status.rollbackWarnings)}`,
+        message: `Couldn't invite ${p.email}: ${outcome.status.message}. ${leftBehindNote(outcome.status.rollbackWarnings)}`,
         recovery: { hint: "Try again.", retryable: true },
       });
     }

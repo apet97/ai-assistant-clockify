@@ -1,14 +1,15 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { nowDate } from "../../durations.js";
 import { successReceipt } from "../receipts.js";
-import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef, resolveInstant, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
+import { fromMinor, toMinor } from "../money.js";
+import { describePatch, resolveDateRange, resolveEntityRef, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
 function resolveDate(ctx: ActionContext, date?: string): string | undefined {
-  return resolveRelativeDay((ctx.now ?? (() => new Date()))(), { date });
+  return resolveRelativeDay(nowDate(ctx), { date });
 }
 
 const DATE_CLARIFY = (raw: string) =>
@@ -50,20 +51,16 @@ const listExpenses = defineAction({
   async handler(ctx, args) {
     // The wire wants yyyy-MM-ddThh:mm:ssZ instants — a raw date word silently
     // returns an empty list (not a 400). Resolve here (from→start-of-day,
-    // to→end-of-day), clarify on garbage. Mirrors clockify_entries_list.
-    const now = (ctx.now ?? (() => new Date()))();
-    const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
-    const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
-    const bad = [
-      args.start !== undefined && start === undefined ? args.start : undefined,
-      args.end !== undefined && end === undefined ? args.end : undefined,
-    ].filter((value): value is string => value !== undefined);
-    if (bad.length) {
-      return {
-        kind: "clarify",
-        message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last month.`,
-      };
-    }
+    // to→end-of-day), clarify on garbage. Mirrors clockify_entries_list. The
+    // shared resolver owns the per-edge resolveInstant + bad-date clarify; both
+    // edges are optional with no default, so an omitted edge stays undefined.
+    const dates = resolveDateRange(nowDate(ctx), {
+      start: { raw: args.start },
+      end: { raw: args.end },
+      exampleHint: "today, yesterday, or last month",
+    });
+    if (!dates.ok) return { kind: "clarify", message: dates.message };
+    const { start, end } = dates;
     const items = await ctx.clockify.listExpenses({ start, end });
     return {
       kind: "receipt",
@@ -200,7 +197,7 @@ const createExpense = defineRiskyAction({
       actionLabel: "Create expense",
       targets: [],
       expectedChanges: [
-        `Create an expense of ${(input.amountMinor / 100).toFixed(2)} for ${ownerLabel} in category ${category.name ?? category.id}${onProject}${args.notes ? ` — "${args.notes}"` : ""}`,
+        `Create an expense of ${fromMinor(input.amountMinor)} for ${ownerLabel} in category ${category.name ?? category.id}${onProject}${args.notes ? ` — "${args.notes}"` : ""}`,
       ],
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],

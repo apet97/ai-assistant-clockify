@@ -11,3 +11,17 @@ export const DAY_MS = 86_400_000;
 export const SEVEN_DAYS_MS = 7 * DAY_MS;
 /** Milliseconds in thirty days (default invoice due window). */
 export const THIRTY_DAYS_MS = 30 * DAY_MS;
+
+/**
+ * Resolve "now" through an optional injected clock, falling back to the real
+ * wall clock. The structural `{ now?: () => Date }` param keeps this module
+ * import-free (a leaf) — it never imports `ActionContext`, so madge stays at 0.
+ */
+export function nowDate(ctx: { now?: () => Date }): Date {
+  return (ctx.now ?? (() => new Date()))();
+}
+
+/** The injected (or real) "now" as an ISO-8601 UTC instant string. */
+export function nowIso(ctx: { now?: () => Date }): string {
+  return nowDate(ctx).toISOString();
+}

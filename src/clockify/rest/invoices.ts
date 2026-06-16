@@ -1,4 +1,5 @@
-import { MAX_PAGES, PAGE_SIZE, type RestCore } from "./core.js";
+import type { RestCore } from "./core.js";
+import { toClockifyDate } from "./wire-dates.js";
 import type { EntitySummary } from "../types.js";
 import type {
   InvoicePort,
@@ -7,11 +8,6 @@ import type {
   InvoiceDetail,
   InvoicePayment,
 } from "../ports/invoices.js";
-
-/** Clockify date fields want a full ISO datetime; normalize a bare YYYY-MM-DD. */
-function toClockifyDate(d: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00Z` : d;
-}
 
 /**
  * Largest export the receipt will carry inline (1 MB raw → base64). Over this,
@@ -60,15 +56,15 @@ const INVOICE_PERCENT_FIELDS: ReadonlyArray<readonly [getKey: string, putKey: st
   ["tax2", "tax2Percent"],
 ];
 
-function mapSummary(raw: any): InvoiceSummary {
-  const out: InvoiceSummary = { id: raw.id };
-  if (raw.number !== undefined) out.number = raw.number;
-  if (raw.clientId !== undefined) out.clientId = raw.clientId;
-  if (raw.clientName !== undefined) out.clientName = raw.clientName;
-  if (raw.status !== undefined) out.status = raw.status;
-  if (raw.currency !== undefined) out.currency = raw.currency;
-  if (raw.amount !== undefined) out.amount = raw.amount;
-  if (raw.balance !== undefined) out.balance = raw.balance;
+function mapSummary(raw: Record<string, unknown>): InvoiceSummary {
+  const out: InvoiceSummary = { id: raw.id as string };
+  if (raw.number !== undefined) out.number = raw.number as string;
+  if (raw.clientId !== undefined) out.clientId = raw.clientId as string;
+  if (raw.clientName !== undefined) out.clientName = raw.clientName as string;
+  if (raw.status !== undefined) out.status = raw.status as string;
+  if (raw.currency !== undefined) out.currency = raw.currency as string;
+  if (raw.amount !== undefined) out.amount = raw.amount as number;
+  if (raw.balance !== undefined) out.balance = raw.balance as number;
   if (typeof raw.tax === "number") out.tax = raw.tax;
   if (typeof raw.tax2 === "number") out.tax2 = raw.tax2;
   return out;
@@ -82,33 +78,35 @@ function mapSummary(raw: any): InvoiceSummary {
  */
 const UNIT_PRICE_WIRE_SCALE = 100;
 
-function mapItem(raw: any): InvoiceItem {
+function mapItem(raw: Record<string, unknown>): InvoiceItem {
   const out: InvoiceItem = {};
-  if (raw.order !== undefined) out.order = raw.order;
-  if (raw.description !== undefined) out.description = raw.description;
-  if (raw.quantity !== undefined) out.quantity = raw.quantity;
+  if (raw.order !== undefined) out.order = raw.order as number;
+  if (raw.description !== undefined) out.description = raw.description as string;
+  if (raw.quantity !== undefined) out.quantity = raw.quantity as number;
   if (typeof raw.unitPrice === "number") out.unitPrice = Math.round(raw.unitPrice / UNIT_PRICE_WIRE_SCALE);
-  else if (raw.unitPrice !== undefined) out.unitPrice = raw.unitPrice;
-  if (raw.amount !== undefined) out.amount = raw.amount;
-  if (raw.itemType !== undefined) out.itemType = raw.itemType;
+  else if (raw.unitPrice !== undefined) out.unitPrice = raw.unitPrice as number;
+  if (raw.amount !== undefined) out.amount = raw.amount as number;
+  if (raw.itemType !== undefined) out.itemType = raw.itemType as string;
   return out;
 }
 
-function mapDetail(raw: any): InvoiceDetail {
-  const items = Array.isArray(raw.items) ? raw.items.map(mapItem) : [];
+function mapDetail(raw: Record<string, unknown>): InvoiceDetail {
+  const items = Array.isArray(raw.items)
+    ? (raw.items as Record<string, unknown>[]).map(mapItem)
+    : [];
   return { ...mapSummary(raw), items };
 }
 
-function mapPayment(raw: any): InvoicePayment {
+function mapPayment(raw: Record<string, unknown>): InvoicePayment {
   const out: InvoicePayment = {};
-  if (raw.id !== undefined) out.id = raw.id;
-  else if (raw._id !== undefined) out.id = raw._id;
-  if (raw.amount !== undefined) out.amount = raw.amount;
-  if (raw.note !== undefined) out.note = raw.note;
+  if (raw.id !== undefined) out.id = raw.id as string;
+  else if (raw._id !== undefined) out.id = raw._id as string;
+  if (raw.amount !== undefined) out.amount = raw.amount as number;
+  if (raw.note !== undefined) out.note = raw.note as string;
   // The wire field in the payments LIST is `date` (probed); `paymentDate` only
   // appears in the request body. Accept both.
   const date = raw.paymentDate ?? raw.date;
-  if (date !== undefined) out.paymentDate = date;
+  if (date !== undefined) out.paymentDate = date as string;
   return out;
 }
 
@@ -171,24 +169,16 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
 
   return {
     async listInvoices(filter) {
-      const base: Record<string, string> = {};
-      if (filter?.status) base.statuses = filter.status; // wire param is `statuses` (plural)
-      const out: InvoiceSummary[] = [];
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const qs = new URLSearchParams({ ...base, page: String(page), "page-size": String(PAGE_SIZE) });
-        const env = (await core.call("api", "GET", `${ws}/invoices?${qs.toString()}`)) as
-          | { invoices?: any[] }
-          | any[]
-          | null;
-        const rows = Array.isArray(env) ? env : (env?.invoices ?? []);
-        out.push(...rows.map(mapSummary));
-        if (rows.length < PAGE_SIZE) break;
-      }
-      return out;
+      // Envelope list (`{total, invoices:[…]}`); paginate so >50 invoices don't
+      // truncate and the MAX_PAGES backstop warning fires when a list is capped.
+      const params: Record<string, string> = {};
+      if (filter?.status) params.statuses = filter.status; // wire param is `statuses` (plural)
+      const rows = (await core.paginateEnvelope("api", `${ws}/invoices`, "invoices", params)) as Record<string, unknown>[];
+      return rows.map(mapSummary);
     },
     async getInvoice(id) {
       const raw = await core.call("api", "GET", `${ws}/invoices/${id}`, undefined, true);
-      return raw ? mapDetail(raw) : null;
+      return raw ? mapDetail(raw as Record<string, unknown>) : null;
     },
     async listInvoiceItems(id) {
       // GET /invoices/{id}/items 405s; items are embedded in the single-GET.

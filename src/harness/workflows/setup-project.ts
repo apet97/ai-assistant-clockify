@@ -1,17 +1,15 @@
 import { z } from "zod";
 import {
-  defineAction,
+  defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
-  type ActionResult,
-  type ClarifyOption,
-  type ConfirmableOperation,
+  type RiskyPreviewResult,
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js";
-import { toMinor } from "../money.js";
+import { fromMinor, toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 
 /**
@@ -52,19 +50,16 @@ const setupPayloadSchema = z.object({
 });
 type SetupPayload = z.infer<typeof setupPayloadSchema>;
 
-function asClarify(c: { clarify: string; options?: ClarifyOption[] }): ActionResult {
-  return { kind: "clarify", message: c.clarify, options: c.options };
-}
-
+/** "$50.00" — keeps the "$" prefix at the call site, fromMinor owns the ×100. */
 function major(amountMinor: number): string {
-  return `$${(amountMinor / 100).toFixed(2)}`;
+  return `$${fromMinor(amountMinor)}`;
 }
 
-const setupProject = defineAction({
+const setupProject = defineRiskyAction({
   name: "clockify_setup_project",
   description:
     'Create a NEW project AND set it up in one step — optionally make it private, add members (names or "me"), set the project\'s default billable/cost rate, and set per-member rates — as ONE preview and ONE Confirm. Use this for "create a project and add me / make it private / set the rate". For just creating a bare project with nothing else, use clockify_projects_create.',
-  featureGroup: "work_structure",
+  group: "work_structure",
   risks: ["high_risk_write", "billing"],
   schema: z.object({
     name: z.string().min(1),
@@ -91,7 +86,7 @@ const setupProject = defineAction({
     /** `major` (e.g. 50.00) is converted ×100 to the minor units Clockify wants. */
     rateUnit: z.enum(["major", "minor"]).default("major"),
   }),
-  async handler(ctx, args) {
+  async preview(ctx, args) {
     const unit = args.rateUnit ?? "major";
     const isPublic = args.isPublic ?? (args.private !== undefined ? !args.private : undefined);
 
@@ -108,7 +103,7 @@ const setupProject = defineAction({
           notFoundHint: "Or should I create the client first?",
         },
       );
-      if (!client.ok) return asClarify(client.clarify);
+      if (!client.ok) return client.clarify;
       clientId = client.id;
       clientLabel = client.name ?? args.clientName;
     }
@@ -137,7 +132,7 @@ const setupProject = defineAction({
         listUsers,
         verifyIds: true,
       });
-      if (!m.ok) return asClarify(m.clarify);
+      if (!m.ok) return m.clarify;
       m.userIds.forEach((id, i) => addMember(id, m.labels[i]));
     }
 
@@ -148,7 +143,7 @@ const setupProject = defineAction({
         { id: r.member, name: r.member },
         { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers },
       );
-      if (!member.ok) return asClarify(member.clarify);
+      if (!member.ok) return member.clarify;
       addMember(member.userId, member.label);
       resolvedRates.push({ userId: member.userId, label: member.label, amountMinor: toMinor(r.amount, unit), kind: r.kind });
     }
@@ -157,15 +152,13 @@ const setupProject = defineAction({
     //    NOT cover, so we never create a project the admin can't finish setting up.
     if (orderedUserIds.length && !canWrite(ctx.policy, "users_groups")) {
       return {
-        kind: "clarify",
-        message:
+        clarify:
           "I can't add members because write access to users_groups is disabled in your assistant permissions. Enable it (or drop the members) and try again.",
       };
     }
     if (resolvedRates.length && !canWrite(ctx.policy, "invoices")) {
       return {
-        kind: "clarify",
-        message:
+        clarify:
           "I can't set rates because write access to invoices is disabled in your assistant permissions. Enable it (or drop the rates) and try again.",
       };
     }
@@ -194,30 +187,21 @@ const setupProject = defineAction({
       memberRates: resolvedRates.map((r) => ({ userId: r.userId, amountMinor: r.amountMinor, kind: r.kind })),
     };
 
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Set up project",
-        featureGroup: "work_structure",
-        riskLabels: ["high_risk_write", "billing"],
-        targets: [],
-        expectedChanges,
-        reversibility: "Undo removes the new project entirely (with its members and rates); you can also delete it later.",
-        warnings: ["This creates a project, changes who can access it, and sets billable rates."],
-      },
-      operation: {
-        actionName: "clockify_setup_project",
-        featureGroup: "work_structure",
-        risks: ["high_risk_write", "billing"],
-        payload: payload as unknown as Record<string, unknown>,
-      },
+    const result: RiskyPreviewResult = {
+      actionLabel: "Set up project",
+      targets: [],
+      expectedChanges,
+      reversibility: "Undo removes the new project entirely (with its members and rates); you can also delete it later.",
+      warnings: ["This creates a project, changes who can access it, and sets billable rates."],
+      payload: payload as unknown as Record<string, unknown>,
     };
+    return result;
   },
-  async commit(ctx, operation) {
-    const parsed = setupPayloadSchema.safeParse(operation.payload);
+  async commit(ctx, payload) {
+    const parsed = setupPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       return errorReceipt({
-        action: operation.actionName,
+        action: "clockify_setup_project",
         code: "invalid_payload",
         message:
           "The saved project-setup details no longer match the expected shape — nothing was changed. Please re-issue the request.",
@@ -318,12 +302,12 @@ const setupProject = defineAction({
       warnings: outcome.warnings.length ? outcome.warnings : undefined,
     });
   },
-  idempotencyKey(operation: ConfirmableOperation) {
+  idempotencyKey(payload) {
     // A drifted payload must not throw here (this runs BEFORE commit, to claim the
     // dedup key); a stable raw key keeps dedup deterministic, and commit then surfaces
     // the honest invalid_payload receipt.
-    const parsed = setupPayloadSchema.safeParse(operation.payload);
-    if (!parsed.success) return JSON.stringify(operation.payload);
+    const parsed = setupPayloadSchema.safeParse(payload);
+    if (!parsed.success) return JSON.stringify(payload);
     const p = parsed.data;
     return JSON.stringify({
       name: p.name,

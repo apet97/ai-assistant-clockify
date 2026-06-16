@@ -11,6 +11,16 @@
  * summary types live here because every slice shares them.
  */
 
+/**
+ * Auth credential the REST adapter calls Clockify with: production sends the
+ * installation token via `X-Addon-Token`; live-smoke dev scripts send an
+ * `X-Api-Key`. Defined here (the import-free leaf) so both `rest/core.ts` and
+ * `rest-workspace.ts` share ONE definition instead of re-declaring it. The
+ * token/key is sent only in the request header — never logged, never placed in a
+ * prompt, never returned.
+ */
+export type ClockifyAuth = { addonToken: string } | { apiKey: string };
+
 export interface EntitySummary {
   id: string;
   name: string;

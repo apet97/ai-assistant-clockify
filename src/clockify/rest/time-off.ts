@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
+import { toBareDate, inclusiveDays } from "./wire-dates.js";
 import type { EntitySummary } from "../types.js";
-import { DAY_MS } from "../../durations.js";
 import type {
   TimeOffPort,
   TimeOffPolicySummary,
@@ -13,46 +13,31 @@ function filter(ids: string[]): Record<string, unknown> {
   return { contains: "CONTAINS", ids, status: "ACTIVE" };
 }
 
-/** The time-off period wants bare `YYYY-MM-DD` dates (the spec's documented shape). */
-function toBareDate(d: string): string {
-  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
-  const parsed = new Date(d);
-  return Number.isNaN(parsed.getTime()) ? d : parsed.toISOString().slice(0, 10);
-}
-
-
-/** Inclusive calendar-day span between two bare dates (start === end → 1). */
-function inclusiveDays(start: string, end: string): number | undefined {
-  const a = Date.parse(`${start}T00:00:00Z`);
-  const b = Date.parse(`${end}T00:00:00Z`);
-  if (Number.isNaN(a) || Number.isNaN(b) || b < a) return undefined;
-  return Math.round((b - a) / DAY_MS) + 1;
-}
-
-function mapPolicy(raw: any): TimeOffPolicySummary {
-  const out: TimeOffPolicySummary = { id: raw.id, name: raw.name };
-  if (raw.status !== undefined) out.status = raw.status;
-  if (raw.timeUnit !== undefined) out.timeUnit = raw.timeUnit;
+function mapPolicy(raw: Record<string, unknown>): TimeOffPolicySummary {
+  const out: TimeOffPolicySummary = { id: raw.id as string, name: raw.name as string };
+  if (raw.status !== undefined) out.status = raw.status as string;
+  if (raw.timeUnit !== undefined) out.timeUnit = raw.timeUnit as string;
   return out;
 }
 
-function mapRequest(raw: any): TimeOffRequestSummary {
-  const out: TimeOffRequestSummary = { id: raw.id };
-  if (raw.policyId !== undefined) out.policyId = raw.policyId;
-  if (raw.userId !== undefined) out.userId = raw.userId;
-  const status = raw.status && typeof raw.status === "object" ? raw.status.statusType : raw.status;
+function mapRequest(raw: Record<string, unknown>): TimeOffRequestSummary {
+  const out: TimeOffRequestSummary = { id: raw.id as string };
+  if (raw.policyId !== undefined) out.policyId = raw.policyId as string;
+  if (raw.userId !== undefined) out.userId = raw.userId as string;
+  const rawStatus = raw.status as { statusType?: string } | string | undefined;
+  const status = rawStatus && typeof rawStatus === "object" ? rawStatus.statusType : rawStatus;
   if (status !== undefined) out.status = status;
-  if (raw.note !== undefined) out.note = raw.note;
-  const period = raw.timeOffPeriod?.period;
+  if (raw.note !== undefined) out.note = raw.note as string;
+  const period = (raw.timeOffPeriod as { period?: { start?: string; end?: string } } | undefined)?.period;
   if (period?.start !== undefined) out.start = period.start;
   if (period?.end !== undefined) out.end = period.end;
   return out;
 }
 
-function mapBalance(raw: any, userId: string): TimeOffBalanceSummary {
+function mapBalance(raw: Record<string, unknown>, userId: string): TimeOffBalanceSummary {
   const out: TimeOffBalanceSummary = { userId };
-  if (raw.policyId !== undefined) out.policyId = raw.policyId;
-  if (raw.policyName !== undefined) out.policyName = raw.policyName;
+  if (raw.policyId !== undefined) out.policyId = raw.policyId as string;
+  if (raw.policyName !== undefined) out.policyName = raw.policyName as string;
   if (typeof raw.balance === "number") out.balance = raw.balance;
   if (typeof raw.used === "number") out.used = raw.used;
   if (typeof raw.total === "number") out.total = raw.total;
@@ -81,7 +66,7 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
     },
     async getTimeOffPolicy(id) {
       const raw = await core.call("api", "GET", `${ws}/time-off/policies/${id}`, undefined, true);
-      return raw ? mapPolicy(raw) : null;
+      return raw ? mapPolicy(raw as Record<string, unknown>) : null;
     },
     async createTimeOffPolicy(input): Promise<EntitySummary> {
       const body: Record<string, unknown> = {

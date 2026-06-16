@@ -150,25 +150,25 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => v
     shuttingDown = true;
     log(`${signal} received — draining`);
     if (deps.pruneTimer) clearInterval(deps.pruneTimer);
-    const force = setTimeout(() => {
+    // Close the store then exit. The store close may throw if the drain still
+    // holds a statement open — exit regardless (so a throw never hangs teardown).
+    const finish = (code: number): void => {
       try {
         deps.store.close();
       } catch {
-        // The drain may still hold a statement open — exit regardless.
+        // A statement may still be open — exit cleanly regardless.
       }
-      exit(1);
-    }, deps.forceExitAfterMs ?? FORCE_EXIT_AFTER_MS);
+      exit(code);
+    };
+    const force = setTimeout(() => finish(1), deps.forceExitAfterMs ?? FORCE_EXIT_AFTER_MS);
     force.unref?.();
     deps.server.closeIdleConnections?.();
     deps.server.close(() => {
+      // clearTimeout BEFORE finish: the force timer must be dead before the store
+      // close runs, so a throw there can't be raced by a force-exit (and finish
+      // never double-exits).
       clearTimeout(force);
-      try {
-        deps.store.close();
-      } catch {
-        // A statement may still be open — exit cleanly regardless (the force
-        // timer is already cleared, so a throw here would otherwise hang).
-      }
-      exit(0);
+      finish(0);
     });
   };
 }

@@ -4,11 +4,8 @@ import type { EntitySummary } from "../../clockify/client.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
+import { nowIso } from "../../durations.js";
 import { matchByName, suggestOptions } from "./resolve.js";
-
-function nowIso(ctx: ActionContext): string {
-  return (ctx.now ?? (() => new Date()))().toISOString();
-}
 
 /**
  * Fold the shapes the planner naturally emits into the canonical nested form
@@ -85,6 +82,40 @@ async function listByType(
       return ctx.clockify.listExpenses();
     case "webhook":
       return ctx.clockify.listWebhooks();
+  }
+}
+
+/**
+ * Fetch ONE entity by id, returning `null` when it doesn't exist (the
+ * `entity: null` receipt shape `get_entity` has always produced for a missing
+ * id). Prefer the typed per-type GET so an id that has fallen off the ACTIVE
+ * list (e.g. an archived project) still resolves — `listByType` only sees the
+ * active set, so a list-then-find missed archived rows. `user` has no typed GET
+ * port (only `listUsers`), so it keeps the list-then-find fallback. Never throws
+ * for a missing id — it resolves to `null` like the list-find path did.
+ */
+async function getByType(
+  ctx: ActionContext,
+  type: ListableEntityType,
+  id: string,
+  projectId?: string,
+): Promise<EntitySummary | null> {
+  switch (type) {
+    case "tag":
+      return ctx.clockify.getTag(id);
+    case "project":
+      return ctx.clockify.getProject(id);
+    case "client":
+      return ctx.clockify.getClient(id);
+    case "task":
+      return ctx.clockify.getTask(projectId as string, id);
+    case "expense":
+      return ctx.clockify.getExpense(id);
+    case "webhook":
+      return ctx.clockify.getWebhook(id);
+    case "user":
+      // No typed user GET port — fall back to list-then-find.
+      return (await ctx.clockify.listUsers()).find((e) => e.id === id) ?? null;
   }
 }
 
@@ -374,8 +405,9 @@ const getEntity = defineAction({
         message: "To fetch a task I need its project. Which project is it in?",
       };
     }
-    const items = await listByType(ctx, args.entityType, args.projectId);
-    const entity = items.find((e) => e.id === args.id) ?? null;
+    // Typed per-type GET (resolves archived/off-active-list ids too); a missing id
+    // still yields the `entity: null` receipt shape, never a throw.
+    const entity = await getByType(ctx, args.entityType, args.id, args.projectId);
     return {
       kind: "receipt",
       receipt: successReceipt({

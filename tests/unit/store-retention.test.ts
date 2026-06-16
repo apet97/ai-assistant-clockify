@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createStore, IDEMPOTENCY_RETENTION_MS, type TestStore } from "../../src/db/store.js";
-import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/api.js";
+import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 
 /**

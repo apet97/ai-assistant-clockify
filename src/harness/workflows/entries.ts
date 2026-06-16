@@ -1,12 +1,14 @@
 import { z } from "zod";
 import {
+  clarifyResult,
   defineAction,
   defineRiskyAction,
   defineReadAction,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { resolveInstant, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
+import { resolveDateRange, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
+import { nowDate } from "../../durations.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -40,23 +42,19 @@ const listEntries = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
-    const userId = user.userId as string;
+    if (!user.ok) return clarifyResult(user.clarify);
+    const userId = user.userId;
     // The wire wants yyyy-MM-ddThh:mm:ssZ instants; the live loop sent
-    // `?start=today` 12× (400 every time). Resolve here, clarify on garbage.
-    const now = (ctx.now ?? (() => new Date()))();
-    const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
-    const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
-    const bad = [
-      args.start !== undefined && start === undefined ? args.start : undefined,
-      args.end !== undefined && end === undefined ? args.end : undefined,
-    ].filter((value): value is string => value !== undefined);
-    if (bad.length) {
-      return {
-        kind: "clarify",
-        message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`,
-      };
-    }
+    // `?start=today` 12× (400 every time). Both edges are optional with no
+    // default; the shared resolver owns the per-edge resolveInstant, the
+    // bad-date collection, and the clarify copy — only the hint tail is ours.
+    const range = resolveDateRange(nowDate(ctx), {
+      start: { raw: args.start },
+      end: { raw: args.end },
+      exampleHint: "today, yesterday, or last monday",
+    });
+    if (!range.ok) return { kind: "clarify", message: range.message };
+    const { start, end } = range;
     // A name in either filter slot resolves to a verified id — an unknown
     // filter clarifies instead of a doomed (or silently-empty) wire call.
     const refs = await resolveProjectTaskRefs(args, {
@@ -65,7 +63,7 @@ const listEntries = defineAction({
       listTasks: (projectId) => ctx.clockify.listTasks(projectId),
     });
     if (!refs.ok) {
-      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
+      return clarifyResult(refs.clarify);
     }
     const { entries: items, truncated } = await ctx.clockify.getEntries({
       userId,

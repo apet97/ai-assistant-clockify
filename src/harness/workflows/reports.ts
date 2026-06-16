@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { resolveInstant } from "./resolve.js";
-import { SEVEN_DAYS_MS } from "../../durations.js";
+import { resolveDateRange } from "./resolve.js";
+import { nowDate, SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
  * Typed report workflows (goclmcp §2.14). All reads on the REPORTS host. Reports
@@ -37,25 +37,25 @@ function resolveRange(
   ctx: ActionContext,
   args: { dateRangeStart?: string; dateRangeEnd?: string },
 ): ResolvedRange {
-  const now = (ctx.now ?? (() => new Date()))();
-  const end = args.dateRangeEnd !== undefined ? resolveInstant(now, args.dateRangeEnd, "end") : now.toISOString();
-  const start =
-    args.dateRangeStart !== undefined
-      ? resolveInstant(now, args.dateRangeStart, "start")
-      : end !== undefined
-        ? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString()
-        : undefined;
-  const bad = [
-    args.dateRangeStart !== undefined && start === undefined ? args.dateRangeStart : undefined,
-    args.dateRangeEnd !== undefined && end === undefined ? args.dateRangeEnd : undefined,
-  ].filter((value): value is string => value !== undefined);
-  if (bad.length || start === undefined || end === undefined) {
+  const now = nowDate(ctx);
+  // Default end → now and start → end-minus-7-days when omitted; an explicit
+  // range still wins. The shared resolver owns the per-edge resolveInstant, the
+  // bad-date collection, and the clarify copy (only the example-hint tail is
+  // ours). Reports REQUIRE both edges, so the start/end-undefined guard stays.
+  const resolved = resolveDateRange(now, {
+    start: { raw: args.dateRangeStart, defaultTo: (end) => (end !== undefined ? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString() : undefined) },
+    end: { raw: args.dateRangeEnd, defaultTo: now.toISOString() },
+    exampleHint: "today, yesterday, or last monday",
+  });
+  if (!resolved.ok) return resolved;
+  if (resolved.start === undefined || resolved.end === undefined) {
     return {
       ok: false,
-      message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.`,
+      message:
+        "I couldn't make sense of the date — give me a calendar date (YYYY-MM-DD) or something like today, yesterday, or last monday.",
     };
   }
-  return { ok: true, range: { dateRangeStart: start, dateRangeEnd: end } };
+  return { ok: true, range: { dateRangeStart: resolved.start, dateRangeEnd: resolved.end } };
 }
 
 /** Cap a report payload; returns {data} or {bytes, truncated} + a warning flag. */

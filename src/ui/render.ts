@@ -33,7 +33,11 @@ import {
 
 const PERMISSION_LEVELS = ["off", "read", "read_write"];
 
-export function el(tag: string, className?: string, text?: string): HTMLElement {
+export function el<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className?: string,
+  text?: string,
+): HTMLElementTagNameMap[K] {
   const node = document.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
@@ -98,7 +102,7 @@ export function renderPermissionTable(
     row.appendChild(cell);
     table.appendChild(row);
   }
-  const saveButton = el("button", "primary", "Save permissions") as HTMLButtonElement;
+  const saveButton = el("button", "primary", "Save permissions");
   const saveStatus = el("span", "save-status");
   saveStatus.setAttribute("role", "status"); // "Saved" is announced, not just shown
   saveButton.addEventListener("click", async () => {
@@ -181,7 +185,7 @@ export function relativeTime(iso: string, nowMs: number): string {
 export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuDeps): HTMLElement {
   const wrap = el("div", "chats-menu");
 
-  const toggle = el("button", "secondary chats-toggle") as HTMLButtonElement;
+  const toggle = el("button", "secondary chats-toggle");
   toggle.type = "button";
   toggle.setAttribute("aria-haspopup", "menu");
   toggle.setAttribute("aria-expanded", "false");
@@ -219,7 +223,7 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
   } else {
     const now = Date.now();
     sessions.forEach((s, index) => {
-      const item = el("button", `chats-item${s.current ? " current" : ""}`) as HTMLButtonElement;
+      const item = el("button", `chats-item${s.current ? " current" : ""}`);
       item.type = "button";
       item.setAttribute("role", "menuitem");
       if (s.current) {
@@ -285,7 +289,7 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
     row.setAttribute("role", "group");
     row.setAttribute("aria-label", "Suggested replies");
     for (const option of options) {
-      const chip = el("button", "chip", option.label) as HTMLButtonElement;
+      const chip = el("button", "chip", option.label);
       chip.type = "button";
       chip.addEventListener("click", () => {
         // One-use: the whole row disables; the chosen chip stays highlighted
@@ -333,7 +337,7 @@ export function renderWelcome(deps: ClarifyDeps): HTMLElement {
   );
   const row = el("div", "chip-row");
   for (const prompt of EXAMPLE_PROMPTS) {
-    const chip = el("button", "chip", prompt) as HTMLButtonElement;
+    const chip = el("button", "chip", prompt);
     chip.type = "button";
     chip.addEventListener("click", () => deps.sendText(prompt));
     row.appendChild(chip);
@@ -375,7 +379,7 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
   // One-click undo for a reversible creation (deletes what was just created).
   if (result.receipt.ok && result.undo) {
     const undoId = result.undo.id;
-    const undoButton = el("button", "link undo", "Undo") as HTMLButtonElement;
+    const undoButton = el("button", "link undo", "Undo");
     undoButton.setAttribute("aria-label", `Undo ${result.receipt.action}`);
     undoButton.addEventListener("click", async () => {
       undoButton.disabled = true;
@@ -406,7 +410,7 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
   const body = el("div", "details-body");
   body.id = `receipt-details-${detailsSeq}`;
   body.appendChild(el("pre", undefined, JSON.stringify(result.receipt, null, 2)));
-  const toggle = el("button", "link details-toggle") as HTMLButtonElement;
+  const toggle = el("button", "link details-toggle");
   toggle.appendChild(svgIcon(ICON_CHEVRON));
   toggle.appendChild(document.createTextNode("Details"));
   toggle.setAttribute("aria-expanded", "false");
@@ -456,14 +460,25 @@ export interface PreviewDeps {
   setStatusLabel?: (label: string) => void;
 }
 
-export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
-  const { controller, showError, appendMessage, renderResults, getHistory, returnFocus, setWorking, setStatusLabel } = deps;
-  const batch = previews.length > 1;
-  const card = el("div", "preview-card");
-  card.setAttribute("role", "group");
-  card.setAttribute("aria-label", batch ? `${previews.length} changes awaiting confirmation` : "Change awaiting confirmation");
+/** What `buildPreviewHeader` returns: the header element + the advisory-countdown pieces. */
+interface PreviewHeader {
+  head: HTMLElement;
+  /** The ticking pill (absent when nothing has an expiry). */
+  countdown: HTMLElement | undefined;
+  /** Earliest deadline across the batch (the one honest clock). */
+  minExpiry: string | undefined;
+  /** The expiry view at render time (drives the initial expired/ticking branch). */
+  initialView: ReturnType<typeof expiryView>;
+}
 
-  // Header: what's pending, how risky, and how long the one-use preview lasts.
+/**
+ * Header: what's pending, how risky, and how long the one-use preview lasts. A
+ * batch shows its earliest deadline — one card, one Confirm all, one honest
+ * clock. The countdown is ADVISORY (the server's TTL stays authoritative); a
+ * ticking live region would be hostile, so it is aria-hidden.
+ */
+function buildPreviewHeader(previews: PreviewResult[]): PreviewHeader {
+  const batch = previews.length > 1;
   const head = el("div", "preview-head");
   head.appendChild(svgIcon(ICON_CLOCK));
   head.appendChild(
@@ -472,8 +487,6 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   for (const risk of [...new Set(previews.flatMap((p) => p.preview.riskLabels ?? []))]) {
     head.appendChild(el("span", `badge risk${risk === "destructive" ? " risk-destructive" : ""}`, risk.split("_").join(" ")));
   }
-  // The countdown is ADVISORY (the server's TTL stays authoritative). A batch
-  // shows its earliest deadline — one card, one Confirm all, one honest clock.
   const expiries = previews.map((p) => p.expiresAt).filter((e): e is string => typeof e === "string");
   const minExpiry = expiries.length > 0 ? expiries.reduce((a, b) => (a < b ? a : b)) : undefined;
   const initialView = expiryView(minExpiry, Date.now());
@@ -483,39 +496,25 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     countdown.setAttribute("aria-hidden", "true"); // a ticking live region would be hostile
     head.appendChild(countdown);
   }
-  card.appendChild(head);
+  return { head, countdown, minExpiry, initialView };
+}
 
-  for (const preview of previews) {
-    const block = el("div", "preview");
-    if (batch) block.appendChild(el("strong", undefined, preview.preview.actionLabel));
-    const targets = (preview.preview.targets ?? []).map((t) => t.name ?? t.id);
-    if (targets.length > 0) block.appendChild(el("div", "targets", `Target: ${targets.join(", ")}`));
-    const changes = el("ul");
-    for (const change of preview.preview.expectedChanges) {
-      changes.appendChild(el("li", undefined, change));
-    }
-    block.appendChild(changes);
-    block.appendChild(el("em", "reversibility", preview.preview.reversibility));
-    // Surface the harness's preview warnings (the "$0 caveat" class) — they
-    // exist precisely so the admin sees them BEFORE confirming.
-    for (const warning of preview.preview.warnings ?? []) {
-      block.appendChild(el("p", "warning", warning));
-    }
-    card.appendChild(block);
-  }
-
-  const actions = el("div", "buttons");
-  const refs: PreviewRef[] = previews.map((p) => ({ previewId: p.previewId, nonce: p.nonce }));
-  const confirmButton = el("button", "primary", batch ? "Confirm all" : "Confirm") as HTMLButtonElement;
-  const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel") as HTMLButtonElement;
-  const setButtons = (disabled: boolean): void => {
-    confirmButton.disabled = disabled;
-    cancelButton.disabled = disabled;
-  };
-
-  // Expiry lifecycle: tick once a second while the card is connected; at zero
-  // the buttons die and the card says why. The server re-checks regardless —
-  // a stale click gets its verbatim 400 expired / 409 already-used message.
+/**
+ * The expiry lifecycle, ADVISORY only (the server re-checks regardless — a stale
+ * click gets its verbatim 400 expired / 409 already-used message). Ticks once a
+ * second while the card is connected; at zero the buttons die and the card says
+ * why. Returns the `stopTimer` the confirm/cancel paths call so the interval is
+ * cleared on every settle/removal path (it also self-cleans once the card leaves
+ * the DOM). The shared mutable state — `card`, `head`'s `countdown`, `minExpiry`,
+ * and `setButtons` — is threaded in explicitly.
+ */
+function attachExpiryCountdown(
+  card: HTMLElement,
+  countdown: HTMLElement | undefined,
+  minExpiry: string | undefined,
+  initialView: ReturnType<typeof expiryView>,
+  setButtons: (disabled: boolean) => void,
+): () => void {
   let timer: number | undefined;
   const stopTimer = (): void => {
     if (timer !== undefined) window.clearInterval(timer);
@@ -548,93 +547,140 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
       }, 1000);
     }
   }
+  return stopTimer;
+}
 
-  // True once the stale-nonce re-arm has re-rendered a fresh card for this
-  // preview — the post-stream cleanup must then leave THIS (now-defunct) card
-  // alone instead of double-removing / racing the re-armed replacement.
-  let rearmed = false;
-  const confirmHooks: ConfirmHooks = {
-    onAssistant: (text) => appendMessage("assistant", text),
-    onResults: renderResults,
-    onError: showError,
-    // r1-ux-copy-a11y-03: the durable resume streams per-step status labels; drive
-    // the SAME typing-bubble label the chat path uses so they're not dropped.
-    onStatus: (label) => setStatusLabel?.(label),
-    // r1-concurrency-races-02: this tab's nonce was rotated by another tab's
-    // session restore, so the confirm 400'd on a STILL-pending preview. Re-fetch
-    // history, re-render the re-served card (its rotated nonce re-arms THIS tab),
-    // and retire the stale card — the admin keeps a working Confirm/Cancel right
-    // where they're looking, instead of a dead card. The preview was NOT burned
-    // (the route rejects pre-commit), so the re-served nonce will validate.
-    onStale: (message) => {
-      void (async () => {
-        const previewId = refs[0]?.previewId;
-        let reserved: PreviewResult | undefined;
-        if (getHistory && previewId) {
-          try {
-            reserved = reservedPendingFor(await getHistory(), previewId);
-          } catch {
-            reserved = undefined; // a failed re-fetch falls through to the honest error
-          }
-        }
-        if (reserved) {
-          rearmed = true;
-          stopTimer();
-          card.remove();
-          renderResults([reserved]);
-          appendMessage("assistant", "This card was refreshed in another window — please confirm it again.");
-        } else {
-          // No longer pending (another tab confirmed/cancelled it, or it expired)
-          // or no re-fetch path — surface the honest reason, don't loop.
-          showError(message);
-          setButtons(false);
-        }
-      })();
-    },
-  };
+/**
+ * The mutable state the confirm wiring threads between the stale-rearm helper and
+ * the single-confirm removeCard guard. `rearmed` becomes true once the stale-
+ * nonce re-arm has re-rendered a fresh card for this preview — the post-stream
+ * cleanup must then leave THIS (now-defunct) card alone instead of double-
+ * removing / racing the re-armed replacement.
+ */
+interface ConfirmWiringState {
+  rearmed: boolean;
+}
+
+/**
+ * r1-concurrency-races-02: this tab's nonce was rotated by another tab's session
+ * restore, so the confirm 400'd on a STILL-pending preview. Re-fetch history,
+ * re-render the re-served card (its rotated nonce re-arms THIS tab), and retire
+ * the stale card — the admin keeps a working Confirm/Cancel right where they're
+ * looking, instead of a dead card. The preview was NOT burned (the route rejects
+ * pre-commit), so the re-served nonce will validate. With no still-pending match
+ * (another tab confirmed/cancelled it, or it expired) or no re-fetch path, the
+ * honest reason surfaces and the buttons re-enable — never a loop.
+ */
+function handleStaleRearm(
+  message: string,
+  card: HTMLElement,
+  refs: PreviewRef[],
+  state: ConfirmWiringState,
+  stopTimer: () => void,
+  setButtons: (disabled: boolean) => void,
+  deps: PreviewDeps,
+): void {
+  const { getHistory, renderResults, appendMessage, showError } = deps;
+  void (async () => {
+    const previewId = refs[0]?.previewId;
+    let reserved: PreviewResult | undefined;
+    if (getHistory && previewId) {
+      try {
+        reserved = reservedPendingFor(await getHistory(), previewId);
+      } catch {
+        reserved = undefined; // a failed re-fetch falls through to the honest error
+      }
+    }
+    if (reserved) {
+      state.rearmed = true;
+      stopTimer();
+      card.remove();
+      renderResults([reserved]);
+      appendMessage("assistant", "This card was refreshed in another window — please confirm it again.");
+    } else {
+      // No longer pending (another tab confirmed/cancelled it, or it expired)
+      // or no re-fetch path — surface the honest reason, don't loop.
+      showError(message);
+      setButtons(false);
+    }
+  })();
+}
+
+/**
+ * Wire the batch "Confirm all" click. Batch is single-turn only (agentic mode
+ * interrupts at the first risky write, so it never produces a batch) — plain
+ * JSON, settled truthfully: a failed confirm shows its message, never
+ * "Confirmed." The card stays as the settled record (one ✓/✗ row per item, the
+ * server's message verbatim on failures) so a partial batch shows exactly WHICH
+ * item failed and why, not just "1 of 2".
+ */
+function wireBatchConfirm(
+  confirmButton: HTMLButtonElement,
+  previews: PreviewResult[],
+  refs: PreviewRef[],
+  card: HTMLElement,
+  actions: HTMLElement,
+  countdown: HTMLElement | undefined,
+  setButtons: (disabled: boolean) => void,
+  stopTimer: () => void,
+  confirmHooks: ConfirmHooks,
+  deps: PreviewDeps,
+): void {
+  const { controller, showError } = deps;
   confirmButton.addEventListener("click", async () => {
     // One-use: neither button may fire again (or cross-fire) once clicked.
     setButtons(true);
-    if (batch) {
-      // Batch ("Confirm all") is single-turn only (agentic mode interrupts at the
-      // first risky write, so it never produces a batch) — plain JSON, settled
-      // truthfully: a failed confirm shows its message, never "Confirmed."
-      try {
-        const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
-        stopTimer();
-        // The card stays as the settled record: one ✓/✗ row per item, with the
-        // server's message verbatim on failures — so a partial batch shows
-        // exactly WHICH item failed and why, not just "1 of 2".
-        const list = el("div", "batch-outcomes");
-        for (const outcome of batchItemOutcomes(previews.map((p) => p.preview.actionLabel), responses)) {
-          const row = el("div", `batch-outcome ${outcome.ok ? "ok" : "failed"}`);
-          row.appendChild(svgIcon(outcome.ok ? ICON_CHECK : ICON_X));
-          row.appendChild(el("span", undefined, outcome.label));
-          row.appendChild(el("span", "detail", outcome.detail));
-          list.appendChild(row);
-        }
-        actions.replaceWith(list);
-        countdown?.remove(); // the deadline no longer applies to a settled card
-        card.classList.add("settled");
-        settleConfirmOutcome(responses, confirmHooks);
-      } catch {
-        showError("Confirmation failed.");
-        setButtons(false);
+    try {
+      const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
+      stopTimer();
+      const list = el("div", "batch-outcomes");
+      for (const outcome of batchItemOutcomes(previews.map((p) => p.preview.actionLabel), responses)) {
+        const row = el("div", `batch-outcome ${outcome.ok ? "ok" : "failed"}`);
+        row.appendChild(svgIcon(outcome.ok ? ICON_CHECK : ICON_X));
+        row.appendChild(el("span", undefined, outcome.label));
+        row.appendChild(el("span", "detail", outcome.detail));
+        list.appendChild(row);
       }
-      return;
+      actions.replaceWith(list);
+      countdown?.remove(); // the deadline no longer applies to a settled card
+      card.classList.add("settled");
+      settleConfirmOutcome(responses, confirmHooks);
+    } catch {
+      showError("Confirmation failed.");
+      setButtons(false);
     }
-    // Single confirm STREAMS: the committed receipt renders immediately (the
-    // button never feels dead), then the durable resume streams its continuation
-    // — receipts, a chained preview, and the truthful reply — as it runs.
-    //
-    // The card is removed LAZILY on the first non-stale outcome (not up-front):
-    // a stale-nonce 400 (another tab rotated this preview's nonce) must NOT lose
-    // the card — onStale re-arms it in place. A real receipt/reply/error removes
-    // it exactly as before (the button still never feels dead). If the whole
-    // stream is a single stale event, `rearmed` is set and the card is kept.
+  });
+}
+
+/**
+ * Wire the single Confirm click (one preview).
+ *
+ * Confirm STREAMS: the committed receipt renders immediately (the button never
+ * feels dead), then the durable resume streams its continuation — receipts, a
+ * chained preview, and the truthful reply — as it runs. The card is removed
+ * LAZILY on the first non-stale outcome (not up-front): a stale-nonce 400
+ * (another tab rotated this preview's nonce) must NOT lose the card — onStale
+ * re-arms it in place. A real receipt/reply/error removes it exactly as before
+ * (the button still never feels dead). If the whole stream is a single stale
+ * event, `state.rearmed` is set and the card is kept.
+ */
+function wireSingleConfirm(
+  confirmButton: HTMLButtonElement,
+  refs: PreviewRef[],
+  card: HTMLElement,
+  state: ConfirmWiringState,
+  setButtons: (disabled: boolean) => void,
+  stopTimer: () => void,
+  confirmHooks: ConfirmHooks,
+  deps: PreviewDeps,
+): void {
+  const { controller, returnFocus, setWorking, setStatusLabel } = deps;
+  confirmButton.addEventListener("click", async () => {
+    // One-use: neither button may fire again (or cross-fire) once clicked.
+    setButtons(true);
     stopTimer();
     const removeCard = (): void => {
-      if (!rearmed) {
+      if (!state.rearmed) {
         // Focus sits on the just-clicked Confirm button INSIDE the card; pair the
         // removal with a focus return so it lands on the composer, not <body>
         // (WCAG 2.4.3, r1-ux-copy-a11y-04).
@@ -651,6 +697,23 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
       removeCard,
     });
   });
+}
+
+/**
+ * Wire the Cancel click — shared by the batch ("Cancel all") and single paths,
+ * since the cancel logic is identical (it maps over EVERY ref). A 409/403/404
+ * comes back as `{ ok:false, message }` (only a 401 throws) — inspect it instead
+ * of assuming success, so a concurrent-confirm never reads a false "Cancelled."
+ */
+function wireCancel(
+  cancelButton: HTMLButtonElement,
+  refs: PreviewRef[],
+  card: HTMLElement,
+  setButtons: (disabled: boolean) => void,
+  stopTimer: () => void,
+  deps: PreviewDeps,
+): void {
+  const { controller, showError, appendMessage, returnFocus } = deps;
   cancelButton.addEventListener("click", async () => {
     setButtons(true);
     let outcomes: Array<{ ok?: boolean; message?: string } | null | undefined>;
@@ -680,6 +743,77 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
     appendMessage("assistant", "Cancelled.");
   });
+}
+
+/**
+ * Assemble the preview card: header (buildPreviewHeader), the per-preview detail
+ * blocks, the advisory countdown lifecycle (attachExpiryCountdown), and the
+ * Confirm/Cancel wiring (batch vs single). Behavior is byte-identical to the
+ * former monolith — the extracted builders thread the shared mutable state
+ * (card, countdown, minExpiry, setButtons, refs, stopTimer, the rearmed flag)
+ * explicitly. SAFETY preserved: button-only confirm, one-use setButtons
+ * disabling, lazy card removal via the rearmed guard, the stale-nonce re-arm-in-
+ * place, and the advisory-only countdown (server TTL authoritative).
+ */
+export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTMLElement {
+  const { appendMessage, renderResults, showError, setStatusLabel } = deps;
+  const batch = previews.length > 1;
+  const card = el("div", "preview-card");
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", batch ? `${previews.length} changes awaiting confirmation` : "Change awaiting confirmation");
+
+  const { head, countdown, minExpiry, initialView } = buildPreviewHeader(previews);
+  card.appendChild(head);
+
+  for (const preview of previews) {
+    const block = el("div", "preview");
+    if (batch) block.appendChild(el("strong", undefined, preview.preview.actionLabel));
+    const targets = (preview.preview.targets ?? []).map((t) => t.name ?? t.id);
+    if (targets.length > 0) block.appendChild(el("div", "targets", `Target: ${targets.join(", ")}`));
+    const changes = el("ul");
+    for (const change of preview.preview.expectedChanges) {
+      changes.appendChild(el("li", undefined, change));
+    }
+    block.appendChild(changes);
+    block.appendChild(el("em", "reversibility", preview.preview.reversibility));
+    // Surface the harness's preview warnings (the "$0 caveat" class) — they
+    // exist precisely so the admin sees them BEFORE confirming.
+    for (const warning of preview.preview.warnings ?? []) {
+      block.appendChild(el("p", "warning", warning));
+    }
+    card.appendChild(block);
+  }
+
+  const actions = el("div", "buttons");
+  const refs: PreviewRef[] = previews.map((p) => ({ previewId: p.previewId, nonce: p.nonce }));
+  const confirmButton = el("button", "primary", batch ? "Confirm all" : "Confirm");
+  const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel");
+  const setButtons = (disabled: boolean): void => {
+    confirmButton.disabled = disabled;
+    cancelButton.disabled = disabled;
+  };
+
+  const stopTimer = attachExpiryCountdown(card, countdown, minExpiry, initialView, setButtons);
+
+  const state: ConfirmWiringState = { rearmed: false };
+  const confirmHooks: ConfirmHooks = {
+    onAssistant: (text) => appendMessage("assistant", text),
+    onResults: renderResults,
+    onError: showError,
+    // r1-ux-copy-a11y-03: the durable resume streams per-step status labels; drive
+    // the SAME typing-bubble label the chat path uses so they're not dropped.
+    onStatus: (label) => setStatusLabel?.(label),
+    onStale: (message) => handleStaleRearm(message, card, refs, state, stopTimer, setButtons, deps),
+  };
+
+  if (batch) {
+    wireBatchConfirm(confirmButton, previews, refs, card, actions, countdown, setButtons, stopTimer, confirmHooks, deps);
+  } else {
+    wireSingleConfirm(confirmButton, refs, card, state, setButtons, stopTimer, confirmHooks, deps);
+  }
+  // Cancel is wired for BOTH paths (the original handler lived outside the
+  // batch/single branch) — "Cancel all" maps over every ref.
+  wireCancel(cancelButton, refs, card, setButtons, stopTimer, deps);
   actions.appendChild(confirmButton);
   actions.appendChild(cancelButton);
   card.appendChild(actions);

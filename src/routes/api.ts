@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { buildMetrics, buildUsageMetrics } from "../metrics/metrics.js";
 import { reverseCreation, firstDeniedGroup } from "../harness/undo.js";
 import {
@@ -18,24 +18,10 @@ import {
   confirmBodySchema,
 } from "./request-schemas.js";
 import { asyncHandler } from "./async-handler.js";
+import { bestEffort } from "./best-effort.js";
+import { openNdjsonStream } from "./ndjson.js";
 import { sanitizeResultsForHistory } from "./chat-results.js";
 import { createChatPipeline } from "./chat-pipeline.js";
-
-// Re-export the history-sanitizer/truthful-preview helpers (extracted to
-// ./history-sanitizer.ts) so existing importers of api.ts keep resolving — the
-// integration test imports `previewReplyText`/`sanitizeStoredReplyForModel` from
-// here. This is a temporary compatibility shim (plan 002).
-export {
-  HISTORY_RESULT_MAX_BYTES,
-  pruneHistoryResult,
-  previewReplyText,
-  failureReplyText,
-  failedAttemptNote,
-  sanitizeStoredReplyForModel,
-  isTransientErrorMessage,
-  claimsCompletedMutation,
-  NO_CHANGE_MADE_REPLY,
-} from "./history-sanitizer.js";
 
 /**
  * JSON API (SPEC "Chat Flow", "Confirmation Rules", "Permissions Inside Chat").
@@ -43,11 +29,6 @@ export {
  * execute here: chat creates previews; only the confirm route — with a valid
  * button nonce and an atomic one-use claim — executes the stored operation.
  */
-
-// HISTORY_WINDOW_MESSAGES + IDEMPOTENCY_WINDOW_MS moved to ./chat-constants.ts
-// (leaf module shared with chat-pipeline.ts without a cycle); re-exported here so
-// existing importers of api.ts keep resolving (tests import them from api.js).
-export { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 
 /**
  * How many stored messages GET /api/chat/history replays to the UI after an iframe
@@ -67,6 +48,32 @@ export function apiRouter(deps: AppDeps): Router {
   const pipeline = createChatPipeline(deps);
   const { loadPolicy, requireSession, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
+
+  // Shared validate→apply step for the two permission routes (preview + confirm):
+  // Zod-parse the groups patch, load the caller's base policy, and apply the patch.
+  // Returns the resolved triple, or `undefined` AFTER writing the exact 400 the
+  // route used to write inline (so both routes keep byte-identical error codes and
+  // messages). The caller does `const r = resolvePermissionPatch(...); if (!r) return;`.
+  function resolvePermissionPatch(
+    req: Request,
+    res: Response,
+    claims: SessionClaims,
+  ): { base: AdminPolicy; next: AdminPolicy; changedGroups: string[] } | undefined {
+    const parsed = groupsPatchSchema.safeParse(req.body?.groups);
+    if (!parsed.success) {
+      res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission groups." });
+      return undefined;
+    }
+    const base = loadPolicy(claims.workspaceId, claims.adminUserId);
+    try {
+      const next = applyPolicyPatch(base, { groups: parsed.data ?? {} });
+      const changedGroups = Object.keys(parsed.data ?? {});
+      return { base, next, changedGroups };
+    } catch {
+      res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission change." });
+      return undefined;
+    }
+  }
 
   router.get("/me", (req, res) => {
     const claims = requireSession(req, res);
@@ -124,34 +131,17 @@ export function apiRouter(deps: AppDeps): Router {
   router.post("/permissions/preview", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;
-    const parsed = groupsPatchSchema.safeParse(req.body?.groups);
-    if (!parsed.success) {
-      return res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission groups." });
-    }
-    const base = loadPolicy(claims.workspaceId, claims.adminUserId);
-    try {
-      const next = applyPolicyPatch(base, { groups: parsed.data ?? {} });
-      const changedGroups = Object.keys(parsed.data ?? {});
-      return res.json({ ok: true, preview: { current: base, next, changedGroups } });
-    } catch {
-      return res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission change." });
-    }
+    const r = resolvePermissionPatch(req, res, claims);
+    if (!r) return;
+    return res.json({ ok: true, preview: { current: r.base, next: r.next, changedGroups: r.changedGroups } });
   });
 
   router.post("/permissions/confirm", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;
-    const parsed = groupsPatchSchema.safeParse(req.body?.groups);
-    if (!parsed.success) {
-      return res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission groups." });
-    }
-    const base = loadPolicy(claims.workspaceId, claims.adminUserId);
-    let next: AdminPolicy;
-    try {
-      next = applyPolicyPatch(base, { groups: parsed.data ?? {} });
-    } catch {
-      return res.status(400).json({ ok: false, code: "invalid_args", message: "Invalid permission change." });
-    }
+    const r = resolvePermissionPatch(req, res, claims);
+    if (!r) return;
+    const next = r.next;
     deps.store.upsertAdminPolicy(claims.workspaceId, claims.adminUserId, next);
     const receipt = successReceipt({
       action: "assistant_update_permissions",
@@ -257,8 +247,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceRole: claims.workspaceRole,
       expiresAt: session.expiresAt,
     };
-    const secure = deps.config.baseUrl.startsWith("https://");
-    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, secure);
+    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
     res.json({ ok: true });
   });
 
@@ -287,8 +276,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceRole: claims.workspaceRole,
       expiresAt: target.expiresAt,
     };
-    const secure = deps.config.baseUrl.startsWith("https://");
-    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, secure);
+    setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
     res.json({ ok: true });
   });
 
@@ -311,20 +299,10 @@ export function apiRouter(deps: AppDeps): Router {
   router.post("/chat/stream", asyncHandler(async (req, res) => {
     const pre = chatPreconditions(req, res);
     if (!pre) return;
-    res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-    res.setHeader("Cache-Control", "no-cache, no-transform");
-    res.setHeader("X-Accel-Buffering", "no"); // don't let a proxy buffer the stream
-    // Stop the agentic loop if the client (iframe/proxy) drops the connection
-    // mid-turn — no further model calls or writes for a turn nobody is watching.
-    // res.on("close") fires on a normal end too, but aborting after we've ended
-    // is a harmless no-op (the turn already finished).
-    const ac = new AbortController();
-    res.on("close", () => {
-      if (!res.writableEnded) ac.abort();
-    });
-    const write = (event: unknown): void => {
-      res.write(`${JSON.stringify(event)}\n`);
-    };
+    // openNdjsonStream sets the streaming headers and wires cooperative
+    // cancellation: `signal` fires if the client (iframe/proxy) drops mid-turn,
+    // so no further model calls or writes run for a turn nobody is watching.
+    const { write, signal } = openNdjsonStream(res);
     try {
       const turn = await executeChatTurn(
         pre.claims,
@@ -332,7 +310,7 @@ export function apiRouter(deps: AppDeps): Router {
         pre.message,
         (result) => write({ type: "result", result }),
         (status) => write({ type: "status", ...status }),
-        ac.signal,
+        signal,
       );
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
       else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
@@ -371,17 +349,9 @@ export function apiRouter(deps: AppDeps): Router {
     // timeout / "Confirmation failed" the way one blocking JSON response could. The
     // JSON path (no ?stream) is unchanged for scripts/tests.
     if (req.query.stream === "1") {
-      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache, no-transform");
-      res.setHeader("X-Accel-Buffering", "no");
-      // Stop the resumed loop if the client drops mid-resume (see /chat/stream).
-      const ac = new AbortController();
-      res.on("close", () => {
-        if (!res.writableEnded) ac.abort();
-      });
-      const write = (event: unknown): void => {
-        res.write(`${JSON.stringify(event)}\n`);
-      };
+      // openNdjsonStream sets the streaming headers and fires `signal` if the
+      // client drops mid-resume (see /chat/stream).
+      const { write, signal } = openNdjsonStream(res);
       write({ type: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
       try {
         const resumed = await runResume(
@@ -391,7 +361,7 @@ export function apiRouter(deps: AppDeps): Router {
           receipt,
           (result) => write({ type: "result", result }),
           (status) => write({ type: "status", ...status }),
-          ac.signal,
+          signal,
         );
         if (resumed) write({ type: "reply", kind: resumed.replyKind, text: resumed.replyText });
       } catch {
@@ -453,7 +423,7 @@ export function apiRouter(deps: AppDeps): Router {
     // undone). A transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.
     // Mirror commitConfirmation: best-effort audit, message-only log, return the receipt.
-    try {
+    bestEffort("undo bookkeeping", () => {
       deps.store.addAuditEvent({
         workspaceId: claims.workspaceId,
         adminUserId: claims.adminUserId,
@@ -462,9 +432,7 @@ export function apiRouter(deps: AppDeps): Router {
         risk: ["destructive"],
         receipt,
       });
-    } catch (err) {
-      console.error(`[undo] audit write failed (reversal already applied): ${err instanceof Error ? err.message : "unknown"}`);
-    }
+    });
     return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });
   }));
 

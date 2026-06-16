@@ -22,9 +22,24 @@ export function actionOutcomesSql(bounded: boolean): string {
 }
 
 /** SQL for {@link Store.listConfirmationOutcomes}; same conditional-bound shape. */
-export function confirmationOutcomesSql(bounded: boolean): string {
+function confirmationOutcomesSql(bounded: boolean): string {
   return `SELECT status, expires_at FROM pending_confirmations
           WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
+}
+
+/**
+ * The conditional-bind params for a workspace+admin read: a 2-tuple when
+ * `sinceIso` is undefined (so the appended `AND created_at >= ?` is absent —
+ * preserving the index seek, see actionOutcomesSql) and a 3-tuple otherwise.
+ * One source of truth for every since-bounded read so the param arity can never
+ * drift from the `bounded` flag the SQL builder reads.
+ */
+export function boundedWorkspaceAdminParams(
+  workspaceId: string,
+  adminUserId: string,
+  sinceIso: string | undefined,
+): unknown[] {
+  return sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
 }
 
 /** Audit + operational-metrics concern: the audit log and the two outcome reads. */
@@ -53,7 +68,7 @@ export function buildAuditMetricsStore(ctx: StoreContext): {
 
     listActionOutcomes(workspaceId, adminUserId, sinceIso) {
       const sql = actionOutcomesSql(sinceIso !== undefined);
-      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const params = boundedWorkspaceAdminParams(workspaceId, adminUserId, sinceIso);
       const rows = db.prepare(sql).all(...params) as Array<{
         action_name: string;
         // SQLite json_extract returns the JSON value as a native scalar: 1/0 for
@@ -71,7 +86,7 @@ export function buildAuditMetricsStore(ctx: StoreContext): {
 
     listConfirmationOutcomes(workspaceId, adminUserId, sinceIso) {
       const sql = confirmationOutcomesSql(sinceIso !== undefined);
-      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const params = boundedWorkspaceAdminParams(workspaceId, adminUserId, sinceIso);
       const rows = db.prepare(sql).all(...params) as Array<{
         status: string;
         expires_at: string;

@@ -184,13 +184,14 @@ const updatePermissions = defineRiskyAction({
 });
 
 /**
- * Entity types the generic update can actually write — mirrors the adapter's
- * `updateEntity` path table. Every OTHER type has a typed per-area action; the
- * preview redirects there instead of letting a doomed operation reach the
- * Confirm button (live: a confirmed time_entry update died at commit with
- * "update not supported" — a previewed action must never fail that way).
+ * Where the generic update redirects each non-listable type. The set of types
+ * the generic update can actually write is exactly what `genericEntityList`
+ * resolves (project/client/tag) — its single source of truth; every OTHER type
+ * has a typed per-area action and the preview redirects there instead of letting
+ * a doomed operation reach the Confirm button (live: a confirmed time_entry
+ * update died at commit with "update not supported" — a previewed action must
+ * never fail that way).
  */
-const GENERIC_UPDATE_TYPES = new Set(["project", "client", "tag"]);
 const TYPED_UPDATE_ACTION: Partial<Record<(typeof DELETABLE_ENTITY_TYPES)[number], string>> = {
   task: "clockify_tasks_update",
   time_entry: "clockify_fix_entry (supports description/project/task/tags/billable)",
@@ -215,7 +216,12 @@ const updateEntity = defineRiskyAction({
   }),
   resolveFeatureGroup: (args) => ENTITY_GROUP[args.entityType],
   async preview(ctx, args) {
-    if (!GENERIC_UPDATE_TYPES.has(args.entityType)) {
+    // Redirect BEFORE resolving: only the types `genericEntityList` lists
+    // (project/client/tag) can be written through the generic path — that list
+    // IS the single source of truth. Any other type has a typed per-area action,
+    // so redirect there instead of letting a doomed operation reach Confirm.
+    const list = genericEntityList(ctx, args.entityType);
+    if (!list) {
       const typed = TYPED_UPDATE_ACTION[args.entityType];
       return {
         clarify: `The generic update can't change a ${args.entityType} — use ${typed ?? "the matching typed action"} instead.`,
@@ -225,10 +231,9 @@ const updateEntity = defineRiskyAction({
       ...(args.name ? { name: args.name } : {}),
       ...(args.fields ?? {}),
     };
-    // GENERIC_UPDATE_TYPES are exactly the listable ones — a NAME in the id
-    // slot resolves here (item 091), never reaches the wire. Unarchiving may
-    // target an archived entity.
-    const list = genericEntityList(ctx, args.entityType)!;
+    // The listable types are exactly these — a NAME in the id slot resolves
+    // here (item 091), never reaches the wire. Unarchiving may target an
+    // archived entity.
     const resolved = await resolveEntityRef(
       { id: args.id },
       {

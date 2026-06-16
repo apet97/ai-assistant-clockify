@@ -120,6 +120,78 @@ export interface ConfirmStreamApi {
 }
 
 /**
+ * The hook surface a streamed turn dispatches into. Both `ComposerHooks` (chat
+ * stream) and `ConfirmHooks` (confirm-resume stream) are structurally assignable
+ * to it — `onStale` is optional, so the chat path (which has none) just falls
+ * through to `onError`, byte-identical to its old inline handler.
+ */
+export interface StreamDispatchHooks {
+  onAssistant(text: string): void;
+  onResults(results: ChatResult[]): void;
+  onError(message: string): void;
+  onStatus?(label: string): void;
+  onStale?(message: string): void;
+}
+
+/**
+ * A small buffer that holds streamed PREVIEW results until the reply (or the end
+ * of the stream) so a batch keeps its single "Confirm all" card. Receipts and
+ * clarifies render as they arrive; previews accumulate here and flush together —
+ * the flush-at-reply + flush-in-finally invariant both the chat stream and the
+ * confirm-resume stream depend on (pinned by ui-streaming + ui-confirm).
+ */
+export class PreviewBuffer {
+  private readonly pending: ChatResult[] = [];
+  constructor(private readonly onResults: (results: ChatResult[]) => void) {}
+  push(result: ChatResult): void {
+    this.pending.push(result);
+  }
+  /** Emit the buffered previews as ONE batch (no-op when empty). */
+  flush(): void {
+    if (this.pending.length > 0) this.onResults(this.pending.splice(0));
+  }
+}
+
+/**
+ * Dispatch ONE streamed NDJSON event into the hook surface, buffering previews so
+ * a batch keeps its single Confirm-all card. Shared by the chat stream
+ * (`submitStreaming`) and the confirm-resume stream (`submitConfirmStream`); the
+ * latter handles the extra leading `receipt` event itself (the committed receipt
+ * that must render FIRST) before delegating the rest here.
+ *
+ * Truth contract preserved: `result`/`preview` → buffer; other `result` kinds →
+ * `onResults`; `reply` → flush the buffer THEN append the (truthful) reply text;
+ * `error` routes a stale-nonce 400 to `onStale` when present (re-armable retry,
+ * the preview was NOT burned) else `onError` with the caller's fallback; `status`
+ * drives the optional label hook; unknown types are ignored.
+ */
+export function dispatchStreamEvent(
+  event: StreamEvent,
+  hooks: StreamDispatchHooks,
+  buffer: PreviewBuffer,
+  errorFallback: string,
+): void {
+  if (event.type === "result" && event.result) {
+    if (event.result.kind === "preview") buffer.push(event.result);
+    else hooks.onResults([event.result]);
+  } else if (event.type === "reply") {
+    buffer.flush();
+    if (event.text) hooks.onAssistant(event.text);
+  } else if (event.type === "error") {
+    const message = typeof event.message === "string" ? event.message : errorFallback;
+    // A stale-nonce 400 (another tab rotated this preview's nonce) is a
+    // RE-ARMABLE retry — route it to onStale so this tab can re-fetch + re-render
+    // the still-live card, never a dead-end error. The preview is NOT burned on
+    // this path (api.ts returns JSON BEFORE any commit), so the freshly re-served
+    // nonce will validate. The chat stream has no onStale, so it falls to onError.
+    if (event.code === STALE_NONCE_CODE && hooks.onStale) hooks.onStale(message);
+    else hooks.onError(message);
+  } else if (event.type === "status") {
+    if (typeof event.label === "string") hooks.onStatus?.(event.label);
+  }
+}
+
+/**
  * Settle a STREAMED single confirm. The committed receipt arrives FIRST and is
  * rendered immediately, so the Confirm button never feels dead while a multi-step
  * resume runs (and the live stream keeps the connection alive, so a slow resume
@@ -128,37 +200,22 @@ export interface ConfirmStreamApi {
  * its single Confirm card stays intact. Never falls back to the generic "Confirmed."
  */
 export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef, hooks: ConfirmHooks): Promise<void> {
-  const pendingPreviews: ChatResult[] = [];
-  const flush = (): void => {
-    if (pendingPreviews.length > 0) hooks.onResults(pendingPreviews.splice(0));
-  };
+  const buffer = new PreviewBuffer(hooks.onResults);
   try {
     await api.confirmStream(ref, (event) => {
+      // The confirm-resume stream's extra leading event: the committed receipt
+      // must render FIRST (the button never feels dead) — everything after is the
+      // ordinary streamed-turn dispatch.
       if (event.type === "receipt" && event.receipt) {
         hooks.onResults([{ kind: "receipt", receipt: event.receipt, ...(event.undo ? { undo: event.undo } : {}) } as ReceiptResult]);
-      } else if (event.type === "result" && event.result) {
-        if (event.result.kind === "preview") pendingPreviews.push(event.result);
-        else hooks.onResults([event.result]);
-      } else if (event.type === "reply") {
-        flush();
-        if (event.text) hooks.onAssistant(event.text);
-      } else if (event.type === "error") {
-        const message = typeof event.message === "string" ? event.message : "The follow-up couldn't complete.";
-        // A stale-nonce 400 (another tab rotated this preview's nonce) is a
-        // RE-ARMABLE retry — route it to onStale so this tab can re-fetch + re-
-        // render the still-live card, never a dead-end error. The preview is NOT
-        // burned on this path (api.ts returns JSON BEFORE any commit), so the
-        // freshly re-served nonce will validate.
-        if (event.code === STALE_NONCE_CODE && hooks.onStale) hooks.onStale(message);
-        else hooks.onError(message);
-      } else if (event.type === "status") {
-        if (typeof event.label === "string") hooks.onStatus?.(event.label);
+        return;
       }
+      dispatchStreamEvent(event, hooks, buffer, "The follow-up couldn't complete.");
     });
   } catch {
     hooks.onError("Confirmation failed.");
   } finally {
-    flush();
+    buffer.flush();
   }
 }
 

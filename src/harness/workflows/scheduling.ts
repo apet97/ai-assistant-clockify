@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
@@ -8,7 +9,8 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolveInstant, resolveUserFilter, resolveUserRef } from "./resolve.js";
+import { describePatch, resolveDateRange, resolveEntityRef, resolveUserFilter, resolveUserRef } from "./resolve.js";
+import { nowDate } from "../../durations.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -31,20 +33,14 @@ function resolveSchedulingWindow(
   ctx: ActionContext,
   args: { start?: string; end?: string },
 ): { ok: true; start?: string; end?: string } | { ok: false; message: string } {
-  const now = (ctx.now ?? (() => new Date()))();
-  const start = args.start !== undefined ? resolveInstant(now, args.start, "start") : undefined;
-  const end = args.end !== undefined ? resolveInstant(now, args.end, "end") : undefined;
-  const bad = [
-    args.start !== undefined && start === undefined ? args.start : undefined,
-    args.end !== undefined && end === undefined ? args.end : undefined,
-  ].filter((value): value is string => value !== undefined);
-  if (bad.length) {
-    return {
-      ok: false,
-      message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, tomorrow, or next monday.`,
-    };
-  }
-  return { ok: true, start, end };
+  // Both edges are optional with no default (an omitted edge stays undefined);
+  // the shared resolver owns the per-edge resolveInstant, the bad-date
+  // collection, and the clarify copy — only the example-hint tail is ours.
+  return resolveDateRange(nowDate(ctx), {
+    start: { raw: args.start },
+    end: { raw: args.end },
+    exampleHint: "today, tomorrow, or next monday",
+  });
 }
 
 const listAssignments = defineAction({
@@ -63,7 +59,7 @@ const listAssignments = defineAction({
       adminUserId: ctx.adminUserId,
       listUsers: () => ctx.clockify.listUsers(),
     });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    if (!user.ok) return clarifyResult(user.clarify);
     const items = await ctx.clockify.listAssignments({ ...args, userId: user.userId, start: window.start, end: window.end });
     return {
       kind: "receipt",
@@ -101,9 +97,9 @@ const createAssignment = defineAction({
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { kind: "clarify", message: window.message };
     const user = await resolveUserRef({ id: args.userId }, { verb: "schedule", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    if (!user.ok) return clarifyResult(user.clarify);
     const project = await resolveEntityRef({ id: args.projectId }, { noun: "project", verb: "schedule on", list: (f) => ctx.clockify.listProjects(f) });
-    if (!project.ok) return { kind: "clarify", message: project.clarify.clarify, options: project.clarify.options };
+    if (!project.ok) return clarifyResult(project.clarify);
     const assignment = await ctx.clockify.createAssignment({
       ...args,
       userId: user.userId,
@@ -217,7 +213,7 @@ const projectTotals = defineAction({
         { noun: "project", verb: "total", list: (f) => ctx.clockify.listProjects(f) },
       );
       if (!project.ok) {
-        return { kind: "clarify", message: project.clarify.clarify, options: project.clarify.options };
+        return clarifyResult(project.clarify);
       }
       projectId = project.id;
     }
@@ -249,8 +245,8 @@ const userTotals = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
-    const data = await ctx.clockify.getUserScheduleTotals(user.userId as string, {
+    if (!user.ok) return clarifyResult(user.clarify);
+    const data = await ctx.clockify.getUserScheduleTotals(user.userId, {
       start: window.start as string,
       end: window.end as string,
     });

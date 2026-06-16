@@ -56,12 +56,13 @@ npm run dev           # tsx src/server.ts (needs env)
 
 - `src/config.ts` — env config (Zod). `src/db/` — SQLite schema; `store.ts` is a
   thin facade composing per-concern builders in `store/` (sessions, confirmations,
-  idempotency ledger, undo, audit/metrics, telemetry, installations + AES-256-GCM
-  token encryption). `src/auth/` — admin role check, signed session cookie.
+  idempotency ledger, undo, audit/metrics, telemetry, installations, retention +
+  AES-256-GCM token encryption). `src/auth/` — admin role check, signed session cookie.
 - `src/addon/` — manifest + Clockify token verification (RS256, one platform key
   built in).
 - `src/clockify/` — `client.ts` (the `WorkspaceClient` port, the seam),
-  `rest-workspace.ts` (live REST adapter, `X-Addon-Token`; I/O only),
+  `rest-workspace.ts` (live REST adapter, `X-Addon-Token`; I/O only; per-area
+  `rest/*` over `rest/core.ts`, shared date normalization in `rest/wire-dates.ts`),
   `api-base.ts` (hosts from the install token claims).
 - `src/assistant/` — model client (OpenAI-compatible HTTP or `gemini-cli`), prompt
   builder, planner (native tool-calling default, JSON fallback),
@@ -74,14 +75,22 @@ npm run dev           # tsx src/server.ts (needs env)
   tool subsetting — the model sees only the message-relevant actions + a core, on the
   chat turn and its resume; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `compose.ts` (atomic multi-step/rollback), `idempotency.ts` (dedup confirmed
-  commits), `undo.ts`, `money.ts` (the one major↔minor mapping), `workflows/*`
-  (+ `resolve.ts`).
+  commits), `undo.ts`, `money.ts` (the one major↔minor mapping, both ways —
+  `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
+  `resolve.ts` (entities), `resolve-dates.ts` (calendar + `resolveDateRange`),
+  `preview-patch.ts`, all re-exported via `resolve.ts`; plus shared
+  `resolveScopeRefs`, `clarifyResult` (`action.ts`), and the `rate.ts`
+  rate-preview builder.
 - `src/routes/` — `lifecycle.ts`, `component.ts`, `api.ts` (the route handlers for
   chat + stream + confirm + undo + metrics + new chat + history switcher). The
   turn/confirm/commit machinery lives in `chat-pipeline.ts` (`createChatPipeline`),
-  pure result transforms + guards in `chat-results.ts`; shared `deps.ts`. `server.ts`
-  — `createApp(deps)` + `start()`.
-- `src/ui/` — vanilla TS chat UI (a11y; "New chat" + "Chats ▾" history dropdown).
+  pure result transforms + guards in `chat-results.ts`, the never-break-a-turn
+  bookkeeping wrapper `best-effort.ts`, NDJSON-stream setup `ndjson.ts`; shared
+  `deps.ts`. `server.ts` — `createApp(deps)` + `start()`.
+- `src/ui/` — vanilla TS chat UI (a11y; "New chat" + "Chats ▾" history dropdown);
+  HTTP/NDJSON client in `api-client.ts`, composer/stream flows in
+  `composer-flow.ts`, rendering in `render.ts`/`shared.ts`, `main.ts` keeps
+  `mount()` + a re-export barrel.
   `tests/` — unit + integration (fakes via `tests/helpers/fake-clockify.ts`;
   `tests/helpers/session.ts` mints an admin cookie in-process). `scripts/` — opt-in
   live exercisers (sacrificial workspace only).

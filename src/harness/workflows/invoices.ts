@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
@@ -10,10 +11,10 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
-import { toMinor } from "../money.js";
+import { fromMinor, toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
-import { describePatch, resolveEntityRef, resolveInstant } from "./resolve.js";
-import { discoverItemTypes, resolveItemType, itemTypeClarify } from "./invoices-schema.js";
+import { describePatch, resolveDateRange, resolveEntityRef, resolveInstant } from "./resolve.js";
+import { discoverItemTypes, resolveItemType, itemTypeClarify, taxApplyFlag } from "./invoices-schema.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -36,6 +37,46 @@ function nowDate(ctx: ActionContext): Date {
 }
 
 /**
+ * The shared "an invoice line/import changed this invoice" commit receipt —
+ * items_add / items_delete / import_time all touch a live invoice doc without
+ * creating or deleting the invoice itself, so they report it as `updated`. One
+ * copy so the three receipts can't drift. The create/payment/delete receipts
+ * stay distinct (they report created/deleted refs, not a bare invoice update).
+ */
+function invoiceUpdatedReceipt(ctx: ActionContext, action: string, invoiceId: string): SuccessReceipt {
+  return successReceipt({
+    action,
+    entity: "invoice",
+    ids: { workspaceId: ctx.workspaceId, invoiceId },
+    changed: { updated: [{ type: "invoice", id: invoiceId }] },
+  });
+}
+
+/**
+ * The success arm of {@link resolveInvoiceRef}, discriminated on HOW the invoice
+ * was resolved so the "currency + invoices both known, or both unknown" coupling
+ * is in the TYPE, not just prose:
+ *
+ * - `resolvedFrom: "list"` — the ref was a number / non-hex id, so the invoice
+ *   LIST was fetched: `invoices` (for item-type discovery reuse) and the
+ *   invoice's `currency` (for an amount-preview affix) are both available.
+ * - `resolvedFrom: "id"` — the ref was a real 24-hex id, so resolveEntityRef
+ *   short-circuited WITHOUT listing: neither `invoices` nor `currency` is known
+ *   (discoverItemTypes then fetches lazily; the amount preview shows the figure
+ *   unlabelled).
+ */
+type ResolvedInvoice =
+  | { ok: true; resolvedFrom: "id"; id: string; number?: string }
+  | {
+      ok: true;
+      resolvedFrom: "list";
+      id: string;
+      number?: string;
+      currency?: string;
+      invoices: ReadonlyArray<{ id: string }>;
+    };
+
+/**
  * The planner refers to invoices by their NUMBER at least as often as by id —
  * the live loop sent `/invoices/INV-…` on every single invoice call, each one a
  * confirmed-then-failed commit. Resolve either form (id, number, or a number in
@@ -45,10 +86,7 @@ async function resolveInvoiceRef(
   ctx: ActionContext,
   ref: { id?: string; number?: string },
   verb: string,
-): Promise<
-  | { ok: true; id: string; number?: string; currency?: string; invoices?: ReadonlyArray<{ id: string }> }
-  | { ok: false; clarify: RiskyClarifyResult }
-> {
+): Promise<ResolvedInvoice | { ok: false; clarify: RiskyClarifyResult }> {
   // Capture the fetched invoice list once so item-type discovery can reuse it
   // (an item-add preview must issue exactly one listInvoices, not two). When the
   // ref is already a real id, resolveEntityRef never lists — leave it undefined
@@ -69,12 +107,12 @@ async function resolveInvoiceRef(
     },
   );
   if (!resolved.ok) return resolved;
-  // `invoices` stays undefined when resolveEntityRef short-circuited on a real
-  // 24-hex id (no list fetched) — discoverItemTypes then fetches lazily so a
-  // real-id item-add still discovers types instead of scanning an empty list.
-  // `currency` is likewise only known when the invoice was resolved from the
-  // list; on the raw-id fast path the amount preview shows the figure unlabelled.
-  return { ok: true, id: resolved.id, number: resolved.name, currency: resolved.entity?.currency, invoices };
+  // `invoices` is set IFF the list was fetched (a number/non-hex id) — the same
+  // condition under which `currency` is known. The raw-id fast path leaves both
+  // unknown. Encode that coupling with the discriminant.
+  return invoices !== undefined
+    ? { ok: true, resolvedFrom: "list", id: resolved.id, number: resolved.name, currency: resolved.entity?.currency, invoices }
+    : { ok: true, resolvedFrom: "id", id: resolved.id, number: resolved.name };
 }
 
 /** Identity schema for invoice reads: an id, or a number (either slot works). */
@@ -100,9 +138,7 @@ function defineInvoiceRead(def: {
     async handler(ctx, args): Promise<ActionResult> {
       const typed = args as { id?: string; number?: string };
       const resolved = await resolveInvoiceRef(ctx, typed, "fetch");
-      if (!resolved.ok) {
-        return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
-      }
+      if (!resolved.ok) return clarifyResult(resolved.clarify);
       return { kind: "receipt", receipt: await def.read(ctx, resolved.id, args as Record<string, unknown>) };
     },
   });
@@ -256,7 +292,12 @@ const createInvoice = defineRiskyAction({
 
     // Default the required fields the planner usually omits. Dates resolve
     // server-side ("today"/"next month" must never reach a billing wire raw);
-    // unresolvable ⇒ clarify, never send.
+    // unresolvable ⇒ clarify, never send. BOTH the issued and due dates resolve
+    // at the START edge (an invoice date is a calendar day, not a window end —
+    // "due next month" = the 1st, not the 31st; pinned by invoices.test.ts:170),
+    // so resolveDateRange (which forces the END edge for `to`) doesn't fit here.
+    // The shared range helper IS used in importInvoiceTime, where from→start /
+    // to→end is exactly right. Defaults: issued = now (full instant), due = +30d.
     const now = nowDate(ctx);
     const stamp = now.toISOString().replace(/[^0-9]/g, "").slice(0, 14);
     const number = args.number ?? `INV-${stamp}`;
@@ -291,14 +332,7 @@ const createInvoice = defineRiskyAction({
     // Item-based tax: when the create sets a rate, its items default to taxed
     // (matches Clockify's checked-by-default TAX/TAX2 columns). An explicit
     // per-item applyTaxes still wins.
-    const defaultApplyTaxes =
-      args.taxPercent !== undefined && args.tax2Percent !== undefined
-        ? "TAX1TAX2"
-        : args.tax2Percent !== undefined
-          ? "TAX2"
-          : args.taxPercent !== undefined
-            ? "TAX1"
-            : undefined;
+    const defaultApplyTaxes = taxApplyFlag(args.taxPercent !== undefined, args.tax2Percent !== undefined);
     const items: Array<{ itemType: string; description?: string; quantity?: number; unitPriceMinor?: number; applyTaxes?: string }> = [];
     for (const it of args.items ?? []) {
       const resolved = resolveItemType(discovered, it.itemType);
@@ -338,7 +372,7 @@ const createInvoice = defineRiskyAction({
         (it) =>
           `Add item${it.description ? ` "${it.description}"` : ""}` +
           `${it.quantity !== undefined ? ` ×${it.quantity}` : ""}` +
-          `${it.unitPriceMinor !== undefined ? ` @ ${(it.unitPriceMinor / 100).toFixed(2)} ${currency}` : ""}`,
+          `${it.unitPriceMinor !== undefined ? ` @ ${fromMinor(it.unitPriceMinor)} ${currency}` : ""}`,
       ),
     ];
     if (args.taxPercent !== undefined) expectedChanges.push(`Tax ${args.taxPercent}%`);
@@ -566,9 +600,11 @@ const addInvoiceItem = defineRiskyAction({
     if (!invoice.ok) return invoice.clarify;
     // Resolve the item type against the workspace's actual configured types
     // (discovered from existing line items) — never a blind "NEW DEFAULT".
-    // Reuse the invoice list resolveInvoiceRef just fetched, so this preview
-    // issues a single listInvoices instead of two.
-    const discovered = await discoverItemTypes(ctx, invoice.invoices);
+    // Reuse the invoice list resolveInvoiceRef just fetched (only the list path
+    // has it; the raw-id path leaves it undefined and discoverItemTypes fetches
+    // lazily), so this preview issues a single listInvoices instead of two.
+    const reuseInvoices = invoice.resolvedFrom === "list" ? invoice.invoices : undefined;
+    const discovered = await discoverItemTypes(ctx, reuseInvoices);
     const resolved = resolveItemType(discovered, args.itemType);
     if (!resolved.ok) return itemTypeClarify(resolved.options);
     const itemType = resolved.itemType;
@@ -583,7 +619,7 @@ const addInvoiceItem = defineRiskyAction({
       const detail = await ctx.clockify.getInvoice(invoice.id);
       const hasTax1 = typeof detail?.tax === "number" && detail.tax > 0;
       const hasTax2 = typeof detail?.tax2 === "number" && detail.tax2 > 0;
-      applyTaxes = hasTax1 && hasTax2 ? "TAX1TAX2" : hasTax2 ? "TAX2" : hasTax1 ? "TAX1" : undefined;
+      applyTaxes = taxApplyFlag(hasTax1, hasTax2);
     }
     const item: Record<string, unknown> = {
       itemType,
@@ -597,12 +633,14 @@ const addInvoiceItem = defineRiskyAction({
     // Show the quantity AND the unit price (the human/major figure, never the
     // 100x wire integer) on the card — the admin confirms a billing amount, so a
     // model-garbled price must be catchable before Confirm, the same as
-    // create-with-items. Currency is appended when the invoice's is known.
-    const currencySuffix = invoice.currency ? ` ${invoice.currency}` : "";
+    // create-with-items. Currency is appended when the invoice's is known (only
+    // the list path carries it; the raw-id fast path shows the figure unlabelled).
+    const currency = invoice.resolvedFrom === "list" ? invoice.currency : undefined;
+    const currencySuffix = currency ? ` ${currency}` : "";
     const expectedChange =
       `Add ${itemType} item${args.description ? ` "${args.description}"` : ""}` +
       ` ×${quantity}` +
-      (unitPriceMinor !== undefined ? ` @ ${(unitPriceMinor / 100).toFixed(2)}${currencySuffix}` : "");
+      (unitPriceMinor !== undefined ? ` @ ${fromMinor(unitPriceMinor)}${currencySuffix}` : "");
     return {
       actionLabel: "Add invoice item",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
@@ -618,12 +656,7 @@ const addInvoiceItem = defineRiskyAction({
       item: Parameters<typeof ctx.clockify.addInvoiceItem>[1];
     };
     await ctx.clockify.addInvoiceItem(typed.invoiceId, typed.item);
-    return successReceipt({
-      action: "clockify_invoices_items_add",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
-      changed: { updated: [{ type: "invoice", id: typed.invoiceId }] },
-    });
+    return invoiceUpdatedReceipt(ctx, "clockify_invoices_items_add", typed.invoiceId);
   },
 });
 
@@ -649,12 +682,7 @@ const deleteInvoiceItem = defineRiskyAction({
   async commit(ctx, payload) {
     const { invoiceId, index } = payload as { invoiceId: string; index: number };
     await ctx.clockify.deleteInvoiceItem(invoiceId, index);
-    return successReceipt({
-      action: "clockify_invoices_items_delete",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId },
-      changed: { updated: [{ type: "invoice", id: invoiceId }] },
-    });
+    return invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId);
   },
 });
 
@@ -685,11 +713,10 @@ const createInvoicePayment = defineRiskyAction({
       actionLabel: "Record invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       // Show the HUMAN amount (major units), matching the item preview's
-      // `(unitPriceMinor / 100).toFixed(2)` formatting — never the 100x wire
-      // integer, which would read as $5000 on a $50 payment. Minor units stay
-      // in the payload only.
+      // `fromMinor(...)` formatting — never the 100x wire integer, which would
+      // read as $5000 on a $50 payment. Minor units stay in the payload only.
       expectedChanges: [
-        `Record a payment of ${(amountMinor / 100).toFixed(2)} dated ${args.paymentDate}`,
+        `Record a payment of ${fromMinor(amountMinor)} dated ${args.paymentDate}`,
       ],
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
@@ -778,17 +805,15 @@ const importInvoiceTime = defineRiskyAction({
     // "[to] can't be null". from→start-of-day, to→end-of-day (Clockify wants `to`
     // strictly after `from`); unparseable ⇒ clarify, never send.
     const now = nowDate(ctx);
-    const from = resolveInstant(now, args.from, "start");
-    const to = resolveInstant(now, args.to, "end");
-    const badDates = [
-      from === undefined ? `start date "${args.from}"` : undefined,
-      to === undefined ? `end date "${args.to}"` : undefined,
-    ].filter((value): value is string => value !== undefined);
-    if (badDates.length || from === undefined || to === undefined) {
-      return {
-        clarify: `I couldn't make sense of the ${badDates.join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, last week, or this month.`,
-      };
-    }
+    const dates = resolveDateRange(now, {
+      start: { raw: args.from },
+      end: { raw: args.to },
+      exampleHint: "today, last week, or this month",
+    });
+    if (!dates.ok) return { clarify: dates.message };
+    // Both edges are required (schema `.min(1)`) and resolved (else `!dates.ok`).
+    const from = dates.start as string;
+    const to = dates.end as string;
     const range = {
       from,
       to,
@@ -809,12 +834,7 @@ const importInvoiceTime = defineRiskyAction({
       range: Parameters<typeof ctx.clockify.importInvoiceTime>[1];
     };
     await ctx.clockify.importInvoiceTime(typed.invoiceId, typed.range);
-    return successReceipt({
-      action: "clockify_invoices_import_time",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
-      changed: { updated: [{ type: "invoice", id: typed.invoiceId }] },
-    });
+    return invoiceUpdatedReceipt(ctx, "clockify_invoices_import_time", typed.invoiceId);
   },
 });
 

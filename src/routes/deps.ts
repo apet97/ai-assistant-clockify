@@ -81,8 +81,12 @@ export function resolveSession(req: Request, deps: AppDeps): SessionClaims | und
  * Sign `claims` and write the session cookie header (ARCH-04). The two
  * re-cookie routes (`POST /chat/new`, `POST /chat/sessions/:id/open`) build a
  * route-specific `SessionClaims`, then share this exact sign+set step so the
- * cookie attributes can never drift between them.
+ * cookie attributes can never drift between them. The `secure` flag is derived
+ * HERE from `baseUrl` (single source of truth) so no caller re-computes it: an
+ * https base means the cross-site iframe cookie (SameSite=None; Secure;
+ * Partitioned); local http dev/tests fall back to SameSite=Lax.
  */
-export function setSessionCookie(res: Response, claims: SessionClaims, sessionSecret: string, secure: boolean): void {
+export function setSessionCookie(res: Response, claims: SessionClaims, sessionSecret: string, baseUrl: string): void {
+  const secure = baseUrl.startsWith("https://");
   res.setHeader("Set-Cookie", buildSessionCookie(signSessionCookie(claims, sessionSecret), secure));
 }

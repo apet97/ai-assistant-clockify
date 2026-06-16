@@ -70,7 +70,6 @@ function shellHtml(): string {
 
 export function componentRouter(deps: AppDeps): Router {
   const router = Router();
-  const secure = deps.config.baseUrl.startsWith("https://");
 
   router.get(
     "/component/assistant",
@@ -138,7 +137,7 @@ export function componentRouter(deps: AppDeps): Router {
         expiresAt: session.expiresAt,
       };
       const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);
-      res.setHeader("Set-Cookie", buildSessionCookie(cookie, secure));
+      res.setHeader("Set-Cookie", buildSessionCookie(cookie, deps.config.baseUrl.startsWith("https://")));
       return res.status(200).type("html").send(shellHtml());
     }),
   );

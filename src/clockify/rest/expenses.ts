@@ -1,4 +1,6 @@
-import { MAX_PAGES, PAGE_SIZE, type RestCore } from "./core.js";
+import type { RestCore } from "./core.js";
+import { toClockifyDate } from "./wire-dates.js";
+import { fromMinor } from "../../harness/money.js";
 import type { EntitySummary } from "../types.js";
 import type {
   ExpensePort,
@@ -6,19 +8,9 @@ import type {
   ExpenseCategorySummary,
 } from "../ports/expenses.js";
 
-/** Clockify date fields want a full ISO datetime; normalize a bare YYYY-MM-DD. */
-function toClockifyDate(d: string): string {
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00Z` : d;
-}
-
-/**
- * Expenses are MAJOR units on the wire (unlike invoices, which are minor). The
- * action layer stores canonical MINOR units in the payload, so the REST module
- * divides by 100 here. Two fixed decimals keeps currency values unambiguous.
- */
-function minorToMajor(minor: number): string {
-  return (minor / 100).toFixed(2);
-}
+// Expenses are MAJOR units on the wire (unlike invoices, which are minor). The
+// action layer stores canonical MINOR units in the payload, so the REST module
+// renders them back through `fromMinor` (÷100, 2 fixed decimals) here.
 
 /** Coerce a number or numeric string to a number (Clockify mixes both). */
 function numFrom(v: unknown): number | undefined {
@@ -38,26 +30,26 @@ function existingAmount(existing: Record<string, unknown>): string | undefined {
   const total = numFrom(existing.total);
   if (total === undefined) return undefined;
   const qty = numFrom(existing.quantity) || 1;
-  return (total / qty / 100).toFixed(2);
+  return fromMinor(total / qty);
 }
 
-function mapExpense(raw: any): ExpenseSummary {
-  const name = (raw.notes as string | undefined) ?? raw.id;
-  const out: ExpenseSummary = { id: raw.id, name };
-  if (raw.notes !== undefined) out.notes = raw.notes;
-  if (raw.date !== undefined) out.date = raw.date;
-  if (raw.categoryId !== undefined) out.categoryId = raw.categoryId;
-  if (raw.categoryName !== undefined) out.categoryName = raw.categoryName;
+function mapExpense(raw: Record<string, unknown>): ExpenseSummary {
+  const name = (raw.notes as string | undefined) ?? (raw.id as string);
+  const out: ExpenseSummary = { id: raw.id as string, name };
+  if (raw.notes !== undefined) out.notes = raw.notes as string;
+  if (raw.date !== undefined) out.date = raw.date as string;
+  if (raw.categoryId !== undefined) out.categoryId = raw.categoryId as string;
+  if (raw.categoryName !== undefined) out.categoryName = raw.categoryName as string;
   if (typeof raw.billable === "boolean") out.billable = raw.billable;
-  if (raw.projectId !== undefined) out.projectId = raw.projectId;
-  if (raw.taskId !== undefined) out.taskId = raw.taskId;
+  if (raw.projectId !== undefined) out.projectId = raw.projectId as string;
+  if (raw.taskId !== undefined) out.taskId = raw.taskId as string;
   if (typeof raw.total === "number") out.total = raw.total; // MINOR units
   if (typeof raw.quantity === "number") out.quantity = raw.quantity;
   return out;
 }
 
-function mapCategory(raw: any): ExpenseCategorySummary {
-  const out: ExpenseCategorySummary = { id: raw.id, name: raw.name };
+function mapCategory(raw: Record<string, unknown>): ExpenseCategorySummary {
+  const out: ExpenseCategorySummary = { id: raw.id as string, name: raw.name as string };
   if (typeof raw.archived === "boolean") out.archived = raw.archived;
   return out;
 }
@@ -75,31 +67,25 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
 
   return {
     async listExpenses(filter) {
-      const base: Record<string, string> = {};
-      if (filter?.start) base.start = filter.start;
-      if (filter?.end) base.end = filter.end;
-      const out: ExpenseSummary[] = [];
-      for (let page = 1; page <= MAX_PAGES; page++) {
-        const qs = new URLSearchParams({ ...base, page: String(page), "page-size": String(PAGE_SIZE) });
-        const data = (await core.call("api", "GET", `${ws}/expenses?${qs.toString()}`)) as
-          | { expenses?: { expenses?: any[] } }
-          | any[]
-          | null;
-        const rows = Array.isArray(data) ? data : (data?.expenses?.expenses ?? []);
-        out.push(...rows.map(mapExpense));
-        if (rows.length < PAGE_SIZE) break;
-      }
-      return out;
+      // The list is DOUBLE-nested (`{expenses:{expenses:[…],count}}`); paginate
+      // via the dotted envelope key so >50 expenses don't truncate and the
+      // MAX_PAGES backstop warning fires when a list is capped. A bare array is
+      // tolerated by the unwrap.
+      const params: Record<string, string> = {};
+      if (filter?.start) params.start = filter.start;
+      if (filter?.end) params.end = filter.end;
+      const rows = (await core.paginateEnvelope("api", `${ws}/expenses`, "expenses.expenses", params)) as Record<string, unknown>[];
+      return rows.map(mapExpense);
     },
     async getExpense(id) {
       const raw = await core.call("api", "GET", `${ws}/expenses/${id}`, undefined, true);
-      return raw ? mapExpense(raw) : null;
+      return raw ? mapExpense(raw as Record<string, unknown>) : null;
     },
     async createExpense(input): Promise<EntitySummary> {
       // multipart/form-data — Clockify requires userId; amount is MAJOR on the wire.
       const fields: Record<string, string> = {
         userId: input.userId,
-        amount: minorToMajor(input.amountMinor),
+        amount: fromMinor(input.amountMinor),
         date: toClockifyDate(input.date),
         categoryId: input.categoryId,
         ...(input.notes !== undefined ? { notes: input.notes } : {}),
@@ -127,7 +113,7 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       if (userId) form.append("userId", userId);
 
       const amount =
-        input.amountMinor !== undefined ? minorToMajor(input.amountMinor) : existingAmount(existing);
+        input.amountMinor !== undefined ? fromMinor(input.amountMinor) : existingAmount(existing);
       if (amount !== undefined) form.append("amount", amount);
 
       // Re-send quantity so a per-unit amount keeps the same total on the replace.

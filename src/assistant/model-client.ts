@@ -241,25 +241,33 @@ function toWireMessage(message: ModelMessage): Record<string, unknown> {
   if (message.role === "tool") {
     return { role: "tool", tool_call_id: message.toolCallId, content: message.content };
   }
-  if (message.role === "assistant" && message.toolCalls && message.toolCalls.length > 0) {
+  const hasToolCalls = message.role === "assistant" && !!message.toolCalls && message.toolCalls.length > 0;
+  // An assistant turn carrying tool calls and/or thinking-mode reasoning is
+  // serialized as one object; a plain assistant/system/user turn falls through.
+  if (message.role === "assistant" && (hasToolCalls || message.reasoningContent)) {
     return {
       role: "assistant",
-      content: message.content || null,
+      // A tool-call turn nulls empty content (OpenAI shape); a reasoning-only
+      // turn keeps the original content verbatim.
+      content: hasToolCalls ? message.content || null : message.content,
       // Thinking mode: the provider rejects a continuation that drops the turn's
       // reasoning, so it is echoed back verbatim whenever we captured one.
       ...(message.reasoningContent ? { reasoning_content: message.reasoningContent } : {}),
-      tool_calls: message.toolCalls.map((call) => ({
-        id: call.id,
-        type: "function",
-        function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-        // Gemini 3.x continuation contract: echo the opaque signature verbatim
-        // or the provider 400s; emit nothing for signature-less backends.
-        ...(call.thoughtSignature ? { extra_content: { google: { thought_signature: call.thoughtSignature } } } : {}),
-      })),
+      ...(hasToolCalls
+        ? {
+            tool_calls: message.toolCalls!.map((call) => ({
+              id: call.id,
+              type: "function",
+              function: { name: call.name, arguments: JSON.stringify(call.arguments) },
+              // Gemini 3.x continuation contract: echo the opaque signature verbatim
+              // or the provider 400s; emit nothing for signature-less backends.
+              ...(call.thoughtSignature
+                ? { extra_content: { google: { thought_signature: call.thoughtSignature } } }
+                : {}),
+            })),
+          }
+        : {}),
     };
-  }
-  if (message.role === "assistant" && message.reasoningContent) {
-    return { role: "assistant", content: message.content, reasoning_content: message.reasoningContent };
   }
   return { role: message.role, content: message.content };
 }

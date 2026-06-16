@@ -1,42 +1,15 @@
 import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
-  type ActionContext,
   type ActionDefinition,
-  type RiskyClarifyResult,
 } from "../action.js";
+import { nowDate } from "../../durations.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolveGroupRefs, resolvePeriod, resolveRelativeDay, resolveUserFilter, resolveUserRefs } from "./resolve.js";
-
-/**
- * Resolve a time-off policy's scope — `userIds` (ids/names/'me') and
- * `userGroupIds` (ids/names) — to real ids at PREVIEW, so a name never reaches the
- * wire. Returns the resolved ids + display labels, or a clarify to return directly.
- */
-async function resolvePolicyScope(
-  ctx: ActionContext,
-  args: { userIds?: string[]; userGroupIds?: string[] },
-): Promise<{ ok: true; userIds?: string[]; userGroupIds?: string[]; labels: string[] } | { ok: false; clarify: RiskyClarifyResult }> {
-  const labels: string[] = [];
-  let userIds: string[] | undefined;
-  let userGroupIds: string[] | undefined;
-  if (args.userIds?.length) {
-    const r = await resolveUserRefs(args.userIds, { verb: "scope the policy to", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers(), verifyIds: true });
-    if (!r.ok) return r;
-    userIds = r.userIds;
-    labels.push(...r.labels);
-  }
-  if (args.userGroupIds?.length) {
-    const r = await resolveGroupRefs(args.userGroupIds, { verb: "scope the policy to", listGroups: () => ctx.clockify.listGroups() });
-    if (!r.ok) return r;
-    userGroupIds = r.groupIds;
-    labels.push(...r.labels);
-  }
-  return { ok: true, userIds, userGroupIds, labels };
-}
+import { describePatch, resolveEntityRef, resolvePeriod, resolveRelativeDay, resolveScopeRefs, resolveUserFilter, resolveUserRefs } from "./resolve.js";
 
 /** Step a YYYY-MM-DD day forward by n calendar days. */
 function addCalendarDays(day: string, n: number): string {
@@ -110,9 +83,7 @@ const getPolicy = defineAction({
       verb: "fetch",
       list: () => ctx.clockify.listTimeOffPolicies(),
     });
-    if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
-    }
+    if (!resolved.ok) return clarifyResult(resolved.clarify);
     const entity = await ctx.clockify.getTimeOffPolicy(resolved.id);
     return {
       kind: "receipt",
@@ -141,7 +112,7 @@ const createPolicy = defineRiskyAction({
     userGroupIds: zStringList().optional(),
   }),
   async preview(ctx, args) {
-    const scope = await resolvePolicyScope(ctx, args);
+    const scope = await resolveScopeRefs(ctx, args, { verb: "scope the policy to" });
     if (!scope.ok) return scope.clarify;
     const input = {
       name: args.name,
@@ -197,7 +168,7 @@ const updatePolicy = defineRiskyAction({
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
-    const scope = await resolvePolicyScope(ctx, args);
+    const scope = await resolveScopeRefs(ctx, args, { verb: "scope the policy to" });
     if (!scope.ok) return scope.clarify;
     const patch = {
       ...(args.name !== undefined ? { name: args.name } : {}),
@@ -282,7 +253,7 @@ const listRequests = defineAction({
       adminUserId: ctx.adminUserId,
       listUsers: () => ctx.clockify.listUsers(),
     });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
+    if (!user.ok) return clarifyResult(user.clarify);
     const items = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
     return {
       kind: "receipt",
@@ -345,7 +316,7 @@ const createRequest = defineRiskyAction({
       { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
     );
     if (!policy.ok) return policy.clarify;
-    const now = (ctx.now ?? (() => new Date()))();
+    const now = nowDate(ctx);
     // 'N days next week' anchors deterministically to the first N WORKDAYS of
     // that week (the resolveLogTimes pattern: the harness defaults, the preview
     // shows the chosen dates, the admin confirms). Explicit start/end wins.
@@ -507,8 +478,8 @@ const getBalance = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
-    const items = await ctx.clockify.getTimeOffBalance(user.userId as string);
+    if (!user.ok) return clarifyResult(user.clarify);
+    const items = await ctx.clockify.getTimeOffBalance(user.userId);
     return {
       kind: "receipt",
       receipt: successReceipt({

@@ -17,7 +17,8 @@
  * token/key is sent only in the request header — never logged, never placed in a
  * prompt, never returned.
  */
-export type ClockifyAuth = { addonToken: string } | { apiKey: string };
+import type { ClockifyAuth } from "../types.js";
+export type { ClockifyAuth };
 export type ClockifyHost = "api" | "reports" | "audit";
 
 export interface RestCoreOptions {
@@ -62,7 +63,9 @@ export interface RestCore {
     params?: Record<string, string>,
   ): Promise<{ rows: unknown[]; truncated: boolean }>;
   /** Paginate a list whose page body is an ENVELOPE (`{key:[…]}`) — or a bare array —
-   *  unwrapping `envelopeKey` per page (e.g. expense categories: `{categories:[…]}`). */
+   *  unwrapping `envelopeKey` per page (e.g. expense categories: `{categories:[…]}`).
+   *  A dotted key walks nested envelopes (e.g. expenses: `"expenses.expenses"` for
+   *  `{expenses:{expenses:[…]}}`); a bare array at any level is taken as-is. */
   paginateEnvelope(
     host: ClockifyHost,
     path: string,
@@ -301,6 +304,18 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     envelopeKey: string,
     params: Record<string, string> = {},
   ): Promise<unknown[]> {
+    // A dotted key walks nested envelopes level by level (e.g. expenses:
+    // "expenses.expenses" for {expenses:{expenses:[…]}}); at each level a bare
+    // array short-circuits (taken as-is) and a missing key yields [].
+    const keys = envelopeKey.split(".");
+    const unwrap = (data: unknown): unknown[] => {
+      let cursor: unknown = data;
+      for (const key of keys) {
+        if (Array.isArray(cursor)) break; // a bare array at this level is the list
+        cursor = (cursor as Record<string, unknown> | null)?.[key];
+      }
+      return Array.isArray(cursor) ? cursor : [];
+    };
     const out: unknown[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const qs = new URLSearchParams({ ...params, page: String(page), "page-size": String(PAGE_SIZE) });
@@ -309,9 +324,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
         | Record<string, unknown>
         | unknown[]
         | null;
-      const arr = Array.isArray(data)
-        ? data
-        : ((data as Record<string, unknown> | null)?.[envelopeKey] as unknown[] | undefined) ?? [];
+      const arr = unwrap(data);
       out.push(...arr);
       if (arr.length < PAGE_SIZE) return out; // short page = natural end
     }

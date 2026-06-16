@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { DAY_MS } from "../../durations.js";
+import { DAY_MS, nowDate } from "../../durations.js";
 import { resolveRelativeDay } from "./resolve.js";
 
 /**
@@ -95,7 +95,7 @@ const submitApproval = defineRiskyAction({
     periodStart: z.string().min(1).optional(),
   }),
   async preview(ctx, args) {
-    const now = (ctx.now ?? (() => new Date()))();
+    const now = nowDate(ctx);
     const resolved = resolvePeriodStart(now, args);
     if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
     if (resolved.kind === "missing") {
@@ -189,7 +189,7 @@ const resubmit = defineRiskyAction({
     periodStart: z.string().min(1).optional(),
   }),
   async preview(ctx, args) {
-    const now = (ctx.now ?? (() => new Date()))();
+    const now = nowDate(ctx);
     const resolved = resolvePeriodStart(now, args);
     if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
     if (resolved.kind === "missing") {

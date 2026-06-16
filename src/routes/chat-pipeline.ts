@@ -25,6 +25,7 @@ import {
   type RateLimitDecision,
 } from "./rate-limit.js";
 import {
+  accessDeniedMessage,
   commitConfirmedOperation,
   executeAction,
 } from "../harness/actions.js";
@@ -69,6 +70,7 @@ import {
   type TurnMachinery,
 } from "./chat-results.js";
 import { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
+import { bestEffort } from "./best-effort.js";
 
 /**
  * The user request that drove a suspended turn: the LAST user-role message in the
@@ -235,7 +237,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // duplicate write. Mirror the confirm-tail fix: log (message only, no
       // secrets) and still emit the receipt for the change that already ran.
       let undoId: string | undefined;
-      try {
+      bestEffort("post-execution bookkeeping failed", () => {
         deps.store.addAuditEvent({
           workspaceId: claims.workspaceId,
           adminUserId: claims.adminUserId,
@@ -245,12 +247,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           receipt,
         });
         undoId = recordUndoIfReversible(claims, receipt);
-      } catch (error) {
-        console.error(
-          "post-execution bookkeeping failed (action already applied; receipt preserved):",
-          error instanceof Error ? error.message : String(error),
-        );
-      }
+      });
       emit({ kind: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
     };
 
@@ -490,7 +487,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           body: {
             ok: false,
             code: "policy_denied",
-            message: `Write access to ${operation.featureGroup} is disabled in your assistant permissions.`,
+            message: accessDeniedMessage(operation.featureGroup, "write"),
           },
         };
       }
@@ -540,16 +537,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       );
     }
 
+    // Post-commit bookkeeping is best-effort: the commit already happened and
+    // is durably recorded in the idempotency ledger. A DB hiccup here (e.g. a
+    // transient SQLITE_BUSY) must NOT drop the receipt on the floor or 500 the
+    // turn — log (message only, no secrets) and still return the receipt. The
+    // committed write stays safe and the receipt still reaches the admin, but a
+    // failure here is PERMANENT for this receipt: the confirmation was marked
+    // 'used' above (before the commit), so a re-confirm 409s and never re-runs
+    // this block — a dropped audit entry / undo handle is lost for good.
     let undoId: string | undefined;
-    try {
-      // Post-commit bookkeeping is best-effort: the commit already happened and
-      // is durably recorded in the idempotency ledger. A DB hiccup here (e.g. a
-      // transient SQLITE_BUSY) must NOT drop the receipt on the floor or 500 the
-      // turn — log (message only, no secrets) and still return the receipt. The
-      // committed write stays safe and the receipt still reaches the admin, but a
-      // failure here is PERMANENT for this receipt: the confirmation was marked
-      // 'used' above (before the commit), so a re-confirm 409s and never re-runs
-      // this block — a dropped audit entry / undo handle is lost for good.
+    bestEffort("post-commit bookkeeping failed", () => {
       deps.store.setConfirmationResult(record.id, receipt.ok ? "used" : "failed", receipt);
       deps.store.addAuditEvent({
         workspaceId: claims.workspaceId,
@@ -560,40 +557,40 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         receipt,
       });
       undoId = recordUndoIfReversible(claims, receipt);
-    } catch (error) {
-      console.error(
-        "post-commit bookkeeping failed (commit already applied; receipt preserved):",
-        error instanceof Error ? error.message : String(error),
-      );
-    }
+    });
     const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
     return { ok: true, receipt, undoId, agentState, installation };
   }
 
-  async function executeChatTurn(
-    claims: { sessionId: string; workspaceId: string; adminUserId: string },
-    installation: Installation,
-    message: string,
-    onResult?: (result: unknown) => void,
-    onStatus?: (status: { action: string; label: string }) => void,
-    signal?: AbortSignal,
-  ): Promise<ChatTurnOutcome> {
-    deps.store.addMessage({
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      role: "user",
-      content: message,
-    });
+  /**
+   * A deterministic, model-free answer turn (the three short-circuit guards below
+   * share this exact tail): persist the reply as a plain `answer` and return it.
+   * Each guard keeps its OWN distinct predicate + copy text; only the persist+return
+   * shape is shared here. These early returns deliberately never touch a model and so
+   * never reach `recordTurn()` (no model call ⇒ no telemetry row).
+   */
+  function deterministicAnswer(claims: Claims, text: string): ChatTurnOutcome {
+    persistAssistantReply(claims, "answer", text, []);
+    return { ok: true, replyKind: "answer", replyText: text, results: [] };
+  }
 
+  /**
+   * The three deterministic guards that must short-circuit a turn BEFORE it reaches
+   * the planner — in this exact order: whitespace-only → typed-consent → bare
+   * affirmative after a completed safe write. Returns the deterministic answer when a
+   * guard fires, or `undefined` to let the turn run a model. (The user message is
+   * already persisted by the caller before this runs.)
+   */
+  function shortCircuitReply(
+    claims: { sessionId: string; workspaceId: string; adminUserId: string },
+    message: string,
+  ): ChatTurnOutcome | undefined {
     // A whitespace-only message is no input at all (finding new-6: a blank turn
     // sent the model guessing — it invoked clockify_review_day / clockify_status
     // unsolicited and fabricated a context). Treat it as empty and ask what the
     // admin wants, deterministically — never let it reach the planner.
     if (message.trim().length === 0) {
-      const text = "I didn't catch a message there — what would you like me to do?";
-      persistAssistantReply(claims, "answer", text, []);
-      return { ok: true, replyKind: "answer", replyText: text, results: [] };
+      return deterministicAnswer(claims, "I didn't catch a message there — what would you like me to do?");
     }
 
     // SAFETY (live item 157): a bare typed consent while a preview is pending
@@ -601,10 +598,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // operation instead of pointing at the button. Deterministic reply; only
     // the button nonce can execute the pending change.
     if (TYPED_CONSENT.test(message) && deps.store.countPendingConfirmations(claims.sessionId, now().toISOString()) > 0) {
-      const text =
-        "Typed approval can't apply a pending change — only the Confirm button on its preview card can. The change is still waiting: click Confirm to apply it, or Cancel to discard it.";
-      persistAssistantReply(claims, "answer", text, []);
-      return { ok: true, replyKind: "answer", replyText: text, results: [] };
+      return deterministicAnswer(
+        claims,
+        "Typed approval can't apply a pending change — only the Confirm button on its preview card can. The change is still waiting: click Confirm to apply it, or Cancel to discard it.",
+      );
     }
 
     // SAFETY (finding new-2-affirmative-after-completed-safe): a bare affirmative
@@ -620,25 +617,193 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       const lastAssistant = [...prior].reverse().find((msg) => msg.role === "assistant");
       const lastResults = (lastAssistant?.payload as { results?: unknown[] } | undefined)?.results ?? [];
       if (lastTurnCompletedAWrite(lastResults)) {
-        const text =
-          "That's already done — the previous change was applied when you asked, so there's nothing left to confirm. Let me know if you'd like another change.";
-        persistAssistantReply(claims, "answer", text, []);
-        return { ok: true, replyKind: "answer", replyText: text, results: [] };
+        return deterministicAnswer(
+          claims,
+          "That's already done — the previous change was applied when you asked, so there's nothing left to confirm. Let me know if you'd like another change.",
+        );
       }
     }
 
-    const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
+    return undefined;
+  }
+
+  /** Build the bounded, model-visible history for a turn (the HISTORY_WINDOW_MESSAGES filter+map). */
+  function buildModelHistory(claims: { sessionId: string }): ModelMessage[] {
     // includePayload so transient model-failure rows (payload.kind="error") can be
     // dropped — the model must never re-read its own "I'm unavailable" turn as
     // conversational fact (finding r2-new-session-restore-05).
     const history = deps.store.getRecentMessages(claims.sessionId, HISTORY_WINDOW_MESSAGES, true);
-    const messages: ModelMessage[] = history
-      .filter((m) => m.role !== "system" && !isTransientErrorMessage(m))
-      .map((m) =>
-        m.role === "assistant"
-          ? { role: "assistant" as const, content: sanitizeStoredReplyForModel(m.content) }
-          : { role: "user" as const, content: m.content },
+    return history
+      .filter((msg) => msg.role !== "system" && !isTransientErrorMessage(msg))
+      .map((msg) =>
+        msg.role === "assistant"
+          ? { role: "assistant" as const, content: sanitizeStoredReplyForModel(msg.content) }
+          : { role: "user" as const, content: msg.content },
       );
+  }
+
+  /**
+   * Tool subsetting (LLM_TOOL_SELECT=1): show the model only the actions relevant
+   * to THIS message (+ the always-on core), for weak-model consistency. OFF ⇒
+   * undefined tools/full catalog (byte-identical). The harness still validates and
+   * gates every proposed action — subsetting changes only what the model SEES.
+   * `subsetNarrowed` is true only when a domain intent matched (more than the core)
+   * vs collapsing to just the core (smalltalk) — only a narrowed turn that executed
+   * NOTHING is a possible recall miss worth a full-catalog retry.
+   */
+  function deriveToolSubset(message: string): {
+    subsetTools: ReturnType<typeof toolsForModel> | undefined;
+    subsetCatalog: ReturnType<typeof catalogForModel>;
+    subsetNarrowed: boolean;
+  } {
+    const subsetNames = deps.config.llmToolSelect ? new Set(selectActionsForMessage(message)) : undefined;
+    return {
+      subsetTools: subsetNames ? toolsForModel(subsetNames) : undefined,
+      subsetCatalog: subsetNames ? catalogForModel(subsetNames) : catalogForModel(),
+      subsetNarrowed: subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size,
+    };
+  }
+
+  /**
+   * Run the model turn — owns BOTH the agentic tool-loop and the single-turn planner
+   * paths. Returns `{ replyKind, baseText }` to settle into a reply, or `{ failed: true }`
+   * when the model/transport threw (the caller surfaces `modelUnavailable`). The two
+   * paths keep DISTINCT "produced nothing" predicates and execute their actions
+   * separately — they are NOT merged (that would double the side effects).
+   */
+  async function runModelTurn(args: {
+    m: TurnMachinery;
+    messages: ModelMessage[];
+    policy: AdminPolicy;
+    tracked: ReturnType<typeof trackUsage>;
+    subsetTools: ReturnType<typeof toolsForModel> | undefined;
+    subsetCatalog: ReturnType<typeof catalogForModel>;
+    subsetNarrowed: boolean;
+    signal?: AbortSignal;
+  }): Promise<{ replyKind: string; baseText: string } | { failed: true }> {
+    const { m, messages, policy, tracked, subsetTools, subsetCatalog, subsetNarrowed, signal } = args;
+    const useTools = deps.config.llmMode !== "json";
+    // The server clock's date so the model narrates the real date instead of its
+    // stale knowledge cutoff (finding new-3: "we're still in 2025"). Hoisted once —
+    // both paths read the SAME instant.
+    const currentDate = now().toISOString().slice(0, 10);
+
+    if (deps.config.llmAgentic && useTools && typeof deps.modelClient.completeWithTools === "function") {
+      // Agentic turn (LLM_AGENTIC=1): the durable tool-loop. Reads + safe writes
+      // auto-chain with their receipts fed back to the model; the FIRST risky
+      // write interrupts into the preview→button-confirm flow with its suspended
+      // transcript persisted, so the confirm route can resume the loop.
+      const runAgentic = (tools: ReturnType<typeof toolsForModel> | undefined): Promise<AgentTurnResult> =>
+        runAgentConversation({
+          modelClient: tracked.client,
+          messages,
+          policy,
+          authClass: m.ctx.clockify.authClass,
+          currentDate,
+          tools,
+          runAction: m.runAction,
+          onStep: m.onStep,
+          signal,
+        });
+      let turn: AgentTurnResult;
+      try {
+        turn = await runAgentic(subsetTools);
+        // Recall escape hatch: a NARROWED turn that finished without executing
+        // anything may have had the needed tool hidden. Retry ONCE with the full
+        // catalog. Side-effect-free — guarded on `m.results.length === 0` AFTER
+        // execution, so no read/write is ever duplicated; never fires for smalltalk
+        // (not narrowed). (This predicate gates AFTER execution; the single-turn one
+        // gates BEFORE — keep them distinct.)
+        if (subsetNarrowed && m.results.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
+          turn = await runAgentic(undefined);
+        }
+      } catch {
+        return { failed: true };
+      }
+      return settleAgentTurn(m, turn);
+    }
+
+    const runPlan = (catalog: ReturnType<typeof catalogForModel>, tools: ReturnType<typeof toolsForModel> | undefined) =>
+      planConversation({
+        modelClient: tracked.client,
+        messages,
+        actionCatalog: catalog,
+        policy,
+        authClass: m.ctx.clockify.authClass,
+        currentDate,
+        tools,
+        // Native tool-calling by default (provider validates args); LLM_MODE=json
+        // forces the JSON + repair path. The harness re-validates either way.
+        useTools,
+      });
+    let plan;
+    try {
+      plan = await runPlan(subsetCatalog, subsetTools);
+      // Recall escape hatch (mirrors the agentic path): a NARROWED turn that
+      // proposed no action may have hidden the needed tool — re-plan ONCE with the
+      // full catalog before executing (nothing has run yet → no double side effects).
+      // (This predicate gates BEFORE the action loop; the agentic one gates AFTER —
+      // keep them distinct.)
+      if (subsetNarrowed && plan.kind !== "actions") {
+        plan = await runPlan(catalogForModel(), undefined);
+      }
+    } catch {
+      return { failed: true };
+    }
+
+    let emittedClarify = false;
+    if (plan.kind === "actions" && plan.actions) {
+      for (const proposed of plan.actions) {
+        // The single-turn path runs each proposed action through the same
+        // machinery: a throwing action becomes an audited error receipt, a
+        // risky one becomes a pending preview (no agent state — no resume).
+        const outcome = await m.runAction({ id: "", name: proposed.name, arguments: proposed.arguments });
+        if (outcome.kind === "receipt") {
+          m.auditAndEmitReceipt(proposed.name, outcome.receipt);
+        } else if (outcome.kind === "clarify") {
+          m.emit({ kind: "clarify", message: outcome.message, options: outcome.options });
+          emittedClarify = true;
+        } else {
+          m.emitPreviewFor(outcome.preview, outcome.operation);
+        }
+      }
+    }
+    // fix-clarify-double-render: when a single-turn action resolved to a
+    // clarify, that grounded message is ALREADY in results[]. The model's
+    // pre-action narration (`plan.text`) can echo it VERBATIM — keeping it in
+    // reply.text would render the clarify twice (the clarify bubble AND the
+    // assistant reply bubble). Mirror settleAgentTurn: drop the narration so the
+    // clarify rides ONLY in results[]. (Previews still override via
+    // truthfulReplyText, so this never weakens the truthful-preview path.)
+    return { replyKind: plan.kind, baseText: emittedClarify ? "" : plan.text };
+  }
+
+  async function executeChatTurn(
+    claims: { sessionId: string; workspaceId: string; adminUserId: string },
+    installation: Installation,
+    message: string,
+    onResult?: (result: unknown) => void,
+    onStatus?: (status: { action: string; label: string }) => void,
+    signal?: AbortSignal,
+  ): Promise<ChatTurnOutcome> {
+    // The user message is persisted BEFORE the deterministic guards so even a
+    // short-circuited turn keeps a faithful transcript record.
+    deps.store.addMessage({
+      sessionId: claims.sessionId,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      role: "user",
+      content: message,
+    });
+
+    // Deterministic short-circuits (whitespace → typed-consent → bare-affirmative)
+    // never reach a model and so never reach recordTurn().
+    const shortCircuit = shortCircuitReply(claims, message);
+    if (shortCircuit) return shortCircuit;
+
+    const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
+    const messages = buildModelHistory(claims);
+    const { subsetTools, subsetCatalog, subsetNarrowed } = deriveToolSubset(message);
 
     const m = createTurnMachinery(claims, installation, onResult, onStatus);
 
@@ -666,126 +831,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return { ok: false, code: "model_unavailable", message: errorText };
     };
 
-    const useTools = deps.config.llmMode !== "json";
-    let replyKind: string;
-    let baseText: string;
-
-    // Tool subsetting (LLM_TOOL_SELECT=1): show the model only the actions relevant
-    // to THIS message (+ the always-on core), for weak-model consistency. OFF ⇒
-    // undefined ⇒ the full catalog (byte-identical). The harness still validates and
-    // gates every proposed action — subsetting changes only what the model SEES.
-    const subsetNames = deps.config.llmToolSelect ? new Set(selectActionsForMessage(message)) : undefined;
-    const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
-    const subsetCatalog = subsetNames ? catalogForModel(subsetNames) : catalogForModel();
-    // Did subsetting actually NARROW (a domain intent matched) vs collapse to just
-    // the core (smalltalk)? Only a narrowed turn that executed NOTHING is a possible
-    // recall miss worth a full-catalog retry — smalltalk never triggers it.
-    const subsetNarrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
-
-    if (deps.config.llmAgentic && useTools && typeof deps.modelClient.completeWithTools === "function") {
-      // Agentic turn (LLM_AGENTIC=1): the durable tool-loop. Reads + safe writes
-      // auto-chain with their receipts fed back to the model; the FIRST risky
-      // write interrupts into the preview→button-confirm flow with its suspended
-      // transcript persisted, so the confirm route can resume the loop.
-      let turn: AgentTurnResult;
-      const currentDate = now().toISOString().slice(0, 10);
-      try {
-        turn = await runAgentConversation({
-          modelClient: tracked.client,
-          messages,
-          policy,
-          authClass: m.ctx.clockify.authClass,
-          // The server clock's date so the model narrates the real date instead
-          // of its stale knowledge cutoff (finding new-3: "we're still in 2025").
-          currentDate,
-          tools: subsetTools,
-          runAction: m.runAction,
-          onStep: m.onStep,
-          signal,
-        });
-        // Recall escape hatch: a NARROWED turn that finished without executing
-        // anything may have had the needed tool hidden. Retry ONCE with the full
-        // catalog. Side-effect-free — guarded on `m.results.length === 0`, so no
-        // read/write is ever duplicated; never fires for smalltalk (not narrowed).
-        if (subsetNarrowed && m.results.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
-          turn = await runAgentConversation({
-            modelClient: tracked.client,
-            messages,
-            policy,
-            authClass: m.ctx.clockify.authClass,
-            currentDate,
-            runAction: m.runAction,
-            onStep: m.onStep,
-            signal,
-          });
-        }
-      } catch {
-        return modelUnavailable();
-      }
-      ({ replyKind, baseText } = settleAgentTurn(m, turn));
-    } else {
-      let plan;
-      const currentDate = now().toISOString().slice(0, 10);
-      try {
-        plan = await planConversation({
-          modelClient: tracked.client,
-          messages,
-          actionCatalog: subsetCatalog,
-          policy,
-          authClass: m.ctx.clockify.authClass,
-          // The server clock's date so the model narrates the real date instead
-          // of its stale knowledge cutoff (finding new-3: "we're still in 2025").
-          currentDate,
-          tools: subsetTools,
-          // Native tool-calling by default (provider validates args); LLM_MODE=json
-          // forces the JSON + repair path. The harness re-validates either way.
-          useTools,
-        });
-        // Recall escape hatch (mirrors the agentic path): a NARROWED turn that
-        // proposed no action may have hidden the needed tool — re-plan ONCE with the
-        // full catalog before executing (nothing has run yet → no double side effects).
-        if (subsetNarrowed && plan.kind !== "actions") {
-          plan = await planConversation({
-            modelClient: tracked.client,
-            messages,
-            actionCatalog: catalogForModel(),
-            policy,
-            authClass: m.ctx.clockify.authClass,
-            currentDate,
-            useTools,
-          });
-        }
-      } catch {
-        return modelUnavailable();
-      }
-
-      let emittedClarify = false;
-      if (plan.kind === "actions" && plan.actions) {
-        for (const proposed of plan.actions) {
-          // The single-turn path runs each proposed action through the same
-          // machinery: a throwing action becomes an audited error receipt, a
-          // risky one becomes a pending preview (no agent state — no resume).
-          const outcome = await m.runAction({ id: "", name: proposed.name, arguments: proposed.arguments });
-          if (outcome.kind === "receipt") {
-            m.auditAndEmitReceipt(proposed.name, outcome.receipt);
-          } else if (outcome.kind === "clarify") {
-            m.emit({ kind: "clarify", message: outcome.message, options: outcome.options });
-            emittedClarify = true;
-          } else {
-            m.emitPreviewFor(outcome.preview, outcome.operation);
-          }
-        }
-      }
-      replyKind = plan.kind;
-      // fix-clarify-double-render: when a single-turn action resolved to a
-      // clarify, that grounded message is ALREADY in results[]. The model's
-      // pre-action narration (`plan.text`) can echo it VERBATIM — keeping it in
-      // reply.text would render the clarify twice (the clarify bubble AND the
-      // assistant reply bubble). Mirror settleAgentTurn: drop the narration so the
-      // clarify rides ONLY in results[]. (Previews still override via
-      // truthfulReplyText, so this never weakens the truthful-preview path.)
-      baseText = emittedClarify ? "" : plan.text;
-    }
+    const turn = await runModelTurn({
+      m,
+      messages,
+      policy,
+      tracked,
+      subsetTools,
+      subsetCatalog,
+      subsetNarrowed,
+      signal,
+    });
+    if ("failed" in turn) return modelUnavailable();
+    const { replyKind, baseText } = turn;
 
     // Client disconnected mid-turn (settleAgentTurn → "aborted"): the socket is gone,
     // no reply will be sent, and the loop's abort guard sits before each runAction, so

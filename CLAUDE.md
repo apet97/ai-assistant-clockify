@@ -107,7 +107,9 @@ bug was found against the REAL API, not by reading the code.
 
 - `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
   per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
-  ledger, undo, audit/metrics, telemetry, installations) + token encryption
+  ledger, undo, audit/metrics, telemetry, installations, retention — the prune
+  DELETEs are single-sourced so the index-seek test can't validate a stale copy)
+  + token encryption
   (AES-256-GCM) · `src/auth/` admin check + signed session cookie
   (`SameSite=None; Secure; Partitioned` — required in the cross-site iframe).
 - `src/addon/` manifest + token verification. Inbound add-on JWTs are RS256 with
@@ -116,8 +118,10 @@ bug was found against the REAL API, not by reading the code.
   `iconPath` (no icon → doesn't render).
 - `src/clockify/` — the seam: `client.ts` (`WorkspaceClient` port, composed from
   `ports/<area>.ts`; carries `authClass: "addon"|"api_key"`), `rest-workspace.ts`
-  (adapter = multi-host `rest/core.ts` + one `rest/<area>.ts` per area;
-  `X-Addon-Token` in prod), `types.ts` (leaf shapes), `api-base.ts` (hosts from
+  (adapter = multi-host `rest/core.ts` + one `rest/<area>.ts` per area, list
+  pagination via `core.paginateEnvelope`, the one bare-date↔ISO normalization in
+  `rest/wire-dates.ts`; `X-Addon-Token` in prod), `types.ts` (leaf shapes;
+  `ClockifyAuth` lives here), `api-base.ts` (hosts from
   the INSTALL token claims: api = `apiUrl`+`/v1`, reports = `reportsUrl`+`/v1`;
   audit host has NO claim → derived prod-only, clean "not available" error
   elsewhere).
@@ -128,9 +132,18 @@ bug was found against the REAL API, not by reading the code.
   `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts`, `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `compose.ts` (atomic
   multi-step + rollback), `idempotency.ts` (intent-hash dedupe, 10-min window),
-  `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping),
-  `workflows/<area>.ts` (+ `workflows/resolve.ts` — see invariants below). Shared
-  day-span constants live in `src/durations.ts`.
+  `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
+  BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
+  `workflows/<area>.ts`. Name→id + date resolution is split across
+  `workflows/resolve.ts` (entities), `workflows/resolve-dates.ts` (the calendar
+  helpers + `resolveDateRange`), and `workflows/preview-patch.ts` (update-diff
+  rendering) — all re-exported through `resolve.ts` so consumers' imports are
+  unchanged (see invariants below); plus the shared `resolveScopeRefs`
+  (user/group scoping), `clarifyResult` (`action.ts` — the one
+  resolver-clarify→`ActionResult` unwrap), and `workflows/rate.ts` (the shared
+  rate-preview builder for the project/task/member rate actions). Shared day-span
+  constants AND the injectable-clock helpers (`nowDate`/`nowIso`) live in
+  `src/durations.ts`.
 - `src/assistant/` — model client (`LLM_PROVIDER=http` OpenAI-compatible DeepSeek
   default, or `gemini-cli`), `prompts.ts`, `planner.ts`, `agent-loop.ts` +
   `agent-state.ts` (the durable agentic loop).
@@ -146,9 +159,14 @@ bug was found against the REAL API, not by reading the code.
   pure result transforms + guards in `chat-results.ts`, shared constants in
   `chat-constants.ts`. Earlier sibling helpers: `history-sanitizer.ts`
   (model-visible-history rewrite + truthful-preview text), `request-schemas.ts`
-  (Zod bodies), `consent-guard.ts` (typed-consent), `async-handler.ts`. `src/ui/` vanilla TS chat (a11y; previews
-  batched so "Confirm all" stays one card; header **"New chat"** + **"Chats ▾"**
-  history dropdown — titles via `textContent`, full keyboard nav).
+  (Zod bodies), `consent-guard.ts` (typed-consent), `async-handler.ts`,
+  `best-effort.ts` (the one never-break-a-turn bookkeeping wrapper), `ndjson.ts`
+  (the one NDJSON-stream setup → `{write, signal}`, used by both streaming routes).
+  `src/ui/` vanilla TS chat (a11y; previews batched so "Confirm all" stays one
+  card; header **"New chat"** + **"Chats ▾"** history dropdown — titles via
+  `textContent`, full keyboard nav) — split into the fetch/NDJSON client
+  (`api-client.ts`), the composer/stream flows (`composer-flow.ts`), and rendering
+  (`render.ts`/`shared.ts`); `main.ts` keeps `mount()` + a re-export barrel.
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 

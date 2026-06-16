@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TurnTelemetry } from "../../metrics/metrics.js";
+import { boundedWorkspaceAdminParams } from "./audit-metrics.js";
 import type { StoreContext } from "./context.js";
 
 /** Per-turn model telemetry concern (cost + latency; see metrics.ts TurnTelemetry). */
@@ -54,7 +55,7 @@ export function buildTelemetryStore(ctx: StoreContext): {
             WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}
             ORDER BY created_at ASC`,
         )
-        .all(...(bounded ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId])) as Array<{
+        .all(...boundedWorkspaceAdminParams(workspaceId, adminUserId, sinceIso)) as Array<{
         kind: "chat" | "resume";
         model_calls: number;
         prompt_tokens: number | null;

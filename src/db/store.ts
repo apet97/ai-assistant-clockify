@@ -19,13 +19,18 @@ import type {
 } from "./store/context.js";
 import { buildAdminPolicyStore } from "./store/admin-policies.js";
 import { buildTelemetryStore } from "./store/telemetry.js";
-import { actionOutcomesSql, buildAuditMetricsStore } from "./store/audit-metrics.js";
+import {
+  actionOutcomesSql,
+  boundedWorkspaceAdminParams,
+  buildAuditMetricsStore,
+} from "./store/audit-metrics.js";
 import { buildMessageStore } from "./store/messages.js";
 import { buildSessionStore } from "./store/sessions.js";
 import { buildUndoStore } from "./store/undo.js";
 import { buildInstallationStore } from "./store/installations.js";
 import { buildConfirmationStore } from "./store/confirmations.js";
 import { buildIdempotencyStore } from "./store/idempotency.js";
+import { buildRetentionStore, IDEMPOTENCY_RETENTION_MS, type PruneCounts } from "./store/retention.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
@@ -80,14 +85,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 90;
 
 /**
- * Operational-table retention. Settled/expired confirmations age out on a 30d
- * clock so listConfirmationOutcomes metrics keep a generous recent window.
- */
-const CONFIRMATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-/** Must stay comfortably above routes/api.ts IDEMPOTENCY_WINDOW_MS (10 min). */
-export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
-/**
  * Dead-claim TTL (r1-concurrency-races-01). The LIVE-vs-crashed threshold: an
  * atomic claim NOT heartbeated within this window is treated as crashed. Set
  * STRICTLY above the commit-latency ceiling (COMMIT_TIMEOUT_MS, 120s) so a LIVE
@@ -103,17 +100,11 @@ export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
  */
 export const CLAIM_TTL_MS = 5 * 60 * 1000;
 
-export interface PruneCounts {
-  pendingConfirmations: number;
-  idempotencyKeys: number;
-  undoRecords: number;
-  turnTelemetry: number;
-  chatMessages: number;
-  auditEvents: number;
-}
-
-/** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
-const TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+// The retention windows + pruneExpired/explainPrunePlan live in the retention
+// concern builder; re-exported so the public `../db/store.js` surface
+// (IDEMPOTENCY_RETENTION_MS + the PruneCounts type) stays byte-identical.
+export { IDEMPOTENCY_RETENTION_MS };
+export type { PruneCounts };
 
 export interface Store {
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
@@ -287,67 +278,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildInstallationStore(ctx),
     ...buildConfirmationStore(ctx),
     ...buildIdempotencyStore(ctx),
-
-    pruneExpired(nowIsoArg) {
-      const nowMs = Date.parse(nowIsoArg);
-      const confirmationCutoff = new Date(nowMs - CONFIRMATION_RETENTION_MS).toISOString();
-      const undoCutoff = new Date(nowMs - UNDO_RETENTION_MS).toISOString();
-      const telemetryCutoff = new Date(nowMs - TELEMETRY_RETENTION_MS).toISOString();
-      const chatAuditCutoff = new Date(nowMs - chatAuditRetentionMs).toISOString();
-      const idempotencyCutoff = nowMs - IDEMPOTENCY_RETENTION_MS;
-      // Crashed-claim backstop (r1-concurrency-races-01): a NULL-receipt claim
-      // for a key that never recurs would leak forever — the committed_at-only
-      // prune NEVER matches it (NULL < n is NULL/falsy in SQLite, proven by
-      // execution). It is swept on the SAME retention clock as a completed row,
-      // NOT at CLAIM_TTL: a claim orphaned by a crash between the host write and
-      // `fill` must survive the whole dedup window so a re-claim sees
-      // `stale_unknown` (crash-before-fill), never a silent re-commit. Sweeping it
-      // at CLAIM_TTL would reopen that duplicate window from this hourly prune.
-      // One transaction — operational tables ONLY. ISO-string comparison is
-      // safe: every writer stamps via toISOString().
-      const run = db.transaction((): PruneCounts => {
-        // Each retention DELETE is split into single-predicate statements so the
-        // planner can SEARCH a narrow index instead of full-SCANning the table:
-        // SQLite won't OR-union a low-cardinality `status` index, and a combined
-        // OR over two columns is one SCAN (pinned by explainPrunePlan).
-        const confirmations =
-          db
-            .prepare("DELETE FROM pending_confirmations WHERE status != 'pending' AND created_at < ?")
-            .run(confirmationCutoff).changes +
-          db
-            .prepare("DELETE FROM pending_confirmations WHERE status = 'pending' AND expires_at < ?")
-            .run(confirmationCutoff).changes;
-        const idempotency =
-          db
-            .prepare("DELETE FROM idempotency_keys WHERE committed_at IS NOT NULL AND committed_at < ?")
-            .run(idempotencyCutoff).changes +
-          db
-            .prepare("DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?")
-            .run(idempotencyCutoff).changes;
-        const undo = db
-          .prepare("DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?")
-          .run(undoCutoff).changes;
-        const telemetry = db
-          .prepare("DELETE FROM turn_telemetry WHERE created_at < ?")
-          .run(telemetryCutoff).changes;
-        // Chat transcripts + audit log past the retention window (data-minimization).
-        const chatMessages = db
-          .prepare("DELETE FROM chat_messages WHERE created_at < ?")
-          .run(chatAuditCutoff).changes;
-        const auditEvents = db
-          .prepare("DELETE FROM audit_events WHERE created_at < ?")
-          .run(chatAuditCutoff).changes;
-        return {
-          pendingConfirmations: confirmations,
-          idempotencyKeys: idempotency,
-          undoRecords: undo,
-          turnTelemetry: telemetry,
-          chatMessages,
-          auditEvents,
-        };
-      });
-      return run();
-    },
+    ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
 
     tables() {
       const rows = db
@@ -365,48 +296,11 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
 
     explainActionOutcomesPlan(workspaceId, adminUserId, sinceIso) {
       const sql = actionOutcomesSql(sinceIso !== undefined);
-      const params = sinceIso !== undefined ? [workspaceId, adminUserId, sinceIso] : [workspaceId, adminUserId];
+      const params = boundedWorkspaceAdminParams(workspaceId, adminUserId, sinceIso);
       const rows = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{
         detail: string;
       }>;
       return rows.map((r) => r.detail);
-    },
-
-    explainPrunePlan() {
-      // The exact prune DELETEs (mirror pruneExpired); EXPLAIN takes the WHERE
-      // bind values verbatim, so the planner sees the real predicate shapes. The
-      // OR-predicate prunes are split into one DELETE per disjunct (as pruneExpired
-      // runs them); the joined plan must SEARCH an index for each.
-      const explain = (sqls: string[], ...params: unknown[]): string =>
-        sqls
-          .map((sql) =>
-            (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as Array<{ detail: string }>)
-              .map((r) => r.detail)
-              .join(" | "),
-          )
-          .join(" | ");
-      return {
-        pendingConfirmations: explain(
-          [
-            "DELETE FROM pending_confirmations WHERE status != 'pending' AND created_at < ?",
-            "DELETE FROM pending_confirmations WHERE status = 'pending' AND expires_at < ?",
-          ],
-          "x",
-        ),
-        idempotencyKeys: explain(
-          [
-            "DELETE FROM idempotency_keys WHERE committed_at IS NOT NULL AND committed_at < ?",
-            "DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?",
-          ],
-          0,
-        ),
-        undoRecords: explain([
-          "DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?",
-        ], "x"),
-        turnTelemetry: explain(["DELETE FROM turn_telemetry WHERE created_at < ?"], "x"),
-        chatMessages: explain(["DELETE FROM chat_messages WHERE created_at < ?"], "x"),
-        auditEvents: explain(["DELETE FROM audit_events WHERE created_at < ?"], "x"),
-      };
     },
 
     healthCheck() {

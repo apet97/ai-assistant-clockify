@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { zNumberLike, zStringList } from "../arg-shapes.js";
+import { zStringList } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
@@ -10,6 +11,7 @@ import {
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
 import { matchByName, resolveEntityRef, resolveUserRef, resolveUserRefs, suggestOptions } from "./resolve.js";
+import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -165,11 +167,7 @@ const rateUpdate = defineRiskyAction({
       /** The member's user id, exact name (via userName), or "me" (resolved server-side). */
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
-      rateKind: z.enum(["HOURLY", "COST"]),
-      amount: zNumberLike(z.number().nonnegative()),
-      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
-      amountUnit: z.enum(["major", "minor"]).default("major"),
-      since: z.string().optional(),
+      ...RATE_FIELDS,
     })
     .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
   async preview(ctx, args) {
@@ -185,11 +183,14 @@ const rateUpdate = defineRiskyAction({
     const memberLabel = member.label;
     const amountMinor = toMinor(args.amount, args.amountUnit);
     return {
-      actionLabel: `Set member ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-      targets: [{ type: "user", id: userId }],
-      expectedChanges: [`Set ${args.rateKind} rate for ${memberLabel} to ${(amountMinor / 100).toFixed(2)}`],
-      reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
-      warnings: ["This changes the member's default billable rate for future entries."],
+      ...buildRatePreview({
+        targetType: "user",
+        targetId: userId,
+        scopeLabel: `for ${memberLabel}`,
+        amountMinor,
+        rateKind: args.rateKind,
+        kindNoun: "member",
+      }),
       payload: { userId, rateKind: args.rateKind, amountMinor, since: args.since },
     };
   },
@@ -226,7 +227,7 @@ const deactivateUser = defineAction({
       { verb: "deactivate", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
     );
     if (!member.ok) {
-      return { kind: "clarify", message: member.clarify.clarify, options: member.clarify.options };
+      return clarifyResult(member.clarify);
     }
     // Self-deactivation guard (defense in depth): refuse to lock the admin out.
     if (member.userId === ctx.adminUserId) {
@@ -288,7 +289,7 @@ const getGroup = defineAction({
       list: () => ctx.clockify.listGroups(),
     });
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return clarifyResult(resolved.clarify);
     }
     const entity = await ctx.clockify.getGroup(resolved.id);
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_groups_get", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };

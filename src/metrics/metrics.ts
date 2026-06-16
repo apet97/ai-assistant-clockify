@@ -9,6 +9,8 @@
  * so this is trivially unit-testable.
  */
 
+import { DAY_MS } from "../durations.js";
+
 /** One audited action outcome (parsed from its receipt). */
 export interface ActionOutcome {
   actionName: string;
@@ -127,11 +129,9 @@ export interface UsageMetrics {
   };
 }
 
-const DAY_IN_MS = 24 * 60 * 60 * 1000;
-
 /** Pure aggregation over turn_telemetry rows (cost review + latency baseline). */
 export function buildUsageMetrics(rows: TurnTelemetry[], generatedAt: string): UsageMetrics {
-  const cutoff = new Date(Date.parse(generatedAt) - DAY_IN_MS).toISOString();
+  const cutoff = new Date(Date.parse(generatedAt) - DAY_MS).toISOString();
   const sum = (subset: TurnTelemetry[]) => ({
     turns: subset.length,
     modelCalls: subset.reduce((n, r) => n + r.modelCalls, 0),

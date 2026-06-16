@@ -13,6 +13,12 @@ import {
   type ChatSessionSummary,
 } from "./render.js";
 import {
+  ApiError,
+  createFetchApi,
+  type ChatApi,
+} from "./api-client.js";
+import { submitStreaming, switchToSession } from "./composer-flow.js";
+import {
   createRestoreGate,
   historyRestoreItems,
   type ChatController,
@@ -21,13 +27,24 @@ import {
   type PolicyShape,
   type PreviewResult,
   type RestoreGate,
-  type StreamEvent,
 } from "./shared.js";
 
-// Re-export the shared UI primitives from the leaf `./shared.js` so the
-// public/test import surface (`featureGroupRows` et al. from `./main.js`) is
-// unchanged. They live in the leaf so `render.ts` can use them without importing
-// from main (which imports render's builders) — that would be a circular dep.
+// Re-export barrel: `main.ts` is the bundle entry + the public/test import
+// surface, so every symbol the tests pull from `./main.js` is re-exported here.
+// They live in the leaf modules (api-client / composer-flow / shared /
+// presentation) so `render.ts` and the flows can use them WITHOUT importing from
+// main (which imports their builders) — that back-edge would be a circular dep.
+export { createFetchApi, ApiError, SESSION_EXPIRED_MESSAGE, httpErrorMessage, createNdjsonParser } from "./api-client.js";
+export type { ChatApi } from "./api-client.js";
+export { submitMessage, submitStreaming, switchToSession, SWITCH_FAILED_MESSAGE } from "./composer-flow.js";
+export type {
+  ChatResponse,
+  ChatApiLike,
+  ComposerHooks,
+  StreamingApi,
+  SwitchApiLike,
+  SwitchHooks,
+} from "./composer-flow.js";
 export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
 export type {
   PolicyShape,
@@ -37,7 +54,6 @@ export type {
   ConfirmResponse,
   ConfirmHooks,
   ConfirmStreamApi,
-  ConfirmStreamLive,
   StreamEvent,
 } from "./shared.js";
 export {
@@ -62,27 +78,6 @@ export {
  * data and model output cannot inject markup.
  */
 
-export interface ChatApi {
-  getPermissions(): Promise<unknown>;
-  savePermissions(groups: Record<string, string>): Promise<unknown>;
-  /** Session restore: prior messages + live pending previews (rotated nonces). */
-  getHistory(): Promise<unknown>;
-  /** Start a fresh conversation (new session); the old chat stays on the server. */
-  newChat(): Promise<unknown>;
-  /** List the admin's live, owned, non-empty conversations (the history switcher). */
-  listSessions(): Promise<unknown>;
-  /** Switch the session cookie to an owned conversation; then restoreHistory replays it. */
-  switchSession(id: string): Promise<unknown>;
-  sendMessage(message: string): Promise<unknown>;
-  /** Streaming send: harness results arrive incrementally, then the truthful reply. */
-  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
-  confirmPreview(previewId: string, nonce: string): Promise<unknown>;
-  /** Streaming single confirm: the receipt arrives first, then the resume streams. */
-  confirmStream(ref: { previewId: string; nonce: string }, onEvent: (event: StreamEvent) => void): Promise<void>;
-  cancelPreview(previewId: string): Promise<unknown>;
-  undo(id: string): Promise<unknown>;
-}
-
 export function createController(api: ChatApi): ChatController {
   return {
     send: (message) => api.sendMessage(message),
@@ -93,316 +88,6 @@ export function createController(api: ChatApi): ChatController {
     undo: (id) => api.undo(id),
     savePermissions: (groups) => api.savePermissions(groups),
     getPermissions: () => api.getPermissions(),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Chat response shapes + the responsive send flow (testable core).
-// ---------------------------------------------------------------------------
-
-export interface ChatResponse {
-  ok: boolean;
-  reply: { kind: string; text: string };
-  results: ChatResult[];
-}
-
-/** Minimal API surface the send flow needs (so it's trivial to test). */
-export interface ChatApiLike {
-  sendMessage(message: string): Promise<unknown>;
-}
-
-/**
- * Hooks the DOM (or a test) plugs into the send flow. `onWorking(true)` fires
- * BEFORE the request so the UI can announce "Assistant is working…" immediately
- * (responsiveness) and is ALWAYS cleared afterward (even on error). The assistant
- * bubble is only appended when the (truthful) reply text is non-empty — in
- * tool-mode the model often returns no text, and the results speak for themselves.
- */
-export interface ComposerHooks {
-  onWorking(working: boolean): void;
-  onAssistant(text: string): void;
-  onResults(results: ChatResult[]): void;
-  onError(message: string): void;
-  /** Latest progress label ("Starting the timer") — purely cosmetic, optional. */
-  onStatus?(label: string): void;
-}
-
-/** Honest copy for an auth-expired exchange — the fix is a reload, say so. */
-export const SESSION_EXPIRED_MESSAGE = "Your session has expired — reload the page to continue.";
-
-/** An HTTP exchange the UI must surface by STATUS (only 401 throws; see json()). */
-export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
-}
-
-/**
- * Honest user-facing copy for a failed HTTP exchange: 401 = the session
- * expired (reload); anything else shows the server's own message (the routes
- * return honest JSON copy, e.g. the rate limiter's "too quickly") or the
- * caller's fallback.
- */
-export function httpErrorMessage(status: number, serverMessage?: string, fallback = "Message failed to send."): string {
-  if (status === 401) return SESSION_EXPIRED_MESSAGE;
-  return serverMessage && serverMessage.trim() ? serverMessage : fallback;
-}
-
-/**
- * The non-streaming send flow over POST /api/chat/messages. The mounted UI uses
- * `submitStreaming` (+ /chat/stream) instead — this is the maintained, unit-tested
- * fallback/test surface (a simple request/response shape the responsiveness +
- * error-surfacing contracts are pinned against). Kept deliberately so the
- * non-streaming route has a tested client; do not wire it into mount() without
- * a reason.
- *
- * `sendMessage` → `json()` only THROWS on 401 (an expired session); a non-401
- * turn failure (the route's 502 `{ok:false,code,message}`) comes back as the
- * return body, so we must inspect `ok === false` and surface the server's honest
- * copy via onError — otherwise a failed turn would render nothing.
- */
-export async function submitMessage(api: ChatApiLike, message: string, hooks: ComposerHooks): Promise<void> {
-  hooks.onWorking(true);
-  try {
-    const response = (await api.sendMessage(message)) as ChatResponse & { code?: string; message?: string };
-    if (response.ok === false) {
-      hooks.onError(response.message?.trim() ? response.message : "Message failed to send.");
-      return;
-    }
-    if (response.reply?.text) hooks.onAssistant(response.reply.text);
-    hooks.onResults(response.results ?? []);
-  } catch (error) {
-    hooks.onError(error instanceof ApiError ? error.message : "Message failed to send.");
-  } finally {
-    hooks.onWorking(false);
-  }
-}
-
-// --- NDJSON streaming (POST /api/chat/stream) ------------------------------
-
-
-export interface StreamingApi {
-  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
-}
-
-/**
- * A stateful NDJSON line parser: feed it response-body chunks (which can split a
- * line anywhere) and it calls `onEvent` once per COMPLETE line, buffering the
- * partial remainder. Malformed lines are skipped (never throws).
- */
-export function createNdjsonParser(onEvent: (event: StreamEvent) => void): (chunk: string) => void {
-  let buffer = "";
-  return (chunk: string): void => {
-    buffer += chunk;
-    let nl = buffer.indexOf("\n");
-    while (nl >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (line) {
-        try {
-          onEvent(JSON.parse(line) as StreamEvent);
-        } catch {
-          /* skip a malformed line */
-        }
-      }
-      nl = buffer.indexOf("\n");
-    }
-  };
-}
-
-/**
- * The streaming send flow. Receipts/clarifies render as they stream in; PREVIEWS
- * are buffered and flushed together (so a batch keeps its single "Confirm all"
- * card) when the truthful reply arrives. Same responsiveness contract as
- * `submitMessage`: working is announced before and always cleared after.
- */
-export async function submitStreaming(api: StreamingApi, message: string, hooks: ComposerHooks): Promise<void> {
-  hooks.onWorking(true);
-  const pendingPreviews: ChatResult[] = [];
-  const flushPreviews = (): void => {
-    if (pendingPreviews.length > 0) hooks.onResults(pendingPreviews.splice(0));
-  };
-  try {
-    await api.streamMessage(message, (event) => {
-      if (event.type === "result" && event.result) {
-        if (event.result.kind === "preview") pendingPreviews.push(event.result);
-        else hooks.onResults([event.result]);
-      } else if (event.type === "reply") {
-        flushPreviews();
-        if (event.text) hooks.onAssistant(event.text);
-      } else if (event.type === "error") {
-        hooks.onError(typeof event.message === "string" ? event.message : "Message failed.");
-      } else if (event.type === "status") {
-        if (typeof event.label === "string") hooks.onStatus?.(event.label);
-      }
-    });
-  } catch {
-    hooks.onError("Message failed to send.");
-  } finally {
-    flushPreviews(); // flush any previews if the stream ended without a reply
-    hooks.onWorking(false);
-  }
-}
-
-/** Minimal API surface the switch flow needs (so it's trivial to test). */
-export interface SwitchApiLike {
-  switchSession(id: string): Promise<unknown>;
-}
-
-/**
- * Hooks the switch flow plugs into. `onSwitched(id)` fires ONLY after the cookie
- * was re-bound to the target session (so the host can reset the transcript and
- * replay the switched-to conversation); on ANY failure it fires `onError` and
- * NEVER `onSwitched` — the current chat must stay intact when the switch didn't
- * happen.
- */
-export interface SwitchHooks {
-  onSwitched(id: string): void;
-  onError(message: string): void;
-}
-
-/** Honest fallback copy when opening a past conversation fails (non-401). */
-export const SWITCH_FAILED_MESSAGE = "Could not open that conversation. Please try again.";
-
-/**
- * The chat-history switch flow over POST /api/chat/sessions/:id/open. Mirrors the
- * send/new-chat error discipline: `switchSession` → `json()` only THROWS on 401
- * (an expired session → the reload copy); a non-401 failure (the route's 404
- * `{ok:false,code,message}` for a foreign/expired id) comes back as the return
- * body, so we inspect `ok === false` and surface the server's honest copy. ON
- * SUCCESS we hand the id to `onSwitched` (the host re-cookied already on the
- * server) so it can reset + replay; on failure the current chat is LEFT INTACT.
- */
-export async function switchToSession(api: SwitchApiLike, id: string, hooks: SwitchHooks): Promise<void> {
-  try {
-    const response = (await api.switchSession(id)) as { ok?: boolean; message?: string };
-    if (response?.ok === false) {
-      hooks.onError(response.message?.trim() ? response.message : SWITCH_FAILED_MESSAGE);
-      return;
-    }
-    hooks.onSwitched(id);
-  } catch (error) {
-    // A 401 always means "reload" (httpErrorMessage maps it); any other thrown
-    // failure shows the friendly switch fallback. The current chat stays intact.
-    hooks.onError(error instanceof ApiError ? httpErrorMessage(error.status, error.message, SWITCH_FAILED_MESSAGE) : SWITCH_FAILED_MESSAGE);
-  }
-}
-
-/** Real fetch-backed API client (same-origin; the session cookie authenticates). */
-export function createFetchApi(): ChatApi {
-  async function json(path: string, init?: RequestInit): Promise<unknown> {
-    const res = await fetch(path, {
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      ...init,
-    });
-    let body: unknown;
-    try {
-      body = await res.json();
-    } catch {
-      body = undefined;
-    }
-    // ONLY 401 throws: an expired session has one fix (reload) and must say so.
-    // Other non-ok statuses RETURN their JSON body — the confirm/cancel/undo
-    // flows render those `{ok:false, code, message}` payloads as return values.
-    if (res.status === 401) throw new ApiError(401, SESSION_EXPIRED_MESSAGE);
-    return body;
-  }
-  return {
-    getPermissions: () => json("/api/permissions"),
-    savePermissions: (groups) =>
-      json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
-    getHistory: () => json("/api/chat/history"),
-    newChat: () => json("/api/chat/new", { method: "POST" }),
-    listSessions: () => json("/api/chat/sessions"),
-    switchSession: (id) =>
-      json(`/api/chat/sessions/${encodeURIComponent(id)}/open`, { method: "POST", body: JSON.stringify({}) }),
-    sendMessage: (message) =>
-      json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
-    streamMessage: async (message, onEvent) => {
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      if (!res.ok || !res.body) {
-        // Surface the route's honest JSON copy (rate limit, expired session)
-        // instead of a blanket "unavailable".
-        let serverMessage: string | undefined;
-        try {
-          serverMessage = ((await res.json()) as { message?: string })?.message;
-        } catch {
-          /* keep the fallback */
-        }
-        onEvent({
-          type: "error",
-          message: httpErrorMessage(res.status, serverMessage, "The assistant is temporarily unavailable. Please try again."),
-        });
-        return;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      const feed = createNdjsonParser(onEvent);
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        feed(decoder.decode(value, { stream: true }));
-      }
-      feed(decoder.decode()); // flush any trailing bytes
-    },
-    confirmPreview: (previewId, nonce) =>
-      json(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
-        method: "POST",
-        body: JSON.stringify({ nonce }),
-      }),
-    confirmStream: async (ref, onEvent) => {
-      const res = await fetch(`/api/confirmations/${encodeURIComponent(ref.previewId)}/confirm?stream=1`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ nonce: ref.nonce }),
-      });
-      if (!res.ok || !res.body) {
-        // A non-OK confirm is a JSON error (validation/policy/expired) — surface
-        // it; a 401 gets the session-expired copy. Carry the server's `code`
-        // through so a stale-nonce 400 (a cross-tab nonce rotation) can re-arm
-        // this tab instead of dead-ending — see submitConfirmStream/onStale.
-        let serverMessage: string | undefined;
-        let serverCode: string | undefined;
-        try {
-          const body = (await res.json()) as { message?: string; code?: string };
-          serverMessage = body?.message;
-          serverCode = body?.code;
-        } catch {
-          /* keep the default */
-        }
-        onEvent({
-          type: "error",
-          ...(serverCode ? { code: serverCode } : {}),
-          message: httpErrorMessage(res.status, serverMessage, "Confirmation failed."),
-        });
-        return;
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      const feed = createNdjsonParser(onEvent);
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        feed(decoder.decode(value, { stream: true }));
-      }
-      feed(decoder.decode());
-    },
-    cancelPreview: (previewId) =>
-      json(`/api/confirmations/${encodeURIComponent(previewId)}/cancel`, {
-        method: "POST",
-        body: JSON.stringify({}),
-      }),
-    undo: (id) => json(`/api/undo/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({}) }),
   };
 }
 
@@ -431,14 +116,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // Start a fresh conversation. Hidden until the chat is up (same as settings).
   // The previous chat stays on the server (retention + the audit log keep it);
   // this only resets the visible transcript to an empty session.
-  const newChatButton = el("button", "secondary hidden") as HTMLButtonElement;
+  const newChatButton = el("button", "secondary hidden");
   newChatButton.type = "button";
   newChatButton.textContent = "New chat";
   newChatButton.setAttribute("aria-label", "Start a new chat");
   header.appendChild(newChatButton);
   // Settings (assistant permissions). Hidden until the chat is up, so the
   // first-run setup flow can't be bypassed mid-way.
-  const settingsButton = el("button", "icon-button hidden") as HTMLButtonElement;
+  const settingsButton = el("button", "icon-button hidden");
   settingsButton.type = "button";
   settingsButton.setAttribute("aria-label", "Assistant permissions");
   settingsButton.setAttribute("aria-expanded", "false");
@@ -520,6 +205,18 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // path as typed text — never to a confirmation endpoint.
   let sendText: (text: string) => Promise<void> = async () => {};
 
+  // The empty-chat welcome card lives OUTSIDE the message log (insertBefore the
+  // `messages` live region) so it is never announced as a turn, and is bound to
+  // the SAME `sendText` path the composer uses (a chip is typed text, never a
+  // confirmation endpoint). Both helpers are main-local because they capture the
+  // live `chat`/`messages`/`sendText` bindings.
+  function dropWelcome(): void {
+    chat.querySelector(".welcome")?.remove();
+  }
+  function showWelcome(): void {
+    chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+  }
+
   // r1-new-session-restore-04: the composer goes live the moment renderChat()
   // runs, but restoreHistory() then awaits a GET before appending the replayed
   // conversation. A message typed in that window must NOT jump ahead of the
@@ -582,12 +279,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
   function renderChat(): void {
     chat.replaceChildren();
     chat.appendChild(messages);
-    const form = el("form", "composer") as HTMLFormElement;
+    const form = el("form", "composer");
     form.setAttribute("aria-label", "Send a message to the assistant");
-    const input = el("input", "composer-input") as HTMLInputElement;
+    const input = el("input", "composer-input");
     input.placeholder = "Ask the assistant…";
     input.setAttribute("aria-label", "Message");
-    const send = el("button", "primary", "Send") as HTMLButtonElement;
+    const send = el("button", "primary", "Send");
     send.type = "submit";
     form.appendChild(input);
     form.appendChild(send);
@@ -603,7 +300,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
       // fast first message never renders ABOVE the replayed history. The gate
       // is already-settled outside the restore window, so this is a no-op then.
       await restoreGate.waitUntilSettled();
-      chat.querySelector(".welcome")?.remove(); // the conversation has started
+      dropWelcome(); // the conversation has started
       appendMessage("user", text);
       messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
       clearError();
@@ -638,7 +335,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     // First visit: a welcome card with example prompts, ABOVE the message log
     // (outside the live region, so it is never announced as a turn).
     if (messages.childElementCount === 0) {
-      chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+      showWelcome();
     }
     chat.classList.remove("hidden");
     settingsButton.classList.remove("hidden");
@@ -692,7 +389,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
         }),
       );
       if (!firstRun) {
-        const close = el("button", "secondary", "Close") as HTMLButtonElement;
+        const close = el("button", "secondary", "Close");
         close.type = "button";
         close.addEventListener("click", closePermissions);
         setup.appendChild(close);
@@ -726,8 +423,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
     clearError();
     setWorking(false);
     messages.replaceChildren(); // drop the transcript + any pending preview cards
-    chat.querySelector(".welcome")?.remove();
-    chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+    dropWelcome();
+    showWelcome();
     void refreshChatsMenu(); // the prior conversation is now reopenable from the dropdown
     focusComposer();
   }
@@ -743,7 +440,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
       const history = (await api.getHistory()) as HistoryResponse;
       const items = historyRestoreItems(history);
       if (items.length === 0) return;
-      chat.querySelector(".welcome")?.remove(); // the conversation already started
+      dropWelcome(); // the conversation already started
       for (const item of items) {
         if (item.kind === "bubble") appendMessage(item.role, item.text);
         else renderResults(item.results);
@@ -784,14 +481,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
         clearError();
         setWorking(false);
         messages.replaceChildren(); // drop the previous transcript + any preview cards
-        chat.querySelector(".welcome")?.remove();
+        dropWelcome();
         // Arm the gate so a message typed during the replay can't jump ahead
         // (r1-new-session-restore-04); restoreHistory settles it when done.
         restoreGate = createRestoreGate();
         await restoreHistory();
         if (messages.childElementCount === 0) {
           // The switched-to session replayed nothing visible — show the welcome.
-          chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+          showWelcome();
         }
       },
       onError: (message) => showError(message),

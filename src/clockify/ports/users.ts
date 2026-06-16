@@ -21,7 +21,8 @@ export interface UpdateWorkspaceMemberRateInput {
  * User & group slice of the {@link WorkspaceClient} port (goclmcp §2.13). Reads
  * are immediate; the writes run from the handler. Gotchas pinned by the unit
  * tests: invite is `POST /users?send-email={bool}` with `{email}`; role is
- * `PUT /users/{id}/roles {entityId,role}`; the Team-section member rate is
+ * `POST /users/{id}/roles {entityId,role}` (the route has no PUT — spec + goclmcp,
+ * which live-pinned the POST); the Team-section member rate is
  * `PUT /users/{id}/{hourly-rate|cost-rate} {amount}`; deactivate is
  * `PUT /users/{id} {status:INACTIVE}`; groups live under `/user-groups`, the
  * single GET is a list-scan, members are `…/{id}/users`.

@@ -61,3 +61,17 @@ export function itemTypeClarify(options: string[]): { clarify: string; options: 
     options: options.map((t) => ({ id: t, label: t })),
   };
 }
+
+/**
+ * Map a pair of "is this tax rate set?" booleans to Clockify's item-based tax
+ * apply flag. When the invoice carries a rate, its line items default to taxed
+ * (Clockify's TAX/TAX2 columns are checked by default); no rate ⇒ no flag. The
+ * one place this mapping lives so create-with-items and items_add can't drift —
+ * an explicit per-item `applyTaxes` still wins at the call site.
+ */
+export function taxApplyFlag(
+  hasTax1: boolean,
+  hasTax2: boolean,
+): "TAX1TAX2" | "TAX2" | "TAX1" | undefined {
+  return hasTax1 && hasTax2 ? "TAX1TAX2" : hasTax2 ? "TAX2" : hasTax1 ? "TAX1" : undefined;
+}

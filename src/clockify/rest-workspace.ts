@@ -1,5 +1,6 @@
 import type { WorkspaceClient } from "./client.js";
-import { createRestCore } from "./rest/core.js";
+import type { ClockifyAuth } from "./types.js";
+import { createRestCore, type RestCoreOptions } from "./rest/core.js";
 import { makeProjectRest } from "./rest/projects.js";
 import { makeTimeEntryRest } from "./rest/time-entries.js";
 import { makeTaskRest } from "./rest/tasks.js";
@@ -27,19 +28,15 @@ import { makeWorkspaceRest } from "./rest/workspace.js";
  * The token/key is sent only in the request header — never logged, never placed
  * in a prompt, never returned.
  */
-export type ClockifyAuth = { addonToken: string } | { apiKey: string };
+// `ClockifyAuth` now lives in the import-free leaf (types.ts) so the adapter and
+// the core share ONE definition; re-exported here because callers/tests import
+// it from this module.
+export type { ClockifyAuth };
 
-export interface RestWorkspaceOptions {
+export interface RestWorkspaceOptions
+  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs"> {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
-  /** Explicit reports host base from the token `reportsUrl` claim (+ /v1). */
-  reportsBase?: string;
-  /** Explicit audit host base, when known. */
-  auditBase?: string;
   workspaceId: string;
-  auth: ClockifyAuth;
-  fetchImpl?: typeof fetch; // injectable for tests
-  /** Clockify commit/IO timeout (ms); defaults to COMMIT_TIMEOUT_MS. */
-  commitTimeoutMs?: number;
 }
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
@@ -98,76 +95,48 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     ...auditRest,
     ...workspaceRest,
     async deleteEntity({ entityType, id, projectId }) {
-      // Projects and clients cannot be deleted while active — Clockify rejects a
-      // bare DELETE ("Cannot delete an active ..."). Archive first, then delete.
-      // The typed project module owns the project path; clients archive inline
-      // until the Clients phase adds a typed module.
+      // Route the generic delete to the typed per-area deleter, which owns the
+      // archive-then-delete ordering Clockify requires (projects/clients archive
+      // first because a bare DELETE is rejected for an active one; tasks mark
+      // DONE then DELETE). The task case is special: a delete is PROJECT-scoped,
+      // so without the projectId we cannot route it and fail loudly rather than
+      // guess (a created-task undo always carries its projectId).
       if (entityType === "task") {
-        // Tasks are project-scoped; the typed deleteTask marks DONE then DELETEs.
-        // Without the projectId we cannot route the delete, so fail loudly rather
-        // than guess (a created-task undo always carries its projectId).
         if (!projectId) throw new Error("delete not supported for a task without its projectId");
         await taskRest.deleteTask(projectId, id);
         return;
       }
-      if (entityType === "project") {
-        await projectRest.deleteProject(id); // archive-then-delete
-        return;
-      }
-      if (entityType === "client") {
-        await clientRest.deleteClient(id); // archive-then-delete
-        return;
-      }
-      if (entityType === "tag") {
-        await tagRest.deleteTag(id);
-        return;
-      }
-      if (entityType === "invoice") {
-        await invoiceRest.deleteInvoice(id);
-        return;
-      }
-      if (entityType === "expense") {
-        await expenseRest.deleteExpense(id);
-        return;
-      }
-      if (entityType === "webhook") {
-        await webhookRest.deleteWebhook(id);
-        return;
-      }
-      if (entityType === "group") {
-        await userRest.deleteGroup(id);
-        return;
-      }
-      if (entityType === "holiday") {
-        await holidayRest.deleteHoliday(id);
-        return;
-      }
-      if (entityType === "assignment") {
-        await schedulingRest.deleteAssignment(id);
-        return;
-      }
-      const pathByType: Record<string, string> = {
-        time_entry: `${ws}/time-entries/${id}`,
+      const deleteByType: Record<string, (id: string) => Promise<void>> = {
+        project: (i) => projectRest.deleteProject(i), // archive-then-delete
+        client: (i) => clientRest.deleteClient(i), // archive-then-delete
+        tag: (i) => tagRest.deleteTag(i),
+        invoice: (i) => invoiceRest.deleteInvoice(i),
+        expense: (i) => expenseRest.deleteExpense(i),
+        webhook: (i) => webhookRest.deleteWebhook(i),
+        group: (i) => userRest.deleteGroup(i),
+        holiday: (i) => holidayRest.deleteHoliday(i),
+        assignment: (i) => schedulingRest.deleteAssignment(i),
+        time_entry: (i) => core.call("api", "DELETE", `${ws}/time-entries/${i}`).then(() => undefined),
       };
-      const path = pathByType[entityType];
-      if (!path) throw new Error(`delete not supported for entity type: ${entityType}`);
-      await core.call("api", "DELETE", path);
+      const del = deleteByType[entityType];
+      if (!del) throw new Error(`delete not supported for entity type: ${entityType}`);
+      await del(id);
     },
     async updateEntity({ entityType, id, fields }) {
-      // Fetch-then-merge PUT (Clockify replaces on PUT, so merge onto the current
-      // entity). Only single-resource paths are supported here; `task` needs a
-      // projectId that this generic signature lacks, so it (and other types)
-      // throw a clear error rather than guessing.
-      const pathByType: Record<string, string> = {
-        project: `${ws}/projects/${id}`,
-        client: `${ws}/clients/${id}`,
-        tag: `${ws}/tags/${id}`,
+      // Delegate to the typed per-area update (each is GET-then-merge-PUT, since
+      // Clockify replaces on PUT). Only project/client/tag have a single-resource
+      // path; `task` needs a projectId this generic signature lacks, so it (and
+      // every other type) throws a clear error rather than guessing. Normalize the
+      // typed result back to the `{id,name}` shape admin.ts's commit consumes.
+      const patch = fields ?? {};
+      const updateByType: Record<string, (patch: Record<string, unknown>) => Promise<{ id: string; name: string }>> = {
+        project: (p) => projectRest.updateProject(id, p),
+        client: (p) => clientRest.updateClient(id, p),
+        tag: (p) => tagRest.updateTag(id, p),
       };
-      const path = pathByType[entityType];
-      if (!path) throw new Error(`update not supported for entity type: ${entityType}`);
-      const current = ((await core.call("api", "GET", path)) ?? {}) as Record<string, unknown>;
-      const merged = { ...current, ...(fields ?? {}) };
-      const updated = (await core.call("api", "PUT", path, merged)) as { id?: string; name?: string };
+      const update = updateByType[entityType];
+      if (!update) throw new Error(`update not supported for entity type: ${entityType}`);
+      const updated = await update(patch);
       return { id: updated.id ?? id, name: updated.name ?? id };
     },
   };

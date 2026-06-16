@@ -4,7 +4,7 @@ import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinit
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
 import { resolveProjectTaskRefs, resolveRelativeDay, resolveTagRefs, resolveUserFilter } from "./resolve.js";
-import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
+import { DAY_MS, SEVEN_DAYS_MS, nowDate, nowIso } from "../../durations.js";
 
 /**
  * Time-tracking read + write workflows (SPEC "Safe Writes"): status, start timer,
@@ -13,10 +13,6 @@ import { DAY_MS, SEVEN_DAYS_MS } from "../../durations.js";
  * it previews + requires confirmation like every other update action (editing
  * existing data has no undo). Ambiguous project/task identity stops and asks.
  */
-
-function nowIso(ctx: ActionContext): string {
-  return (ctx.now ?? (() => new Date()))().toISOString();
-}
 
 /**
  * Merge `tagIds` + `tagNames` and resolve every entry (id, short id, or NAME —
@@ -172,7 +168,7 @@ const stopTimer = defineAction({
  *  `undefined` = unparseable; callers clarify instead of sending it (live: review
  *  crashed with "Invalid time value" on `new Date("today")`). */
 function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string | undefined {
-  return resolveRelativeDay((ctx.now ?? (() => new Date()))(), args);
+  return resolveRelativeDay(nowDate(ctx), args);
 }
 
 const DATE_CLARIFY = (raw: string) =>
@@ -320,7 +316,7 @@ const reviewDay = defineAction({
       defaultTo: ctx.adminUserId,
     });
     if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
-    const userId = user.userId as string;
+    const userId = user.userId;
     const start = `${date}T00:00:00.000Z`;
     // Exclusive end = next-day midnight (consistent with review_week's window).
     const end = new Date(Date.parse(start) + DAY_MS).toISOString();
@@ -367,7 +363,7 @@ const reviewWeek = defineAction({
       defaultTo: ctx.adminUserId,
     });
     if (!user.ok) return { kind: "clarify", message: user.clarify.clarify, options: user.clarify.options };
-    const userId = user.userId as string;
+    const userId = user.userId;
     const start = `${startDate}T00:00:00.000Z`;
     const end = new Date(Date.parse(start) + SEVEN_DAYS_MS).toISOString();
     const { entries, truncated } = await ctx.clockify.getEntries({ userId, start, end });

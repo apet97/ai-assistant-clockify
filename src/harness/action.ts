@@ -196,6 +196,15 @@ export interface RiskyClarifyResult {
 }
 
 /**
+ * Map a {@link RiskyClarifyResult} to the clarify {@link ActionResult} variant.
+ * Workflows return the `{ clarify, options? }` shape; this is the one place that
+ * renames `clarify` → `message` so the spelling lives once.
+ */
+export function clarifyResult(c: RiskyClarifyResult): ActionResult {
+  return { kind: "clarify", message: c.clarify, options: c.options };
+}
+
+/**
  * Build a risky (preview → button-confirm → commit) action without re-stating
  * the action's identity three times. The preview callback returns the
  * preview-specific fields plus the operation `payload`; everything derived from

@@ -1,4 +1,5 @@
 import type { RestCore } from "./core.js";
+import { periodStart, periodEnd } from "./wire-dates.js";
 import type { EntitySummary } from "../types.js";
 import type { HolidayPort, HolidaySummary } from "../ports/holidays.js";
 
@@ -7,19 +8,11 @@ function assignment(ids: string[]): Record<string, unknown> {
   return { contains: "CONTAINS", ids, status: "ALL" };
 }
 
-/** The in-period endpoint wants full ISO datetimes; normalize a date-only bound. */
-function periodStart(d: string): string {
-  return d.includes("T") ? d : `${d}T00:00:00Z`;
-}
-function periodEnd(d: string): string {
-  return d.includes("T") ? d : `${d}T23:59:59.999Z`;
-}
-
-function mapHoliday(raw: any): HolidaySummary {
-  const out: HolidaySummary = { id: raw.id, name: raw.name };
-  const dp = raw.datePeriod ?? {};
-  if (dp.startDate !== undefined) out.startDate = dp.startDate;
-  if (dp.endDate !== undefined) out.endDate = dp.endDate;
+function mapHoliday(raw: Record<string, unknown>): HolidaySummary {
+  const out: HolidaySummary = { id: raw.id as string, name: raw.name as string };
+  const dp = (raw.datePeriod ?? {}) as Record<string, unknown>;
+  if (dp.startDate !== undefined) out.startDate = dp.startDate as string;
+  if (dp.endDate !== undefined) out.endDate = dp.endDate as string;
   if (typeof raw.occursAnnually === "boolean") out.occursAnnually = raw.occursAnnually;
   return out;
 }

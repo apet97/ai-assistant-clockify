@@ -1,14 +1,16 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { toMinor } from "../money.js";
+import { fromMinor, toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveUserRef } from "./resolve.js";
+import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -59,7 +61,7 @@ const getProject = defineAction({
       list: () => ctx.clockify.listProjects(),
     });
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return clarifyResult(resolved.clarify);
     }
     const entity = await ctx.clockify.getProject(resolved.id);
     return {
@@ -105,7 +107,7 @@ const createProject = defineAction({
         { noun: "client", verb: "assign the new project to", list: (f) => ctx.clockify.listClients(f) },
       );
       if (!client.ok) {
-        return { kind: "clarify", message: client.clarify.clarify, options: client.clarify.options };
+        return clarifyResult(client.clarify);
       }
       clientId = client.id;
     }
@@ -156,7 +158,7 @@ const createFromTemplate = defineAction({
       { noun: "project template", verb: "create the project from", list: () => ctx.clockify.listTemplates() },
     );
     if (!template.ok) {
-      return { kind: "clarify", message: template.clarify.clarify, options: template.clarify.options };
+      return clarifyResult(template.clarify);
     }
     const project = await ctx.clockify.createProjectFromTemplate({
       templateProjectId: template.id,
@@ -234,12 +236,12 @@ const updateProject = defineRiskyAction({
     if (hourlyRate !== undefined) {
       const amount = toMinor(hourlyRate, rateUnitFinal);
       fields.hourlyRate = { amount };
-      rateChanges.push(`Set the project default hourly rate to ${(amount / 100).toFixed(2)}`);
+      rateChanges.push(`Set the project default hourly rate to ${fromMinor(amount)}`);
     }
     if (costRate !== undefined) {
       const amount = toMinor(costRate, rateUnitFinal);
       fields.costRate = { amount };
-      rateChanges.push(`Set the project default cost rate to ${(amount / 100).toFixed(2)}`);
+      rateChanges.push(`Set the project default cost rate to ${fromMinor(amount)}`);
     }
     // A client NAME in the clientId slot resolves to the real id (live item
     // 096: "assign P4 to client X" previewed the name and failed at commit).
@@ -375,11 +377,7 @@ const rateUpdate = defineRiskyAction({
       /** A member's user id, exact name (via userName), or "me" (resolved server-side). */
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
-      rateKind: z.enum(["HOURLY", "COST"]),
-      amount: zNumberLike(z.number().nonnegative()),
-      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
-      amountUnit: z.enum(["major", "minor"]).default("major"),
-      since: z.string().optional(),
+      ...RATE_FIELDS,
     })
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact name." })
     .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
@@ -410,13 +408,14 @@ const rateUpdate = defineRiskyAction({
     }
     const amountMinor = toMinor(args.amount, args.amountUnit);
     return {
-      actionLabel: `Set project ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-      targets: [{ type: "project", id: project.id }],
-      expectedChanges: [
-        `Set ${args.rateKind} rate for ${memberLabel} on "${project.name ?? project.id}" to ${(amountMinor / 100).toFixed(2)}`,
-      ],
-      reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
-      warnings: ["This changes the billable amount of future entries."],
+      ...buildRatePreview({
+        targetType: "project",
+        targetId: project.id,
+        scopeLabel: `for ${memberLabel} on "${project.name ?? project.id}"`,
+        amountMinor,
+        rateKind: args.rateKind,
+        kindNoun: "project",
+      }),
       payload: {
         projectId: project.id,
         userId,

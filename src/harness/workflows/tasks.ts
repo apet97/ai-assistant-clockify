@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { zNumberLike, zStringList } from "../arg-shapes.js";
+import { zStringList } from "../arg-shapes.js";
 import {
+  clarifyResult,
   defineAction,
   defineReadAction,
   defineRiskyAction,
@@ -11,6 +12,7 @@ import {
 import { successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveUserRefs } from "./resolve.js";
+import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -94,7 +96,7 @@ const getTask = defineAction({
   async handler(ctx, args) {
     const resolved = await resolveTaskRef(ctx, args, "fetch");
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return clarifyResult(resolved.clarify);
     }
     const entity = await ctx.clockify.getTask(resolved.projectId, resolved.id);
     return {
@@ -129,7 +131,7 @@ const createTask = defineAction({
         adminUserId: ctx.adminUserId,
         listUsers: () => ctx.clockify.listUsers(),
       });
-      if (!resolved.ok) return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      if (!resolved.ok) return clarifyResult(resolved.clarify);
       assigneeIds = resolved.userIds;
     }
     const task = await ctx.clockify.createTask({
@@ -283,11 +285,7 @@ const rateUpdate = defineRiskyAction({
       projectName: z.string().min(1).optional(),
       taskId: z.string().min(1).optional(),
       taskName: z.string().min(1).optional(),
-      rateKind: z.enum(["HOURLY", "COST"]),
-      amount: zNumberLike(z.number().nonnegative()),
-      /** `major` (e.g. 75.00) is converted ×100 to the minor units Clockify wants. */
-      amountUnit: z.enum(["major", "minor"]).default("major"),
-      since: z.string().optional(),
+      ...RATE_FIELDS,
     })
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact projectName." })
     .refine((v) => v.taskId !== undefined || v.taskName !== undefined, { message: "Provide the task id or its exact taskName." }),
@@ -306,11 +304,15 @@ const rateUpdate = defineRiskyAction({
     const amountMinor = toMinor(args.amount, args.amountUnit);
     const taskLabel = resolved.name ?? resolved.id;
     return {
-      actionLabel: `Set task ${args.rateKind === "COST" ? "cost" : "hourly"} rate`,
-      targets: [{ type: "task", id: resolved.id, name: resolved.name }],
-      expectedChanges: [`Set ${args.rateKind} rate for "${taskLabel}" to ${(amountMinor / 100).toFixed(2)}`],
-      reversibility: "You can set a new rate at any time; past entries keep their recorded rate.",
-      warnings: ["This changes the billable amount of future entries on the task."],
+      ...buildRatePreview({
+        targetType: "task",
+        targetId: resolved.id,
+        targetName: resolved.name,
+        scopeLabel: `for "${taskLabel}"`,
+        amountMinor,
+        rateKind: args.rateKind,
+        kindNoun: "task",
+      }),
       payload: {
         projectId: resolved.projectId,
         taskId: resolved.id,

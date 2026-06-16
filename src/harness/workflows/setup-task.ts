@@ -1,16 +1,14 @@
 import { z } from "zod";
 import {
-  defineAction,
+  defineRiskyAction,
   type ActionDefinition,
-  type ActionResult,
-  type ClarifyOption,
-  type ConfirmableOperation,
+  type RiskyPreviewResult,
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRefs } from "./resolve.js";
-import { toMinor } from "../money.js";
+import { fromMinor, toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 
 /**
@@ -43,15 +41,11 @@ const setupTaskPayloadSchema = z.object({
 });
 type SetupTaskPayload = z.infer<typeof setupTaskPayloadSchema>;
 
-function asClarify(c: { clarify: string; options?: ClarifyOption[] }): ActionResult {
-  return { kind: "clarify", message: c.clarify, options: c.options };
-}
-
-const setupTask = defineAction({
+const setupTask = defineRiskyAction({
   name: "clockify_setup_task",
   description:
     'Create a NEW task in an existing project AND set it up in one step — assign members (names or "me") and set the task\'s billable/cost rate — as ONE preview and ONE Confirm. Use this for "create a task in <project> and set its rate". For just creating or assigning a task with no rate, use clockify_tasks_create.',
-  featureGroup: "work_structure",
+  group: "work_structure",
   risks: ["high_risk_write", "billing"],
   schema: z
     .object({
@@ -68,7 +62,7 @@ const setupTask = defineAction({
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
       message: "Provide the project id or its exact projectName.",
     }),
-  async handler(ctx, args) {
+  async preview(ctx, args) {
     const unit = args.rateUnit ?? "major";
 
     // 1. Parent project (must already exist) — resolve before any write.
@@ -76,7 +70,7 @@ const setupTask = defineAction({
       { id: args.projectId, name: args.projectName },
       { noun: "project", verb: "create the task in", list: (f) => ctx.clockify.listProjects(f) },
     );
-    if (!project.ok) return asClarify(project.clarify);
+    if (!project.ok) return project.clarify;
 
     // 2. Assignees (id/name/"me").
     let assigneeIds: string[] = [];
@@ -88,7 +82,7 @@ const setupTask = defineAction({
         listUsers: () => ctx.clockify.listUsers(),
         verifyIds: true,
       });
-      if (!m.ok) return asClarify(m.clarify);
+      if (!m.ok) return m.clarify;
       assigneeIds = m.userIds;
       assigneeLabels = m.labels;
     }
@@ -96,8 +90,7 @@ const setupTask = defineAction({
     // 3. Pre-check the rate's sub-group (invoices) — the outer gate is work_structure.
     if (args.rate !== undefined && !canWrite(ctx.policy, "invoices")) {
       return {
-        kind: "clarify",
-        message:
+        clarify:
           "I can't set the task rate because write access to invoices is disabled in your assistant permissions. Enable it (or drop the rate) and try again.",
       };
     }
@@ -106,7 +99,7 @@ const setupTask = defineAction({
     const projectName = project.name ?? args.projectName;
     const expectedChanges: string[] = [`Create task "${args.name}" in project "${projectName ?? project.id}"`];
     for (const label of assigneeLabels) expectedChanges.push(label === "you" ? "Assign you" : `Assign "${label}"`);
-    if (rate) expectedChanges.push(`Set the task ${rate.kind} rate to $${(rate.amountMinor / 100).toFixed(2)}`);
+    if (rate) expectedChanges.push(`Set the task ${rate.kind} rate to $${fromMinor(rate.amountMinor)}`);
 
     const payload: SetupTaskPayload = {
       projectId: project.id,
@@ -116,30 +109,21 @@ const setupTask = defineAction({
       ...(rate ? { rate } : {}),
     };
 
-    return {
-      kind: "preview",
-      preview: {
-        actionLabel: "Set up task",
-        featureGroup: "work_structure",
-        riskLabels: ["high_risk_write", "billing"],
-        targets: [{ type: "project", id: project.id, ...(projectName ? { name: projectName } : {}) }],
-        expectedChanges,
-        reversibility: "Undo removes the created task (and its rate) from the project.",
-        warnings: ["This creates a task, sets its assignees, and sets a billable rate."],
-      },
-      operation: {
-        actionName: "clockify_setup_task",
-        featureGroup: "work_structure",
-        risks: ["high_risk_write", "billing"],
-        payload: payload as unknown as Record<string, unknown>,
-      },
+    const result: RiskyPreviewResult = {
+      actionLabel: "Set up task",
+      targets: [{ type: "project", id: project.id, ...(projectName ? { name: projectName } : {}) }],
+      expectedChanges,
+      reversibility: "Undo removes the created task (and its rate) from the project.",
+      warnings: ["This creates a task, sets its assignees, and sets a billable rate."],
+      payload: payload as unknown as Record<string, unknown>,
     };
+    return result;
   },
-  async commit(ctx, operation) {
-    const parsed = setupTaskPayloadSchema.safeParse(operation.payload);
+  async commit(ctx, payload) {
+    const parsed = setupTaskPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       return errorReceipt({
-        action: operation.actionName,
+        action: "clockify_setup_task",
         code: "invalid_payload",
         message:
           "The saved task-setup details no longer match the expected shape — nothing was changed. Please re-issue the request.",
@@ -217,12 +201,12 @@ const setupTask = defineAction({
       warnings: outcome.warnings.length ? outcome.warnings : undefined,
     });
   },
-  idempotencyKey(operation: ConfirmableOperation) {
+  idempotencyKey(payload) {
     // A drifted payload must not throw here (this runs BEFORE commit, to claim the
     // dedup key); a stable raw key keeps dedup deterministic, and commit then surfaces
     // the honest invalid_payload receipt.
-    const parsed = setupTaskPayloadSchema.safeParse(operation.payload);
-    if (!parsed.success) return JSON.stringify(operation.payload);
+    const parsed = setupTaskPayloadSchema.safeParse(payload);
+    if (!parsed.success) return JSON.stringify(payload);
     const p = parsed.data;
     return JSON.stringify({
       projectId: p.projectId,

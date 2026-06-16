@@ -41,19 +41,51 @@ const modelPlanSchema = z
     message: "kind 'actions' requires a non-empty actions array",
   });
 
-export interface PlanConversationInput {
-  modelClient: ModelClient;
-  messages: ModelMessage[];
-  actionCatalog: ActionCatalogEntry[];
+/**
+ * The fields that shape the tool-calling system prompt + tool catalog, shared by
+ * the single-turn ({@link PlanConversationInput}) and agentic
+ * ({@link AgentConversationInput}) paths. {@link buildToolMessages} consumes
+ * exactly these — so both paths build a byte-identical prompt and resolve the
+ * same tool list.
+ */
+export interface ToolPromptInput {
   policy: AdminPolicy;
-  /** Prefer native tool-calling when the client supports it (default true). */
-  useTools?: boolean;
   /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
   tools?: ToolDefinition[];
   /** Clockify auth class so the prompt can surface add-on platform restrictions. */
   authClass?: AuthClass;
   /** Server clock date (YYYY-MM-DD) so the model narrates the real date, not its cutoff. */
   currentDate?: string;
+}
+
+export interface PlanConversationInput extends ToolPromptInput {
+  modelClient: ModelClient;
+  messages: ModelMessage[];
+  actionCatalog: ActionCatalogEntry[];
+  /** Prefer native tool-calling when the client supports it (default true). */
+  useTools?: boolean;
+}
+
+/**
+ * Build the tool-calling request: the system prompt (prepended to the caller's
+ * messages) plus the resolved tool catalog. Shared by single-turn
+ * {@link planWithTools} and the agentic {@link runAgentConversation} so the model
+ * always sees the same prompt + tools on a chat turn and its confirm resume — a
+ * prerequisite for the prompt-cache-stable prefix.
+ */
+function buildToolMessages(input: ToolPromptInput & { messages: ModelMessage[] }): {
+  messages: ModelMessage[];
+  tools: ToolDefinition[];
+} {
+  const system = buildToolSystemPrompt({
+    policy: input.policy,
+    authClass: input.authClass,
+    currentDate: input.currentDate,
+  });
+  return {
+    messages: [{ role: "system", content: system }, ...input.messages],
+    tools: input.tools ?? toolsForModel(),
+  };
 }
 
 type ParseResult =
@@ -80,15 +112,8 @@ function parsePlan(raw: string): ParseResult {
 }
 
 export interface AgentConversationInput
-  extends Pick<RunAgentTurnInput, "modelClient" | "messages" | "runAction" | "onStep" | "maxSteps" | "signal"> {
-  policy: AdminPolicy;
-  /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
-  tools?: ToolDefinition[];
-  /** Clockify auth class so the prompt can surface add-on platform restrictions. */
-  authClass?: AuthClass;
-  /** Server clock date (YYYY-MM-DD) so the model narrates the real date, not its cutoff. */
-  currentDate?: string;
-}
+  extends Pick<RunAgentTurnInput, "modelClient" | "messages" | "runAction" | "onStep" | "maxSteps" | "signal">,
+    ToolPromptInput {}
 
 /**
  * Agentic planning entry (Phase 2b): the durable tool-loop with the SAME tool
@@ -98,15 +123,11 @@ export interface AgentConversationInput
  * resumes the returned transcript on an interrupt.
  */
 export async function runAgentConversation(input: AgentConversationInput): Promise<AgentTurnResult> {
-  const system = buildToolSystemPrompt({
-    policy: input.policy,
-    authClass: input.authClass,
-    currentDate: input.currentDate,
-  });
+  const { messages, tools } = buildToolMessages(input);
   return runAgentTurn({
     modelClient: input.modelClient,
-    messages: [{ role: "system", content: system }, ...input.messages],
-    tools: input.tools ?? toolsForModel(),
+    messages,
+    tools,
     runAction: input.runAction,
     onStep: input.onStep,
     maxSteps: input.maxSteps,
@@ -129,13 +150,7 @@ export async function planConversation(input: PlanConversationInput): Promise<Mo
  * still re-validates and gates every proposed action (Zod + risk/policy).
  */
 async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
-  const system = buildToolSystemPrompt({
-    policy: input.policy,
-    authClass: input.authClass,
-    currentDate: input.currentDate,
-  });
-  const messages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
-  const tools = input.tools ?? toolsForModel();
+  const { messages, tools } = buildToolMessages(input);
   const completion = await input.modelClient.completeWithTools!(messages, tools);
 
   if (completion.toolCalls.length > 0) {

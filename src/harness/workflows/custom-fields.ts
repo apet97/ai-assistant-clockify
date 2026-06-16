@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
+import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
@@ -62,7 +62,7 @@ const getCustomField = defineAction({
       list: () => ctx.clockify.listCustomFields(),
     });
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return clarifyResult(resolved.clarify);
     }
     const entity = await ctx.clockify.getCustomField(resolved.id);
     return {
