@@ -90,3 +90,32 @@ describe("selectActionsForMessage — against the real catalog", () => {
     expect(sel.has("clockify_status")).toBe(true);
   });
 });
+
+// Pins the exact recall misses the live matrix surfaced (DeepSeek pro 100%→94%
+// under the first subsetting cut) so they can never silently return.
+describe("selectActionsForMessage — matrix regression guards", () => {
+  it("routes 'list my projects' to the projects area (not invoices via description noise)", () => {
+    expect(selectActionsForMessage("list my projects")).toContain("clockify_projects_list");
+  });
+
+  it("shows the create primitive for 'create a project called X'", () => {
+    expect(selectActionsForMessage("create a project called Zenith")).toContain("clockify_projects_create");
+  });
+
+  it("gives a bare proper-noun command a generic entity tool (core safety net)", () => {
+    // "delete Beacon" has no lexical area signal → core only; it must still carry a delete tool.
+    expect(new Set(selectActionsForMessage("delete Beacon")).has("clockify_delete_entity")).toBe(true);
+  });
+
+  it("keeps the generic entity CRUD ops in the always-on core", () => {
+    for (const name of [
+      "clockify_delete_entity",
+      "clockify_update_entity",
+      "clockify_get_entity",
+      "clockify_list_entities",
+      "clockify_create_work_package",
+    ]) {
+      expect(CORE_ACTION_NAMES.has(name)).toBe(true);
+    }
+  });
+});

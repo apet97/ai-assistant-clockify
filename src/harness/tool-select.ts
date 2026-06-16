@@ -43,20 +43,46 @@ export interface SelectOptions {
 /** Default number of relevant feature groups to surface (tune against the matrix). */
 export const DEFAULT_MAX_GROUPS = 3;
 
+// Relevance weights. A match on an action NAME or a group SYNONYM is a strong signal;
+// a match in a DESCRIPTION is weak (descriptions cross-reference other areas — e.g.
+// invoice/expense actions MENTION "project"). Weighting + COUNTING per-action (below)
+// is what stops a single shared description word from hijacking the routing.
+const WEIGHT_NAME = 3;
+const WEIGHT_SYNONYM = 3;
+const WEIGHT_DESCRIPTION = 1;
+
+/**
+ * The GENERIC entity CRUD ops — they act by `entityType` + name/id across EVERY
+ * area, so they're the safety net for a bare command with no lexical area signal
+ * ("delete Beacon", "rename X to Y") that would otherwise route to nothing. Without
+ * them in the core, the matrix showed "delete Beacon" stranded with no delete tool.
+ */
+const GENERIC_ENTITY_OPS = [
+  "clockify_list_entities",
+  "clockify_get_entity",
+  "clockify_delete_entity",
+  "clockify_update_entity",
+  "clockify_create_work_package",
+];
+
 /**
  * The always-on core: the proven single-action intents (curated + the setup
- * composites), every assistant-meta action (recaps + the admin's own permission
- * management), and the timer status quick-read. Derived from the arrays so it
- * never drifts when the curated/meta sets change.
+ * composites), the generic entity CRUD ops (the no-lexical-signal safety net),
+ * every assistant-meta action (recaps + the admin's own permission management), and
+ * the timer status quick-read. Derived from the arrays + filtered against the real
+ * catalog so it never drifts.
  */
-export const CORE_ACTION_NAMES: Set<string> = new Set<string>([
-  ...CURATED_ACTIONS.map((a) => a.name),
-  ...SETUP_PROJECT_ACTIONS.map((a) => a.name),
-  ...SETUP_TASK_ACTIONS.map((a) => a.name),
-  ...ACTION_CATALOG.filter((a) => a.name.startsWith("assistant_") || a.name === "clockify_status").map(
-    (a) => a.name,
-  ),
-]);
+export const CORE_ACTION_NAMES: Set<string> = new Set<string>(
+  [
+    ...CURATED_ACTIONS.map((a) => a.name),
+    ...SETUP_PROJECT_ACTIONS.map((a) => a.name),
+    ...SETUP_TASK_ACTIONS.map((a) => a.name),
+    ...GENERIC_ENTITY_OPS,
+    ...ACTION_CATALOG.filter((a) => a.name.startsWith("assistant_") || a.name === "clockify_status").map(
+      (a) => a.name,
+    ),
+  ].filter((name) => ACTION_CATALOG.some((a) => a.name === name)),
+);
 
 /**
  * Generic words that carry NO area signal — articles, pronouns, prepositions,
@@ -117,22 +143,31 @@ function tokenize(text: string): Set<string> {
   return out;
 }
 
-/** Build a `featureGroup → token set` index (names + descriptions + group + synonyms). */
-function buildIndex(catalog: SelectableAction[]): Map<string, Set<string>> {
-  const index = new Map<string, Set<string>>();
+interface CatalogIndex {
+  /** group → tokens from the group name + its synonyms (a strong, group-level signal). */
+  groupSyn: Map<string, Set<string>>;
+  /** per-action token sets, kept SEPARATE so NAME matches can outweigh DESCRIPTION noise. */
+  actions: { group: string; nameTokens: Set<string>; descTokens: Set<string> }[];
+}
+
+/** Build the relevance index: per-group synonyms + per-action name/description tokens. */
+function buildIndex(catalog: SelectableAction[]): CatalogIndex {
+  const groupSyn = new Map<string, Set<string>>();
+  const actions: CatalogIndex["actions"] = [];
   for (const action of catalog) {
-    let set = index.get(action.featureGroup);
-    if (!set) {
-      set = new Set<string>();
-      // The group's own name + its synonyms apply to every action in it.
+    if (!groupSyn.has(action.featureGroup)) {
+      const set = new Set<string>();
       for (const t of tokenize(action.featureGroup.replace(/_/g, " "))) set.add(t);
       for (const syn of SYNONYMS[action.featureGroup] ?? []) for (const t of tokenize(syn)) set.add(t);
-      index.set(action.featureGroup, set);
+      groupSyn.set(action.featureGroup, set);
     }
-    for (const t of tokenize(action.name.replace(/_/g, " "))) set.add(t);
-    for (const t of tokenize(action.description)) set.add(t);
+    actions.push({
+      group: action.featureGroup,
+      nameTokens: tokenize(action.name.replace(/_/g, " ")),
+      descTokens: tokenize(action.description),
+    });
   }
-  return index;
+  return { groupSyn, actions };
 }
 
 const DEFAULT_CATALOG: SelectableAction[] = ACTION_CATALOG.map((a) => ({
@@ -155,15 +190,38 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
   const index = catalog === DEFAULT_CATALOG ? DEFAULT_INDEX : buildIndex(catalog);
 
   const messageTokens = tokenize(message);
-  const scored: { group: string; score: number }[] = [];
-  for (const [group, groupTokens] of index) {
-    let score = 0;
-    for (const t of messageTokens) if (groupTokens.has(t)) score += 1;
-    if (score > 0) scored.push({ group, score });
+  // COUNT-based, weighted group scoring: a group wins by how many of ITS OWN actions
+  // match by NAME (+ its synonyms), not by a single shared token — so "list my
+  // projects" routes to work_structure (many projects_* actions) over invoices/
+  // expenses (which only MENTION projects in descriptions). Without this, every group
+  // tied at 1 and the alphabetical tiebreak sent the turn to the wrong area (matrix
+  // finding: DeepSeek pro 100%→94% under subsetting, projects_list never shown).
+  const score = new Map<string, number>();
+  const bump = (group: string, points: number): void => {
+    if (points) score.set(group, (score.get(group) ?? 0) + points);
+  };
+  for (const [group, synTokens] of index.groupSyn) {
+    let hits = 0;
+    for (const t of messageTokens) if (synTokens.has(t)) hits += 1;
+    bump(group, hits * WEIGHT_SYNONYM);
+  }
+  for (const action of index.actions) {
+    let nameHits = 0;
+    let descHits = 0;
+    for (const t of messageTokens) {
+      if (action.nameTokens.has(t)) nameHits += 1;
+      else if (action.descTokens.has(t)) descHits += 1;
+    }
+    bump(action.group, nameHits * WEIGHT_NAME + descHits * WEIGHT_DESCRIPTION);
   }
   // Highest score first; ties broken by group name so the result is deterministic.
-  scored.sort((a, b) => b.score - a.score || a.group.localeCompare(b.group));
-  const selectedGroups = new Set(scored.slice(0, maxGroups).map((s) => s.group));
+  const selectedGroups = new Set(
+    [...score.entries()]
+      .filter(([, s]) => s > 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, maxGroups)
+      .map(([group]) => group),
+  );
 
   const chosen = new Set<string>(core);
   for (const action of catalog) {

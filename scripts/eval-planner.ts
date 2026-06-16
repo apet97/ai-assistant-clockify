@@ -26,6 +26,8 @@ import type { ModelClient } from "../src/assistant/model-client.js";
 import { planConversation, type ModelPlan } from "../src/assistant/planner.js";
 import { buildSystemPrompt } from "../src/assistant/prompts.js";
 import { catalogForModel, getAction } from "../src/harness/catalog.js";
+import { toolsForModel } from "../src/harness/tools.js";
+import { selectActionsForMessage } from "../src/harness/tool-select.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { scoreCase } from "../src/eval/score.js";
 import { consistencyStats, mean } from "../src/eval/consistency.js";
@@ -40,12 +42,14 @@ interface Flags {
   noArgs: boolean;
   /** Force the JSON + repair path instead of native tool-calling (Phase 2 A/B). */
   jsonMode: boolean;
+  /** Apply deterministic tool subsetting per case (measures LLM_TOOL_SELECT's effect). */
+  toolSelect: boolean;
   /** Explicit output path (the matrix runner sets this per model); default timestamped. */
   out?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { repeat: 1, concurrency: 6, noArgs: false, jsonMode: false };
+  const flags: Flags = { repeat: 1, concurrency: 6, noArgs: false, jsonMode: false, toolSelect: false };
   for (const arg of argv) {
     const repeat = arg.match(/^--repeat=(\d+)$/);
     const only = arg.match(/^--only=(.+)$/);
@@ -57,6 +61,7 @@ function parseFlags(argv: string[]): Flags {
     else if (out) flags.out = out[1];
     else if (arg === "--no-args") flags.noArgs = true;
     else if (arg === "--json-mode") flags.jsonMode = true;
+    else if (arg === "--tool-select") flags.toolSelect = true;
   }
   return flags;
 }
@@ -174,6 +179,7 @@ async function main(): Promise<void> {
   console.log(
     `Running planner eval: provider=${selection.llmProvider} model=${modelLabel} mode=${planMode} ` +
       `cases=${cases.length} repeat=${flags.repeat} concurrency=${flags.concurrency}` +
+      `${flags.toolSelect ? " [tool-select ON]" : ""}` +
       `${flags.jsonMode && flags.noArgs ? " [--no-args: arg contract OFF]" : ""}`,
   );
   console.log(`System prompt: ${systemPrompt.length} chars (~${promptTokensEst} tokens)\n`);
@@ -185,9 +191,19 @@ async function main(): Promise<void> {
   let done = 0;
   const outcomes = await mapWithConcurrency(units, flags.concurrency, async ({ c }): Promise<RunOutcome> => {
     const messages = [...(c.history ?? []), { role: "user" as const, content: c.message }];
+    // --tool-select: mirror the chat route — show the model only the message-relevant
+    // actions (+ core), so the eval measures LLM_TOOL_SELECT's effect, not the full catalog.
+    const names = flags.toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
     let plan: ModelPlan;
     try {
-      plan = await planConversation({ modelClient, messages, actionCatalog, policy, useTools: !flags.jsonMode });
+      plan = await planConversation({
+        modelClient,
+        messages,
+        actionCatalog: names ? catalogForModel(names) : actionCatalog,
+        tools: names ? toolsForModel(names) : undefined,
+        policy,
+        useTools: !flags.jsonMode,
+      });
     } catch (err) {
       plan = { kind: "clarify", text: `eval-error: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -271,6 +287,7 @@ async function main(): Promise<void> {
         provider: selection.llmProvider,
         model: modelLabel,
         planMode,
+        toolSelect: flags.toolSelect,
         argContract: flags.jsonMode && flags.noArgs ? "off" : "on",
         repeat: flags.repeat,
         only: flags.only ?? null,
