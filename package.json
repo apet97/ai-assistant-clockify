@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.build.json && vite build",
     "start": "node dist/server/server.js",
     "type-check": "tsc -p tsconfig.json --noEmit",
+    "type-check:scripts": "tsc -p tsconfig.scripts.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "cycles": "madge --circular --extensions ts --ts-config tsconfig.json src",

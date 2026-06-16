@@ -92,12 +92,15 @@ async function main(): Promise<void> {
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
     sessionSecret: "repro-session-secret",
+    sessionTtlMs: 2 * 60 * 60 * 1000,
     databasePath: ":memory:",
     llmProvider: selection.llmProvider,
+    llmMode: "tool",
     llmBaseUrl: selection.llmBaseUrl,
     llmApiKey: selection.llmApiKey,
     llmModel: selection.llmModel,
     llmAgentic: true,
+    llmToolSelect: false,
   };
   const store = createStore(":memory:", { encryptionKey: "repro-key" });
   store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
