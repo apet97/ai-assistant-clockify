@@ -33,11 +33,12 @@ workspace, and deployed.
   (+ an always-on core) instead of all 139, on BOTH the chat turn and its confirm
   resume — deterministic, `src/harness/tool-select.ts`. The agentic eval flipped it
   (11 cases × 5, OFF vs ON): **DeepSeek** 100% pass / 0 safety both, ~61% fewer prompt
-  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; **Gemini
-  flash** 100% / 0 safety both, ~65% fewer tokens (17.6K→6.1K/round-trip) and latency
-  HALVED (p95 6604→3195ms). A recall escape hatch retries the full catalog when a
-  narrowed CHAT turn does nothing (DeepSeek fired 9.1% of narrowed runs, Gemini 0%; net
-  still −61/−65%). The RESUME has no escape hatch, so a request spanning more areas than
+  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; **both Gemini
+  tiers** (flash-latest + flash-lite-3.1 no-think) 100% / 0 safety both, ~65% fewer tokens
+  (17.6K→6.1K/round-trip — same tokenizer) with latency down 18–50% (flash p95
+  6604→3195ms; flash-lite p50 2560→1704ms). A recall escape hatch retries the full catalog
+  when a narrowed CHAT turn does nothing (DeepSeek fired 9.1% of narrowed runs, BOTH Gemini
+  tiers 0%; net still −61/−65%). The RESUME has no escape hatch, so a request spanning more areas than
   the 3-group clamp keeps (`selectionDroppedGroups`) widens the resume to the full
   catalog — else a later step's tool would be hidden and silently skipped (only triggers
   for rare 4+-area requests; ≤3-area turns stay subsetted). `LLM_SEED` adds a sampling
