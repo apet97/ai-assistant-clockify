@@ -67,6 +67,21 @@ import {
 } from "./chat-results.js";
 import { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 
+/**
+ * The user request that drove a suspended turn: the LAST user-role message in the
+ * transcript. The agentic loop appends only assistant/tool turns after the request,
+ * so the most recent user message IS the current request — the SAME text
+ * `executeChatTurn` subsetted on for the initial turn (never an older history turn;
+ * "first" would route the resume off a stale topic). Empty string if somehow none,
+ * which `selectActionsForMessage` collapses to just the core.
+ */
+function lastUserMessage(transcript: ModelMessage[]): string {
+  for (let i = transcript.length - 1; i >= 0; i -= 1) {
+    if (transcript[i].role === "user") return transcript[i].content;
+  }
+  return "";
+}
+
 /** The outcome of one chat turn, shared by the JSON route and the streaming route. */
 export type ChatTurnOutcome =
   | { ok: true; replyKind: string; replyText: string; results: unknown[] }
@@ -369,12 +384,24 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     const m = createTurnMachinery(claims, installation, onResult, onStatus);
     const resumeStartMs = now().getTime();
     const tracked = trackUsage(deps.modelClient, now);
+    // STEP 6: subset the resume too. When LLM_TOOL_SELECT is on, re-derive the SAME
+    // menu the initial turn used — from the user request preserved in the suspended
+    // transcript — so the resume re-sends only the relevant tools (~7K vs ~18K per
+    // round-trip) instead of the full catalog. OFF ⇒ full catalog (byte-identical to
+    // before). There is deliberately NO resume escape hatch: a resume that ends with
+    // no tool calls is the NORMAL "done" narration, so the initial-turn guard
+    // (results empty → retry full) would fire on every completion and double the
+    // cost. The agentic eval subsetted the resume and held 100% / 0 safety on every
+    // resume-bearing case; the harness still validates + gates every proposed call.
+    const resumeTools = deps.config.llmToolSelect
+      ? toolsForModel(new Set(selectActionsForMessage(lastUserMessage(agentState.transcript))))
+      : toolsForModel();
     let turn: AgentTurnResult | undefined;
     try {
       turn = await runAgentTurn({
         modelClient: tracked.client,
         messages: resumeMessages(agentState, receipt),
-        tools: toolsForModel(),
+        tools: resumeTools,
         runAction: m.runAction,
         onStep: m.onStep,
         signal,

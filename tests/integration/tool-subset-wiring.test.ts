@@ -10,6 +10,7 @@ import type { ModelClient, ToolDefinition } from "../../src/assistant/model-clie
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { ACTION_CATALOG } from "../../src/harness/catalog.js";
 import { CORE_ACTION_NAMES } from "../../src/harness/tool-select.js";
+import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
 
 /**
  * Wiring proof for LLM_TOOL_SELECT (Phase 1): the chat turn shows the model the
@@ -126,6 +127,93 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
     expect(res.status).toBe(200);
     expect(b.captured).toHaveLength(1); // no escape-hatch retry for smalltalk
     expect(new Set(b.captured[0])).toEqual(CORE_ACTION_NAMES);
+    b.store.close();
+  });
+});
+
+/**
+ * STEP 6 — the resume re-sends only the subset too. Until now runResume ran the
+ * FULL catalog on every confirm round-trip, halving the savings on every risky-write
+ * turn. With LLM_TOOL_SELECT on, the resume re-derives the same menu from the user
+ * request in the suspended transcript. Proven safe by the agentic eval (the resume
+ * was subsetted there and held 100% / 0 safety on every resume-bearing case). No
+ * resume escape hatch: a resume that ends with no tool calls is the NORMAL "done"
+ * narration, so the initial-turn guard would fire on every completion.
+ */
+function buildResume(llmToolSelect: boolean): { app: Express; model: ScriptedToolModel; store: Store } {
+  const model = scriptedToolModel([
+    // Initial turn: a risky delete → preview → interrupt (one model call, no escape hatch).
+    { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+    // Resume after confirm: narrate completion, no further tool calls.
+    { text: "Done — the urgent tag is gone.", toolCalls: [] },
+  ]);
+  const store = createStore(":memory:", { encryptionKey: "test-key" });
+  store.saveInstallation({
+    workspaceId: "ws-1",
+    addonId: "addon-1",
+    addonUserId: "addon-user-1",
+    addonToken: "addon-token",
+  });
+  const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+  const app = createApp({
+    config: config(llmToolSelect),
+    store,
+    parser: createSignatureParser(ADDON_KEY, keys.pem),
+    modelClient: model,
+    clockifyForWorkspace: () => fake.client,
+  });
+  return { app, model, store };
+}
+
+type PreviewItem = { kind: string; previewId?: string; nonce?: string };
+
+async function drivePreviewThenConfirm(
+  app: Express,
+  cookie: string,
+): Promise<{ confirmStatus: number; confirmOk: boolean }> {
+  const chat = await request(app)
+    .post("/api/chat/messages")
+    .set("Cookie", cookie)
+    .send({ message: "delete the urgent tag" });
+  expect(chat.status).toBe(200);
+  const preview = (chat.body.results as PreviewItem[]).find((r) => r.kind === "preview");
+  if (!preview) throw new Error("expected a preview from the risky delete");
+  const confirm = await request(app)
+    .post(`/api/confirmations/${preview.previewId}/confirm`)
+    .set("Cookie", cookie)
+    .send({ nonce: preview.nonce });
+  return { confirmStatus: confirm.status, confirmOk: Boolean(confirm.body?.receipt?.ok) };
+}
+
+describe("tool subsetting on RESUME (STEP 6)", () => {
+  it("ON: the resume re-sends only the relevant subset, not the full catalog", async () => {
+    const b = buildResume(true);
+    const cookie = await cookieFor(b.app);
+    const { confirmStatus, confirmOk } = await drivePreviewThenConfirm(b.app, cookie);
+    expect(confirmStatus).toBe(200);
+    expect(confirmOk).toBe(true);
+
+    // Exactly two model calls: the initial (subset) turn that previewed, then the resume.
+    expect(b.model.calls).toHaveLength(2);
+    const initialTools = b.model.calls[0].tools.map((t) => t.name);
+    const resumeTools = b.model.calls[1].tools.map((t) => t.name);
+
+    expect(initialTools.length).toBeLessThan(ACTION_CATALOG.length); // initial narrowed
+    // The RESUME is narrowed to the SAME menu — this is what STEP 6 changes.
+    expect(resumeTools.length).toBeLessThan(ACTION_CATALOG.length);
+    expect(resumeTools).toContain("clockify_tags_delete"); // the relevant tool survives
+    expect(resumeTools).not.toContain("clockify_start_timer"); // an unrelated area stays hidden
+    b.store.close();
+  });
+
+  it("OFF: the resume sees the full catalog (byte-identical to before)", async () => {
+    const b = buildResume(false);
+    const cookie = await cookieFor(b.app);
+    const { confirmStatus } = await drivePreviewThenConfirm(b.app, cookie);
+    expect(confirmStatus).toBe(200);
+    expect(b.model.calls).toHaveLength(2);
+    expect(b.model.calls[0].tools).toHaveLength(ACTION_CATALOG.length);
+    expect(b.model.calls[1].tools).toHaveLength(ACTION_CATALOG.length); // resume = full catalog
     b.store.close();
   });
 });
