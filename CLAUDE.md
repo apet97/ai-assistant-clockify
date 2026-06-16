@@ -16,7 +16,7 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1317 tests**, **0** circular deps (madge), and a
+- **Gate:** `npm run verify` = **1411 tests**, **0** circular deps (madge), and a
   typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
   all folded into `verify`. Keep them green.
 - **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
@@ -31,12 +31,17 @@ workspace, and deployed.
   an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
   **default ON**, `=0` rolls back) shows the model only the message-relevant actions
   (+ an always-on core) instead of all 139, on BOTH the chat turn and its confirm
-  resume — deterministic, `src/harness/tool-select.ts`. The agentic eval flipped it:
-  DeepSeek held 100% pass / 0 safety OFF and ON (11 cases × 5) with ~61% fewer prompt
-  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; a recall
-  escape hatch retries the full catalog when a narrowed CHAT turn does nothing (fired
-  9.1% of narrowed runs; net still −61%). `LLM_SEED` adds a sampling seed for
-  reproducibility. `unknown_action` errors carry a "did you mean"
+  resume — deterministic, `src/harness/tool-select.ts`. The agentic eval flipped it
+  (11 cases × 5, OFF vs ON): **DeepSeek** 100% pass / 0 safety both, ~61% fewer prompt
+  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; **Gemini
+  flash** 100% / 0 safety both, ~65% fewer tokens (17.6K→6.1K/round-trip) and latency
+  HALVED (p95 6604→3195ms). A recall escape hatch retries the full catalog when a
+  narrowed CHAT turn does nothing (DeepSeek fired 9.1% of narrowed runs, Gemini 0%; net
+  still −61/−65%). The RESUME has no escape hatch, so a request spanning more areas than
+  the 3-group clamp keeps (`selectionDroppedGroups`) widens the resume to the full
+  catalog — else a later step's tool would be hidden and silently skipped (only triggers
+  for rare 4+-area requests; ≤3-area turns stay subsetted). `LLM_SEED` adds a sampling
+  seed for reproducibility. `unknown_action` errors carry a "did you mean"
   (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
   pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
   (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
