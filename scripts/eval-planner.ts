@@ -28,6 +28,7 @@ import { buildSystemPrompt } from "../src/assistant/prompts.js";
 import { catalogForModel, getAction } from "../src/harness/catalog.js";
 import { toolsForModel } from "../src/harness/tools.js";
 import { selectActionsForMessage } from "../src/harness/tool-select.js";
+import { trackUsage } from "../src/assistant/usage.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { scoreCase } from "../src/eval/score.js";
 import { consistencyStats, mean } from "../src/eval/consistency.js";
@@ -115,6 +116,10 @@ interface RunOutcome {
   pass: boolean;
   signature: string;
   reasons: string[];
+  latencyMs: number;
+  promptTokens: number;
+  completionTokens: number;
+  usageReported: boolean;
 }
 
 interface CaseReport {
@@ -195,9 +200,12 @@ async function main(): Promise<void> {
     // actions (+ core), so the eval measures LLM_TOOL_SELECT's effect, not the full catalog.
     const names = flags.toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
     let plan: ModelPlan;
+    // Per-run latency + token cost: a fresh tracker captures THIS run's model wall-clock
+    // and token usage (the same seam the prod chat route uses for turn_telemetry).
+    const tracked = trackUsage(modelClient, () => new Date());
     try {
       plan = await planConversation({
-        modelClient,
+        modelClient: tracked.client,
         messages,
         actionCatalog: names ? catalogForModel(names) : actionCatalog,
         tools: names ? toolsForModel(names) : undefined,
@@ -210,7 +218,16 @@ async function main(): Promise<void> {
     const scored = scoreCase(plan, c.expect, { riskFor });
     done += 1;
     process.stdout.write(`\r  ${done}/${units.length} runs complete`);
-    return { caseId: c.id, pass: scored.pass, signature: planSignature(plan), reasons: scored.reasons };
+    return {
+      caseId: c.id,
+      pass: scored.pass,
+      signature: planSignature(plan),
+      reasons: scored.reasons,
+      latencyMs: tracked.usage.modelMs,
+      promptTokens: tracked.usage.promptTokens,
+      completionTokens: tracked.usage.completionTokens,
+      usageReported: tracked.usage.usageReported,
+    };
   });
   process.stdout.write("\n\n");
 
@@ -251,6 +268,17 @@ async function main(): Promise<void> {
   const meanNormalizedEntropy = mean(reports.map((r) => r.normalizedEntropy));
   const stablePass = reports.filter((r) => r.passCount === r.repeat).length;
 
+  // Latency + cost — the model-performance dimensions, measured alongside accuracy so
+  // optimizations (round-trips, reasoning effort, token diet) are provable, not hoped.
+  const latencies = outcomes.map((o) => o.latencyMs).sort((a, b) => a - b);
+  const percentile = (q: number): number =>
+    latencies.length ? latencies[Math.min(latencies.length - 1, Math.floor(q * latencies.length))] : 0;
+  const latencyP50Ms = percentile(0.5);
+  const latencyP95Ms = percentile(0.95);
+  const meanPromptTokens = mean(outcomes.map((o) => o.promptTokens));
+  const meanCompletionTokens = mean(outcomes.map((o) => o.completionTokens));
+  const tokensReported = outcomes.some((o) => o.usageReported);
+
   // Failures / variance table (worst first).
   const ranked = [...reports].sort(
     (a, b) => a.passCount / a.repeat - b.passCount / b.repeat || a.consistency - b.consistency,
@@ -273,6 +301,10 @@ async function main(): Promise<void> {
     `\nPLANNER EVAL: ${passRuns}/${totalRuns} (${pct(passRate)}) | consistency ${pct(meanConsistency)} | ` +
       `spread ${meanNormalizedEntropy.toFixed(2)}  ` +
       `[cases=${cases.length} repeat=${flags.repeat} stable-pass=${stablePass}/${cases.length}]`,
+  );
+  console.log(
+    `  PERF: latency p50 ${latencyP50Ms}ms / p95 ${latencyP95Ms}ms | ` +
+      `tokens/run ${tokensReported ? `~${Math.round(meanPromptTokens)} prompt + ${Math.round(meanCompletionTokens)} completion` : "(not reported by backend)"}`,
   );
 
   // Persist for trend tracking (gitignored). The matrix runner pins --out per model.
@@ -301,6 +333,11 @@ async function main(): Promise<void> {
           meanNormalizedEntropy,
           stablePass,
           cases: cases.length,
+          latencyP50Ms,
+          latencyP95Ms,
+          meanPromptTokens,
+          meanCompletionTokens,
+          tokensReported,
         },
         reports,
       },
