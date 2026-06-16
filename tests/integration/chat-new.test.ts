@@ -9,6 +9,7 @@ import type { AppConfig } from "../../src/config.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
+import { testKeys } from "../helpers/test-keys.js";
 
 /**
  * POST /api/chat/new starts a fresh conversation: it mints a NEW session (new
@@ -22,12 +23,13 @@ afterEach(() => {
   for (const s of stores.splice(0)) s.close();
 });
 
+
 async function makeApp(
   script: ToolCompletion[],
   fake: FakeWorkspace,
   configOverride: Partial<AppConfig> = {},
 ): Promise<{ app: Express; cookie: string }> {
-  const keys = await testing.generateTestKeys();
+  const keys = await testKeys();
   const config: AppConfig = {
     nodeEnv: "test",
     port: 3993,

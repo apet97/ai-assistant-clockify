@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
+import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -38,7 +39,7 @@ async function makeApp(
   fake: FakeWorkspace,
   rateMax: number,
 ): Promise<TestApp> {
-  const keys = await testing.generateTestKeys();
+  const keys = await testKeys();
   const config: AppConfig = {
     nodeEnv: "test",
     port: 3995,
