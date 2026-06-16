@@ -7,7 +7,7 @@ const baseEnv = {
   BASE_URL: "https://example.com/addon",
   CLOCKIFY_ADDON_PUBLIC_KEY_PEM: "public-key",
   CLOCKIFY_ADDON_KEY: "ai-assistant",
-  SESSION_SECRET: "session-secret",
+  SESSION_SECRET: "session-secret-with-32-chars-of-entropy",
   DATABASE_PATH: ":memory:",
   LLM_BASE_URL: "https://llm.example.com",
   LLM_API_KEY: "llm-key",
@@ -15,6 +15,10 @@ const baseEnv = {
 };
 
 describe("loadConfig", () => {
+  it("rejects a SESSION_SECRET below 32 chars (cookie-forgery + nonce-hash strength)", () => {
+    expect(() => loadConfig({ ...baseEnv, NODE_ENV: "test", SESSION_SECRET: "too-short" })).toThrow();
+  });
+
   it("loads required config", () => {
     const cfg = loadConfig({
       ...baseEnv,

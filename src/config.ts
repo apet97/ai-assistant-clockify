@@ -58,7 +58,10 @@ const envObjectSchema = z.object({
   BASE_URL: z.string().min(1),
   CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
   CLOCKIFY_ADDON_KEY: z.string().min(1),
-  SESSION_SECRET: z.string().min(1),
+  // Keys both the signed session cookie (forgery resistance) AND the confirmation
+  // nonce hash (src/harness/confirmations.ts). A weak value silently weakens both, so
+  // require real entropy and fail closed — matching DATA_ENCRYPTION_KEY's floor.
+  SESSION_SECRET: z.string().min(32),
   // A passphrase, SHA-256-derived to the AES-256-GCM key (src/db/encryption.ts);
   // NOT raw hex bytes. Require real entropy (>=32 chars), not a 1-char value.
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
