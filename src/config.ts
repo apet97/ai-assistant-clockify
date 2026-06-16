@@ -26,7 +26,12 @@ export interface AppConfig {
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
   llmProvider: "http" | "gemini-cli";
   /** Planner mode: "tool" (native function-calling, default) or "json" (JSON + repair).
-   *  Tool mode only applies when the backend supports it (the http client does). */
+   *  EFFECT (re-verified T02): this IS consumed. src/routes/chat-pipeline.ts derives
+   *  `useTools = llmMode !== "json"` (chat turn) and gates the agentic resume on
+   *  `llmMode !== "json"`. So LLM_MODE=json forces the validated JSON+repair path on
+   *  BOTH backends (it disables native tool-calling even on the http client, which
+   *  otherwise always exposes completeWithTools). On gemini-cli the JSON path is used
+   *  regardless, since that backend has no completeWithTools. */
   llmMode?: "tool" | "json";
   /** Agentic loop: when true, the chat turn runs the durable tool-loop
    *  (read-then-act + resume across the confirm round-trip). Default ON after the
