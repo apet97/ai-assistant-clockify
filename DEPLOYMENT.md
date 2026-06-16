@@ -84,7 +84,10 @@ CLI equivalent: `railway variables --set "BASE_URL=https://…" --set
 "DATABASE_PATH=/data/ai-assistant.sqlite" --set "SESSION_SECRET=…"` (etc.).
 
 Optional knobs (defaults are fine): `LLM_PROVIDER=http`, `LLM_MODE=tool`,
-`LLM_AGENTIC=1`, `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
+`LLM_AGENTIC=1`, `LLM_TOOL_SELECT=1` (deterministic tool subsetting, **default on** —
+the model sees only the message-relevant actions; eval-proven 100% on DeepSeek + both
+Gemini tiers with ~61–65% fewer prompt tokens; set `=0` to roll back to the full
+catalog), `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 120000 — **must be < 290000** so it stays below the idempotency claim TTL),
 `RETENTION_DAYS` (chat-transcript + audit-log retention in days, default 90,
 **min 30**; see [`PRIVACY.md`](./PRIVACY.md)). Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform

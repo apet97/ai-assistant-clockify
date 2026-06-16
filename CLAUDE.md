@@ -235,7 +235,9 @@ bug was found against the REAL API, not by reading the code.
   tool execution — label from the action NAME only (args can carry admin text),
   never persisted. Turn telemetry (`turn_telemetry`) records model
   calls/tokens/wall-clock per chat+resume turn — best-effort, never breaks a turn;
-  tokens NULL when the backend reports none (absence ≠ zero).
+  tokens NULL when the backend reports none (absence ≠ zero), incl.
+  `cached_prompt_tokens` (prompt-cache hits, read from DeepSeek `prompt_cache_hit_tokens`
+  / OpenAI-compat `prompt_tokens_details.cached_tokens`) surfaced in `buildUsageMetrics`.
 - **Agentic loop** (`LLM_AGENTIC` default ON; `=0` = byte-identical single-turn
   rollback): reads + safe writes auto-chain; the FIRST risky write interrupts into
   preview→confirm with the transcript persisted
