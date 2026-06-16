@@ -17,7 +17,30 @@ import type { ToolDefinition } from "../assistant/model-client.js";
  * which is exactly the shape we want the model to produce.
  */
 
-/** Generate the JSON Schema for an action's arguments (minus the noisy `$schema`). */
+/**
+ * Strip JSON-Schema keys the model doesn't need — they're re-validated by the harness
+ * (executeAction Zod-parses every proposal), so they're invisible at the trust boundary
+ * but inflate the prompt (re-sent every model call, ~99% of token cost; ~11.7% of the
+ * tool array). Drops `additionalProperties:false` (the bare deny literal — a real nested
+ * object-schema survives), `minLength:1`, and `default`. KEEPS all signal: enums,
+ * type, required, descriptions, minimum/maximum, nested schemas.
+ */
+function pruneSchemaNoise(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(pruneSchemaNoise);
+  if (node && typeof node === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === "additionalProperties" && value === false) continue;
+      if (key === "minLength" && value === 1) continue;
+      if (key === "default") continue;
+      out[key] = pruneSchemaNoise(value);
+    }
+    return out;
+  }
+  return node;
+}
+
+/** Generate the lean JSON Schema for an action's arguments (minus `$schema` + noise keys). */
 export function actionParametersSchema(schema: z.ZodTypeAny): Record<string, unknown> {
   const json = zodToJsonSchema(schema, { $refStrategy: "none", target: "jsonSchema7" }) as Record<string, unknown>;
   const { $schema: _drop, ...rest } = json;
@@ -27,7 +50,7 @@ export function actionParametersSchema(schema: z.ZodTypeAny): Record<string, unk
   if (rest.type !== "object") {
     return { type: "object", properties: {}, additionalProperties: true };
   }
-  return rest;
+  return pruneSchemaNoise(rest) as Record<string, unknown>;
 }
 
 let cached: ToolDefinition[] | undefined;
