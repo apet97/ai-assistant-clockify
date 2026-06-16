@@ -6,7 +6,7 @@ import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
-import type { AppConfig } from "../../src/config.js";
+import { makeTestConfig } from "../helpers/config.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 
@@ -26,22 +26,12 @@ afterEach(() => {
 
 async function makeApp(nowRef: { value: Date }): Promise<{ app: Express; mintCookie: () => Promise<string> }> {
   const keys = await testKeys();
-  const config: AppConfig = {
-    nodeEnv: "test",
-    port: 3996,
-    baseUrl: "https://example.com/ai-assistant",
+  const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
-    sessionSecret: "test-session-secret",
-    databasePath: ":memory:",
-    llmProvider: "http",
-    llmBaseUrl: "https://llm.example.com",
-    llmApiKey: "llm-key",
-    llmModel: "cheap-model",
-    llmAgentic: true,
     chatRateLimitMax: 2,
     chatRateLimitWindowMs: 60_000,
-  };
+  });
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
   store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });

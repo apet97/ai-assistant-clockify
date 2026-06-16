@@ -20,7 +20,7 @@ export interface AppConfig {
    *  how long a demoted admin keeps access. Shorter = tighter revocation but a shorter
    *  history-switcher window (it lists only live sessions). loadConfig always sets it
    *  (default 2h, SESSION_TTL_HOURS); the store falls back to 8h if a caller omits it. */
-  sessionTtlMs?: number;
+  sessionTtlMs: number;
   dataEncryptionKey?: string;
   databasePath: string;
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
@@ -32,17 +32,17 @@ export interface AppConfig {
    *  BOTH backends (it disables native tool-calling even on the http client, which
    *  otherwise always exposes completeWithTools). On gemini-cli the JSON path is used
    *  regardless, since that backend has no completeWithTools. */
-  llmMode?: "tool" | "json";
+  llmMode: "tool" | "json";
   /** Agentic loop: when true, the chat turn runs the durable tool-loop
    *  (read-then-act + resume across the confirm round-trip). Default ON after the
    *  live acceptance proof; set LLM_AGENTIC=0 to roll back to single-turn. */
-  llmAgentic?: boolean;
+  llmAgentic: boolean;
   /** Tool subsetting: when true, each chat turn (and its resume) shows the model only
    *  the actions relevant to the message (+ an always-on core) instead of all 139, for
    *  weak-model consistency. Default ON after the agentic eval proved it (DeepSeek 100%
    *  held, ~61% fewer prompt tokens/turn, 0 safety); LLM_TOOL_SELECT=0 is the rollback.
    *  The harness still validates + gates every proposed action. */
-  llmToolSelect?: boolean;
+  llmToolSelect: boolean;
   llmBaseUrl?: string;
   llmApiKey?: string;
   llmModel?: string;

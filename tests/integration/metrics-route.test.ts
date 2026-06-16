@@ -5,7 +5,7 @@ import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
-import type { AppConfig } from "../../src/config.js";
+import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 
@@ -39,19 +39,10 @@ async function adminCookie(): Promise<string> {
 
 beforeAll(async () => {
   keys = await testing.generateTestKeys();
-  const config: AppConfig = {
-    nodeEnv: "test",
-    port: 3995,
-    baseUrl: "https://example.com/ai-assistant",
+  const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
-    sessionSecret: "test-session-secret",
-    databasePath: ":memory:",
-    llmBaseUrl: "https://llm.example.com",
-    llmApiKey: "llm-key",
-    llmModel: "cheap-model",
-    llmProvider: "http",
-  };
+  });
   store = createStore(":memory:", { encryptionKey: "test-key" });
   store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
   fake = createFakeWorkspace();

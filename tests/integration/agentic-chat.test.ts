@@ -5,7 +5,7 @@ import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
-import type { AppConfig } from "../../src/config.js";
+import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
 import { DEFAULT_MAX_STEPS, EXHAUSTED_TEXT } from "../../src/assistant/agent-loop.js";
 import { HISTORY_WINDOW_MESSAGES } from "../../src/routes/chat-constants.js";
@@ -51,20 +51,16 @@ async function makeApp(
   opts: { agentic?: boolean; modelClient?: ModelClient } = {},
 ): Promise<TestApp> {
   const keys = await testKeys();
-  const config: AppConfig = {
-    nodeEnv: "test",
-    port: 3997,
-    baseUrl: "https://example.com/ai-assistant",
+  const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
-    sessionSecret: "test-session-secret",
-    databasePath: ":memory:",
-    llmProvider: "http",
-    llmBaseUrl: "https://llm.example.com",
-    llmApiKey: "llm-key",
-    llmModel: "cheap-model",
     llmAgentic: opts.agentic ?? true,
-  };
+    // Preserve this file's original posture: the pre-migration inline literal left
+    // llmToolSelect undefined (OFF). The factory default is ON; override back to
+    // OFF so these turn-counting assertions stay behavior-identical (#37 migration
+    // must not change behavior).
+    llmToolSelect: false,
+  });
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
   store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });

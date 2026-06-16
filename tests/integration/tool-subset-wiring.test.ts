@@ -6,6 +6,7 @@ import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import type { AppConfig } from "../../src/config.js";
+import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient, ToolDefinition } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { ACTION_CATALOG } from "../../src/harness/catalog.js";
@@ -22,22 +23,11 @@ const ADDON_KEY = "ai-assistant";
 let keys: { privateKey: unknown; pem: string };
 
 function config(llmToolSelect: boolean): AppConfig {
-  return {
-    nodeEnv: "test",
-    port: 3990,
-    baseUrl: "https://example.com/ai-assistant",
+  return makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
-    sessionSecret: "test-session-secret",
-    databasePath: ":memory:",
-    llmBaseUrl: "https://llm.example.com",
-    llmApiKey: "llm-key",
-    llmModel: "cheap-model",
-    llmProvider: "http",
-    llmMode: "tool",
-    llmAgentic: true,
     llmToolSelect,
-  };
+  });
 }
 
 function build(llmToolSelect: boolean): { app: Express; captured: string[][]; store: Store } {
