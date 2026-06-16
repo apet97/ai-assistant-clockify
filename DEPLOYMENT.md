@@ -139,6 +139,17 @@ embedded chat loads and a read action returns a receipt.
 - With the stable URL, you can finally answer the prod **AUDIT-host** question: run
   `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN`.
 
+## Operational constraints
+
+- **Run a single instance.** The chat/new-chat rate limiters are in-process (per
+  Railway instance) by design (src/routes/rate-limit.ts). Scaling to >1 instance
+  multiplies the effective caps and weakens the paid-loop abuse damping. If you
+  must scale out, move the limiter to the shared SQLite (or a shared store) first.
+- **SESSION_SECRET keys two things.** It signs the session cookie AND hashes the
+  one-use confirmation nonce. Rotating it invalidates ALL live sessions AND ALL
+  live pending confirmations at once — expect admins to re-open the panel and
+  re-preview after a rotation.
+
 ## Still human-gated (unchanged by hosting)
 
 - Prod security review + token rotation before real users.
