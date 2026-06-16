@@ -43,14 +43,6 @@ export interface SelectOptions {
 /** Default number of relevant feature groups to surface (tune against the matrix). */
 export const DEFAULT_MAX_GROUPS = 3;
 
-// Relevance weights. A match on an action NAME or a group SYNONYM is a strong signal;
-// a match in a DESCRIPTION is weak (descriptions cross-reference other areas — e.g.
-// invoice/expense actions MENTION "project"). Weighting + COUNTING per-action (below)
-// is what stops a single shared description word from hijacking the routing.
-const WEIGHT_NAME = 3;
-const WEIGHT_SYNONYM = 3;
-const WEIGHT_DESCRIPTION = 1;
-
 /**
  * The GENERIC entity CRUD ops — they act by `entityType` + name/id across EVERY
  * area, so they're the safety net for a bare command with no lexical area signal
@@ -144,30 +136,46 @@ function tokenize(text: string): Set<string> {
 }
 
 interface CatalogIndex {
-  /** group → tokens from the group name + its synonyms (a strong, group-level signal). */
+  /** group → its TRIGGER tokens (group name + curated synonyms) = the group's topic. */
   groupSyn: Map<string, Set<string>>;
-  /** per-action token sets, kept SEPARATE so NAME matches can outweigh DESCRIPTION noise. */
-  actions: { group: string; nameTokens: Set<string>; descTokens: Set<string> }[];
+  /** trigger token → the group(s) that OWN it as a topic word. */
+  synonymOwners: Map<string, Set<string>>;
+  /** per-action NAME tokens (descriptions are excluded — pure cross-reference noise). */
+  actions: { group: string; nameTokens: Set<string> }[];
 }
 
-/** Build the relevance index: per-group synonyms + per-action name/description tokens. */
+/**
+ * Build the routing index. A group's TRIGGER tokens are its name + curated synonyms
+ * (its topic). Action NAME tokens add recall for in-group actions whose phrasing
+ * isn't a synonym ("review" → review_day) — BUT a name token only credits its group
+ * when it isn't OWNED by a DIFFERENT group's topic. That one rule keeps "list my
+ * projects" OUT of invoices: projects_rate_update lives in invoices and its name has
+ * "project", but "project" is work_structure's topic word, so it can't drag invoices
+ * in (the matrix finding the user flagged). Descriptions are excluded entirely.
+ */
 function buildIndex(catalog: SelectableAction[]): CatalogIndex {
   const groupSyn = new Map<string, Set<string>>();
+  const synonymOwners = new Map<string, Set<string>>();
   const actions: CatalogIndex["actions"] = [];
   for (const action of catalog) {
     if (!groupSyn.has(action.featureGroup)) {
-      const set = new Set<string>();
-      for (const t of tokenize(action.featureGroup.replace(/_/g, " "))) set.add(t);
-      for (const syn of SYNONYMS[action.featureGroup] ?? []) for (const t of tokenize(syn)) set.add(t);
-      groupSyn.set(action.featureGroup, set);
+      const triggers = new Set<string>();
+      const claim = (token: string): void => {
+        triggers.add(token);
+        let owners = synonymOwners.get(token);
+        if (!owners) {
+          owners = new Set<string>();
+          synonymOwners.set(token, owners);
+        }
+        owners.add(action.featureGroup);
+      };
+      for (const t of tokenize(action.featureGroup.replace(/_/g, " "))) claim(t);
+      for (const syn of SYNONYMS[action.featureGroup] ?? []) for (const t of tokenize(syn)) claim(t);
+      groupSyn.set(action.featureGroup, triggers);
     }
-    actions.push({
-      group: action.featureGroup,
-      nameTokens: tokenize(action.name.replace(/_/g, " ")),
-      descTokens: tokenize(action.description),
-    });
+    actions.push({ group: action.featureGroup, nameTokens: tokenize(action.name.replace(/_/g, " ")) });
   }
-  return { groupSyn, actions };
+  return { groupSyn, synonymOwners, actions };
 }
 
 const DEFAULT_CATALOG: SelectableAction[] = ACTION_CATALOG.map((a) => ({
@@ -190,31 +198,29 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
   const index = catalog === DEFAULT_CATALOG ? DEFAULT_INDEX : buildIndex(catalog);
 
   const messageTokens = tokenize(message);
-  // COUNT-based, weighted group scoring: a group wins by how many of ITS OWN actions
-  // match by NAME (+ its synonyms), not by a single shared token — so "list my
-  // projects" routes to work_structure (many projects_* actions) over invoices/
-  // expenses (which only MENTION projects in descriptions). Without this, every group
-  // tied at 1 and the alphabetical tiebreak sent the turn to the wrong area (matrix
-  // finding: DeepSeek pro 100%→94% under subsetting, projects_list never shown).
+  // Score each group by message tokens hitting its TRIGGER words (name + synonyms)
+  // plus its action NAMES — but a name token counts ONLY when it isn't a DIFFERENT
+  // group's topic word, so an unrelated area (notably invoices) never rides along on
+  // a cross-cutting noun. Nothing matches ⇒ no group selected (core only).
   const score = new Map<string, number>();
   const bump = (group: string, points: number): void => {
     if (points) score.set(group, (score.get(group) ?? 0) + points);
   };
-  for (const [group, synTokens] of index.groupSyn) {
+  for (const [group, triggers] of index.groupSyn) {
     let hits = 0;
-    for (const t of messageTokens) if (synTokens.has(t)) hits += 1;
-    bump(group, hits * WEIGHT_SYNONYM);
+    for (const t of messageTokens) if (triggers.has(t)) hits += 1;
+    bump(group, hits);
   }
   for (const action of index.actions) {
-    let nameHits = 0;
-    let descHits = 0;
+    let hits = 0;
     for (const t of messageTokens) {
-      if (action.nameTokens.has(t)) nameHits += 1;
-      else if (action.descTokens.has(t)) descHits += 1;
+      if (!action.nameTokens.has(t)) continue;
+      const owners = index.synonymOwners.get(t);
+      if (!owners || owners.has(action.group)) hits += 1; // skip another group's topic word
     }
-    bump(action.group, nameHits * WEIGHT_NAME + descHits * WEIGHT_DESCRIPTION);
+    bump(action.group, hits);
   }
-  // Highest score first; ties broken by group name so the result is deterministic.
+  // Most-relevant first; deterministic alphabetical tiebreak.
   const selectedGroups = new Set(
     [...score.entries()]
       .filter(([, s]) => s > 0)
