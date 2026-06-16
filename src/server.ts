@@ -35,6 +35,18 @@ export function createApp(deps: AppDeps): Express {
     res.json(buildAddon(deps.config.baseUrl).getManifest());
   });
 
+  // Readiness probe (the platform healthcheck). Unlike the static /manifest, this
+  // touches the DB handle, so a hung/locked SQLite instance reports 503 and gets
+  // rotated out instead of silently failing live traffic. Public, no auth, no secrets.
+  app.get("/health", (_req, res) => {
+    try {
+      deps.store.healthCheck();
+      res.json({ ok: true });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
+
   // The add-on icon (manifest `iconPath`) — Clockify's sidebar nav entry renders
   // from this. Public, cacheable, no auth.
   app.get(ICON_PATH, (_req, res) => {

@@ -112,8 +112,10 @@ embedded chat loads and a read action returns a receipt.
 
 ## 5. Verify the deploy
 
-- `GET https://<your-app>.up.railway.app/manifest` → `200` (this is the Railway
-  healthcheck path).
+- `GET https://<your-app>.up.railway.app/health` → `200 {"ok":true}` (this is the
+  Railway healthcheck path — it touches the DB handle, so a hung/locked SQLite
+  instance reports `503` and gets rotated out, which a static `/manifest` couldn't).
+- `GET https://<your-app>.up.railway.app/manifest` → `200` (the add-on manifest).
 - Sidebar chat loads; a read ("list my projects") returns a receipt; a risky write
   shows a preview + Confirm button.
 - With the stable URL, you can finally answer the prod **AUDIT-host** question: run

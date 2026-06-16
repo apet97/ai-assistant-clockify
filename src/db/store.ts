@@ -229,6 +229,11 @@ export interface Store {
   /** Delete operational rows + chat_messages/audit_events past their retention windows. */
   pruneExpired(nowIso: string): PruneCounts;
 
+  /** Cheap liveness probe — runs a trivial query against the DB handle. THROWS if the
+   *  handle is closed/locked/unusable, so a readiness endpoint can 503 a hung instance
+   *  (the static /manifest healthcheck can't tell). Returns nothing on success. */
+  healthCheck(): void;
+
   close(): void;
 }
 
@@ -402,6 +407,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         chatMessages: explain(["DELETE FROM chat_messages WHERE created_at < ?"], "x"),
         auditEvents: explain(["DELETE FROM audit_events WHERE created_at < ?"], "x"),
       };
+    },
+
+    healthCheck() {
+      // user_version is a near-free pragma; reading it proves the handle is open and
+      // the file is reachable. A closed/locked/corrupt DB throws here.
+      db.pragma("user_version");
     },
 
     close() {
