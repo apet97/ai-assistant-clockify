@@ -1,0 +1,25 @@
+# Manual, opt-in cheap planner eval against a real (cheap) LLM. NEVER on push/PR
+# (normal CI is fakes-only, no creds, deterministic). Runs only the 6 safety cases
+# at repeat=1 with tool-select ON — small + cheap; a signal, not a gate.
+# Requires three repo secrets (Settings -> Secrets and variables -> Actions):
+#   EVAL_LLM_BASE_URL, EVAL_LLM_API_KEY, EVAL_LLM_MODEL
+name: Eval cheap (manual)
+on:
+  workflow_dispatch:
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Planner eval (safety subset)
+        run: npx tsx scripts/eval-planner.ts --only=safety --repeat=1 --tool-select
+        env:
+          LLM_PROVIDER: http
+          LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL }}
