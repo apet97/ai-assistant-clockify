@@ -14,8 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "cycles": "madge --circular --extensions ts --ts-config tsconfig.json src",
+    "dup": "jscpd",
     "lint": "eslint src",
-    "verify": "npm run type-check && npm run lint && npm run cycles && npm test && npm run build",
+    "verify": "npm run type-check && npm run lint && npm run cycles && npm run dup && npm test && npm run build",
     "eval:smoke": "vitest run tests/integration/eval-smoke.test.ts"
   },
   "dependencies": {
@@ -32,6 +33,7 @@
     "@types/node": "^22.10.0",
     "@types/supertest": "^6.0.2",
     "eslint": "^10.5.0",
+    "jscpd": "^4.0.5",
     "madge": "^8.0.0",
     "supertest": "^7.0.0",
     "tsx": "^4.19.2",
