@@ -76,8 +76,8 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
 
   return {
     async listTimeOffPolicies() {
-      const rows = (await core.call("api", "GET", `${ws}/time-off/policies`)) as any[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapPolicy);
+      const rows = (await core.paginate("api", `${ws}/time-off/policies`)) as any[];
+      return rows.map(mapPolicy);
     },
     async getTimeOffPolicy(id) {
       const raw = await core.call("api", "GET", `${ws}/time-off/policies/${id}`, undefined, true);

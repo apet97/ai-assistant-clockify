@@ -28,8 +28,10 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
 
   return {
     async listUsers() {
-      const rows = (await core.call("api", "GET", `${ws}/users`)) as any[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapUser);
+      // Paginate: the bare GET returns only the server default page-size (50), which
+      // silently breaks member name resolution in any workspace with >50 members.
+      const rows = (await core.paginate("api", `${ws}/users`)) as any[];
+      return rows.map(mapUser);
     },
     async inviteUser(email, sendEmail): Promise<EntitySummary> {
       const qs = new URLSearchParams({ "send-email": String(sendEmail) });
@@ -63,12 +65,14 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       return { id: u?.id ?? userId, name: "INACTIVE" };
     },
     async listGroups() {
-      const rows = (await core.call("api", "GET", `${ws}/user-groups`)) as any[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapGroup);
+      const rows = (await core.paginate("api", `${ws}/user-groups`)) as any[];
+      return rows.map(mapGroup);
     },
     async getGroup(id) {
-      const rows = (await core.call("api", "GET", `${ws}/user-groups`)) as any[] | null;
-      const raw = (Array.isArray(rows) ? rows : []).find((g) => g.id === id);
+      // Single-GET-by-id 404s for groups (CLAUDE.md) → scan the paginated list so a
+      // group past page 1 is still found.
+      const rows = (await core.paginate("api", `${ws}/user-groups`)) as any[];
+      const raw = rows.find((g) => g.id === id);
       return raw ? mapGroup(raw) : null;
     },
     async createGroup(name): Promise<EntitySummary> {

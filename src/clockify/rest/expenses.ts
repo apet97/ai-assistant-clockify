@@ -164,12 +164,9 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
     async listExpenseCategories(filter) {
       // The spec's archived param DEFAULTS to false (active-only) — name
       // resolution for deletes must be able to ask for the archived set.
-      const qs = filter?.archived === undefined ? "" : `?archived=${filter.archived}`;
-      const data = (await core.call("api", "GET", `${ws}/expenses/categories${qs}`)) as
-        | { categories?: any[] }
-        | any[]
-        | null;
-      const rows = Array.isArray(data) ? data : (data?.categories ?? []);
+      // Paginate (envelope: `{categories:[…]}`) so >50 categories don't truncate.
+      const params: Record<string, string> = filter?.archived === undefined ? {} : { archived: String(filter.archived) };
+      const rows = (await core.paginateEnvelope("api", `${ws}/expenses/categories`, "categories", params)) as any[];
       return rows.map(mapCategory);
     },
     async createExpenseCategory({ name }): Promise<EntitySummary> {

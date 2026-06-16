@@ -61,6 +61,14 @@ export interface RestCore {
     path: string,
     params?: Record<string, string>,
   ): Promise<{ rows: unknown[]; truncated: boolean }>;
+  /** Paginate a list whose page body is an ENVELOPE (`{key:[…]}`) — or a bare array —
+   *  unwrapping `envelopeKey` per page (e.g. expense categories: `{categories:[…]}`). */
+  paginateEnvelope(
+    host: ClockifyHost,
+    path: string,
+    envelopeKey: string,
+    params?: Record<string, string>,
+  ): Promise<unknown[]>;
   getThenPut(
     host: ClockifyHost,
     path: string,
@@ -287,6 +295,32 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return (await paginateWithMeta(host, path, params)).rows;
   }
 
+  async function paginateEnvelope(
+    host: ClockifyHost,
+    path: string,
+    envelopeKey: string,
+    params: Record<string, string> = {},
+  ): Promise<unknown[]> {
+    const out: unknown[] = [];
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const qs = new URLSearchParams({ ...params, page: String(page), "page-size": String(PAGE_SIZE) });
+      const sep = path.includes("?") ? "&" : "?";
+      const data = (await call(host, "GET", `${path}${sep}${qs.toString()}`)) as
+        | Record<string, unknown>
+        | unknown[]
+        | null;
+      const arr = Array.isArray(data)
+        ? data
+        : ((data as Record<string, unknown> | null)?.[envelopeKey] as unknown[] | undefined) ?? [];
+      out.push(...arr);
+      if (arr.length < PAGE_SIZE) return out; // short page = natural end
+    }
+    console.warn(
+      `Clockify list ${path} hit the ${MAX_PAGES}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
+    );
+    return out;
+  }
+
   async function getThenPut(
     host: ClockifyHost,
     path: string,
@@ -321,5 +355,5 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 
-  return { call, paginate, paginateWithMeta, getThenPut, postForm, getBinary };
+  return { call, paginate, paginateWithMeta, paginateEnvelope, getThenPut, postForm, getBinary };
 }
