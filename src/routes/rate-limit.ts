@@ -12,6 +12,15 @@
 export const DEFAULT_CHAT_RATE_LIMIT_MAX = 30;
 export const DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 
+/**
+ * New-chat (session-creation) budget per ADMIN. The chat limiter above is keyed by
+ * sessionId, so minting fresh sessions via POST /chat/new would reset that per-session
+ * budget — this per-admin cap bounds how fast an admin can spin up new budgets.
+ * Generous for a human (clicking "New chat"), low enough to damp the bypass.
+ */
+export const DEFAULT_NEW_CHAT_RATE_LIMIT_MAX = 10;
+export const DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+
 /** Sweep dead keys every N checks so the map can't grow unboundedly. */
 const SWEEP_EVERY_CHECKS = 512;
 

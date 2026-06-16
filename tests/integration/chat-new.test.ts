@@ -25,6 +25,7 @@ afterEach(() => {
 async function makeApp(
   script: ToolCompletion[],
   fake: FakeWorkspace,
+  configOverride: Partial<AppConfig> = {},
 ): Promise<{ app: Express; cookie: string }> {
   const keys = await testing.generateTestKeys();
   const config: AppConfig = {
@@ -40,6 +41,7 @@ async function makeApp(
     llmApiKey: "llm-key",
     llmModel: "cheap-model",
     llmAgentic: true,
+    ...configOverride,
   };
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
@@ -100,5 +102,26 @@ describe("POST /api/chat/new", () => {
     const old = await request(app).get("/api/chat/history").set("Cookie", cookie);
     expect(old.status).toBe(200);
     expect((old.body.messages as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  // Cost-bounding: the chat rate limiter is per-SESSION, so minting fresh sessions
+  // via /chat/new would otherwise reset the paid-model-loop budget. A per-ADMIN limit
+  // on session creation closes that bypass (the actor is an authenticated admin, but
+  // the limiter must still bound how fast they can spin up new budgets).
+  it("rate-limits rapid new-chat creation per admin (can't reset the paid-loop budget by minting sessions)", async () => {
+    const { app, cookie } = await makeApp([], createFakeWorkspace(), {
+      newChatRateLimitMax: 3,
+      newChatRateLimitWindowMs: 60_000,
+    });
+    // The same admin's original cookie keeps resolving (a new chat never invalidates it),
+    // so the per-admin key is constant across these calls.
+    for (let i = 0; i < 3; i += 1) {
+      const ok = await request(app).post("/api/chat/new").set("Cookie", cookie);
+      expect(ok.status, `new chat #${i + 1}`).toBe(200);
+    }
+    const limited = await request(app).post("/api/chat/new").set("Cookie", cookie);
+    expect(limited.status).toBe(429);
+    expect(limited.body.code).toBe("rate_limited");
+    expect(limited.headers["retry-after"]).toBeDefined();
   });
 });

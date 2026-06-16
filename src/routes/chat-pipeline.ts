@@ -20,6 +20,9 @@ import {
   createSlidingWindowLimiter,
   DEFAULT_CHAT_RATE_LIMIT_MAX,
   DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS,
+  DEFAULT_NEW_CHAT_RATE_LIMIT_MAX,
+  DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS,
+  type RateLimitDecision,
 } from "./rate-limit.js";
 import {
   commitConfirmedOperation,
@@ -108,6 +111,9 @@ export type CommitConfirmationOutcome =
 export interface ChatPipeline {
   loadPolicy: (workspaceId: string, adminUserId: string) => AdminPolicy;
   requireSession: (req: Request, res: Response) => SessionClaims | undefined;
+  /** Per-admin budget for creating fresh sessions (POST /chat/new) — bounds resetting
+   *  the per-session paid-loop limit by minting sessions. Keyed by workspace+admin. */
+  newChatAllowed: (workspaceId: string, adminUserId: string) => RateLimitDecision;
   actionContext: (workspaceId: string, adminUserId: string, installation: Installation) => ActionContext;
   runResume: (
     claims: Claims,
@@ -142,6 +148,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     deps.config.chatRateLimitMax ?? DEFAULT_CHAT_RATE_LIMIT_MAX,
     deps.config.chatRateLimitWindowMs ?? DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS,
   );
+  // Per-ADMIN session-creation limiter (POST /chat/new): the chat limiter above is
+  // keyed by sessionId, so minting fresh sessions resets its budget — this bounds that.
+  const newChatLimiter = createSlidingWindowLimiter(
+    deps.config.newChatRateLimitMax ?? DEFAULT_NEW_CHAT_RATE_LIMIT_MAX,
+    deps.config.newChatRateLimitWindowMs ?? DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS,
+  );
+  const newChatAllowed = (workspaceId: string, adminUserId: string): RateLimitDecision =>
+    newChatLimiter.check(`${workspaceId}:${adminUserId}`, now().getTime());
 
   function loadPolicy(workspaceId: string, adminUserId: string): AdminPolicy {
     return deps.store.getAdminPolicy(workspaceId, adminUserId) ?? defaultAdminPolicy();
@@ -819,5 +833,5 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return { claims, installation, message: parsed.data.message };
   }
 
-  return { loadPolicy, requireSession, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions };
+  return { loadPolicy, requireSession, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions };
 }

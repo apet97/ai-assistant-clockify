@@ -64,7 +64,7 @@ export function apiRouter(deps: AppDeps): Router {
   // owns the per-instance chat rate limiter and a derived clock; the route
   // handlers below call its methods.
   const pipeline = createChatPipeline(deps);
-  const { loadPolicy, requireSession, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
+  const { loadPolicy, requireSession, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
 
   router.get("/me", (req, res) => {
@@ -232,6 +232,18 @@ export function apiRouter(deps: AppDeps): Router {
   router.post("/chat/new", (req, res) => {
     const claims = requireSession(req, res);
     if (!claims) return;
+    // Per-admin cap on session creation: the chat limiter is per-session, so without
+    // this an admin could mint fresh sessions to reset the paid-model-loop budget.
+    const limited = newChatAllowed(claims.workspaceId, claims.adminUserId);
+    if (!limited.allowed) {
+      res.setHeader("Retry-After", String(Math.ceil(limited.retryAfterMs / 1000)));
+      res.status(429).json({
+        ok: false,
+        code: "rate_limited",
+        message: "You're starting new chats too quickly — please wait a moment and try again.",
+      });
+      return;
+    }
     const session = deps.store.createSession({
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,

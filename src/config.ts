@@ -51,6 +51,10 @@ export interface AppConfig {
   /** Chat rate limit per admin session; the route defaults apply when unset. */
   chatRateLimitMax?: number;
   chatRateLimitWindowMs?: number;
+  /** New-chat (session-creation) rate limit per ADMIN; bounds minting fresh sessions
+   *  to reset the per-session paid-loop budget. Route defaults apply when unset. */
+  newChatRateLimitMax?: number;
+  newChatRateLimitWindowMs?: number;
 }
 
 const envObjectSchema = z.object({
@@ -99,6 +103,10 @@ const envObjectSchema = z.object({
   /** Chat rate limit per admin session (each turn drives a paid model loop). */
   CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
   CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+  /** New-chat (session-creation) rate limit per admin — bounds resetting the
+   *  per-session paid-loop budget by minting fresh sessions. */
+  NEW_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
+  NEW_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
 });
 
 const envSchema = envObjectSchema.superRefine((v, ctx) => {
@@ -165,5 +173,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,
     chatRateLimitWindowMs: parsed.CHAT_RATE_LIMIT_WINDOW_MS,
+    newChatRateLimitMax: parsed.NEW_CHAT_RATE_LIMIT_MAX,
+    newChatRateLimitWindowMs: parsed.NEW_CHAT_RATE_LIMIT_WINDOW_MS,
   };
 }
