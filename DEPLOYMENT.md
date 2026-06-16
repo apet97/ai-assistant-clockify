@@ -20,11 +20,29 @@ and `package.json` points the dependency at it:
 
 `npm ci` resolves it from the in-repo tarball (the lockfile pins its integrity
 hash), so the Railway build is self-contained — no npm publish, account, or token
-needed. To re-vendor after an SDK change:
+needed. **To re-vendor after an SDK change** (run from THIS directory):
 
 ```bash
-( cd ../addon-ts-sdk/addon-sdk && npm pack --pack-destination "$OLDPWD/vendor" )
-# bump the filename in package.json if the version changed, then: npm install
+# 1. Build the SDK from source, then pack the built artifact into vendor/.
+( cd ../addon-ts-sdk/addon-sdk && npm ci && npm run build && \
+  npm pack --pack-destination "$OLDPWD/vendor" )
+#    (If ../addon-ts-sdk/addon-sdk has no "build" script, drop `npm run build`.)
+
+# 2. If the SDK version changed, delete the OLD tarball and point package.json
+#    at the new filename (else vendor/ accumulates stale tarballs):
+#    rm vendor/apet97-clockify-addon-sdk-<OLD>.tgz
+#    edit package.json: "file:vendor/apet97-clockify-addon-sdk-<NEW>.tgz"
+
+# 3. Reinstall so package-lock.json re-pins the new tarball's integrity hash.
+rm -rf node_modules
+npm install
+
+# 4. Prove the swap didn't break the request path (verify + a clean offline install).
+npm run verify
+rm -rf node_modules && npm ci
+
+# 5. Commit BOTH the new vendor/*.tgz and the updated package.json + package-lock.json.
+git add vendor/ package.json package-lock.json
 ```
 
 (If you later publish the SDK to npm, swap the dependency to a version range like
