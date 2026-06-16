@@ -31,6 +31,22 @@ export function createApp(deps: AppDeps): Express {
   // message/nonce field caps (routes/api.ts) are the second, finer layer.
   app.use(express.json({ limit: "32kb" }));
 
+  // Cheap defense-in-depth on EVERY response (the component HTML route sets its
+  // own; this covers the /api JSON routes that previously set none). nosniff stops
+  // MIME-confusion; HSTS is emitted only when the deployment is https (it is a
+  // no-op/meaningless over local http) in case Railway's edge doesn't add it.
+  // X-Frame-Options is intentionally NOT set — the add-on must stay
+  // iframe-embeddable; clickjacking is controlled by the component CSP
+  // frame-ancestors allow-list.
+  const httpsDeployment = deps.config.baseUrl.startsWith("https://");
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (httpsDeployment) {
+      res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+    }
+    next();
+  });
+
   app.get("/manifest", (_req, res) => {
     res.json(buildAddon(deps.config.baseUrl).getManifest());
   });
