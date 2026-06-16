@@ -9,9 +9,9 @@ evidence trail. Fill in owner + date + evidence for each before tagging a prod r
 
 | # | Gate | Status | Owner | Date | Evidence |
 |---|------|--------|-------|------|----------|
-| 1 | **Rotate prod LLM credentials.** The prod `LLM_API_KEY` (Railway env) must be a fresh key, never a dev/test key. Confirm `.env.server` / `.env.gemini` keys (used for evals) are NOT the prod keys. | ☐ pending | | | |
-| 2 | **Security review before real users.** A reviewer walks `SECURITY.md` + the harness trust boundary, the token-isolation tripwires, and the auth/rate-limit posture; records findings + sign-off. | ☐ pending | | | |
-| 3 | **AUDIT-host clearance.** Confirm the prod add-on token clears the Clockify AUDIT host: run `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN` (dev cleanly reports "audit log not available"). Record the result here. | ☐ pending | | | |
+| 1 | **Rotate prod LLM credentials** (plan T60). The prod `LLM_API_KEY` (Railway env) must be a fresh key, never a dev/test key. Confirm `.env.server` / `.env.gemini` keys (used for evals) are NOT the prod keys. | ☐ OPEN — requires human + credentials | | | |
+| 2 | **Security review before real users** (plan T62). A reviewer walks `SECURITY.md` + the harness trust boundary, the token-isolation tripwires, and the auth/rate-limit posture; records findings + sign-off. | ☐ OPEN — requires human reviewer | | | |
+| 3 | **AUDIT-host clearance** (plan T61). Confirm the prod add-on token clears the Clockify AUDIT host: run `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN` (dev cleanly reports "audit log not available"). Record the result here. | ☐ pending | | | |
 
 ## Decisions made (recorded for the reviewer)
 
@@ -31,6 +31,21 @@ LIVE_ADDON_TOKEN=… npx tsx scripts/host-auth-spike.ts
 ```
 A clean prod result confirms the AUDIT host accepts the add-on token; a "not available"
 result means audit-log reads stay dev-gated. Either way, record the outcome in the table.
+
+## Status of the human-gated operational items (plan T60/T61/T62)
+
+All three remain **OPEN** at the end of the automated hardening pass — they require a human
+with production credentials, a captured prod `X-Addon-Token`, and/or a sacrificial workspace,
+none of which the autonomous run had. The *code/docs* they depend on are in place:
+
+- **T60 (rotate prod LLM key)** — OPEN. Operational only; no code change needed. Complete the
+  end-state checklist in the plan and record owner/date/fingerprint in row 1 above.
+- **T61 (clear AUDIT host)** — OPEN. Run `scripts/host-auth-spike.ts` with a captured prod
+  `LIVE_ADDON_TOKEN` (see "How to run gate 3" below) and record the VERDICT in row 3.
+- **T62 (pre-launch security review)** — OPEN. The code dependency (authz-surface-01 posture)
+  is resolved by T40 and signed-off-ready; a human reviewer completes the checklist in the
+  plan and records findings + sign-off in row 2. `npm run verify` is green at the current
+  test count; `madge` 0 cycles; the dup gate is clean.
 
 ## Notes
 
