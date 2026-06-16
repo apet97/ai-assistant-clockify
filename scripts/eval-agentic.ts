@@ -34,6 +34,9 @@ import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { errorReceipt } from "../src/harness/receipts.js";
 import { requiresConfirmation } from "../src/harness/risk.js";
 import { toolsForModel } from "../src/harness/tools.js";
+import { selectActionsForMessage, CORE_ACTION_NAMES } from "../src/harness/tool-select.js";
+import { trackUsage, type TurnUsage } from "../src/assistant/usage.js";
+import { mean } from "../src/eval/consistency.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
 import { AGENTIC_CASES, type AgenticCase, type AgenticOutcome } from "./eval/agentic-cases.js";
 import { persistAndResume } from "./eval/persist-resume.js";
@@ -43,12 +46,14 @@ interface Flags {
   only?: string;
   concurrency: number;
   singleTurn: boolean;
+  /** Apply deterministic tool subsetting per case (measures LLM_TOOL_SELECT's effect). */
+  toolSelect: boolean;
   /** Explicit output path (the matrix runner sets this per model); default timestamped. */
   out?: string;
 }
 
 function parseFlags(argv: string[]): Flags {
-  const flags: Flags = { repeat: 1, concurrency: 4, singleTurn: false };
+  const flags: Flags = { repeat: 1, concurrency: 4, singleTurn: false, toolSelect: false };
   for (const arg of argv) {
     const repeat = arg.match(/^--repeat=(\d+)$/);
     const only = arg.match(/^--only=(.+)$/);
@@ -59,6 +64,7 @@ function parseFlags(argv: string[]): Flags {
     else if (conc) flags.concurrency = Math.max(1, Number(conc[1]));
     else if (out) flags.out = out[1];
     else if (arg === "--single-turn") flags.singleTurn = true;
+    else if (arg === "--tool-select") flags.toolSelect = true;
   }
   return flags;
 }
@@ -76,15 +82,36 @@ function makeContext(fake: ReturnType<typeof createFakeWorkspace>): ActionContex
 interface CaseRun {
   outcome: AgenticOutcome;
   safetyViolations: string[];
+  /** Per-case-run model telemetry: round-trips, prompt tokens, model wall-clock. */
+  usage: TurnUsage;
+  /** Subsetting actually NARROWED the menu (a domain intent matched, not just core),
+   *  so a recall miss — and thus the escape hatch — is possible for this run. */
+  narrowed: boolean;
+  /** The full-catalog escape hatch fired (a narrowed turn produced nothing). */
+  escapeHatchFired: boolean;
 }
 
-async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise<CaseRun> {
+async function runAgenticCase(modelClient: ModelClient, c: AgenticCase, toolSelect: boolean): Promise<CaseRun> {
   const fake = createFakeWorkspace(c.seed);
   const ctx = makeContext(fake);
   const executed: string[] = [];
   const committed: string[] = [];
   const safetyViolations: string[] = [];
   let interrupts = 0;
+  let escapeHatchFired = false;
+
+  // Tool subsetting (mirrors chat-pipeline.ts executeChatTurn): compute the subset
+  // ONCE from the first user message and reuse it on the initial turn AND every
+  // resume — so the eval measures exactly the production subset path (including the
+  // resume-subset of STEP 6). The harness still validates + gates every proposed call.
+  const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
+  const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
+  const narrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
+
+  // One usage tracker per case-run captures wall-clock + token cost across the
+  // initial turn, the escape-hatch retry, and every resume round-trip (the same
+  // seam the prod chat route uses for turn_telemetry).
+  const tracked = trackUsage(modelClient, () => new Date());
 
   const runAction = async (call: ToolCall): Promise<ActionResult> => {
     let result: ActionResult;
@@ -111,11 +138,26 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
 
   try {
     let turn: AgentTurnResult = await runAgentConversation({
-      modelClient,
+      modelClient: tracked.client,
       messages: [{ role: "user", content: c.message }],
       policy: ctx.policy,
+      tools: subsetTools,
       runAction,
     });
+    // Recall escape hatch (mirrors chat-pipeline.ts): a NARROWED turn that executed
+    // NOTHING may have had the needed tool hidden — retry ONCE with the full catalog.
+    // Side-effect-free (guarded on executed.length === 0); a risky write would have
+    // INTERRUPTED (not final/exhausted), so this never re-runs a write. Counting its
+    // fire-rate makes the net (savings-on-hits − tax-on-misses) measured, not assumed.
+    if (narrowed && executed.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
+      escapeHatchFired = true;
+      turn = await runAgentConversation({
+        modelClient: tracked.client,
+        messages: [{ role: "user", content: c.message }],
+        policy: ctx.policy,
+        runAction,
+      });
+    }
     const maxConfirms = c.maxConfirms ?? 3;
     let confirms = 0;
     while (turn.kind === "interrupt" && confirms < maxConfirms) {
@@ -132,9 +174,10 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
       const messages = persistAndResume(state, receipt);
       if (!messages) break; // production would not resume → the turn stays interrupted (a failure)
       turn = await runAgentTurn({
-        modelClient,
+        modelClient: tracked.client,
         messages,
-        tools: toolsForModel(),
+        // Subset on resume too (STEP 6's production shape): when off, full catalog.
+        tools: subsetTools ?? toolsForModel(),
         runAction,
       });
     }
@@ -149,7 +192,13 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
     if (turn.kind === "interrupt") interrupts += 1;
     const finalText =
       turn.kind === "final" || turn.kind === "exhausted" ? turn.text : turn.kind === "clarify" ? turn.message : "";
-    return { outcome: { kind, finalText, executed, committed, interrupts, fake }, safetyViolations };
+    return {
+      outcome: { kind, finalText, executed, committed, interrupts, fake },
+      safetyViolations,
+      usage: tracked.usage,
+      narrowed,
+      escapeHatchFired,
+    };
   } catch (err) {
     return {
       outcome: {
@@ -161,12 +210,15 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase): Promise
         fake,
       },
       safetyViolations,
+      usage: tracked.usage,
+      narrowed,
+      escapeHatchFired,
     };
   }
 }
 
 /** The pre-loop architecture: one plan, executed once, previews auto-confirmed, no feedback. */
-async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase): Promise<CaseRun> {
+async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolSelect: boolean): Promise<CaseRun> {
   const fake = createFakeWorkspace(c.seed);
   const ctx = makeContext(fake);
   const executed: string[] = [];
@@ -175,15 +227,36 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase): Prom
   let interrupts = 0;
   let clarified = false;
   let text = "";
+  let escapeHatchFired = false;
+
+  // Tool subsetting mirrors the single-turn branch of chat-pipeline.ts: a subset
+  // catalog/tools for the plan, then a full-catalog re-plan if a NARROWED turn
+  // proposed no action (the recall escape hatch — re-plan runs before any execute).
+  const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
+  const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
+  const subsetCatalog = subsetNames ? catalogForModel(subsetNames) : catalogForModel();
+  const narrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
+  const tracked = trackUsage(modelClient, () => new Date());
 
   try {
-    const plan = await planConversation({
-      modelClient,
+    let plan = await planConversation({
+      modelClient: tracked.client,
       messages: [{ role: "user", content: c.message }],
-      actionCatalog: catalogForModel(),
+      actionCatalog: subsetCatalog,
+      tools: subsetTools,
       policy: ctx.policy,
       useTools: true,
     });
+    if (narrowed && plan.kind !== "actions") {
+      escapeHatchFired = true;
+      plan = await planConversation({
+        modelClient: tracked.client,
+        messages: [{ role: "user", content: c.message }],
+        actionCatalog: catalogForModel(),
+        policy: ctx.policy,
+        useTools: true,
+      });
+    }
     text = plan.text ?? "";
     clarified = plan.kind === "clarify";
     if (plan.kind === "actions" && plan.actions) {
@@ -213,11 +286,17 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase): Prom
     return {
       outcome: { kind: "error", finalText: String(err), executed, committed, interrupts, fake },
       safetyViolations,
+      usage: tracked.usage,
+      narrowed,
+      escapeHatchFired,
     };
   }
   return {
     outcome: { kind: clarified ? "clarify" : "final", finalText: text, executed, committed, interrupts, fake },
     safetyViolations,
+    usage: tracked.usage,
+    narrowed,
+    escapeHatchFired,
   };
 }
 
@@ -294,7 +373,8 @@ async function main(): Promise<void> {
     selection.llmProvider === "gemini-cli" ? `gemini-cli:${selection.geminiModel ?? "router"}` : selection.llmModel ?? "?";
   console.log(
     `Running ${mode} task-completion eval: provider=${selection.llmProvider} model=${modelLabel} ` +
-      `cases=${cases.length} repeat=${flags.repeat} concurrency=${flags.concurrency}\n`,
+      `cases=${cases.length} repeat=${flags.repeat} concurrency=${flags.concurrency}` +
+      `${flags.toolSelect ? " [tool-select ON]" : ""}\n`,
   );
 
   const units: { c: AgenticCase; run: number }[] = [];
@@ -302,14 +382,25 @@ async function main(): Promise<void> {
 
   let done = 0;
   const runs = await mapWithConcurrency(units, flags.concurrency, async ({ c }) => {
-    const result = flags.singleTurn ? await runSingleTurnCase(modelClient, c) : await runAgenticCase(modelClient, c);
+    const result = flags.singleTurn
+      ? await runSingleTurnCase(modelClient, c, flags.toolSelect)
+      : await runAgenticCase(modelClient, c, flags.toolSelect);
     const reasons = c.check(result.outcome);
     if (result.outcome.kind === "error" && result.outcome.finalText) {
       reasons.push(`error: ${result.outcome.finalText.slice(0, 160)}`);
     }
     done += 1;
     process.stdout.write(`\r  ${done}/${units.length} runs complete`);
-    return { caseId: c.id, area: c.area, pass: reasons.length === 0, reasons, safety: result.safetyViolations };
+    return {
+      caseId: c.id,
+      area: c.area,
+      pass: reasons.length === 0,
+      reasons,
+      safety: result.safetyViolations,
+      usage: result.usage,
+      narrowed: result.narrowed,
+      escapeHatchFired: result.escapeHatchFired,
+    };
   });
   process.stdout.write("\n\n");
 
@@ -337,11 +428,51 @@ async function main(): Promise<void> {
   const passRuns = runs.filter((r) => r.pass).length;
   const safetyViolations = runs.flatMap((r) => r.safety.map((s) => `${r.caseId}: ${s}`));
 
+  // PERF — the model-performance dimensions, measured per case-run so subset OFF vs
+  // ON is a comparison, not a hope. A "turn" here is the WHOLE case-run: the initial
+  // turn + any escape-hatch retry + every resume round-trip (trackUsage sums them).
+  //   - round-trips/turn  = paid model calls (DEFAULT_MAX_STEPS bounds each leg)
+  //   - prompt-tokens/turn = total prompt cost of the turn (~99% of the bill)
+  //   - prompt-tokens/round-trip = the schema-driven per-call number (≈ the planner
+  //     baseline), so subsetting's per-call shrink is directly visible
+  //   - latency p50/p95   = model wall-clock summed over the turn's calls
+  const turnLatencies = runs.map((r) => r.usage.modelMs).sort((a, b) => a - b);
+  const percentile = (q: number): number =>
+    turnLatencies.length ? turnLatencies[Math.min(turnLatencies.length - 1, Math.floor(q * turnLatencies.length))] : 0;
+  const latencyP50Ms = percentile(0.5);
+  const latencyP95Ms = percentile(0.95);
+  const meanRoundTrips = mean(runs.map((r) => r.usage.modelCalls));
+  const meanPromptTokens = mean(runs.map((r) => r.usage.promptTokens));
+  const meanCompletionTokens = mean(runs.map((r) => r.usage.completionTokens));
+  const perCall = runs.filter((r) => r.usage.modelCalls > 0).map((r) => r.usage.promptTokens / r.usage.modelCalls);
+  const meanPromptTokensPerRoundTrip = mean(perCall);
+  const tokensReported = runs.some((r) => r.usage.usageReported);
+  // Escape-hatch fire-rate (tool-select only): of the NARROWED runs (a domain intent
+  // matched, so a recall miss is possible), how often did the full-catalog retry fire?
+  // That retry is the tax-on-misses that nets against the savings-on-hits.
+  const narrowedRuns = runs.filter((r) => r.narrowed).length;
+  const escapeHatchFires = runs.filter((r) => r.escapeHatchFired).length;
+
   console.log(
-    `\nAGENTIC EVAL (${mode}): ${passRuns}/${totalRuns} (${pct(totalRuns ? passRuns / totalRuns : 0)}) ` +
-      `| safety violations: ${safetyViolations.length}`,
+    `\nAGENTIC EVAL (${mode}${flags.toolSelect ? ", tool-select" : ""}): ${passRuns}/${totalRuns} ` +
+      `(${pct(totalRuns ? passRuns / totalRuns : 0)}) | safety violations: ${safetyViolations.length}`,
   );
   for (const v of safetyViolations) console.log(`  !! SAFETY: ${v}`);
+  console.log(
+    `  PERF: round-trips/turn ${meanRoundTrips.toFixed(2)} | latency p50 ${latencyP50Ms}ms / p95 ${latencyP95Ms}ms | ` +
+      `tokens/turn ${
+        tokensReported
+          ? `~${Math.round(meanPromptTokens)} prompt (${Math.round(meanPromptTokensPerRoundTrip)}/round-trip) + ${Math.round(meanCompletionTokens)} completion`
+          : "(not reported by backend)"
+      }`,
+  );
+  if (flags.toolSelect) {
+    console.log(
+      `  ESCAPE HATCH: fired ${escapeHatchFires}/${narrowedRuns} narrowed run(s)` +
+        `${narrowedRuns ? ` (${pct(escapeHatchFires / narrowedRuns)})` : ""}` +
+        ` — full-catalog retries (the tax-on-misses)`,
+    );
+  }
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const outFile = flags.out ?? `eval-results/agentic-${mode}-${stamp}.json`;
@@ -355,8 +486,24 @@ async function main(): Promise<void> {
         mode,
         provider: selection.llmProvider,
         model: modelLabel,
+        toolSelect: flags.toolSelect,
         repeat: flags.repeat,
-        summary: { totalRuns, passRuns, passRate: totalRuns ? passRuns / totalRuns : 0, safetyViolations: safetyViolations.length },
+        summary: {
+          totalRuns,
+          passRuns,
+          passRate: totalRuns ? passRuns / totalRuns : 0,
+          safetyViolations: safetyViolations.length,
+          meanRoundTrips,
+          latencyP50Ms,
+          latencyP95Ms,
+          meanPromptTokens,
+          meanPromptTokensPerRoundTrip,
+          meanCompletionTokens,
+          tokensReported,
+          narrowedRuns,
+          escapeHatchFires,
+          escapeHatchFireRate: narrowedRuns ? escapeHatchFires / narrowedRuns : 0,
+        },
         reports,
       },
       null,
