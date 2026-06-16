@@ -704,7 +704,7 @@ async function runHolidays(h: LiveHarness): Promise<void> {
     holidayId = created?.changed?.created?.[0]?.id;
     if (holidayId) {
       await h.read("clockify_holidays_get", { id: holidayId });
-      await h.safeWrite("clockify_holidays_update", { id: holidayId, name: `${name}_v2` });
+      await h.risky("clockify_holidays_update", { id: holidayId, name: `${name}_v2` });
       const del = await h.risky("clockify_holidays_delete", { id: holidayId, name: `${name}_v2` });
       if (del) holidayId = undefined;
     }
@@ -1096,7 +1096,7 @@ async function main(): Promise<void> {
 
     // fix_entry = updateTimeEntry PUT (the TODO-verify sparse-body endpoint)
     if (loggedId) {
-      await safeWrite(ctx, "clockify_fix_entry", {
+      await risky(ctx, "clockify_fix_entry", {
         id: loggedId,
         description: `AIASSIST_SMOKE_log_${sfx}_fixed`,
       });
