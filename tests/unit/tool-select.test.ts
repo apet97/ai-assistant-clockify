@@ -118,4 +118,15 @@ describe("selectActionsForMessage — matrix regression guards", () => {
       expect(CORE_ACTION_NAMES.has(name)).toBe(true);
     }
   });
+
+  it("does NOT pull the invoices area into non-invoice requests (only when asked)", () => {
+    // The invoices group owns rate-update actions whose names contain "project"/"task";
+    // a topic word must not drag the whole billing area into unrelated turns.
+    for (const msg of ["list my projects", "log 2 hours on apollo", "show my expenses", "add a task to apollo"]) {
+      const sel = selectActionsForMessage(msg);
+      expect(sel).not.toContain("clockify_invoices_create");
+    }
+    // ...but a genuine invoice request still gets it.
+    expect(selectActionsForMessage("create an invoice for acme")).toContain("clockify_invoices_create");
+  });
 });
