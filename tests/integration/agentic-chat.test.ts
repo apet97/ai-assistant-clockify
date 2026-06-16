@@ -34,12 +34,22 @@ interface TestApp {
   store: Store;
 }
 
+// RSA-2048 keygen is ~46ms; generating it per test (55× in this file) starved the
+// Vitest fork pool and intermittently failed UNRELATED test files under load
+// (flaky-CI root cause). The key material is identical across tests, so generate it
+// exactly once and memoize the promise (race-safe even if a test runs concurrently).
+let keysPromise: ReturnType<typeof testing.generateTestKeys> | undefined;
+function testKeys(): ReturnType<typeof testing.generateTestKeys> {
+  if (!keysPromise) keysPromise = testing.generateTestKeys();
+  return keysPromise;
+}
+
 async function makeApp(
   script: ToolCompletion[],
   fake: FakeWorkspace,
   opts: { agentic?: boolean; modelClient?: ModelClient } = {},
 ): Promise<TestApp> {
-  const keys = await testing.generateTestKeys();
+  const keys = await testKeys();
   const config: AppConfig = {
     nodeEnv: "test",
     port: 3997,

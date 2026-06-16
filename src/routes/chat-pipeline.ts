@@ -736,6 +736,15 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       baseText = emittedClarify ? "" : plan.text;
     }
 
+    // Client disconnected mid-turn (settleAgentTurn → "aborted"): the socket is gone,
+    // no reply will be sent, and the loop's abort guard sits before each runAction, so
+    // nothing was committed for a turn nobody is watching. Persist nothing and record
+    // nothing — both are store writes for an abandoned turn (and would otherwise be a
+    // write that can land after the request has already closed). The caller discards it.
+    if (replyKind === "aborted") {
+      return { ok: true, replyKind, replyText: "", results: m.results };
+    }
+
     // The truthful-preview override (see truthfulReplyText): a pending preview
     // replaces the model's text. The streaming route emits this replyText AFTER
     // the results — the truthful text isn't known until execution finishes.
