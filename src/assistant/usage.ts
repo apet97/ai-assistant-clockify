@@ -12,6 +12,14 @@ export interface TurnUsage {
   promptTokens: number;
   completionTokens: number;
   usageReported: boolean;
+  /**
+   * Prompt tokens that HIT the provider's cache (a cheaper subset of promptTokens),
+   * summed across the turn's calls. `cachedPromptReported` distinguishes "the backend
+   * reported no cache info" (stays 0) from a genuine zero-hit turn — observability into
+   * how much of the (now subset-shrunk) prompt prefix the provider is caching.
+   */
+  cachedPromptTokens: number;
+  cachedPromptReported: boolean;
   /** Wall-clock summed across model calls (failed calls count — they cost time too). */
   modelMs: number;
 }
@@ -23,7 +31,15 @@ export interface TurnUsage {
  * that materializes it would silently flip gemini-cli into tool mode).
  */
 export function trackUsage(client: ModelClient, now: () => Date): { client: ModelClient; usage: TurnUsage } {
-  const usage: TurnUsage = { modelCalls: 0, promptTokens: 0, completionTokens: 0, usageReported: false, modelMs: 0 };
+  const usage: TurnUsage = {
+    modelCalls: 0,
+    promptTokens: 0,
+    completionTokens: 0,
+    usageReported: false,
+    cachedPromptTokens: 0,
+    cachedPromptReported: false,
+    modelMs: 0,
+  };
 
   const timed = async <T>(run: () => Promise<T>): Promise<T> => {
     usage.modelCalls += 1;
@@ -39,6 +55,13 @@ export function trackUsage(client: ModelClient, now: () => Date): { client: Mode
     usage.usageReported = true;
     usage.promptTokens += reported.promptTokens;
     usage.completionTokens += reported.completionTokens;
+    // Cache hits are observability only and not every provider reports them — so a
+    // missing field leaves the count at 0 AND keeps cachedPromptReported false
+    // (honest absence), never fabricating a zero-hit turn.
+    if (typeof reported.cachedPromptTokens === "number") {
+      usage.cachedPromptReported = true;
+      usage.cachedPromptTokens += reported.cachedPromptTokens;
+    }
   };
 
   const wrapped: ModelClient = {

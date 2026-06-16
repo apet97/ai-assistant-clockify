@@ -57,6 +57,16 @@ export interface ToolCall {
 export interface TokenUsage {
   promptTokens: number;
   completionTokens: number;
+  /**
+   * Prompt tokens that HIT the provider's prompt cache, when reported — a subset of
+   * `promptTokens` billed at a fraction of the price. DeepSeek reports it as
+   * `prompt_cache_hit_tokens`; OpenAI-compatible backends as
+   * `prompt_tokens_details.cached_tokens`. OMITTED when the provider reports no cache
+   * info (absence ≠ a zero cache hit). Observability only — the request bytes are
+   * unchanged; a stable prompt prefix (see toolsForModel + buildToolSystemPrompt) is
+   * what makes these hits happen.
+   */
+  cachedPromptTokens?: number;
 }
 
 /**
@@ -153,13 +163,33 @@ interface ChatCompletionResponse {
   choices?: Array<{
     message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: RawToolCall[] };
   }>;
-  usage?: { prompt_tokens?: number; completion_tokens?: number };
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    /** DeepSeek's prompt-cache hit count (cheaper tokens). */
+    prompt_cache_hit_tokens?: number;
+    /** OpenAI-compatible nesting for the same signal. */
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
+}
+
+/** The cached-prompt-token count from either provider shape, or undefined if neither reported it. */
+function parseCachedPromptTokens(usage: NonNullable<ChatCompletionResponse["usage"]>): number | undefined {
+  if (typeof usage.prompt_cache_hit_tokens === "number") return usage.prompt_cache_hit_tokens;
+  if (typeof usage.prompt_tokens_details?.cached_tokens === "number") return usage.prompt_tokens_details.cached_tokens;
+  return undefined;
 }
 
 /** Map the provider's usage block to {@link TokenUsage}; undefined unless both counts are numbers. */
 function parseUsage(usage: ChatCompletionResponse["usage"]): TokenUsage | undefined {
   if (typeof usage?.prompt_tokens === "number" && typeof usage.completion_tokens === "number") {
-    return { promptTokens: usage.prompt_tokens, completionTokens: usage.completion_tokens };
+    const cachedPromptTokens = parseCachedPromptTokens(usage);
+    return {
+      promptTokens: usage.prompt_tokens,
+      completionTokens: usage.completion_tokens,
+      // Omit when the provider reported no cache info (absence ≠ a zero cache hit).
+      ...(cachedPromptTokens !== undefined ? { cachedPromptTokens } : {}),
+    };
   }
   return undefined;
 }

@@ -82,4 +82,14 @@ describe("buildUsageMetrics", () => {
     expect(buildUsageMetrics([noUsage], NOW_ISO).promptTokens).toBe(0);
     expect(buildUsageMetrics([], NOW_ISO)).toMatchObject({ turns: 0, avgTurnMs: 0, maxTurnMs: 0 });
   });
+
+  it("sums cached prompt tokens (total + last24h), treating an absent cache count as 0", () => {
+    const old = row({ createdAt: "2026-06-01T00:00:00.000Z", cachedPromptTokens: 700 });
+    const recentHit = row({ cachedPromptTokens: 640 });
+    const recentNoCache = row({ cachedPromptTokens: undefined }); // backend reported no cache info
+    const metrics = buildUsageMetrics([old, recentHit, recentNoCache], NOW_ISO);
+    expect(metrics.cachedPromptTokens).toBe(1340); // 700 + 640 + 0
+    expect(metrics.last24h.cachedPromptTokens).toBe(640); // the old row falls out of 24h
+    expect(buildUsageMetrics([], NOW_ISO).cachedPromptTokens).toBe(0);
+  });
 });

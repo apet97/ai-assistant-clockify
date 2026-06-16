@@ -100,6 +100,8 @@ export interface TurnTelemetry {
   /** Absent when the backend reported no token counts (absence ≠ zero). */
   promptTokens?: number;
   completionTokens?: number;
+  /** Prompt tokens served from the provider's cache; absent when the backend reported none. */
+  cachedPromptTokens?: number;
   turnMs: number;
   modelMs: number;
   createdAt: string;
@@ -110,10 +112,19 @@ export interface UsageMetrics {
   modelCalls: number;
   promptTokens: number;
   completionTokens: number;
+  /** Prompt tokens that hit the provider cache (cheaper) — a window into prefix-cache savings. */
+  cachedPromptTokens: number;
   avgTurnMs: number;
   maxTurnMs: number;
   avgModelMs: number;
-  last24h: { turns: number; modelCalls: number; promptTokens: number; completionTokens: number; avgTurnMs: number };
+  last24h: {
+    turns: number;
+    modelCalls: number;
+    promptTokens: number;
+    completionTokens: number;
+    cachedPromptTokens: number;
+    avgTurnMs: number;
+  };
 }
 
 const DAY_IN_MS = 24 * 60 * 60 * 1000;
@@ -126,6 +137,7 @@ export function buildUsageMetrics(rows: TurnTelemetry[], generatedAt: string): U
     modelCalls: subset.reduce((n, r) => n + r.modelCalls, 0),
     promptTokens: subset.reduce((n, r) => n + (r.promptTokens ?? 0), 0),
     completionTokens: subset.reduce((n, r) => n + (r.completionTokens ?? 0), 0),
+    cachedPromptTokens: subset.reduce((n, r) => n + (r.cachedPromptTokens ?? 0), 0),
     avgTurnMs: subset.length ? Math.round(subset.reduce((n, r) => n + r.turnMs, 0) / subset.length) : 0,
   });
   const recent = rows.filter((r) => r.createdAt >= cutoff);

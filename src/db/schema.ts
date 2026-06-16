@@ -123,6 +123,7 @@ const SCHEMA_STATEMENTS: string[] = [
     model_calls INTEGER NOT NULL,
     prompt_tokens INTEGER,
     completion_tokens INTEGER,
+    cached_prompt_tokens INTEGER,
     turn_ms INTEGER NOT NULL,
     model_ms INTEGER NOT NULL,
     created_at TEXT NOT NULL
@@ -186,6 +187,9 @@ export function migrate(db: Database.Database): void {
   // Additive column for DBs created before the durable agentic resume (Phase 3):
   // a NULL agent_state_json row confirms exactly as before.
   addColumnIfMissing(db, "pending_confirmations", "agent_state_json", "TEXT");
+  // Additive column for DBs created before prompt-cache observability: a NULL
+  // cached_prompt_tokens means the backend reported no cache info for that turn.
+  addColumnIfMissing(db, "turn_telemetry", "cached_prompt_tokens", "INTEGER");
   // Atomic-claim ledger (r1-concurrency-races-01): old DBs have idempotency_keys
   // with `receipt_json NOT NULL` and no `claimed_at`. Add the column additively,
   // then relax receipt_json via a guarded, crash-idempotent rebuild.

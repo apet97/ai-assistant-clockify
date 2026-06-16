@@ -42,6 +42,26 @@ describe("store", () => {
     }
   });
 
+  it("round-trips turn telemetry incl. cached prompt tokens (NULL when the backend reported none)", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "a", addonUserId: "u", addonToken: "tok", status: "active" });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    // A turn whose backend reported a prompt-cache hit…
+    store.recordTurnTelemetry({
+      sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", kind: "chat",
+      modelCalls: 2, promptTokens: 1400, completionTokens: 30, cachedPromptTokens: 1024, turnMs: 20, modelMs: 12,
+    });
+    // …and one whose backend reported no cache info at all.
+    store.recordTurnTelemetry({
+      sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", kind: "resume",
+      modelCalls: 1, promptTokens: 900, completionTokens: 10, turnMs: 8, modelMs: 5,
+    });
+    const rows = store.listTurnTelemetry("ws-1", "admin-1");
+    expect(rows).toHaveLength(2);
+    expect(rows.find((r) => r.kind === "chat")?.cachedPromptTokens).toBe(1024);
+    expect(rows.find((r) => r.kind === "resume")?.cachedPromptTokens).toBeUndefined(); // NULL ⇒ undefined
+  });
+
   it("sets a non-zero busy_timeout so concurrent writers retry instead of an immediate SQLITE_BUSY 500", () => {
     // WAL is on, but better-sqlite3 defaults busy_timeout to 0 — a write-lock
     // collision (two concurrent admins on the Railway /data volume) then

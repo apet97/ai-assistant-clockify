@@ -75,4 +75,36 @@ describe("trackUsage", () => {
     const tracked = trackUsage(completeOnly, steppingNow(1));
     expect(tracked.client.completeWithTools).toBeUndefined();
   });
+
+  it("accumulates cached prompt tokens across calls when the provider reports them", async () => {
+    const inner: ModelClient = {
+      complete: async () => "{}",
+      completeWithTools: async () => ({
+        text: "",
+        toolCalls: [],
+        usage: { promptTokens: 100, completionTokens: 10, cachedPromptTokens: 64 },
+      }),
+    };
+    const tracked = trackUsage(inner, steppingNow(1));
+    await tracked.client.completeWithTools!([], []);
+    await tracked.client.completeWithTools!([], []);
+    expect(tracked.usage.cachedPromptTokens).toBe(128);
+    expect(tracked.usage.cachedPromptReported).toBe(true);
+  });
+
+  it("leaves cachedPromptReported false (count 0) when the backend reports usage but no cache info", async () => {
+    const inner: ModelClient = {
+      complete: async () => "{}",
+      completeWithTools: async () => ({
+        text: "",
+        toolCalls: [],
+        usage: { promptTokens: 100, completionTokens: 10 },
+      }),
+    };
+    const tracked = trackUsage(inner, steppingNow(1));
+    await tracked.client.completeWithTools!([], []);
+    expect(tracked.usage.usageReported).toBe(true); // usage WAS reported…
+    expect(tracked.usage.cachedPromptReported).toBe(false); // …but cache info was not
+    expect(tracked.usage.cachedPromptTokens).toBe(0);
+  });
 });

@@ -357,6 +357,43 @@ describe("createModelClient token usage", () => {
     });
     expect(calls).toBe(0); // absence ≠ zero: the sink never fires without a usage block
   });
+
+  it("captures cached prompt tokens from BOTH the DeepSeek and the OpenAI-compat shapes (and omits when absent)", async () => {
+    // DeepSeek reports a hit/miss split on the usage block.
+    const deepseek = {
+      choices: [{ message: { content: "hi", tool_calls: [] } }],
+      usage: { prompt_tokens: 1200, completion_tokens: 88, prompt_cache_hit_tokens: 1024, prompt_cache_miss_tokens: 176 },
+    };
+    const r1 = await client(deepseek).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(r1.usage).toEqual({ promptTokens: 1200, completionTokens: 88, cachedPromptTokens: 1024 });
+
+    // OpenAI-compatible backends nest it under prompt_tokens_details.cached_tokens.
+    const compat = {
+      choices: [{ message: { content: "hi", tool_calls: [] } }],
+      usage: { prompt_tokens: 900, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 512 } },
+    };
+    const r2 = await client(compat).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(r2.usage).toEqual({ promptTokens: 900, completionTokens: 40, cachedPromptTokens: 512 });
+
+    // No cache field → the key is OMITTED (absence ≠ a zero cache hit).
+    const plain = {
+      choices: [{ message: { content: "hi", tool_calls: [] } }],
+      usage: { prompt_tokens: 100, completion_tokens: 5 },
+    };
+    const r3 = await client(plain).completeWithTools!([{ role: "user", content: "x" }], tools);
+    expect(r3.usage).toEqual({ promptTokens: 100, completionTokens: 5 });
+
+    // The JSON-mode sink also carries the cached count.
+    const sinkPayload = {
+      choices: [{ message: { content: "{}" } }],
+      usage: { prompt_tokens: 700, completion_tokens: 12, prompt_cache_hit_tokens: 640 },
+    };
+    let seen: { cachedPromptTokens?: number } | undefined;
+    await client(sinkPayload).complete([{ role: "user", content: "x" }], (u) => {
+      seen = u;
+    });
+    expect(seen?.cachedPromptTokens).toBe(640);
+  });
 });
 
 describe("createModelClient retry + provider error detail", () => {

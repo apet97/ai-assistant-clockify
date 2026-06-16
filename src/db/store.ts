@@ -219,6 +219,8 @@ export interface Store {
     modelCalls: number;
     promptTokens?: number;
     completionTokens?: number;
+    /** Prompt tokens served from the provider's cache; omit when the backend reported none. */
+    cachedPromptTokens?: number;
     turnMs: number;
     modelMs: number;
   }): void;

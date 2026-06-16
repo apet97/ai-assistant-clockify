@@ -333,6 +333,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         ...(usage.usageReported
           ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
           : {}),
+        // Cache hits are reported separately (DeepSeek always; some backends never) —
+        // store the count only when the backend gave us cache info, NULL otherwise.
+        ...(usage.cachedPromptReported ? { cachedPromptTokens: usage.cachedPromptTokens } : {}),
         turnMs,
         modelMs: usage.modelMs,
       });
