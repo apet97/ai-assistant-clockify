@@ -251,3 +251,19 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
   }
   return ordered;
 }
+
+/**
+ * True when a message matches MORE feature groups than {@link SelectOptions.maxGroups}
+ * keeps — i.e. {@link selectActionsForMessage} dropped a relevant group to honor the
+ * clamp. The clamp focuses a weak model on the INITIAL decision, but on the RESUME of a
+ * multi-step turn a dropped group hides a later step's tool, and the resume has no
+ * escape hatch — so the model would silently skip an admin-requested step. The resume
+ * path widens to the full catalog when this returns true (a sprawling 4+-area request
+ * is exactly where coverage beats the token saving; single/dual-area turns are
+ * unaffected). Pure + deterministic — two selector passes, no model, no I/O.
+ */
+export function selectionDroppedGroups(message: string, opts: SelectOptions = {}): boolean {
+  const clamped = selectActionsForMessage(message, opts).length;
+  const unclamped = selectActionsForMessage(message, { ...opts, maxGroups: Number.MAX_SAFE_INTEGER }).length;
+  return unclamped > clamped;
+}

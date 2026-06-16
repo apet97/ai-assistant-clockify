@@ -42,7 +42,7 @@ import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
-import { selectActionsForMessage, CORE_ACTION_NAMES } from "../harness/tool-select.js";
+import { selectActionsForMessage, selectionDroppedGroups, CORE_ACTION_NAMES } from "../harness/tool-select.js";
 import type { Installation } from "../db/store.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
@@ -393,12 +393,19 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // round-trip) instead of the full catalog. OFF ⇒ full catalog (byte-identical to
     // before). There is deliberately NO resume escape hatch: a resume that ends with
     // no tool calls is the NORMAL "done" narration, so the initial-turn guard
-    // (results empty → retry full) would fire on every completion and double the
-    // cost. The agentic eval subsetted the resume and held 100% / 0 safety on every
-    // resume-bearing case; the harness still validates + gates every proposed call.
-    const resumeTools = deps.config.llmToolSelect
-      ? toolsForModel(new Set(selectActionsForMessage(lastUserMessage(agentState.transcript))))
-      : toolsForModel();
+    // (results empty → retry full) would fire on every completion and double the cost.
+    //
+    // EXCEPTION (recall safety): a request spanning more areas than the 3-group clamp
+    // keeps would have a later step's tool DROPPED on every resume round-trip — and
+    // with no escape hatch the model would silently skip that admin-requested step.
+    // For such sprawling 4+-area requests the resume widens to the full catalog;
+    // coverage beats the token saving there, and those requests are rare. Single/dual-
+    // area turns (the common case + every eval case) stay subsetted and proven.
+    const resumeMessage = lastUserMessage(agentState.transcript);
+    const resumeTools =
+      deps.config.llmToolSelect && !selectionDroppedGroups(resumeMessage)
+        ? toolsForModel(new Set(selectActionsForMessage(resumeMessage)))
+        : toolsForModel();
     let turn: AgentTurnResult | undefined;
     try {
       turn = await runAgentTurn({

@@ -170,11 +170,9 @@ type PreviewItem = { kind: string; previewId?: string; nonce?: string };
 async function drivePreviewThenConfirm(
   app: Express,
   cookie: string,
+  message = "delete the urgent tag",
 ): Promise<{ confirmStatus: number; confirmOk: boolean }> {
-  const chat = await request(app)
-    .post("/api/chat/messages")
-    .set("Cookie", cookie)
-    .send({ message: "delete the urgent tag" });
+  const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message });
   expect(chat.status).toBe(200);
   const preview = (chat.body.results as PreviewItem[]).find((r) => r.kind === "preview");
   if (!preview) throw new Error("expected a preview from the risky delete");
@@ -214,6 +212,27 @@ describe("tool subsetting on RESUME (STEP 6)", () => {
     expect(b.model.calls).toHaveLength(2);
     expect(b.model.calls[0].tools).toHaveLength(ACTION_CATALOG.length);
     expect(b.model.calls[1].tools).toHaveLength(ACTION_CATALOG.length); // resume = full catalog
+    b.store.close();
+  });
+
+  // Recall-safety (adversarial-review finding): a request spanning MORE areas than the
+  // 3-group clamp keeps would otherwise drop a later step's tool on the resume — with no
+  // escape hatch, the model would silently skip an admin-requested step. The resume must
+  // widen to the FULL catalog for such sprawling requests so nothing is hidden.
+  it("ON + a >3-area request: the resume widens to the FULL catalog (no dropped-group tool hidden)", async () => {
+    const b = buildResume(true);
+    const cookie = await cookieFor(b.app);
+    // Four distinct feature groups: users_groups + expenses + scheduling + invoices.
+    const fourArea = "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme";
+    const { confirmStatus, confirmOk } = await drivePreviewThenConfirm(b.app, cookie, fourArea);
+    expect(confirmStatus).toBe(200);
+    expect(confirmOk).toBe(true);
+    expect(b.model.calls).toHaveLength(2);
+    // The INITIAL turn is still subsetted (the clamp focuses the first decision)…
+    expect(b.model.calls[0].tools.length).toBeLessThan(ACTION_CATALOG.length);
+    // …but the RESUME widens to the full catalog because the request dropped a group,
+    // so a later step's tool can never be hidden with no way to recover it.
+    expect(b.model.calls[1].tools).toHaveLength(ACTION_CATALOG.length);
     b.store.close();
   });
 });

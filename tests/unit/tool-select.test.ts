@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   selectActionsForMessage,
+  selectionDroppedGroups,
   CORE_ACTION_NAMES,
   type SelectableAction,
 } from "../../src/harness/tool-select.js";
@@ -128,5 +129,25 @@ describe("selectActionsForMessage — matrix regression guards", () => {
     }
     // ...but a genuine invoice request still gets it.
     expect(selectActionsForMessage("create an invoice for acme")).toContain("clockify_invoices_create");
+  });
+});
+
+describe("selectionDroppedGroups (resume widens to full when the clamp dropped a group)", () => {
+  it("is false for single/dual-area requests (the clamp keeps every matched group)", () => {
+    for (const msg of [
+      "delete the urgent tag",
+      "create an invoice for qwen for 1000",
+      "rename the client Globex to Initech, and rename the tag urgent to critical",
+      "how many projects and how many clients do I have",
+    ]) {
+      expect(selectionDroppedGroups(msg), msg).toBe(false);
+    }
+  });
+
+  it("is true for a request spanning MORE areas than the 3-group clamp keeps", () => {
+    const fourArea = "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme";
+    expect(selectionDroppedGroups(fourArea)).toBe(true);
+    // The dropped group is real: a scheduling tool the request asked for is hidden by the clamp.
+    expect(selectActionsForMessage(fourArea)).not.toContain("clockify_scheduling_assignments_create");
   });
 });
