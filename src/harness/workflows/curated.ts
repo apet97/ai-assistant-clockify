@@ -2,7 +2,7 @@ import { z } from "zod";
 import { zStringList } from "../arg-shapes.js";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { runComposition, type CompositionStep } from "../compose.js";
+import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
 import { DAY_MS } from "../../durations.js";
 
@@ -166,8 +166,8 @@ const onboardUser = defineAction({
       return errorReceipt({
         action: "clockify_onboard_user",
         code: "onboard_failed",
-        message: `Couldn't invite ${payload.email}: ${outcome.status.message}.`,
-        recovery: { hint: "No partial onboarding was left behind; try again.", retryable: true },
+        message: `Couldn't invite ${payload.email}: ${outcome.status.message}. ${leftBehindNote(outcome.status.rollbackWarnings)}`,
+        recovery: { hint: "Try again.", retryable: true },
       });
     }
     return successReceipt({

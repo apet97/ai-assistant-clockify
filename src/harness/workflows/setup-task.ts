@@ -8,7 +8,7 @@ import {
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { runComposition, type CompositionStep } from "../compose.js";
+import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRefs } from "./resolve.js";
 import { toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
@@ -182,7 +182,7 @@ const setupTask = defineAction({
       return errorReceipt({
         action: "clockify_setup_task",
         code: "setup_failed",
-        message: `Couldn't finish setting up task "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). Nothing partial was left behind.`,
+        message: `Couldn't finish setting up task "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}`,
         recovery: { hint: "Adjust the request and try again.", retryable: true },
       });
     }

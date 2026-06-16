@@ -9,7 +9,7 @@ import {
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { runComposition, type CompositionStep } from "../compose.js";
+import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js";
 import { toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
@@ -282,7 +282,7 @@ const setupProject = defineAction({
       return errorReceipt({
         action: "clockify_setup_project",
         code: "setup_failed",
-        message: `Couldn't finish setting up "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). Nothing partial was left behind.${rolled}`,
+        message: `Couldn't finish setting up "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}${rolled}`,
         recovery: { hint: "Adjust the request and try again.", retryable: true },
       });
     }

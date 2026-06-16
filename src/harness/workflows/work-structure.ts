@@ -3,7 +3,7 @@ import { defineAction, type ActionContext, type ActionDefinition, type ActionRes
 import type { EntitySummary } from "../../clockify/client.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { runComposition, type CompositionStep } from "../compose.js";
+import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { matchByName, suggestOptions } from "./resolve.js";
 
 function nowIso(ctx: ActionContext): string {
@@ -293,8 +293,8 @@ const createWorkPackage = defineAction({
         receipt: errorReceipt({
           action: "clockify_create_work_package",
           code: "composition_failed",
-          message: `Couldn't complete the request: the ${outcome.status.label} step failed (${outcome.status.message}).${rolled}`,
-          recovery: { hint: "Nothing partial was left behind; adjust the request and try again.", retryable: true },
+          message: `Couldn't complete the request: the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}${rolled}`,
+          recovery: { hint: "Adjust the request and try again.", retryable: true },
         }),
       };
     }

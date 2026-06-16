@@ -435,14 +435,22 @@ export function apiRouter(deps: AppDeps): Router {
       actionContext(claims.workspaceId, claims.adminUserId, installation),
       record.reversal,
     );
-    deps.store.addAuditEvent({
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      sessionId: claims.sessionId,
-      actionName: "undo",
-      risk: ["destructive"],
-      receipt,
-    });
+    // The reversal already happened (and the one-use claim is already flipped to
+    // undone). A transient audit-write failure must NOT surface as a 500 — the admin
+    // would retry and hit already_undone (409), believing it failed when it succeeded.
+    // Mirror commitConfirmation: best-effort audit, message-only log, return the receipt.
+    try {
+      deps.store.addAuditEvent({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        actionName: "undo",
+        risk: ["destructive"],
+        receipt,
+      });
+    } catch (err) {
+      console.error(`[undo] audit write failed (reversal already applied): ${err instanceof Error ? err.message : "unknown"}`);
+    }
     return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });
   }));
 

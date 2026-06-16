@@ -56,6 +56,20 @@ export interface CompositionOutcome {
   status: CompositionStatus;
 }
 
+/**
+ * The truthful cleanup note for a FAILED composition. Reassuring ("Nothing partial
+ * was left behind.") ONLY when rollback was clean; when rollback itself failed
+ * (rollbackWarnings non-empty) it must say so — otherwise the receipt tells the admin
+ * the workspace is clean while orphaned entities remain (enterprise-audit silent
+ * failure). Callers must pass `outcome.status.rollbackWarnings`, never assume clean.
+ */
+export function leftBehindNote(rollbackWarnings: readonly { message: string }[]): string {
+  if (rollbackWarnings.length === 0) return "Nothing partial was left behind.";
+  return `WARNING: some already-created items could NOT be rolled back and may remain — ${rollbackWarnings
+    .map((w) => w.message)
+    .join("; ")}. Please check the workspace before retrying.`;
+}
+
 interface Undoable {
   refs: EntityRef[];
   undo: () => Promise<void>;
