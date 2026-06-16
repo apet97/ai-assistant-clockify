@@ -47,7 +47,7 @@ workspace, and deployed.
   pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
   (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
 - **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, healthcheck
-  `/manifest`). Redeploy = `railway up` from this dir. The SDK
+  `/health`). Redeploy = `railway up` from this dir. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
   tarball at `vendor/` so `npm ci` is self-contained; a Railway **volume at
   `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so installs survive
