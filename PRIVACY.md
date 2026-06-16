@@ -30,11 +30,14 @@ workspace + admin, and is isolated per workspace.
 | Pending confirmations | Risky-write previews awaiting button-confirm | 30 days |
 | Undo records | Reverse a recent creation | 30 days |
 | Turn telemetry | Model call counts / token usage / latency (cost) | 30 days |
-| Session records | Signed session cookie state (8-hour validity) | Deleted on uninstall |
+| Session records | Signed session cookie state (validity `SESSION_TTL_HOURS`, default 2h) | Deleted on uninstall |
 
-Retention is enforced by an hourly sweep. The chat/audit window is set by the
-`RETENTION_DAYS` environment variable (default **90**, minimum **30** so the 30-day
-metrics view is never truncated).
+Retention is enforced by an hourly background sweep, so a row may persist for **up to
+~1 hour past** its window before deletion (and expired sessions/previews are already
+treated as gone before then — they're filtered by their expiry on read). The chat/audit
+window is set by the `RETENTION_DAYS` environment variable (default **90**, minimum
+**30** so the 30-day metrics view is never truncated). Uninstall erasure (below) is
+**immediate**, not on the hourly schedule.
 
 ## Encryption
 
