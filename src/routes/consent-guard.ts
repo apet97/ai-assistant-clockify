@@ -41,6 +41,12 @@ export const CONSENT_APPLY_VERB = "(?:apply|execute|run|do|perform|commit|approv
 // The ONLY allowed object — a self-reference to the pending change, never a new entity.
 export const CONSENT_PENDING_OBJECT =
   "(?:it|this|that|them|those|the (?:change|changes|edit|update|action|operation|thing|pending (?:change|changes|edit|update|action|operation)))";
+// An apply-verb whose pending-OBJECT is OPTIONAL. Used ONLY as the trailing chain
+// (Shape C) after an affirmation already established consent — so a bare
+// "yes please confirm" / "yes confirm" / "ok do it" hits the guard. As a STANDALONE
+// imperative the object stays mandatory (Shape B) so "run the report" /
+// "apply the discount to invoice 5" still fall through to the planner.
+export const CONSENT_APPLY_CLAUSE = `${CONSENT_APPLY_VERB}(?:\\s+${CONSENT_PENDING_OBJECT})?`;
 export const TYPED_CONSENT = new RegExp(
   "^\\s*" +
     "(?:please\\s+|just\\s+)*" +
@@ -51,8 +57,9 @@ export const TYPED_CONSENT = new RegExp(
     // Shape B: apply/execute/run an object that is the pending change.
     `${CONSENT_APPLY_VERB}\\s+${CONSENT_PENDING_OBJECT}(?:[\\s,.!-]+${CONSENT_FILLER})*` +
     ")" +
-    // Shape C: optionally chain "… and apply the pending change".
-    `(?:[\\s,.!-]+(?:and\\s+|then\\s+)?${CONSENT_APPLY_VERB}\\s+${CONSENT_PENDING_OBJECT})*` +
+    // Shape C: optionally chain "… and apply the pending change" (object optional
+    // here only, since an affirmation already established consent).
+    `(?:[\\s,.!-]+(?:and\\s+|then\\s+)?${CONSENT_APPLY_CLAUSE})*` +
     "\\s*[.!]*\\s*$",
   "i",
 );

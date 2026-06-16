@@ -22,3 +22,6 @@ scripts/user-sim.ts
 
 # Advisor improvement plans (local handoff docs, never published)
 plans/
+
+# Firecrawl local scrape cache
+.firecrawl/

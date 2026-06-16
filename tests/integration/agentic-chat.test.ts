@@ -1118,6 +1118,13 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     "confirm them",
     "confirm those",
     "approve all",
+    // broaden affirmative matching: affirmation + a bare trailing apply-verb
+    // (no pending-object) is still pure consent — must hit the guard, not the planner.
+    "yes please confirm",
+    "yes confirm",
+    "yes go ahead and confirm",
+    "ok confirm",
+    "sure do it",
   ])("a consent-adjacent '%s' while a preview is pending is answered deterministically (no second preview)", async (phrase) => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     // If the guard misses, the message reaches the planner; script a second
@@ -1140,6 +1147,33 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(consent.body.results).toEqual([]); // no SECOND preview, no receipts
     expect(String(consent.body.reply?.text ?? "")).toMatch(/confirm button/i);
     expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
+  });
+
+  // BOUNDARY: an affirmation that ALSO carries a NEW instruction must NOT be
+  // swallowed — it has to reach the planner so the new work runs.
+  it.each([
+    "yes, also create a project named X",
+    "yes and create a project named X",
+    "yes but change the rate to 50",
+    "approve the discount on invoice 5",
+    "run the report",
+    "apply the discount to invoice 5",
+  ])("a follow-on instruction '%s' (even affirmation-prefixed) still reaches the planner", async (phrase) => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, model, cookie } = await makeApp(
+      [
+        { text: "Deleting the tag now.", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] },
+        { text: "On it.", toolCalls: [] },
+      ],
+      fake,
+    );
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete tag urgent" });
+    expect(first.status).toBe(200);
+    expect(previewsOf(first.body.results as ResultItem[])).toHaveLength(1);
+    const callsAfterPreview = model.calls.length;
+    const follow = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: phrase });
+    expect(follow.status).toBe(200);
+    expect(model.calls.length).toBe(callsAfterPreview + 1); // guard did NOT intercept
   });
 
   it("a bare 'yes' with NOTHING pending still reaches the model (the guard is scoped to pending previews)", async () => {
