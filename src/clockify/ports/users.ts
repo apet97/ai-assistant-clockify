@@ -29,6 +29,12 @@ export interface UpdateWorkspaceMemberRateInput {
  */
 export interface UserPort {
   listUsers(): Promise<UserSummary[]>;
+  /**
+   * The caller's CURRENT workspace role string (e.g. "ADMIN"/"OWNER"/"MEMBER"),
+   * or undefined if the member can't be resolved. Used by the opt-in per-request
+   * admin re-check (authz-surface-01); a single-member read, never a full scan.
+   */
+  getWorkspaceMemberRole(userId: string): Promise<string | undefined>;
   inviteUser(email: string, sendEmail: boolean): Promise<EntitySummary>;
   updateUserRole(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary>;
   /** Set a workspace member's default hourly/cost rate (the Team-section rate). */

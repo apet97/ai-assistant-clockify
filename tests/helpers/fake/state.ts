@@ -37,6 +37,8 @@ export interface FakeWorkspaceSeed {
   expenses?: ExpenseSummary[];
   expenseCategories?: ExpenseCategorySummary[];
   users?: UserSummary[];
+  /** Per-user workspace role for the opt-in admin re-check (authz-surface-01). */
+  memberRoles?: Record<string, string>;
   groups?: GroupSummary[];
   webhooks?: WebhookSummary[];
   invoices?: InvoiceDetail[];
@@ -68,6 +70,7 @@ export interface FakeState {
   expenses: ExpenseSummary[];
   expenseCategories: ExpenseCategorySummary[];
   users: UserSummary[];
+  memberRoles: Record<string, string>;
   groups: GroupSummary[];
   webhooks: WebhookSummary[];
   invoices: InvoiceDetail[];
@@ -115,6 +118,7 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
     expenses: [...(seed.expenses ?? [])],
     expenseCategories: [...(seed.expenseCategories ?? [])],
     users: [...(seed.users ?? [])],
+    memberRoles: { ...(seed.memberRoles ?? {}) },
     groups: [...(seed.groups ?? [])],
     webhooks: [...(seed.webhooks ?? [])],
     invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),

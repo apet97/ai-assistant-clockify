@@ -33,6 +33,29 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       const rows = (await core.paginate("api", `${ws}/users`)) as any[];
       return rows.map(mapUser);
     },
+    async getWorkspaceMemberRole(userId): Promise<string | undefined> {
+      // I/O only. Single-member read for the opt-in per-request admin re-check
+      // (authz-surface-01). The /users list is the working member source (same
+      // paginate as listUsers); we find the caller and read the workspace-scoped
+      // role from the raw member object. Clockify member shapes vary by
+      // API/version, so read the common spots defensively: a top-level `role`, or
+      // a `roles: [{ role, entity?:{type} }]` array (prefer a WORKSPACE-scoped
+      // entry), falling back to the first role. Returns undefined when the member
+      // or a role string can't be resolved (the rechecker treats undefined as
+      // "no verdict" / fail-open). LIVE-VERIFY against a prod member doc before
+      // relying on ROLE_RECHECK=1 in production (T62).
+      const rows = (await core.paginate("api", `${ws}/users`)) as any[];
+      const raw = rows.find((u) => u?.id === userId);
+      if (!raw) return undefined;
+      if (typeof raw.role === "string" && raw.role.length > 0) return raw.role;
+      const roles = Array.isArray(raw.roles) ? raw.roles : [];
+      const workspaceRole = roles.find(
+        (r: any) => String(r?.entity?.type ?? r?.sourceType ?? "").toUpperCase() === "WORKSPACE",
+      );
+      const picked = workspaceRole ?? roles[0];
+      const roleValue = picked?.role ?? picked?.name;
+      return typeof roleValue === "string" && roleValue.length > 0 ? roleValue : undefined;
+    },
     async inviteUser(email, sendEmail): Promise<EntitySummary> {
       const qs = new URLSearchParams({ "send-email": String(sendEmail) });
       const u = (await core.call("api", "POST", `${ws}/users?${qs.toString()}`, { email })) as { id?: string; name?: string };

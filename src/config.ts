@@ -19,8 +19,17 @@ export interface AppConfig {
    *  mint and not re-checked per request (authz-surface-01), so this TTL also bounds
    *  how long a demoted admin keeps access. Shorter = tighter revocation but a shorter
    *  history-switcher window (it lists only live sessions). loadConfig always sets it
-   *  (default 2h, SESSION_TTL_HOURS); the store falls back to 8h if a caller omits it. */
+   *  (default 2h, SESSION_TTL_HOURS); the store falls back to 8h if a caller omits it.
+   *  For near-real-time revocation, enable the opt-in per-request admin re-check
+   *  (`roleRecheckEnabled` / ROLE_RECHECK=1) instead of shrinking this TTL. */
   sessionTtlMs: number;
+  /** When true, every authenticated /api request re-verifies the caller is still a
+   *  Clockify admin/owner (closes authz-surface-01), cached per admin for
+   *  `roleRecheckTtlMs`. Default OFF: byte-identical to the cookie-only posture
+   *  (the role baked into the cookie, bounded only by `sessionTtlMs`). */
+  roleRecheckEnabled?: boolean;
+  /** Cache window (ms) for a passed admin re-check. Default 60000. */
+  roleRecheckTtlMs?: number;
   dataEncryptionKey?: string;
   databasePath: string;
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
@@ -81,6 +90,9 @@ const envObjectSchema = z.object({
   /** Signed-session lifetime in HOURS (also the authz-surface-01 role-staleness bound).
    *  Default 2h; min 0.1 (6 min) so a typo can't mint an effectively-zero session. */
   SESSION_TTL_HOURS: z.coerce.number().positive().min(0.1).optional(),
+  // authz-surface-01: opt-in per-request admin re-check (default OFF).
+  ROLE_RECHECK: z.enum(["0", "1"]).default("0"),
+  ROLE_RECHECK_TTL_MS: z.coerce.number().int().positive().optional(),
   // A passphrase, SHA-256-derived to the AES-256-GCM key (src/db/encryption.ts);
   // NOT raw hex bytes. Require real entropy (>=32 chars), not a 1-char value.
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
@@ -174,6 +186,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     // staleness window; an operator can raise SESSION_TTL_HOURS for a longer history
     // window. Always set here, so prod never falls through to the store's 8h default.
     sessionTtlMs: (parsed.SESSION_TTL_HOURS ?? 2) * 60 * 60 * 1000,
+    roleRecheckEnabled: parsed.ROLE_RECHECK === "1",
+    roleRecheckTtlMs: parsed.ROLE_RECHECK_TTL_MS ?? 60_000,
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
     databasePath: parsed.DATABASE_PATH,
     llmProvider: parsed.LLM_PROVIDER,

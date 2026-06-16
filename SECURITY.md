@@ -46,8 +46,13 @@ assistant access until their session expires.** That window is bounded by the se
   longer history window at the cost of a longer staleness window.
 
 If near-real-time revocation is ever required (compliance), the stronger option is a
-per-request role re-check against Clockify behind a short cache — deliberately not enabled by
-default to keep the request path dependency-free.
+per-request role re-check against Clockify behind a short cache. This is **now available as an
+opt-in** (T40): set **`ROLE_RECHECK=1`** (and optionally `ROLE_RECHECK_TTL_MS`, default 60000)
+to re-verify the caller is still a Clockify admin/owner on every authenticated `/api` request,
+cached per (workspace, admin) for the TTL. A demoted admin is then denied (`403 forbidden`)
+within ≤ `ROLE_RECHECK_TTL_MS`. It **fails open** on a Clockify outage (no verdict ⇒ the
+session TTL still bounds staleness). Default OFF keeps the request path dependency-free and
+byte-identical to the posture above.
 
 ## Abuse / cost controls
 

@@ -58,7 +58,9 @@ workspace, and deployed.
 do a security review before real users; confirm the prod AUDIT-host
 `X-Addon-Token` clearance (run `scripts/host-auth-spike.ts` with a captured prod
 `LIVE_ADDON_TOKEN` — dev cleanly reports "audit log not available"); decide the
-session-TTL / per-request-role posture (`authz-surface-01`).
+session-TTL / per-request-role posture (`authz-surface-01`) — default is the 2h
+session-TTL bound (`SESSION_TTL_HOURS`); an opt-in per-request admin re-check is
+available via `ROLE_RECHECK=1` (fail-open, cached `ROLE_RECHECK_TTL_MS`).
 
 ## Product contract
 

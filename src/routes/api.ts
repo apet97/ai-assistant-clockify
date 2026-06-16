@@ -75,8 +75,8 @@ export function apiRouter(deps: AppDeps): Router {
     }
   }
 
-  router.get("/me", (req, res) => {
-    const claims = requireSession(req, res);
+  router.get("/me", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     res.json({
       ok: true,
@@ -84,7 +84,7 @@ export function apiRouter(deps: AppDeps): Router {
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
     });
-  });
+  }));
 
   // Operational metrics (Phase 7): per-action success/failure, error taxonomy, and
   // confirm/cancel/expire rates — scoped to the caller's own actions (privacy).
@@ -94,8 +94,8 @@ export function apiRouter(deps: AppDeps): Router {
   // at most that window — the 30-day default still avoids aggregating every
   // retained row in JS. An explicit ?since override reaches the full retained
   // history for ops (r1-efficiency-01).
-  router.get("/metrics", (req, res) => {
-    const claims = requireSession(req, res);
+  router.get("/metrics", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const since =
       typeof req.query.since === "string"
@@ -114,10 +114,10 @@ export function apiRouter(deps: AppDeps): Router {
         usage: buildUsageMetrics(telemetry, nowIsoStamp),
       },
     });
-  });
+  }));
 
-  router.get("/permissions", (req, res) => {
-    const claims = requireSession(req, res);
+  router.get("/permissions", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const existing = deps.store.getAdminPolicy(claims.workspaceId, claims.adminUserId);
     res.json({
@@ -126,18 +126,18 @@ export function apiRouter(deps: AppDeps): Router {
       firstRun: !existing,
       featureGroups: FEATURE_GROUPS,
     });
-  });
+  }));
 
-  router.post("/permissions/preview", (req, res) => {
-    const claims = requireSession(req, res);
+  router.post("/permissions/preview", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const r = resolvePermissionPatch(req, res, claims);
     if (!r) return;
-    return res.json({ ok: true, preview: { current: r.base, next: r.next, changedGroups: r.changedGroups } });
-  });
+    res.json({ ok: true, preview: { current: r.base, next: r.next, changedGroups: r.changedGroups } });
+  }));
 
-  router.post("/permissions/confirm", (req, res) => {
-    const claims = requireSession(req, res);
+  router.post("/permissions/confirm", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const r = resolvePermissionPatch(req, res, claims);
     if (!r) return;
@@ -156,16 +156,16 @@ export function apiRouter(deps: AppDeps): Router {
       risk: ["permission_change"],
       receipt,
     });
-    return res.json({ ok: true, receipt, policy: next });
-  });
+    res.json({ ok: true, receipt, policy: next });
+  }));
 
   // Session restore after an iframe reload: replay the stored conversation and
   // re-serve the session's still-live pending previews. Each recovered preview
   // gets a ROTATED one-use nonce (the plaintext lives only in the UI; the old
   // one dies atomically — see rotatePendingNonce). Session-gated; NOT behind
   // the chat rate limit (no model call).
-  router.get("/chat/history", (req, res) => {
-    const claims = requireSession(req, res);
+  router.get("/chat/history", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const messages = deps.store
       .getRecentMessages(claims.sessionId, CHAT_HISTORY_RESTORE_LIMIT, true)
@@ -200,28 +200,28 @@ export function apiRouter(deps: AppDeps): Router {
       });
     }
     res.json({ ok: true, messages, pendingPreviews });
-  });
+  }));
 
   // List this admin's live, non-empty conversations (the chat-history switcher).
   // Session-gated and tenant-scoped (listSessions filters by workspace+admin), so
   // it can never enumerate another tenant's sessions. `current` is decided HERE
   // from the cookie's claims — the UI can't know its own (HttpOnly) session id.
-  router.get("/chat/sessions", (req, res) => {
-    const claims = requireSession(req, res);
+  router.get("/chat/sessions", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const sessions = deps.store
       .listSessions(claims.workspaceId, claims.adminUserId, now().toISOString())
       .map((s) => ({ ...s, current: s.id === claims.sessionId }));
     res.json({ ok: true, sessions });
-  });
+  }));
 
   // Start a new conversation: mint a FRESH session for the same admin+workspace
   // and re-cookie. The previous session's messages are NOT deleted (they remain
   // under retention; the audit log keeps the actions) — only the transcript the
   // UI shows resets. Mirrors the cookie the component route issues so subsequent
   // chat calls bind the new session.
-  router.post("/chat/new", (req, res) => {
-    const claims = requireSession(req, res);
+  router.post("/chat/new", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     // Per-admin cap on session creation: the chat limiter is per-session, so without
     // this an admin could mint fresh sessions to reset the paid-model-loop budget.
@@ -249,7 +249,7 @@ export function apiRouter(deps: AppDeps): Router {
     };
     setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
     res.json({ ok: true });
-  });
+  }));
 
   // Switch the cookie to a PAST conversation (the chat-history switcher). `:id` is
   // attacker-controlled, so this is the IDOR-guarded re-cookie: the target must be
@@ -258,8 +258,8 @@ export function apiRouter(deps: AppDeps): Router {
   // check mirrors resolveSession / the component reuse gate. A foreign/other-admin
   // target returns 404 (NOT 403 — existence is never confirmed) and sets no cookie.
   // The re-cookie carries the TARGET session's own expiry — never extended.
-  router.post("/chat/sessions/:id/open", (req, res) => {
-    const claims = requireSession(req, res);
+  router.post("/chat/sessions/:id/open", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const target = deps.store.getSession(req.params.id);
     if (
@@ -267,7 +267,8 @@ export function apiRouter(deps: AppDeps): Router {
       target.workspaceId !== claims.workspaceId ||
       target.adminUserId !== claims.adminUserId
     ) {
-      return res.status(404).json({ ok: false, code: "not_found", message: "Conversation not found." });
+      res.status(404).json({ ok: false, code: "not_found", message: "Conversation not found." });
+      return;
     }
     const sessionClaims: SessionClaims = {
       sessionId: target.id,
@@ -278,14 +279,14 @@ export function apiRouter(deps: AppDeps): Router {
     };
     setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl);
     res.json({ ok: true });
-  });
+  }));
 
   // Non-streaming turn (request/response). The mounted UI uses /chat/stream
   // below; this is the tested fallback surface (its client is `submitMessage`).
   // A failed turn returns 502 {ok:false,code,message} — the client surfaces that
   // copy (json() only throws on 401), it never silently renders nothing.
   router.post("/chat/messages", asyncHandler(async (req, res) => {
-    const pre = chatPreconditions(req, res);
+    const pre = await chatPreconditions(req, res);
     if (!pre) return;
     const turn = await executeChatTurn(pre.claims, pre.installation, pre.message);
     if (!turn.ok) return res.status(502).json({ ok: false, code: turn.code, message: turn.message });
@@ -297,7 +298,7 @@ export function apiRouter(deps: AppDeps): Router {
   // harness's progress (receipts/clarifies/previews) — never the model's tokens,
   // which would conflict with the truthful-preview override.
   router.post("/chat/stream", asyncHandler(async (req, res) => {
-    const pre = chatPreconditions(req, res);
+    const pre = await chatPreconditions(req, res);
     if (!pre) return;
     // openNdjsonStream sets the streaming headers and wires cooperative
     // cancellation: `signal` fires if the client (iframe/proxy) drops mid-turn,
@@ -322,7 +323,7 @@ export function apiRouter(deps: AppDeps): Router {
   }));
 
   router.post("/confirmations/:id/confirm", asyncHandler(async (req, res) => {
-    const claims = requireSession(req, res);
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const parsed = confirmBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -383,7 +384,7 @@ export function apiRouter(deps: AppDeps): Router {
 
   // Undo the last reversible action (Phase 5b): delete the entities it created.
   router.post("/undo/:id", asyncHandler(async (req, res) => {
-    const claims = requireSession(req, res);
+    const claims = await requireSession(req, res);
     if (!claims) return;
 
     const record = deps.store.getUndoRecord(req.params.id);
@@ -436,25 +437,28 @@ export function apiRouter(deps: AppDeps): Router {
     return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });
   }));
 
-  router.post("/confirmations/:id/cancel", (req, res) => {
-    const claims = requireSession(req, res);
+  router.post("/confirmations/:id/cancel", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
     if (!claims) return;
     const record = deps.store.getPendingConfirmation(req.params.id);
     if (!record) {
-      return res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
+      res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
+      return;
     }
     if (
       record.workspaceId !== claims.workspaceId ||
       record.adminUserId !== claims.adminUserId ||
       record.sessionId !== claims.sessionId
     ) {
-      return res.status(403).json({ ok: false, code: "forbidden", message: "This preview belongs to a different session." });
+      res.status(403).json({ ok: false, code: "forbidden", message: "This preview belongs to a different session." });
+      return;
     }
     if (!deps.store.cancelConfirmation(record.id)) {
-      return res.status(409).json({ ok: false, code: "not_pending", message: "This preview is no longer pending." });
+      res.status(409).json({ ok: false, code: "not_pending", message: "This preview is no longer pending." });
+      return;
     }
-    return res.json({ ok: true, status: "cancelled" });
-  });
+    res.json({ ok: true, status: "cancelled" });
+  }));
 
   return router;
 }

@@ -50,6 +50,7 @@ import { selectActionsForMessage, selectionDroppedGroups, CORE_ACTION_NAMES } fr
 import type { Installation } from "../db/store.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
+import { createRoleRechecker } from "../auth/role-recheck.js";
 import type { SessionClaims } from "../auth/sessions.js";
 import {
   sanitizeStoredReplyForModel,
@@ -112,7 +113,7 @@ export type CommitConfirmationOutcome =
 
 export interface ChatPipeline {
   loadPolicy: (workspaceId: string, adminUserId: string) => AdminPolicy;
-  requireSession: (req: Request, res: Response) => SessionClaims | undefined;
+  requireSession: (req: Request, res: Response) => Promise<SessionClaims | undefined>;
   /** Per-admin budget for creating fresh sessions (POST /chat/new) — bounds resetting
    *  the per-session paid-loop limit by minting sessions. Keyed by workspace+admin. */
   newChatAllowed: (workspaceId: string, adminUserId: string) => RateLimitDecision;
@@ -139,7 +140,7 @@ export interface ChatPipeline {
     onStatus?: (status: { action: string; label: string }) => void,
     signal?: AbortSignal,
   ) => Promise<ChatTurnOutcome>;
-  chatPreconditions: (req: Request, res: Response) => ChatPreconditions | undefined;
+  chatPreconditions: (req: Request, res: Response) => Promise<ChatPreconditions | undefined>;
 }
 
 export function createChatPipeline(deps: AppDeps): ChatPipeline {
@@ -159,15 +160,39 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
   const newChatAllowed = (workspaceId: string, adminUserId: string): RateLimitDecision =>
     newChatLimiter.check(`${workspaceId}:${adminUserId}`, now().getTime());
 
+  // authz-surface-01: opt-in per-request admin re-check (default OFF = undefined,
+  // so behavior is byte-identical to the cookie-only posture).
+  const roleRechecker = deps.config.roleRecheckEnabled
+    ? createRoleRechecker(deps.config.roleRecheckTtlMs ?? 60_000, () => now().getTime())
+    : undefined;
+
   function loadPolicy(workspaceId: string, adminUserId: string): AdminPolicy {
     return deps.store.getAdminPolicy(workspaceId, adminUserId) ?? defaultAdminPolicy();
   }
 
-  function requireSession(req: Request, res: Response) {
+  async function requireSession(req: Request, res: Response): Promise<SessionClaims | undefined> {
     const claims = resolveSession(req, deps);
     if (!claims) {
       res.status(401).json({ ok: false, code: "unauthorized", message: "No valid session." });
       return undefined;
+    }
+    if (roleRechecker) {
+      // Re-verify the caller is STILL a Clockify admin/owner (authz-surface-01).
+      // Cached per (workspace, admin); a Clockify outage fails OPEN (no verdict),
+      // bounded by the session TTL. Only an explicit non-admin verdict denies.
+      const installation = deps.store.getInstallation(claims.workspaceId);
+      if (installation && installation.status === "active") {
+        const live = await roleRechecker.stillAdmin(
+          claims.workspaceId,
+          claims.adminUserId,
+          deps.clockifyForWorkspace(installation),
+        );
+        if (live === false) {
+          res.status(403).json({ ok: false, code: "forbidden", message: "Admin access is required." });
+          return undefined;
+        }
+        // true (still admin) or undefined (Clockify unreachable -> fail open).
+      }
     }
     return claims;
   }
@@ -862,8 +887,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return { ok: true, replyKind, replyText, results: m.results };
   }
 
-  function chatPreconditions(req: Request, res: Response): ChatPreconditions | undefined {
-    const claims = requireSession(req, res);
+  async function chatPreconditions(req: Request, res: Response): Promise<ChatPreconditions | undefined> {
+    const claims = await requireSession(req, res);
     if (!claims) return undefined;
     // Rate-limit BEFORE parsing/persisting anything — a limited turn never
     // stores the user message nor opens the NDJSON stream.

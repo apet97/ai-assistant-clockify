@@ -5,6 +5,7 @@ import type { FakeContext } from "./state.js";
 export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listUsers"
+  | "getWorkspaceMemberRole"
   | "inviteUser"
   | "updateUserRole"
   | "updateWorkspaceMemberRate"
@@ -21,6 +22,10 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
     async listUsers() {
       bump("listUsers");
       return state.users;
+    },
+    async getWorkspaceMemberRole(userId): Promise<string | undefined> {
+      bump("getWorkspaceMemberRole");
+      return state.memberRoles[userId];
     },
     async inviteUser(email, sendEmail) {
       bump("inviteUser");

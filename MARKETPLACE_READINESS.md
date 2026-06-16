@@ -15,10 +15,13 @@ evidence trail. Fill in owner + date + evidence for each before tagging a prod r
 
 ## Decisions made (recorded for the reviewer)
 
-- **authz-surface-01 (per-request role posture) — RESOLVED.** Posture B: the session TTL is
-  configurable (`SESSION_TTL_HOURS`, default **2h**, down from 8h) and bounds how long a
-  demoted admin keeps access. No per-request Clockify role re-check (keeps the hot path
-  dependency-free). Rationale + the history-switcher coupling are in `SECURITY.md`.
+- **authz-surface-01 (per-request role posture) — RESOLVED.** Posture B by default: the
+  session TTL is configurable (`SESSION_TTL_HOURS`, default **2h**, down from 8h) and bounds
+  how long a demoted admin keeps access. **Opt-in Posture A is now available via `ROLE_RECHECK=1`**
+  (T40): a per-request Clockify admin re-check, cached per (workspace, admin) for
+  `ROLE_RECHECK_TTL_MS` (default 60000), fail-open on a Clockify outage — a demoted admin is
+  denied within ≤ the TTL. Default OFF keeps the hot path dependency-free. Rationale +
+  the history-switcher coupling are in `SECURITY.md`.
 
 ## How to run gate 3 (AUDIT-host spike)
 
