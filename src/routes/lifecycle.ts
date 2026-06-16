@@ -84,6 +84,8 @@ export function lifecycleRouter(deps: AppDeps): Router {
         status: "active",
         installedByUserId: body.asUser,
       });
+      // Operational trace (searchable, NEVER the token): install churn + correlation.
+      console.log(`[lifecycle] event=installed workspace=${workspaceId} addon=${body.addonId ?? claims.addonId ?? ""}`);
       return res.status(200).json({ ok: true });
     }),
   );
@@ -103,6 +105,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
 
       const status = String(body.status ?? "").toUpperCase() === "ACTIVE" ? "active" : "inactive";
       deps.store.setInstallationStatus(workspaceId, status);
+      console.log(`[lifecycle] event=status_changed workspace=${workspaceId} status=${status}`);
       return res.status(200).json({ ok: true });
     }),
   );
@@ -124,7 +127,10 @@ export function lifecycleRouter(deps: AppDeps): Router {
       // workspace-scoped row is deleted and the installation is tombstoned with the
       // token wiped. The cross-workspace guard above ensures only the token's own
       // workspace can be erased.
-      deps.store.eraseWorkspace(workspaceId);
+      // Durable forensic trace: the audit rows are themselves erased, so the erase
+      // COUNTS go to the log drain (which survives) — never the token or any content.
+      const erased = deps.store.eraseWorkspace(workspaceId);
+      console.log(`[lifecycle] event=deleted workspace=${workspaceId} erased=${JSON.stringify(erased ?? {})}`);
       return res.status(200).json({ ok: true });
     }),
   );
