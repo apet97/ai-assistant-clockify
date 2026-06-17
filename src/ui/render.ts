@@ -390,6 +390,13 @@ export function renderWelcome(deps: ClarifyDeps): HTMLElement {
 export interface ReceiptDeps {
   controller: ChatController;
   showError: (message: string) => void;
+  /**
+   * Return focus after a successful Undo (mount points it at the composer input,
+   * mirroring the Confirm/Cancel `removeCardReturningFocus` path). Replacing the
+   * focused Undo button with the non-focusable "Undone" span would otherwise drop
+   * focus to <body> — WCAG 2.4.3 Focus Order.
+   */
+  returnFocus?: () => void;
 }
 
 /** Unique ids for the details disclosure (aria-controls). */
@@ -430,6 +437,9 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
           done.appendChild(svgIcon(ICON_CHECK));
           done.appendChild(document.createTextNode("Undone"));
           undoButton.replaceWith(done);
+          // Replacing the focused button with a non-focusable span drops focus to
+          // <body>; return it to a stable target (the composer) like Confirm/Cancel.
+          deps.returnFocus?.();
           // The log region announces additions — give non-visual users the outcome.
           card.appendChild(el("p", "sr-only", "Undo complete"));
         } else {

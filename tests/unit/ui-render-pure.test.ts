@@ -164,6 +164,24 @@ describe("renderReceipt — Undo button", () => {
     expect((undoBtn.replacedWith?.allText() ?? []).join("")).toContain("Undone");
   });
 
+  it("returns focus after a successful undo (the replaced button would otherwise drop focus to <body>)", async () => {
+    const returnFocus = vi.fn();
+    const ctrl = controller({ undo: vi.fn(async () => ({ ok: true })) });
+    const deps: ReceiptDeps = { controller: ctrl, showError: vi.fn(), returnFocus };
+    const card = renderReceipt(receipt(), deps) as unknown as StubNode;
+    await card.buttons("Undo")[0].dispatch("click");
+    expect(returnFocus).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT move focus when the undo FAILS (the button stays focusable + re-enabled)", async () => {
+    const returnFocus = vi.fn();
+    const ctrl = controller({ undo: vi.fn(async () => ({ ok: false, message: "Policy denies this undo." })) });
+    const deps: ReceiptDeps = { controller: ctrl, showError: vi.fn(), returnFocus };
+    const card = renderReceipt(receipt(), deps) as unknown as StubNode;
+    await card.buttons("Undo")[0].dispatch("click");
+    expect(returnFocus).not.toHaveBeenCalled();
+  });
+
   it("a failed undo re-enables the button and surfaces the honest reason", async () => {
     const ctrl = controller({ undo: vi.fn(async () => ({ ok: false, message: "Policy denies this undo." })) });
     const showError = vi.fn();

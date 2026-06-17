@@ -268,7 +268,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
         }),
       );
     for (const result of results) {
-      if (result.kind === "receipt") messages.appendChild(renderReceipt(result, { controller, showError }));
+      if (result.kind === "receipt")
+        messages.appendChild(renderReceipt(result, { controller, showError, returnFocus: () => focusComposer() }));
       else if (result.kind === "clarify")
         messages.appendChild(renderClarify(result, { sendText: (text) => void sendText(text) }));
     }
