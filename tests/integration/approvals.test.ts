@@ -52,6 +52,24 @@ describe("approval actions", () => {
     expect(fake.state.approvals.at(-1)?.periodStart).toBe("2026-06-01T00:00:00Z");
   });
 
+  it("anchors an OFFSET-NAIVE ISO periodStart to UTC, not server-local TZ (no period shift on a non-UTC host)", async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = "America/New_York"; // UTC-4/-5 — a naive instant parsed locally would shift hours
+    try {
+      const fake = createFakeWorkspace();
+      const preview = await executeAction({
+        actionName: "clockify_approvals_submit",
+        args: { periodStart: "2026-06-01T00:00:00" },
+        context: makeContext(fake),
+      });
+      if (preview.kind !== "preview") throw new Error("expected a preview");
+      expect((preview.operation.payload as { periodStart: string }).periodStart).toBe("2026-06-01T00:00:00Z");
+    } finally {
+      if (originalTz === undefined) delete process.env.TZ;
+      else process.env.TZ = originalTz;
+    }
+  });
+
   it("resolves a relative week server-side from ctx.now so the model never guesses a date", async () => {
     // NOW is Sat 2026-06-06; the Monday of this week is 2026-06-01.
     const fake = createFakeWorkspace();

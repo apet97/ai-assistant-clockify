@@ -40,7 +40,14 @@ function resolvePeriodStart(
   const raw = args.periodStart?.trim();
   if (!raw) return { kind: "missing" };
   if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
-    const parsed = new Date(raw);
+    // An OFFSET-NAIVE ISO instant ("2026-06-01T00:00:00") is parsed by `new Date`
+    // in the SERVER's local timezone, then toClockifyInstant's toISOString()
+    // shifts it back to UTC — landing the submitted period hours (or a calendar
+    // day) off what the admin confirmed on a non-UTC host. Anchor a missing
+    // offset to UTC explicitly; a value already carrying Z or a ±HH:MM offset is
+    // left untouched.
+    const hasOffset = /([zZ]|[+-]\d{2}:?\d{2})$/.test(raw);
+    const parsed = new Date(hasOffset ? raw : `${raw}Z`);
     return Number.isNaN(parsed.getTime()) ? { kind: "bad", raw } : { kind: "ok", instant: toClockifyInstant(parsed) };
   }
   const day = resolveRelativeDay(now, { date: raw });
