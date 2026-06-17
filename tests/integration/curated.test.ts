@@ -109,7 +109,7 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     expect(fake.counts.listGroups).toBe(1);
   });
 
-  it("a missing group is a warning — the user is still invited (best-effort group adds)", async () => {
+  it("a missing group is shown as skipped at PREVIEW — the user is still invited (best-effort group adds)", async () => {
     const fake = createFakeWorkspace(); // no groups configured
     const preview = await executeAction({
       actionName: "clockify_onboard_user",
@@ -117,11 +117,29 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
       context: ctx(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
+    // Truthful preview: the unresolved group is flagged on the card, not silently promised.
+    const previewText = [...preview.preview.expectedChanges, ...(preview.preview.warnings ?? [])].join(" ");
+    expect(previewText).toMatch(/Nonexistent/);
+    expect(previewText).toMatch(/skip|not found/i);
     const receipt = await commitConfirmedOperation(ctx(fake), preview.operation as ConfirmableOperation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.inviteUser).toBe(1);
     expect(fake.counts.addUserToGroup ?? 0).toBe(0);
-    if (receipt.ok) expect((receipt.warnings ?? []).some((w) => /group/i.test(w.message))).toBe(true);
+  });
+
+  it("preview marks an UNRESOLVABLE group as skipped and carries only the RESOLVED group in the payload (never promises an add the commit drops)", async () => {
+    const fake = createFakeWorkspace({ groups: [{ id: "g1", name: "Engineering" }] });
+    const result = await executeAction({
+      actionName: "clockify_onboard_user",
+      args: { email: "ada@example.com", groups: ["Engineering", "Ghost Team"] },
+      context: ctx(fake),
+    });
+    if (result.kind !== "preview") throw new Error("expected a preview");
+    const text = result.preview.expectedChanges.join(" ");
+    expect(text).toMatch(/Engineering/);
+    expect(text).toMatch(/Ghost Team.*skip/i);
+    // The payload carries only the verified group, so commit can't re-trust a bad name.
+    expect((result.operation.payload as any).groups).toEqual([{ id: "g1", name: "Engineering" }]);
   });
 });
 

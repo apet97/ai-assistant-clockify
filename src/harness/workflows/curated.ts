@@ -3,7 +3,6 @@ import { zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineRiskyAction,
-  type ActionContext,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
@@ -89,26 +88,43 @@ const onboardUser = defineRiskyAction({
     groups: zStringList().optional(),
     sendEmail: z.boolean().optional(),
   }),
-  async preview(_ctx, args) {
-    const groups = args.groups ?? [];
+  async preview(ctx, args) {
+    const requested = args.groups ?? [];
+    // Resolve group names at PREVIEW (one listGroups, like the per-area resolvers)
+    // so the card matches exactly what the commit will do. A best-effort group-add
+    // must never be PROMISED for a group that doesn't exist: resolvable groups go
+    // into the payload as verified ids; unresolvable/ambiguous names are shown as
+    // "will be skipped" instead of being silently dropped at commit time.
+    const groupList = requested.length ? await ctx.clockify.listGroups() : [];
+    const resolvedGroups: Array<{ id: string; name: string }> = [];
+    const skipped: Array<{ name: string; reason: string }> = [];
+    for (const name of requested) {
+      const match = matchByName(groupList, name);
+      if (match.kind === "one") resolvedGroups.push({ id: match.entity.id, name: match.entity.name });
+      else skipped.push({ name, reason: match.kind === "many" ? "ambiguous" : "not found" });
+    }
     return {
       actionLabel: "Onboard user",
       targets: [],
       expectedChanges: [
         `Invite ${args.email}${args.sendEmail === false ? " (without sending an email)" : ""}`,
-        ...groups.map((g) => `Add ${args.email} to group "${g}"`),
+        ...resolvedGroups.map((g) => `Add ${args.email} to group "${g.name}"`),
+        ...skipped.map((s) => `Add ${args.email} to group "${s.name}" — ${s.reason}, will be skipped`),
       ],
       reversibility: "An invited user can be deactivated; group membership can be removed.",
       warnings: [
         args.sendEmail === false
           ? "The user is added without an invitation email."
           : "This sends a real invitation.",
+        ...(skipped.length
+          ? [`${skipped.length} group${skipped.length > 1 ? "s" : ""} couldn't be resolved and will be skipped: ${skipped.map((s) => `"${s.name}"`).join(", ")}.`]
+          : []),
       ],
-      payload: { email: args.email, groups, sendEmail: args.sendEmail ?? true },
+      payload: { email: args.email, groups: resolvedGroups, sendEmail: args.sendEmail ?? true },
     };
   },
   async commit(ctx, payload) {
-    const p = payload as { email: string; groups: string[]; sendEmail: boolean };
+    const p = payload as { email: string; groups: Array<{ id: string; name: string }>; sendEmail: boolean };
     const ids: { userId?: string } = {};
     const steps: CompositionStep[] = [
       {
@@ -121,32 +137,15 @@ const onboardUser = defineRiskyAction({
         },
       },
     ];
-    // The group list is identical across every group step within one commit;
-    // fetch it once (lazy single-flight, captured by each step) instead of
-    // re-fetching per group. Lazy-inside-the-step preserves semantics exactly:
-    // a listGroups failure still surfaces as the per-group (non-required) warning
-    // and can never fail the required invite step.
-    let groupsPromise: ReturnType<ActionContext["clockify"]["listGroups"]> | undefined;
-    const getGroups = (): ReturnType<ActionContext["clockify"]["listGroups"]> =>
-      (groupsPromise ??= ctx.clockify.listGroups());
-    for (const groupName of p.groups) {
+    // Group names were resolved + shown at preview time; the payload carries only
+    // verified group ids, so commit just adds to them (best-effort: a group failure
+    // must not undo the required invite).
+    for (const group of p.groups) {
       steps.push({
-        label: `group:${groupName}`,
-        required: false, // a group problem must not undo a successful invite
+        label: `group:${group.name}`,
+        required: false,
         run: async () => {
-          const match = matchByName(await getGroups(), groupName);
-          if (match.kind !== "one") {
-            return {
-              kind: "done",
-              warnings: [
-                {
-                  code: "group_not_resolved",
-                  message: `Group "${groupName}" ${match.kind === "many" ? "is ambiguous" : "was not found"} — the user was invited but not added to it.`,
-                },
-              ],
-            };
-          }
-          await ctx.clockify.addUserToGroup(match.entity.id, ids.userId as string);
+          await ctx.clockify.addUserToGroup(group.id, ids.userId as string);
           return { kind: "done" };
         },
       });
