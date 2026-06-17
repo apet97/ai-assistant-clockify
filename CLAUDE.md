@@ -194,8 +194,8 @@ bug was found against the REAL API, not by reading the code.
   fallback → `matchByName` → grounded did-you-mean clarify (`notFoundHint` appends
   caller copy like "Or should I create it first?"). Covers every entity action
   incl. invoices BY NUMBER, the generic update/delete_entity,
-  `projects_create`/`projects_update` `clientId`+`clientName`, invoices_create (a
-  non-hex `clientId` resolves as a name), expense categories (create/update/delete
+  `projects_create`/`projects_update` `clientId`+`clientName`, invoices_create +
+  invoices_update (a non-hex `clientId` resolves as a name), expense categories (create/update/delete
   + `expenses_update.categoryName`). The OPTIONAL project/task slot PAIR (expenses
   create/update, fix_entry, start_timer, log_work, entries_list filters, scheduling
   project_totals) goes through ONE `resolveProjectTaskRefs` (a name in EITHER slot
@@ -224,7 +224,10 @@ bug was found against the REAL API, not by reading the code.
   self-correct. Destructive/archive/unarchive verbs pass `includeArchived` (the
   wire defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a confirmed-then-failed
-  commit.
+  commit. `clockify_onboard_user` likewise resolves its group NAMES at PREVIEW
+  (matchByName over listGroups; unresolved/ambiguous render as "will be skipped",
+  verified ids go in the payload) — so the preview matches what the best-effort
+  group-adds actually do (it was the lone commit-time resolver before).
 - **Dates server-side:** the model never computes calendar dates.
   `resolveRelativeDay` (today/yesterday/tomorrow, weekday words, dayOffset;
   `undefined` ⇒ caller MUST clarify), `resolveInstant` (UTC instants the hosts
@@ -232,8 +235,8 @@ bug was found against the REAL API, not by reading the code.
   next_week/next_month/next_quarter/next_year). Applied at
   entries/reports/scheduling/time-off/approvals (`week: this_week|last_week` AND a
   relative `periodStart` — `new Date("June 1")` fabricates year 2001, so
-  resolveRelativeDay owns it), invoices_create `issuedDate`/`dueDate`, and holidays
-  in_period.
+  resolveRelativeDay owns it), invoices_create + invoices_update
+  `issuedDate`/`dueDate`, and holidays in_period.
 - **Bounded model input:** `HISTORY_WINDOW_MESSAGES=12` (chat route) +
   `TOOL_RESULT_MAX_BYTES=24KB` per tool result in the agent loop (prune, then
   honest note; the admin always sees the full receipt). The model fetch itself is
