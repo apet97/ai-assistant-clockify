@@ -680,6 +680,57 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect((disconnectingModel.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
     expect(fake.counts.listTags ?? 0).toBe(0);
   });
+
+  // plan-009 (sibling of the chat-stream abort test above): the CONFIRM-resume
+  // stream route (/api/confirmations/:id/confirm?stream=1) wires the SAME signal
+  // through runResume → runAgentTurn. CLAUDE.md pins BOTH streaming routes; only
+  // the chat route had an end-to-end disconnect test (audit finding #6). Same
+  // deterministic technique: drive the disconnect from inside the FIRST RESUME
+  // model call (call #2 overall — call #1 is the chat turn that builds the
+  // preview), park ~100ms so res.on("close") → ac.abort() fires, and keep
+  // proposing a read so ONLY the disconnect can stop the resumed loop.
+  it("aborts the RESUME loop when the client disconnects mid-confirm-stream (commit lands; no runaway resume)", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const reqHolder: { abort: () => void } = { abort: () => undefined };
+    let calls = 0;
+    const disconnectingModel: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
+        calls += 1;
+        if (calls === 1) {
+          // Chat turn: propose the risky delete → the loop interrupts into a preview.
+          return { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] };
+        }
+        if (calls === 2) {
+          reqHolder.abort(); // the admin closes the iframe mid-resume
+          await new Promise((r) => setTimeout(r, 100)); // let the server abort the signal first
+        }
+        // The resume keeps proposing a read, so ONLY the disconnect can stop the
+        // loop. Use a CLIENTS read — the delete-tag flow lists tags to resolve
+        // "urgent", so listClients is a clean "did the resume read run?" signal.
+        return { text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_clients_list", arguments: {} }] };
+      }),
+    };
+    const { app, cookie } = await makeApp([], fake, { modelClient: disconnectingModel });
+
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0];
+
+    const req = request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    reqHolder.abort = () => req.abort();
+    await req.catch(() => undefined); // the aborted request rejects; ignore it
+    await new Promise((r) => setTimeout(r, 20)); // let the loop settle past the abort guard
+
+    // The confirmed delete committed (its receipt is streamed BEFORE the resume model call blocks)…
+    expect(fake.counts.deleteTag).toBe(1);
+    // …then the resume made exactly ONE model call (the one that triggered the disconnect),
+    // and the read it then proposed never executed — the abort guard sits before runAction.
+    expect((disconnectingModel.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
+    expect(fake.counts.listClients ?? 0).toBe(0);
+  });
 });
 
 // F10-truthfulness-assistant-falsely-claims-a-t: live tour turn 30 — the model
