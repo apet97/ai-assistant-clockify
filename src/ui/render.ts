@@ -197,25 +197,63 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
   menu.setAttribute("aria-label", "Recent conversations");
   menu.hidden = true;
 
+  const items: HTMLButtonElement[] = [];
+  // Roving tabindex (WAI-ARIA menu): exactly ONE item sits in the Tab sequence;
+  // Arrow keys move focus (and the tab stop) within the menu, so the whole list
+  // is a single Tab stop instead of one stop per conversation row.
+  const setRoving = (active: number): void => {
+    items.forEach((it, i) => {
+      it.tabIndex = i === active ? 0 : -1;
+    });
+  };
+  const focusItem = (index: number): void => {
+    if (items.length === 0) return;
+    const next = (index + items.length) % items.length;
+    items[next].focus();
+    setRoving(next);
+  };
+  const moveFocus = (from: number, delta: number): void => {
+    focusItem(from + delta);
+  };
+
+  // Close the menu on a pointer-down anywhere outside it (the menu-widget
+  // behavior mouse users expect). Capture-phase, registered on open, removed on close.
+  const onDocPointerDown = (event: Event): void => {
+    const target = event.target as Node | null;
+    if (target && !wrap.contains(target)) close();
+  };
   const close = (): void => {
     menu.hidden = true;
     toggle.setAttribute("aria-expanded", "false");
+    document.removeEventListener("pointerdown", onDocPointerDown, true);
   };
-  const open = (): void => {
+  // APG menu-button: opening moves focus INTO the menu so Arrow/Escape work at
+  // once (a keyboard user shouldn't have to Tab in first); ArrowUp opens onto the
+  // last item.
+  const open = (focusIndex = 0): void => {
     menu.hidden = false;
     toggle.setAttribute("aria-expanded", "true");
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    focusItem(focusIndex);
   };
   toggle.addEventListener("click", () => {
     if (menu.hidden) open();
     else close();
   });
-
-  const items: HTMLButtonElement[] = [];
-  const moveFocus = (from: number, delta: number): void => {
-    if (items.length === 0) return;
-    const next = (from + delta + items.length) % items.length;
-    items[next].focus();
-  };
+  toggle.addEventListener("keydown", (event) => {
+    const e = event as KeyboardEvent;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (menu.hidden) open(0);
+      else focusItem(0);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (menu.hidden) open(items.length - 1);
+      else focusItem(items.length - 1);
+    } else if (e.key === "Escape") {
+      if (!menu.hidden) close();
+    }
+  });
 
   if (sessions.length === 0) {
     const empty = el("div", "chats-empty", "No past conversations");
@@ -261,6 +299,8 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
       items.push(item);
       menu.appendChild(item);
     });
+    // The current session is the initial tab stop (else the first item).
+    setRoving(Math.max(0, sessions.findIndex((s) => s.current)));
   }
 
   wrap.appendChild(toggle);

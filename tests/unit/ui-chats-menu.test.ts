@@ -60,6 +60,12 @@ function makeEvent(type: string, key?: string): StubEvent {
 }
 
 let focusedNode: StubNode | undefined;
+// Document-level listeners the builder registers (outside-click close). Reset per test.
+let docHandlers: Record<string, Array<(e: { type: string; target?: StubNode }) => void>> = {};
+/** Fire a document-level event (e.g. an outside pointerdown) at the registered handlers. */
+function fireDoc(type: string, target?: StubNode): void {
+  for (const cb of docHandlers[type] ?? []) cb({ type, target });
+}
 
 class StubNode {
   tagName: string;
@@ -157,6 +163,7 @@ const originalWindow = (globalThis as Record<string, unknown>).window;
 
 beforeEach(() => {
   focusedNode = undefined;
+  docHandlers = {};
   const doc = {
     createElement: (tag: string) => new StubNode(tag),
     createElementNS: (_ns: string, tag: string) => new StubNode(tag),
@@ -164,6 +171,12 @@ beforeEach(() => {
       const n = new StubNode("#text");
       n.textContent = text;
       return n;
+    },
+    addEventListener: (type: string, cb: (e: { type: string; target?: StubNode }) => void) => {
+      (docHandlers[type] ??= []).push(cb);
+    },
+    removeEventListener: (type: string, cb: (e: { type: string; target?: StubNode }) => void) => {
+      docHandlers[type] = (docHandlers[type] ?? []).filter((h) => h !== cb);
     },
   };
   (globalThis as Record<string, unknown>).document = doc;
@@ -285,6 +298,56 @@ describe("renderChatsMenu (chat-history dropdown — accessible, textContent-saf
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
     items[0].dispatch(makeEvent("keydown", "Escape"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("opening via the toggle moves focus to the first menuitem (APG menu-button: focus into the menu on open)", () => {
+    const sessions = [session({ id: "a", title: "A" }), session({ id: "b", title: "B" })];
+    const { root, items } = build(sessions, () => {});
+    const toggle = root.all().find((n) => n.getAttribute("aria-haspopup") === "menu")!;
+    toggle.dispatch(makeEvent("click"));
+    expect(focusedNode).toBe(items[0]);
+  });
+
+  it("ArrowDown/ArrowUp on the toggle open the menu and focus the first/last item", () => {
+    const sessions = [session({ id: "a" }), session({ id: "b" }), session({ id: "c" })];
+    const { root, items } = build(sessions, () => {});
+    const toggle = root.all().find((n) => n.getAttribute("aria-haspopup") === "menu")!;
+    toggle.dispatch(makeEvent("keydown", "ArrowDown"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(focusedNode).toBe(items[0]);
+    toggle.dispatch(makeEvent("click")); // open → close
+    toggle.dispatch(makeEvent("keydown", "ArrowUp"));
+    expect(focusedNode).toBe(items[items.length - 1]);
+  });
+
+  it("Escape on the toggle closes an open menu", () => {
+    const { root } = build([session({ id: "a" })], () => {});
+    const toggle = root.all().find((n) => n.getAttribute("aria-haspopup") === "menu")!;
+    toggle.dispatch(makeEvent("click"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    toggle.dispatch(makeEvent("keydown", "Escape"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("roving tabindex: exactly one menuitem is tabbable (the current session), and Arrow moves the tab stop", () => {
+    const sessions = [session({ id: "a" }), session({ id: "b", current: true }), session({ id: "c" })];
+    const { items } = build(sessions, () => {});
+    expect(items.filter((it) => it.tabIndex === 0)).toHaveLength(1);
+    expect(items[1].tabIndex).toBe(0); // the current session is the initial tab stop
+    expect(items[0].tabIndex).toBe(-1);
+    items[1].dispatch(makeEvent("keydown", "ArrowDown"));
+    expect(focusedNode).toBe(items[2]);
+    expect(items[2].tabIndex).toBe(0);
+    expect(items[1].tabIndex).toBe(-1);
+  });
+
+  it("closes on an outside pointer interaction and resets aria-expanded", () => {
+    const { root } = build([session({ id: "a" })], () => {});
+    const toggle = root.all().find((n) => n.getAttribute("aria-haspopup") === "menu")!;
+    toggle.dispatch(makeEvent("click"));
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    fireDoc("pointerdown", new StubNode("div")); // a click somewhere outside the menu
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
   });
 
