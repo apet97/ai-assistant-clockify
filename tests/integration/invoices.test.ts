@@ -256,6 +256,49 @@ describe("invoice actions", () => {
     expect(fake.state.invoices[0].status).toBe("SENT");
   });
 
+  it("clockify_invoices_update resolves RELATIVE issuedDate/dueDate server-side (billing must never wire 'next month' on UPDATE)", async () => {
+    // NOW is 2026-06-06. The update path must resolve dates server-side just like create.
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", issuedDate: "today", dueDate: "next month" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const patch = (preview.operation.payload as any).patch;
+    expect(patch.issuedDate).toBe("2026-06-06T00:00:00.000Z");
+    expect(String(patch.dueDate).slice(0, 10)).toBe("2026-07-01");
+  });
+
+  it("clockify_invoices_update clarifies on an unparseable date instead of wiring it raw", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", dueDate: "whenever it suits" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.updateInvoice ?? 0).toBe(0);
+  });
+
+  it("clockify_invoices_update resolves a client NAME in the clientId slot and clarifies on unknown (never wire an unverified ref)", async () => {
+    const fake = createFakeWorkspace({ ...seed(), clients: [{ id: "c-acme", name: "Acme" }] });
+    const preview = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", clientId: "Acme" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as any).patch.clientId).toBe("c-acme");
+
+    const unknown = await executeAction({
+      actionName: "clockify_invoices_update",
+      args: { id: "inv1", clientId: "Ghost Co" },
+      context: makeContext(fake),
+    });
+    expect(unknown.kind).toBe("clarify");
+  });
+
   it("clockify_invoices_delete previews destructive+billing then deletes once", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_invoices_delete", args: { id: "inv1", number: "INV-1" }, context: makeContext(fake) });

@@ -508,14 +508,47 @@ const updateInvoice = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveInvoiceRef(ctx, { id: args.id }, "update");
     if (!resolved.ok) return resolved.clarify;
+
+    // Resolve identity + dates server-side BEFORE they reach the billing PUT —
+    // the same invariant the create path enforces. A relative/garbled date
+    // ("next month") or an unverified client ref must clarify here, never wire
+    // raw (the REST adapter only normalizes a bare YYYY-MM-DD, so an unresolved
+    // string would otherwise reach the live invoice unchanged).
+    const now = nowDate(ctx);
+    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start") : undefined;
+    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start") : undefined;
+    const badDates = [
+      args.issuedDate !== undefined && issuedDate === undefined ? `issued date "${args.issuedDate}"` : undefined,
+      args.dueDate !== undefined && dueDate === undefined ? `due date "${args.dueDate}"` : undefined,
+    ].filter((value): value is string => value !== undefined);
+    if (badDates.length) {
+      return {
+        clarify: `I couldn't make sense of the ${badDates.join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like today, next monday, or next month.`,
+      };
+    }
+    let clientId: string | undefined;
+    if (args.clientId !== undefined) {
+      const client = await resolveEntityRef(
+        { id: args.clientId },
+        {
+          noun: "client",
+          verb: "invoice",
+          list: (f) => ctx.clockify.listClients(f),
+          notFoundHint: "Or should I create the client first?",
+        },
+      );
+      if (!client.ok) return client.clarify;
+      clientId = client.id;
+    }
+
     const patch: Record<string, unknown> = {
       ...(args.number !== undefined ? { number: args.number } : {}),
-      ...(args.issuedDate !== undefined ? { issuedDate: args.issuedDate } : {}),
+      ...(issuedDate !== undefined ? { issuedDate } : {}),
       ...(args.currency !== undefined ? { currency: args.currency } : {}),
-      ...(args.dueDate !== undefined ? { dueDate: args.dueDate } : {}),
+      ...(dueDate !== undefined ? { dueDate } : {}),
       ...(args.note !== undefined ? { note: args.note } : {}),
       ...(args.subject !== undefined ? { subject: args.subject } : {}),
-      ...(args.clientId !== undefined ? { clientId: args.clientId } : {}),
+      ...(clientId !== undefined ? { clientId } : {}),
       ...(args.taxPercent !== undefined ? { taxPercent: args.taxPercent } : {}),
       ...(args.tax2Percent !== undefined ? { tax2Percent: args.tax2Percent } : {}),
       ...(args.discountPercent !== undefined ? { discountPercent: args.discountPercent } : {}),
