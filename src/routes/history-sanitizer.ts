@@ -85,6 +85,18 @@ export function failureReplyText(failed: number, total: number): string {
 }
 
 /**
+ * Deterministic honest text for a single-turn `actions` batch that PARTIALLY
+ * failed (truthfulness-02): some receipts succeeded and some failed. The model
+ * narrates the batch outcome BEFORE the actions run, so an optimistic "Done!"
+ * can survive a MIXED-outcome batch — `failureReplyText` only catches the
+ * all-failed case. Replace that pre-execution claim with a count-accurate line;
+ * the per-action receipt cards (each error's reason) ride alongside in results[].
+ */
+export function partialOutcomeReplyText(succeeded: number, total: number, failed: number): string {
+  return `${succeeded} of ${total} actions completed; ${failed} failed — see the receipts below.`;
+}
+
+/**
  * Deterministic honest note for a turn that left a pending preview AFTER one or
  * more failed tool calls (finding new-4-failed-tool-call-receipt-silently-hidden).
  * The agentic loop can attempt a tool call that fails (e.g. invalid_args) and then

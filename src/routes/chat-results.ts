@@ -18,6 +18,7 @@ import {
   pruneHistoryResult,
   previewReplyText,
   failureReplyText,
+  partialOutcomeReplyText,
   failedAttemptNote,
   claimsCompletedMutation,
   NO_CHANGE_MADE_REPLY,
@@ -106,14 +107,18 @@ export function truthfulReplyText(results: unknown[], baseText: string, replyKin
   }
   // truthfulness-02: in the single-turn `actions` path `baseText` is the model's
   // narration written BEFORE any action ran, so an optimistic "Done!/I created…"
-  // can survive a failed safe write. When every executed receipt failed, replace
-  // that pre-execution claim with the actual failure count. The agentic loop's
+  // can survive failed safe writes. Replace that pre-execution claim with a
+  // count-accurate line whenever ANY receipt failed — all-failed reports "nothing
+  // was changed", a mixed batch reports the succeeded/failed split (else the
+  // optimistic "Done!" overclaims a partial batch). The agentic loop's
   // "final"/"answer" text already follows its receipts, so leave it untouched.
   if (replyKind === "actions") {
     const receipts = results.filter(isReceiptResult);
     const failed = receipts.filter((r) => r.receipt.ok === false).length;
-    if (receipts.length > 0 && failed === receipts.length) {
-      return failureReplyText(failed, receipts.length);
+    if (receipts.length > 0 && failed > 0) {
+      return failed === receipts.length
+        ? failureReplyText(failed, receipts.length)
+        : partialOutcomeReplyText(receipts.length - failed, receipts.length, failed);
     }
   }
   // truthfulness (F10): a completion claim ("Done! … deleted/created/renamed …")
