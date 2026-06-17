@@ -396,6 +396,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
         setup.appendChild(close);
         chat.classList.add("hidden");
         settingsButton.setAttribute("aria-expanded", "true");
+        // Symmetric with closePermissions()'s settingsButton.focus(): on open move
+        // focus INTO the now-visible panel (its heading) so a keyboard/AT user
+        // isn't stranded on the gear with the chat hidden behind an unfocused panel.
+        const heading = setup.querySelector("h2");
+        if (heading) {
+          heading.setAttribute("tabindex", "-1");
+          (heading as HTMLElement).focus();
+        }
       }
       setup.classList.remove("hidden");
     } catch {
@@ -406,6 +414,14 @@ function mount(root: HTMLElement, api: ChatApi): void {
   settingsButton.addEventListener("click", () => {
     if (setup.classList.contains("hidden")) void openPermissions(false);
     else closePermissions();
+  });
+  // Escape closes the panel on the gear/reopen path only (aria-expanded="true");
+  // first-run setup leaves aria-expanded false, so Escape can't skip it. Registered
+  // once on `setup` (which persists across reopens) — closePermissions is idempotent.
+  setup.addEventListener("keydown", (event) => {
+    if ((event as KeyboardEvent).key === "Escape" && settingsButton.getAttribute("aria-expanded") === "true") {
+      closePermissions();
+    }
   });
 
   /**
