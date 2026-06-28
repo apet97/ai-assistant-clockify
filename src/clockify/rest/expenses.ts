@@ -48,6 +48,13 @@ function mapExpense(raw: Record<string, unknown>): ExpenseSummary {
   return out;
 }
 
+/** Category row fields read by {@link mapCategory}. */
+type CategoryRow = {
+  id?: string;
+  name?: string;
+  archived?: boolean;
+};
+
 function mapCategory(raw: Record<string, unknown>): ExpenseCategorySummary {
   const out: ExpenseCategorySummary = { id: raw.id as string, name: raw.name as string };
   if (typeof raw.archived === "boolean") out.archived = raw.archived;
@@ -152,7 +159,7 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       // resolution for deletes must be able to ask for the archived set.
       // Paginate (envelope: `{categories:[…]}`) so >50 categories don't truncate.
       const params: Record<string, string> = filter?.archived === undefined ? {} : { archived: String(filter.archived) };
-      const rows = (await core.paginateEnvelope("api", `${ws}/expenses/categories`, "categories", params)) as any[];
+      const rows = (await core.paginateEnvelope("api", `${ws}/expenses/categories`, "categories", params)) as CategoryRow[];
       return rows.map(mapCategory);
     },
     async createExpenseCategory({ name }): Promise<EntitySummary> {

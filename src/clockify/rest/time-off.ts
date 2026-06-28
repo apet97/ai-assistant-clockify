@@ -13,6 +13,33 @@ function filter(ids: string[]): Record<string, unknown> {
   return { contains: "CONTAINS", ids, status: "ACTIVE" };
 }
 
+/** Policy row fields read by {@link mapPolicy}. */
+type PolicyRow = {
+  id?: string;
+  name?: string;
+  status?: string;
+  timeUnit?: string;
+};
+
+/** Request row fields read by {@link mapRequest}. */
+type RequestRow = {
+  id?: string;
+  policyId?: string;
+  userId?: string;
+  status?: { statusType?: string } | string;
+  note?: string;
+  timeOffPeriod?: { period?: { start?: string; end?: string } };
+};
+
+/** Balance row fields read by {@link mapBalance}. */
+type BalanceRow = {
+  policyId?: string;
+  policyName?: string;
+  balance?: number;
+  used?: number;
+  total?: number;
+};
+
 function mapPolicy(raw: Record<string, unknown>): TimeOffPolicySummary {
   const out: TimeOffPolicySummary = { id: raw.id as string, name: raw.name as string };
   if (raw.status !== undefined) out.status = raw.status as string;
@@ -61,7 +88,7 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
 
   return {
     async listTimeOffPolicies() {
-      const rows = (await core.paginate("api", `${ws}/time-off/policies`)) as any[];
+      const rows = (await core.paginate("api", `${ws}/time-off/policies`)) as PolicyRow[];
       return rows.map(mapPolicy);
     },
     async getTimeOffPolicy(id) {
@@ -97,14 +124,15 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
     },
     async updateTimeOffPolicy(id, patch): Promise<EntitySummary> {
       // GET-then-merge-PUT: Clockify replaces on PUT, so merge into the existing policy.
-      const existing = ((await core.call("api", "GET", `${ws}/time-off/policies/${id}`)) ?? {}) as Record<string, any>;
+      const existing = ((await core.call("api", "GET", `${ws}/time-off/policies/${id}`)) ?? {}) as Record<string, unknown>;
       const timeUnit = (existing.timeUnit as string | undefined) ?? TIME_UNIT;
       if (patch.name !== undefined) existing.name = patch.name;
       if (patch.daysPerYear !== undefined) {
         existing.automaticAccrual = { amount: patch.daysPerYear, period: "YEAR", timeUnit };
       }
       if (patch.requiresApproval !== undefined) {
-        existing.approve = { ...(existing.approve ?? {}), requiresApproval: patch.requiresApproval };
+        const approve = (existing.approve ?? {}) as Record<string, unknown>;
+        existing.approve = { ...approve, requiresApproval: patch.requiresApproval };
       }
       // The PUT requires users/userGroups as {contains,ids} FILTERS, but the GET
       // returns them FLAT as userIds/userGroupIds — re-sending the GET doc leaves
@@ -127,8 +155,8 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       if (filterArg?.status) body.statuses = [filterArg.status];
       if (filterArg?.userId) body.users = [filterArg.userId];
       const env = (await core.call("api", "POST", `${ws}/time-off/requests`, body)) as
-        | { requests?: any[] }
-        | any[]
+        | { requests?: RequestRow[] }
+        | RequestRow[]
         | null;
       const rows = Array.isArray(env) ? env : (env?.requests ?? []);
       return rows.map(mapRequest);
@@ -137,11 +165,11 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       // There is no real single-GET route (live: 404 "No static resource" even
       // for an existing id) — find the request through the POST search instead.
       const env = (await core.call("api", "POST", `${ws}/time-off/requests`, { page: 1, pageSize: 200 })) as
-        | { requests?: any[] }
-        | any[]
+        | { requests?: RequestRow[] }
+        | RequestRow[]
         | null;
       const rows = Array.isArray(env) ? env : (env?.requests ?? []);
-      const raw = rows.find((r: any) => r.id === id);
+      const raw = rows.find((r) => r.id === id);
       return raw ? mapRequest(raw) : null;
     },
     async createTimeOffRequest(policyId, input): Promise<EntitySummary> {
@@ -191,11 +219,11 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
     async getTimeOffBalance(userId) {
       const qs = new URLSearchParams({ page: "1", "page-size": "200" });
       const env = (await core.call("api", "GET", `${ws}/time-off/balance/user/${userId}?${qs.toString()}`)) as
-        | { balances?: any[] }
-        | any[]
+        | { balances?: BalanceRow[] }
+        | BalanceRow[]
         | null;
       const rows = Array.isArray(env) ? env : (env?.balances ?? []);
-      return rows.map((r: any) => mapBalance(r, userId));
+      return rows.map((r) => mapBalance(r, userId));
     },
     async updateTimeOffBalance(policyId, input) {
       await core.call("api", "PATCH", `${ws}/time-off/balance/policy/${policyId}`, {

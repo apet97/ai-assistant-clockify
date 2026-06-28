@@ -8,6 +8,22 @@ function assignment(ids: string[]): Record<string, unknown> {
   return { contains: "CONTAINS", ids, status: "ALL" };
 }
 
+/**
+ * Holiday row read from `GET /holidays` (and `…/in-period`). Fields are those
+ * {@link mapHoliday} and the update GET-scan read; the read-back exposes the
+ * assignment FLAT as `userIds`/`userGroupIds` (re-sent as `{contains,ids,status}`
+ * filters on the full-replace PUT).
+ */
+type HolidayRow = {
+  id?: string;
+  name?: string;
+  datePeriod?: { startDate?: string; endDate?: string };
+  occursAnnually?: boolean;
+  userIds?: string[];
+  userGroupIds?: string[];
+  everyoneIncludingNew?: boolean;
+};
+
 function mapHoliday(raw: Record<string, unknown>): HolidaySummary {
   const out: HolidaySummary = { id: raw.id as string, name: raw.name as string };
   const dp = (raw.datePeriod ?? {}) as Record<string, unknown>;
@@ -28,17 +44,17 @@ export function makeHolidayRest(core: RestCore, workspaceId: string): HolidayPor
 
   return {
     async listHolidays() {
-      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as any[] | null;
+      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as HolidayRow[] | null;
       return (Array.isArray(rows) ? rows : []).map(mapHoliday);
     },
     async getHoliday(id) {
-      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as any[] | null;
+      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as HolidayRow[] | null;
       const raw = (Array.isArray(rows) ? rows : []).find((h) => h.id === id);
       return raw ? mapHoliday(raw) : null;
     },
     async listHolidaysInPeriod({ assignedTo, start, end }) {
       const qs = new URLSearchParams({ "assigned-to": assignedTo, start: periodStart(start), end: periodEnd(end) });
-      const rows = (await core.call("api", "GET", `${ws}/holidays/in-period?${qs.toString()}`)) as any[] | null;
+      const rows = (await core.call("api", "GET", `${ws}/holidays/in-period?${qs.toString()}`)) as HolidayRow[] | null;
       return (Array.isArray(rows) ? rows : []).map(mapHoliday);
     },
     async createHoliday(input): Promise<EntitySummary> {
@@ -56,8 +72,8 @@ export function makeHolidayRest(core: RestCore, workspaceId: string): HolidayPor
       // The PUT is a full REPLACE — unchanged fields must be carried over or
       // Clockify 400s "must not be null". GET-scan the existing holiday (no
       // single-GET route) and merge the patch into a complete body.
-      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as any[] | null;
-      const existing = (Array.isArray(rows) ? rows : []).find((h) => h.id === id) ?? {};
+      const rows = (await core.call("api", "GET", `${ws}/holidays`)) as HolidayRow[] | null;
+      const existing: HolidayRow = (Array.isArray(rows) ? rows : []).find((h) => h.id === id) ?? {};
       const existingPeriod = existing.datePeriod ?? {};
       const body: Record<string, unknown> = {
         name: patch.name ?? existing.name,

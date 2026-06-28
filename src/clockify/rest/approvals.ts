@@ -2,20 +2,37 @@ import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { ApprovalPort, ApprovalSummary } from "../ports/approvals.js";
 
-function mapApproval(raw: any): ApprovalSummary {
+/**
+ * Approval request as read from `GET /approval-requests`. Either flat or wrapped
+ * under `approvalRequest`; the state lives at `status.state` and the period at
+ * `dateRange` (flat `state`/`period` are defensive fallbacks).
+ */
+type ApprovalReq = {
+  id?: string;
+  owner?: { userId?: string; userName?: string };
+  userId?: string;
+  userName?: string;
+  status?: { state?: string } | string;
+  state?: string;
+  dateRange?: { start?: string; end?: string };
+  period?: { start?: string; end?: string };
+};
+type ApprovalRow = ApprovalReq & { approvalRequest?: ApprovalReq };
+
+function mapApproval(raw: ApprovalRow): ApprovalSummary {
   // Live shape (probed 2026-06-10): each list item WRAPS the approval under
   // `approvalRequest` next to period totals; the state lives at `status.state`
   // and the period at `dateRange`. Flat fields are kept as a defensive fallback.
-  const req = raw?.approvalRequest && typeof raw.approvalRequest === "object" ? raw.approvalRequest : raw;
-  const out: ApprovalSummary = { id: req.id };
-  const owner = req.owner ?? {};
+  const req: ApprovalReq = raw?.approvalRequest && typeof raw.approvalRequest === "object" ? raw.approvalRequest : raw;
+  const out: ApprovalSummary = { id: req.id as string };
+  const owner: { userId?: string; userName?: string } = req.owner ?? {};
   const userId = owner.userId ?? req.userId;
   if (userId !== undefined) out.userId = userId;
   const userName = owner.userName ?? req.userName;
   if (userName !== undefined) out.userName = userName;
   const state = typeof req.status === "object" && req.status !== null ? req.status.state : (req.state ?? req.status);
   if (state !== undefined) out.state = state;
-  const period = req.dateRange ?? req.period ?? {};
+  const period: { start?: string; end?: string } = req.dateRange ?? req.period ?? {};
   if (period.start !== undefined) out.periodStart = period.start;
   if (period.end !== undefined) out.periodEnd = period.end;
   return out;
@@ -33,11 +50,11 @@ function mapApproval(raw: any): ApprovalSummary {
 export function makeApprovalRest(core: RestCore, workspaceId: string): ApprovalPort {
   const ws = `/workspaces/${workspaceId}`;
 
-  async function listRaw(status?: string): Promise<any[]> {
+  async function listRaw(status?: string): Promise<ApprovalRow[]> {
     const params: Record<string, string> = {};
     if (status) params.status = status;
     const rows = await core.paginate("api", `${ws}/approval-requests`, params);
-    return rows as any[];
+    return rows as ApprovalRow[];
   }
 
   return {
