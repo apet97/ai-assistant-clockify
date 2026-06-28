@@ -2,7 +2,14 @@ import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { WorkspacePort } from "../ports/workspace.js";
 
-function mapTemplate(raw: any): EntitySummary {
+/** Raw project-template fields read by {@link mapTemplate}. */
+type TemplateRow = {
+  id: string;
+  name?: string;
+  archived?: boolean;
+};
+
+function mapTemplate(raw: TemplateRow): EntitySummary {
   const out: EntitySummary = { id: raw.id, name: raw.name ?? raw.id };
   if (typeof raw.archived === "boolean") out.archived = raw.archived;
   return out;
@@ -24,11 +31,11 @@ export function makeWorkspaceRest(core: RestCore, workspaceId: string): Workspac
       return (await core.call("api", "GET", ws, undefined, true)) ?? null;
     },
     async listTemplates() {
-      const rows = (await core.call("api", "GET", `${ws}/projects?is-template=true`)) as any[] | null;
+      const rows = (await core.call("api", "GET", `${ws}/projects?is-template=true`)) as TemplateRow[] | null;
       return (Array.isArray(rows) ? rows : []).map(mapTemplate);
     },
     async getTemplate(id) {
-      const raw = await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true);
+      const raw = (await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true)) as TemplateRow | null;
       return raw ? mapTemplate(raw) : null;
     },
   };
