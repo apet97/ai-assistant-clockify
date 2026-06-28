@@ -30,6 +30,8 @@ import type { UserSummary, GroupSummary } from "../../../src/clockify/ports/user
 export interface FakeWorkspaceSeed {
   tags?: EntitySummary[];
   clients?: EntitySummary[];
+  /** Workspace currencies (for client currency-by-code resolution). */
+  currencies?: Array<{ id: string; code: string }>;
   projects?: ProjectSummary[];
   tasks?: TaskSummary[];
   running?: TimeEntrySummary | null;
@@ -63,6 +65,7 @@ export interface FakeWorkspaceSeed {
 export interface FakeState {
   tags: EntitySummary[];
   clients: EntitySummary[];
+  currencies: Array<{ id: string; code: string }>;
   projects: ProjectSummary[];
   tasks: TaskSummary[];
   timeEntries: TimeEntrySummary[];
@@ -111,6 +114,7 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
   return {
     tags: [...(seed.tags ?? [])],
     clients: [...(seed.clients ?? [])],
+    currencies: [...(seed.currencies ?? [])],
     projects: [...(seed.projects ?? [])],
     tasks: [...(seed.tasks ?? [])],
     timeEntries: [...(seed.entries ?? [])],

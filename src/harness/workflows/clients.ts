@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  type ActionContext,
   defineAction,
   defineReadAction,
   defineRiskyAction,
@@ -7,6 +8,19 @@ import {
 } from "../action.js";
 import { successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
+
+/** Resolve a currency CODE (e.g. "EUR") to its workspace currencyId, or a clarify message. */
+async function resolveCurrencyId(
+  ctx: ActionContext,
+  code: string,
+): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
+  const currencies = await ctx.clockify.listCurrencies();
+  const want = code.trim().toUpperCase();
+  const match = currencies.find((c) => c.code.toUpperCase() === want);
+  if (match) return { ok: true, id: match.id };
+  const codes = currencies.map((c) => c.code).join(", ");
+  return { ok: false, message: `I don't see a "${code}" currency in this workspace. Available: ${codes || "(none configured)"}.` };
+}
 
 /**
  * Typed client workflows (goclmcp §2.4). Reads + create execute immediately;
@@ -67,12 +81,28 @@ const getClient = defineAction({
 
 const createClient = defineAction({
   name: "clockify_clients_create",
-  description: "Create a client. Safe write — executes immediately when policy allows.",
+  description:
+    'Create a client (optional billing `ccEmails` + `currency` by code, e.g. "EUR"). Safe write — executes immediately when policy allows.',
   featureGroup: WORK,
   risks: ["safe_write"],
-  schema: z.object({ name: z.string().min(1) }),
+  schema: z.object({
+    name: z.string().min(1),
+    ccEmails: z.array(z.string().email()).optional(),
+    /** Currency CODE (e.g. "USD"), resolved to the workspace currencyId server-side. */
+    currency: z.string().min(1).optional(),
+  }),
   async handler(ctx, args) {
-    const client = await ctx.clockify.createClient({ name: args.name });
+    let currencyId: string | undefined;
+    if (args.currency !== undefined) {
+      const cur = await resolveCurrencyId(ctx, args.currency);
+      if (!cur.ok) return { kind: "clarify", message: cur.message };
+      currencyId = cur.id;
+    }
+    const client = await ctx.clockify.createClient({
+      name: args.name,
+      ...(args.ccEmails !== undefined ? { ccEmails: args.ccEmails } : {}),
+      ...(currencyId !== undefined ? { currencyId } : {}),
+    });
     return {
       kind: "receipt",
       receipt: successReceipt({
@@ -88,7 +118,7 @@ const createClient = defineAction({
 const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   description:
-    "Update a client (rename, archive/unarchive, set billing `ccEmails`). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
+    'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR"). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
@@ -100,6 +130,8 @@ const updateClient = defineRiskyAction({
       archived: z.boolean().optional(),
       /** Billing CC recipients (Clockify `ccEmails`); update sticks via getThenPut. */
       ccEmails: z.array(z.string().email()).optional(),
+      /** Currency CODE (e.g. "EUR"), resolved to the workspace currencyId server-side. */
+      currency: z.string().min(1).optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })
     .refine((v) => v.id !== undefined || v.currentName !== undefined, {
@@ -107,7 +139,11 @@ const updateClient = defineRiskyAction({
     })
     .refine(
       (v) =>
-        v.name !== undefined || v.archived !== undefined || v.ccEmails !== undefined || v.fields !== undefined,
+        v.name !== undefined ||
+        v.archived !== undefined ||
+        v.ccEmails !== undefined ||
+        v.currency !== undefined ||
+        v.fields !== undefined,
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
@@ -122,10 +158,17 @@ const updateClient = defineRiskyAction({
       },
     );
     if (!resolved.ok) return resolved.clarify;
+    let currencyId: string | undefined;
+    if (args.currency !== undefined) {
+      const cur = await resolveCurrencyId(ctx, args.currency);
+      if (!cur.ok) return { clarify: cur.message };
+      currencyId = cur.id;
+    }
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
       ...(args.ccEmails !== undefined ? { ccEmails: args.ccEmails } : {}),
+      ...(currencyId !== undefined ? { currencyId } : {}),
       ...(args.fields ?? {}),
     };
     return {

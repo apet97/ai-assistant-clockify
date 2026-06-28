@@ -24,9 +24,18 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
       const c = await core.call("api", "GET", `${ws}/clients/${id}`, undefined, true);
       return c ? map(c) : null;
     },
-    async createClient({ name }) {
-      const c = await core.call("api", "POST", `${ws}/clients`, { name });
-      return map(c);
+    async createClient({ name, ccEmails, currencyId }) {
+      const created = (await core.call("api", "POST", `${ws}/clients`, { name })) as { id: string };
+      // POST /clients SILENTLY DROPS ccEmails/currencyId (live-probed: only name+email
+      // stick) — apply them via the verified GET-then-PUT path, same class as the
+      // invoice note/subject silent-drop. A name-only create stays a single POST.
+      const extra: Record<string, unknown> = {};
+      if (ccEmails !== undefined) extra.ccEmails = ccEmails;
+      if (currencyId !== undefined) extra.currencyId = currencyId;
+      if (Object.keys(extra).length > 0) {
+        return map(await core.getThenPut("api", `${ws}/clients/${created.id}`, extra));
+      }
+      return map(created);
     },
     async updateClient(id, patch) {
       const c = await core.getThenPut("api", `${ws}/clients/${id}`, patch);
@@ -35,6 +44,12 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
     async deleteClient(id) {
       await core.getThenPut("api", `${ws}/clients/${id}`, { archived: true }); // archive first
       await core.call("api", "DELETE", `${ws}/clients/${id}`);
+    },
+    async listCurrencies() {
+      // Currencies live on the workspace doc (`GET /workspaces/{id}` → `currencies[]`),
+      // not a standalone list endpoint (live-verified). Workspace-scoped GET is allowed.
+      const doc = (await core.call("api", "GET", ws)) as { currencies?: Array<{ id: string; code: string }> } | null;
+      return (doc?.currencies ?? []).map((c) => ({ id: c.id, code: c.code }));
     },
   };
 }

@@ -15,7 +15,10 @@ export interface ClientFilter {
 export interface ClientPort {
   listClients(filter?: ClientFilter): Promise<EntitySummary[]>;
   getClient(id: string): Promise<EntitySummary | null>;
-  createClient(input: { name: string }): Promise<EntitySummary>;
+  /** `ccEmails`/`currencyId` are silently dropped by POST /clients, so the adapter applies them via a follow-up PUT. */
+  createClient(input: { name: string; ccEmails?: string[]; currencyId?: string }): Promise<EntitySummary>;
   updateClient(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
   deleteClient(id: string): Promise<void>;
+  /** Workspace currencies (`{id, code}`), for resolving a currency CODE → id. */
+  listCurrencies(): Promise<Array<{ id: string; code: string }>>;
 }

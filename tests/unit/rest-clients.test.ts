@@ -47,6 +47,36 @@ describe("client rest", () => {
     expect(JSON.parse(init.body)).toEqual({ name: "New" });
   });
 
+  it("createClient applies ccEmails/currencyId via create-then-PUT (POST silently drops them)", async () => {
+    const f = vi.fn(async (_url: string, init: any) => {
+      if (init.method === "POST") return jsonResponse({ id: "c9", name: "New" });
+      if (init.method === "GET") return jsonResponse({ id: "c9", name: "New", ccEmails: null, currencyId: "old" });
+      return jsonResponse({ id: "c9", name: "New", ccEmails: ["cc@x.com"], currencyId: "cur-eur" }); // PUT
+    });
+    await rest(f as unknown as typeof fetch).createClient({ name: "New", ccEmails: ["cc@x.com"], currencyId: "cur-eur" });
+    const calls = (f as any).mock.calls;
+    expect(calls.map((c: any) => c[1].method)).toEqual(["POST", "GET", "PUT"]); // create, then getThenPut
+    expect(JSON.parse(calls[0][1].body)).toEqual({ name: "New" }); // POST is name-only
+    const putBody = JSON.parse(calls[2][1].body);
+    expect(putBody.ccEmails).toEqual(["cc@x.com"]);
+    expect(putBody.currencyId).toBe("cur-eur");
+  });
+
+  it("createClient name-only stays a single POST (no follow-up PUT)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "c9", name: "New" }));
+    await rest(f as unknown as typeof fetch).createClient({ name: "New" });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["POST"]);
+  });
+
+  it("listCurrencies reads the workspace doc's currencies[]", async () => {
+    const f = vi.fn(async () =>
+      jsonResponse({ id: "ws-1", currencies: [{ id: "cur-usd", code: "USD", isDefault: true }, { id: "cur-eur", code: "EUR" }] }),
+    );
+    const cur = await rest(f as unknown as typeof fetch).listCurrencies();
+    expect(cur).toEqual([{ id: "cur-usd", code: "USD" }, { id: "cur-eur", code: "EUR" }]);
+    expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1");
+  });
+
   it("updateClient GET-then-merge-PUTs (preserves fields, requires name)", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"

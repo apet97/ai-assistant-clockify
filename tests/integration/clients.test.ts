@@ -48,6 +48,31 @@ describe("client actions", () => {
     expect(fake.counts.createClient).toBe(1);
   });
 
+  it("clockify_clients_create threads ccEmails and resolves currency by code (case-insensitive)", async () => {
+    const fake = createFakeWorkspace({ currencies: [{ id: "cur-usd", code: "USD" }, { id: "cur-eur", code: "EUR" }] });
+    const result = await executeAction({
+      actionName: "clockify_clients_create",
+      args: { name: "AIASSIST_SMOKE_c", ccEmails: ["billing@acme.com"], currency: "eur" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error(`expected a receipt, got ${result.kind}`);
+    const created = fake.state.clients.find((c) => c.name === "AIASSIST_SMOKE_c") as { ccEmails?: string[]; currencyId?: string } | undefined;
+    expect(created?.ccEmails).toEqual(["billing@acme.com"]);
+    expect(created?.currencyId).toBe("cur-eur");
+  });
+
+  it("clockify_clients_create clarifies on an unknown currency code (never creates)", async () => {
+    const fake = createFakeWorkspace({ currencies: [{ id: "cur-usd", code: "USD" }] });
+    const result = await executeAction({
+      actionName: "clockify_clients_create",
+      args: { name: "X", currency: "ZZZ" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toContain("USD");
+    expect(fake.counts.createClient ?? 0).toBe(0);
+  });
+
   it("clockify_clients_update previews then updates once on commit", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_clients_update", args: { id: "c1", name: "Acme Inc" }, context: makeContext(fake) });
@@ -95,6 +120,24 @@ describe("client actions", () => {
     });
     if (result.kind !== "receipt" || result.receipt.ok) throw new Error("expected an error receipt");
     expect(result.receipt.code).toBe("invalid_args");
+  });
+
+  it("clockify_clients_update resolves currency by code into the patch (clarifies on unknown)", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }], currencies: [{ id: "cur-gbp", code: "GBP" }] });
+    const preview = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { id: "c1", currency: "GBP" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.operation.payload).toMatchObject({ id: "c1", patch: { currencyId: "cur-gbp" } });
+
+    const bad = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { id: "c1", currency: "ZZZ" },
+      context: makeContext(fake),
+    });
+    expect(bad.kind).toBe("clarify");
   });
 
   it("clockify_clients_update clarifies (never previews a doomed commit) on an unknown name", async () => {

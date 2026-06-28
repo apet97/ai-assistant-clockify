@@ -3,7 +3,7 @@ import type { FakeContext } from "./state.js";
 
 export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
-  "listClients" | "getClient" | "createClient" | "updateClient" | "deleteClient"
+  "listClients" | "getClient" | "createClient" | "updateClient" | "deleteClient" | "listCurrencies"
 > {
   return {
     async listClients(filter) {
@@ -22,9 +22,10 @@ export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
       bump("getClient");
       return state.clients.find((c) => c.id === id) ?? null;
     },
-    async createClient({ name }) {
+    async createClient({ name, ccEmails, currencyId }) {
       bump("createClient");
-      const c = { id: nextId("client"), name };
+      // Echo the create-then-PUT fields so tests can assert they were threaded through.
+      const c = { id: nextId("client"), name, ...(ccEmails ? { ccEmails } : {}), ...(currencyId ? { currencyId } : {}) } as EntitySummary;
       state.clients.push(c);
       return c;
     },
@@ -45,6 +46,10 @@ export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
       bump("deleteClient");
       state.clients = state.clients.filter((c) => c.id !== id);
       state.deleted.push({ entityType: "client", id });
+    },
+    async listCurrencies() {
+      bump("listCurrencies");
+      return state.currencies;
     },
   };
 }
