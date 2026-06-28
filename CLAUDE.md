@@ -16,7 +16,7 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1483 tests**, **0** circular deps (madge), a
+- **Gate:** `npm run verify` = **1486 tests**, **0** circular deps (madge), a
   duplication gate (jscpd, `npm run dup`), and a
   typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
   all folded into `verify`. Keep them green.
@@ -325,7 +325,11 @@ bug was found against the REAL API, not by reading the code.
   description+quantity (defaulted visibly).
 - PUTs replace (time-entry/expense/holiday/scheduling) → GET-then-PUT with the full
   body. Time-off approve/deny field is `status`; create needs `period.days` + bare
-  `YYYY-MM-DD`. Role grant is **POST** `/users/{RECIPIENT}/roles`
+  `YYYY-MM-DD` — but that DAYS body is policy-unit-specific, so
+  `clockify_time_off_requests_create` reads the resolved policy's `timeUnit` at
+  PREVIEW and CLARIFIES on a non-DAYS (HOURS) policy rather than mis-booking
+  (best-effort read; full HOURS support is live-verification-gated, not yet wired).
+  Role grant is **POST** `/users/{RECIPIENT}/roles`
   `{entityId, role, sourceType?}`: the URL user is the RECIPIENT, `entityId` is the
   SCOPE — `workspaceId` for `WORKSPACE_ADMIN`, a `projectId` for `PROJECT_MANAGER`
   (no `sourceType`), a user-group id + `sourceType:USER_GROUP` for `TEAM_MANAGER` of
