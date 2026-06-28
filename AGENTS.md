@@ -9,7 +9,7 @@ harness or the Clockify adapter. `README.md` is the product overview.
 A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
-secrets. `npm run verify` is green at **1483 tests**, 0 circular deps, and a typed
+secrets. `npm run verify` is green at **1495 tests**, 0 circular deps, and a typed
 ESLint gate (`no-floating-promises`/`no-misused-promises` as errors). 139 typed
 actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite at
 `/data`; redeploy = `railway up`; see `DEPLOYMENT.md`). Data handling/retention:
@@ -106,4 +106,10 @@ npm run dev           # tsx src/server.ts (needs env)
 - A task delete is **project-scoped**: `deleteEntity` for a `task` needs its
   `projectId` (it routes to the typed `deleteTask`), so an undo of a created task
   carries `projectId` on the `EntityRef`.
+- Time-off request create is **policy-unit-specific**: a DAYS policy wants bare
+  `YYYY-MM-DD` + `period.days`; an HOURS policy wants full ISO datetime
+  `period.{start,end}` with **no `days`** (the DAYS body 400s on an HOURS policy).
+- Client CREATE silently drops `ccEmails`/`currencyId` (adapter applies them via a
+  follow-up PUT); scheduling `publish` is range-scoped, with an optional
+  `userFilter` to narrow it to one user.
 - Full set + the money/rate/scoping subtleties: `CLAUDE.md` → "Clockify API facts".
