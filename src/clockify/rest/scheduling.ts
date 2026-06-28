@@ -2,8 +2,27 @@ import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { SchedulingPort, AssignmentSummary } from "../ports/scheduling.js";
 
-function mapAssignment(raw: any): AssignmentSummary {
-  const out: AssignmentSummary = { id: raw.id };
+/**
+ * Assignment row read from `…/assignments/all` (and the recurring POST/PATCH
+ * responses). Fields are those {@link mapAssignment} and the update GET-scan read;
+ * the period is exposed nested as `period:{start,end}` while create accepts
+ * top-level `start`/`end`.
+ */
+type AssignmentRow = {
+  id?: string;
+  userId?: string;
+  projectId?: string;
+  start?: string;
+  end?: string;
+  period?: { start?: string; end?: string };
+  hoursPerDay?: number;
+  startTime?: string;
+  note?: string;
+  published?: boolean;
+};
+
+function mapAssignment(raw: AssignmentRow): AssignmentSummary {
+  const out: AssignmentSummary = { id: raw.id as string };
   if (raw.userId !== undefined) out.userId = raw.userId;
   if (raw.projectId !== undefined) out.projectId = raw.projectId;
   // The period is exposed as a nested `period:{start,end}` (create accepts top-level).
@@ -32,7 +51,7 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
   const DEFAULT_START = "2000-01-01T00:00:00Z";
   const DEFAULT_END = "2099-12-31T00:00:00Z";
 
-  async function listRaw(filter?: { start?: string; end?: string; userId?: string; projectId?: string }): Promise<any[]> {
+  async function listRaw(filter?: { start?: string; end?: string; userId?: string; projectId?: string }): Promise<AssignmentRow[]> {
     const params: Record<string, string> = {
       start: filter?.start || DEFAULT_START,
       end: filter?.end || DEFAULT_END,
@@ -40,7 +59,7 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
     if (filter?.userId) params.userId = filter.userId;
     if (filter?.projectId) params.projectId = filter.projectId;
     const rows = await core.paginate("api", `${ws}/scheduling/assignments/all`, params);
-    return rows as any[];
+    return rows as AssignmentRow[];
   }
 
   return {
@@ -60,15 +79,18 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
         hoursPerDay: input.hoursPerDay,
         ...(input.note !== undefined ? { note: input.note } : {}),
       };
-      const result = (await core.call("api", "POST", `${ws}/scheduling/assignments/recurring`, body)) as any;
+      const result = (await core.call("api", "POST", `${ws}/scheduling/assignments/recurring`, body)) as
+        | AssignmentRow
+        | AssignmentRow[]
+        | null;
       const rows = Array.isArray(result) ? result : [result];
-      const first = rows[0] ?? {};
+      const first: AssignmentRow = rows[0] ?? {};
       return { id: first.id ?? "assignment", name: first.id ?? "assignment" };
     },
     async updateAssignment(id, patch): Promise<EntitySummary> {
       // The recurring PATCH is a full replace (rejects a body without start/end),
       // so list-scan the existing assignment and re-send its period + identity.
-      const existing = (await listRaw()).find((a) => a.id === id) ?? {};
+      const existing: AssignmentRow = (await listRaw()).find((a) => a.id === id) ?? {};
       const period = existing.period ?? {};
       const start = existing.start ?? period.start;
       const end = existing.end ?? period.end;
