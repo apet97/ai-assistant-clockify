@@ -28,6 +28,17 @@ const seriesOption = z.enum(["ONLY_THIS", "ALL", "THIS_AND_FOLLOWING"]);
  * (OpenAPI: AssignmentCreateRequestV1 / PublishAssignmentsRequestV1 / the
  * assignments query params). The live loop sent relative words straight
  * through; resolve them server-side and STOP on anything unparseable.
+ *
+ * The `ok:true` bounds are INTENTIONALLY optional (string | undefined), not a
+ * lying type: this helper is shared by `clockify_scheduling_assignments_list`,
+ * whose `start`/`end` are legitimately optional (an unfiltered list passes
+ * `args:{}` → both edges resolve to undefined → `ok:true` with no bounds, and
+ * the REST list filter accepts that). So it CANNOT be narrowed to required
+ * bounds — a guard that rejected undefined here would break the unfiltered
+ * read. The five callers whose schemas REQUIRE both edges (`.min(1)`: create /
+ * publish / project_totals / user_totals) therefore narrow locally: with a
+ * non-empty raw input, resolveDateRange returns `ok:false` on an unparseable
+ * date, so on the `ok:true` path both bounds are provably defined for them.
  */
 function resolveSchedulingWindow(
   ctx: ActionContext,
