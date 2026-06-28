@@ -268,4 +268,18 @@ describe("rotatePendingNonce (session restore)", () => {
     expect(r4.ok).toBe(false);
     if (!r4.ok) expect(r4.code).toBe("operation_mismatch");
   });
+
+  it("rejects a tampered operation: the op-hash tripwire must guard the rotate path too", () => {
+    // The stored operation sits inside the integrity envelope: mutating it so it
+    // no longer hashes to operationHash must fail rotation, exactly like confirm.
+    // Otherwise a tampered operation could be re-armed with a fresh valid nonce.
+    const created = makePending(now);
+    const tampered: PendingConfirmationRecord = {
+      ...created.record,
+      operation: { action: "clockify_delete_entity", entityType: "project", id: "EVIL" },
+    };
+    const result = rotatePendingNonce({ record: tampered, ...base });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe("operation_mismatch");
+  });
 });
