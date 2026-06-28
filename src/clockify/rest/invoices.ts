@@ -97,6 +97,20 @@ function mapDetail(raw: Record<string, unknown>): InvoiceDetail {
   return { ...mapSummary(raw), items };
 }
 
+/**
+ * Payment row as read from the payments LIST. Live shape (probed): a bare array
+ * of `{id, amount, date, note, author}`; the `_id`/`paymentDate` keys are
+ * defensive fallbacks {@link mapPayment} accepts.
+ */
+type PaymentRow = {
+  id?: string;
+  _id?: string;
+  amount?: number;
+  note?: string;
+  paymentDate?: string;
+  date?: string;
+};
+
 function mapPayment(raw: Record<string, unknown>): InvoicePayment {
   const out: InvoicePayment = {};
   if (raw.id !== undefined) out.id = raw.id as string;
@@ -123,10 +137,10 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
 
   // Live shape (probed): a bare array of {id, amount, date, note, author}.
   // The envelope keys are a defensive fallback only.
-  async function listPaymentsRaw(id: string): Promise<any[]> {
+  async function listPaymentsRaw(id: string): Promise<PaymentRow[]> {
     const env = (await core.call("api", "GET", `${ws}/invoices/${id}/payments`)) as
-      | { payments?: any[]; items?: any[]; data?: any[] }
-      | any[]
+      | { payments?: PaymentRow[]; items?: PaymentRow[]; data?: PaymentRow[] }
+      | PaymentRow[]
       | null;
     return Array.isArray(env) ? env : (env?.payments ?? env?.items ?? env?.data ?? []);
   }
@@ -182,8 +196,10 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
     },
     async listInvoiceItems(id) {
       // GET /invoices/{id}/items 405s; items are embedded in the single-GET.
-      const detail = await core.call("api", "GET", `${ws}/invoices/${id}`, undefined, true);
-      const items = (detail as any)?.items;
+      const detail = (await core.call("api", "GET", `${ws}/invoices/${id}`, undefined, true)) as
+        | { items?: Record<string, unknown>[] }
+        | null;
+      const items = detail?.items;
       return Array.isArray(items) ? items.map(mapItem) : [];
     },
     async listInvoicePayments(id) {
@@ -255,14 +271,14 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       // (live-probed) — mapping it as a payment put the invoice's id/amount in
       // the receipt. Diff the payments list around the POST to return the
       // genuinely new payment instead.
-      const before = new Set((await listPaymentsRaw(id)).map((p: any) => p.id ?? p._id));
+      const before = new Set((await listPaymentsRaw(id)).map((p) => p.id ?? p._id));
       const body: Record<string, unknown> = {
         amount: payment.amountMinor,
         paymentDate: toClockifyDate(payment.paymentDate),
         ...(payment.note !== undefined ? { note: payment.note } : {}),
       };
       await core.call("api", "POST", `${ws}/invoices/${id}/payments`, body);
-      const created = (await listPaymentsRaw(id)).find((p: any) => !before.has(p.id ?? p._id));
+      const created = (await listPaymentsRaw(id)).find((p) => !before.has(p.id ?? p._id));
       return created ? mapPayment(created) : {};
     },
     async deleteInvoicePayment(id, paymentId) {
