@@ -11,6 +11,10 @@ import { mapEntitySummary } from "./common.js";
 export function makeClientRest(core: RestCore, workspaceId: string): ClientPort {
   const ws = `/workspaces/${workspaceId}`;
   const map = mapEntitySummary;
+  // Currencies are immutable for a client instance's lifetime; memoize the
+  // full-workspace GET so setting currency on several clients in one turn re-uses
+  // the first fetch (PERF-02). Scoped per instance — no process-global staleness.
+  let currenciesCache: Array<{ id: string; code: string }> | undefined;
 
   return {
     async listClients(filter) {
@@ -48,8 +52,10 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
     async listCurrencies() {
       // Currencies live on the workspace doc (`GET /workspaces/{id}` → `currencies[]`),
       // not a standalone list endpoint (live-verified). Workspace-scoped GET is allowed.
+      if (currenciesCache) return currenciesCache;
       const doc = (await core.call("api", "GET", ws)) as { currencies?: Array<{ id: string; code: string }> } | null;
-      return (doc?.currencies ?? []).map((c) => ({ id: c.id, code: c.code }));
+      currenciesCache = (doc?.currencies ?? []).map((c) => ({ id: c.id, code: c.code }));
+      return currenciesCache;
     },
   };
 }

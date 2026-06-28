@@ -258,6 +258,10 @@ describe("time-off actions", () => {
     expect(input).toMatchObject({ start: "2026-06-10T09:00:00Z", end: "2026-06-10T13:00:00Z", timeUnit: "HOURS" });
     expect(input.days).toBeUndefined();
     expect(preview.preview.expectedChanges.join(" ")).toContain("4h");
+    // PERF-01: the preview lists policies ONCE (for resolution) and reads timeUnit
+    // from that same list — no redundant getTimeOffPolicy round-trip.
+    expect(fake.counts.getTimeOffPolicy ?? 0).toBe(0);
+    expect(fake.counts.listTimeOffPolicies).toBe(1);
     await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(fake.counts.createTimeOffRequest).toBe(1);
   });

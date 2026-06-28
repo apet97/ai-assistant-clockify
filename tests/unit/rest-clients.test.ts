@@ -77,6 +77,15 @@ describe("client rest", () => {
     expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1");
   });
 
+  it("listCurrencies caches within an instance (the workspace doc is fetched once)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "ws-1", currencies: [{ id: "cur-usd", code: "USD" }] }));
+    const client = rest(f as unknown as typeof fetch);
+    const first = await client.listCurrencies();
+    const second = await client.listCurrencies();
+    expect(second).toEqual(first);
+    expect((f as any).mock.calls.length).toBe(1); // memoized — no second GET /workspaces/{id}
+  });
+
   it("updateClient GET-then-merge-PUTs (preserves fields, requires name)", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
