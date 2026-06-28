@@ -9,9 +9,18 @@ import type { ProjectSummary } from "../types.js";
  * `amount` to the `.../{userId}/{hourly-rate|cost-rate}` endpoint; delete
  * archives first because Clockify rejects deleting an active project.
  */
+/** Project row fields read by {@link makeProjectRest} `map`. */
+type ProjectRow = {
+  id: string;
+  name: string;
+  clientId?: string;
+  archived?: boolean;
+  billable?: boolean;
+};
+
 export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPort {
   const ws = `/workspaces/${workspaceId}`;
-  const map = (p: any): ProjectSummary => ({
+  const map = (p: ProjectRow): ProjectSummary => ({
     id: p.id,
     name: p.name,
     clientId: p.clientId,
@@ -24,11 +33,11 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       const params: Record<string, string> = { archived: String(filter?.archived ?? false) };
       if (filter?.name) params.name = filter.name;
       if (filter?.clientIds?.length) params.clients = filter.clientIds.join(",");
-      const rows = await core.paginate("api", `${ws}/projects`, params);
+      const rows = (await core.paginate("api", `${ws}/projects`, params)) as ProjectRow[];
       return rows.map(map);
     },
     async getProject(id) {
-      const p = await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true);
+      const p = (await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true)) as ProjectRow | null;
       return p ? map(p) : null;
     },
     async createProject(input) {
@@ -41,15 +50,15 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
         ...(input.hourlyRate ? { hourlyRate: input.hourlyRate } : {}),
         ...(input.costRate ? { costRate: input.costRate } : {}),
       });
-      return map(p);
+      return map(p as ProjectRow);
     },
     async updateProject(id, patch) {
       const p = await core.getThenPut("api", `${ws}/projects/${id}`, patch);
-      return map(p);
+      return map(p as ProjectRow);
     },
     async archiveProject(id) {
       const p = await core.getThenPut("api", `${ws}/projects/${id}`, { archived: true });
-      return map(p);
+      return map(p as ProjectRow);
     },
     async deleteProject(id) {
       await core.getThenPut("api", `${ws}/projects/${id}`, { archived: true }); // archive first
@@ -61,7 +70,7 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
         templateProjectId: input.templateProjectId,
         name: input.name,
       });
-      return map(p);
+      return map(p as ProjectRow);
     },
     async updateProjectRate(input) {
       const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
