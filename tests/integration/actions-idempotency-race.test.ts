@@ -3,7 +3,9 @@ import { executeAction, commitConfirmedOperation, CLAIM_HEARTBEAT_MS } from "../
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createStore, CLAIM_TTL_MS, type Store } from "../../src/db/store.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
-import type { ActionContext, ConfirmableOperation } from "../../src/harness/catalog.js";
+import { getAction, type ActionContext, type ConfirmableOperation } from "../../src/harness/catalog.js";
+import { idempotencyScopeKey } from "../../src/harness/idempotency.js";
+import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import type { AtomicIdempotencyLedger } from "../../src/harness/action.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
 
@@ -308,5 +310,74 @@ describe("crash-before-fill residual (a crash between the host write and fill mu
     const reissue = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, true)), op);
     expect(reissue.ok).toBe(true);
     expect(fake.counts.createInvoice).toBe(2);
+  });
+});
+
+/**
+ * F4 — commit_outcome_unknown END-TO-END via a SEEDED stale claim (fake timers).
+ * The unit test (tests/unit/idempotency-store.test.ts) proves claimIdempotency
+ * returns "stale_unknown" for a crash-orphaned NULL claim past CLAIM_TTL_MS but
+ * still inside the dedup window; this drives that exact state through the real
+ * commitConfirmedOperation RECEIPT path (the route/receipt wiring the unit test
+ * doesn't reach) and asserts the calm "verify in Clockify" receipt with NO host
+ * write. The timer advance is DERIVED from the exported constants (CLAIM_TTL_MS,
+ * IDEMPOTENCY_WINDOW_MS) — never hard-coded — so it tracks any future retune.
+ */
+describe("commit_outcome_unknown end-to-end (a seeded stale claim drives the confirm path)", () => {
+  /** A store-backed atomic ledger whose clock is the (fake) SYSTEM clock — wired
+   *  exactly like routes/chat-pipeline.ts (now().getTime() - {WINDOW,CLAIM_TTL}),
+   *  so advancing vi's fake timers ages the claim past CLAIM_TTL_MS. */
+  function liveClockLedger(s: Store): AtomicIdempotencyLedger {
+    const t = () => Date.now();
+    return {
+      lookup: (k) => s.lookupIdempotency(k, t() - IDEMPOTENCY_WINDOW_MS),
+      record: (k, r) => s.recordIdempotency(k, r, t()),
+      claim: (k) => s.claimIdempotency(k, t(), t() - IDEMPOTENCY_WINDOW_MS, t() - CLAIM_TTL_MS),
+      lookupCompleted: (k) => s.claimIdempotencyReceipt(k),
+      fill: (k, r) => s.fillIdempotency(k, r, t()),
+      release: (k) => s.releaseIdempotency(k),
+    };
+  }
+
+  it("a confirm whose claim is crash-orphaned past CLAIM_TTL but in-window yields commit_outcome_unknown with NO host write", async () => {
+    // The advance must be strictly between CLAIM_TTL_MS (claim is now "dead") and
+    // IDEMPOTENCY_WINDOW_MS (intent still dedupes). The midpoint satisfies both for
+    // any CLAIM_TTL_MS < IDEMPOTENCY_WINDOW_MS — derived, never hard-coded.
+    expect(CLAIM_TTL_MS).toBeLessThan(IDEMPOTENCY_WINDOW_MS);
+    const advanceMs = Math.floor((CLAIM_TTL_MS + IDEMPOTENCY_WINDOW_MS) / 2);
+
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW);
+      store = createStore(":memory:");
+      const ledger = liveClockLedger(store);
+      const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+      const ctx = ctxWith(fake, ledger);
+      const op = await previewInvoice(ctx, "qwen");
+
+      // Seed the crash-orphaned claim DIRECTLY in the store at NOW: a NULL-receipt
+      // claim is exactly the row a process crash between the host write and `fill`
+      // leaves. The scoped key is computed the same way commitConfirmedOperation
+      // does, so the seed and the confirm collide on the SAME ledger row.
+      const action = getAction("clockify_invoices_create");
+      const semantic = action?.idempotencyKey?.(op);
+      expect(semantic).toBeDefined();
+      const scopedKey = idempotencyScopeKey(ctx.workspaceId, ctx.adminUserId, op, semantic!);
+      expect(ledger.claim(scopedKey)).toBe("won"); // writes the NULL claim at NOW
+
+      // Age the claim past CLAIM_TTL_MS (now "dead") but stay inside the dedup
+      // window — the crash's host-side outcome is UNKNOWN, never silently re-won.
+      await vi.advanceTimersByTimeAsync(advanceMs);
+
+      const receipt = await commitConfirmedOperation(ctx, op);
+
+      expect(receipt.ok).toBe(false);
+      expect((receipt as { code?: string }).code).toBe("commit_outcome_unknown");
+      // The host was NEVER reached: the seed never committed and stale_unknown
+      // short-circuits BEFORE the commit — so there is no (duplicate) host write.
+      expect(fake.counts.createInvoice ?? 0).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
