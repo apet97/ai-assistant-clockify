@@ -2,7 +2,36 @@ import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { CustomFieldPort, CustomFieldSummary } from "../ports/custom-fields.js";
 
-function mapField(raw: any): CustomFieldSummary {
+/** Custom-field row fields read by {@link mapField} + the update GET-scan. */
+type FieldRow = {
+  id: string;
+  name: string;
+  type?: string;
+  status?: string;
+  required?: boolean;
+  allowedValues?: string[];
+};
+
+/** One entry of a time entry's `customFieldValues` (read for replace-or-append). */
+type EntryCustomFieldValue = {
+  customFieldId?: string;
+  customFieldDefinitionId?: string;
+  id?: string;
+  value?: unknown;
+};
+
+/** The time-entry doc fields the entry-value PUT carries over. */
+type EntryDoc = {
+  customFieldValues?: EntryCustomFieldValue[];
+  timeInterval?: { start?: string; end?: string };
+  description?: string;
+  projectId?: string;
+  taskId?: string;
+  tagIds?: string[];
+  billable?: boolean;
+};
+
+function mapField(raw: FieldRow): CustomFieldSummary {
   const out: CustomFieldSummary = { id: raw.id, name: raw.name };
   if (raw.type !== undefined) out.type = raw.type;
   if (raw.status !== undefined) out.status = raw.status;
@@ -25,14 +54,14 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
 
   // The single-field GET /custom-fields/{id} 405s (live-verified); read one field
   // by listing and filtering, like invoice items.
-  async function findRaw(id: string): Promise<any | null> {
-    const rows = (await core.paginate("api", `${ws}/custom-fields`)) as any[];
+  async function findRaw(id: string): Promise<FieldRow | null> {
+    const rows = (await core.paginate("api", `${ws}/custom-fields`)) as FieldRow[];
     return rows.find((r) => r.id === id) ?? null;
   }
 
   return {
     async listCustomFields() {
-      const rows = await core.paginate("api", `${ws}/custom-fields`);
+      const rows = (await core.paginate("api", `${ws}/custom-fields`)) as FieldRow[];
       return rows.map(mapField);
     },
     async getCustomField(id) {
@@ -83,8 +112,8 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
       // The entry custom-field value lives in the entry's `customFieldValues`; GET
       // the entry, merge (replace-or-append), then PUT the full entry (Clockify's
       // PUT replaces and requires `start`, so flatten timeInterval to the top level).
-      const entry = ((await core.call("api", "GET", `${ws}/time-entries/${entryId}`)) ?? {}) as any;
-      const existing: any[] = Array.isArray(entry.customFieldValues) ? entry.customFieldValues : [];
+      const entry = ((await core.call("api", "GET", `${ws}/time-entries/${entryId}`)) ?? {}) as EntryDoc;
+      const existing: EntryCustomFieldValue[] = Array.isArray(entry.customFieldValues) ? entry.customFieldValues : [];
       let found = false;
       const merged = existing.map((cf) => {
         const id = cf.customFieldId ?? cf.customFieldDefinitionId ?? cf.id;
