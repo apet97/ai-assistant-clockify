@@ -16,7 +16,7 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1486 tests**, **0** circular deps (madge), a
+- **Gate:** `npm run verify` = **1495 tests**, **0** circular deps (madge), a
   duplication gate (jscpd, `npm run dup`), and a
   typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
   all folded into `verify`. Keep them green.
@@ -324,12 +324,14 @@ bug was found against the REAL API, not by reading the code.
   none → $0 caveat surfaced in the PREVIEW. items POST requires
   description+quantity (defaulted visibly).
 - PUTs replace (time-entry/expense/holiday/scheduling) → GET-then-PUT with the full
-  body. Time-off approve/deny field is `status`; create needs `period.days` + bare
-  `YYYY-MM-DD` — but that DAYS body is policy-unit-specific, so
-  `clockify_time_off_requests_create` reads the resolved policy's `timeUnit` at
-  PREVIEW and CLARIFIES on a non-DAYS (HOURS) policy rather than mis-booking
-  (best-effort read; full HOURS support is live-verification-gated, not yet wired).
-  Role grant is **POST** `/users/{RECIPIENT}/roles`
+  body. Time-off approve/deny field is `status`; request create is policy-unit
+  specific (live-verified): a DAYS policy needs `period.days` + bare `YYYY-MM-DD`;
+  an HOURS policy needs full ISO datetime `period.{start,end}` with **NO `days`/
+  half-day scaffold** (the DAYS body 400s "datetime must be yyyy-MM-ddThh:mm:ssZ").
+  `clockify_time_off_requests_create` reads the resolved policy `timeUnit` at PREVIEW
+  (best-effort) and branches — HOURS takes a server-resolved day + `hours` and builds
+  09:00→09:00+N instants; a non-DAYS/non-HOURS unit clarifies. Role grant is **POST**
+  `/users/{RECIPIENT}/roles`
   `{entityId, role, sourceType?}`: the URL user is the RECIPIENT, `entityId` is the
   SCOPE — `workspaceId` for `WORKSPACE_ADMIN`, a `projectId` for `PROJECT_MANAGER`
   (no `sourceType`), a user-group id + `sourceType:USER_GROUP` for `TEAM_MANAGER` of
@@ -339,6 +341,13 @@ bug was found against the REAL API, not by reading the code.
   `seriesUpdateOption`. Expense-category archive is `PATCH …/categories/{id}/status`;
   category list `archived` param DEFAULTS to false. Memberships PATCH REPLACES the
   set → "add me" merges via `getProjectMemberships` ("me" = `ctx.adminUserId`).
+  **Client CREATE silently drops `ccEmails`/`currencyId`** (live-probed: only
+  name+email stick) — `createClient` POSTs the minimal body then applies them via
+  GET-then-PUT (same silent-drop class as invoice note/subject); UPDATE sticks via
+  getThenPut. `currencyId` is resolved from a CODE (e.g. "EUR") via the workspace
+  `currencies[]` (on `GET /workspaces/{id}`, workspace-scoped GET allowed). Scheduling
+  `publish` is range-scoped (all drafts overlapping); an optional `userFilter`
+  (`{contains,ids}`) narrows it to one user (live-verified accepted).
 - **Rates are PUTs of integer `{amount}` minor units** (`.../hourly-rate` |
   `.../cost-rate`; GET on those paths 405s — discover the current value from a
   membership doc): the **per-project member** rate is
