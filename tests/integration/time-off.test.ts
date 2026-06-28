@@ -243,6 +243,22 @@ describe("time-off actions", () => {
     expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
   });
 
+  it("requests_create guards an HOURS-based policy with an honest clarify (never a DAYS-shaped commit)", async () => {
+    // The wire body the adapter builds is the DAYS form (period.days). An HOURS
+    // policy needs a shape we have not live-verified — clarify, don't mis-book.
+    const fake = createFakeWorkspace({
+      timeOffPolicies: [{ id: "polh", name: "Hourly PTO", status: "ACTIVE", timeUnit: "HOURS" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "Hourly PTO", start: "2026-06-10", end: "2026-06-11" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message.toLowerCase()).toContain("hour");
+    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+  });
+
   it("requests_list resolves a user NAME filter (or 'me') and clarifies on an unknown one", async () => {
     const fake = createFakeWorkspace(seed());
     const byName = await executeAction({

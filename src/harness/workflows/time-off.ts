@@ -316,6 +316,24 @@ const createRequest = defineRiskyAction({
       { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
     );
     if (!policy.ok) return policy.clarify;
+    // Time-off request bodies are policy-unit-specific: `createTimeOffRequest`
+    // builds the DAYS form (`period.days`). An HOURS-based policy needs a shape we
+    // have not live-verified — clarify rather than send a wrong body to the PTO
+    // path (an identity/shape mistake is a clarify, never a doomed commit). The
+    // unit read is best-effort: a failure falls through to today's DAYS behavior,
+    // never blocking the common path on a transient blip.
+    let policyUnit: string | undefined;
+    try {
+      policyUnit = (await ctx.clockify.getTimeOffPolicy(policy.id))?.timeUnit;
+    } catch {
+      policyUnit = undefined;
+    }
+    if (policyUnit !== undefined && policyUnit !== "DAYS") {
+      const unit = policyUnit.toLowerCase();
+      return {
+        clarify: `The policy "${policy.name ?? policy.id}" is measured in ${unit}, and ${unit}-based time-off requests aren't supported here yet — please submit it directly in Clockify.`,
+      };
+    }
     const now = nowDate(ctx);
     // 'N days next week' anchors deterministically to the first N WORKDAYS of
     // that week (the resolveLogTimes pattern: the harness defaults, the preview
