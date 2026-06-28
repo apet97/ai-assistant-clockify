@@ -168,6 +168,21 @@ describe("time-off rest", () => {
     expect(body.timeOffPeriod.period).toEqual({ start: "2026-09-14", end: "2026-09-16", days: 3 });
   });
 
+  it("createTimeOffRequest with timeUnit HOURS POSTs ISO datetimes and NO days/half-day scaffold (live-verified 2026-06-28)", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "r9" }));
+    await rest(f as unknown as typeof fetch).createTimeOffRequest("pol1", {
+      start: "2026-07-06T09:00:00Z",
+      end: "2026-07-06T13:00:00Z",
+      timeUnit: "HOURS",
+      note: "afternoon",
+    });
+    const body = JSON.parse((f as any).mock.calls[0][1].body);
+    expect(body.timeOffPeriod.period).toEqual({ start: "2026-07-06T09:00:00Z", end: "2026-07-06T13:00:00Z" });
+    expect(body.timeOffPeriod.period.days).toBeUndefined(); // HOURS carries no days
+    expect(body.timeOffPeriod.isHalfDay).toBeUndefined(); // no half-day scaffold for HOURS
+    expect(body.note).toBe("afternoon");
+  });
+
   it("deleteTimeOffRequest DELETEs under the policy", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).deleteTimeOffRequest("pol1", "r1");

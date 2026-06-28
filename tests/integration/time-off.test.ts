@@ -243,9 +243,26 @@ describe("time-off actions", () => {
     expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
   });
 
-  it("requests_create guards an HOURS-based policy with an honest clarify (never a DAYS-shaped commit)", async () => {
-    // The wire body the adapter builds is the DAYS form (period.days). An HOURS
-    // policy needs a shape we have not live-verified — clarify, don't mis-book.
+  it("requests_create supports an HOURS policy: builds an ISO-datetime hour window (no `days`)", async () => {
+    const fake = createFakeWorkspace({
+      timeOffPolicies: [{ id: "polh", name: "Hourly PTO", status: "ACTIVE", timeUnit: "HOURS" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "Hourly PTO", start: "2026-06-10", hours: 4 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    const input = (preview.operation.payload as any).input;
+    // Live-verified HOURS shape: full ISO datetimes, timeUnit HOURS, NO days.
+    expect(input).toMatchObject({ start: "2026-06-10T09:00:00Z", end: "2026-06-10T13:00:00Z", timeUnit: "HOURS" });
+    expect(input.days).toBeUndefined();
+    expect(preview.preview.expectedChanges.join(" ")).toContain("4h");
+    await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(fake.counts.createTimeOffRequest).toBe(1);
+  });
+
+  it("requests_create on an HOURS policy clarifies when hours are missing (never a wrong-shape commit)", async () => {
     const fake = createFakeWorkspace({
       timeOffPolicies: [{ id: "polh", name: "Hourly PTO", status: "ACTIVE", timeUnit: "HOURS" }],
     });

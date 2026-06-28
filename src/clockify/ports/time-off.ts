@@ -53,6 +53,11 @@ export interface CreateTimeOffRequestInput {
   days?: number;
   halfDay?: boolean;
   note?: string;
+  /**
+   * Policy time unit. "HOURS" selects the hours wire shape (full ISO datetime
+   * start/end, NO `days`/half-day scaffold); default/"DAYS" uses the bare-date form.
+   */
+  timeUnit?: string;
 }
 
 /**

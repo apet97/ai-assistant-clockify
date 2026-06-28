@@ -145,6 +145,17 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       return raw ? mapRequest(raw) : null;
     },
     async createTimeOffRequest(policyId, input): Promise<EntitySummary> {
+      if (input.timeUnit === "HOURS") {
+        // HOURS policies want full ISO datetime start/end and NO `days`/half-day
+        // scaffold (live-verified 2026-06-28: the DAYS body 400s "datetime must be
+        // yyyy-MM-ddThh:mm:ssZ"; this shape returns 200 with balanceDiff in hours).
+        const body: Record<string, unknown> = {
+          timeOffPeriod: { period: { start: input.start, end: input.end } },
+          ...(input.note !== undefined ? { note: input.note } : {}),
+        };
+        const r = (await core.call("api", "POST", `${ws}/time-off/policies/${policyId}/requests`, body)) as { id: string };
+        return { id: r.id, name: r.id };
+      }
       const start = toBareDate(input.start);
       const end = toBareDate(input.end);
       // `days` is REQUIRED on the wire (live: 400 without it); default the

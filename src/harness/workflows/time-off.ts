@@ -286,7 +286,7 @@ const getRequest = defineReadAction({
 const createRequest = defineRiskyAction({
   name: "clockify_time_off_requests_create",
   description:
-    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. External side effect (notifies approvers) — previews and requires confirmation.",
+    "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. For an HOUR-based policy, pass the day in `start` plus `hours` (the harness builds the hour window). External side effect (notifies approvers) — previews and requires confirmation.",
   group: TOA,
   risks: ["external_side_effect"],
   schema: z
@@ -299,15 +299,24 @@ const createRequest = defineRiskyAction({
       /** 'N days off next week' — the harness anchors to the first N workdays. */
       week: z.enum(["this_week", "next_week"]).optional(),
       days: zNumberLike(z.number().positive()).optional(),
+      /** For HOUR-based policies: the number of hours off on `start` (the day). */
+      hours: zNumberLike(z.number().positive()).optional(),
       halfDay: z.boolean().optional(),
       note: z.string().optional(),
     })
     .refine((v) => v.policyId !== undefined || v.policyName !== undefined, {
       message: "Provide the time-off policy id or its exact name.",
     })
-    .refine((v) => (v.start !== undefined && v.end !== undefined) || v.week !== undefined, {
-      message: "Provide start+end dates, or a week ('this_week'/'next_week') with the number of days.",
-    }),
+    .refine(
+      (v) =>
+        (v.start !== undefined && v.end !== undefined) ||
+        v.week !== undefined ||
+        (v.start !== undefined && v.hours !== undefined),
+      {
+        message:
+          "Provide start+end dates, a week ('this_week'/'next_week') with days, or — for an hour-based policy — a start day + hours.",
+      },
+    ),
   async preview(ctx, args) {
     // The policy ref resolves by name in either slot (balance_update precedent) —
     // a bogus policy clarifies with the real list, never a doomed commit.
@@ -316,25 +325,62 @@ const createRequest = defineRiskyAction({
       { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
     );
     if (!policy.ok) return policy.clarify;
-    // Time-off request bodies are policy-unit-specific: `createTimeOffRequest`
-    // builds the DAYS form (`period.days`). An HOURS-based policy needs a shape we
-    // have not live-verified — clarify rather than send a wrong body to the PTO
-    // path (an identity/shape mistake is a clarify, never a doomed commit). The
-    // unit read is best-effort: a failure falls through to today's DAYS behavior,
-    // never blocking the common path on a transient blip.
+    const now = nowDate(ctx);
+    // Time-off request bodies are policy-unit-specific: the DAYS path below builds
+    // `period.days` from bare dates; an HOURS policy wants ISO datetime instants
+    // (live-verified). Read the unit best-effort — a failure falls through to the
+    // DAYS path, never blocking the common case on a transient blip.
     let policyUnit: string | undefined;
     try {
       policyUnit = (await ctx.clockify.getTimeOffPolicy(policy.id))?.timeUnit;
     } catch {
       policyUnit = undefined;
     }
+    if (policyUnit === "HOURS") {
+      // HOURS request = a server-resolved DAY + a number of hours (the model never
+      // computes calendar dates). Build 09:00 → 09:00+N ISO instants for the wire.
+      const day = resolveRelativeDay(now, { date: args.start });
+      if (day === undefined) {
+        return {
+          clarify: `For the hour-based policy "${policy.name ?? policy.id}", tell me the day (e.g. "next monday" or 2026-07-06) and how many hours.`,
+        };
+      }
+      const hours = args.hours;
+      if (hours === undefined || hours <= 0) {
+        return { clarify: `How many hours of time off on ${day} under "${policy.name ?? policy.id}"?` };
+      }
+      const startMs = Date.parse(`${day}T09:00:00Z`);
+      const isoNoMillis = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+      const startIso = isoNoMillis(startMs);
+      const endIso = isoNoMillis(startMs + hours * 3_600_000);
+      const warnings = ["This submits a request that notifies approvers."];
+      try {
+        const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
+        const bal = balances.find((b) => b.policyId === policy.id)?.balance;
+        if (bal !== undefined && hours > bal) {
+          warnings.push(`This requests ${hours}h but the policy balance is ${bal}h — Clockify will likely reject it.`);
+        }
+      } catch {
+        // Balance unavailable — submit anyway; Clockify itself remains the gate.
+      }
+      return {
+        actionLabel: "Request time off",
+        targets: [],
+        expectedChanges: [`Request ${hours}h off on ${day} under "${policy.name ?? policy.id}"`],
+        reversibility: "Cancel or have the request denied in Clockify.",
+        warnings,
+        payload: {
+          policyId: policy.id,
+          input: { start: startIso, end: endIso, timeUnit: "HOURS", ...(args.note !== undefined ? { note: args.note } : {}) },
+        },
+      };
+    }
     if (policyUnit !== undefined && policyUnit !== "DAYS") {
       const unit = policyUnit.toLowerCase();
       return {
-        clarify: `The policy "${policy.name ?? policy.id}" is measured in ${unit}, and ${unit}-based time-off requests aren't supported here yet — please submit it directly in Clockify.`,
+        clarify: `The policy "${policy.name ?? policy.id}" is measured in ${unit}, which isn't supported here yet — please submit it directly in Clockify.`,
       };
     }
-    const now = nowDate(ctx);
     // 'N days next week' anchors deterministically to the first N WORKDAYS of
     // that week (the resolveLogTimes pattern: the harness defaults, the preview
     // shows the chosen dates, the admin confirms). Explicit start/end wins.
