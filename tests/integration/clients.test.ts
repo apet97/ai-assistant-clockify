@@ -73,6 +73,30 @@ describe("client actions", () => {
     expect(fake.state.clients[0].name).toBe("Acme Corp");
   });
 
+  it("clockify_clients_update threads ccEmails into the patch (typed + validated)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { id: "c1", ccEmails: ["billing@acme.com"] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.operation.payload).toMatchObject({ id: "c1", patch: { ccEmails: ["billing@acme.com"] } });
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+  });
+
+  it("clockify_clients_update rejects a malformed ccEmails entry (invalid_args)", async () => {
+    const fake = createFakeWorkspace(seed());
+    const result = await executeAction({
+      actionName: "clockify_clients_update",
+      args: { id: "c1", ccEmails: ["not-an-email"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || result.receipt.ok) throw new Error("expected an error receipt");
+    expect(result.receipt.code).toBe("invalid_args");
+  });
+
   it("clockify_clients_update clarifies (never previews a doomed commit) on an unknown name", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({

@@ -88,7 +88,7 @@ const createClient = defineAction({
 const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   description:
-    "Update a client (rename, note, archived). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
+    "Update a client (rename, archive/unarchive, set billing `ccEmails`). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   schema: z
@@ -98,14 +98,18 @@ const updateClient = defineRiskyAction({
       currentName: z.string().min(1).optional(),
       name: z.string().optional(),
       archived: z.boolean().optional(),
+      /** Billing CC recipients (Clockify `ccEmails`); update sticks via getThenPut. */
+      ccEmails: z.array(z.string().email()).optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })
     .refine((v) => v.id !== undefined || v.currentName !== undefined, {
       message: "Provide the client id or its exact currentName.",
     })
-    .refine((v) => v.name !== undefined || v.archived !== undefined || v.fields !== undefined, {
-      message: "Provide at least one field to change.",
-    }),
+    .refine(
+      (v) =>
+        v.name !== undefined || v.archived !== undefined || v.ccEmails !== undefined || v.fields !== undefined,
+      { message: "Provide at least one field to change." },
+    ),
   async preview(ctx, args) {
     const resolved = await resolveEntityRef(
       { id: args.id, name: args.currentName },
@@ -121,6 +125,7 @@ const updateClient = defineRiskyAction({
     const patch: Record<string, unknown> = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.archived !== undefined ? { archived: args.archived } : {}),
+      ...(args.ccEmails !== undefined ? { ccEmails: args.ccEmails } : {}),
       ...(args.fields ?? {}),
     };
     return {
