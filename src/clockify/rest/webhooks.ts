@@ -26,8 +26,18 @@ const WEBHOOK_EVENTS: readonly string[] = [
 /** Editable webhook fields carried through a GET-then-merge update (never authToken). */
 const WEBHOOK_FIELDS = ["name", "url", "webhookEvent", "triggerSourceType", "triggerSource"] as const;
 
+/** Raw webhook fields read by {@link mapWebhook} (the `authToken` secret is never read). */
+type WebhookRow = {
+  id: string;
+  name?: string;
+  url?: string;
+  webhookEvent?: string;
+  triggerSourceType?: string;
+  enabled?: boolean;
+};
+
 /** Map a raw webhook to a view, STRIPPING the `authToken` secret. */
-function mapWebhook(raw: any): WebhookSummary {
+function mapWebhook(raw: WebhookRow): WebhookSummary {
   const out: WebhookSummary = { id: raw.id, name: raw.name ?? raw.id };
   if (raw.url !== undefined) out.url = raw.url;
   if (raw.webhookEvent !== undefined) out.webhookEvent = raw.webhookEvent;
@@ -47,12 +57,12 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
 
   return {
     async listWebhooks() {
-      const data = (await core.call("api", "GET", `${ws}/webhooks`)) as { webhooks?: any[] } | any[] | null;
+      const data = (await core.call("api", "GET", `${ws}/webhooks`)) as { webhooks?: WebhookRow[] } | WebhookRow[] | null;
       const rows = Array.isArray(data) ? data : (data?.webhooks ?? []);
       return rows.map(mapWebhook);
     },
     async getWebhook(id) {
-      const raw = await core.call("api", "GET", `${ws}/webhooks/${id}`, undefined, true);
+      const raw = (await core.call("api", "GET", `${ws}/webhooks/${id}`, undefined, true)) as WebhookRow | null;
       return raw ? mapWebhook(raw) : null;
     },
     async createWebhook(input): Promise<EntitySummary> {
