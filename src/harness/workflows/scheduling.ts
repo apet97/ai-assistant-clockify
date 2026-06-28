@@ -177,9 +177,11 @@ const publish = defineRiskyAction({
     return {
       actionLabel: "Publish schedule",
       targets: [],
-      expectedChanges: [`Publish scheduled assignments ${start} → ${end}${args.notifyUsers ? " (notify users)" : ""}`],
+      expectedChanges: [`Publish ALL draft scheduling assignments overlapping ${start} → ${end}${args.notifyUsers ? " (notify users)" : ""}`],
       reversibility: "Publishing notifies assignees and is hard to reverse.",
-      warnings: ["This publishes the schedule and may email affected users."],
+      warnings: [
+        "This publishes EVERY draft assignment overlapping the range — not just recently-created ones — and may email affected users.",
+      ],
       payload: { start, end, notifyUsers: args.notifyUsers },
     };
   },

@@ -137,6 +137,9 @@ describe("scheduling actions", () => {
     const preview = await executeAction({ actionName: "clockify_scheduling_publish", args: { start: "2026-06-01", end: "2026-06-07", notifyUsers: false }, context: makeContext(fake) });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("external_side_effect");
+    // Truthful blast radius: publish targets ALL drafts overlapping the range,
+    // not just recently-created ones (live: range-scoped publish).
+    expect(preview.preview.expectedChanges.join(" ")).toMatch(/all .*draft/i);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.publishSchedule).toBe(1);
