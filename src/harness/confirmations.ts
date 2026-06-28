@@ -166,17 +166,33 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
   return { record, previewId: id, nonce, expiresAt };
 }
 
-export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult {
-  const { record } = input;
-  const now = input.now ?? new Date();
+interface ConfirmationGateInput {
+  record: PendingConfirmationRecord;
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  now: Date;
+}
+
+/**
+ * The four shared confirmation guards in order — tenant binding, status,
+ * fail-closed expiry, op-hash tripwire — single-sourced for {@link confirmPending}
+ * and {@link rotatePendingNonce}. Returns the first failure or `{ ok: true }`.
+ * The nonce check stays OUT of this gate: confirmPending validates the nonce
+ * after it, rotatePendingNonce mints a fresh one.
+ */
+function checkConfirmationGate(
+  g: ConfirmationGateInput,
+): { ok: true } | { ok: false; code: string; message: string } {
+  const { record, now } = g;
 
   // Binding BEFORE status (matches cancelPending): a non-owner must always get
   // "forbidden", never the preview's lifecycle state — the route fetches the
-  // record by id with no scoping, so confirmPending is the only tenant boundary.
+  // record by id with no scoping, so this gate is the only tenant boundary.
   if (
-    record.sessionId !== input.sessionId ||
-    record.workspaceId !== input.workspaceId ||
-    record.adminUserId !== input.adminUserId
+    record.sessionId !== g.sessionId ||
+    record.workspaceId !== g.workspaceId ||
+    record.adminUserId !== g.adminUserId
   ) {
     return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
   }
@@ -194,6 +210,22 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
   if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {
     return { ok: false, code: "operation_mismatch", message: "Preview integrity check failed." };
   }
+  return { ok: true };
+}
+
+export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult {
+  const { record } = input;
+  const now = input.now ?? new Date();
+
+  const gate = checkConfirmationGate({
+    record,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    adminUserId: input.adminUserId,
+    now,
+  });
+  if (!gate.ok) return gate;
+
   if (
     !timingSafeStringEqual(
       hashNonce(input.nonce, record.id, record.operationHash, input.sessionSecret),
@@ -237,27 +269,14 @@ export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
   const { record } = input;
   const now = input.now ?? new Date();
 
-  // Binding BEFORE status (matches confirmPending/cancelPending): a non-owner
-  // must get "forbidden", never the lifecycle state.
-  if (
-    record.sessionId !== input.sessionId ||
-    record.workspaceId !== input.workspaceId ||
-    record.adminUserId !== input.adminUserId
-  ) {
-    return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
-  }
-  if (record.status !== "pending") {
-    return { ok: false, code: "not_pending", message: "This preview is no longer pending." };
-  }
-  const expiresAtMs = new Date(record.expiresAt).getTime();
-  if (Number.isNaN(expiresAtMs) || now.getTime() >= expiresAtMs) {
-    // Fail CLOSED on an unparseable expiry — `now >= NaN` is false, which would
-    // otherwise leave a corrupt/tampered TTL confirmable forever.
-    return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
-  }
-  if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {
-    return { ok: false, code: "operation_mismatch", message: "Preview integrity check failed." };
-  }
+  const gate = checkConfirmationGate({
+    record,
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    adminUserId: input.adminUserId,
+    now,
+  });
+  if (!gate.ok) return gate;
 
   const nonce = input.nonce ?? randomBytes(32).toString("base64url");
   return {
