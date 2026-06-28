@@ -144,6 +144,19 @@ describe("scheduling actions", () => {
     expect(receipt.ok).toBe(true);
     expect(fake.counts.publishSchedule).toBe(1);
   });
+
+  it("publish scopes to a resolved user (userFilter) and clarifies on an unknown one", async () => {
+    const fake = createFakeWorkspace({ ...seed(), users: [{ id: "u1", name: "Alice", status: "ACTIVE" }] });
+    const preview = await executeAction({ actionName: "clockify_scheduling_publish", args: { start: "2026-06-01", end: "2026-06-07", userId: "Alice" }, context: makeContext(fake) });
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
+    expect(preview.operation.payload).toMatchObject({ userId: "u1" });
+    expect(preview.preview.expectedChanges.join(" ")).toContain("Alice");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+
+    const unknown = await executeAction({ actionName: "clockify_scheduling_publish", args: { start: "2026-06-01", end: "2026-06-07", userId: "Ghost" }, context: makeContext(fake) });
+    expect(unknown.kind).toBe("clarify");
+  });
 });
 
 describe("scheduling date normalization (live-loop FIX 2: invalid start/end)", () => {

@@ -93,10 +93,14 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
       await core.call("api", "DELETE", `${ws}/scheduling/assignments/recurring/${id}${qs}`);
     },
     async publishSchedule(input) {
+      // Publish is range-scoped (publishes ALL drafts overlapping [start,end]). An
+      // optional userFilter narrows the blast radius to a single user (live-verified
+      // the endpoint accepts {contains,ids}).
       await core.call("api", "PUT", `${ws}/scheduling/assignments/publish`, {
         start: input.start,
         end: input.end,
         notifyUsers: input.notifyUsers ?? false,
+        ...(input.userId ? { userFilter: { contains: "CONTAINS", ids: [input.userId] } } : {}),
       });
     },
     async getProjectScheduleTotals(input) {

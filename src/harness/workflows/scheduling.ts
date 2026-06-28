@@ -166,29 +166,56 @@ const deleteAssignment = defineRiskyAction({
 
 const publish = defineRiskyAction({
   name: "clockify_scheduling_publish",
-  description: "Publish draft scheduling assignments in a date range. External side effect (notifies assignees) — previews and requires confirmation.",
+  description:
+    "Publish draft scheduling assignments in a date range. Publishes ALL drafts overlapping the range unless you pass `userId` (or a user's exact name / 'me') to scope it to one person. External side effect (notifies assignees) — previews and requires confirmation.",
   group: SCHED,
   risks: ["external_side_effect"],
-  schema: z.object({ start: z.string().min(1), end: z.string().min(1), notifyUsers: z.boolean().optional() }),
+  schema: z.object({
+    start: z.string().min(1),
+    end: z.string().min(1),
+    notifyUsers: z.boolean().optional(),
+    /** Optional: narrow the publish to ONE user (id, exact name, or 'me'). */
+    userId: z.string().min(1).optional(),
+  }),
   async preview(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
     if (!window.ok) return { clarify: window.message };
     const { start, end } = window as { start: string; end: string };
+    // Optional user scoping narrows the blast radius from the whole range to one
+    // person (userFilter). A bogus name clarifies, never a doomed publish.
+    let scopedId: string | undefined;
+    let scopedLabel: string | undefined;
+    if (args.userId !== undefined) {
+      const user = await resolveUserRef(
+        { id: args.userId },
+        { verb: "publish the schedule for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+      );
+      if (!user.ok) return user.clarify;
+      scopedId = user.userId;
+      scopedLabel = user.label;
+    }
+    const notify = args.notifyUsers ? " (notify users)" : "";
     return {
       actionLabel: "Publish schedule",
       targets: [],
-      expectedChanges: [`Publish ALL draft scheduling assignments overlapping ${start} → ${end}${args.notifyUsers ? " (notify users)" : ""}`],
+      expectedChanges: [
+        scopedId
+          ? `Publish draft scheduling assignments for ${scopedLabel} overlapping ${start} → ${end}${notify}`
+          : `Publish ALL draft scheduling assignments overlapping ${start} → ${end}${notify}`,
+      ],
       reversibility: "Publishing notifies assignees and is hard to reverse.",
       warnings: [
-        "This publishes EVERY draft assignment overlapping the range — not just recently-created ones — and may email affected users.",
+        scopedId
+          ? `This publishes every draft assignment for ${scopedLabel} overlapping the range and may email them.`
+          : "This publishes EVERY draft assignment overlapping the range — not just recently-created ones — and may email affected users.",
       ],
-      payload: { start, end, notifyUsers: args.notifyUsers },
+      payload: { start, end, notifyUsers: args.notifyUsers, ...(scopedId ? { userId: scopedId } : {}) },
     };
   },
   async commit(ctx, payload) {
-    const { start, end, notifyUsers } = payload as { start: string; end: string; notifyUsers?: boolean };
-    await ctx.clockify.publishSchedule({ start, end, notifyUsers });
-    return successReceipt({ action: "clockify_scheduling_publish", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { published: true, start, end } });
+    const { start, end, notifyUsers, userId } = payload as { start: string; end: string; notifyUsers?: boolean; userId?: string };
+    await ctx.clockify.publishSchedule({ start, end, notifyUsers, userId });
+    return successReceipt({ action: "clockify_scheduling_publish", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { published: true, start, end, ...(userId ? { userId } : {}) } });
   },
 });
 

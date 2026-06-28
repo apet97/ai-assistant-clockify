@@ -48,7 +48,7 @@ export interface SchedulingPort {
   createAssignment(input: CreateAssignmentInput): Promise<EntitySummary>;
   updateAssignment(id: string, patch: UpdateAssignmentInput): Promise<EntitySummary>;
   deleteAssignment(id: string, seriesUpdateOption?: string): Promise<void>;
-  publishSchedule(input: { start: string; end: string; notifyUsers?: boolean }): Promise<void>;
+  publishSchedule(input: { start: string; end: string; notifyUsers?: boolean; userId?: string }): Promise<void>;
   getProjectScheduleTotals(input: { start: string; end: string; projectId?: string }): Promise<unknown[]>;
   getUserScheduleTotals(userId: string, range: { start: string; end: string }): Promise<unknown>;
 }
