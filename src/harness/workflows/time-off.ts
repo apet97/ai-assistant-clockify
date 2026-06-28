@@ -318,24 +318,22 @@ const createRequest = defineRiskyAction({
       },
     ),
   async preview(ctx, args) {
-    // The policy ref resolves by name in either slot (balance_update precedent) —
-    // a bogus policy clarifies with the real list, never a doomed commit.
+    // List ONCE; reuse the list for resolution AND the timeUnit read so a time-off
+    // request preview makes a single policies round-trip (PERF-01). The policy ref
+    // resolves by name in either slot (balance_update precedent) — a bogus policy
+    // clarifies with the real list, never a doomed commit.
+    const policies = await ctx.clockify.listTimeOffPolicies();
     const policy = await resolveEntityRef(
       { id: args.policyId, name: args.policyName },
-      { noun: "time-off policy", verb: "request time off under", list: () => ctx.clockify.listTimeOffPolicies() },
+      { noun: "time-off policy", verb: "request time off under", list: () => Promise.resolve(policies) },
     );
     if (!policy.ok) return policy.clarify;
     const now = nowDate(ctx);
     // Time-off request bodies are policy-unit-specific: the DAYS path below builds
     // `period.days` from bare dates; an HOURS policy wants ISO datetime instants
-    // (live-verified). Read the unit best-effort — a failure falls through to the
-    // DAYS path, never blocking the common case on a transient blip.
-    let policyUnit: string | undefined;
-    try {
-      policyUnit = (await ctx.clockify.getTimeOffPolicy(policy.id))?.timeUnit;
-    } catch {
-      policyUnit = undefined;
-    }
+    // (live-verified). Read the unit from the already-fetched list — an unknown
+    // unit falls through to the DAYS path, exactly as before.
+    const policyUnit = policies.find((p) => p.id === policy.id)?.timeUnit;
     if (policyUnit === "HOURS") {
       // HOURS request = a server-resolved DAY + a number of hours (the model never
       // computes calendar dates). Build 09:00 → 09:00+N ISO instants for the wire.
