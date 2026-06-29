@@ -1,15 +1,29 @@
-import { testing } from "@apet97/clockify-addon-sdk";
+import { inject } from "vitest";
+import { createPrivateKey, type KeyObject } from "node:crypto";
 
 /**
- * Memoized RSA test keys. RSA-2048 keygen is ~46ms and CPU-heavy; generating it
- * PER TEST saturates the Vitest fork pool and intermittently TIMES OUT unrelated
- * test files under load — the flaky-CI root cause. The key material is identical
- * across every test, so generate it once per module graph and share the promise.
- * Vitest isolation gives each test file a fresh module registry, so this memoizes
- * once per file (the same effect as the prior inline `keysPromise` pattern, DRY).
+ * The suite-wide RSA test keypair: generated ONCE in tests/global-setup.ts and
+ * handed to workers as PEMs (provide/inject). RSA-2048 keygen is ~46ms and
+ * CPU-heavy; doing it per test FILE (~15 integration files) saturated the Vitest
+ * fork pool and, under the concurrent build+test CPU contention of
+ * `npm run verify`, intermittently skewed unrelated files' auth/session timing
+ * (the flaky-gate root cause). Here we only RE-IMPORT the shared private key
+ * (cheap; no keygen) and memoize per file. The shape matches what every caller
+ * reads: { privateKey, pem } (pem is the SPKI public-key PEM).
  */
-let keysPromise: ReturnType<typeof testing.generateTestKeys> | undefined;
-export function testKeys(): ReturnType<typeof testing.generateTestKeys> {
-  if (!keysPromise) keysPromise = testing.generateTestKeys();
-  return keysPromise;
+export interface TestKeys {
+  privateKey: KeyObject;
+  pem: string;
+}
+
+let cached: TestKeys | undefined;
+
+export function testKeys(): Promise<TestKeys> {
+  if (!cached) {
+    cached = {
+      pem: inject("addonPublicKeyPem"),
+      privateKey: createPrivateKey(inject("addonPrivateKeyPem")),
+    };
+  }
+  return Promise.resolve(cached);
 }

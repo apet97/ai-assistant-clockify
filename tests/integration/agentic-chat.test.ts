@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
+import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -35,15 +36,7 @@ interface TestApp {
   store: Store;
 }
 
-// RSA-2048 keygen is ~46ms; generating it per test (55× in this file) starved the
-// Vitest fork pool and intermittently failed UNRELATED test files under load
-// (flaky-CI root cause). The key material is identical across tests, so generate it
-// exactly once and memoize the promise (race-safe even if a test runs concurrently).
-let keysPromise: ReturnType<typeof testing.generateTestKeys> | undefined;
-function testKeys(): ReturnType<typeof testing.generateTestKeys> {
-  if (!keysPromise) keysPromise = testing.generateTestKeys();
-  return keysPromise;
-}
+// Test keys come from the suite-wide keypair (tests/global-setup.ts) via testKeys().
 
 async function makeApp(
   script: ToolCompletion[],

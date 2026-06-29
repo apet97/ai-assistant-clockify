@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
+import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -71,7 +72,7 @@ async function cookieFor(app: Express): Promise<string> {
 }
 
 beforeAll(async () => {
-  keys = await testing.generateTestKeys();
+  keys = await testKeys();
 });
 
 describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {

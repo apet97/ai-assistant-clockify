@@ -8,5 +8,8 @@ export default defineConfig({
     root: ".",
     include: ["tests/**/*.test.ts"],
     environment: "node",
+    // ONE RSA keypair for the whole suite (see tests/global-setup.ts) instead of
+    // a per-file keygen that saturated the fork pool and flaked the gate (F1).
+    globalSetup: ["./tests/global-setup.ts"],
   },
 });

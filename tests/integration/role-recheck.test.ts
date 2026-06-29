@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
+import { testKeys } from "../helpers/test-keys.js";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore } from "../../src/db/store.js";
@@ -24,7 +24,7 @@ const modelClient: ModelClient = {
  * request succeeds (the prior cookie-only posture, byte-identical).
  */
 async function buildApp(roleRecheckEnabled: boolean, memberRole: string) {
-  const keys = await testing.generateTestKeys();
+  const keys = await testKeys();
   const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
