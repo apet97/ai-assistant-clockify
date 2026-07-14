@@ -28,14 +28,14 @@
     "@apet97/clockify-addon-sdk": "file:vendor/apet97-clockify-addon-sdk-1.0.0.tgz",
     "@js-temporal/polyfill": "0.5.1",
     "better-sqlite3": "^12.10.0",
-    "express": "^4.19.2",
+    "express": "^5.2.1",
     "zod": "^3.25.0",
     "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/express": "^4.17.21",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.10.0",
     "@types/spdx-expression-parse": "4.0.0",
     "@types/supertest": "^6.0.2",
