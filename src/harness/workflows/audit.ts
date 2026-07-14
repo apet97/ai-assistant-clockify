@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt } from "../receipts.js";
 import { SEVEN_DAYS_MS } from "../../durations.js";
 
 /**
@@ -51,20 +51,24 @@ const search = defineAction({
   async handler(ctx: ActionContext, args) {
     const end = args.end ?? (ctx.now ?? (() => new Date()))().toISOString();
     const start = args.start ?? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString();
-    const rows = await ctx.clockify.searchAuditLog({
+    const result = await ctx.clockify.searchAuditLog({
       actions: args.actions ?? ALL_AUDIT_ACTIONS,
       start,
       end,
       page: args.page,
     });
-    const capped = capRows(rows);
+    const capped = capRows(result.rows);
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_audit_logs_search",
         entity: "audit_log",
         ids: { workspaceId: ctx.workspaceId },
-        data: { count: capped.count, bytes: capped.bytes, truncated: capped.truncated, entries: capped.data },
+        rows: capped.data ?? [],
+        dataKey: "entries",
+        count: capped.count,
+        truncated: result.truncated || capped.truncated,
+        data: { bytes: capped.bytes, inlineTruncated: capped.truncated },
         warnings: capped.truncated ? [{ code: "audit_truncated", message: `Audit result is ${capped.bytes} bytes, over the inline cap; narrow the date range or fewer actions.` }] : undefined,
       }),
     };
@@ -78,15 +82,19 @@ const entityChanges = defineAction({
   risks: ["read"],
   schema: z.object({ changeType: z.enum(["created", "updated", "deleted"]) }),
   async handler(ctx, args) {
-    const rows = await ctx.clockify.listEntityChanges(args.changeType);
-    const capped = capRows(rows);
+    const result = await ctx.clockify.listEntityChanges(args.changeType);
+    const capped = capRows(result.rows);
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_entity_changes_list",
         entity: "audit_log",
         ids: { workspaceId: ctx.workspaceId },
-        data: { changeType: args.changeType, count: capped.count, bytes: capped.bytes, truncated: capped.truncated, entities: capped.data },
+        rows: capped.data ?? [],
+        dataKey: "entities",
+        count: capped.count,
+        truncated: result.truncated || capped.truncated,
+        data: { changeType: args.changeType, bytes: capped.bytes, inlineTruncated: capped.truncated },
         warnings: capped.truncated ? [{ code: "audit_truncated", message: `Change feed is ${capped.bytes} bytes, over the inline cap.` }] : undefined,
       }),
     };

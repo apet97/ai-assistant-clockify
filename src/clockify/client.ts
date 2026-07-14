@@ -35,6 +35,7 @@ export type {
   ProjectSummary,
   TaskSummary,
   TimeEntrySummary,
+  ListResult,
 } from "./types.js";
 
 /**

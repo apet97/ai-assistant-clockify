@@ -94,6 +94,20 @@ describe("scheduling actions", () => {
     expect(fake.counts.getProjectScheduleTotals ?? 0).toBe(2); // the unknown filter never reached the wire
   });
 
+  it("project_totals marks derived totals incomplete when the source list is truncated", async () => {
+    const fake = createFakeWorkspace({
+      listTruncated: { getProjectScheduleTotals: true },
+    });
+    const result = await executeAction({
+      actionName: "clockify_scheduling_project_totals",
+      args: { start: "2026-06-01", end: "2026-06-30" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
+    expect((result.receipt.data as any).truncated).toBe(true);
+    expect(result.receipt.warnings?.map((warning) => warning.code)).toContain("list_truncated");
+  });
+
   it("assignments_create is a SAFE write (executes immediately)", async () => {
     const fake = createFakeWorkspace({ users: [{ id: "u1", name: "Alice", status: "ACTIVE" }], projects: [{ id: "p1", name: "Apollo" }] });
     const result = await executeAction({ actionName: "clockify_scheduling_assignments_create", args: { userId: "u1", projectId: "p1", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8 }, context: makeContext(fake) });

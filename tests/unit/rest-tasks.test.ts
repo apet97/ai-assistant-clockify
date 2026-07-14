@@ -19,7 +19,7 @@ describe("task rest", () => {
   it("listTasks paginates under the project and maps projectId", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "t1", name: "Design" }]));
     const tasks = await rest(f as unknown as typeof fetch).listTasks("p1");
-    expect(tasks).toEqual([{ id: "t1", name: "Design", projectId: "p1" }]);
+    expect(tasks).toEqual({ rows: [{ id: "t1", name: "Design", projectId: "p1" }], truncated: false });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/projects/p1/tasks");
     expect(parsed.searchParams.get("page")).toBe("1");

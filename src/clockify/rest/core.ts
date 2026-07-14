@@ -17,7 +17,7 @@
  * token/key is sent only in the request header — never logged, never placed in a
  * prompt, never returned.
  */
-import type { ClockifyAuth } from "../types.js";
+import type { ClockifyAuth, ListResult } from "../types.js";
 import { canonicalClockifyServiceUrl } from "../service-url.js";
 import {
   AmbiguousWriteOutcome,
@@ -64,13 +64,7 @@ export interface RestCore {
     host: ClockifyHost,
     path: string,
     params?: Record<string, string>,
-  ): Promise<unknown[]>;
-  /** Like {@link paginate}, but reports whether the MAX_PAGES backstop truncated the list. */
-  paginateWithMeta(
-    host: ClockifyHost,
-    path: string,
-    params?: Record<string, string>,
-  ): Promise<{ rows: unknown[]; truncated: boolean }>;
+  ): Promise<ListResult<unknown>>;
   /** Paginate a list whose page body is an ENVELOPE (`{key:[…]}`) — or a bare array —
    *  unwrapping `envelopeKey` per page (e.g. expense categories: `{categories:[…]}`).
    *  A dotted key walks nested envelopes (e.g. expenses: `"expenses.expenses"` for
@@ -80,7 +74,7 @@ export interface RestCore {
     path: string,
     envelopeKey: string,
     params?: Record<string, string>,
-  ): Promise<unknown[]>;
+  ): Promise<ListResult<unknown>>;
   getThenPut(
     host: ClockifyHost,
     path: string,
@@ -299,11 +293,11 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // certainly more — the caller must surface that the list is incomplete rather
   // than reason over a silently-capped result. Warns once per truncated list so
   // the truncation is operator-visible even for callers that ignore the flag.
-  async function paginateWithMeta(
+  async function paginate(
     host: ClockifyHost,
     path: string,
     params: Record<string, string> = {},
-  ): Promise<{ rows: unknown[]; truncated: boolean }> {
+  ): Promise<ListResult<unknown>> {
     const out: unknown[] = [];
     for (let page = 1; page <= MAX_PAGES; page++) {
       const qs = new URLSearchParams({
@@ -324,20 +318,12 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { rows: out, truncated: true };
   }
 
-  async function paginate(
-    host: ClockifyHost,
-    path: string,
-    params: Record<string, string> = {},
-  ): Promise<unknown[]> {
-    return (await paginateWithMeta(host, path, params)).rows;
-  }
-
   async function paginateEnvelope(
     host: ClockifyHost,
     path: string,
     envelopeKey: string,
     params: Record<string, string> = {},
-  ): Promise<unknown[]> {
+  ): Promise<ListResult<unknown>> {
     // A dotted key walks nested envelopes level by level (e.g. expenses:
     // "expenses.expenses" for {expenses:{expenses:[…]}}); at each level a bare
     // array short-circuits (taken as-is) and a missing key yields [].
@@ -360,12 +346,12 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
         | null;
       const arr = unwrap(data);
       out.push(...arr);
-      if (arr.length < PAGE_SIZE) return out; // short page = natural end
+      if (arr.length < PAGE_SIZE) return { rows: out, truncated: false }; // short page = natural end
     }
     console.warn(
       `Clockify list ${path} hit the ${MAX_PAGES}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
     );
-    return out;
+    return { rows: out, truncated: true };
   }
 
   async function getThenPut(
@@ -434,5 +420,5 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 
-  return { call, paginate, paginateWithMeta, paginateEnvelope, getThenPut, postForm, getBinary };
+  return { call, paginate, paginateEnvelope, getThenPut, postForm, getBinary };
 }

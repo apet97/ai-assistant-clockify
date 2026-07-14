@@ -2,7 +2,7 @@ import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import {
   resolveInstant,
   resolveProjectTaskRefs,
@@ -364,24 +364,22 @@ const reviewDay = defineAction({
     const start = `${date}T00:00:00.000Z`;
     // Exclusive end = next-day midnight (consistent with review_week's window).
     const end = new Date(Date.parse(start) + DAY_MS).toISOString();
-    const { entries, truncated } = await ctx.clockify.getEntries({ userId, start, end });
+    const { rows, truncated } = await ctx.clockify.getEntries({ userId, start, end });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_review_day",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
+        rows,
+        truncated,
         data: {
           date,
           userId,
-          count: entries.length,
-          totalMinutes: totalMinutes(entries),
-          entries,
-          ...(truncated ? { truncated: true } : {}),
+          totalMinutes: totalMinutes(rows),
         },
-        // A truncated list makes totalMinutes UNDERSTATED — say so plainly so the
-        // model and admin never trust the total as the full picture.
-        warnings: truncated ? [TRUNCATED_TOTAL_WARNING] : undefined,
+        dataKey: "entries",
+        truncationMessage: TRUNCATED_TOTAL_WARNING.message,
       }),
     };
   },
@@ -410,24 +408,23 @@ const reviewWeek = defineAction({
     const userId = user.userId;
     const start = `${startDate}T00:00:00.000Z`;
     const end = new Date(Date.parse(start) + SEVEN_DAYS_MS).toISOString();
-    const { entries, truncated } = await ctx.clockify.getEntries({ userId, start, end });
+    const { rows, truncated } = await ctx.clockify.getEntries({ userId, start, end });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_review_week",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
+        rows,
+        truncated,
         data: {
           start: startDate,
           end,
           userId,
-          count: entries.length,
-          totalMinutes: totalMinutes(entries),
-          entries,
-          ...(truncated ? { truncated: true } : {}),
+          totalMinutes: totalMinutes(rows),
         },
-        // A truncated week list understates totalMinutes — caveat it the same way.
-        warnings: truncated ? [TRUNCATED_TOTAL_WARNING] : undefined,
+        dataKey: "entries",
+        truncationMessage: TRUNCATED_TOTAL_WARNING.message,
       }),
     };
   },

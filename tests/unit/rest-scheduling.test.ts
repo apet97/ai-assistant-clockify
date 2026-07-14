@@ -20,7 +20,7 @@ describe("scheduling rest", () => {
       jsonResponse([{ id: "a1", userId: "u1", projectId: "p1", start: "2026-06-01", end: "2026-06-05", hoursPerDay: 8, published: false }]),
     );
     const out = await rest(f as unknown as typeof fetch).listAssignments({ start: "2026-06-01", end: "2026-06-30", userId: "u1", projectId: "p1" });
-    expect(out[0]).toMatchObject({ id: "a1", userId: "u1", projectId: "p1", hoursPerDay: 8 });
+    expect(out.rows[0]).toMatchObject({ id: "a1", userId: "u1", projectId: "p1", hoursPerDay: 8 });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/scheduling/assignments/all");
     expect(parsed.searchParams.get("start")).toBe("2026-06-01");
@@ -101,7 +101,7 @@ describe("scheduling rest", () => {
     // GET …/projects/totals/{projectId}?start&end (single object → wrapped in array).
     const f = vi.fn(async () => jsonResponse({ projectId: "p1", total: 40 }));
     const out = await rest(f as unknown as typeof fetch).getProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07", projectId: "p1" });
-    expect(out).toEqual([{ projectId: "p1", total: 40 }]);
+    expect(out).toEqual({ rows: [{ projectId: "p1", total: 40 }], truncated: false });
     const [url, init] = (f as any).mock.calls[0];
     expect(init.method).toBe("GET");
     const parsed = new URL(url);
@@ -113,12 +113,12 @@ describe("scheduling rest", () => {
   it("getProjectScheduleTotals POSTs the all-projects search (no bogus projectId) when none is given", async () => {
     const f = vi.fn(async () => jsonResponse([{ projectId: "p1", total: 40 }]));
     const out = await rest(f as unknown as typeof fetch).getProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07" });
-    expect(out).toEqual([{ projectId: "p1", total: 40 }]);
+    expect(out).toEqual({ rows: [{ projectId: "p1", total: 40 }], truncated: false });
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/projects/totals");
     expect(init.method).toBe("POST");
     const body = JSON.parse(init.body);
-    expect(body).toEqual({ start: "2026-06-01", end: "2026-06-07" });
+    expect(body).toEqual({ start: "2026-06-01", end: "2026-06-07", page: 1, pageSize: 200 });
     expect(body).not.toHaveProperty("projectId");
   });
 

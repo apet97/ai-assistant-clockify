@@ -1,5 +1,5 @@
 import type { TimeEntrySummary, WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
 export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
@@ -64,8 +64,7 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
         if (taskId && e.taskId !== taskId) return false;
         return true;
       });
-      // `entriesTruncated` simulates the real adapter hitting the 10k page backstop.
-      return { entries, truncated: seed.entriesTruncated ?? false };
+      return fakeListResult(seed, "getEntries", entries);
     },
     async getEntry(id) {
       bump("getEntry");

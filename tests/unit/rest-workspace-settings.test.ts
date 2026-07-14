@@ -21,7 +21,7 @@ describe("workspace & template rest", () => {
   it("listTemplates GETs /projects?is-template=true and maps", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "t1", name: "Sprint template", archived: false }]));
     const out = await rest(f as unknown as typeof fetch).listTemplates();
-    expect(out).toEqual([{ id: "t1", name: "Sprint template", archived: false }]);
+    expect(out).toEqual({ rows: [{ id: "t1", name: "Sprint template", archived: false }], truncated: false });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/projects");
     expect(parsed.searchParams.get("is-template")).toBe("true");

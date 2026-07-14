@@ -35,7 +35,7 @@ describe("approval rest", () => {
   it("listApprovals GETs /approval-requests with a status filter + unwraps the approvalRequest wrapper", async () => {
     const f = vi.fn(async () => jsonResponse([liveWrapper("ap1")]));
     const out = await rest(f as unknown as typeof fetch).listApprovals({ status: "PENDING" });
-    expect(out[0]).toMatchObject({
+    expect(out.rows[0]).toMatchObject({
       id: "ap1",
       userId: "u1",
       userName: "Ann",
@@ -53,7 +53,7 @@ describe("approval rest", () => {
       jsonResponse([{ id: "ap1", userId: "u1", userName: "Ann", state: "PENDING", period: { start: "2026-06-01", end: "2026-06-07" } }]),
     );
     const out = await rest(f as unknown as typeof fetch).listApprovals();
-    expect(out[0]).toMatchObject({ id: "ap1", state: "PENDING", periodStart: "2026-06-01" });
+    expect(out.rows[0]).toMatchObject({ id: "ap1", state: "PENDING", periodStart: "2026-06-01" });
   });
 
   it("getApproval list-scans for the WRAPPED id", async () => {

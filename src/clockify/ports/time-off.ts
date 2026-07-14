@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 export interface TimeOffPolicySummary extends EntitySummary {
   status?: string;
@@ -69,12 +69,12 @@ export interface CreateTimeOffRequestInput {
  * balance update path is `/time-off/balance/policy/{policyId}`.
  */
 export interface TimeOffPort {
-  listTimeOffPolicies(): Promise<TimeOffPolicySummary[]>;
+  listTimeOffPolicies(): Promise<ListResult<TimeOffPolicySummary>>;
   getTimeOffPolicy(id: string): Promise<TimeOffPolicySummary | null>;
   createTimeOffPolicy(input: CreateTimeOffPolicyInput): Promise<EntitySummary>;
   updateTimeOffPolicy(id: string, patch: UpdateTimeOffPolicyInput): Promise<EntitySummary>;
   archiveTimeOffPolicy(id: string, archived: boolean): Promise<void>;
-  listTimeOffRequests(filter?: { status?: string; userId?: string }): Promise<TimeOffRequestSummary[]>;
+  listTimeOffRequests(filter?: { status?: string; userId?: string }): Promise<ListResult<TimeOffRequestSummary>>;
   getTimeOffRequest(id: string): Promise<TimeOffRequestSummary | null>;
   createTimeOffRequest(policyId: string, input: CreateTimeOffRequestInput): Promise<EntitySummary>;
   deleteTimeOffRequest(policyId: string, requestId: string): Promise<void>;
@@ -84,7 +84,7 @@ export interface TimeOffPort {
     statusType: "APPROVED" | "REJECTED",
     note?: string,
   ): Promise<EntitySummary>;
-  getTimeOffBalance(userId: string): Promise<TimeOffBalanceSummary[]>;
+  getTimeOffBalance(userId: string): Promise<ListResult<TimeOffBalanceSummary>>;
   updateTimeOffBalance(
     policyId: string,
     input: { userIds: string[]; value: number; note?: string },

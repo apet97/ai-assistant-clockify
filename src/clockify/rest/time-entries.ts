@@ -83,12 +83,12 @@ export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntr
       if (end) params.end = end;
       if (projectId) params.project = projectId;
       if (taskId) params.task = taskId;
-      const { rows, truncated } = await core.paginateWithMeta(
+      const { rows, truncated } = await core.paginate(
         "api",
         `${ws}/user/${userId}/time-entries`,
         params,
       );
-      return { entries: (rows as ClockifyTimeEntry[]).map(mapEntry), truncated };
+      return { rows: (rows as ClockifyTimeEntry[]).map(mapEntry), truncated };
     },
     async getEntry(id) {
       const e = (await core.call(

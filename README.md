@@ -15,6 +15,9 @@ anything) runs.
 - **Per-admin, per-workspace permissions.** Default is full `read_write` for every
   feature group; each admin manages only their own policy, from inside the chat.
 - **Safe writes execute immediately** and return a structured receipt.
+- **List completeness is explicit.** Every Clockify list/search receipt carries
+  `truncated`; incomplete results add `list_truncated`, and the harness never
+  treats a truncated scan as proof that a name is unique or absent.
 - **Risky writes require a dry-run preview + a button confirmation.** Typed text
   such as "yes" never executes a risky action. `Confirm all` applies only to the
   exact previewed batch.

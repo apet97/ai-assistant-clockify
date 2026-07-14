@@ -15,6 +15,7 @@ export interface AuditSearchInput {
 }
 
 export interface AuditPort {
-  searchAuditLog(input: AuditSearchInput): Promise<unknown[]>;
-  listEntityChanges(changeType: "created" | "updated" | "deleted"): Promise<unknown[]>;
+  searchAuditLog(input: AuditSearchInput): Promise<ListResult<unknown>>;
+  listEntityChanges(changeType: "created" | "updated" | "deleted"): Promise<ListResult<unknown>>;
 }
+import type { ListResult } from "../types.js";

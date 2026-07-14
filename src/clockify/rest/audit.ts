@@ -1,5 +1,8 @@
 import type { RestCore } from "./core.js";
 import type { AuditPort } from "../ports/audit.js";
+import { collectPages } from "./list-pages.js";
+
+const AUDIT_PAGE_SIZE = 50;
 
 /**
  * Typed audit REST module (goclmcp §2.15). I/O only. The audit-log search runs on
@@ -13,18 +16,30 @@ export function makeAuditRest(core: RestCore, workspaceId: string): AuditPort {
 
   return {
     async searchAuditLog(input) {
-      const body: Record<string, unknown> = {
-        actions: input.actions,
-        start: input.start,
-        end: input.end,
-        ...(input.page !== undefined ? { page: input.page } : {}),
+      const load = async (page: number) => {
+        const body: Record<string, unknown> = {
+          actions: input.actions,
+          start: input.start,
+          end: input.end,
+          page,
+          "page-size": AUDIT_PAGE_SIZE,
+        };
+        const rows = (await core.call("audit", "POST", `${ws}/audit-log`, body)) as unknown[] | null;
+        return Array.isArray(rows) ? rows : [];
       };
-      const rows = (await core.call("audit", "POST", `${ws}/audit-log`, body)) as unknown[] | null;
-      return Array.isArray(rows) ? rows : [];
+      if (input.page !== undefined) {
+        const rows = await load(input.page);
+        return { rows, truncated: input.page > 1 || rows.length === AUDIT_PAGE_SIZE };
+      }
+      return collectPages({
+        label: `${ws}/audit-log`,
+        pageSize: AUDIT_PAGE_SIZE,
+        load: async (page) => ({ rows: await load(page) }),
+      });
     },
     async listEntityChanges(changeType) {
       const rows = (await core.call("api", "GET", `${ws}/entities/${changeType}`)) as unknown[] | null;
-      return Array.isArray(rows) ? rows : [];
+      return { rows: Array.isArray(rows) ? rows : [], truncated: false };
     },
   };
 }

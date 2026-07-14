@@ -1,7 +1,7 @@
 import type { TaskSummary, WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeTasks({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeTasks({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listTasks" | "getTask" | "createTask" | "updateTask" | "deleteTask" | "updateTaskRate"
 > {
@@ -13,7 +13,7 @@ export function makeFakeTasks({ state, bump, nextId }: FakeContext): Pick<
         const needle = filter.name.toLowerCase();
         rows = rows.filter((t) => t.name.toLowerCase().includes(needle));
       }
-      return rows;
+      return fakeListResult(seed, "listTasks", rows);
     },
     async getTask(projectId, id) {
       bump("getTask");

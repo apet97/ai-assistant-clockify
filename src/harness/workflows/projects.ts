@@ -7,7 +7,7 @@ import {
   defineRiskyAction,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveUserRef } from "./resolve.js";
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
@@ -34,12 +34,13 @@ const listProjects = defineReadAction({
     clientIds: z.array(z.string()).optional(),
   }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listProjects(args);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listProjects(args);
+    return listReceipt({
       action: "clockify_projects_list",
       entity: "project",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -400,7 +401,12 @@ const rateUpdate = defineRiskyAction({
     // VERIFY membership — a member-rate PUT for a non-member 404s ("User membership
     // on project ... not found"), so catch it at preview, never confirm-then-fail.
     const memberships = await ctx.clockify.getProjectMemberships(project.id);
-    if (!memberships.some((m) => String(m.userId) === userId)) {
+    if (!memberships.rows.some((m) => String(m.userId) === userId)) {
+      if (memberships.truncated) {
+        return {
+          clarify: `Clockify returned an incomplete membership list for "${project.name ?? project.id}", so I can't verify whether ${memberLabel} is already a member. Narrow the membership filter and try again.`,
+        };
+      }
       const you = memberLabel === "you";
       return {
         clarify: `${you ? "You aren't" : `${memberLabel} isn't`} a member of "${project.name ?? project.id}" yet — Clockify only sets a rate for project members. Add ${you ? "yourself" : "them"} to the project first ("add ${you ? "me" : memberLabel} to ${project.name ?? project.id}"), then set the rate.`,
@@ -517,11 +523,16 @@ const membershipsUpdate = defineRiskyAction({
       // CURRENT records ("me" = the caller — live item 058 asked "which user
       // are you?" instead of knowing).
       const current = await ctx.clockify.getProjectMemberships(resolved.id);
+      if (current.truncated) {
+        return {
+          clarify: `Clockify returned an incomplete membership list for "${resolved.name ?? resolved.id}", so I can't safely merge members without risking removal. Narrow the membership filter and try again.`,
+        };
+      }
       const requested = args.addUserIds.map((u) => (u.trim().toLowerCase() === "me" ? ctx.adminUserId : u));
-      const have = new Set(current.map((m) => String(m.userId)));
+      const have = new Set(current.rows.map((m) => String(m.userId)));
       const additions = [...new Set(requested)].filter((u) => !have.has(u));
-      memberships = [...current, ...additions.map((userId) => ({ userId }))];
-      change = `Add ${additions.length} member(s) (${current.length} existing kept)`;
+      memberships = [...current.rows, ...additions.map((userId) => ({ userId }))];
+      change = `Add ${additions.length} member(s) (${current.rows.length} existing kept)`;
     } else {
       change = `Replace membership set (${memberships.length} member(s))`;
     }

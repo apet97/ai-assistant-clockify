@@ -200,7 +200,7 @@ async function main(): Promise<void> {
   const tagName = `AIASSIST_SMOKE_T_${suffix}`;
   const createdTag = (await rest.createTag({ name: tagName })) as { id: string; name: string };
   const tagExists = async (): Promise<boolean> => {
-    const tags = (await rest.listTags({})) as Array<{ name: string }>;
+    const tags = (await rest.listTags({})).rows;
     return tags.some((t) => t.name === tagName);
   };
   ok("seeded a tag to delete", await tagExists(), createdTag.id);
@@ -224,22 +224,22 @@ async function main(): Promise<void> {
 
   // ── Final sweep: no AIASSIST_SMOKE_* leftovers in the installed workspace ───
   console.log(`\n== Sweep: remove any AIASSIST_SMOKE_* leftovers ==`);
-  const leftoverTags = ((await rest.listTags({})) as Array<{ id: string; name: string }>).filter((t) =>
+  const leftoverTags = (await rest.listTags({})).rows.filter((t) =>
     t.name.startsWith("AIASSIST_SMOKE_"),
   );
   for (const t of leftoverTags) await rest.deleteTag(t.id);
   const allProjects = [
-    ...((await rest.listProjects({})) as Array<{ id: string; name: string }>),
-    ...((await rest.listProjects({ archived: true })) as Array<{ id: string; name: string }>),
+    ...(await rest.listProjects({})).rows,
+    ...(await rest.listProjects({ archived: true })).rows,
   ];
   const leftoverProjects = allProjects.filter((p) => p.name.startsWith("AIASSIST_SMOKE_"));
   for (const p of leftoverProjects) await rest.deleteProject(p.id);
-  const remainingTags = ((await rest.listTags({})) as Array<{ name: string }>).filter((t) =>
+  const remainingTags = (await rest.listTags({})).rows.filter((t) =>
     t.name.startsWith("AIASSIST_SMOKE_"),
   ).length;
   const remainingProjects = [
-    ...((await rest.listProjects({})) as Array<{ name: string }>),
-    ...((await rest.listProjects({ archived: true })) as Array<{ name: string }>),
+    ...(await rest.listProjects({})).rows,
+    ...(await rest.listProjects({ archived: true })).rows,
   ].filter((p) => p.name.startsWith("AIASSIST_SMOKE_")).length;
   ok("no AIASSIST_SMOKE_* tags remain", remainingTags === 0, `${leftoverTags.length} tag(s) swept`);
   console.log(

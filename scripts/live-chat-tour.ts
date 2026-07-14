@@ -263,11 +263,11 @@ async function main(): Promise<void> {
 
   // ── Sweep any AIASSIST_SMOKE_* leftovers ──────────────────────────────────
   console.log(`\n== Sweep AIASSIST_SMOKE_* ==`);
-  const tagsLeft = ((await rest.listTags({})) as Array<{ id: string; name: string }>).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
+  const tagsLeft = (await rest.listTags({})).rows.filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   for (const t of tagsLeft) await rest.deleteTag(t.id);
   const projsLeft = [
-    ...((await rest.listProjects({})) as Array<{ id: string; name: string }>),
-    ...((await rest.listProjects({ archived: true })) as Array<{ id: string; name: string }>),
+    ...(await rest.listProjects({})).rows,
+    ...(await rest.listProjects({ archived: true })).rows,
   ].filter((p) => p.name.startsWith("AIASSIST_SMOKE_"));
   for (const p of projsLeft) await rest.deleteProject(p.id);
   console.log(`  swept ${tagsLeft.length} tag(s) + ${projsLeft.length} project(s)`);

@@ -23,8 +23,9 @@ describe("project rest", () => {
       .mockResolvedValueOnce(jsonResponse(page1))
       .mockResolvedValueOnce(jsonResponse([{ id: "p200", name: "last", clientId: "c1", archived: false }]));
     const projects = await rest(f as unknown as typeof fetch).listProjects();
-    expect(projects).toHaveLength(201);
-    expect(projects[200]).toEqual({ id: "p200", name: "last", clientId: "c1", archived: false });
+    expect(projects.rows).toHaveLength(201);
+    expect(projects.rows[200]).toEqual({ id: "p200", name: "last", clientId: "c1", archived: false });
+    expect(projects.truncated).toBe(false);
     expect((f as any).mock.calls[0][0]).toContain("page=1");
     expect((f as any).mock.calls[0][0]).toContain("archived=false"); // default filter
     expect((f as any).mock.calls[1][0]).toContain("page=2");
@@ -62,7 +63,7 @@ describe("project rest", () => {
 
     const list = vi.fn(async () => jsonResponse([{ id: "p1", name: "Site", billable: false }]));
     const projects = await rest(list as unknown as typeof fetch).listProjects();
-    expect(projects[0].billable).toBe(false);
+    expect(projects.rows[0].billable).toBe(false);
   });
 
   it("createProject POSTs only the provided fields", async () => {

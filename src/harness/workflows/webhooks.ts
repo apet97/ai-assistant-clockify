@@ -5,7 +5,7 @@ import {
   type ActionContext,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch } from "./resolve.js";
 
 /**
@@ -53,8 +53,8 @@ const listWebhooks = defineReadAction({
   group: WH,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listWebhooks();
-    return successReceipt({ action: "clockify_webhooks_list", entity: "webhook", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const { rows, truncated } = await ctx.clockify.listWebhooks();
+    return listReceipt({ action: "clockify_webhooks_list", entity: "webhook", ids: { workspaceId: ctx.workspaceId }, rows, truncated });
   },
 });
 
@@ -75,8 +75,8 @@ const listEvents = defineReadAction({
   group: WH,
   schema: z.object({}),
   async handler(ctx) {
-    const events = await ctx.clockify.listWebhookEvents();
-    return successReceipt({ action: "clockify_webhooks_events", entity: "webhook", ids: { workspaceId: ctx.workspaceId }, data: { count: events.length, events } });
+    const { rows, truncated } = await ctx.clockify.listWebhookEvents();
+    return listReceipt({ action: "clockify_webhooks_events", entity: "webhook", ids: { workspaceId: ctx.workspaceId }, rows, truncated, dataKey: "events" });
   },
 });
 
@@ -86,8 +86,8 @@ const listLogs = defineReadAction({
   group: WH,
   schema: z.object({ id: z.string().min(1) }),
   async handler(ctx, args) {
-    const logs = await ctx.clockify.listWebhookLogs(args.id);
-    return successReceipt({ action: "clockify_webhooks_logs", entity: "webhook", ids: { workspaceId: ctx.workspaceId, webhookId: args.id }, data: { count: logs.length, logs } });
+    const { rows, truncated } = await ctx.clockify.listWebhookLogs(args.id);
+    return listReceipt({ action: "clockify_webhooks_logs", entity: "webhook", ids: { workspaceId: ctx.workspaceId, webhookId: args.id }, rows, truncated, dataKey: "logs" });
   },
 });
 

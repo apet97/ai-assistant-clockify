@@ -1,6 +1,8 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 import type { SchedulingPort, AssignmentSummary } from "../ports/scheduling.js";
+import { assertCompleteAbsence, collectPages } from "./list-pages.js";
+import { PAGE_SIZE } from "./core.js";
 
 /**
  * Assignment row read from `…/assignments/all` (and the recurring POST/PATCH
@@ -51,23 +53,26 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
   const DEFAULT_START = "2000-01-01T00:00:00Z";
   const DEFAULT_END = "2099-12-31T00:00:00Z";
 
-  async function listRaw(filter?: { start?: string; end?: string; userId?: string; projectId?: string }): Promise<AssignmentRow[]> {
+  async function listRaw(filter?: { start?: string; end?: string; userId?: string; projectId?: string }): Promise<ListResult<AssignmentRow>> {
     const params: Record<string, string> = {
       start: filter?.start || DEFAULT_START,
       end: filter?.end || DEFAULT_END,
     };
     if (filter?.userId) params.userId = filter.userId;
     if (filter?.projectId) params.projectId = filter.projectId;
-    const rows = await core.paginate("api", `${ws}/scheduling/assignments/all`, params);
-    return rows as AssignmentRow[];
+    const result = await core.paginate("api", `${ws}/scheduling/assignments/all`, params);
+    return { ...result, rows: result.rows as AssignmentRow[] };
   }
 
   return {
     async listAssignments(filter) {
-      return (await listRaw(filter)).map(mapAssignment);
+      const result = await listRaw(filter);
+      return { ...result, rows: result.rows.map(mapAssignment) };
     },
     async getAssignment(id) {
-      const raw = (await listRaw()).find((a) => a.id === id);
+      const result = await listRaw();
+      const raw = result.rows.find((a) => a.id === id);
+      if (!raw) assertCompleteAbsence(result.truncated, "assignment", id);
       return raw ? mapAssignment(raw) : null;
     },
     async createAssignment(input): Promise<EntitySummary> {
@@ -90,7 +95,10 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
     async updateAssignment(id, patch): Promise<EntitySummary> {
       // The recurring PATCH is a full replace (rejects a body without start/end),
       // so list-scan the existing assignment and re-send its period + identity.
-      const existing: AssignmentRow = (await listRaw()).find((a) => a.id === id) ?? {};
+      const result = await listRaw();
+      const found = result.rows.find((a) => a.id === id);
+      if (!found) assertCompleteAbsence(result.truncated, "assignment", id);
+      const existing: AssignmentRow = found ?? {};
       const period = existing.period ?? {};
       const start = existing.start ?? period.start;
       const end = existing.end ?? period.end;
@@ -136,13 +144,21 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
           "GET",
           `${ws}/scheduling/assignments/projects/totals/${input.projectId}?${qs.toString()}`,
         )) as unknown;
-        return Array.isArray(one) ? one : one ? [one] : [];
+        return { rows: Array.isArray(one) ? one : one ? [one] : [], truncated: false };
       }
-      const out = (await core.call("api", "POST", `${ws}/scheduling/assignments/projects/totals`, {
-        start: input.start,
-        end: input.end,
-      })) as unknown;
-      return Array.isArray(out) ? out : out ? [out] : [];
+      return collectPages({
+        label: `${ws}/scheduling/assignments/projects/totals`,
+        pageSize: PAGE_SIZE,
+        async load(page, pageSize) {
+          const out = (await core.call("api", "POST", `${ws}/scheduling/assignments/projects/totals`, {
+            start: input.start,
+            end: input.end,
+            page,
+            pageSize,
+          })) as unknown;
+          return { rows: Array.isArray(out) ? out : out ? [out] : [] };
+        },
+      });
     },
     async getUserScheduleTotals(userId, range) {
       const qs = new URLSearchParams({ start: range.start, end: range.end });

@@ -1,5 +1,6 @@
-import type { RestCore } from "./core.js";
+import { PAGE_SIZE, type RestCore } from "./core.js";
 import { toBareDate, inclusiveDays } from "./wire-dates.js";
+import { assertCompleteAbsence, collectPages } from "./list-pages.js";
 import type { EntitySummary } from "../types.js";
 import type {
   TimeOffPort,
@@ -86,10 +87,28 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
   const ws = `/workspaces/${workspaceId}`;
   const TIME_UNIT = "DAYS";
 
+  async function searchRequests(filterArg?: { status?: string; userId?: string }) {
+    return collectPages<RequestRow>({
+      label: `${ws}/time-off/requests`,
+      pageSize: PAGE_SIZE,
+      async load(page, pageSize) {
+        const body: Record<string, unknown> = { page, pageSize };
+        if (filterArg?.status) body.statuses = [filterArg.status];
+        if (filterArg?.userId) body.users = [filterArg.userId];
+        const env = (await core.call("api", "POST", `${ws}/time-off/requests`, body)) as
+          | { count?: number; requests?: RequestRow[] }
+          | RequestRow[]
+          | null;
+        const rows = Array.isArray(env) ? env : (env?.requests ?? []);
+        return { rows, ...(!Array.isArray(env) && typeof env?.count === "number" ? { total: env.count } : {}) };
+      },
+    });
+  }
+
   return {
     async listTimeOffPolicies() {
-      const rows = (await core.paginate("api", `${ws}/time-off/policies`)) as PolicyRow[];
-      return rows.map(mapPolicy);
+      const result = await core.paginate("api", `${ws}/time-off/policies`);
+      return { ...result, rows: (result.rows as PolicyRow[]).map(mapPolicy) };
     },
     async getTimeOffPolicy(id) {
       const raw = await core.call("api", "GET", `${ws}/time-off/policies/${id}`, undefined, true);
@@ -151,25 +170,15 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       });
     },
     async listTimeOffRequests(filterArg) {
-      const body: Record<string, unknown> = { page: 1, pageSize: 200 };
-      if (filterArg?.status) body.statuses = [filterArg.status];
-      if (filterArg?.userId) body.users = [filterArg.userId];
-      const env = (await core.call("api", "POST", `${ws}/time-off/requests`, body)) as
-        | { requests?: RequestRow[] }
-        | RequestRow[]
-        | null;
-      const rows = Array.isArray(env) ? env : (env?.requests ?? []);
-      return rows.map(mapRequest);
+      const result = await searchRequests(filterArg);
+      return { ...result, rows: result.rows.map(mapRequest) };
     },
     async getTimeOffRequest(id) {
       // There is no real single-GET route (live: 404 "No static resource" even
       // for an existing id) — find the request through the POST search instead.
-      const env = (await core.call("api", "POST", `${ws}/time-off/requests`, { page: 1, pageSize: 200 })) as
-        | { requests?: RequestRow[] }
-        | RequestRow[]
-        | null;
-      const rows = Array.isArray(env) ? env : (env?.requests ?? []);
-      const raw = rows.find((r) => r.id === id);
+      const result = await searchRequests();
+      const raw = result.rows.find((r) => r.id === id);
+      if (!raw) assertCompleteAbsence(result.truncated, "time-off request", id);
       return raw ? mapRequest(raw) : null;
     },
     async createTimeOffRequest(policyId, input): Promise<EntitySummary> {
@@ -217,13 +226,8 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       return { id: r?.id ?? requestId, name: statusType };
     },
     async getTimeOffBalance(userId) {
-      const qs = new URLSearchParams({ page: "1", "page-size": "200" });
-      const env = (await core.call("api", "GET", `${ws}/time-off/balance/user/${userId}?${qs.toString()}`)) as
-        | { balances?: BalanceRow[] }
-        | BalanceRow[]
-        | null;
-      const rows = Array.isArray(env) ? env : (env?.balances ?? []);
-      return rows.map((r) => mapBalance(r, userId));
+      const result = await core.paginateEnvelope("api", `${ws}/time-off/balance/user/${userId}`, "balances");
+      return { ...result, rows: (result.rows as BalanceRow[]).map((r) => mapBalance(r, userId)) };
     },
     async updateTimeOffBalance(policyId, input) {
       await core.call("api", "PATCH", `${ws}/time-off/balance/policy/${policyId}`, {

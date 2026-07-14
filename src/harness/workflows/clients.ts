@@ -6,7 +6,7 @@ import {
   defineRiskyAction,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /** Resolve a currency CODE (e.g. "EUR") to its workspace currencyId, or a clarify message. */
@@ -16,9 +16,12 @@ async function resolveCurrencyId(
 ): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
   const currencies = await ctx.clockify.listCurrencies();
   const want = code.trim().toUpperCase();
-  const match = currencies.find((c) => c.code.toUpperCase() === want);
+  const match = currencies.rows.find((c) => c.code.toUpperCase() === want);
   if (match) return { ok: true, id: match.id };
-  const codes = currencies.map((c) => c.code).join(", ");
+  if (currencies.truncated) {
+    return { ok: false, message: `Clockify returned an incomplete currency list, so I can't verify that "${code}" is unavailable.` };
+  }
+  const codes = currencies.rows.map((c) => c.code).join(", ");
   return { ok: false, message: `I don't see a "${code}" currency in this workspace. Available: ${codes || "(none configured)"}.` };
 }
 
@@ -37,12 +40,13 @@ const listClients = defineReadAction({
   group: WORK,
   schema: z.object({ name: z.string().optional(), archived: z.boolean().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listClients(args);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listClients(args);
+    return listReceipt({
       action: "clockify_clients_list",
       entity: "client",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });

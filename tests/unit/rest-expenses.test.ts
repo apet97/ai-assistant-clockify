@@ -23,9 +23,10 @@ describe("expense rest", () => {
       }),
     );
     const out = await rest(f as unknown as typeof fetch).listExpenses();
-    expect(out).toEqual([
-      { id: "x1", name: "Taxi", notes: "Taxi", date: "2026-06-06T00:00:00Z", categoryId: "c1" },
-    ]);
+    expect(out).toEqual({
+      rows: [{ id: "x1", name: "Taxi", notes: "Taxi", date: "2026-06-06T00:00:00Z", categoryId: "c1" }],
+      truncated: false,
+    });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/expenses");
     expect(parsed.searchParams.get("page")).toBe("1");
@@ -34,7 +35,7 @@ describe("expense rest", () => {
   it("listExpenses also tolerates a plain array and passes start/end filters", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "x2", notes: "Hotel" }]));
     const out = await rest(f as unknown as typeof fetch).listExpenses({ start: "2026-06-01", end: "2026-06-30" });
-    expect(out).toEqual([{ id: "x2", name: "Hotel", notes: "Hotel" }]);
+    expect(out).toEqual({ rows: [{ id: "x2", name: "Hotel", notes: "Hotel" }], truncated: false });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.searchParams.get("start")).toBe("2026-06-01");
     expect(parsed.searchParams.get("end")).toBe("2026-06-30");
@@ -147,15 +148,16 @@ describe("expense rest", () => {
       jsonResponse({ categories: [{ id: "c1", name: "Travel", archived: false }] }),
     );
     const out = await rest(f as unknown as typeof fetch).listExpenseCategories();
-    expect(out).toEqual([{ id: "c1", name: "Travel", archived: false }]);
+    expect(out).toEqual({ rows: [{ id: "c1", name: "Travel", archived: false }], truncated: false });
     expect((f as any).mock.calls[0][0]).toContain("/workspaces/ws-1/expenses/categories");
   });
 
   it("listExpenseCategories also tolerates a plain array", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "c2", name: "Meals" }]));
-    expect(await rest(f as unknown as typeof fetch).listExpenseCategories()).toEqual([
-      { id: "c2", name: "Meals" },
-    ]);
+    expect(await rest(f as unknown as typeof fetch).listExpenseCategories()).toEqual({
+      rows: [{ id: "c2", name: "Meals" }],
+      truncated: false,
+    });
   });
 
   it("createExpenseCategory POSTs the name as JSON", async () => {

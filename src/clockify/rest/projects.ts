@@ -33,8 +33,8 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       const params: Record<string, string> = { archived: String(filter?.archived ?? false) };
       if (filter?.name) params.name = filter.name;
       if (filter?.clientIds?.length) params.clients = filter.clientIds.join(",");
-      const rows = (await core.paginate("api", `${ws}/projects`, params)) as ProjectRow[];
-      return rows.map(map);
+      const result = await core.paginate("api", `${ws}/projects`, params);
+      return { ...result, rows: (result.rows as ProjectRow[]).map(map) };
     },
     async getProject(id) {
       const p = (await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true)) as ProjectRow | null;
@@ -91,7 +91,7 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       const p = (await core.call("api", "GET", `${ws}/projects/${projectId}`, undefined, true)) as
         | { memberships?: Array<Record<string, unknown>> }
         | null;
-      return p?.memberships ?? [];
+      return { rows: p?.memberships ?? [], truncated: false };
     },
   };
 }

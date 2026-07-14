@@ -162,6 +162,22 @@ describe("time-off actions", () => {
     expect((bySlot.operation.payload as any).policyId).toBe("pol1");
   });
 
+  it("requests_create does not infer a policy unit from an incomplete policy list", async () => {
+    const fake = createFakeWorkspace({
+      ...seed(),
+      timeOffPolicies: [],
+      listTruncated: { listTimeOffPolicies: true },
+    });
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyId: "5f1e2d3c4b5a69788796a5b4", start: "2026-06-10", end: "2026-06-11" },
+      context: makeContext(fake),
+    });
+
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toMatch(/incomplete/i);
+  });
+
   it("requests_create anchors 'N days next week' to the first N workdays (visible dates, no guessing)", async () => {
     // NOW is Sat 2026-06-06 → next week's Monday is 2026-06-08.
     const fake = createFakeWorkspace(seed());

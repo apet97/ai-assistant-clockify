@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { UserSummary, GroupSummary } from "../../../src/clockify/ports/users.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeUsers({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listUsers"
   | "getWorkspaceMemberRole"
@@ -22,7 +22,7 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listUsers() {
       bump("listUsers");
-      return state.users;
+      return fakeListResult(seed, "listUsers", state.users);
     },
     async getWorkspaceMemberRole(userId): Promise<string | undefined> {
       bump("getWorkspaceMemberRole");
@@ -59,7 +59,7 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
     },
     async listGroups() {
       bump("listGroups");
-      return state.groups;
+      return fakeListResult(seed, "listGroups", state.groups);
     },
     async getGroup(id) {
       bump("getGroup");

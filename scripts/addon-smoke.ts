@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   if (!commit.ok) throw new Error("commit failed");
 
   // 4) Verify cleanup
-  const remaining = (await ctx.clockify.listTags()).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
+  const remaining = (await ctx.clockify.listTags()).rows.filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   console.log("4. leftover AIASSIST_SMOKE_ tags:", remaining.length);
   if (remaining.length > 0) {
     console.warn("   WARNING leftovers:", remaining.map((t) => `${t.name}(${t.id})`).join(", "));

@@ -95,11 +95,19 @@ const onboardUser = defineRiskyAction({
     // must never be PROMISED for a group that doesn't exist: resolvable groups go
     // into the payload as verified ids; unresolvable/ambiguous names are shown as
     // "will be skipped" instead of being silently dropped at commit time.
-    const groupList = requested.length ? await ctx.clockify.listGroups() : [];
+    const groupList = requested.length
+      ? await ctx.clockify.listGroups()
+      : { rows: [], truncated: false };
+    if (groupList.truncated) {
+      return {
+        clarify:
+          "Clockify returned an incomplete user group list, so I can't prove the requested groups are unique or absent. Provide exact group ids or narrow the group filter.",
+      };
+    }
     const resolvedGroups: Array<{ id: string; name: string }> = [];
     const skipped: Array<{ name: string; reason: string }> = [];
     for (const name of requested) {
-      const match = matchByName(groupList, name);
+      const match = matchByName(groupList.rows, name);
       if (match.kind === "one") resolvedGroups.push({ id: match.entity.id, name: match.entity.name });
       else skipped.push({ name, reason: match.kind === "many" ? "ambiguous" : "not found" });
     }

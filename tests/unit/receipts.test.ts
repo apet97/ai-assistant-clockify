@@ -1,7 +1,28 @@
 import { describe, expect, it } from "vitest";
 import { errorReceipt, hasChanges, successReceipt } from "../../src/harness/receipts.js";
+import * as receipts from "../../src/harness/receipts.js";
 
 describe("receipts", () => {
+  it("listReceipt always emits truncated and adds list_truncated only for incomplete data", () => {
+    const listReceipt = (receipts as unknown as {
+      listReceipt: (input: {
+        action: string;
+        rows: unknown[];
+        truncated: boolean;
+      }) => { data?: unknown; warnings?: Array<{ code?: string }> };
+    }).listReceipt;
+
+    expect(listReceipt).toBeTypeOf("function");
+    expect(listReceipt({ action: "clockify_tags_list", rows: [], truncated: false })).toMatchObject({
+      data: { count: 0, items: [], truncated: false },
+    });
+    expect(listReceipt({ action: "clockify_tags_list", rows: [], truncated: false }).warnings).toBeUndefined();
+    expect(listReceipt({ action: "clockify_tags_list", rows: [{ id: "t1" }], truncated: true })).toMatchObject({
+      data: { count: 1, items: [{ id: "t1" }], truncated: true },
+      warnings: [{ code: "list_truncated" }],
+    });
+  });
+
   it("includes a non-empty changed bucket", () => {
     const receipt = successReceipt({
       action: "clockify_create_work_package",

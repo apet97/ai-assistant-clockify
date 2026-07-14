@@ -124,9 +124,12 @@ bug was found against the REAL API, not by reading the code.
   `iconPath` (no icon → doesn't render).
 - `src/clockify/` — the seam: `client.ts` (`WorkspaceClient` port, composed from
   `ports/<area>.ts`; carries `authClass: "addon"|"api_key"`), `rest-workspace.ts`
-  (adapter = multi-host `rest/core.ts` + one `rest/<area>.ts` per area, list
-  pagination via `core.paginateEnvelope`, the one bare-date↔ISO normalization in
-  `rest/wire-dates.ts`; `X-Addon-Token` in prod), `types.ts` (leaf shapes;
+  (adapter = multi-host `rest/core.ts` + one `rest/<area>.ts` per area; every
+  public list/search returns exact `ListResult<T> {rows,truncated}`; plain and
+  envelope pagination preserve completeness through `core.paginate*`, while
+  POST/search pagination uses `rest/list-pages.ts`; the one bare-date↔ISO
+  normalization lives in `rest/wire-dates.ts`; `X-Addon-Token` in prod),
+  `types.ts` (leaf shapes;
   `ClockifyAuth` lives here), `api-base.ts` (hosts from
   the INSTALL token claims: api = `apiUrl`+`/v1`, reports = `reportsUrl`+`/v1`;
   audit host has NO claim → derived prod-only, clean "not available" error
@@ -138,7 +141,8 @@ bug was found against the REAL API, not by reading the code.
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
-  `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts`, `confirmations.ts`,
+  `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts` (`listReceipt` always
+  emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `compose.ts` (atomic
   multi-step + rollback), `idempotency.ts` (intent-hash dedupe, 10-min window),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
@@ -259,10 +263,13 @@ bug was found against the REAL API, not by reading the code.
   self-correct. Destructive/archive/unarchive verbs pass `includeArchived` (the
   wire defaults to ACTIVE-ONLY — both states are fetched explicitly; archived
   options labeled). An identity mistake is a clarify, never a confirmed-then-failed
-  commit. `clockify_onboard_user` likewise resolves its group NAMES at PREVIEW
-  (matchByName over listGroups; unresolved/ambiguous render as "will be skipped",
-  verified ids go in the payload) — so the preview matches what the best-effort
-  group-adds actually do (it was the lone commit-time resolver before).
+  commit. A truncated entity/user/group/tag scan never establishes absence or
+  uniqueness: exact-id hits remain usable, but symbolic one/none matches clarify
+  for an exact id or narrower filter. `clockify_onboard_user` likewise resolves
+  its group NAMES at PREVIEW (matchByName over a complete listGroups result;
+  unresolved/ambiguous render as "will be skipped", verified ids go in the
+  payload; a truncated result clarifies) — so the preview matches what the
+  best-effort group-adds actually do (it was the lone commit-time resolver before).
 - **Dates server-side:** the model never computes calendar dates.
   `resolveRelativeDay` (today/yesterday/tomorrow, weekday words, dayOffset;
   `undefined` ⇒ caller MUST clarify), `resolveInstant` (UTC instants the hosts

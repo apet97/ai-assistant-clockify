@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /** List filter for clients (name / archived). */
 export interface ClientFilter {
@@ -13,12 +13,12 @@ export interface ClientFilter {
  * if the client still has active projects — the error is surfaced).
  */
 export interface ClientPort {
-  listClients(filter?: ClientFilter): Promise<EntitySummary[]>;
+  listClients(filter?: ClientFilter): Promise<ListResult<EntitySummary>>;
   getClient(id: string): Promise<EntitySummary | null>;
   /** `ccEmails`/`currencyId` are silently dropped by POST /clients, so the adapter applies them via a follow-up PUT. */
   createClient(input: { name: string; ccEmails?: string[]; currencyId?: string }): Promise<EntitySummary>;
   updateClient(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
   deleteClient(id: string): Promise<void>;
   /** Workspace currencies (`{id, code}`), for resolving a currency CODE → id. */
-  listCurrencies(): Promise<Array<{ id: string; code: string }>>;
+  listCurrencies(): Promise<ListResult<{ id: string; code: string }>>;
 }

@@ -8,7 +8,7 @@ import {
   type ActionContext,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveUserFilter, resolveUserRef } from "./resolve.js";
 import { nowDate } from "../../durations.js";
 
@@ -72,10 +72,10 @@ const listAssignments = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
     });
     if (!user.ok) return clarifyResult(user.clarify);
-    const items = await ctx.clockify.listAssignments({ ...args, userId: user.userId, start: window.start, end: window.end });
+    const { rows, truncated } = await ctx.clockify.listAssignments({ ...args, userId: user.userId, start: window.start, end: window.end });
     return {
       kind: "receipt",
-      receipt: successReceipt({ action: "clockify_scheduling_assignments_list", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }),
+      receipt: listReceipt({ action: "clockify_scheduling_assignments_list", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, rows, truncated }),
     };
   },
 });
@@ -258,14 +258,14 @@ const projectTotals = defineAction({
       }
       projectId = project.id;
     }
-    const items = await ctx.clockify.getProjectScheduleTotals({
+    const { rows, truncated } = await ctx.clockify.getProjectScheduleTotals({
       projectId,
       start: window.start as string,
       end: window.end as string,
     });
     return {
       kind: "receipt",
-      receipt: successReceipt({ action: "clockify_scheduling_project_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }),
+      receipt: listReceipt({ action: "clockify_scheduling_project_totals", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, rows, truncated }),
     };
   },
 });

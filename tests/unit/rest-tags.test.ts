@@ -19,7 +19,7 @@ describe("tag rest", () => {
   it("listTags paginates with archived=false default and passes name filter", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "t1", name: "Deep Work" }]));
     const tags = await rest(f as unknown as typeof fetch).listTags({ name: "Deep" });
-    expect(tags).toEqual([{ id: "t1", name: "Deep Work", archived: undefined }]);
+    expect(tags).toEqual({ rows: [{ id: "t1", name: "Deep Work", archived: undefined }], truncated: false });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/tags");
     expect(parsed.searchParams.get("archived")).toBe("false");

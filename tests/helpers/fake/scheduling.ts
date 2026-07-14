@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { AssignmentSummary } from "../../../src/clockify/ports/scheduling.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeScheduling({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listAssignments"
   | "getAssignment"
@@ -19,7 +19,7 @@ export function makeFakeScheduling({ state, bump, nextId }: FakeContext): Pick<
       let rows = state.assignments;
       if (filter?.userId) rows = rows.filter((a) => a.userId === filter.userId);
       if (filter?.projectId) rows = rows.filter((a) => a.projectId === filter.projectId);
-      return rows;
+      return fakeListResult(seed, "listAssignments", rows);
     },
     async getAssignment(id) {
       bump("getAssignment");
@@ -62,7 +62,7 @@ export function makeFakeScheduling({ state, bump, nextId }: FakeContext): Pick<
     async getProjectScheduleTotals(input) {
       bump("getProjectScheduleTotals");
       void input;
-      return [];
+      return fakeListResult(seed, "getProjectScheduleTotals", []);
     },
     async getUserScheduleTotals(userId, range) {
       bump("getUserScheduleTotals");

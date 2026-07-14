@@ -29,9 +29,10 @@ describe("invoice rest", () => {
       }),
     );
     const out = await rest(f as unknown as typeof fetch).listInvoices();
-    expect(out).toEqual([
-      { id: "inv1", number: "INV-1", clientId: "c1", clientName: "Acme", status: "UNSENT", currency: "GBP", amount: 12500, balance: 12500 },
-    ]);
+    expect(out).toEqual({
+      rows: [{ id: "inv1", number: "INV-1", clientId: "c1", clientName: "Acme", status: "UNSENT", currency: "GBP", amount: 12500, balance: 12500 }],
+      truncated: false,
+    });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/invoices");
     expect(parsed.searchParams.get("page")).toBe("1");
@@ -81,7 +82,7 @@ describe("invoice rest", () => {
       jsonResponse({ id: "inv1", items: [{ order: 0, description: "A" }, { order: 1, description: "B" }] }),
     );
     const items = await rest(f as unknown as typeof fetch).listInvoiceItems("inv1");
-    expect(items).toEqual([{ order: 0, description: "A" }, { order: 1, description: "B" }]);
+    expect(items).toEqual({ rows: [{ order: 0, description: "A" }, { order: 1, description: "B" }], truncated: false });
     // It must hit the single-invoice path, NOT the 405 /items path.
     expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/invoices/inv1");
   });
@@ -273,7 +274,7 @@ describe("invoice rest", () => {
       jsonResponse([{ id: "pay1", amount: 5000, note: "deposit", date: "2026-06-06T00:00:00Z", author: "Ann" }]),
     );
     const out = await rest(f as unknown as typeof fetch).listInvoicePayments("inv1");
-    expect(out).toEqual([{ id: "pay1", amount: 5000, note: "deposit", paymentDate: "2026-06-06T00:00:00Z" }]);
+    expect(out).toEqual({ rows: [{ id: "pay1", amount: 5000, note: "deposit", paymentDate: "2026-06-06T00:00:00Z" }], truncated: false });
     expect((f as any).mock.calls[0][0]).toContain("/workspaces/ws-1/invoices/inv1/payments");
   });
 
@@ -282,7 +283,7 @@ describe("invoice rest", () => {
       jsonResponse({ payments: [{ id: "pay1", amount: 5000, note: "deposit", paymentDate: "2026-06-06T00:00:00Z" }] }),
     );
     const out = await rest(f as unknown as typeof fetch).listInvoicePayments("inv1");
-    expect(out).toEqual([{ id: "pay1", amount: 5000, note: "deposit", paymentDate: "2026-06-06T00:00:00Z" }]);
+    expect(out).toEqual({ rows: [{ id: "pay1", amount: 5000, note: "deposit", paymentDate: "2026-06-06T00:00:00Z" }], truncated: false });
   });
 
   it("createInvoicePayment POSTs amount + paymentDate (NOT date) and returns the NEW payment from the list diff — the POST response is the INVOICE body, not the payment (live-probed)", async () => {

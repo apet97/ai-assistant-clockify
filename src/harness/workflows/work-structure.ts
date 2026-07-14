@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { defineAction, type ActionContext, type ActionDefinition, type ActionResult } from "../action.js";
 import type { EntitySummary } from "../../clockify/client.js";
+import type { ListResult } from "../../clockify/types.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
-import { successReceipt, errorReceipt } from "../receipts.js";
+import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
 import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { nowIso } from "../../durations.js";
 import { matchByName, suggestOptions } from "./resolve.js";
@@ -66,7 +67,7 @@ async function listByType(
   ctx: ActionContext,
   type: ListableEntityType,
   projectId?: string,
-): Promise<EntitySummary[]> {
+): Promise<ListResult<EntitySummary>> {
   switch (type) {
     case "tag":
       return ctx.clockify.listTags();
@@ -99,7 +100,7 @@ async function getByType(
   type: ListableEntityType,
   id: string,
   projectId?: string,
-): Promise<EntitySummary | null> {
+): Promise<EntitySummary | null | undefined> {
   switch (type) {
     case "tag":
       return ctx.clockify.getTag(id);
@@ -115,7 +116,11 @@ async function getByType(
       return ctx.clockify.getWebhook(id);
     case "user":
       // No typed user GET port — fall back to list-then-find.
-      return (await ctx.clockify.listUsers()).find((e) => e.id === id) ?? null;
+      {
+        const users = await ctx.clockify.listUsers();
+        const user = users.rows.find((entity) => entity.id === id);
+        return user ?? (users.truncated ? undefined : null);
+      }
   }
 }
 
@@ -169,24 +174,32 @@ const createWorkPackage = defineAction({
       };
     }
 
-    const [tags, clients, projects] = await Promise.all([
-      args.tag ? ctx.clockify.listTags() : Promise.resolve([]),
-      args.client || args.project?.clientName ? ctx.clockify.listClients() : Promise.resolve([]),
-      args.project ? ctx.clockify.listProjects() : Promise.resolve([]),
+    const [tagsResult, clientsResult, projectsResult] = await Promise.all([
+      args.tag ? ctx.clockify.listTags() : Promise.resolve({ rows: [], truncated: false }),
+      args.client || args.project?.clientName ? ctx.clockify.listClients() : Promise.resolve({ rows: [], truncated: false }),
+      args.project ? ctx.clockify.listProjects() : Promise.resolve({ rows: [], truncated: false }),
     ]);
+    const tags = tagsResult.rows;
+    const clients = clientsResult.rows;
+    const projects = projectsResult.rows;
     const tagMatch = args.tag ? matchByName(tags, args.tag.name) : undefined;
     if (args.tag && tagMatch?.kind === "many") return ambiguous("tag", args.tag.name, tagMatch.matches);
+    if (args.tag && tagsResult.truncated) return incompleteIdentity("tag", args.tag.name);
 
     const clientMatch = args.client ? matchByName(clients, args.client.name) : undefined;
     if (args.client && clientMatch?.kind === "many") {
       return ambiguous("client", args.client.name, clientMatch.matches);
     }
+    if (args.client && clientsResult.truncated) return incompleteIdentity("client", args.client.name);
 
     const projectClientMatch = args.project?.clientName
       ? matchByName(clients, args.project.clientName)
       : undefined;
     if (args.project?.clientName && projectClientMatch?.kind === "many") {
       return ambiguous("client", args.project.clientName, projectClientMatch.matches);
+    }
+    if (args.project?.clientName && clientsResult.truncated) {
+      return incompleteIdentity("client", args.project.clientName);
     }
     const projectClientWillBeCreated =
       args.project?.clientName !== undefined &&
@@ -220,14 +233,18 @@ const createWorkPackage = defineAction({
     if (args.project && projectMatch?.kind === "many") {
       return ambiguous("project", args.project.name, projectMatch.matches);
     }
+    if (args.project && projectsResult.truncated) return incompleteIdentity("project", args.project.name);
 
-    const taskMatch =
-      args.task && projectMatch?.kind === "one"
-        ? matchByName(await ctx.clockify.listTasks(projectMatch.entity.id), args.task.name)
-        : undefined;
+    const taskResult = args.task && projectMatch?.kind === "one"
+      ? await ctx.clockify.listTasks(projectMatch.entity.id)
+      : undefined;
+    const taskMatch = args.task && taskResult
+      ? matchByName(taskResult.rows, args.task.name)
+      : undefined;
     if (args.task && taskMatch?.kind === "many") {
       return ambiguous("task", args.task.name, taskMatch.matches);
     }
+    if (args.task && taskResult?.truncated) return incompleteIdentity("task", args.task.name);
 
     // Each entity is a composition STEP. A required step that fails rolls back the
     // entities this op already created (no orphan client/project when a later step
@@ -418,6 +435,13 @@ function ambiguous(
   };
 }
 
+function incompleteIdentity(type: string, name: string): ActionResult {
+  return {
+    kind: "clarify",
+    message: `Clockify returned an incomplete ${type} list, so I can't prove "${name}" is unique or absent. Provide the exact id or use a narrower filter.`,
+  };
+}
+
 const listEntities = defineAction({
   name: "clockify_list_entities",
   description:
@@ -436,14 +460,16 @@ const listEntities = defineAction({
         message: "To list tasks I need a project. Which project's tasks should I list?",
       };
     }
-    const items = await listByType(ctx, args.entityType, args.projectId);
+    const { rows, truncated } = await listByType(ctx, args.entityType, args.projectId);
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_list_entities",
         entity: args.entityType,
         ids: { workspaceId: ctx.workspaceId },
-        data: { entityType: args.entityType, count: items.length, items },
+        rows,
+        truncated,
+        data: { entityType: args.entityType },
       }),
     };
   },
@@ -471,6 +497,12 @@ const getEntity = defineAction({
     // Typed per-type GET (resolves archived/off-active-list ids too); a missing id
     // still yields the `entity: null` receipt shape, never a throw.
     const entity = await getByType(ctx, args.entityType, args.id, args.projectId);
+    if (entity === undefined) {
+      return {
+        kind: "clarify",
+        message: `Clockify returned an incomplete ${args.entityType} list, so I can't verify that id ${args.id} is absent. Use a narrower filter and try again.`,
+      };
+    }
     return {
       kind: "receipt",
       receipt: successReceipt({

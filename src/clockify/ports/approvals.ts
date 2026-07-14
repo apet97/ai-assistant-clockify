@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 export interface ApprovalSummary {
   id: string;
@@ -19,7 +19,7 @@ export interface ApprovalSummary {
  * withdraw are `PATCH /approval-requests/{id} {state, note?}`.
  */
 export interface ApprovalPort {
-  listApprovals(filter?: { status?: string }): Promise<ApprovalSummary[]>;
+  listApprovals(filter?: { status?: string }): Promise<ListResult<ApprovalSummary>>;
   getApproval(id: string): Promise<ApprovalSummary | null>;
   submitApproval(input: { period: string; periodStart: string }): Promise<EntitySummary>;
   setApprovalState(id: string, state: string, note?: string): Promise<EntitySummary>;

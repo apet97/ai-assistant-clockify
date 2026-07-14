@@ -21,9 +21,10 @@ describe("custom field rest", () => {
       jsonResponse([{ id: "cf1", name: "Priority", type: "DROPDOWN_SINGLE", status: "VISIBLE", required: true, allowedValues: ["Hi", "Lo"] }]),
     );
     const out = await rest(f as unknown as typeof fetch).listCustomFields();
-    expect(out).toEqual([
-      { id: "cf1", name: "Priority", type: "DROPDOWN_SINGLE", status: "VISIBLE", required: true, allowedValues: ["Hi", "Lo"] },
-    ]);
+    expect(out).toEqual({
+      rows: [{ id: "cf1", name: "Priority", type: "DROPDOWN_SINGLE", status: "VISIBLE", required: true, allowedValues: ["Hi", "Lo"] }],
+      truncated: false,
+    });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/custom-fields");
     expect(parsed.searchParams.get("page")).toBe("1");

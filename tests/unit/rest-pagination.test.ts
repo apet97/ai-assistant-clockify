@@ -35,19 +35,20 @@ describe("workspace list pagination (>50 rows must not truncate)", () => {
   it("paginates listUsers through page 2 with page-size=200 (the >50-member bug)", async () => {
     const f = pagedFetch((page) => (page === "1" ? fullPage(200, "u") : [{ id: "u200", name: "User 200" }]));
     const users = await client(f).listUsers();
-    expect(users).toHaveLength(201);
+    expect(users).toMatchObject({ truncated: false });
+    expect(users.rows).toHaveLength(201);
     expect(firstPageSize(f)).toBe("200");
   });
 
   it("paginates listGroups through page 2", async () => {
     const f = pagedFetch((page) => (page === "1" ? fullPage(200, "g") : [{ id: "g200", name: "Group 200" }]));
-    expect(await client(f).listGroups()).toHaveLength(201);
+    expect((await client(f).listGroups()).rows).toHaveLength(201);
     expect(firstPageSize(f)).toBe("200");
   });
 
   it("paginates listTimeOffPolicies through page 2", async () => {
     const f = pagedFetch((page) => (page === "1" ? fullPage(200, "pol") : [{ id: "pol200", name: "Policy 200" }]));
-    expect(await client(f).listTimeOffPolicies()).toHaveLength(201);
+    expect((await client(f).listTimeOffPolicies()).rows).toHaveLength(201);
     expect(firstPageSize(f)).toBe("200");
   });
 
@@ -55,7 +56,7 @@ describe("workspace list pagination (>50 rows must not truncate)", () => {
     const f = pagedFetch((page) =>
       page === "1" ? { categories: fullPage(200, "cat") } : { categories: [{ id: "cat200", name: "Cat 200" }] },
     );
-    expect(await client(f).listExpenseCategories()).toHaveLength(201);
+    expect((await client(f).listExpenseCategories()).rows).toHaveLength(201);
     expect(firstPageSize(f)).toBe("200");
   });
 });

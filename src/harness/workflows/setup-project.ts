@@ -245,9 +245,12 @@ const setupProject = defineRiskyAction({
           if (!canWrite(ctx.policy, "users_groups")) throw new Error("write access to users_groups is disabled");
           const projectId = ids.projectId as string;
           const current = await ctx.clockify.getProjectMemberships(projectId);
-          const have = new Set(current.map((m) => String(m.userId)));
+          if (current.truncated) {
+            throw new Error("Clockify returned an incomplete membership list; refusing a replacement that could drop members");
+          }
+          const have = new Set(current.rows.map((m) => String(m.userId)));
           const additions = p.addUserIds.filter((u) => !have.has(u));
-          const memberships = [...current, ...additions.map((userId) => ({ userId }))];
+          const memberships = [...current.rows, ...additions.map((userId) => ({ userId }))];
           await ctx.clockify.updateProjectMemberships(projectId, { memberships });
           return { kind: "done" };
         },

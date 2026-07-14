@@ -1,6 +1,7 @@
 import type { RestCore } from "./core.js";
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 import type { ApprovalPort, ApprovalSummary } from "../ports/approvals.js";
+import { assertCompleteAbsence } from "./list-pages.js";
 
 /**
  * Approval request as read from `GET /approval-requests`. Either flat or wrapped
@@ -50,20 +51,24 @@ function mapApproval(raw: ApprovalRow): ApprovalSummary {
 export function makeApprovalRest(core: RestCore, workspaceId: string): ApprovalPort {
   const ws = `/workspaces/${workspaceId}`;
 
-  async function listRaw(status?: string): Promise<ApprovalRow[]> {
+  async function listRaw(status?: string): Promise<ListResult<ApprovalRow>> {
     const params: Record<string, string> = {};
     if (status) params.status = status;
-    const rows = await core.paginate("api", `${ws}/approval-requests`, params);
-    return rows as ApprovalRow[];
+    const result = await core.paginate("api", `${ws}/approval-requests`, params);
+    return { ...result, rows: result.rows as ApprovalRow[] };
   }
 
   return {
     async listApprovals(filter) {
-      return (await listRaw(filter?.status)).map(mapApproval);
+      const result = await listRaw(filter?.status);
+      return { ...result, rows: result.rows.map(mapApproval) };
     },
     async getApproval(id) {
       // Scan the MAPPED rows: the wire id is nested under approvalRequest.
-      return (await listRaw()).map(mapApproval).find((a) => a.id === id) ?? null;
+      const result = await listRaw();
+      const approval = result.rows.map(mapApproval).find((a) => a.id === id);
+      if (!approval) assertCompleteAbsence(result.truncated, "approval", id);
+      return approval ?? null;
     },
     async submitApproval(input): Promise<EntitySummary> {
       const a = (await core.call("api", "POST", `${ws}/approval-requests`, {

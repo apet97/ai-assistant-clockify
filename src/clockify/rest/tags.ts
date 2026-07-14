@@ -14,8 +14,8 @@ export function makeTagRest(core: RestCore, workspaceId: string): TagPort {
     async listTags(filter) {
       const params: Record<string, string> = { archived: String(filter?.archived ?? false) };
       if (filter?.name) params.name = filter.name;
-      const rows = await core.paginate("api", `${ws}/tags`, params);
-      return rows.map(map);
+      const result = await core.paginate("api", `${ws}/tags`, params);
+      return { ...result, rows: result.rows.map(map) };
     },
     async getTag(id) {
       const t = await core.call("api", "GET", `${ws}/tags/${id}`, undefined, true);

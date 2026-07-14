@@ -17,9 +17,10 @@ const rest = (fetchImpl: typeof fetch) =>
 describe("time-off rest", () => {
   it("listTimeOffPolicies GETs and maps id/name/status/timeUnit", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "pol1", name: "PTO", status: "ACTIVE", timeUnit: "DAYS" }]));
-    expect(await rest(f as unknown as typeof fetch).listTimeOffPolicies()).toEqual([
-      { id: "pol1", name: "PTO", status: "ACTIVE", timeUnit: "DAYS" },
-    ]);
+    expect(await rest(f as unknown as typeof fetch).listTimeOffPolicies()).toEqual({
+      rows: [{ id: "pol1", name: "PTO", status: "ACTIVE", timeUnit: "DAYS" }],
+      truncated: false,
+    });
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/time-off/policies");
   });
 
@@ -120,7 +121,7 @@ describe("time-off rest", () => {
       jsonResponse({ count: 1, requests: [{ id: "r1", policyId: "pol1", status: { statusType: "PENDING" }, timeOffPeriod: { period: { start: "2026-06-10T00:00:00Z", end: "2026-06-12T00:00:00Z" } } }] }),
     );
     const out = await rest(f as unknown as typeof fetch).listTimeOffRequests({ status: "PENDING", userId: "u1" });
-    expect(out[0]).toMatchObject({ id: "r1", policyId: "pol1", status: "PENDING", start: "2026-06-10T00:00:00Z" });
+    expect(out.rows[0]).toMatchObject({ id: "r1", policyId: "pol1", status: "PENDING", start: "2026-06-10T00:00:00Z" });
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-off/requests");
     expect(init.method).toBe("POST");
@@ -205,7 +206,7 @@ describe("time-off rest", () => {
       jsonResponse({ count: 1, balances: [{ policyId: "pol1", policyName: "PTO", balance: 15, used: 5, total: 20 }] }),
     );
     const out = await rest(f as unknown as typeof fetch).getTimeOffBalance("u1");
-    expect(out).toEqual([{ policyId: "pol1", policyName: "PTO", balance: 15, used: 5, total: 20, userId: "u1" }]);
+    expect(out).toEqual({ rows: [{ policyId: "pol1", policyName: "PTO", balance: 15, used: 5, total: 20, userId: "u1" }], truncated: false });
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/time-off/balance/user/u1");
   });
 

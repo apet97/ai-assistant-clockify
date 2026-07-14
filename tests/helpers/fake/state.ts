@@ -23,6 +23,38 @@ import type { AssignmentSummary } from "../../../src/clockify/ports/scheduling.j
 import type { ApprovalSummary } from "../../../src/clockify/ports/approvals.js";
 import type { WebhookSummary } from "../../../src/clockify/ports/webhooks.js";
 import type { UserSummary, GroupSummary, CalendarContext } from "../../../src/clockify/ports/users.js";
+import type { ListResult } from "../../../src/clockify/types.js";
+
+export type FakeListFamily =
+  | "listApprovals"
+  | "searchAuditLog"
+  | "listEntityChanges"
+  | "listClients"
+  | "listCurrencies"
+  | "listCustomFields"
+  | "listExpenses"
+  | "listExpenseCategories"
+  | "listHolidays"
+  | "listHolidaysInPeriod"
+  | "listInvoices"
+  | "listInvoiceItems"
+  | "listInvoicePayments"
+  | "listProjects"
+  | "getProjectMemberships"
+  | "listAssignments"
+  | "getProjectScheduleTotals"
+  | "listTags"
+  | "listTasks"
+  | "getEntries"
+  | "listTimeOffPolicies"
+  | "listTimeOffRequests"
+  | "getTimeOffBalance"
+  | "listUsers"
+  | "listGroups"
+  | "listWebhooks"
+  | "listWebhookEvents"
+  | "listWebhookLogs"
+  | "listTemplates";
 
 /**
  * Shape of the seed accepted by the fake. Re-exported through `fake-clockify.ts`.
@@ -56,8 +88,8 @@ export interface FakeWorkspaceSeed {
   projectMemberships?: Record<string, Array<Record<string, unknown>>>;
   /** deleteEntity throws for these ids (used to exercise partial batch failure). */
   failDeleteIds?: string[];
-  /** getEntries reports `truncated: true` (simulates the 10k pagination backstop). */
-  entriesTruncated?: boolean;
+  /** Per-family completeness controls (simulates a pagination/search backstop). */
+  listTruncated?: Partial<Record<FakeListFamily, boolean>>;
   /** addInvoiceItem throws (simulates a workspace with no matching invoice item type). */
   failAddInvoiceItem?: boolean;
 }
@@ -101,6 +133,14 @@ export interface FakeContext {
   seed: FakeWorkspaceSeed;
   bump: (method: string) => void;
   nextId: (prefix: string) => string;
+}
+
+export function fakeListResult<T>(
+  seed: FakeWorkspaceSeed,
+  family: FakeListFamily,
+  rows: T[],
+): ListResult<T> {
+  return { rows, truncated: seed.listTruncated?.[family] ?? false };
 }
 
 let idSeq = 0;

@@ -10,6 +10,7 @@ import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../perm
 import type { FeatureGroup } from "../permissions.js";
 import { describePatch, resolveEntityRef, type ArchivedFilter } from "./resolve.js";
 import { buildMetrics } from "../../metrics/metrics.js";
+import type { ListResult } from "../../clockify/types.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -67,7 +68,7 @@ const ENTITY_GROUP: Record<(typeof DELETABLE_ENTITY_TYPES)[number], FeatureGroup
 function genericEntityList(
   ctx: ActionContext,
   entityType: string,
-): ((filter?: ArchivedFilter) => Promise<{ id: string; name: string; archived?: boolean }[]>) | undefined {
+): ((filter?: ArchivedFilter) => Promise<ListResult<{ id: string; name: string; archived?: boolean }>>) | undefined {
   switch (entityType) {
     case "project":
       return (filter) => ctx.clockify.listProjects(filter);

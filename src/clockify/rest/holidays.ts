@@ -45,7 +45,7 @@ export function makeHolidayRest(core: RestCore, workspaceId: string): HolidayPor
   return {
     async listHolidays() {
       const rows = (await core.call("api", "GET", `${ws}/holidays`)) as HolidayRow[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapHoliday);
+      return { rows: (Array.isArray(rows) ? rows : []).map(mapHoliday), truncated: false };
     },
     async getHoliday(id) {
       const rows = (await core.call("api", "GET", `${ws}/holidays`)) as HolidayRow[] | null;
@@ -55,7 +55,7 @@ export function makeHolidayRest(core: RestCore, workspaceId: string): HolidayPor
     async listHolidaysInPeriod({ assignedTo, start, end }) {
       const qs = new URLSearchParams({ "assigned-to": assignedTo, start: periodStart(start), end: periodEnd(end) });
       const rows = (await core.call("api", "GET", `${ws}/holidays/in-period?${qs.toString()}`)) as HolidayRow[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapHoliday);
+      return { rows: (Array.isArray(rows) ? rows : []).map(mapHoliday), truncated: false };
     },
     async createHoliday(input): Promise<EntitySummary> {
       const body: Record<string, unknown> = {

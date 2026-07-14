@@ -41,6 +41,10 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   stays in `src/harness/*`. Secrets never enter a `ConfirmableOperation.payload`.
 - Resolve identity (names/numbers → ids, incl. archived) and calendar dates
   server-side, at preview time — never trust model-supplied ids or dates.
+- Every public Clockify list/search port returns exact
+  `ListResult<T> = { rows, truncated }`. Every list/search receipt includes
+  `truncated`; `true` adds `list_truncated`. A truncated scan cannot prove
+  absence or uniqueness — require an exact id or narrower filter.
 - Don't add React/Next/Prisma/Redis/queues/vector DBs. Don't modify sibling repos.
 - Verify Clockify behavior against the OpenAPI spec + a live probe, not the code —
   this codebase's API assumptions have repeatedly been wrong. TDD: failing test
@@ -72,7 +76,9 @@ npm run dev           # tsx src/server.ts (needs env)
   built in).
 - `src/clockify/` — `client.ts` (the `WorkspaceClient` port, the seam),
   `rest-workspace.ts` (live REST adapter, `X-Addon-Token`; I/O only; per-area
-  `rest/*` over `rest/core.ts`, shared date normalization in `rest/wire-dates.ts`),
+  `rest/*` over `rest/core.ts`; plain/envelope/POST pagination preserves
+  `ListResult.truncated`, with shared bounded-page collection in
+  `rest/list-pages.ts`; shared date normalization in `rest/wire-dates.ts`),
   `api-base.ts` (hosts from the install token claims), `service-url.ts` (strict
   Clockify-origin validation), `request-governor.ts` (per-workspace rate,
   concurrency, write, and per-turn host-call bounds).
@@ -83,7 +89,8 @@ npm run dev           # tsx src/server.ts (needs env)
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
   `commitConfirmedOperation`), `catalog.ts`, `permissions.ts`, `risk.ts`,
-  `receipts.ts`, `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
+  `receipts.ts` (`listReceipt` is the list/search receipt choke point),
+  `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `compose.ts` (atomic multi-step/rollback), `idempotency.ts` (dedup confirmed

@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /**
  * Webhook view. NEVER carries `authToken` (the HMAC signing secret) — the REST
@@ -36,11 +36,11 @@ export interface UpdateWebhookInput {
  * `EntitySummary[]`-compatible rows (the generic `list_entities` uses it).
  */
 export interface WebhookPort {
-  listWebhooks(): Promise<WebhookSummary[]>;
+  listWebhooks(): Promise<ListResult<WebhookSummary>>;
   getWebhook(id: string): Promise<WebhookSummary | null>;
   createWebhook(input: CreateWebhookInput): Promise<EntitySummary>;
   updateWebhook(id: string, patch: UpdateWebhookInput): Promise<EntitySummary>;
   deleteWebhook(id: string): Promise<void>;
-  listWebhookEvents(): Promise<string[]>;
-  listWebhookLogs(id: string): Promise<unknown[]>;
+  listWebhookEvents(): Promise<ListResult<string>>;
+  listWebhookLogs(id: string): Promise<ListResult<unknown>>;
 }

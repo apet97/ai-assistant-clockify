@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveEntityRef } from "./resolve.js";
 
 /**
@@ -29,8 +29,8 @@ const listTemplates = defineAction({
   risks: ["read"],
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listTemplates();
-    return { kind: "receipt", receipt: successReceipt({ action: "clockify_templates_list", entity: "template", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } }) };
+    const { rows, truncated } = await ctx.clockify.listTemplates();
+    return { kind: "receipt", receipt: listReceipt({ action: "clockify_templates_list", entity: "template", ids: { workspaceId: ctx.workspaceId }, rows, truncated }) };
   },
 });
 

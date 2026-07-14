@@ -21,8 +21,8 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
       const params: Record<string, string> = {};
       if (filter?.name) params.name = filter.name;
       if (filter?.archived !== undefined) params.archived = String(filter.archived);
-      const rows = await core.paginate("api", `${ws}/clients`, params);
-      return rows.map(map);
+      const result = await core.paginate("api", `${ws}/clients`, params);
+      return { ...result, rows: result.rows.map(map) };
     },
     async getClient(id) {
       const c = await core.call("api", "GET", `${ws}/clients/${id}`, undefined, true);
@@ -52,10 +52,10 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
     async listCurrencies() {
       // Currencies live on the workspace doc (`GET /workspaces/{id}` → `currencies[]`),
       // not a standalone list endpoint (live-verified). Workspace-scoped GET is allowed.
-      if (currenciesCache) return currenciesCache;
+      if (currenciesCache) return { rows: currenciesCache, truncated: false };
       const doc = (await core.call("api", "GET", ws)) as { currencies?: Array<{ id: string; code: string }> } | null;
       currenciesCache = (doc?.currencies ?? []).map((c) => ({ id: c.id, code: c.code }));
-      return currenciesCache;
+      return { rows: currenciesCache, truncated: false };
     },
   };
 }

@@ -11,7 +11,7 @@ const rest = (fetchImpl: typeof fetch) =>
 describe("user & group rest", () => {
   it("listUsers GETs /users and maps name/email/status", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "u1", name: "Ann", email: "ann@x.com", status: "ACTIVE" }]));
-    expect(await rest(f as unknown as typeof fetch).listUsers()).toEqual([{ id: "u1", name: "Ann", email: "ann@x.com", status: "ACTIVE" }]);
+    expect(await rest(f as unknown as typeof fetch).listUsers()).toEqual({ rows: [{ id: "u1", name: "Ann", email: "ann@x.com", status: "ACTIVE" }], truncated: false });
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/users");
   });
 
@@ -61,7 +61,7 @@ describe("user & group rest", () => {
 
   it("listGroups GETs /user-groups; getGroup list-scans", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "g1", name: "Devs" }, { id: "g2", name: "Ops" }]));
-    expect(await rest(f as unknown as typeof fetch).listGroups()).toEqual([{ id: "g1", name: "Devs" }, { id: "g2", name: "Ops" }]);
+    expect(await rest(f as unknown as typeof fetch).listGroups()).toEqual({ rows: [{ id: "g1", name: "Devs" }, { id: "g2", name: "Ops" }], truncated: false });
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/user-groups");
     expect(await rest(f as unknown as typeof fetch).getGroup("g2")).toMatchObject({ id: "g2" });
     const miss = vi.fn(async () => jsonResponse([{ id: "gX" }]));

@@ -10,7 +10,7 @@ import {
   type RiskyClarifyResult,
 } from "../action.js";
 import { nowDate } from "../../durations.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveEntityRef, resolveRelativeDay, resolveScopeRefs, resolveUserFilter } from "./resolve.js";
 
 /**
@@ -62,12 +62,13 @@ const listHolidays = defineReadAction({
   group: TOA,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listHolidays();
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listHolidays();
+    return listReceipt({
       action: "clockify_holidays_list",
       entity: "holiday",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -134,14 +135,15 @@ const listInPeriod = defineAction({
           "I couldn't make sense of the date — give me a calendar date (YYYY-MM-DD) or something like today, next monday, or next month.",
       };
     }
-    const items = await ctx.clockify.listHolidaysInPeriod({ assignedTo: user.userId, start: dates.start, end: dates.end });
+    const { rows, truncated } = await ctx.clockify.listHolidaysInPeriod({ assignedTo: user.userId, start: dates.start, end: dates.end });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_holidays_in_period",
         entity: "holiday",
         ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
+        rows,
+        truncated,
       }),
     };
   },

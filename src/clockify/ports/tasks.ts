@@ -1,4 +1,4 @@
-import type { TaskSummary } from "../types.js";
+import type { ListResult, TaskSummary } from "../types.js";
 
 /** List filter for tasks (name / active state). */
 export interface TaskFilter {
@@ -21,7 +21,7 @@ export interface UpdateTaskRateInput {
  * `deleteTask` marks the task DONE before deleting (Clockify requirement).
  */
 export interface TaskPort {
-  listTasks(projectId: string, filter?: TaskFilter): Promise<TaskSummary[]>;
+  listTasks(projectId: string, filter?: TaskFilter): Promise<ListResult<TaskSummary>>;
   getTask(projectId: string, id: string): Promise<TaskSummary | null>;
   createTask(input: { projectId: string; name: string; assigneeIds?: string[] }): Promise<TaskSummary>;
   updateTask(projectId: string, id: string, patch: Record<string, unknown>): Promise<TaskSummary>;

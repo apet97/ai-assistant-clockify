@@ -6,7 +6,7 @@ import {
   defineReadAction,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt, errorReceipt } from "../receipts.js";
+import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
 import { resolveDateRange, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
 import { nowDate } from "../../durations.js";
 
@@ -66,7 +66,7 @@ const listEntries = defineAction({
     if (!refs.ok) {
       return clarifyResult(refs.clarify);
     }
-    const { entries: items, truncated } = await ctx.clockify.getEntries({
+    const { rows, truncated } = await ctx.clockify.getEntries({
       userId,
       start,
       end,
@@ -75,27 +75,17 @@ const listEntries = defineAction({
     });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_entries_list",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
+        rows,
+        truncated,
         data: {
           userId,
-          count: items.length,
-          items,
-          ...(truncated ? { truncated: true } : {}),
           ...(start !== undefined || end !== undefined ? { window: { start, end } } : {}),
         },
-        // Mirror the exportInvoice precedent: a truncated list gets both a
-        // data flag and an honest, actionable caveat for the model + admin.
-        warnings: truncated
-          ? [
-              {
-                code: "list_truncated",
-                message: `Showing the first ${items.length} time entries (the maximum fetched at once); there may be more. Narrow the date window or add a project filter to see the rest.`,
-              },
-            ]
-          : undefined,
+        truncationMessage: `Showing the first ${rows.length} time entries (the maximum fetched at once); there may be more. Narrow the date window or add a project filter to see the rest.`,
       }),
     };
   },

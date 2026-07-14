@@ -1,6 +1,7 @@
-import type { RestCore } from "./core.js";
+import { PAGE_SIZE, type RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { WebhookPort, WebhookSummary } from "../ports/webhooks.js";
+import { collectPages } from "./list-pages.js";
 
 /**
  * Known Clockify webhook event types (mirrors goclmcp §2.12). The workspace
@@ -57,9 +58,13 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
 
   return {
     async listWebhooks() {
-      const data = (await core.call("api", "GET", `${ws}/webhooks`)) as { webhooks?: WebhookRow[] } | WebhookRow[] | null;
+      const data = (await core.call("api", "GET", `${ws}/webhooks`)) as
+        | { workspaceWebhookCount?: number; webhooks?: WebhookRow[] }
+        | WebhookRow[]
+        | null;
       const rows = Array.isArray(data) ? data : (data?.webhooks ?? []);
-      return rows.map(mapWebhook);
+      const total = Array.isArray(data) ? undefined : data?.workspaceWebhookCount;
+      return { rows: rows.map(mapWebhook), truncated: typeof total === "number" && total > rows.length };
     },
     async getWebhook(id) {
       const raw = (await core.call("api", "GET", `${ws}/webhooks/${id}`, undefined, true)) as WebhookRow | null;
@@ -96,16 +101,23 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
       await core.call("api", "DELETE", `${ws}/webhooks/${id}`);
     },
     async listWebhookEvents() {
-      return [...WEBHOOK_EVENTS];
+      return { rows: [...WEBHOOK_EVENTS], truncated: false };
     },
     async listWebhookLogs(id) {
       // Logs are a POST search per the OpenAPI spec (WebhookLogSearchRequestV1);
       // the GET on this route 405s live. Ask for ALL statuses, newest first.
-      const rows = (await core.call("api", "POST", `${ws}/webhooks/${id}/logs`, {
-        status: "ALL",
-        sortByNewest: true,
-      })) as unknown[] | null;
-      return Array.isArray(rows) ? rows : [];
+      return collectPages({
+        label: `${ws}/webhooks/${id}/logs`,
+        pageSize: PAGE_SIZE,
+        async load(page, pageSize) {
+          const qs = new URLSearchParams({ page: String(page), "page-size": String(pageSize) });
+          const rows = (await core.call("api", "POST", `${ws}/webhooks/${id}/logs?${qs.toString()}`, {
+            status: "ALL",
+            sortByNewest: true,
+          })) as unknown[] | null;
+          return { rows: Array.isArray(rows) ? rows : [] };
+        },
+      });
     },
   };
 }

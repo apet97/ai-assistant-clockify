@@ -17,22 +17,22 @@ describe("audit rest (multi-host)", () => {
       end: "2026-06-30T23:59:59Z",
       page: 1,
     });
-    expect(out).toEqual([{ id: "a1", action: "CREATE_PROJECT" }]);
+    expect(out).toEqual({ rows: [{ id: "a1", action: "CREATE_PROJECT" }], truncated: false });
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://auditlog-api.api.clockify.me/v1/workspaces/ws-1/audit-log");
     expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual({ actions: ["CREATE_PROJECT", "DELETE_PROJECT"], start: "2026-06-01T00:00:00Z", end: "2026-06-30T23:59:59Z", page: 1 });
+    expect(JSON.parse(init.body)).toEqual({ actions: ["CREATE_PROJECT", "DELETE_PROJECT"], start: "2026-06-01T00:00:00Z", end: "2026-06-30T23:59:59Z", page: 1, "page-size": 50 });
   });
 
   it("searchAuditLog tolerates a non-array response (returns [])", async () => {
     const f = vi.fn(async () => jsonResponse({ message: "none" }));
-    expect(await rest(f as unknown as typeof fetch).searchAuditLog({ actions: ["UPDATE_TASK"], start: "s", end: "e" })).toEqual([]);
+    expect(await rest(f as unknown as typeof fetch).searchAuditLog({ actions: ["UPDATE_TASK"], start: "s", end: "e" })).toEqual({ rows: [], truncated: false });
   });
 
   it("listEntityChanges GETs /entities/{changeType} on the PRIMARY api host", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "p1" }]));
     const out = await rest(f as unknown as typeof fetch).listEntityChanges("created");
-    expect(out).toEqual([{ id: "p1" }]);
+    expect(out).toEqual({ rows: [{ id: "p1" }], truncated: false });
     const [url] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/entities/created");
   });

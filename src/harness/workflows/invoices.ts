@@ -11,7 +11,8 @@ import {
   type ActionResult,
   type RiskyClarifyResult,
 } from "../action.js";
-import { errorReceipt, successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
+import { errorReceipt, listReceipt, successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
+import type { ListResult } from "../../clockify/types.js";
 import { fromMinor, toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveInstant, resolveRelativeDay } from "./resolve.js";
@@ -74,7 +75,7 @@ type ResolvedInvoice =
       id: string;
       number?: string;
       currency?: string;
-      invoices: ReadonlyArray<{ id: string }>;
+      invoices: ListResult<{ id: string }>;
     };
 
 /**
@@ -92,7 +93,7 @@ async function resolveInvoiceRef(
   // (an item-add preview must issue exactly one listInvoices, not two). When the
   // ref is already a real id, resolveEntityRef never lists — leave it undefined
   // and let discoverItemTypes fetch lazily only if it's actually needed.
-  let invoices: ReadonlyArray<{ id: string }> | undefined;
+  let invoices: ListResult<{ id: string }> | undefined;
   const resolved = await resolveEntityRef<{ id: string; name: string; currency?: string }>(
     { id: ref.id, name: ref.number },
     {
@@ -100,10 +101,13 @@ async function resolveInvoiceRef(
       verb,
       list: async () => {
         const list = await ctx.clockify.listInvoices();
-        invoices = list;
+        invoices = { rows: list.rows, truncated: list.truncated };
         // Carry the currency through so an amount preview (item-add/payment) can
         // label the figure with the invoice's actual currency.
-        return list.map((inv) => ({ id: inv.id, name: inv.number ?? inv.id, currency: inv.currency }));
+        return {
+          rows: list.rows.map((inv) => ({ id: inv.id, name: inv.number ?? inv.id, currency: inv.currency })),
+          truncated: list.truncated,
+        };
       },
     },
   );
@@ -151,12 +155,13 @@ const listInvoices = defineReadAction({
   group: INV,
   schema: z.object({ status: invoiceStatusSchema.optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listInvoices(args.status ? { status: args.status } : undefined);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listInvoices(args.status ? { status: args.status } : undefined);
+    return listReceipt({
       action: "clockify_invoices_list",
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -180,12 +185,13 @@ const listInvoiceItems = defineInvoiceRead({
   name: "clockify_invoices_items_list",
   description: "List the line items on an invoice (by invoice id or `number`).",
   async read(ctx, id) {
-    const items = await ctx.clockify.listInvoiceItems(id);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listInvoiceItems(id);
+    return listReceipt({
       action: "clockify_invoices_items_list",
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId, invoiceId: id },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -194,12 +200,13 @@ const listInvoicePayments = defineInvoiceRead({
   name: "clockify_invoices_payments_list",
   description: "List the payments recorded against an invoice (by invoice id or `number`).",
   async read(ctx, id) {
-    const items = await ctx.clockify.listInvoicePayments(id);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listInvoicePayments(id);
+    return listReceipt({
       action: "clockify_invoices_payments_list",
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId, invoiceId: id },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -341,7 +348,7 @@ const createInvoice = defineRiskyAction({
     // re-derives them). Resolve each item's type against the workspace's actual
     // configured types — if a named type isn't configured (and some ARE), clarify
     // with the real list instead of creating a doomed $0 invoice.
-    const discovered = args.items?.length ? await discoverItemTypes(ctx) : [];
+    const discovered = args.items?.length ? await discoverItemTypes(ctx) : { rows: [], truncated: false };
     // Item-based tax: when the create sets a rate, its items default to taxed
     // (matches Clockify's checked-by-default TAX/TAX2 columns). An explicit
     // per-item applyTaxes still wins.
@@ -349,7 +356,7 @@ const createInvoice = defineRiskyAction({
     const items: Array<{ itemType: string; description?: string; quantity?: number; unitPriceMinor?: number; applyTaxes?: string }> = [];
     for (const it of args.items ?? []) {
       const resolved = resolveItemType(discovered, it.itemType);
-      if (!resolved.ok) return itemTypeClarify(resolved.options);
+      if (!resolved.ok) return itemTypeClarify(resolved.options, resolved.incomplete);
       items.push({
         itemType: resolved.itemType,
         // Clockify REQUIRES description + quantity on the items POST (live: 400
@@ -403,7 +410,7 @@ const createInvoice = defineRiskyAction({
         // confirm. Only when the workspace has NO discoverable item type (none has
         // ever been auto-created by a manual line item) will the item(s) be skipped
         // → a $0 total. When types WERE discovered, the items apply, so no caveat.
-        ...(items.length && discovered.length === 0
+        ...(items.length && discovered.rows.length === 0
           ? [
               "This workspace has no invoice item type yet, so the line item(s) can't be added and the total will be $0. Add one line item manually in the Clockify invoice editor once — it auto-creates a type — and I can add items here from then on.",
             ]
@@ -647,7 +654,7 @@ const addInvoiceItem = defineRiskyAction({
     const reuseInvoices = invoice.resolvedFrom === "list" ? invoice.invoices : undefined;
     const discovered = await discoverItemTypes(ctx, reuseInvoices);
     const resolved = resolveItemType(discovered, args.itemType);
-    if (!resolved.ok) return itemTypeClarify(resolved.options);
+    if (!resolved.ok) return itemTypeClarify(resolved.options, resolved.incomplete);
     const itemType = resolved.itemType;
     const quantity = args.quantity ?? 1;
     const unitPriceMinor =
@@ -712,10 +719,12 @@ const deleteInvoiceItem = defineRiskyAction({
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete an item from");
     if (!invoice.ok) return invoice.clarify;
     const items = await ctx.clockify.listInvoiceItems(invoice.id);
-    const selectedItem = items[args.index];
+    const selectedItem = items.rows[args.index];
     if (!selectedItem) {
       return {
-        clarify: `Invoice ${invoice.number ?? invoice.id} has no line item at index ${args.index}.`,
+        clarify: items.truncated
+          ? `Clockify returned an incomplete invoice item list, so I can't verify index ${args.index}. Use a narrower invoice view and preview again.`
+          : `Invoice ${invoice.number ?? invoice.id} has no line item at index ${args.index}.`,
       };
     }
     const itemSnapshot = structuredClone(selectedItem);
@@ -734,9 +743,9 @@ const deleteInvoiceItem = defineRiskyAction({
     const { invoiceId, index, itemSnapshot } = payload as {
       invoiceId: string;
       index: number;
-      itemSnapshot: Awaited<ReturnType<typeof ctx.clockify.listInvoiceItems>>[number];
+      itemSnapshot: Awaited<ReturnType<typeof ctx.clockify.listInvoiceItems>>["rows"][number];
     };
-    const current = (await ctx.clockify.listInvoiceItems(invoiceId))[index];
+    const current = (await ctx.clockify.listInvoiceItems(invoiceId)).rows[index];
     if (current === undefined || JSON.stringify(current) !== JSON.stringify(itemSnapshot)) {
       return errorReceipt({
         action: "clockify_invoices_items_delete",

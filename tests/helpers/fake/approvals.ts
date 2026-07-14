@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { ApprovalSummary } from "../../../src/clockify/ports/approvals.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeApprovals({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeApprovals({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listApprovals"
   | "getApproval"
@@ -13,7 +13,8 @@ export function makeFakeApprovals({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listApprovals(filter) {
       bump("listApprovals");
-      return filter?.status ? state.approvals.filter((a) => a.state === filter.status) : state.approvals;
+      const rows = filter?.status ? state.approvals.filter((a) => a.state === filter.status) : state.approvals;
+      return fakeListResult(seed, "listApprovals", rows);
     },
     async getApproval(id) {
       bump("getApproval");

@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /** List filter for tags (name / archived). */
 export interface TagFilter {
@@ -12,7 +12,7 @@ export interface TagFilter {
  * DELETE (no archive step needed).
  */
 export interface TagPort {
-  listTags(filter?: TagFilter): Promise<EntitySummary[]>;
+  listTags(filter?: TagFilter): Promise<ListResult<EntitySummary>>;
   getTag(id: string): Promise<EntitySummary | null>;
   createTag(input: { name: string }): Promise<EntitySummary>;
   updateTag(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;

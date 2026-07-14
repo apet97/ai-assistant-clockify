@@ -186,8 +186,8 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       // truncate and the MAX_PAGES backstop warning fires when a list is capped.
       const params: Record<string, string> = {};
       if (filter?.status) params.statuses = filter.status; // wire param is `statuses` (plural)
-      const rows = (await core.paginateEnvelope("api", `${ws}/invoices`, "invoices", params)) as Record<string, unknown>[];
-      return rows.map(mapSummary);
+      const result = await core.paginateEnvelope("api", `${ws}/invoices`, "invoices", params);
+      return { ...result, rows: (result.rows as Record<string, unknown>[]).map(mapSummary) };
     },
     async getInvoice(id) {
       const raw = await core.call("api", "GET", `${ws}/invoices/${id}`, undefined, true);
@@ -199,10 +199,10 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
         | { items?: Record<string, unknown>[] }
         | null;
       const items = detail?.items;
-      return Array.isArray(items) ? items.map(mapItem) : [];
+      return { rows: Array.isArray(items) ? items.map(mapItem) : [], truncated: false };
     },
     async listInvoicePayments(id) {
-      return (await listPaymentsRaw(id)).map(mapPayment);
+      return { rows: (await listPaymentsRaw(id)).map(mapPayment), truncated: false };
     },
     async exportInvoice(id, format = "PDF") {
       const fmt = format.toUpperCase();

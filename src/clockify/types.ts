@@ -21,6 +21,16 @@
  */
 export type ClockifyAuth = { addonToken: string } | { apiKey: string };
 
+/**
+ * Exact collection-read contract shared by every Clockify list/search port.
+ * `truncated` is true only when the adapter cannot prove the returned rows are
+ * complete (for example, a pagination backstop was reached).
+ */
+export interface ListResult<T> {
+  rows: T[];
+  truncated: boolean;
+}
+
 export interface EntitySummary {
   id: string;
   name: string;

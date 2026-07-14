@@ -1,7 +1,7 @@
 import type { EntitySummary, WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listClients" | "getClient" | "createClient" | "updateClient" | "deleteClient" | "listCurrencies"
 > {
@@ -16,7 +16,7 @@ export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
       if (filter?.archived !== undefined) {
         rows = rows.filter((c) => Boolean(c.archived) === filter.archived);
       }
-      return rows;
+      return fakeListResult(seed, "listClients", rows);
     },
     async getClient(id) {
       bump("getClient");
@@ -49,7 +49,7 @@ export function makeFakeClients({ state, bump, nextId }: FakeContext): Pick<
     },
     async listCurrencies() {
       bump("listCurrencies");
-      return state.currencies;
+      return fakeListResult(seed, "listCurrencies", state.currencies);
     },
   };
 }

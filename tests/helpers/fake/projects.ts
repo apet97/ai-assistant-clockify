@@ -1,7 +1,7 @@
 import type { ProjectSummary, WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listProjects"
   | "getProject"
@@ -29,7 +29,7 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
       if (filter?.clientIds?.length) {
         rows = rows.filter((p) => p.clientId !== undefined && filter.clientIds?.includes(p.clientId));
       }
-      return rows;
+      return fakeListResult(seed, "listProjects", rows);
     },
     async getProject(id) {
       bump("getProject");
@@ -92,7 +92,7 @@ export function makeFakeProjects({ state, bump, nextId }: FakeContext): Pick<
     },
     async getProjectMemberships(projectId) {
       bump("getProjectMemberships");
-      return [...(state.projectMemberships[projectId] ?? [])];
+      return fakeListResult(seed, "getProjectMemberships", [...(state.projectMemberships[projectId] ?? [])]);
     },
   };
 }

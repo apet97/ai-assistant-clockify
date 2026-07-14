@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { CustomFieldSummary } from "../../../src/clockify/ports/custom-fields.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeCustomFields({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeCustomFields({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listCustomFields"
   | "getCustomField"
@@ -15,7 +15,7 @@ export function makeFakeCustomFields({ state, bump, nextId }: FakeContext): Pick
   return {
     async listCustomFields() {
       bump("listCustomFields");
-      return state.customFields;
+      return fakeListResult(seed, "listCustomFields", state.customFields);
     },
     async getCustomField(id) {
       bump("getCustomField");

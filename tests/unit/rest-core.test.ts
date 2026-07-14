@@ -233,8 +233,9 @@ describe("rest core host routing + auth", () => {
       auth: { apiKey: "k" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const rows = await core.paginate("api", "/workspaces/ws-1/projects", { archived: "false" });
-    expect(rows).toHaveLength(201);
+    const result = await core.paginate("api", "/workspaces/ws-1/projects", { archived: "false" });
+    expect(result.rows).toHaveLength(201);
+    expect(result.truncated).toBe(false);
     const url1 = (fetchImpl as any).mock.calls[0][0] as string;
     const url2 = (fetchImpl as any).mock.calls[1][0] as string;
     expect(url1).toContain("page=1");
@@ -256,12 +257,12 @@ describe("rest core host routing + auth", () => {
     expect(url).toContain("page=1");
   });
 
-  it("paginate stops at the MAX_PAGES backstop (50) and paginateWithMeta reports truncated=true", async () => {
+  it("paginate stops at the MAX_PAGES backstop (50) and reports truncated=true", async () => {
     // Every page returns a FULL page (200 rows) so the short-page break never
     // fires — the only thing that can stop the loop is the MAX_PAGES ceiling.
     // This pins BOTH the runaway backstop (never loops unbounded against the live
     // host) AND the truncation SIGNAL: a workspace with > 10k rows is cut off at
-    // 50 * 200 = 10000 rows, and `paginateWithMeta` reports `truncated: true` so
+    // 50 * 200 = 10000 rows, and `paginate` reports `truncated: true` so
     // the list is no longer silently incomplete. An off-by-one in the loop bound
     // or a regression in the short-page condition would change either the call
     // count, the row total, or the truncated flag and fail here.
@@ -273,26 +274,21 @@ describe("rest core host routing + auth", () => {
       auth: { apiKey: "k" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const rows = await core.paginate("api", "/workspaces/ws-1/time-entries");
+    const result = await core.paginate("api", "/workspaces/ws-1/time-entries");
     expect(fetchImpl).toHaveBeenCalledTimes(50); // MAX_PAGES — no 51st request
-    expect(rows).toHaveLength(10000); // PAGE_SIZE * MAX_PAGES
+    expect(result.rows).toHaveLength(10000); // PAGE_SIZE * MAX_PAGES
+    expect(result.truncated).toBe(true);
     // The last request asked for page 50; there is no page 51 (the backstop, not
     // a short page, ended the loop).
     const lastUrl = (fetchImpl as any).mock.calls[49][0] as string;
     expect(lastUrl).toContain("page=50");
 
-    // paginateWithMeta exposes the truncation that paginate hides, and warns once.
-    fetchImpl.mockClear();
-    warn.mockClear();
-    const meta = await core.paginateWithMeta("api", "/workspaces/ws-1/time-entries");
-    expect(meta.truncated).toBe(true);
-    expect(meta.rows).toHaveLength(10000);
     expect(warn).toHaveBeenCalledTimes(1);
     expect((warn.mock.calls[0][0] as string)).toContain("/workspaces/ws-1/time-entries");
     warn.mockRestore();
   });
 
-  it("paginateWithMeta reports truncated=false when the final page is short", async () => {
+  it("paginate reports truncated=false when the final page is short", async () => {
     // A full first page then a short second page = the natural end of the list,
     // not the backstop — so the result is complete and truncated must be false.
     const page1 = Array.from({ length: 200 }, (_, i) => ({ id: i }));
@@ -306,11 +302,56 @@ describe("rest core host routing + auth", () => {
       auth: { apiKey: "k" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    const meta = await core.paginateWithMeta("api", "/workspaces/ws-1/time-entries");
+    const meta = await core.paginate("api", "/workspaces/ws-1/time-entries");
     expect(meta.truncated).toBe(false);
     expect(meta.rows).toHaveLength(201);
     expect(fetchImpl).toHaveBeenCalledTimes(2); // stopped on the short page, not the backstop
     expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("plain and envelope pagination return the exact ListResult contract without dropping completeness", async () => {
+    const plainFetch = vi.fn(async () => res([{ id: "p1" }]));
+    const plain = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: plainFetch as unknown as typeof fetch,
+    });
+    await expect(plain.paginate("api", "/workspaces/ws-1/projects")).resolves.toEqual({
+      rows: [{ id: "p1" }],
+      truncated: false,
+    });
+
+    const envelopeFetch = vi.fn(async () => res({ expenses: { expenses: [{ id: "e1" }] } }));
+    const envelope = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: envelopeFetch as unknown as typeof fetch,
+    });
+    await expect(
+      envelope.paginateEnvelope("api", "/workspaces/ws-1/expenses", "expenses.expenses"),
+    ).resolves.toEqual({ rows: [{ id: "e1" }], truncated: false });
+  });
+
+  it("envelope pagination reports truncated=true at the same MAX_PAGES backstop", async () => {
+    const fullPage = Array.from({ length: 200 }, (_, i) => ({ id: i }));
+    const fetchImpl = vi.fn(async () => res({ categories: fullPage }));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const result = await core.paginateEnvelope(
+      "api",
+      "/workspaces/ws-1/expenses/categories",
+      "categories",
+    );
+    expect(result).toMatchObject({ truncated: true });
+    expect((result as { rows: unknown[] }).rows).toHaveLength(10_000);
+    expect(fetchImpl).toHaveBeenCalledTimes(50);
+    expect(warn).toHaveBeenCalledTimes(1);
     warn.mockRestore();
   });
 

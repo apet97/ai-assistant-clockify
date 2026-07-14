@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /**
  * Workspace & project-template slice of the {@link WorkspaceClient} port (goclmcp
@@ -7,6 +7,6 @@ import type { EntitySummary } from "../types.js";
  */
 export interface WorkspacePort {
   getWorkspace(): Promise<unknown>;
-  listTemplates(): Promise<EntitySummary[]>;
+  listTemplates(): Promise<ListResult<EntitySummary>>;
   getTemplate(id: string): Promise<EntitySummary | null>;
 }

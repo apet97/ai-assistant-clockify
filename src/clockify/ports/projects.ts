@@ -1,4 +1,4 @@
-import type { ProjectSummary } from "../types.js";
+import type { ListResult, ProjectSummary } from "../types.js";
 
 /** List filter for projects (goclmcp §2.2 — name/archived/clients). */
 export interface ProjectFilter {
@@ -36,7 +36,7 @@ export interface UpdateProjectRateInput {
  * implement them; the harness still gates them by risk label.
  */
 export interface ProjectPort {
-  listProjects(filter?: ProjectFilter): Promise<ProjectSummary[]>;
+  listProjects(filter?: ProjectFilter): Promise<ListResult<ProjectSummary>>;
   getProject(id: string): Promise<ProjectSummary | null>;
   createProject(input: CreateProjectInput): Promise<ProjectSummary>;
   /** Fetch-then-merge PUT (Clockify replaces and requires `name`). */
@@ -58,5 +58,5 @@ export interface ProjectPort {
    * carries them on GET). The memberships PATCH REPLACES the whole set, so an
    * "add" must merge into this (live item 058).
    */
-  getProjectMemberships(projectId: string): Promise<Array<Record<string, unknown>>>;
+  getProjectMemberships(projectId: string): Promise<ListResult<Record<string, unknown>>>;
 }

@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 export interface UserSummary extends EntitySummary {
   email?: string;
@@ -34,7 +34,7 @@ export interface UpdateWorkspaceMemberRateInput {
  * single GET is a list-scan, members are `…/{id}/users`.
  */
 export interface UserPort {
-  listUsers(): Promise<UserSummary[]>;
+  listUsers(): Promise<ListResult<UserSummary>>;
   /**
    * The caller's CURRENT workspace role string (e.g. "ADMIN"/"OWNER"/"MEMBER"),
    * or undefined if the member can't be resolved. Used by the opt-in per-request
@@ -48,7 +48,7 @@ export interface UserPort {
   /** Set a workspace member's default hourly/cost rate (the Team-section rate). */
   updateWorkspaceMemberRate(input: UpdateWorkspaceMemberRateInput): Promise<void>;
   deactivateUser(userId: string): Promise<EntitySummary>;
-  listGroups(): Promise<GroupSummary[]>;
+  listGroups(): Promise<ListResult<GroupSummary>>;
   getGroup(id: string): Promise<GroupSummary | null>;
   createGroup(name: string): Promise<EntitySummary>;
   updateGroup(id: string, name: string): Promise<EntitySummary>;

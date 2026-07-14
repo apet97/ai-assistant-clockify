@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
@@ -35,12 +35,13 @@ const listCustomFields = defineReadAction({
   group: CF,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listCustomFields();
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listCustomFields();
+    return listReceipt({
       action: "clockify_custom_fields_list",
       entity: "custom_field",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });

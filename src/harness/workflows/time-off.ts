@@ -8,7 +8,7 @@ import {
   type ActionDefinition,
 } from "../action.js";
 import { nowDate } from "../../durations.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef, resolvePeriod, resolveRelativeDay, resolveScopeRefs, resolveUserFilter, resolveUserRefs, zonedDayTimeInstant } from "./resolve.js";
 
 /** Step a YYYY-MM-DD day forward by n calendar days. */
@@ -57,12 +57,13 @@ const listPolicies = defineReadAction({
   group: TOA,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listTimeOffPolicies();
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listTimeOffPolicies();
+    return listReceipt({
       action: "clockify_time_off_policies_list",
       entity: "time_off_policy",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });
@@ -254,14 +255,15 @@ const listRequests = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
     });
     if (!user.ok) return clarifyResult(user.clarify);
-    const items = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
+    const { rows, truncated } = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_time_off_requests_list",
         entity: "time_off_request",
         ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
+        rows,
+        truncated,
       }),
     };
   },
@@ -325,7 +327,14 @@ const createRequest = defineRiskyAction({
     const policies = await ctx.clockify.listTimeOffPolicies();
     const policy = await resolveEntityRef(
       { id: args.policyId, name: args.policyName },
-      { noun: "time-off policy", verb: "request time off under", list: () => Promise.resolve(policies) },
+      {
+        noun: "time-off policy",
+        verb: "request time off under",
+        list: () => Promise.resolve(policies),
+        // The request body depends on the policy's DAYS/HOURS unit, so even a
+        // syntactically valid id must be present in the list used below.
+        verifyId: true,
+      },
     );
     if (!policy.ok) return policy.clarify;
     const now = nowDate(ctx);
@@ -333,7 +342,7 @@ const createRequest = defineRiskyAction({
     // `period.days` from bare dates; an HOURS policy wants ISO datetime instants
     // (live-verified). Read the unit from the already-fetched list — an unknown
     // unit falls through to the DAYS path, exactly as before.
-    const policyUnit = policies.find((p) => p.id === policy.id)?.timeUnit;
+    const policyUnit = policies.rows.find((p) => p.id === policy.id)?.timeUnit;
     if (policyUnit === "HOURS") {
       // HOURS request = a server-resolved DAY + a number of hours (the model never
       // computes calendar dates). Build 09:00 → 09:00+N ISO instants for the wire.
@@ -358,7 +367,7 @@ const createRequest = defineRiskyAction({
       const warnings = ["This submits a request that notifies approvers."];
       try {
         const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
-        const bal = balances.find((b) => b.policyId === policy.id)?.balance;
+        const bal = balances.rows.find((b) => b.policyId === policy.id)?.balance;
         if (bal !== undefined && hours > bal) {
           warnings.push(`This requests ${hours}h but the policy balance is ${bal}h — Clockify will likely reject it.`);
         }
@@ -433,7 +442,7 @@ const createRequest = defineRiskyAction({
     const warnings = ["This submits a request that notifies approvers."];
     try {
       const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
-      const policyBalance = balances.find((b) => b.policyId === policy.id)?.balance;
+      const policyBalance = balances.rows.find((b) => b.policyId === policy.id)?.balance;
       if (policyBalance !== undefined && requestedDays > policyBalance) {
         warnings.push(
           `This requests ${requestedDays} day(s) but the policy balance is ${policyBalance} — Clockify will likely reject it (its error reads "Value for number of days is not allowed"). Top up the balance or shorten the request.`,
@@ -548,14 +557,15 @@ const getBalance = defineAction({
       defaultTo: ctx.adminUserId,
     });
     if (!user.ok) return clarifyResult(user.clarify);
-    const items = await ctx.clockify.getTimeOffBalance(user.userId);
+    const { rows, truncated } = await ctx.clockify.getTimeOffBalance(user.userId);
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_time_off_balance_get",
         entity: "time_off_balance",
         ids: { workspaceId: ctx.workspaceId },
-        data: { count: items.length, items },
+        rows,
+        truncated,
       }),
     };
   },

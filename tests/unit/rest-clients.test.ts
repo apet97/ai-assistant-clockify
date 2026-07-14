@@ -19,7 +19,7 @@ describe("client rest", () => {
   it("listClients paginates and maps id/name/archived; passes filters", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "c1", name: "Acme", archived: false }]));
     const clients = await rest(f as unknown as typeof fetch).listClients({ name: "Ac", archived: false });
-    expect(clients).toEqual([{ id: "c1", name: "Acme", archived: false }]);
+    expect(clients).toEqual({ rows: [{ id: "c1", name: "Acme", archived: false }], truncated: false });
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/clients");
     expect(parsed.searchParams.get("name")).toBe("Ac");
@@ -73,7 +73,7 @@ describe("client rest", () => {
       jsonResponse({ id: "ws-1", currencies: [{ id: "cur-usd", code: "USD", isDefault: true }, { id: "cur-eur", code: "EUR" }] }),
     );
     const cur = await rest(f as unknown as typeof fetch).listCurrencies();
-    expect(cur).toEqual([{ id: "cur-usd", code: "USD" }, { id: "cur-eur", code: "EUR" }]);
+    expect(cur).toEqual({ rows: [{ id: "cur-usd", code: "USD" }, { id: "cur-eur", code: "EUR" }], truncated: false });
     expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1");
   });
 

@@ -1,7 +1,7 @@
 import type { EntitySummary, WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeTags({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeTags({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listTags" | "getTag" | "createTag" | "updateTag" | "deleteTag"
 > {
@@ -16,7 +16,7 @@ export function makeFakeTags({ state, bump, nextId }: FakeContext): Pick<
       // The real adapter always wires archived=false unless asked (rest/tags.ts).
       const archived = filter?.archived ?? false;
       rows = rows.filter((t) => Boolean(t.archived) === archived);
-      return rows;
+      return fakeListResult(seed, "listTags", rows);
     },
     async getTag(id) {
       bump("getTag");

@@ -5,7 +5,7 @@ import {
   defineRiskyAction,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
 /**
@@ -21,12 +21,13 @@ const listTags = defineReadAction({
   group: WORK,
   schema: z.object({ name: z.string().optional(), archived: z.boolean().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listTags(args);
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listTags(args);
+    return listReceipt({
       action: "clockify_tags_list",
       entity: "tag",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });

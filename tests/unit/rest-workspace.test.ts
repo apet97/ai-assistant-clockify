@@ -52,7 +52,8 @@ describe("rest workspace client", () => {
     );
     const c = client(fetchImpl as unknown as typeof fetch);
     const projects = await c.listProjects();
-    expect(projects).toEqual([
+    expect(projects.truncated).toBe(false);
+    expect(projects.rows).toMatchObject([
       { id: "p1", name: "Website", clientId: "c1", archived: false },
       { id: "p2", name: "App", clientId: undefined, archived: undefined },
     ]);
@@ -175,14 +176,14 @@ describe("rest workspace client", () => {
         { id: "e2", timeInterval: { start: "2026-06-02T00:00:00Z", end: null } },
       ]),
     );
-    const { entries } = await client(f as any).getEntries({
+    const { rows } = await client(f as any).getEntries({
       userId: "u1",
       start: "2026-06-01T00:00:00Z",
       end: "2026-06-30T00:00:00Z",
     });
-    expect(entries).toHaveLength(2);
-    expect(entries[0]).toMatchObject({ id: "e1", start: "2026-06-01T00:00:00Z", end: "2026-06-01T01:00:00Z" });
-    expect(entries[1].end).toBeNull();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ id: "e1", start: "2026-06-01T00:00:00Z", end: "2026-06-01T01:00:00Z" });
+    expect(rows[1].end).toBeNull();
     const [url, init] = (f as any).mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/user/u1/time-entries");

@@ -9,9 +9,9 @@ import {
   type ActionContext,
   type ActionDefinition,
 } from "../action.js";
-import { successReceipt, errorReceipt } from "../receipts.js";
+import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
-import { matchByName, resolveEntityRef, resolveUserRef, resolveUserRefs, suggestOptions } from "./resolve.js";
+import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js";
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 
 /**
@@ -35,8 +35,8 @@ const listUsers = defineReadAction({
   group: UG,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listUsers();
-    return successReceipt({ action: "clockify_users_list", entity: "user", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const { rows, truncated } = await ctx.clockify.listUsers();
+    return listReceipt({ action: "clockify_users_list", entity: "user", ids: { workspaceId: ctx.workspaceId }, rows, truncated });
   },
 });
 
@@ -107,32 +107,20 @@ const updateRole = defineRiskyAction({
       entityId = ctx.workspaceId;
       scopeLabel = "the whole workspace";
     } else if (args.groupId || args.groupName) {
-      const groups = await ctx.clockify.listGroups();
-      let group = args.groupId ? groups.find((g) => g.id === args.groupId) : undefined;
-      if (!group && args.groupName) {
-        const m = matchByName(groups, args.groupName);
-        if (m.kind === "many") return { clarify: `Several user groups match "${args.groupName}". Which one?`, options: m.matches.map((g) => ({ id: g.id, label: g.name })) };
-        if (m.kind === "one") group = m.entity;
-      }
-      if (!group) {
-        const target = args.groupName ?? args.groupId ?? "";
-        return { clarify: `I couldn't find a user group "${target}". Which group should ${granteeName} manage?`, options: suggestOptions(groups, target) };
-      }
+      const group = await resolveEntityRef(
+        { id: args.groupId, name: args.groupName },
+        { noun: "user group", verb: "manage", list: () => ctx.clockify.listGroups(), verifyId: true },
+      );
+      if (!group.ok) return group.clarify;
       entityId = group.id;
       sourceType = "USER_GROUP";
       scopeLabel = `the "${group.name}" group`;
     } else if (args.projectId || args.projectName) {
-      const projects = await ctx.clockify.listProjects();
-      let project = args.projectId ? projects.find((p) => p.id === args.projectId) : undefined;
-      if (!project && args.projectName) {
-        const m = matchByName(projects, args.projectName);
-        if (m.kind === "many") return { clarify: `Several projects match "${args.projectName}". Which one?`, options: m.matches.map((p) => ({ id: p.id, label: p.name })) };
-        if (m.kind === "one") project = m.entity;
-      }
-      if (!project) {
-        const target = args.projectName ?? args.projectId ?? "";
-        return { clarify: `I couldn't find an active project "${target}". Which project should ${granteeName} manage?`, options: suggestOptions(projects, target) };
-      }
+      const project = await resolveEntityRef(
+        { id: args.projectId, name: args.projectName },
+        { noun: "project", verb: "manage", list: () => ctx.clockify.listProjects(), verifyId: true },
+      );
+      if (!project.ok) return project.clarify;
       entityId = project.id;
       scopeLabel = `the "${project.name}" project`;
     } else {
@@ -268,8 +256,8 @@ const listGroups = defineReadAction({
   group: UG,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listGroups();
-    return successReceipt({ action: "clockify_groups_list", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const { rows, truncated } = await ctx.clockify.listGroups();
+    return listReceipt({ action: "clockify_groups_list", entity: "group", ids: { workspaceId: ctx.workspaceId }, rows, truncated });
   },
 });
 

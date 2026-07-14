@@ -2,7 +2,7 @@ import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { nowDate } from "../../durations.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
 
@@ -62,16 +62,16 @@ const listExpenses = defineAction({
     });
     if (!dates.ok) return { kind: "clarify", message: dates.message };
     const { start, end } = dates;
-    const items = await ctx.clockify.listExpenses({ start, end });
+    const { rows, truncated } = await ctx.clockify.listExpenses({ start, end });
     return {
       kind: "receipt",
-      receipt: successReceipt({
+      receipt: listReceipt({
         action: "clockify_expenses_list",
         entity: "expense",
         ids: { workspaceId: ctx.workspaceId },
+        rows,
+        truncated,
         data: {
-          count: items.length,
-          items,
           ...(start !== undefined || end !== undefined ? { window: { start, end } } : {}),
         },
       }),
@@ -101,12 +101,13 @@ const listExpenseCategories = defineReadAction({
   group: EXP,
   schema: z.object({}),
   async handler(ctx) {
-    const items = await ctx.clockify.listExpenseCategories();
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listExpenseCategories();
+    return listReceipt({
       action: "clockify_expenses_categories_list",
       entity: "expense_category",
       ids: { workspaceId: ctx.workspaceId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });

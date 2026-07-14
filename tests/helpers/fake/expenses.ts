@@ -3,9 +3,9 @@ import type {
   ExpenseSummary,
   ExpenseCategorySummary,
 } from "../../../src/clockify/ports/expenses.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeExpenses({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listExpenses"
   | "getExpense"
@@ -21,7 +21,7 @@ export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listExpenses() {
       bump("listExpenses");
-      return state.expenses;
+      return fakeListResult(seed, "listExpenses", state.expenses);
     },
     async getExpense(id) {
       bump("getExpense");
@@ -68,8 +68,10 @@ export function makeFakeExpenses({ state, bump, nextId }: FakeContext): Pick<
     },
     async listExpenseCategories(filter) {
       bump("listExpenseCategories");
-      if (filter?.archived === undefined) return state.expenseCategories;
-      return state.expenseCategories.filter((c) => Boolean(c.archived) === filter.archived);
+      const rows = filter?.archived === undefined
+        ? state.expenseCategories
+        : state.expenseCategories.filter((c) => Boolean(c.archived) === filter.archived);
+      return fakeListResult(seed, "listExpenseCategories", rows);
     },
     async createExpenseCategory({ name }) {
       bump("createExpenseCategory");

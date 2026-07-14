@@ -44,14 +44,14 @@ describe("time-entry rest", () => {
         { id: "e1", timeInterval: { start: "2026-06-01T00:00:00Z", end: "2026-06-01T01:00:00Z" } },
       ]),
     );
-    const { entries, truncated } = await rest(f as unknown as typeof fetch).getEntries({
+    const { rows, truncated } = await rest(f as unknown as typeof fetch).getEntries({
       userId: "u1",
       start: "2026-06-01T00:00:00Z",
       end: "2026-06-30T00:00:00Z",
       projectId: "p1",
       taskId: "t1",
     });
-    expect(entries).toHaveLength(1);
+    expect(rows).toHaveLength(1);
     expect(truncated).toBe(false); // a single short page is the natural end, not the backstop
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/user/u1/time-entries");

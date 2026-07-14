@@ -2,6 +2,7 @@ import type {
   TimeEntrySummary,
   StartTimeEntryInput,
   CreateTimeEntryInput,
+  ListResult,
 } from "../types.js";
 
 /**
@@ -25,7 +26,7 @@ export interface TimeEntryPort {
     end?: string;
     projectId?: string;
     taskId?: string;
-  }): Promise<{ entries: TimeEntrySummary[]; truncated: boolean }>;
+  }): Promise<ListResult<TimeEntrySummary>>;
   /** Fetch a single time entry by id. */
   getEntry(id: string): Promise<TimeEntrySummary | null>;
   /** Update known time-entry fields (safe write — entry id is already resolved). */

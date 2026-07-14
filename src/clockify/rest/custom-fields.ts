@@ -1,6 +1,7 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { CustomFieldPort, CustomFieldSummary } from "../ports/custom-fields.js";
+import { assertCompleteAbsence } from "./list-pages.js";
 
 /** Custom-field row fields read by {@link mapField} + the update GET-scan. */
 type FieldRow = {
@@ -55,14 +56,16 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
   // The single-field GET /custom-fields/{id} 405s (live-verified); read one field
   // by listing and filtering, like invoice items.
   async function findRaw(id: string): Promise<FieldRow | null> {
-    const rows = (await core.paginate("api", `${ws}/custom-fields`)) as FieldRow[];
-    return rows.find((r) => r.id === id) ?? null;
+    const result = await core.paginate("api", `${ws}/custom-fields`);
+    const raw = (result.rows as FieldRow[]).find((r) => r.id === id);
+    if (!raw) assertCompleteAbsence(result.truncated, "custom-field", id);
+    return raw ?? null;
   }
 
   return {
     async listCustomFields() {
-      const rows = (await core.paginate("api", `${ws}/custom-fields`)) as FieldRow[];
-      return rows.map(mapField);
+      const result = await core.paginate("api", `${ws}/custom-fields`);
+      return { ...result, rows: (result.rows as FieldRow[]).map(mapField) };
     },
     async getCustomField(id) {
       const raw = await findRaw(id);

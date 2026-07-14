@@ -81,8 +81,8 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       const params: Record<string, string> = {};
       if (filter?.start) params.start = filter.start;
       if (filter?.end) params.end = filter.end;
-      const rows = (await core.paginateEnvelope("api", `${ws}/expenses`, "expenses.expenses", params)) as Record<string, unknown>[];
-      return rows.map(mapExpense);
+      const result = await core.paginateEnvelope("api", `${ws}/expenses`, "expenses.expenses", params);
+      return { ...result, rows: (result.rows as Record<string, unknown>[]).map(mapExpense) };
     },
     async getExpense(id) {
       const raw = await core.call("api", "GET", `${ws}/expenses/${id}`, undefined, true);
@@ -159,8 +159,8 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       // resolution for deletes must be able to ask for the archived set.
       // Paginate (envelope: `{categories:[…]}`) so >50 categories don't truncate.
       const params: Record<string, string> = filter?.archived === undefined ? {} : { archived: String(filter.archived) };
-      const rows = (await core.paginateEnvelope("api", `${ws}/expenses/categories`, "categories", params)) as CategoryRow[];
-      return rows.map(mapCategory);
+      const result = await core.paginateEnvelope("api", `${ws}/expenses/categories`, "categories", params);
+      return { ...result, rows: (result.rows as CategoryRow[]).map(mapCategory) };
     },
     async createExpenseCategory({ name }): Promise<EntitySummary> {
       const c = (await core.call("api", "POST", `${ws}/expenses/categories`, { name })) as {

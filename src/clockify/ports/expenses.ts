@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /** List filter for expenses (date range, full ISO or YYYY-MM-DD). */
 export interface ExpenseFilter {
@@ -66,12 +66,12 @@ export interface UpdateExpenseInput {
  * required `userId`.
  */
 export interface ExpensePort {
-  listExpenses(filter?: ExpenseFilter): Promise<ExpenseSummary[]>;
+  listExpenses(filter?: ExpenseFilter): Promise<ListResult<ExpenseSummary>>;
   getExpense(id: string): Promise<ExpenseSummary | null>;
   createExpense(input: CreateExpenseInput): Promise<EntitySummary>;
   updateExpense(id: string, input: UpdateExpenseInput): Promise<EntitySummary>;
   deleteExpense(id: string): Promise<void>;
-  listExpenseCategories(filter?: { archived?: boolean }): Promise<ExpenseCategorySummary[]>;
+  listExpenseCategories(filter?: { archived?: boolean }): Promise<ListResult<ExpenseCategorySummary>>;
   createExpenseCategory(input: { name: string }): Promise<EntitySummary>;
   updateExpenseCategory(id: string, patch: { name?: string }): Promise<EntitySummary>;
   /** PATCH /expenses/categories/{id}/status — the spec's archive/unarchive route. */

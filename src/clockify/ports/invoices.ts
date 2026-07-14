@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /** List filter for invoices (live status). */
 export interface InvoiceFilter {
@@ -109,10 +109,10 @@ export interface ImportInvoiceTimeInput {
  * `paymentDate`; status changes go through a separate `PATCH /status`.
  */
 export interface InvoicePort {
-  listInvoices(filter?: InvoiceFilter): Promise<InvoiceSummary[]>;
+  listInvoices(filter?: InvoiceFilter): Promise<ListResult<InvoiceSummary>>;
   getInvoice(id: string): Promise<InvoiceDetail | null>;
-  listInvoiceItems(id: string): Promise<InvoiceItem[]>;
-  listInvoicePayments(id: string): Promise<InvoicePayment[]>;
+  listInvoiceItems(id: string): Promise<ListResult<InvoiceItem>>;
+  listInvoicePayments(id: string): Promise<ListResult<InvoicePayment>>;
   exportInvoice(id: string, format?: string): Promise<InvoiceExport>;
   createInvoice(input: CreateInvoiceInput): Promise<EntitySummary>;
   updateInvoice(id: string, input: UpdateInvoiceInput): Promise<EntitySummary>;

@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { WebhookSummary } from "../../../src/clockify/ports/webhooks.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeWebhooks({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeWebhooks({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listWebhooks"
   | "getWebhook"
@@ -15,7 +15,7 @@ export function makeFakeWebhooks({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listWebhooks() {
       bump("listWebhooks");
-      return state.webhooks;
+      return fakeListResult(seed, "listWebhooks", state.webhooks);
     },
     async getWebhook(id) {
       bump("getWebhook");
@@ -40,12 +40,12 @@ export function makeFakeWebhooks({ state, bump, nextId }: FakeContext): Pick<
     },
     async listWebhookEvents() {
       bump("listWebhookEvents");
-      return ["NEW_TIME_ENTRY", "TIMER_STOPPED"];
+      return fakeListResult(seed, "listWebhookEvents", ["NEW_TIME_ENTRY", "TIMER_STOPPED"]);
     },
     async listWebhookLogs(id) {
       bump("listWebhookLogs");
       void id;
-      return [];
+      return fakeListResult(seed, "listWebhookLogs", []);
     },
   };
 }

@@ -438,7 +438,7 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
     // A truncated list means totalMinutes is computed on an incomplete set — the
     // caveat must say the total is understated, not just that rows are missing.
     const fake = createFakeWorkspace({
-      entriesTruncated: true,
+      listTruncated: { getEntries: true },
       entries: [{ id: "in1", start: "2026-06-05T09:00:00.000Z", end: "2026-06-05T10:00:00.000Z", description: "a" }],
     });
     const result = await executeAction({
@@ -454,7 +454,7 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
 
   it("review_week flags a truncated entry list with a list_truncated warning", async () => {
     const fake = createFakeWorkspace({
-      entriesTruncated: true,
+      listTruncated: { getEntries: true },
       entries: [{ id: "w1", start: "2026-06-01T09:00:00.000Z", description: "a" }],
     });
     const result = await executeAction({
@@ -477,7 +477,7 @@ describe("expanded read + safe-write actions (Phase 3)", () => {
       context: makeContext(fake),
     });
     if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected a success receipt");
-    expect((result.receipt.data as any).truncated).toBeUndefined();
+    expect((result.receipt.data as any).truncated).toBe(false);
     expect(result.receipt.warnings).toBeUndefined();
   });
 

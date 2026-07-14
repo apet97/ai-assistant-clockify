@@ -3,9 +3,9 @@ import type {
   TimeOffPolicySummary,
   TimeOffRequestSummary,
 } from "../../../src/clockify/ports/time-off.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeTimeOff({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listTimeOffPolicies"
   | "getTimeOffPolicy"
@@ -23,7 +23,7 @@ export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listTimeOffPolicies() {
       bump("listTimeOffPolicies");
-      return state.timeOffPolicies;
+      return fakeListResult(seed, "listTimeOffPolicies", state.timeOffPolicies);
     },
     async getTimeOffPolicy(id) {
       bump("getTimeOffPolicy");
@@ -66,7 +66,7 @@ export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
       let rows = state.timeOffRequests;
       if (filter?.status) rows = rows.filter((r) => r.status === filter.status);
       if (filter?.userId) rows = rows.filter((r) => r.userId === filter.userId);
-      return rows;
+      return fakeListResult(seed, "listTimeOffRequests", rows);
     },
     async getTimeOffRequest(id) {
       bump("getTimeOffRequest");
@@ -101,7 +101,7 @@ export function makeFakeTimeOff({ state, bump, nextId }: FakeContext): Pick<
     },
     async getTimeOffBalance(userId) {
       bump("getTimeOffBalance");
-      return state.timeOffBalances.map((b) => ({ ...b, userId }));
+      return fakeListResult(seed, "getTimeOffBalance", state.timeOffBalances.map((b) => ({ ...b, userId })));
     },
     async updateTimeOffBalance(policyId, input) {
       bump("updateTimeOffBalance");

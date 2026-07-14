@@ -9,7 +9,7 @@ import {
   type ActionDefinition,
   type RiskyClarifyResult,
 } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveUserRefs } from "./resolve.js";
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
@@ -64,12 +64,13 @@ const listTasks = defineReadAction({
   group: WORK,
   schema: z.object({ projectId: z.string().min(1), name: z.string().optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listTasks(args.projectId, { name: args.name });
-    return successReceipt({
+    const { rows, truncated } = await ctx.clockify.listTasks(args.projectId, { name: args.name });
+    return listReceipt({
       action: "clockify_tasks_list",
       entity: "task",
       ids: { workspaceId: ctx.workspaceId, projectId: args.projectId },
-      data: { count: items.length, items },
+      rows,
+      truncated,
     });
   },
 });

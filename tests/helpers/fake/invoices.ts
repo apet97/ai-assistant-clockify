@@ -5,7 +5,7 @@ import type {
   InvoicePayment,
   InvoiceSummary,
 } from "../../../src/clockify/ports/invoices.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
 export function makeFakeInvoices({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
@@ -29,11 +29,11 @@ export function makeFakeInvoices({ state, seed, bump, nextId }: FakeContext): Pi
       const rows = filter?.status
         ? state.invoices.filter((i) => i.status === filter.status)
         : state.invoices;
-      return rows.map((inv): InvoiceSummary => {
+      return fakeListResult(seed, "listInvoices", rows.map((inv): InvoiceSummary => {
         const { items: _items, ...summary } = inv;
         void _items;
         return summary;
-      });
+      }));
     },
     async getInvoice(id) {
       bump("getInvoice");
@@ -41,11 +41,11 @@ export function makeFakeInvoices({ state, seed, bump, nextId }: FakeContext): Pi
     },
     async listInvoiceItems(id) {
       bump("listInvoiceItems");
-      return state.invoices.find((i) => i.id === id)?.items ?? [];
+      return fakeListResult(seed, "listInvoiceItems", state.invoices.find((i) => i.id === id)?.items ?? []);
     },
     async listInvoicePayments(id) {
       bump("listInvoicePayments");
-      return state.invoicePayments[id] ?? [];
+      return fakeListResult(seed, "listInvoicePayments", state.invoicePayments[id] ?? []);
     },
     async exportInvoice(id) {
       bump("exportInvoice");

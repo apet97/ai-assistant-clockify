@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 export interface HolidaySummary extends EntitySummary {
   startDate?: string;
@@ -37,9 +37,9 @@ export interface UpdateHolidayInput {
  * status}` assignment filter; update is a full PUT.
  */
 export interface HolidayPort {
-  listHolidays(): Promise<HolidaySummary[]>;
+  listHolidays(): Promise<ListResult<HolidaySummary>>;
   getHoliday(id: string): Promise<HolidaySummary | null>;
-  listHolidaysInPeriod(input: { assignedTo: string; start: string; end: string }): Promise<HolidaySummary[]>;
+  listHolidaysInPeriod(input: { assignedTo: string; start: string; end: string }): Promise<ListResult<HolidaySummary>>;
   createHoliday(input: CreateHolidayInput): Promise<EntitySummary>;
   updateHoliday(id: string, patch: UpdateHolidayInput): Promise<EntitySummary>;
   deleteHoliday(id: string): Promise<void>;

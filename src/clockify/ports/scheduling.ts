@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 export interface AssignmentSummary {
   id: string;
@@ -43,12 +43,12 @@ export interface UpdateAssignmentInput {
  * is a PUT to `…/publish`; project totals is a POST search.
  */
 export interface SchedulingPort {
-  listAssignments(filter?: AssignmentFilter): Promise<AssignmentSummary[]>;
+  listAssignments(filter?: AssignmentFilter): Promise<ListResult<AssignmentSummary>>;
   getAssignment(id: string): Promise<AssignmentSummary | null>;
   createAssignment(input: CreateAssignmentInput): Promise<EntitySummary>;
   updateAssignment(id: string, patch: UpdateAssignmentInput): Promise<EntitySummary>;
   deleteAssignment(id: string, seriesUpdateOption?: string): Promise<void>;
   publishSchedule(input: { start: string; end: string; notifyUsers?: boolean; userId?: string }): Promise<void>;
-  getProjectScheduleTotals(input: { start: string; end: string; projectId?: string }): Promise<unknown[]>;
+  getProjectScheduleTotals(input: { start: string; end: string; projectId?: string }): Promise<ListResult<unknown>>;
   getUserScheduleTotals(userId: string, range: { start: string; end: string }): Promise<unknown>;
 }

@@ -14,8 +14,8 @@ describe("webhook rest", () => {
       jsonResponse({ webhooks: [{ id: "w1", name: "Hook", url: "https://x.example/h", webhookEvent: "NEW_TIME_ENTRY", authToken: "SECRET" }] }),
     );
     const out = await rest(f as unknown as typeof fetch).listWebhooks();
-    expect(out[0]).toMatchObject({ id: "w1", name: "Hook", url: "https://x.example/h", webhookEvent: "NEW_TIME_ENTRY" });
-    expect(out[0]).not.toHaveProperty("authToken"); // secret never surfaced
+    expect(out.rows[0]).toMatchObject({ id: "w1", name: "Hook", url: "https://x.example/h", webhookEvent: "NEW_TIME_ENTRY" });
+    expect(out.rows[0]).not.toHaveProperty("authToken"); // secret never surfaced
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/webhooks");
   });
 
@@ -66,9 +66,13 @@ describe("webhook rest", () => {
   it("listWebhookLogs POSTs a WebhookLogSearchRequestV1 search body (the GET 405s live)", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "log1" }]));
     const out = await rest(f as unknown as typeof fetch).listWebhookLogs("w1");
-    expect(out).toEqual([{ id: "log1" }]);
+    expect(out).toEqual({ rows: [{ id: "log1" }], truncated: false });
     const [url, init] = (f as any).mock.calls[0];
-    expect(new URL(url).pathname).toBe("/api/v1/workspaces/ws-1/webhooks/w1/logs");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/webhooks/w1/logs");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page-size")).toBe("200");
+    expect(parsed.searchParams.has("size")).toBe(false);
     expect(init.method).toBe("POST");
     expect(JSON.parse(init.body)).toEqual({ status: "ALL", sortByNewest: true });
   });
@@ -76,8 +80,9 @@ describe("webhook rest", () => {
   it("listWebhookEvents returns a non-empty static event list (no API call)", async () => {
     const f = vi.fn(async () => jsonResponse({}));
     const events = await rest(f as unknown as typeof fetch).listWebhookEvents();
-    expect(events).toContain("NEW_TIME_ENTRY");
-    expect(events.length).toBeGreaterThan(20);
+    expect(events.rows).toContain("NEW_TIME_ENTRY");
+    expect(events.rows.length).toBeGreaterThan(20);
+    expect(events.truncated).toBe(false);
     expect((f as any).mock.calls.length).toBe(0); // static, no fetch
   });
 });

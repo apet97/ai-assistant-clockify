@@ -1,6 +1,7 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
 import type { UserPort, UserSummary, GroupSummary, CalendarContext } from "../ports/users.js";
+import { assertCompleteAbsence } from "./list-pages.js";
 
 /** A workspace role entry as read by {@link makeUserRest} `getWorkspaceMemberRole`. */
 type RoleEntry = {
@@ -94,8 +95,8 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
     async listUsers() {
       // Paginate: the bare GET returns only the server default page-size (50), which
       // silently breaks member name resolution in any workspace with >50 members.
-      const rows = (await core.paginate("api", `${ws}/users`)) as UserRow[];
-      return rows.map(mapUser);
+      const result = await core.paginate("api", `${ws}/users`);
+      return { ...result, rows: (result.rows as UserRow[]).map(mapUser) };
     },
     async getWorkspaceMemberRole(userId): Promise<string | undefined> {
       // I/O only. Single-member read for the opt-in per-request admin re-check
@@ -108,8 +109,9 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       // or a role string can't be resolved (the rechecker treats undefined as
       // "no verdict" / fail-open). LIVE-VERIFY against a prod member doc before
       // relying on ROLE_RECHECK=1 in production (T62).
-      const rows = (await core.paginate("api", `${ws}/users`)) as UserRow[];
-      const raw = rows.find((u) => u?.id === userId);
+      const result = await core.paginate("api", `${ws}/users`);
+      const raw = (result.rows as UserRow[]).find((u) => u?.id === userId);
+      if (!raw) assertCompleteAbsence(result.truncated, "workspace-member", userId);
       if (!raw) return undefined;
       if (typeof raw.role === "string" && raw.role.length > 0) return raw.role;
       const roles = Array.isArray(raw.roles) ? raw.roles : [];
@@ -121,11 +123,13 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       return typeof roleValue === "string" && roleValue.length > 0 ? roleValue : undefined;
     },
     async getCalendarContext(userId) {
-      const [rows, workspace] = await Promise.all([
-        core.paginate("api", `${ws}/users`) as Promise<UserRow[]>,
+      const [members, workspace] = await Promise.all([
+        core.paginate("api", `${ws}/users`),
         core.call("api", "GET", ws, undefined, true),
       ]);
-      const admin = calendarFrom(rows.find((user) => user.id === userId));
+      const member = (members.rows as UserRow[]).find((user) => user.id === userId);
+      if (!member) assertCompleteAbsence(members.truncated, "workspace-member", userId);
+      const admin = calendarFrom(member);
       const fallback = calendarFrom(workspace);
       const timeZone = admin.timeZone ?? fallback.timeZone;
       const weekStartsOn = admin.weekStartsOn ?? fallback.weekStartsOn;
@@ -169,14 +173,15 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       return { id: u?.id ?? userId, name: "INACTIVE" };
     },
     async listGroups() {
-      const rows = (await core.paginate("api", `${ws}/user-groups`)) as GroupRow[];
-      return rows.map(mapGroup);
+      const result = await core.paginate("api", `${ws}/user-groups`);
+      return { ...result, rows: (result.rows as GroupRow[]).map(mapGroup) };
     },
     async getGroup(id) {
       // Single-GET-by-id 404s for groups (CLAUDE.md) → scan the paginated list so a
       // group past page 1 is still found.
-      const rows = (await core.paginate("api", `${ws}/user-groups`)) as GroupRow[];
-      const raw = rows.find((g) => g.id === id);
+      const result = await core.paginate("api", `${ws}/user-groups`);
+      const raw = (result.rows as GroupRow[]).find((g) => g.id === id);
+      if (!raw) assertCompleteAbsence(result.truncated, "user-group", id);
       return raw ? mapGroup(raw) : null;
     },
     async createGroup(name): Promise<EntitySummary> {

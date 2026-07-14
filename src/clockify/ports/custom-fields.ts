@@ -1,4 +1,4 @@
-import type { EntitySummary } from "../types.js";
+import type { EntitySummary, ListResult } from "../types.js";
 
 /** Clockify custom-field types (case-sensitive on the wire). */
 export type CustomFieldType =
@@ -42,7 +42,7 @@ export interface UpdateCustomFieldInput {
  * merged into the entry's `customFieldValues` and written via a full-entry PUT.
  */
 export interface CustomFieldPort {
-  listCustomFields(): Promise<CustomFieldSummary[]>;
+  listCustomFields(): Promise<ListResult<CustomFieldSummary>>;
   getCustomField(id: string): Promise<CustomFieldSummary | null>;
   createCustomField(input: CreateCustomFieldInput): Promise<EntitySummary>;
   updateCustomField(id: string, patch: UpdateCustomFieldInput): Promise<EntitySummary>;

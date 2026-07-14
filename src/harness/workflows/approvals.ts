@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
-import { successReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { nowDate } from "../../durations.js";
 import { resolveInstant, resolvePeriod } from "./resolve.js";
 
@@ -52,8 +52,8 @@ const listApprovals = defineReadAction({
   group: AP,
   schema: z.object({ status: z.enum(["PENDING", "APPROVED", "WITHDRAWN_APPROVAL"]).optional() }),
   async handler(ctx, args) {
-    const items = await ctx.clockify.listApprovals(args);
-    return successReceipt({ action: "clockify_approvals_list", entity: "approval", ids: { workspaceId: ctx.workspaceId }, data: { count: items.length, items } });
+    const { rows, truncated } = await ctx.clockify.listApprovals(args);
+    return listReceipt({ action: "clockify_approvals_list", entity: "approval", ids: { workspaceId: ctx.workspaceId }, rows, truncated });
   },
 });
 

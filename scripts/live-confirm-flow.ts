@@ -162,7 +162,7 @@ async function main(): Promise<void> {
     auth: { addonToken: installToken },
   });
   const tagExists = async (name: string): Promise<{ id: string; name: string } | undefined> => {
-    const tags = (await rest.listTags({})) as Array<{ id: string; name: string }>;
+    const tags = (await rest.listTags({})).rows;
     return tags.find((t) => t.name === name);
   };
 

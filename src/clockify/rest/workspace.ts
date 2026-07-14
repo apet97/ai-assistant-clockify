@@ -31,8 +31,8 @@ export function makeWorkspaceRest(core: RestCore, workspaceId: string): Workspac
       return (await core.call("api", "GET", ws, undefined, true)) ?? null;
     },
     async listTemplates() {
-      const rows = (await core.call("api", "GET", `${ws}/projects?is-template=true`)) as TemplateRow[] | null;
-      return (Array.isArray(rows) ? rows : []).map(mapTemplate);
+      const result = await core.paginate("api", `${ws}/projects`, { "is-template": "true" });
+      return { ...result, rows: (result.rows as TemplateRow[]).map(mapTemplate) };
     },
     async getTemplate(id) {
       const raw = (await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true)) as TemplateRow | null;

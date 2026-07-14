@@ -74,6 +74,19 @@ export interface SuccessReceiptInput {
   next?: NextAction[];
 }
 
+export interface ListReceiptInput<T> extends Omit<SuccessReceiptInput, "data"> {
+  rows: T[];
+  truncated: boolean;
+  /** Payload field for the rows. Defaults to `items`. */
+  dataKey?: string;
+  /** Additional list context such as filters, totals, or byte counts. */
+  data?: Record<string, unknown>;
+  /** Override when the represented count differs from the inline row count. */
+  count?: number;
+  /** Action-specific recovery copy for an incomplete list. */
+  truncationMessage?: string;
+}
+
 export interface ErrorReceiptInput {
   action: string;
   code: string;
@@ -123,6 +136,32 @@ export function successReceipt(input: SuccessReceiptInput): SuccessReceipt {
   if (input.warnings && input.warnings.length > 0) receipt.warnings = input.warnings;
   if (input.next && input.next.length > 0) receipt.next = input.next;
   return receipt;
+}
+
+export function listReceipt<T>(input: ListReceiptInput<T>): SuccessReceipt {
+  const warnings = [...(input.warnings ?? [])];
+  if (input.truncated && !warnings.some((warning) => warning.code === "list_truncated")) {
+    warnings.push({
+      code: "list_truncated",
+      message:
+        input.truncationMessage ??
+        "Clockify returned an incomplete list. Narrow the filter or date range before relying on absence, uniqueness, counts, or totals.",
+    });
+  }
+  return successReceipt({
+    action: input.action,
+    entity: input.entity,
+    ids: input.ids,
+    changed: input.changed,
+    next: input.next,
+    data: {
+      ...input.data,
+      count: input.count ?? input.rows.length,
+      [input.dataKey ?? "items"]: input.rows,
+      truncated: input.truncated,
+    },
+    warnings,
+  });
 }
 
 export function errorReceipt(input: ErrorReceiptInput): ErrorReceipt {

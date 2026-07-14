@@ -19,9 +19,10 @@ describe("holiday rest", () => {
     const f = vi.fn(async () =>
       jsonResponse([{ id: "h1", name: "Xmas", datePeriod: { startDate: "2026-12-25", endDate: "2026-12-25" }, occursAnnually: true }]),
     );
-    expect(await rest(f as unknown as typeof fetch).listHolidays()).toEqual([
-      { id: "h1", name: "Xmas", startDate: "2026-12-25", endDate: "2026-12-25", occursAnnually: true },
-    ]);
+    expect(await rest(f as unknown as typeof fetch).listHolidays()).toEqual({
+      rows: [{ id: "h1", name: "Xmas", startDate: "2026-12-25", endDate: "2026-12-25", occursAnnually: true }],
+      truncated: false,
+    });
     expect(new URL((f as any).mock.calls[0][0]).pathname).toBe("/api/v1/workspaces/ws-1/holidays");
   });
 

@@ -1,8 +1,8 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
 import type { HolidaySummary } from "../../../src/clockify/ports/holidays.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeHolidays({ state, bump, nextId }: FakeContext): Pick<
+export function makeFakeHolidays({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listHolidays"
   | "getHoliday"
@@ -14,7 +14,7 @@ export function makeFakeHolidays({ state, bump, nextId }: FakeContext): Pick<
   return {
     async listHolidays() {
       bump("listHolidays");
-      return state.holidays;
+      return fakeListResult(seed, "listHolidays", state.holidays);
     },
     async getHoliday(id) {
       bump("getHoliday");
@@ -23,7 +23,7 @@ export function makeFakeHolidays({ state, bump, nextId }: FakeContext): Pick<
     async listHolidaysInPeriod(input) {
       bump("listHolidaysInPeriod");
       void input;
-      return state.holidays;
+      return fakeListResult(seed, "listHolidaysInPeriod", state.holidays);
     },
     async createHoliday(input) {
       bump("createHoliday");

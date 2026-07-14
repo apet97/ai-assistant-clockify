@@ -30,8 +30,8 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
       const params: Record<string, string> = {};
       if (filter?.name) params.name = filter.name;
       if (filter?.isActive !== undefined) params["is-active"] = String(filter.isActive);
-      const rows = (await core.paginate("api", `${ws}/projects/${projectId}/tasks`, params)) as TaskRow[];
-      return rows.map((t) => map(projectId, t));
+      const result = await core.paginate("api", `${ws}/projects/${projectId}/tasks`, params);
+      return { ...result, rows: (result.rows as TaskRow[]).map((t) => map(projectId, t)) };
     },
     async getTask(projectId, id) {
       const t = (await core.call("api", "GET", `${ws}/projects/${projectId}/tasks/${id}`, undefined, true)) as TaskRow | null;

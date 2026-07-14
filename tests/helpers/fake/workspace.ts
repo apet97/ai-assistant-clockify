@@ -1,7 +1,7 @@
 import type { WorkspaceClient } from "../../../src/clockify/client.js";
-import type { FakeContext } from "./state.js";
+import { fakeListResult, type FakeContext } from "./state.js";
 
-export function makeFakeWorkspace({ state, bump }: FakeContext): Pick<
+export function makeFakeWorkspace({ state, seed, bump }: FakeContext): Pick<
   WorkspaceClient,
   "getWorkspace" | "listTemplates" | "getTemplate"
 > {
@@ -12,7 +12,11 @@ export function makeFakeWorkspace({ state, bump }: FakeContext): Pick<
     },
     async listTemplates() {
       bump("listTemplates");
-      return state.projects.filter((p) => p.name.toLowerCase().includes("template"));
+      return fakeListResult(
+        seed,
+        "listTemplates",
+        state.projects.filter((p) => p.name.toLowerCase().includes("template")),
+      );
     },
     async getTemplate(id) {
       bump("getTemplate");

@@ -10,6 +10,7 @@ import {
 } from "../../src/harness/workflows/resolve.js";
 
 const HEX_ID = "5f1e2d3c4b5a69788796a5b4";
+const complete = <T>(rows: T[]) => ({ rows, truncated: false });
 
 describe("looksLikeClockifyId", () => {
   it("accepts a 24-hex Mongo ObjectId", () => {
@@ -31,13 +32,13 @@ describe("resolveEntityRef", () => {
     { id: "p2", name: "Mobile App" },
     { id: "p3", name: "Old Site", archived: true },
   ];
-  const list = async () => items;
+  const list = async () => complete(items);
 
   it("passes a real-looking id straight through without listing", async () => {
     let listed = 0;
     const result = await resolveEntityRef(
       { id: HEX_ID },
-      { noun: "project", verb: "update", list: async () => (listed++, items) },
+      { noun: "project", verb: "update", list: async () => (listed++, complete(items)) },
     );
     expect(result).toMatchObject({ ok: true, id: HEX_ID });
     expect(listed).toBe(0);
@@ -83,10 +84,42 @@ describe("resolveEntityRef", () => {
     ];
     const result = await resolveEntityRef(
       { name: "Focus" },
-      { noun: "tag", verb: "delete", list: async () => dupes },
+      { noun: "tag", verb: "delete", list: async () => complete(dupes) },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.clarify.options?.length).toBe(2);
+  });
+
+  it("does not treat one name match in a truncated scan as unique", async () => {
+    const result = await resolveEntityRef(
+      { name: "Website Redesign" },
+      {
+        noun: "project",
+        verb: "update",
+        list: async () => ({ rows: [items[0]], truncated: true }),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.clarify).toMatch(/incomplete/i);
+      expect(result.clarify.clarify).toMatch(/exact id|narrower filter/i);
+    }
+  });
+
+  it("does not report not-found from a truncated scan", async () => {
+    const result = await resolveEntityRef(
+      { name: "Ghost" },
+      {
+        noun: "project",
+        verb: "update",
+        list: async () => ({ rows: [], truncated: true }),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.clarify.clarify).toMatch(/incomplete/i);
+      expect(result.clarify.clarify).not.toMatch(/there is no|couldn't find/i);
+    }
   });
 
   it("ignores archived entities when resolving by name", async () => {
@@ -100,7 +133,7 @@ describe("resolveEntityRef", () => {
 
 describe("resolveEntityRef — notFoundHint", () => {
   const items = [{ id: "p1", name: "Website Redesign" }];
-  const list = async () => items;
+  const list = async () => complete(items);
 
   it("appends the hint to the did-you-mean clarify (options exist)", async () => {
     const result = await resolveEntityRef(
@@ -117,7 +150,7 @@ describe("resolveEntityRef — notFoundHint", () => {
   it("appends the hint to the no-options clarify too", async () => {
     const result = await resolveEntityRef(
       { name: "Ghost" },
-      { noun: "client", verb: "invoice", list: async () => [], notFoundHint: "Or should I create the client first?" },
+      { noun: "client", verb: "invoice", list: async () => complete([]), notFoundHint: "Or should I create the client first?" },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -127,7 +160,7 @@ describe("resolveEntityRef — notFoundHint", () => {
   });
 
   it("leaves the copy byte-identical when no hint is given", async () => {
-    const result = await resolveEntityRef({ name: "Ghost" }, { noun: "client", verb: "invoice", list: async () => [] });
+    const result = await resolveEntityRef({ name: "Ghost" }, { noun: "client", verb: "invoice", list: async () => complete([]) });
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.clarify.clarify).toBe('There is no active client named "Ghost" to invoice.');
@@ -151,11 +184,11 @@ describe("resolveProjectTaskRefs", () => {
     verb: "log against",
     listProjects: async () => {
       counts.projects += 1;
-      return projects;
+      return complete(projects);
     },
     listTasks: async (projectId: string) => {
       counts.tasks += 1;
-      return tasksByProject[projectId] ?? [];
+      return complete(tasksByProject[projectId] ?? []);
     },
   });
 
@@ -241,7 +274,7 @@ describe("resolveEntityRef — includeArchived (destructive/archive verbs, live 
     { id: "p1", name: "Website Redesign" },
     { id: "p3", name: "Old Site", archived: true },
   ];
-  const list = async () => items;
+  const list = async () => complete(items);
 
   it("resolves an ARCHIVED entity by name (deleting/unarchiving an archived entity is valid)", async () => {
     const result = await resolveEntityRef(
@@ -260,8 +293,8 @@ describe("resolveEntityRef — includeArchived (destructive/archive verbs, live 
         verb: "delete",
         list: async (filter?: { archived?: boolean }) => {
           filters.push(filter);
-          if (filter?.archived === true) return [{ id: "p3", name: "Old Site", archived: true }];
-          return [{ id: "p1", name: "Website Redesign" }];
+          if (filter?.archived === true) return complete([{ id: "p3", name: "Old Site", archived: true }]);
+          return complete([{ id: "p1", name: "Website Redesign" }]);
         },
         includeArchived: true,
       },
@@ -291,7 +324,7 @@ describe("resolveEntityRef — includeArchived (destructive/archive verbs, live 
     ];
     const result = await resolveEntityRef(
       { name: "Focus" },
-      { noun: "tag", verb: "delete", list: async () => dupes, includeArchived: true },
+      { noun: "tag", verb: "delete", list: async () => complete(dupes), includeArchived: true },
     );
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -320,7 +353,7 @@ describe("resolveUserRefs", () => {
     adminUserId: "admin-1",
     listUsers: async () => {
       listed.n += 1;
-      return users;
+      return complete(users);
     },
   });
 
@@ -356,6 +389,24 @@ describe("resolveUserRefs", () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.clarify.clarify).toContain("isn't a workspace member");
   });
+
+  it("does not resolve or reject a symbolic user from a truncated member scan", async () => {
+    const listUsers = async () => ({ rows: [{ id: "u2", name: "Bob" }], truncated: true });
+    const matched = await resolveUserRefs(["Bob"], {
+      verb: "assign",
+      adminUserId: "admin-1",
+      listUsers,
+    });
+    const missing = await resolveUserRefs(["Nobody"], {
+      verb: "assign",
+      adminUserId: "admin-1",
+      listUsers,
+    });
+    expect(matched.ok).toBe(false);
+    expect(missing.ok).toBe(false);
+    if (!matched.ok) expect(matched.clarify.clarify).toMatch(/incomplete/i);
+    if (!missing.ok) expect(missing.clarify.clarify).not.toMatch(/isn't a workspace member/i);
+  });
 });
 
 describe("resolveTagRefs", () => {
@@ -368,7 +419,7 @@ describe("resolveTagRefs", () => {
     verb: "tag the entry with",
     listTags: async () => {
       listed.n += 1;
-      return tags;
+      return complete(tags);
     },
   });
 
@@ -403,7 +454,7 @@ describe("resolveUserRef — trustIds (read-filter happy path)", () => {
     adminUserId: "admin-1",
     listUsers: async () => {
       listed.n += 1;
-      return users;
+      return complete(users);
     },
     trustIds,
   });
@@ -446,7 +497,7 @@ describe("resolveGroupRefs", () => {
     verb: "assign",
     listGroups: async () => {
       listed.n += 1;
-      return groups;
+      return complete(groups);
     },
   });
 
