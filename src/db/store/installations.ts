@@ -129,6 +129,9 @@ export function buildInstallationStore(ctx: StoreContext): {
         // FK-children of chat_sessions (chat_messages, pending_confirmations) MUST
         // be deleted before chat_sessions (foreign_keys = ON). undo_records and
         // turn_telemetry carry session_id but no FK; admin_policies is independent.
+        const intentCapabilityUsage = del(
+          "DELETE FROM intent_capability_usage WHERE capability_id IN (SELECT id FROM intent_capabilities WHERE workspace_id = ?)",
+        );
         const operationSteps = del(
           "DELETE FROM operation_steps WHERE operation_id IN (SELECT id FROM operation_runs WHERE workspace_id = ?)",
         );
@@ -145,6 +148,7 @@ export function buildInstallationStore(ctx: StoreContext): {
         const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
         const turnRuns = del("DELETE FROM turn_runs WHERE workspace_id = ?");
         const operationRuns = del("DELETE FROM operation_runs WHERE workspace_id = ?");
+        const intentCapabilities = del("DELETE FROM intent_capabilities WHERE workspace_id = ?");
         const actionResults = del("DELETE FROM action_results WHERE workspace_id = ?");
         const artifacts = del("DELETE FROM artifacts WHERE workspace_id = ?");
         const idempotencyKeys = del("DELETE FROM idempotency_keys WHERE workspace_id = ?");
@@ -163,6 +167,8 @@ export function buildInstallationStore(ctx: StoreContext): {
           turnRuns,
           operationSteps,
           operationRuns,
+          intentCapabilityUsage,
+          intentCapabilities,
           actionResults,
           artifacts,
           idempotencyKeys,

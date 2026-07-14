@@ -53,6 +53,16 @@ import { buildRetentionStore, IDEMPOTENCY_RETENTION_MS, type PruneCounts } from 
 import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import { buildArtifactStore } from "./store/artifacts.js";
+import {
+  buildIntentCapabilityStore,
+  type BindIntentCapabilityOperationInput,
+  type BindIntentCapabilityOperationResult,
+  type ConsumeIntentCapabilityExecutionResult,
+  type CreateIntentCapabilityInput,
+  type IntentCapabilityRecord,
+  type IntentCapabilityOperationScope,
+  type IntentCapabilityScope,
+} from "./store/intent-capabilities.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
@@ -101,6 +111,16 @@ export type {
   DurableResultLink,
 } from "./store/context.js";
 export type { ActionResultKind, ActionResultRef } from "./action-results.js";
+export type {
+  BindIntentCapabilityOperationInput,
+  BindIntentCapabilityOperationResult,
+  ConsumeIntentCapabilityExecutionResult,
+  CreateIntentCapabilityInput,
+  IntentCapabilityRecord,
+  IntentCapabilityOperationScope,
+  IntentCapabilityScope,
+} from "./store/intent-capabilities.js";
+export { IntentCapabilityStoreError } from "./store/intent-capabilities.js";
 
 export interface StoreOptions {
   encryptionKey?: string;
@@ -190,6 +210,12 @@ export interface Store {
     resultLinks?: DurableResultLink[],
   ): void;
   getTurnRun(sessionId: string, requestId: string): TurnRun | undefined;
+  createIntentCapability(input: CreateIntentCapabilityInput): IntentCapabilityRecord;
+  getIntentCapability(id: string, scope: IntentCapabilityScope): IntentCapabilityRecord | undefined;
+  getIntentCapabilityForOperation(input: IntentCapabilityOperationScope): IntentCapabilityRecord;
+  bindIntentCapabilityOperation(input: BindIntentCapabilityOperationInput): BindIntentCapabilityOperationResult;
+  consumeIntentCapabilityExecution(input: BindIntentCapabilityOperationInput): ConsumeIntentCapabilityExecutionResult;
+  consumeIntentCapabilityForOperation(input: IntentCapabilityOperationScope): ConsumeIntentCapabilityExecutionResult;
   prepareOperationRun(input: PrepareOperationRunInput): string;
   markOperationExecuting(id: string): boolean;
   settleOperationRun(
@@ -388,7 +414,7 @@ export interface TestStore extends Store {
   /** EXPLAIN QUERY PLAN of each `pruneExpired` DELETE, keyed by table (for the
    *  retention index-seek regression test); joined `detail` lines per table. */
   explainPrunePlan(): Record<
-    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents" | "artifacts" | "operationSteps" | "operationRuns" | "actionResults" | "turnRuns" | "chatSessions",
+    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents" | "artifacts" | "operationSteps" | "operationRuns" | "intentCapabilities" | "actionResults" | "turnRuns" | "chatSessions",
     string
   >;
 }
@@ -474,6 +500,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
+    ...buildIntentCapabilityStore(ctx),
     ...operationRunStore,
     mutationStepJournal,
     ...buildArtifactStore(ctx),

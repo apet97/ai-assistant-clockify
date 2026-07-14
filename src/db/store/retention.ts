@@ -19,6 +19,7 @@ export interface PruneCounts {
   artifacts: number;
   operationSteps: number;
   operationRuns: number;
+  intentCapabilities: number;
   actionResults: number;
   turnRuns: number;
   chatSessions: number;
@@ -80,6 +81,14 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     cutoff: "iso",
     sqls: [batched("operation_runs", "updated_at < ? AND NOT EXISTS (SELECT 1 FROM operation_steps WHERE operation_id = operation_runs.id)")],
   },
+  {
+    table: "intentCapabilities",
+    cutoff: "iso",
+    sqls: [batched("intent_capabilities", `created_at < ?
+      AND NOT EXISTS (SELECT 1 FROM operation_runs WHERE capability_id = intent_capabilities.id)
+      AND NOT EXISTS (SELECT 1 FROM pending_confirmations WHERE capability_id = intent_capabilities.id)
+      AND NOT EXISTS (SELECT 1 FROM intent_capability_usage WHERE capability_id = intent_capabilities.id)`)],
+  },
   { table: "turnRuns", cutoff: "iso", sqls: [batched("turn_runs", "updated_at < ?")] },
   {
     table: "actionResults",
@@ -138,6 +147,7 @@ export function buildRetentionStore(
         artifacts: nowIsoArg,
         operationSteps: operationCutoff,
         operationRuns: operationCutoff,
+        intentCapabilities: operationCutoff,
         actionResults: isoCutoff(chatAuditRetentionMs),
         turnRuns: isoCutoff(chatAuditRetentionMs),
         chatSessions: nowIsoArg,
@@ -152,6 +162,7 @@ export function buildRetentionStore(
         artifacts: 0,
         operationSteps: 0,
         operationRuns: 0,
+        intentCapabilities: 0,
         actionResults: 0,
         turnRuns: 0,
         chatSessions: 0,

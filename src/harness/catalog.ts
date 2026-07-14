@@ -25,6 +25,7 @@ import { CURATED_ACTIONS } from "./workflows/curated.js";
 import { SETUP_PROJECT_ACTIONS } from "./workflows/setup-project.js";
 import { SETUP_TASK_ACTIONS } from "./workflows/setup-task.js";
 import { createHash } from "node:crypto";
+import { writeAuthorityActionNames, writeAuthorityFor } from "./write-authority.js";
 
 /**
  * MCP-shaped action catalog (SPEC "Action Catalog Strategy"). Each action maps
@@ -37,7 +38,7 @@ import { createHash } from "node:crypto";
  */
 export * from "./action.js";
 
-export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
+const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...TIME_TRACKING_ACTIONS,
   ...ENTRY_ACTIONS,
   ...WORK_STRUCTURE_ACTIONS,
@@ -62,6 +63,24 @@ export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = [
   ...SETUP_PROJECT_ACTIONS,
   ...SETUP_TASK_ACTIONS,
 ];
+
+const externalWriteNames = ASSEMBLED_ACTIONS
+  .filter((action) => action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read"))
+  .map((action) => action.name)
+  .sort();
+const authorityNames = [...writeAuthorityActionNames()].sort();
+if (JSON.stringify(externalWriteNames) !== JSON.stringify(authorityNames)) {
+  const external = new Set(externalWriteNames);
+  const authority = new Set(authorityNames);
+  const missing = externalWriteNames.filter((name) => !authority.has(name));
+  const extra = authorityNames.filter((name) => !external.has(name));
+  throw new Error(`write_authority_catalog_mismatch:missing=${missing.join(",")};extra=${extra.join(",")}`);
+}
+
+export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = ASSEMBLED_ACTIONS.map((action) =>
+  action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read")
+    ? { ...action, writeAuthority: writeAuthorityFor(action) }
+    : action);
 
 const CATALOG_BY_NAME = new Map<string, ActionDefinition>(
   ACTION_CATALOG.map((action) => [action.name, action]),
@@ -116,6 +135,7 @@ export function actionFingerprint(name: string): string | undefined {
         argumentOpenPaths: action.argumentOpenPaths ?? [],
         mutationWorkflow: action.mutationWorkflow,
         mutationContract: action.mutationContract,
+        writeAuthority: action.writeAuthority,
         preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
       })
     : undefined;
@@ -133,6 +153,7 @@ export function catalogHash(): string {
       argumentOpenPaths: action.argumentOpenPaths ?? [],
       mutationWorkflow: action.mutationWorkflow,
       mutationContract: action.mutationContract,
+      writeAuthority: action.writeAuthority,
       preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
     })),
   );

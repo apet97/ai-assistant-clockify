@@ -54,10 +54,7 @@ describe("idempotent commits (Phase 5)", () => {
     };
     const ctx = ctxWith(fake, ledger);
     const op = await previewInvoice(ctx, "qwen");
-    const planned = {
-      ...op,
-      mutationPlan: { mode: "single" as const, steps: [{ id: "create-invoice", kind: "primary" as const }] },
-    };
+    const planned = op;
     const action = getAction(op.actionName)!;
     const partialReceipt = successReceipt({
       action: op.actionName,

@@ -32,6 +32,7 @@ import {
 } from "../harness/actions.js";
 import {
   isPartialCommitResult,
+  OperationPreparationError,
   type ActionContext,
   type ActionResult,
   type CommitResult,
@@ -52,12 +53,17 @@ import {
 import { errorReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
 import { parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
+import {
+  canonicalIntentAuthoredSource,
+  declareIntentCapability,
+  filterCatalogByIntentCapability,
+} from "../assistant/intent-declaration.js";
 import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
 import { selectActionsForMessage } from "../harness/tool-select.js";
-import type { Installation } from "../db/store.js";
+import type { Installation, IntentCapabilityRecord } from "../db/store.js";
 import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
@@ -83,6 +89,7 @@ import {
 } from "./chat-results.js";
 import { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 import { bestEffort } from "./best-effort.js";
+import { authorizeIntentWriteArguments } from "../harness/intent-authority.js";
 
 /**
  * The user request that drove a suspended turn: the LAST user-role message in the
@@ -177,6 +184,8 @@ export interface ChatPipeline {
 
 export function createChatPipeline(deps: AppDeps): ChatPipeline {
   const now = deps.now ?? (() => new Date());
+  const intentCapabilitiesEnforced = deps.config.nodeEnv !== "test" ||
+    deps.enforceIntentCapabilitiesInTests === true;
   // Per-SESSION chat rate limit — each turn drives a paid model loop, and
   // nothing else bounds it (confirm/cancel/undo are button-driven + one-use).
   const chatLimiter = createSlidingWindowLimiter(
@@ -339,6 +348,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     requestId?: string,
     calendar?: CalendarContext,
     selectionContext?: string,
+    intentCapability?: IntentCapabilityRecord,
   ): TurnMachinery {
     const results: unknown[] = [];
     const resultLinks: DurableResultLink[] = [];
@@ -347,16 +357,47 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       resultLinks.push(link);
       onResult?.(result);
     };
+    let calendarLoaded = calendar !== undefined;
+    let calendarPromise: Promise<void> | undefined;
+    const ensureCalendar = (): Promise<void> => {
+      if (calendarLoaded) return Promise.resolve();
+      calendarPromise ??= deps.clockifyForWorkspace(installation)
+        .getCalendarContext(claims.adminUserId)
+        .then((resolved) => {
+          Object.assign(ctx, resolved);
+          calendarLoaded = true;
+        })
+        .catch(() => {
+          calendarLoaded = true;
+        });
+      return calendarPromise;
+    };
     const baseCtx = {
       ...actionContext(claims.workspaceId, claims.adminUserId, installation, claims.sessionId),
       ...(calendar ?? {}),
+      ...(intentCapability
+        ? {
+            authorizeWriteArguments: async (input: Parameters<NonNullable<ActionContext["authorizeWriteArguments"]>>[0]) => {
+              const denial = authorizeIntentWriteArguments({
+                capability: intentCapability.capability,
+                actionName: input.actionName,
+                rawArgs: input.rawArgs,
+                authority: input.authority,
+                catalogHash: catalogHash(),
+              });
+              if (denial) return denial;
+              await ensureCalendar();
+              return undefined;
+            },
+          }
+        : {}),
     };
     const ctx: ActionContext = requestId
       ? {
           ...baseCtx,
           operationJournal: {
             prepare(actionName, actionArgs, mutationPlan) {
-              return deps.store.prepareOperationRun({
+              const operationId = deps.store.prepareOperationRun({
                 requestId,
                 sessionId: claims.sessionId,
                 workspaceId: claims.workspaceId,
@@ -368,6 +409,38 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
                 operation: actionArgs,
                 mutationPlan,
               });
+              if (intentCapability) {
+                try {
+                  deps.store.bindIntentCapabilityOperation({
+                    workspaceId: claims.workspaceId,
+                    adminUserId: claims.adminUserId,
+                    sessionId: claims.sessionId,
+                    requestId: intentCapability.requestId,
+                    requestHash: intentCapability.requestHash,
+                    catalogHash: intentCapability.catalogHash,
+                    capabilityId: intentCapability.id,
+                    capabilityHash: intentCapability.capabilityHash,
+                    actionName,
+                    operationId,
+                  });
+                  const consumed = deps.store.consumeIntentCapabilityForOperation({
+                    operationId,
+                    workspaceId: claims.workspaceId,
+                    adminUserId: claims.adminUserId,
+                    sessionId: claims.sessionId,
+                    capabilityId: intentCapability.id,
+                    capabilityHash: intentCapability.capabilityHash,
+                    expectedCatalogHash: catalogHash(),
+                    expectedActionName: actionName,
+                  });
+                  if (consumed.state === "denied") {
+                    throw new Error(`intent_capability_${consumed.reason}`);
+                  }
+                } catch (error) {
+                  throw new OperationPreparationError(operationId, error);
+                }
+              }
+              return operationId;
             },
             markExecuting(operationId) {
               if (!deps.store.markOperationExecuting(operationId)) throw new Error("operation_not_prepared");
@@ -470,6 +543,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // An agentic interrupt persists its suspended transcript alongside the
     // pending confirmation (Phase 3) so the confirm route can resume the loop.
     const emitPreviewFor = (preview: PreviewCard, operation: ConfirmableOperation, agentState?: AgentState): void => {
+      if (intentCapabilitiesEnforced && !intentCapability) throw new Error("intent_capability_missing");
       const created = createPendingConfirmation({
         sessionId: claims.sessionId,
         workspaceId: claims.workspaceId,
@@ -479,12 +553,22 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         operation,
         sessionSecret: deps.config.sessionSecret,
         now: now(),
-        agentState,
+        agentState: agentState && intentCapability
+          ? {
+              ...agentState,
+              intentCapability: {
+                operationId: operation.operationId,
+                id: intentCapability.id,
+                hash: intentCapability.capabilityHash,
+              },
+            }
+          : agentState,
         actionFingerprint: actionFingerprint(operation.actionName),
         catalogHash: catalogHash(),
       });
       deps.store.prepareOperationRun({
         id: created.record.operationId,
+        requestId: intentCapability?.requestId ?? requestId,
         confirmationId: created.record.id,
         sessionId: claims.sessionId,
         workspaceId: claims.workspaceId,
@@ -497,6 +581,21 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         mutationPlan: operation.mutationPlan,
       });
       deps.store.savePendingConfirmation(created.record);
+      if (intentCapability) {
+        deps.store.bindIntentCapabilityOperation({
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          sessionId: claims.sessionId,
+          requestId: intentCapability.requestId,
+          requestHash: intentCapability.requestHash,
+          catalogHash: intentCapability.catalogHash,
+          capabilityId: intentCapability.id,
+          capabilityHash: intentCapability.capabilityHash,
+          actionName: operation.actionName,
+          operationId: created.record.operationId,
+          confirmationId: created.record.id,
+        });
+      }
       const livePreview = {
         kind: "preview",
         previewId: created.previewId,
@@ -517,6 +616,22 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // text and never ride a status line. Ephemeral: never persisted/audited.
       onStatus?.({ action: call.name, label: actionStatusLabel(call.name) });
       try {
+        const action = getAction(call.name);
+        const isWrite = !!action && action.risks.some((risk) => risk !== "read");
+        const writeDeclared = intentCapability?.capability.mode === "allow" &&
+          intentCapability.capability.writeActions.some((grant) => grant.actionName === call.name);
+        if (intentCapabilitiesEnforced && isWrite && !writeDeclared) {
+          return {
+            kind: "receipt",
+            receipt: errorReceipt({
+              action: call.name,
+              code: "intent_capability_denied",
+              message: "This write was not authorized by the admin-authored request.",
+              recovery: { hint: "Ask for the write explicitly in a fresh request.", retryable: false },
+            }),
+          };
+        }
+        if (action && (!isWrite || !intentCapabilitiesEnforced)) await ensureCalendar();
         return await executeAction({ actionName: call.name, args: call.arguments, context: ctx });
       } catch (err) {
         return {
@@ -638,6 +753,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
   ): Promise<{ replyKind: string; replyText: string; results: unknown[] } | undefined> {
     if (
       !agentState ||
+      (intentCapabilitiesEnforced && !agentState.intentCapability) ||
       !installation ||
       installation.status !== "active" ||
       !deps.config.llmAgentic ||
@@ -645,6 +761,25 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       typeof deps.modelClient.completeWithTools !== "function"
     ) {
       return undefined;
+    }
+    let intentCapability: IntentCapabilityRecord | undefined;
+    if (intentCapabilitiesEnforced) {
+      const binding = agentState.intentCapability;
+      if (!binding) return undefined;
+      try {
+        intentCapability = deps.store.getIntentCapabilityForOperation({
+          operationId: binding.operationId,
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          sessionId: claims.sessionId,
+          capabilityId: binding.id,
+          capabilityHash: binding.hash,
+          expectedCatalogHash: catalogHash(),
+          expectedActionName: agentState.call.name,
+        });
+      } catch {
+        return undefined;
+      }
     }
     // r2-new-ops-layer-04: the resume is a PAID model loop (up to DEFAULT_MAX_STEPS
     // round-trips), and a chain of confirm→resume→preview→confirm could otherwise
@@ -656,16 +791,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     if (!chatLimiter.check(claims.sessionId, now().getTime()).allowed) {
       return undefined;
     }
-    const calendar = await deps.clockifyForWorkspace(installation).getCalendarContext(claims.adminUserId).catch(() => undefined);
     const resumeSelectionContext = agentState.selectionContext ?? lastUserMessage(agentState.transcript);
     const m = createTurnMachinery(
       claims,
       installation,
       onResult,
       onStatus,
+      intentCapability?.requestId,
       undefined,
-      calendar,
       resumeSelectionContext,
+      intentCapability,
     );
     const resumeStartMs = now().getTime();
     const tracked = trackUsage(deps.modelClient, now);
@@ -675,9 +810,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // Recall-risk inputs (no lexical match, non-ASCII, or >3 matched areas) already
     // fail open to the full catalog. There is deliberately no post-resume retry: a
     // no-tool result is the normal "done" narration and must not double provider cost.
-    const resumeTools = deps.config.llmToolSelect
-      ? toolsForModel(new Set(selectActionsForMessage(resumeSelectionContext)))
-      : toolsForModel();
+    const { subsetTools: resumeTools } = deriveToolSubset(resumeSelectionContext, intentCapability);
     let turn: AgentTurnResult | undefined;
     try {
       turn = await runAgentTurn({
@@ -745,6 +878,43 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     }
 
     const operation = record.operation as ConfirmableOperation;
+    let capabilityScope: Parameters<typeof deps.store.consumeIntentCapabilityForOperation>[0] | undefined;
+    if (intentCapabilitiesEnforced) {
+      if (!record.capabilityId || !record.capabilityHash) {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            ok: false,
+            code: "incompatible_confirmation",
+            message: "This preview predates the current intent-safety contract. Create a fresh preview.",
+          },
+        };
+      }
+      capabilityScope = {
+        operationId: record.operationId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        capabilityId: record.capabilityId,
+        capabilityHash: record.capabilityHash,
+        expectedCatalogHash: catalogHash(),
+        expectedActionName: operation.actionName,
+      };
+      try {
+        deps.store.getIntentCapabilityForOperation(capabilityScope);
+      } catch {
+        return {
+          ok: false,
+          status: 400,
+          body: {
+            ok: false,
+            code: "incompatible_confirmation",
+            message: "This preview's intent authority is no longer compatible. Create a fresh preview.",
+          },
+        };
+      }
+    }
 
     // Re-check current policy BEFORE consuming the one-use preview, so a policy
     // that was lowered after the preview denies cleanly without burning it
@@ -783,7 +953,17 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // `commit` does the work; for a permission change that commit persists the new
     // policy itself via the `savePolicy` capability the context carries.
     let commitResult: CommitResult;
-    if (!installation || installation.status !== "active") {
+    const consumed = capabilityScope
+      ? deps.store.consumeIntentCapabilityForOperation(capabilityScope)
+      : undefined;
+    if (consumed?.state === "denied") {
+      commitResult = errorReceipt({
+        action: operation.actionName,
+        code: "intent_capability_denied",
+        message: "This write exceeds the exact admin-authored intent capability.",
+        recovery: { hint: "Create a fresh request and preview.", retryable: false },
+      });
+    } else if (!installation || installation.status !== "active") {
       commitResult = errorReceipt({
         action: operation.actionName,
         code: "not_installed",
@@ -835,9 +1015,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         ...actionContext(claims.workspaceId, claims.adminUserId, installation),
         mutationJournal: deps.store.mutationStepJournal(record.operationId),
       };
-      // The fresh role verdict above happened before consuming the nonce. Avoid a
-      // redundant host lookup inside the generic harness for this same dispatch.
-      delete authorizedContext.authorizeWrite;
+      // Keep authorizeWrite on the context: the exact mutation scope invokes it
+      // again immediately before every primary/compensation network dispatch.
       commitResult = operation.mutationPlan
         ? await commitConfirmedOperation(
             { ...authorizedContext, idempotency },
@@ -1016,16 +1195,26 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
    * for an actual strict subset, so only a narrowed turn that executed NOTHING is a
    * possible recall miss worth a full-catalog retry.
    */
-  function deriveToolSubset(message: string): {
-    subsetTools: ReturnType<typeof toolsForModel> | undefined;
+  function deriveToolSubset(message: string, intentCapability?: IntentCapabilityRecord): {
+    subsetTools: ReturnType<typeof toolsForModel>;
     subsetCatalog: ReturnType<typeof catalogForModel>;
     subsetNarrowed: boolean;
+    fullIntentTools: ReturnType<typeof toolsForModel>;
+    fullIntentCatalog: ReturnType<typeof catalogForModel>;
   } {
-    const subsetNames = deps.config.llmToolSelect ? new Set(selectActionsForMessage(message)) : undefined;
+    const fullIntentCatalog = intentCapability
+      ? filterCatalogByIntentCapability(catalogForModel(), intentCapability.capability)
+      : catalogForModel();
+    const fullIntentNames = new Set(fullIntentCatalog.map((entry) => entry.name));
+    const selectedNames = deps.config.llmToolSelect
+      ? new Set(selectActionsForMessage(message).filter((name) => fullIntentNames.has(name)))
+      : fullIntentNames;
     return {
-      subsetTools: subsetNames ? toolsForModel(subsetNames) : undefined,
-      subsetCatalog: subsetNames ? catalogForModel(subsetNames) : catalogForModel(),
-      subsetNarrowed: subsetNames !== undefined && subsetNames.size < catalogForModel().length,
+      subsetTools: toolsForModel(selectedNames),
+      subsetCatalog: catalogForModel(selectedNames),
+      subsetNarrowed: selectedNames.size < fullIntentNames.size,
+      fullIntentTools: toolsForModel(fullIntentNames),
+      fullIntentCatalog,
     };
   }
 
@@ -1044,9 +1233,22 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     subsetTools: ReturnType<typeof toolsForModel> | undefined;
     subsetCatalog: ReturnType<typeof catalogForModel>;
     subsetNarrowed: boolean;
+    fullIntentTools: ReturnType<typeof toolsForModel>;
+    fullIntentCatalog: ReturnType<typeof catalogForModel>;
     signal?: AbortSignal;
   }): Promise<{ replyKind: string; baseText: string } | { failed: true }> {
-    const { m, messages, policy, tracked, subsetTools, subsetCatalog, subsetNarrowed, signal } = args;
+    const {
+      m,
+      messages,
+      policy,
+      tracked,
+      subsetTools,
+      subsetCatalog,
+      subsetNarrowed,
+      fullIntentTools,
+      fullIntentCatalog,
+      signal,
+    } = args;
     const useTools = deps.config.llmMode !== "json";
     // The server clock's date so the model narrates the real date instead of its
     // stale knowledge cutoff (finding new-3: "we're still in 2025"). Hoisted once —
@@ -1080,7 +1282,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         // (not narrowed). (This predicate gates AFTER execution; the single-turn one
         // gates BEFORE — keep them distinct.)
         if (subsetNarrowed && m.results.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
-          turn = await runAgentic(undefined);
+          turn = await runAgentic(fullIntentTools);
         }
       } catch {
         return { failed: true };
@@ -1112,7 +1314,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // (This predicate gates BEFORE the action loop; the agentic one gates AFTER —
       // keep them distinct.)
       if (subsetNarrowed && plan.kind !== "actions") {
-        plan = await runPlan(catalogForModel(), undefined);
+        plan = await runPlan(fullIntentCatalog, fullIntentTools);
         if (signal?.aborted) return { replyKind: "aborted", baseText: "" };
       }
     } catch {
@@ -1181,25 +1383,70 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     const shortCircuit = shortCircuitReply(claims, message);
     if (shortCircuit) return shortCircuit;
 
+    // The declaration is the FIRST provider pass. Its input contains only exact
+    // admin-authored current/unresolved text plus the write allowlist/catalog
+    // hash — never chat history, assistant prose, or Clockify results.
+    const turnStartMs = now().getTime();
+    const tracked = trackUsage(deps.modelClient, now);
+    const effectiveRequestId = requestId ?? randomUUID();
+    let intentCapability: IntentCapabilityRecord | undefined;
+    if (intentCapabilitiesEnforced) {
+      const writeActionNames = catalogForModel()
+        .filter((entry) => entry.risks.some((risk) => risk !== "read"))
+        .map((entry) => entry.name);
+      let declaredCapability;
+      try {
+        declaredCapability = await declareIntentCapability({
+          modelClient: tracked.client,
+          currentText: message,
+          ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
+          writeActionNames,
+          catalogHash: catalogHash(),
+          signal,
+        });
+      } catch {
+        if (signal?.aborted) {
+          recordTurnTelemetrySafely(claims, "chat", tracked.usage, now().getTime() - turnStartMs);
+          return { ok: true, replyKind: "aborted", replyText: "", results: [], resultLinks: [] };
+        }
+        throw new Error("intent_declaration_failed");
+      }
+      intentCapability = deps.store.createIntentCapability({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        requestId: effectiveRequestId,
+        authoredSource: canonicalIntentAuthoredSource({
+          currentText: message,
+          ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
+        }),
+        capability: declaredCapability,
+      });
+    }
+
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
     const messages = buildModelHistory(claims);
-    const { subsetTools, subsetCatalog, subsetNarrowed } = deriveToolSubset(selectionContext);
+    const {
+      subsetTools,
+      subsetCatalog,
+      subsetNarrowed,
+      fullIntentTools,
+      fullIntentCatalog,
+    } = deriveToolSubset(selectionContext, intentCapability);
 
-    const calendar = await deps.clockifyForWorkspace(installation).getCalendarContext(claims.adminUserId).catch(() => undefined);
     const m = createTurnMachinery(
       claims,
       installation,
       onResult,
       onStatus,
-      requestId,
-      calendar,
+      effectiveRequestId,
+      undefined,
       selectionContext,
+      intentCapability,
     );
 
     // Cost/latency telemetry: every model-touching turn records one row (the
     // deterministic early returns above never reach here — no model, no row).
-    const turnStartMs = now().getTime();
-    const tracked = trackUsage(deps.modelClient, now);
     const recordTurn = (): void => {
       recordTurnTelemetrySafely(claims, "chat", tracked.usage, now().getTime() - turnStartMs);
     };
@@ -1228,6 +1475,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       subsetTools,
       subsetCatalog,
       subsetNarrowed,
+      fullIntentTools,
+      fullIntentCatalog,
       signal,
     });
     if ("failed" in turn) return modelUnavailable();

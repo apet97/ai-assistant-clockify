@@ -13,6 +13,21 @@ import type {
 export type { ExternalMutationPlan } from "./mutation-contract.js";
 
 /**
+ * A durable operation row can exist before the rest of preparation finishes.
+ * Carry its identity across a preparation failure so the result owner can
+ * atomically attach the canonical denial instead of leaving a prepared orphan.
+ */
+export class OperationPreparationError extends Error {
+  constructor(
+    readonly operationId: string,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : "operation_preparation_failed");
+    this.name = "OperationPreparationError";
+  }
+}
+
+/**
  * Action contracts and the typed `defineAction` helper. This is a leaf module
  * (it imports no workflows and not the catalog), so workflow modules can import
  * `defineAction` without creating a circular dependency with the catalog.
@@ -57,6 +72,13 @@ export interface ActionContext {
   mutationJournal?: MutationStepJournal;
   /** Fresh role gate injected by the route; returns an error receipt to block. */
   authorizeWrite?(actionName: string): Promise<ErrorReceipt | undefined>;
+  /** Phase 6 raw-argument authority gate. It runs before Zod preprocessing or
+   * server-side resolution so provider aliases/coercions cannot widen intent. */
+  authorizeWriteArguments?(input: {
+    actionName: string;
+    rawArgs: unknown;
+    authority: WriteAuthorityMetadata;
+  }): ErrorReceipt | undefined | Promise<ErrorReceipt | undefined>;
   saveArtifact?(input: {
     contentType: string;
     filename: string;
@@ -181,6 +203,36 @@ export interface DurableMutationContract {
   };
 }
 
+/** Static authority surface for a Clockify write. Every path class is explicit:
+ * raw model literals, server-derived identifiers, and permitted host defaults
+ * can never silently substitute for one another. */
+export interface WriteAuthorityMetadata {
+  literalControlledPaths: readonly string[];
+  serverDerivedIdPaths: readonly string[];
+  permittedServerDefaultPaths: readonly string[];
+  /** Exact fields copied unchanged from an authoritative pre-dispatch read. */
+  preservedStatePaths: readonly string[];
+  cardinality: {
+    mode: "single" | "fixed" | "argument";
+    maxExecutions: number;
+    argumentPath?: string;
+  };
+  /** Reviewed host-dispatch grammars. A persisted plan must match one variant
+   * exactly: mode, ordered step identifiers, and primary/compensation kinds. */
+  mutationPlans: readonly {
+    mode: "single" | "curated" | "batch";
+    minSteps: number;
+    maxSteps: number;
+    steps: readonly {
+      /** Exact id, or a trailing `*` for an indexed step family. */
+      id: string;
+      kind: "primary" | "compensation";
+      min: number;
+      max: number;
+    }[];
+  }[];
+}
+
 /** Validate that an exact persisted plan is fully covered by the action's
  * declared reconciliation contract. Durable writes fail before persistence or
  * dispatch when a step is missing a strategy or invents an undeclared one. */
@@ -274,6 +326,8 @@ export interface ActionDefinition {
   /** Marks a confirmed action whose external effects use mutation-workflow steps. */
   mutationWorkflow?: "durable";
   mutationContract?: DurableMutationContract;
+  /** Required by the catalog invariant for every Clockify external write. */
+  writeAuthority?: WriteAuthorityMetadata;
   /** Executes the stored operation after confirmation (risky actions only). */
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   /** Opt into idempotent commits: return the operation's SEMANTIC identity (e.g.
@@ -310,6 +364,7 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   mutationWorkflow?: "durable";
   mutationContract?: DurableMutationContract;
+  writeAuthority?: WriteAuthorityMetadata;
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }): ActionDefinition {

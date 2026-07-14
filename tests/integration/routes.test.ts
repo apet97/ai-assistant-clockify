@@ -18,9 +18,51 @@ let store: Store;
 let app: Express;
 let fake: FakeWorkspace;
 
+function authoredSpan(source: string, literal: string) {
+  const index = source.indexOf(literal);
+  if (index < 0) throw new Error(`missing declaration literal: ${literal}`);
+  const startByte = Buffer.byteLength(source.slice(0, index), "utf8");
+  return { startByte, endByte: startByte + Buffer.byteLength(literal, "utf8"), text: literal };
+}
+
 // Smart fake model: returns a delete action for "delete" messages, else an answer.
 const modelClient: ModelClient = {
   async complete(messages) {
+    if (messages[0]?.role === "system" && messages[0].content.includes("constrained intent declaration pass")) {
+      const requestPayload = JSON.parse(messages[1]?.content ?? "{}") as { segments?: Array<{ text?: string }> };
+      const source = (requestPayload.segments ?? []).map((segment) => segment.text ?? "").join("\n");
+      if (source.toLowerCase().includes("delete")) {
+        const action = authoredSpan(source, "delete");
+        const entityType = authoredSpan(source, "project");
+        const name = authoredSpan(source, "Acme");
+        const id = authoredSpan(source, "p1");
+        return JSON.stringify({
+          writeActions: [{
+            actionName: "clockify_delete_entity",
+            sourceSpans: [action, entityType, name, id],
+            literalConstraints: [
+              { path: "entityType", value: "project", sourceSpan: entityType },
+              { path: "name", value: "Acme", sourceSpan: name },
+              { path: "id", value: "p1", sourceSpan: id },
+            ],
+            maxExecutions: 1,
+          }],
+        });
+      }
+      if (source.toLowerCase().includes("create tag")) {
+        const action = authoredSpan(source, "create tag");
+        const name = authoredSpan(source, "Billing");
+        return JSON.stringify({
+          writeActions: [{
+            actionName: "clockify_tags_create",
+            sourceSpans: [action, name],
+            literalConstraints: [{ path: "name", value: "Billing", sourceSpan: name }],
+            maxExecutions: 1,
+          }],
+        });
+      }
+      return JSON.stringify({ writeActions: [] });
+    }
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const text = lastUser?.content ?? "";
     if (text.toLowerCase().includes("what failed")) {
@@ -204,7 +246,7 @@ describe("routes", () => {
     const chat = await request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
-      .send({ message: "delete project Acme" });
+      .send({ message: "delete project Acme with id p1" });
     expect(chat.status).toBe(200);
     expect(chat.body.results.some((r: { kind: string }) => r.kind === "preview")).toBe(true);
     const reply = String(chat.body.reply?.text ?? "");
@@ -242,7 +284,7 @@ describe("routes", () => {
     const chat = await request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
-      .send({ message: "delete project Acme" });
+      .send({ message: "delete project Acme with id p1" });
     expect(chat.status).toBe(200);
     const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
     expect(preview).toBeDefined();
@@ -261,7 +303,7 @@ describe("routes", () => {
     const chat = await request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
-      .send({ message: "delete project Acme" });
+      .send({ message: "delete project Acme with id p1" });
     const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
     expect(preview?.previewId).toBeTruthy();
 
@@ -291,7 +333,7 @@ describe("routes", () => {
     const chat = await request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
-      .send({ message: "delete project Acme" });
+      .send({ message: "delete project Acme with id p1" });
     const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
     expect(preview?.previewId).toBeTruthy();
 

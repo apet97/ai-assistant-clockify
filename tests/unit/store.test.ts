@@ -8,6 +8,7 @@ import { createStore, type TestStore } from "../../src/db/store.js";
 import { migrate } from "../../src/db/schema.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import { successReceipt } from "../../src/harness/receipts.js";
+import { buildAllowIntentCapabilityV1 } from "../../src/harness/intent-capability.js";
 import {
   FEATURE_GROUPS,
   adminPolicySchema,
@@ -160,6 +161,31 @@ describe("store", () => {
       store.saveInstallation({ workspaceId: ws, addonId: "a", addonUserId: "u", addonToken: `tok-${ws}`, status: "active" });
       store.upsertAdminPolicy(ws, "admin-1", defaultAdminPolicy());
       const session = store.createSession({ workspaceId: ws, adminUserId: "admin-1" });
+      const authoredSource = `Create tag ${ws}`;
+      const literal = {
+        startByte: Buffer.byteLength("Create tag ", "utf8"),
+        endByte: Buffer.byteLength(authoredSource, "utf8"),
+        text: ws,
+      };
+      const capability = buildAllowIntentCapabilityV1({
+        authoredSource,
+        catalogHash: "catalog",
+        writeActions: [{
+          actionName: "clockify_tags_create",
+          sourceSpans: [literal],
+          literalConstraints: [{ path: "name", value: ws, sourceSpan: literal }],
+        }],
+      });
+      const requestId = `request-${ws}`;
+      const capabilityRecord = store.createIntentCapability({
+        id: `capability-${ws}`,
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        sessionId: session.id,
+        requestId,
+        authoredSource,
+        capability,
+      });
       store.addMessage({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", role: "user", content: "hi" });
       const receipt = successReceipt({ action: "clockify_tags_create" });
       const result = { kind: "receipt", receipt };
@@ -199,10 +225,10 @@ describe("store", () => {
       store.savePendingConfirmation(pc.record);
       store.recordUndoable({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", actionName: "x", reversal: [] });
       store.recordTurnTelemetry({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", kind: "chat", modelCalls: 1, turnMs: 10, modelMs: 5 });
-      const requestId = `request-${ws}`;
       store.claimTurnRun({ requestId, sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", intentHash: "intent" });
       store.finishTurnRun(session.id, requestId, "succeeded", { status: 200, body: { ok: true } }, [{ kind: "action_result", ref: resultRef }]);
       const operationId = store.prepareOperationRun({
+        requestId,
         sessionId: session.id,
         workspaceId: ws,
         adminUserId: "admin-1",
@@ -210,7 +236,17 @@ describe("store", () => {
         actionFingerprint: "action",
         catalogHash: "catalog",
         operationHash: "operation",
+        capabilityId: capabilityRecord.id,
+        capabilityHash: capabilityRecord.capabilityHash,
       });
+      expect(store.consumeIntentCapabilityForOperation({
+        operationId,
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        sessionId: session.id,
+        capabilityId: capabilityRecord.id,
+        capabilityHash: capabilityRecord.capabilityHash,
+      })).toEqual({ state: "consumed", execution: 1 });
       store.settleOperationRun(operationId, "succeeded", resultRef.id);
       store.recordIdempotency("same-key", ws, "admin-1", resultRef, Date.now());
       store.createArtifact({
@@ -221,7 +257,7 @@ describe("store", () => {
         filename: "result.txt",
         bytes: new Uint8Array([1]),
       });
-      return session;
+      return { session, capability, capabilityRecord, requestId };
     };
     const s1 = seed("ws-1");
     const s2 = seed("ws-2");
@@ -234,6 +270,8 @@ describe("store", () => {
     expect(counts.turnTelemetry).toBe(1);
     expect(counts.turnRuns).toBe(1);
     expect(counts.operationRuns).toBe(1);
+    expect(counts.intentCapabilityUsage).toBe(1);
+    expect(counts.intentCapabilities).toBe(1);
     expect(counts.actionResults).toBe(1);
     expect(counts.artifacts).toBe(1);
     expect(counts.idempotencyKeys).toBe(1);
@@ -244,19 +282,35 @@ describe("store", () => {
 
     // ws-1 fully erased, including installation metadata and its token.
     expect(store.getInstallation("ws-1")).toBeUndefined();
-    expect(store.getRecentMessages(s1.id, 10)).toHaveLength(0);
+    expect(store.getRecentMessages(s1.session.id, 10)).toHaveLength(0);
     expect(store.listActionOutcomes("ws-1", "admin-1")).toHaveLength(0);
     expect(store.getAdminPolicy("ws-1", "admin-1")).toBeUndefined();
-    expect(store.getSession(s1.id)).toBeUndefined();
+    expect(store.getSession(s1.session.id)).toBeUndefined();
     expect(store.listTurnTelemetry("ws-1", "admin-1")).toHaveLength(0);
+    expect(store.getIntentCapability(s1.capabilityRecord.id, {
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: s1.session.id,
+      requestId: s1.requestId,
+      requestHash: s1.capability.requestHash,
+      catalogHash: s1.capability.catalogHash,
+    })).toBeUndefined();
 
     // ws-2 is completely untouched.
     expect(store.getInstallation("ws-2")?.addonToken).toBe("tok-ws-2");
     expect(store.getInstallation("ws-2")?.status).toBe("active");
-    expect(store.getRecentMessages(s2.id, 10)).toHaveLength(2);
+    expect(store.getRecentMessages(s2.session.id, 10)).toHaveLength(2);
     expect(store.listActionOutcomes("ws-2", "admin-1")).toHaveLength(1);
     expect(store.getAdminPolicy("ws-2", "admin-1")).toBeDefined();
-    expect(store.getSession(s2.id)).toBeDefined();
+    expect(store.getSession(s2.session.id)).toBeDefined();
+    expect(store.getIntentCapability(s2.capabilityRecord.id, {
+      workspaceId: "ws-2",
+      adminUserId: "admin-1",
+      sessionId: s2.session.id,
+      requestId: s2.requestId,
+      requestHash: s2.capability.requestHash,
+      catalogHash: s2.capability.catalogHash,
+    })).toBeDefined();
     store.close();
   });
 

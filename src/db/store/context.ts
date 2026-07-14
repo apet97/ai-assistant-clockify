@@ -162,7 +162,8 @@ export interface PrepareOperationRunInput {
   /** Normalized nonsecret wire intent. Legacy callers omit it explicitly. */
   operation?: unknown;
   mutationPlan?: ExternalMutationPlan;
-  /** Reserved for the persisted intent-capability phase. */
+  /** Immutable admin-authored authority binding. Omitted only by legacy callers. */
+  capabilityId?: string;
   capabilityHash?: string;
 }
 
@@ -330,6 +331,8 @@ export interface EraseCounts {
   turnRuns: number;
   operationSteps: number;
   operationRuns: number;
+  intentCapabilityUsage: number;
+  intentCapabilities: number;
   actionResults: number;
   artifacts: number;
   idempotencyKeys: number;

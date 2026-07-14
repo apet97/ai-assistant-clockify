@@ -41,6 +41,7 @@ interface OperationRunRow {
   operation_json: string;
   reconciled_at: string | null;
   reconciliation_json: string | null;
+  capability_id: string | null;
   capability_hash: string | null;
   created_at: string;
   updated_at: string;
@@ -157,6 +158,7 @@ function toRun(row: OperationRunRow): OperationRun {
     operationHash: row.operation_hash,
     ...(Object.hasOwn(persisted, "operation") ? { operation: persisted.operation } : {}),
     ...(persisted.mutationPlan ? { mutationPlan: persisted.mutationPlan } : {}),
+    ...(row.capability_id ? { capabilityId: row.capability_id } : {}),
     ...(row.capability_hash ? { capabilityHash: row.capability_hash } : {}),
     status: row.status,
     ...(row.action_result_id ? { actionResultId: row.action_result_id } : {}),
@@ -283,8 +285,8 @@ export function buildOperationRunStore(ctx: StoreContext): {
         `INSERT INTO operation_runs (
            id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
            action_name, action_fingerprint, catalog_hash, operation_hash,
-           operation_json, capability_hash, status, action_result_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
+           operation_json, capability_id, capability_hash, status, action_result_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
       ).run(
         id,
         input.requestId ?? null,
@@ -297,6 +299,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
         input.catalogHash,
         input.operationHash,
         actionResultJson(operationEnvelope),
+        input.capabilityId ?? null,
         input.capabilityHash ?? null,
         timestamp,
         timestamp,
@@ -334,7 +337,10 @@ export function buildOperationRunStore(ctx: StoreContext): {
           if (!existing) throw new Error("operation_result_not_found");
           return { id: operation.action_result_id, kind: existing.kind, summary: JSON.parse(existing.summary_json) };
         }
-        if (operation.status !== "executing") throw new Error("operation_not_executing");
+        const settlesPreparedDenial = operation.status === "prepared" && status === "definitive_failed";
+        if (operation.status !== "executing" && !settlesPreparedDenial) {
+          throw new Error("operation_not_executing");
+        }
         const actionResultId = randomUUID();
         const summary = buildActionResultSummary(actionResultId, result);
         db.prepare(
@@ -356,8 +362,8 @@ export function buildOperationRunStore(ctx: StoreContext): {
         );
         const update = db.prepare(
           `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
-            WHERE id = ? AND status = 'executing' AND action_result_id IS NULL`,
-        ).run(status, actionResultId, nowIso(), id);
+            WHERE id = ? AND status = ? AND action_result_id IS NULL`,
+        ).run(status, actionResultId, nowIso(), id, operation.status);
         if (update.changes !== 1) throw new Error("operation_not_executing");
         return { id: actionResultId, kind: status, summary };
       })();

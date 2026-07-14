@@ -37,6 +37,8 @@ export interface RestWorkspaceOptions
   extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor"> {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
   workspaceId: string;
+  /** Unit/integration adapter probes only. Production always leaves this true. */
+  testOnlyEnforceMutationScope?: boolean;
 }
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
@@ -53,6 +55,9 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     fetchImpl: opts.fetchImpl,
     commitTimeoutMs: opts.commitTimeoutMs,
     requestGovernor: opts.requestGovernor,
+    enforceMutationScope: process.env.NODE_ENV === "test"
+      ? (opts.testOnlyEnforceMutationScope ?? true)
+      : true,
   });
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);

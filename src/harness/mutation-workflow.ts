@@ -10,6 +10,11 @@ import {
 import type { CommitResult } from "./action.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
 import { boundedCompleteSanitizedJson, exactNonsecretJson } from "./safe-json.js";
+import {
+  MutationDispatchDenied,
+  MutationPlanViolation,
+  withMutationPlanStep,
+} from "../clockify/rest/core.js";
 
 export interface MutationDispatchResult {
   externalId?: string;
@@ -31,6 +36,12 @@ export interface ExecutableMutationStep {
 }
 
 function safeFailureDetail(error: unknown): Record<string, unknown> {
+  if (error instanceof MutationDispatchDenied) {
+    return { type: error.name, code: "mutation_dispatch_denied", denial: error.denial, message: error.message };
+  }
+  if (error instanceof MutationPlanViolation) {
+    return { type: error.name, code: error.code, message: error.message };
+  }
   if (error instanceof AmbiguousWriteOutcome || error instanceof DefinitiveWriteFailure) {
     return {
       type: error.name,
@@ -137,10 +148,14 @@ export async function executeStep(input: {
   let status: "succeeded" | "definitive_failed" | "outcome_unknown";
   let outcome: MutationDispatchResult;
   try {
-    outcome = await input.dispatch();
+    outcome = await withMutationPlanStep(
+      { id: input.step.id, index: input.step.index, kind: "primary" },
+      input.dispatch,
+    );
     status = "succeeded";
   } catch (error) {
-    status = error instanceof DefinitiveWriteFailure
+    status = error instanceof DefinitiveWriteFailure ||
+      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation
       ? "definitive_failed"
       : "outcome_unknown";
     outcome = { detail: safeFailureDetail(error) };
@@ -219,10 +234,14 @@ export async function executeCompensationStep(input: {
   let status: "compensated" | "compensation_failed" | "outcome_unknown";
   let outcome: MutationDispatchResult;
   try {
-    outcome = await input.dispatch();
+    outcome = await withMutationPlanStep(
+      { id: input.step.id, index: input.step.index, kind: "compensation" },
+      input.dispatch,
+    );
     status = "compensated";
   } catch (error) {
-    status = error instanceof DefinitiveWriteFailure
+    status = error instanceof DefinitiveWriteFailure ||
+      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation
       ? "compensation_failed"
       : "outcome_unknown";
     outcome = { detail: safeFailureDetail(error) };
@@ -336,6 +355,21 @@ export async function executeMutationWorkflow(
           hint: "Verify the recorded step in Clockify before deciding whether to try again.",
           retryable: false,
         },
+      });
+    }
+    const controlDetail = result.detail && typeof result.detail === "object"
+      ? result.detail as { code?: unknown; denial?: unknown }
+      : undefined;
+    if (completed.length === 0 && controlDetail?.code === "mutation_dispatch_denied" &&
+      controlDetail.denial && typeof controlDetail.denial === "object") {
+      return controlDetail.denial as ErrorReceipt;
+    }
+    if (completed.length === 0 && controlDetail?.code === "mutation_plan_violation") {
+      return errorReceipt({
+        action: input.actionName,
+        code: "mutation_plan_violation",
+        message: "A host mutation was blocked because it did not match the exact stored plan.",
+        recovery: { hint: "Create a fresh preview from the current action catalog.", retryable: false },
       });
     }
     return completed.length > 0

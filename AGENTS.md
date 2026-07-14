@@ -21,20 +21,42 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
 - Per-admin, per-workspace policy; genuinely new admins default to full
   `read_write`, while groups missing from an existing policy migrate to `off`.
   Admins manage only their own policy.
-- Safe writes (reads/creates) execute immediately with a receipt. **Editing
-  existing data and every risky write require a dry-run preview + button-only
-  confirmation.** Typed "yes" never executes.
+- Reads return immediately. Only actions explicitly classified `safe_write`
+  execute immediately with a receipt. **Editing existing data and every risky
+  write require a dry-run preview + button-only confirmation.** Typed "yes"
+  never executes.
 - `Confirm all` applies only to the exact stored batch; partial failure is never
   hidden.
 - Confirmation is one-use, time-limited (5 min), bound to
-  session/workspace/admin + a salted nonce hash + operation hash; policy is
+  session/workspace/admin + a salted nonce hash + operation hash + immutable
+  capability id/hash. Policy, capability, catalog, and action compatibility are
   re-checked at confirm time.
 - Every mutation/confirmation/undo performs a fresh role check and fails closed;
-  Clockify host writes are single-flight per workspace and are never auto-retried.
+  every primary and compensation step repeats that check immediately before
+  dispatch. Clockify host writes are single-flight per workspace and are never
+  auto-retried.
+- Before the main planner can see Clockify results, a constrained declaration
+  pass receives only current and unresolved prior admin-authored text as
+  untrusted natural-language input; its trusted envelope also supplies the exact
+  write-action names and catalog hash. It persists an immutable
+  `IntentCapabilityV1`: exact write actions, UTF-8 byte spans, literal constraints,
+  cardinality, and request/catalog hashes. Provider failure, malformed spans, or
+  invented values durably deny all writes while reads remain available.
+- Raw model arguments are matched against that capability before Zod
+  preprocessing or server-side id/date resolution. Every one of the 81 write
+  actions has explicit authority metadata; server-derived ids, permitted
+  defaults, and exact authoritative preserved-state paths may narrow execution
+  but never expand it. Safe and confirmed writes bind and atomically consume the
+  capability; exact operation replay consumes no additional execution, and
+  resume reloads the original capability.
 - Every Clockify external write persists normalized nonsecret operation data, an
   exact mutation plan, authoritative target/parent snapshots where applicable,
   and step-bound reconciliation metadata. The catalog has no legacy mutation or
-  target-verification exceptions.
+  target-verification exceptions. The REST mutation scope rejects unscoped,
+  repeated, excess, or out-of-order calls before the affected dispatch and
+  permits at most one mutation call per host step. After the callback and before
+  success is reported, it rejects an incomplete primary plan. Compensation is
+  allowed only after its durable source step becomes eligible.
 - A post-dispatch journal failure never rewrites a known Clockify success as a
   retryable or definitive failure: single safe writes return success with an
   explicit degradation warning, composed writes stop as `partial`, and known
@@ -76,8 +98,9 @@ npm run dev           # tsx src/server.ts (needs env)
   thin facade composing per-concern builders in `store/` (sessions, confirmations,
   idempotency ledger, undo, audit/metrics, telemetry, durable turn/operation
   journals, canonical action results + ordered replay/history links, short-lived
-  artifacts, installations, batched retention + AES-256-GCM token
-  encryption/rotation). Full outcomes live only in `action_results`; linked
+  artifacts, installations, immutable intent capabilities + operation bindings +
+  usage claims (`store/intent-capabilities.ts`), batched retention + AES-256-GCM
+  token encryption/rotation). Full outcomes live only in `action_results`; linked
   summaries are capped at 65,536 bytes. `src/auth/` — admin role check, CSRF,
   signed session cookie.
 - `src/addon/` — manifest + Clockify token verification (RS256, one platform key
@@ -87,20 +110,26 @@ npm run dev           # tsx src/server.ts (needs env)
   `rest/*` over `rest/core.ts`; plain/envelope/POST pagination preserves
   `ListResult.truncated`, with shared bounded-page collection in
   `rest/list-pages.ts`; `core.mutate` is the exactly-one-external-mutation
-  primitive used by durable workflow steps; shared date normalization in
-  `rest/wire-dates.ts`),
+  primitive used by durable workflow steps and its async-local exact-plan scope
+  enforces order, at most one mutation call per host step, post-callback plan
+  completion before success reporting, compensation eligibility, and the
+  per-dispatch role gate; shared date normalization in `rest/wire-dates.ts`),
   `api-base.ts` (hosts from the install token claims), `service-url.ts` (strict
   Clockify-origin validation), `request-governor.ts` (per-workspace rate,
   concurrency, write, and per-turn host-call bounds).
 - `src/assistant/` — model client (OpenAI-compatible HTTP or `gemini-cli`), prompt
-  builder, planner (native tool-calling default, JSON fallback),
+  builder, planner (native tool-calling default, JSON fallback), the isolated
+  admin-text + trusted catalog-metadata declaration pass (`intent-declaration.ts`),
   `agent-loop.ts`/`agent-state.ts` (durable agentic loop; provider cancellation and
   bounded selection context survive clarification/confirm resume).
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
   `commitConfirmedOperation`), `catalog.ts`, `permissions.ts`, `risk.ts`,
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
-  `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
+  `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
+  declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),
+  `write-authority.ts` (explicit metadata + exact-plan validation for all 81
+  writes), `tool-select.ts` (deterministic
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `mutation-workflow.ts` (operation-scoped prepared→executing→terminal primary
@@ -114,8 +143,9 @@ npm run dev           # tsx src/server.ts (needs env)
   workflow registries (read-only executable reconciliation for crash-orphaned
   dispatched steps; never resumes prepared work or compensates),
   `compose.ts` (legacy atomic multi-step/rollback),
-  `idempotency.ts` (operation-scoped confirmed-commit dedupe, including partial
-  replay; invoice identity is the durable operation ID, not a second semantic
+  `idempotency.ts` (workspace/admin/action-scoped semantic confirmed-commit
+  dedupe for `clockify_setup_project` and `clockify_setup_task`, including partial
+  replay; invoices instead use the durable operation ID, not a second semantic
   payload ID), `undo.ts`,
   `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across

@@ -18,6 +18,13 @@ export interface AgentState {
   /** Admin-authored request context used for deterministic tool selection. It
    *  survives terse clarification follow-ups and the confirmation round-trip. */
   selectionContext?: string;
+  /** Durable operation binding used to reload (never redeclare) the original
+   * admin-authored capability before a confirm-time model resume. */
+  intentCapability?: {
+    operationId: string;
+    id: string;
+    hash: string;
+  };
 }
 
 const modelMessageSchema = z.object({
@@ -47,6 +54,11 @@ const agentStateSchema = z.object({
   transcript: z.array(modelMessageSchema).min(1),
   call: z.object({ id: z.string().min(1), name: z.string().min(1) }),
   selectionContext: z.string().min(1).max(8_000).optional(),
+  intentCapability: z.object({
+    operationId: z.string().min(1),
+    id: z.string().min(1),
+    hash: z.string().length(64),
+  }).optional(),
 });
 
 /**

@@ -637,7 +637,7 @@ describe("schema v5 durable mutation substrate", () => {
       "settled_at",
       "compensates_step_id",
     ]));
-    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
 
@@ -738,6 +738,103 @@ describe("schema v5 durable mutation substrate", () => {
     expect(db.prepare(
       "SELECT plan_step_id, status FROM operation_steps WHERE id = 'legacy-step-2'",
     ).get()).toEqual({ plan_step_id: "create-tag:1", status: "prepared" });
+    db.close();
+  });
+});
+
+describe("schema v6 persisted intent capabilities", () => {
+  it("adds bounded immutable capability records, usage claims, and durable bindings", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    );
+    expect(tables).toEqual(expect.arrayContaining(["intent_capabilities", "intent_capability_usage"]));
+
+    const operationColumns = (db.prepare("PRAGMA table_info(operation_runs)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
+    const confirmationColumns = (db.prepare("PRAGMA table_info(pending_confirmations)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
+    expect(operationColumns).toEqual(expect.arrayContaining(["capability_id", "capability_hash"]));
+    expect(confirmationColumns).toEqual(expect.arrayContaining(["capability_id", "capability_hash"]));
+
+    const capabilityJson = JSON.stringify({
+      version: 1,
+      mode: "deny_all_writes",
+      requestHash: "r".repeat(64),
+      catalogHash: "catalog-hash",
+      reason: "provider_unavailable",
+      writeActions: [],
+    });
+    db.prepare(
+      `INSERT INTO intent_capabilities (
+         id, workspace_id, admin_user_id, session_id, request_id, request_hash,
+         catalog_hash, capability_hash, mode, capability_json, created_at
+       ) VALUES ('capability', 'workspace', 'admin', 'session', 'request',
+                 '${"r".repeat(64)}', 'catalog-hash', '${"c".repeat(64)}',
+                 'deny_all_writes', ?, '2026-01-01T00:00:00.000Z')`,
+    ).run(capabilityJson);
+    expect(() => db.prepare(
+      "UPDATE intent_capabilities SET catalog_hash = 'changed' WHERE id = 'capability'",
+    ).run()).toThrow("intent_capability_immutable");
+    expect(() => db.prepare(
+      `INSERT INTO intent_capabilities (
+         id, workspace_id, admin_user_id, session_id, request_id, request_hash,
+         catalog_hash, capability_hash, mode, capability_json, created_at
+       ) VALUES ('invalid-json', 'w', 'a', 's', 'r', 'rh', 'ch', 'hh',
+                 'allow', '{', '2026-01-01T00:00:00.000Z')`,
+    ).run()).toThrow(/CHECK constraint failed/);
+    expect(() => db.prepare(
+      `INSERT INTO intent_capabilities (
+         id, workspace_id, admin_user_id, session_id, request_id, request_hash,
+         catalog_hash, capability_hash, mode, capability_json, created_at
+       ) VALUES ('too-large', 'w', 'a', 's', 'large', 'rh', 'ch', 'hh2',
+                 'allow', ?, '2026-01-01T00:00:00.000Z')`,
+    ).run(JSON.stringify({ value: "x".repeat(65_536) }))).toThrow(/CHECK constraint failed/);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    db.close();
+  });
+
+  it("migrates a checked v5 fixture twice and leaves legacy operation/confirmation bindings incompatible", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    db.exec(`
+      DROP TRIGGER intent_capabilities_immutable;
+      DROP TABLE intent_capability_usage;
+      DROP TABLE intent_capabilities;
+      DROP INDEX idx_pending_confirmations_capability;
+      DROP INDEX idx_operation_runs_capability;
+      ALTER TABLE pending_confirmations DROP COLUMN capability_hash;
+      ALTER TABLE pending_confirmations DROP COLUMN capability_id;
+      ALTER TABLE operation_runs DROP COLUMN capability_id;
+      PRAGMA user_version = 5;
+    `);
+    db.prepare(
+      `INSERT INTO operation_runs (
+         id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
+         action_name, action_fingerprint, catalog_hash, operation_hash, status,
+         action_result_id, operation_json, reconciled_at, reconciliation_json,
+         capability_hash, created_at, updated_at
+       ) VALUES (
+         'legacy-operation', 'legacy-request', NULL, 'legacy-session', 'legacy-workspace',
+         'legacy-admin', 'clockify_clients_create', 'action-hash', 'catalog-hash',
+         'operation-hash', 'prepared', NULL, '{}', NULL, NULL, NULL,
+         '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+       )`,
+    ).run();
+
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+
+    expect(db.prepare(
+      "SELECT capability_id, capability_hash FROM operation_runs WHERE id = 'legacy-operation'",
+    ).get()).toEqual({ capability_id: null, capability_hash: null });
+    expect(db.pragma("user_version", { simple: true })).toBe(6);
     db.close();
   });
 });

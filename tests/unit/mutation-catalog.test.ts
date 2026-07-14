@@ -4,6 +4,10 @@ import { ACTION_CATALOG } from "../../src/harness/catalog.js";
 import { mutationPlanContractError, type ActionDefinition } from "../../src/harness/action.js";
 import { mutationCatalogCoverage } from "../../src/harness/mutation-compatibility.js";
 
+const VALID_WRITE_AUTHORITY = ACTION_CATALOG.find(
+  (action) => action.name === "clockify_tags_create",
+)!.writeAuthority!;
+
 describe("durable external-mutation catalog coverage", () => {
   it("requires every Clockify external write to satisfy the complete durable contract", () => {
     const coverage = mutationCatalogCoverage(ACTION_CATALOG);
@@ -65,6 +69,7 @@ describe("durable external-mutation catalog coverage", () => {
         name: `clockify_missing_${missing}`,
         risks: ["safe_write" as const],
         mutationWorkflow: "durable" as const,
+        writeAuthority: VALID_WRITE_AUTHORITY,
         mutationContract: Object.fromEntries(Object.entries(complete).filter(([key]) => key !== missing)),
       };
       const coverage = mutationCatalogCoverage([...ACTION_CATALOG, synthetic as unknown as ActionDefinition]);
@@ -80,6 +85,7 @@ describe("durable external-mutation catalog coverage", () => {
       mutationWorkflow: "durable" as const,
       prepareSafeWrite: async () => ({ operation: {}, mutationPlan: { mode: "single" as const, steps: [{ id: "x", kind: "primary" as const }] } }),
       executeSafeWrite: async () => ({ ok: true as const, action: "clockify_safe_source_lie" }),
+      writeAuthority: VALID_WRITE_AUTHORITY,
       mutationContract: {
         operationData: { source: "confirmable_operation" as const, normalized: true as const, nonsecret: true as const },
         mutationPlan: { source: "preview" as const, exact: true as const },

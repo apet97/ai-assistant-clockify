@@ -70,11 +70,18 @@ confirmation, and undo performs an uncached role recheck and fails closed;
 - Per-admin, per-workspace assistant permissions; genuinely new admins default to
   full `read_write`, while missing groups in an existing policy migrate to `off`;
   admins manage only their own (owners don't see others').
-- Safe writes execute immediately with receipts. Risky writes require a dry-run
-  preview + BUTTON confirmation; typed "yes" never executes.
+- Reads return immediately. Only actions explicitly classified `safe_write`
+  execute immediately with receipts. Risky writes require a dry-run preview +
+  BUTTON confirmation; typed "yes" never executes.
 - `Confirm all` applies only to the exact previewed batch. Confirmations are
-  one-use, 5-min TTL, bound to session/workspace/admin + nonce + operation hash;
-  policy is re-checked at confirm time.
+  one-use, 5-min TTL, bound to session/workspace/admin + nonce + operation hash +
+  immutable capability id/hash; policy, capability, catalog, and action
+  compatibility are re-checked at confirm time.
+- Before the main planner receives Clockify results, an isolated declaration pass
+  receives only current and unresolved prior admin-authored text as untrusted
+  natural-language input; its trusted envelope also supplies exact write-action
+  names and the catalog hash. It persists the exact write authority for that
+  request. Invalid declarations deny writes but do not remove read access.
 - The model never receives tokens, session secrets, model API keys, or raw
   headers. Not a public Claude connector; not a standalone MCP server.
 
@@ -102,8 +109,10 @@ bug was found against the REAL API, not by reading the code.
 - Small files, one responsibility. Failing test first; `npm run verify` before
   claiming done; one focused commit per fix; madge stays at 0 cycles.
 - The REST adapter is **I/O only** — all risk/policy/confirmation/resolution logic
-  lives in `src/harness/*`. Secrets never enter a `ConfirmableOperation.payload`
-  (persisted to DB + audit log).
+  lives in `src/harness/*`. Secrets never enter a `ConfirmableOperation.payload`.
+  Its nonsecret payload is persisted transiently in confirmation/operation rows
+  and scrubbed at terminal states; audit rows store a canonical result reference
+  plus a bounded summary, never a payload copy.
 - Never log/commit/paste tokens or raw auth headers; fake tokens in tests; live
   tests opt-in on a sacrificial workspace only.
 - If a safety test fails, stop and fix it before features.
@@ -113,7 +122,8 @@ bug was found against the REAL API, not by reading the code.
 - `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
   per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
   ledger, undo, audit/metrics, telemetry, durable turn/operation + ordered
-  external-mutation-step journals,
+  external-mutation-step journals, immutable intent capabilities + operation
+  bindings + atomic usage claims in `intent-capabilities.ts`,
   canonical action results, short-lived artifacts, installations, and bounded
   500-row retention batches (10k rows/pass with event-loop yields and continuation)
   + token encryption/one-release key rotation
@@ -145,7 +155,10 @@ bug was found against the REAL API, not by reading the code.
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
   `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
-  `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `mutation-workflow.ts`
+  `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`
+  (immutable `IntentCapabilityV1`), `intent-authority.ts` (pre-Zod raw-argument
+  matcher), `write-authority.ts` (explicit authority and exact-plan metadata for
+  all 81 external writes), `mutation-workflow.ts`
   (durable one-dispatch steps + partial/unknown classification),
   `durable-risky-write.ts` (confirmed one-dispatch adapter), the focused
   `invoice-create-workflow.ts`/`invoice-update-workflow.ts`/
@@ -156,9 +169,10 @@ bug was found against the REAL API, not by reading the code.
   workflow registries (read-only executable reconciliation for crash-orphaned
   dispatched steps; never resumes prepared work or compensates),
   `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
-  (operation-scoped confirmed-commit dedupe, 10-min window, canonical partial
-  replay; invoice identity is the durable operation ID, never a second semantic
-  payload ID),
+  (workspace/admin/action-scoped semantic confirmed-commit dedupe for
+  `clockify_setup_project` and `clockify_setup_task`, with a 10-min window and
+  canonical partial replay; invoices instead use the durable operation ID, never
+  a second semantic payload ID),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
   BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
   `workflows/<area>.ts`. Name→id + date resolution is split across
@@ -172,9 +186,11 @@ bug was found against the REAL API, not by reading the code.
   constants AND the injectable-clock helpers (`nowDate`/`nowIso`) live in
   `src/durations.ts`.
 - `src/assistant/` — model client (`LLM_PROVIDER=http` OpenAI-compatible DeepSeek
-  default, or `gemini-cli`), `prompts.ts`, `planner.ts`, `agent-loop.ts` +
-  `agent-state.ts` (the durable agentic loop, including bounded selection context
-  and provider cancellation).
+  default, or `gemini-cli`), `prompts.ts`, `planner.ts`,
+  `intent-declaration.ts` (the isolated admin-text + trusted catalog-metadata
+  declaration pass),
+  `agent-loop.ts` + `agent-state.ts` (the durable agentic loop, including bounded
+  selection context, persisted capability bindings, and provider cancellation).
 - `src/routes/api.ts` — chat (JSON + NDJSON stream), confirm/cancel/undo/metrics +
   `POST /chat/new` (mints a fresh session/cookie → empty transcript; the prior
   session's messages are NOT deleted — kept under retention + the audit log) + the
@@ -218,9 +234,27 @@ bug was found against the REAL API, not by reading the code.
   payloads. A restart during execution records one linked `outcome_unknown` result.
 - **Write authority:** immediately before every write/confirmation/undo, refresh
   the caller's role. Non-admin invalidates that admin's sessions; uncertainty
-  fails closed. Writes are journaled as prepared→executing→terminal, and transport
-  failure/timeout/408/5xx/malformed success after dispatch remains
-  `outcome_unknown` without automatic retry.
+  fails closed. Every primary and compensation step repeats the role check
+  immediately before network dispatch. Writes are journaled as
+  prepared→executing→terminal, and transport failure/timeout/408/5xx/malformed
+  success after dispatch remains `outcome_unknown` without automatic retry.
+- **Admin-authored intent capability:** before any main-planner turn can receive
+  Clockify results, the constrained declaration pass receives only the exact
+  current and unresolved prior admin-authored text as untrusted natural-language
+  input; its trusted envelope also supplies exact write-action names and the
+  catalog hash. It persists an immutable
+  `IntentCapabilityV1` with exact write action names, verified UTF-8 byte spans,
+  normalized literal constraints, maximum executions (one by default), and
+  request/catalog hashes. Provider failure, malformed spans, or invented values
+  produce a durable `deny_all_writes` capability; reads remain available. The
+  harness matches the model's raw arguments before Zod preprocessing and before
+  server-side id/date resolution against explicit authority metadata for all 81
+  writes. Server-derived ids, permitted defaults, and exact authoritative
+  preserved-state paths can only narrow authority.
+  Each safe or confirmed operation binds the capability and atomically consumes
+  one execution; replay of that same bound operation consumes none. Confirmation
+  and resume reload the original persisted capability, reject capability/catalog
+  drift, and journal any resumed write under a new bound operation.
 - **Durable external effects:** every Clockify external write persists normalized
   nonsecret intent and an exact mutation plan before dispatch. Every host effect is an
   ordered prepared→executing→terminal step. Safe writes own the single operation
@@ -236,13 +270,18 @@ bug was found against the REAL API, not by reading the code.
   `operation_journal_degraded`; a composition stops as nonretryable `partial`;
   compensation preserves the known result. Even if the fallback marker cannot
   persist, the synthetic result stays truthful and the already-created unique
-  step identity blocks redispatch. Startup recovery is read-only: store recovery
-  marks only dispatched orphan steps unknown, then the production reconciliation
-  registry executes the action/step's complete-list or exact-target read strategy
-  before traffic is accepted. Compatible authoritative evidence settles the step
-  and operation; incomplete, zero/multiple, truncated, handler-missing, or
-  fingerprint-drift evidence remains unknown. It never resumes prepared work or
-  compensates automatically. `mutation-compatibility.ts` rejects any external
+  step identity blocks redispatch. The async-local REST mutation scope rejects
+  unscoped, repeated, excess, or out-of-order calls before the affected dispatch,
+  permits at most one mutation call per host step, and after the callback rejects
+  an incomplete primary plan before success is reported. It poisons later primary
+  dispatch after a caught denial/failure and admits compensation only after its
+  durable source step is eligible. Startup recovery is read-only:
+  store recovery marks only dispatched orphan steps unknown, then the production
+  reconciliation registry executes the action/step's complete-list or exact-target
+  read strategy before traffic is accepted. Compatible authoritative evidence
+  settles the step and operation; incomplete, zero/multiple, truncated,
+  handler-missing, or fingerprint-drift evidence remains unknown. It never resumes
+  prepared work or compensates automatically. `mutation-compatibility.ts` rejects any external
   write lacking normalized nonsecret operation data, an exact plan,
   authoritative targeting, or step-bound complete-evidence reconciliation
   metadata; there is no exception bridge. `clockify_tags_create` is the
@@ -367,9 +406,10 @@ bug was found against the REAL API, not by reading the code.
   cancellation before every not-yet-dispatched tool call. The signal is never
   passed into a Clockify mutation after dispatch starts, so cancellation cannot
   interrupt or retry an external write with an unknown outcome.
-- **Idempotent commits** (scoped operation identity; an invoice replay reuses the
-  same durable `operationId`, while a separately authored preview is a distinct
-  intentional operation) + **undo** for creations (one-use, re-checks policy,
+- **Idempotent commits** (workspace/admin/action-scoped semantic dedupe remains
+  for `clockify_setup_project` and `clockify_setup_task`; an invoice replay instead
+  reuses the same durable `operationId`, while a separately authored preview is a
+  distinct intentional operation) + **undo** for creations (one-use, re-checks policy,
   reverse order). A created TASK ref carries its `projectId` on the `EntityRef`
   (a task delete is project-scoped), so `reverseCreation` can delete it; a task
   ref missing its `projectId` can't be reversed and returns an honest

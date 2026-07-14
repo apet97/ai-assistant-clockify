@@ -18,6 +18,7 @@ function client(fetchImpl: typeof fetch) {
     workspaceId: "ws-1",
     auth: { addonToken: "tok" },
     fetchImpl,
+    testOnlyEnforceMutationScope: false,
   });
 }
 function fullPage(n: number, prefix: string): { id: string; name: string }[] {

@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createStore, IDEMPOTENCY_RETENTION_MS, type TestStore } from "../../src/db/store.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import { successReceipt } from "../../src/harness/receipts.js";
+import { buildAllowIntentCapabilityV1 } from "../../src/harness/intent-capability.js";
+import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 
 /** Retention pruning for operational rows, transcripts, audit, and artifacts. */
 const NOW = new Date("2026-06-06T00:00:00.000Z");
@@ -46,6 +48,93 @@ describe("store.pruneExpired", () => {
     expect(store.getPendingConfirmation("stale-pending")).toBeUndefined();
     expect(store.getPendingConfirmation("live-pending")).toBeDefined();
     expect(store.countPendingConfirmations(s, NOW.toISOString())).toBe(1);
+    store.close();
+  });
+
+  it("retains referenced intent capabilities, then deletes their literal/span JSON after references expire", async () => {
+    const clock = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const authoredSource = "Create tag Žuto";
+    const literal = {
+      startByte: Buffer.byteLength("Create tag ", "utf8"),
+      endByte: Buffer.byteLength(authoredSource, "utf8"),
+      text: "Žuto",
+    };
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource,
+      catalogHash: "catalog",
+      writeActions: [{
+        actionName: "clockify_tags_create",
+        sourceSpans: [literal],
+        literalConstraints: [{ path: "name", value: "Žuto", sourceSpan: literal }],
+      }],
+    });
+    const createCapability = (id: string, requestId: string) => store.createIntentCapability({
+      id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: session.id,
+      requestId,
+      authoredSource,
+      capability,
+    });
+    const orphan = createCapability("capability-orphan", "request-orphan");
+    const referenced = createCapability("capability-referenced", "request-referenced");
+
+    clock.value = NOW;
+    const operationId = "operation-capability-reference";
+    const pending = createPendingConfirmation({
+      id: "confirmation-capability-reference",
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      risk: ["high_risk_write"],
+      preview: {},
+      operation: { operationId, actionName: "clockify_tags_create" },
+      sessionSecret: "secret",
+      capabilityId: referenced.id,
+      capabilityHash: referenced.capabilityHash,
+      actionFingerprint: "action",
+      catalogHash: "catalog",
+      now: clock.value,
+    }).record;
+    store.savePendingConfirmation(pending);
+    store.prepareOperationRun({
+      id: operationId,
+      requestId: referenced.requestId,
+      confirmationId: pending.id,
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "action",
+      catalogHash: "catalog",
+      operationHash: "operation",
+      capabilityId: referenced.id,
+      capabilityHash: referenced.capabilityHash,
+    });
+
+    const first = await store.pruneExpired(NOW.toISOString());
+    expect(first.intentCapabilities).toBe(1);
+    expect(store.getIntentCapability(orphan.id, {
+      workspaceId: "ws-1", adminUserId: "admin-1", sessionId: session.id,
+      requestId: orphan.requestId, requestHash: orphan.requestHash, catalogHash: orphan.catalogHash,
+    })).toBeUndefined();
+    expect(store.getIntentCapabilityForOperation({
+      operationId, workspaceId: "ws-1", adminUserId: "admin-1", sessionId: session.id,
+      capabilityId: referenced.id, capabilityHash: referenced.capabilityHash,
+    })).toEqual(referenced);
+
+    clock.value = new Date(NOW.getTime() + 31 * DAY_MS);
+    const eventual = await store.pruneExpired(clock.value.toISOString());
+    expect(eventual.pendingConfirmations).toBe(1);
+    expect(eventual.operationRuns).toBe(1);
+    expect(eventual.intentCapabilities).toBe(1);
+    expect(store.getIntentCapability(referenced.id, {
+      workspaceId: "ws-1", adminUserId: "admin-1", sessionId: session.id,
+      requestId: referenced.requestId, requestHash: referenced.requestHash, catalogHash: referenced.catalogHash,
+    })).toBeUndefined();
     store.close();
   });
 
@@ -165,6 +254,7 @@ describe("store.pruneExpired", () => {
     expect(plan.chatMessages).not.toMatch(/SCAN chat_messages/);
     expect(plan.auditEvents).not.toMatch(/SCAN audit_events/);
     expect(plan.artifacts).not.toMatch(/SCAN artifacts/);
+    expect(plan.intentCapabilities).not.toMatch(/SCAN intent_capabilities/);
     store.close();
   });
 

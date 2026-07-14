@@ -17,10 +17,23 @@ function client(fetchImpl: typeof fetch, auth: ClockifyAuth = { addonToken: "tok
     workspaceId: "ws-1",
     auth,
     fetchImpl,
+    testOnlyEnforceMutationScope: false,
   });
 }
 
 describe("rest workspace client", () => {
+  it("ignores the test-only unscoped option outside NODE_ENV=test", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const fetchImpl = vi.fn(async () => jsonResponse({ id: "t1", name: "Deep Work" }));
+      const c = client(fetchImpl as unknown as typeof fetch);
+      await expect(c.createTag({ name: "Deep Work" })).rejects.toThrow("mutation_scope_required");
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("creates a tag with X-Addon-Token", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({ id: "t1", name: "Deep Work" }));
     const c = client(fetchImpl as unknown as typeof fetch);

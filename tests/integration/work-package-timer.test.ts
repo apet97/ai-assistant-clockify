@@ -44,6 +44,7 @@ describe("create_work_package + startTimer (wire shape)", () => {
       workspaceId: "ws-1",
       auth: { apiKey: "k" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
+      testOnlyEnforceMutationScope: false,
     });
     const context: ActionContext = {
       workspaceId: "ws-1",

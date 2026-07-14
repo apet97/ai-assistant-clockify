@@ -18,6 +18,8 @@ interface PendingRow {
   target_fingerprints_json: string;
   action_fingerprint: string;
   catalog_hash: string;
+  capability_id: string | null;
+  capability_hash: string | null;
   nonce_hash: string;
   expires_at: string;
   created_at: string;
@@ -70,6 +72,8 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     targetFingerprints: JSON.parse(row.target_fingerprints_json) as string[],
     actionFingerprint: row.action_fingerprint,
     catalogHash: row.catalog_hash,
+    ...(row.capability_id ? { capabilityId: row.capability_id } : {}),
+    ...(row.capability_hash ? { capabilityHash: row.capability_hash } : {}),
     nonceHash: row.nonce_hash,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
@@ -123,9 +127,9 @@ export function buildConfirmationStore(ctx: StoreContext): {
         `INSERT INTO pending_confirmations (
            id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
            operation_json, operation_hash, target_fingerprints_json, action_fingerprint, catalog_hash,
-           nonce_hash, expires_at, created_at, used_at, action_result_id, idempotency_key,
+           capability_id, capability_hash, nonce_hash, expires_at, created_at, used_at, action_result_id, idempotency_key,
            result_summary_json, agent_state_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
         record.operationId ?? record.id,
@@ -140,6 +144,8 @@ export function buildConfirmationStore(ctx: StoreContext): {
         JSON.stringify(record.targetFingerprints ?? []),
         record.actionFingerprint ?? "legacy",
         record.catalogHash ?? "legacy",
+        record.capabilityId ?? null,
+        record.capabilityHash ?? null,
         record.nonceHash,
         record.expiresAt,
         record.createdAt,

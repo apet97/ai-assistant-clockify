@@ -16,6 +16,8 @@ describe("action compatibility fingerprints", () => {
         argumentAliases: action!.argumentAliases ?? [],
         argumentOpenPaths: ["groups"],
         mutationWorkflow: action!.mutationWorkflow,
+        mutationContract: action!.mutationContract,
+        writeAuthority: action!.writeAuthority,
         preparedSafeWrite: !!action!.prepareSafeWrite && !!action!.executeSafeWrite,
       }))
       .digest("hex");
@@ -33,6 +35,7 @@ describe("action compatibility fingerprints", () => {
       argumentOpenPaths: action.argumentOpenPaths ?? [],
       mutationWorkflow: action.mutationWorkflow,
       mutationContract: action.mutationContract,
+      writeAuthority: action.writeAuthority,
       preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
     }));
 

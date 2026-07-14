@@ -25,6 +25,7 @@ import {
   isMutationMethod,
 } from "../write-outcome.js";
 import type { WorkspaceRequestGovernor } from "../request-governor.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 export type { ClockifyAuth };
 export type ClockifyHost = "api" | "reports" | "audit";
 
@@ -50,6 +51,186 @@ export interface RestCoreOptions {
   commitTimeoutMs?: number;
   /** Shared per-workspace host-call governor. */
   requestGovernor?: WorkspaceRequestGovernor;
+  /** Production adapters enable the Phase 6 exact-plan network gate. */
+  enforceMutationScope?: boolean;
+}
+
+export interface MutationPlanScopeStep {
+  id: string;
+  kind: "primary" | "compensation";
+}
+
+export interface MutationPlanScopeInput {
+  actionName: string;
+  plan: { mode: "single" | "curated" | "batch"; steps: MutationPlanScopeStep[] };
+  authorizeDispatch?(step: MutationPlanScopeStep): Promise<unknown> | unknown;
+  compensationEligible?(stepId: string): boolean;
+  /** Durable read-only reconciliation may terminalize an ambiguous primary
+   * after its dispatch threw. The caller must prove this exact plan step is now
+   * authoritatively settled; dispatch denials and plan violations remain final. */
+  authoritativelyReconciled?(stepId: string): boolean;
+  /** Caller-owned result policy. REST core intentionally knows nothing about
+   * harness receipts; it only enforces complete primary dispatch when asked. */
+  requiresComplete?(result: unknown): boolean;
+}
+
+type MutationDescriptorStatus = "pending" | "dispatching" | "completed" | "failed";
+
+interface MutationDescriptorState {
+  step: MutationPlanScopeStep;
+  status: MutationDescriptorStatus;
+  networkCalls: number;
+  failure?: unknown;
+}
+
+interface MutationPlanScopeState extends MutationPlanScopeInput {
+  descriptors: MutationDescriptorState[];
+  active?: { index: number; descriptor: MutationDescriptorState };
+  primaryPoison?: MutationPlanViolation;
+}
+
+function readDescriptorFailure(descriptor: MutationDescriptorState): { failed: boolean; failure?: unknown } {
+  return descriptor.status === "failed"
+    ? { failed: true, failure: descriptor.failure }
+    : { failed: false };
+}
+
+const mutationPlanStorage = new AsyncLocalStorage<MutationPlanScopeState>();
+
+export class MutationPlanViolation extends Error {
+  readonly code = "mutation_plan_violation";
+  constructor(message: string) {
+    super(message);
+    this.name = "MutationPlanViolation";
+  }
+}
+
+export class MutationDispatchDenied extends Error {
+  constructor(readonly denial: unknown) {
+    super("mutation_dispatch_denied");
+    this.name = "MutationDispatchDenied";
+  }
+}
+
+function reconciledAmbiguousDescriptor(
+  scope: MutationPlanScopeState,
+  descriptor: MutationDescriptorState,
+): boolean {
+  if (descriptor.status !== "failed" ||
+    descriptor.failure instanceof MutationPlanViolation ||
+    descriptor.failure instanceof MutationDispatchDenied ||
+    descriptor.failure instanceof DefinitiveWriteFailure) return false;
+  try {
+    return scope.authoritativelyReconciled?.(descriptor.step.id) === true;
+  } catch {
+    return false;
+  }
+}
+
+export function withMutationPlanScope<T>(input: MutationPlanScopeInput, run: () => Promise<T>): Promise<T> {
+  const ids = input.plan.steps.map((step) => step.id);
+  if (ids.length === 0 || ids.some((id) => !id) || new Set(ids).size !== ids.length) {
+    return Promise.reject(new MutationPlanViolation("invalid_mutation_plan_scope"));
+  }
+  const scope: MutationPlanScopeState = {
+    ...input,
+    descriptors: input.plan.steps.map((step) => ({ step, status: "pending", networkCalls: 0 })),
+  };
+  return mutationPlanStorage.run(scope, async () => {
+    const result = await run();
+    if (input.requiresComplete?.(result)) {
+      const incomplete = scope.descriptors.find((descriptor) =>
+        descriptor.step.kind === "primary" && descriptor.status !== "completed" &&
+        !reconciledAmbiguousDescriptor(scope, descriptor));
+      if (incomplete) throw new MutationPlanViolation(`mutation_plan_incomplete:${incomplete.step.id}`);
+    }
+    return result;
+  });
+}
+
+/** Bind one durable workflow dispatch to its exact persisted plan descriptor. */
+export async function withMutationPlanStep<T>(
+  input: { id: string; index: number; kind: "primary" | "compensation" },
+  run: () => Promise<T>,
+): Promise<T> {
+  const scope = mutationPlanStorage.getStore();
+  // Isolated harness/fake tests perform no network I/O. Production RestCore
+  // remains fail-closed when enforceMutationScope is enabled.
+  if (!scope) return run();
+  if (input.kind === "primary" && scope.primaryPoison) {
+    throw new MutationPlanViolation(`mutation_scope_poisoned:${scope.primaryPoison.message}`);
+  }
+  const descriptor = scope.descriptors[input.index];
+  if (!descriptor || descriptor.step.id !== input.id || descriptor.step.kind !== input.kind) {
+    const violation = new MutationPlanViolation(`mutation_step_out_of_order:${input.id}`);
+    if (input.kind === "primary") scope.primaryPoison = violation;
+    throw violation;
+  }
+  if (scope.active || descriptor.status !== "pending") {
+    const violation = new MutationPlanViolation(`mutation_step_repeated:${input.id}`);
+    if (input.kind === "primary") scope.primaryPoison = violation;
+    throw violation;
+  }
+  const earlierPrimaryStates = scope.descriptors.slice(0, input.index)
+    .filter((candidate) => candidate.step.kind === "primary");
+  const earlierPrimaryInvalid = input.kind === "primary"
+    ? earlierPrimaryStates.some((candidate) => candidate.status !== "completed")
+    : earlierPrimaryStates.some((candidate) => candidate.status === "pending" || candidate.status === "dispatching");
+  if (earlierPrimaryInvalid) {
+    const violation = new MutationPlanViolation(`mutation_step_out_of_order:${input.id}`);
+    if (input.kind === "primary") scope.primaryPoison = violation;
+    throw violation;
+  }
+  if (input.kind === "compensation" && !scope.compensationEligible?.(input.id)) {
+    throw new MutationPlanViolation(`compensation_not_eligible:${input.id}`);
+  }
+  scope.active = { index: input.index, descriptor };
+  try {
+    const result = await run();
+    const afterRun = readDescriptorFailure(descriptor);
+    if (afterRun.failed) throw afterRun.failure;
+    descriptor.status = "completed";
+    return result;
+  } catch (error) {
+    descriptor.status = "failed";
+    descriptor.failure ??= error;
+    if (input.kind === "primary") {
+      scope.primaryPoison = error instanceof MutationPlanViolation
+        ? error
+        : new MutationPlanViolation(`mutation_primary_failed:${input.id}`);
+    }
+    throw error;
+  } finally {
+    scope.active = undefined;
+  }
+}
+
+async function beginScopedMutationDispatch(): Promise<void> {
+  const scope = mutationPlanStorage.getStore();
+  if (!scope?.active) throw new MutationPlanViolation("mutation_scope_required");
+  const { descriptor } = scope.active;
+  if (descriptor.status !== "pending" || descriptor.networkCalls > 0) {
+    const violation = new MutationPlanViolation(`mutation_step_excess_dispatch:${descriptor.step.id}`);
+    descriptor.status = "failed";
+    descriptor.failure = violation;
+    if (descriptor.step.kind === "primary") scope.primaryPoison = violation;
+    throw violation;
+  }
+  const denial = await scope.authorizeDispatch?.(descriptor.step);
+  if (denial !== undefined) {
+    const error = new MutationDispatchDenied(denial);
+    descriptor.status = "failed";
+    descriptor.failure = error;
+    if (descriptor.step.kind === "primary") {
+      scope.primaryPoison = new MutationPlanViolation(`mutation_primary_denied:${descriptor.step.id}`);
+    }
+    throw error;
+  }
+  // The descriptor advances only after the fresh role gate succeeds, directly
+  // before the fetch call begins. A swallowed denial therefore cannot unlock a
+  // later descriptor.
+  descriptor.status = "dispatching";
+  descriptor.networkCalls += 1;
 }
 
 export interface RestCore {
@@ -175,15 +356,21 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // no secrets (the url/header are never put in the message).
   async function doFetch(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
     try {
-      const dispatch = () => baseFetch(url, {
+      const dispatch = async () => {
+        if (isMutationMethod(method) && opts.enforceMutationScope) {
+          await beginScopedMutationDispatch();
+        }
+        return baseFetch(url, {
           ...init,
           ...("addonToken" in opts.auth ? { redirect: "error" as const } : {}),
           signal: AbortSignal.timeout(commitTimeoutMs),
         });
+      };
       return opts.requestGovernor
         ? await opts.requestGovernor.run(isMutationMethod(method) ? "mutation" : "read", dispatch)
         : await dispatch();
     } catch (error) {
+      if (error instanceof MutationPlanViolation || error instanceof MutationDispatchDenied) throw error;
       const mutation = isMutationMethod(method);
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
         const message = `Clockify request timed out after ${commitTimeoutMs}ms (${method} ${path}).`;

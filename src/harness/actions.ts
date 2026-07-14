@@ -6,6 +6,7 @@ import {
   isPreparedSafeWrite,
   isSafeWriteClarification,
   mutationPlanContractError,
+  OperationPreparationError,
 } from "./action.js";
 import type {
   ActionContext,
@@ -24,6 +25,8 @@ import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts
 import { idempotencyScopeKey, markCommitReplayed, markReplayed } from "./idempotency.js";
 import { formatZodIssues, unknownArgumentPaths } from "./arg-shapes.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../clockify/write-outcome.js";
+import { withMutationPlanScope } from "../clockify/rest/core.js";
+import { validateWriteAuthorityOperation } from "./write-authority.js";
 
 /**
  * Action executor — the safety boundary (ARCHITECTURE "The model can propose.
@@ -37,6 +40,16 @@ export interface ExecuteActionInput {
   actionName: string;
   args: unknown;
   context: ActionContext;
+}
+
+function hasAuthoritativelyReconciledStep(
+  journal: NonNullable<ActionContext["mutationJournal"]>,
+  planStepId: string,
+): boolean {
+  const step = journal.listOperationSteps().find((candidate) =>
+    candidate.kind === "primary" && candidate.planStepId === planStepId && candidate.status === "succeeded");
+  if (!step || !step.detail || typeof step.detail !== "object" || Array.isArray(step.detail)) return false;
+  return (step.detail as Record<string, unknown>).authoritativeReconciliation === true;
 }
 
 export async function executeAction(input: ExecuteActionInput): Promise<ActionResult> {
@@ -76,6 +89,27 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         recovery: { hint: "Remove unknown fields and try again.", retryable: true },
       }),
     };
+  }
+
+  const externalWrite = action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read");
+  if (externalWrite && input.context.authorizeWriteArguments) {
+    if (!action.writeAuthority) {
+      return {
+        kind: "receipt",
+        receipt: errorReceipt({
+          action: action.name,
+          code: "intent_capability_denied",
+          message: "This write has no declared authority contract.",
+          recovery: { hint: "Refresh the action catalog before retrying.", retryable: false },
+        }),
+      };
+    }
+    const denied = await input.context.authorizeWriteArguments({
+      actionName: action.name,
+      rawArgs: input.args,
+      authority: action.writeAuthority,
+    });
+    if (denied) return { kind: "receipt", receipt: denied };
   }
 
   const parsed = action.schema.safeParse(input.args);
@@ -125,6 +159,14 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         }),
       };
     }
+    if (result.kind === "preview" && externalWrite) {
+      const authorityPlanError = validateWriteAuthorityOperation(
+        action,
+        result.operation.payload,
+        result.operation.mutationPlan,
+      );
+      if (authorityPlanError) return invalidWriteAuthorityResult(action.name, authorityPlanError);
+    }
     return result;
   }
 
@@ -150,6 +192,10 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         }),
       };
     }
+    if (prepared) {
+      const authorityPlanError = validateWriteAuthorityOperation(action, prepared.operation, prepared.mutationPlan);
+      if (authorityPlanError) return invalidWriteAuthorityResult(action.name, authorityPlanError);
+    }
     const authorityError = await input.context.authorizeWrite?.(action.name);
     if (authorityError) return { kind: "receipt", receipt: authorityError };
     let operationId: string | undefined;
@@ -169,7 +215,16 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
           }
         : input.context;
       const executed = prepared && action.executeSafeWrite
-        ? await action.executeSafeWrite(executionContext, prepared)
+        ? executionContext.mutationJournal
+          ? await withMutationPlanScope({
+              actionName: action.name,
+              plan: prepared.mutationPlan,
+              authorizeDispatch: () => input.context.authorizeWrite?.(action.name),
+              authoritativelyReconciled: (stepId) =>
+                hasAuthoritativelyReconciledStep(executionContext.mutationJournal!, stepId),
+              requiresComplete: commitResultRequiresComplete,
+            }, () => action.executeSafeWrite!(executionContext, prepared))
+          : await action.executeSafeWrite(executionContext, prepared)
         : undefined;
       const result: ActionResult = executed
         ? isPartialCommitResult(executed)
@@ -178,6 +233,7 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         : await action.handler(input.context, parsed.data);
       return settleImmediateOperation(input.context, operationId, result);
     } catch (error) {
+      if (error instanceof OperationPreparationError) operationId = error.operationId;
       const result: ActionResult = { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
       return settleImmediateOperation(input.context, operationId, result);
     }
@@ -254,6 +310,18 @@ export async function commitConfirmedOperation(
       recovery: { hint: "Create a fresh preview after the action contract is corrected.", retryable: false },
     });
   }
+  const externalWrite = action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read");
+  const authorityPlanError = externalWrite
+    ? validateWriteAuthorityOperation(action, operation.payload, operation.mutationPlan)
+    : undefined;
+  if (authorityPlanError) {
+    return errorReceipt({
+      action: operation.actionName,
+      code: "intent_capability_denied",
+      message: "The stored operation exceeds this action's reviewed write authority.",
+      recovery: { hint: "Create a fresh preview after the action contract is corrected.", retryable: false },
+    });
+  }
 
   const authorityError = await ctx.authorizeWrite?.(operation.actionName);
   if (authorityError) return authorityError;
@@ -282,8 +350,23 @@ export async function commitConfirmedOperation(
   //    intent can't both reach the host (r1-concurrency-races-01).
   //  - LEGACY (a 2-method lookup/record ledger, e.g. tests): the unchanged
   //    lookup→await→record best-effort path.
-  const commit: CommitFn = (commitCtx, commitOperation) =>
-    action.commit!(commitCtx, commitOperation);
+  const commit: CommitFn = (commitCtx, commitOperation) => commitOperation.mutationPlan && commitCtx.mutationJournal
+    ? withMutationPlanScope({
+        actionName: action.name,
+        plan: commitOperation.mutationPlan,
+        authorizeDispatch: () => commitCtx.authorizeWrite?.(action.name),
+        authoritativelyReconciled: (stepId) =>
+          hasAuthoritativelyReconciledStep(commitCtx.mutationJournal!, stepId),
+        requiresComplete: commitResultRequiresComplete,
+        compensationEligible: (stepId) => {
+          const steps = commitCtx.mutationJournal?.listOperationSteps() ?? [];
+          const compensation = steps.find((step) =>
+            step.kind === "compensation" && step.planStepId === stepId && step.status === "executing");
+          return compensation?.compensatesStepId !== undefined && steps.some((step) =>
+            step.id === compensation.compensatesStepId && step.kind === "primary" && step.status === "compensating");
+        },
+      }, () => action.commit!(commitCtx, commitOperation))
+    : action.commit!(commitCtx, commitOperation);
   const semantic = action.idempotencyKey?.(operation);
   const ledger = ctx.idempotency;
 
@@ -297,11 +380,29 @@ export async function commitConfirmedOperation(
     : commitViaLegacyLedger(commit, ctx, operation, ledger, scopedKey);
 }
 
+function invalidWriteAuthorityResult(action: string, detail: string): ActionResult {
+  return {
+    kind: "receipt",
+    receipt: errorReceipt({
+      action,
+      code: "intent_capability_denied",
+      message: "The normalized operation exceeds this action's reviewed write authority.",
+      recovery: { hint: `Create a fresh request after the action contract is corrected (${detail}).`, retryable: false },
+    }),
+  };
+}
+
 /** A committable action's `commit` callback — the signature {@link runCommit} wraps. */
 type CommitFn = (
   ctx: ActionContext,
   operation: ConfirmableOperation,
 ) => Promise<CommitResult>;
+
+function commitResultRequiresComplete(result: unknown): boolean {
+  if (typeof result !== "object" || result === null) return false;
+  const commitResult = result as CommitResult;
+  return !isPartialCommitResult(commitResult) && commitResult.ok === true;
+}
 
 /**
  * LEGACY PATH (2-method ledgers, tests only — the route always wires the atomic

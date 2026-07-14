@@ -1,0 +1,217 @@
+import { describe, expect, it } from "vitest";
+import type { WriteAuthorityMetadata } from "../../src/harness/action.js";
+import {
+  buildAllowIntentCapabilityV1,
+  buildDenyAllWritesIntentCapabilityV1,
+  type IntentLiteralValue,
+  type Utf8SourceSpan,
+} from "../../src/harness/intent-capability.js";
+import { authorizeIntentWriteArguments } from "../../src/harness/intent-authority.js";
+
+const authority: WriteAuthorityMetadata = {
+  literalControlledPaths: ["name", "amount", "members[]"],
+  serverDerivedIdPaths: ["clientId"],
+  permittedServerDefaultPaths: ["currencyId"],
+  preservedStatePaths: [],
+  cardinality: { mode: "argument", maxExecutions: 3, argumentPath: "members[]" },
+  mutationPlans: [{
+    mode: "batch",
+    minSteps: 1,
+    maxSteps: 3,
+    steps: [{ id: "write-*", kind: "primary", min: 1, max: 3 }],
+  }],
+};
+
+function spanFor(source: string, text: string): Utf8SourceSpan {
+  const start = source.indexOf(text);
+  if (start < 0) throw new Error("missing_test_span");
+  return {
+    startByte: Buffer.byteLength(source.slice(0, start), "utf8"),
+    endByte: Buffer.byteLength(source.slice(0, start + text.length), "utf8"),
+    text,
+  };
+}
+
+function allow(input: {
+  source?: string;
+  constraints?: Array<{ path: string; value: IntentLiteralValue; text: string }>;
+  maxExecutions?: number;
+}) {
+  const source = input.source ?? "Create Acme for Ana and Bob at 125.5";
+  const constraints = input.constraints ?? [{ path: "name", value: "Acme", text: "Acme" }];
+  const spans = constraints.map((constraint) => spanFor(source, constraint.text));
+  return buildAllowIntentCapabilityV1({
+    authoredSource: source,
+    catalogHash: "catalog-current",
+    writeActions: [{
+      actionName: "clockify_clients_create",
+      sourceSpans: spans,
+      literalConstraints: constraints.map((constraint, index) => ({
+        path: constraint.path,
+        value: constraint.value,
+        sourceSpan: spans[index]!,
+      })),
+      maxExecutions: input.maxExecutions,
+    }],
+  });
+}
+
+function authorize(capability: ReturnType<typeof allow>, rawArgs: unknown) {
+  return authorizeIntentWriteArguments({
+    capability,
+    actionName: "clockify_clients_create",
+    rawArgs,
+    authority,
+    catalogHash: "catalog-current",
+  });
+}
+
+describe("raw intent authority matcher", () => {
+  it("allows only exact declared raw literals", () => {
+    expect(authorize(allow({}), { name: "Acme" })).toBeUndefined();
+    expect(authorize(allow({}), { name: "Other" })).toMatchObject({
+      ok: false,
+      code: "intent_capability_argument_mismatch",
+    });
+  });
+
+  it("matches before numeric coercion and denies unconstrained extra literals", () => {
+    const capability = allow({
+      constraints: [
+        { path: "name", value: "Acme", text: "Acme" },
+        { path: "amount", value: 125.5, text: "125.5" },
+      ],
+    });
+
+    expect(authorize(capability, { name: "Acme", amount: 125.5 })).toBeUndefined();
+    expect(authorize(capability, { name: "Acme", amount: "125.5" })).toMatchObject({
+      code: "intent_capability_argument_mismatch",
+    });
+    expect(authorize(allow({}), { name: "Acme", amount: 125.5 })).toMatchObject({
+      code: "intent_capability_argument_undeclared",
+    });
+  });
+
+  it("lets host-derived/default values narrow later but never accepts them from raw model args", () => {
+    const capability = allow({});
+    expect(authorize(capability, { name: "Acme" })).toBeUndefined();
+    expect(authorize(capability, { name: "Acme", clientId: "invented" })).toMatchObject({
+      code: "intent_capability_argument_undeclared",
+    });
+    expect(authorize(capability, { name: "Acme", currencyId: "invented" })).toMatchObject({
+      code: "intent_capability_argument_undeclared",
+    });
+  });
+
+  it("enforces array literals and the action cardinality ceiling", () => {
+    const capability = allow({
+      constraints: [
+        { path: "name", value: "Acme", text: "Acme" },
+        { path: "members[]", value: ["Ana", "Bob"], text: "Ana and Bob" },
+      ],
+    });
+    expect(authorize(capability, { name: "Acme", members: ["Ana", "Bob"] })).toBeUndefined();
+    expect(authorize(capability, { name: "Acme", members: ["Ana", "Bob", "Eve", "Zoe"] })).toMatchObject({
+      code: "intent_capability_cardinality_exceeded",
+    });
+    // Capability usage count is consumed by the store per bound operation; it
+    // is deliberately independent from this action's one-operation host plan.
+    expect(authorizeIntentWriteArguments({
+      capability: allow({ maxExecutions: 4 }),
+      actionName: "clockify_clients_create",
+      rawArgs: { name: "Acme" },
+      authority,
+      catalogHash: "catalog-current",
+    })).toBeUndefined();
+  });
+
+  it("fails closed for deny-all, catalog drift, and undeclared actions", () => {
+    const source = "Create Acme";
+    const denied = buildDenyAllWritesIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-current",
+      reason: "provider_unavailable",
+    });
+    expect(authorizeIntentWriteArguments({
+      capability: denied,
+      actionName: "clockify_clients_create",
+      rawArgs: { name: "Acme" },
+      authority,
+      catalogHash: "catalog-current",
+    })).toMatchObject({ code: "intent_capability_denied" });
+    expect(authorizeIntentWriteArguments({
+      capability: allow({}),
+      actionName: "clockify_clients_create",
+      rawArgs: { name: "Acme" },
+      authority,
+      catalogHash: "catalog-changed",
+    })).toMatchObject({ code: "intent_capability_catalog_drift" });
+    expect(authorizeIntentWriteArguments({
+      capability: allow({}),
+      actionName: "clockify_projects_create",
+      rawArgs: { name: "Acme" },
+      authority,
+      catalogHash: "catalog-current",
+    })).toMatchObject({ code: "intent_capability_action_denied" });
+  });
+
+  it("denies invented targets, amounts, dates, and accepts only the exact authored alias", () => {
+    const source = "Create for Acme in Apollo for 125.5 due 2026-08-01";
+    const constraints = [
+      { path: "clientName", value: "Acme" as const, text: "Acme" },
+      { path: "projectName", value: "Apollo" as const, text: "Apollo" },
+      { path: "amount", value: 125.5 as const, text: "125.5" },
+      { path: "dueDate", value: "2026-08-01" as const, text: "2026-08-01" },
+    ];
+    const spans = constraints.map((constraint) => spanFor(source, constraint.text));
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-current",
+      writeActions: [{
+        actionName: "clockify_invoices_create",
+        sourceSpans: spans,
+        literalConstraints: constraints.map((constraint, index) => ({
+          path: constraint.path,
+          value: constraint.value,
+          sourceSpan: spans[index]!,
+        })),
+      }],
+    });
+    const aliasAuthority: WriteAuthorityMetadata = {
+      literalControlledPaths: ["clientName", "projectName", "amount", "dueDate"],
+      serverDerivedIdPaths: ["operation.clientId", "operation.projectId"],
+      permittedServerDefaultPaths: ["operation.currency"],
+      preservedStatePaths: [],
+      cardinality: { mode: "single", maxExecutions: 1 },
+      mutationPlans: [{
+        mode: "single",
+        minSteps: 1,
+        maxSteps: 1,
+        steps: [{ id: "write", kind: "primary", min: 1, max: 1 }],
+      }],
+    };
+    const exact = {
+      clientName: "Acme",
+      projectName: "Apollo",
+      amount: 125.5,
+      dueDate: "2026-08-01",
+    };
+    const check = (rawArgs: unknown) => authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_invoices_create",
+      rawArgs,
+      authority: aliasAuthority,
+      catalogHash: "catalog-current",
+    });
+
+    expect(check(exact)).toBeUndefined();
+    for (const invented of [
+      { ...exact, clientName: "Other" },
+      { ...exact, amount: 999 },
+      { ...exact, dueDate: "2026-09-01" },
+      { ...exact, projectName: "Zeus" },
+    ]) {
+      expect(check(invented)).toMatchObject({ code: "intent_capability_argument_mismatch" });
+    }
+  });
+});

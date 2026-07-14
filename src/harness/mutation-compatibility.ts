@@ -9,6 +9,12 @@ function hasDurableMutationPath(action: ActionDefinition): boolean {
 }
 
 function invalidContract(action: ActionDefinition): string | undefined {
+  const authority = action.writeAuthority;
+  if (!authority || !Array.isArray(authority.literalControlledPaths) ||
+    !Array.isArray(authority.serverDerivedIdPaths) || !Array.isArray(authority.permittedServerDefaultPaths) ||
+    !authority.cardinality || !["single", "fixed", "argument"].includes(authority.cardinality.mode) ||
+    !Number.isInteger(authority.cardinality.maxExecutions) || authority.cardinality.maxExecutions < 1 ||
+    (authority.cardinality.mode === "argument" && !authority.cardinality.argumentPath)) return "writeAuthority";
   const contract = action.mutationContract as Partial<NonNullable<ActionDefinition["mutationContract"]>> | undefined;
   if (!contract?.operationData) return "operationData";
   if (

@@ -96,6 +96,49 @@ describe("durable operation runs", () => {
     store.close();
   });
 
+  it("atomically settles a pre-dispatch prepared denial with its canonical definitive failure", () => {
+    const store = createStore(":memory:");
+    const id = store.prepareOperationRun({
+      id: "prepared-denial",
+      requestId: "request-denial",
+      sessionId: "s1",
+      workspaceId: "w1",
+      adminUserId: "a1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "af",
+      catalogHash: "ch",
+      operationHash: "oh",
+      operation: { name: "Billing" },
+      mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
+    });
+    const result = {
+      kind: "receipt" as const,
+      receipt: {
+        ok: false as const,
+        action: "clockify_tags_create",
+        code: "execution_error",
+        message: "intent_capability_execution_limit",
+      },
+    };
+
+    const ref = store.settleOperationResult(id, "definitive_failed", result);
+
+    expect(store.getOperationRun(id)).toMatchObject({
+      status: "definitive_failed",
+      actionResultId: ref.id,
+    });
+    expect(store.getActionResult(ref.id)).toEqual(result);
+    expect(store.listOperationSteps(id)).toEqual([]);
+    expect(store.getScopedOperationRun(id, "w1", "a1", "s1")).toMatchObject({
+      id,
+      status: "definitive_failed",
+      steps: [],
+      result: { id: ref.id, kind: "definitive_failed", summary: result },
+    });
+    expect(store.listStartupReconciliationCandidates()).toEqual([]);
+    store.close();
+  });
+
   it("persists normalized nonsecret operation intent before dispatch and exposes ordered durable steps", () => {
     const store = createStore(":memory:");
     const id = store.prepareOperationRun({

@@ -179,6 +179,8 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON artifacts(expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_operation_runs_prune_updated
     ON operation_runs(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_intent_capabilities_prune_created
+    ON intent_capabilities(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_action_results_prune_created
     ON action_results(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_turn_runs_prune_updated
@@ -199,7 +201,7 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON artifacts(session_id)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 5;
+export const LATEST_SCHEMA_VERSION = 6;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -366,6 +368,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   },
   { version: 4, statements: [] },
   { version: 5, statements: [] },
+  { version: 6, statements: [] },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -400,6 +403,7 @@ export function migrate(db: Database.Database): void {
     db.transaction(() => {
       if (migration.version === 4) migrateToV4(db);
       else if (migration.version === 5) migrateToV5(db);
+      else if (migration.version === 6) migrateToV6(db);
       else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
@@ -417,6 +421,66 @@ export function migrate(db: Database.Database): void {
   for (const statement of PRUNE_INDEX_STATEMENTS) {
     db.prepare(statement).run();
   }
+}
+
+/**
+ * Persisted admin-authored write authority. Capability rows are append-only:
+ * usage is recorded separately and operation/confirmation rows retain the
+ * exact capability id + hash they were authorized against. Nullable bindings
+ * intentionally leave pre-v6 previews incompatible with the enforcement path.
+ */
+function migrateToV6(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS intent_capabilities (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+      catalog_hash TEXT NOT NULL,
+      capability_hash TEXT NOT NULL CHECK (length(capability_hash) = 64),
+      mode TEXT NOT NULL CHECK (mode IN ('allow', 'deny_all_writes')),
+      capability_json TEXT NOT NULL CHECK (
+        json_valid(capability_json) AND
+        length(CAST(capability_json AS BLOB)) <= 65536
+      ),
+      created_at TEXT NOT NULL,
+      UNIQUE (workspace_id, admin_user_id, session_id, request_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_intent_capabilities_scope
+      ON intent_capabilities(workspace_id, admin_user_id, session_id, request_id);
+    CREATE TRIGGER IF NOT EXISTS intent_capabilities_immutable
+      BEFORE UPDATE ON intent_capabilities
+      BEGIN
+        SELECT RAISE(ABORT, 'intent_capability_immutable');
+      END;
+  `);
+
+  addColumnIfMissing(db, "operation_runs", "capability_id", "TEXT");
+  addColumnIfMissing(db, "pending_confirmations", "capability_id", "TEXT");
+  addColumnIfMissing(db, "pending_confirmations", "capability_hash", "TEXT");
+
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_operation_runs_capability
+      ON operation_runs(capability_id);
+    CREATE INDEX IF NOT EXISTS idx_pending_confirmations_capability
+      ON pending_confirmations(capability_id);
+    CREATE TABLE IF NOT EXISTS intent_capability_usage (
+      id TEXT PRIMARY KEY,
+      capability_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      action_name TEXT NOT NULL,
+      execution_index INTEGER NOT NULL CHECK (execution_index > 0),
+      created_at TEXT NOT NULL,
+      UNIQUE (operation_id),
+      UNIQUE (capability_id, action_name, execution_index),
+      FOREIGN KEY (capability_id) REFERENCES intent_capabilities(id) ON DELETE CASCADE,
+      FOREIGN KEY (operation_id) REFERENCES operation_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_intent_capability_usage_action
+      ON intent_capability_usage(capability_id, action_name, execution_index);
+  `);
 }
 
 /**

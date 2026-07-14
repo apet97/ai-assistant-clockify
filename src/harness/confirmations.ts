@@ -37,6 +37,9 @@ export interface PendingConfirmationRecord {
   targetFingerprints: string[];
   actionFingerprint: string;
   catalogHash: string;
+  /** Persisted intent authority. Missing on legacy previews, which fail closed. */
+  capabilityId?: string;
+  capabilityHash?: string;
   nonceHash: string;
   expiresAt: string;
   createdAt: string;
@@ -69,6 +72,8 @@ export interface CreateConfirmationInput {
   agentState?: unknown;
   actionFingerprint?: string;
   catalogHash?: string;
+  capabilityId?: string;
+  capabilityHash?: string;
 }
 
 export interface CreatedConfirmation {
@@ -176,6 +181,8 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
     targetFingerprints: previewTargets.map((target) => hashOperation(target)),
     actionFingerprint: input.actionFingerprint ?? hashOperation({ operation: input.operation, version: 1 }),
     catalogHash: input.catalogHash ?? "unbound",
+    ...(input.capabilityId ? { capabilityId: input.capabilityId } : {}),
+    ...(input.capabilityHash ? { capabilityHash: input.capabilityHash } : {}),
     nonceHash: hashNonce(nonce, id, operationHash, input.sessionSecret),
     expiresAt,
     createdAt: now.toISOString(),

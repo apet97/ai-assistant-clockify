@@ -21,6 +21,9 @@ export interface AppDeps {
   clockifyForWorkspace: (installation: Installation) => WorkspaceClient;
   now?: () => Date;
   readiness?: { isReady(): boolean };
+  /** Tests written before persisted intent capabilities may opt out. Ignored
+   * outside NODE_ENV=test; production has no capability-enforcement toggle. */
+  enforceIntentCapabilitiesInTests?: true;
 }
 
 const SESSION_COOKIE = "ai_assistant_session";
