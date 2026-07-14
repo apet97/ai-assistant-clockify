@@ -16,12 +16,15 @@
     "test:watch": "vitest",
     "cycles": "madge --circular --extensions ts --ts-config tsconfig.json src",
     "dup": "jscpd",
-    "lint": "eslint src",
-    "verify": "npm run type-check && npm run lint && npm run cycles && npm run dup && npm test && npm run build",
-    "eval:smoke": "vitest run tests/integration/eval-smoke.test.ts"
+    "lint": "eslint src --max-warnings 0",
+    "verify": "npm run type-check && npm run type-check:scripts && npm run lint && npm run cycles && npm run dup && npm test && npm run build",
+    "eval:smoke": "vitest run tests/integration/eval-smoke.test.ts",
+    "db:backup": "tsx scripts/backup-db.ts",
+    "db:restore": "tsx scripts/restore-db.ts"
   },
   "dependencies": {
     "@apet97/clockify-addon-sdk": "file:vendor/apet97-clockify-addon-sdk-1.0.0.tgz",
+    "@js-temporal/polyfill": "0.5.1",
     "better-sqlite3": "^12.10.0",
     "express": "^4.19.2",
     "zod": "^3.25.0",

@@ -77,10 +77,10 @@ export function buildMetrics(
   const count = (status: string): number => confirmationStatuses.filter((s) => s === status).length;
   const confirmations: ConfirmationMetric = {
     previewed: confirmationStatuses.length,
-    confirmed: count("used"),
+    confirmed: count("succeeded") + count("partial"),
     cancelled: count("cancelled"),
     expired: count("expired"),
-    failed: count("failed"),
+    failed: count("definitive_failed") + count("outcome_unknown"),
     pending: count("pending"),
   };
 

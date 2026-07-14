@@ -5,6 +5,7 @@
  * empty, whitespace, undefined, null, or non-string — is rejected.
  */
 export function isAdminRole(role: unknown): boolean {
-  const normalized = String(role ?? "").trim().toLowerCase();
+  if (typeof role !== "string") return false;
+  const normalized = role.trim().toLowerCase();
   return normalized === "owner" || normalized === "admin";
 }

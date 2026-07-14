@@ -77,6 +77,8 @@ describe("component HTML security headers (injection/clickjacking backstop)", ()
 
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
     expect(res.headers["referrer-policy"]).toBeTruthy();
+    expect(res.headers["cache-control"]).toContain("private");
+    expect(res.headers["cache-control"]).toContain("no-store");
   });
 
   it("sets the session cookie Max-Age to sessionTtlMs/1000 (T50: 7200 for the 2h default, not 28800)", async () => {
@@ -103,5 +105,17 @@ describe("component HTML security headers (injection/clickjacking backstop)", ()
     expect(res.status).toBe(403);
     expect(res.headers["content-security-policy"]).toContain("frame-ancestors");
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("rejects a malicious signed service claim before it can be persisted", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+      backendUrl: "https://api.clockify.me.evil.example/api",
+    });
+    const res = await request(app).get("/component/assistant").query({ auth_token: token });
+    expect(res.status).toBe(400);
+    expect(res.text).not.toContain("api.clockify.me.evil.example");
   });
 });

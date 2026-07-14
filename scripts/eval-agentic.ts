@@ -280,6 +280,9 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
           }
         } else if (outcome.kind === "clarify") {
           clarified = true;
+        } else if (outcome.kind === "partial") {
+          executed.push(a.name);
+          clarified = true;
         } else {
           interrupts += 1;
           // Generous to the baseline: the human confirms every preview.

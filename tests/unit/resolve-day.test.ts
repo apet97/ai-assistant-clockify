@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveInstant, resolveRelativeDay } from "../../src/harness/workflows/resolve.js";
+import { resolveDateRange, resolveInstant, resolveRelativeDay } from "../../src/harness/workflows/resolve.js";
 
 // 2026-06-10 is a WEDNESDAY.
 const NOW = new Date("2026-06-10T12:00:00.000Z");
@@ -83,6 +83,21 @@ describe("resolveInstant", () => {
     );
   });
 
+  it("rejects offset-less datetimes instead of interpreting them in the server zone", () => {
+    expect(resolveInstant(NOW, "2026-06-01T09:30:00", "start")).toBeUndefined();
+  });
+
+  it("rejects impossible ISO calendar dates strictly", () => {
+    expect(resolveRelativeDay(NOW, { date: "2026-02-30" })).toBeUndefined();
+    expect(resolveInstant(NOW, "2026-02-30", "start")).toBeUndefined();
+  });
+
+  it("uses zoned next-day-minus-1ms boundaries across DST", () => {
+    const spring = new Date("2026-03-08T12:00:00.000Z");
+    expect(resolveInstant(spring, "2026-03-08", "start", "America/New_York")).toBe("2026-03-08T05:00:00.000Z");
+    expect(resolveInstant(spring, "2026-03-08", "end", "America/New_York")).toBe("2026-03-09T03:59:59.999Z");
+  });
+
   it("resolves a month-name + day partial date to the CURRENT-year start/end instant (report range without a year)", () => {
     // The finding: "report from June 1 to June 5" must run for 2026, not 2025.
     expect(resolveInstant(NOW, "June 1", "start")).toBe("2026-06-01T00:00:00.000Z");
@@ -105,12 +120,30 @@ describe("resolveInstant", () => {
   it("accepts the period keywords the planner emits as date values (live: entries_list got start='last_7_days' twice)", () => {
     // Edge semantics: a period maps to its own start/end instant.
     expect(resolveInstant(NOW, "last_7_days", "start")).toBe(
-      new Date(NOW.getTime() - 7 * 86_400_000).toISOString(),
+      "2026-06-03T00:00:00.000Z",
     );
     expect(resolveInstant(NOW, "last_7_days", "end")).toBe(NOW.toISOString());
     // 2026-06-10 is a Wednesday → last week = Mon 2026-06-01 … Sun 2026-06-07.
     expect(resolveInstant(NOW, "last week", "start")).toBe("2026-06-01T00:00:00.000Z");
     expect(resolveInstant(NOW, "Last Week", "end")).toBe("2026-06-07T23:59:59.999Z");
     expect(resolveInstant(NOW, "this_month", "start")).toBe("2026-06-01T00:00:00.000Z");
+  });
+});
+
+describe("resolveDateRange", () => {
+  it("rejects reversed day-only and instant ranges centrally", () => {
+    const dayOnly = resolveDateRange(NOW, {
+      start: { raw: "2026-06-11" },
+      end: { raw: "2026-06-10" },
+      exampleHint: "today or tomorrow",
+    });
+    const instants = resolveDateRange(NOW, {
+      start: { raw: "2026-06-10T15:00:00Z" },
+      end: { raw: "2026-06-10T09:00:00Z" },
+      exampleHint: "an ISO datetime",
+    });
+
+    expect(dayOnly).toEqual({ ok: false, message: expect.stringMatching(/start.*after.*end/i) });
+    expect(instants).toEqual({ ok: false, message: expect.stringMatching(/start.*after.*end/i) });
   });
 });

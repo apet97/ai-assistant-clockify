@@ -1,9 +1,11 @@
 import type { RiskLabel } from "../../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../../harness/confirmations.js";
 import type { StoreContext } from "./context.js";
+import { randomUUID } from "node:crypto";
 
 interface PendingRow {
   id: string;
+  operation_id: string;
   session_id: string;
   workspace_id: string;
   admin_user_id: string;
@@ -12,12 +14,16 @@ interface PendingRow {
   preview_json: string;
   operation_json: string;
   operation_hash: string;
+  target_fingerprints_json: string;
+  action_fingerprint: string;
+  catalog_hash: string;
   nonce_hash: string;
   expires_at: string;
   created_at: string;
   used_at: string | null;
   result_json: string | null;
   agent_state_json: string | null;
+  action_result_id: string | null;
 }
 
 /**
@@ -50,6 +56,7 @@ function parseStoredAgentState(value: string | null): unknown {
 function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
   return {
     id: row.id,
+    operationId: row.operation_id,
     sessionId: row.session_id,
     workspaceId: row.workspace_id,
     adminUserId: row.admin_user_id,
@@ -58,12 +65,16 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     preview: JSON.parse(row.preview_json),
     operation: JSON.parse(row.operation_json),
     operationHash: row.operation_hash,
+    targetFingerprints: JSON.parse(row.target_fingerprints_json) as string[],
+    actionFingerprint: row.action_fingerprint,
+    catalogHash: row.catalog_hash,
     nonceHash: row.nonce_hash,
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     usedAt: row.used_at ?? undefined,
     result: row.result_json ? JSON.parse(row.result_json) : undefined,
     agentState: parseStoredAgentState(row.agent_state_json),
+    actionResultId: row.action_result_id ?? undefined,
   };
 }
 
@@ -76,9 +87,16 @@ export function buildConfirmationStore(ctx: StoreContext): {
   getPendingConfirmation(id: string): PendingConfirmationRecord | undefined;
   listPendingConfirmations(sessionId: string, nowIso: string): PendingConfirmationRecord[];
   updateConfirmationNonceHash(id: string, nonceHash: string): boolean;
-  markConfirmationUsed(id: string): boolean;
+  markConfirmationExecuting(id: string): boolean;
   cancelConfirmation(id: string): boolean;
   setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
+  settleConfirmation(
+    id: string,
+    status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
+    actionName: string,
+    result: unknown,
+  ): string;
+  getActionResult(id: string): unknown | undefined;
   countPendingConfirmations(sessionId: string, nowIso: string): number;
 } {
   const { db, nowIso } = ctx;
@@ -86,12 +104,13 @@ export function buildConfirmationStore(ctx: StoreContext): {
     savePendingConfirmation(record) {
       db.prepare(
         `INSERT INTO pending_confirmations (
-           id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
-           operation_json, operation_hash, nonce_hash, expires_at, created_at, used_at, result_json,
-           agent_state_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
+           operation_json, operation_hash, target_fingerprints_json, action_fingerprint, catalog_hash,
+           nonce_hash, expires_at, created_at, used_at, result_json, action_result_id, agent_state_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
+        record.operationId ?? record.id,
         record.sessionId,
         record.workspaceId,
         record.adminUserId,
@@ -100,11 +119,15 @@ export function buildConfirmationStore(ctx: StoreContext): {
         JSON.stringify(record.preview),
         JSON.stringify(record.operation),
         record.operationHash,
+        JSON.stringify(record.targetFingerprints ?? []),
+        record.actionFingerprint ?? "legacy",
+        record.catalogHash ?? "legacy",
         record.nonceHash,
         record.expiresAt,
         record.createdAt,
         record.usedAt ?? null,
         record.result === undefined ? null : JSON.stringify(record.result),
+        record.actionResultId ?? null,
         record.agentState === undefined ? null : JSON.stringify(record.agentState),
       );
     },
@@ -136,13 +159,21 @@ export function buildConfirmationStore(ctx: StoreContext): {
       return info.changes === 1;
     },
 
-    markConfirmationUsed(id) {
-      const info = db
-        .prepare(
-          "UPDATE pending_confirmations SET status = 'used', used_at = ? WHERE id = ? AND status = 'pending'",
-        )
-        .run(nowIso(), id);
-      return info.changes === 1;
+    markConfirmationExecuting(id) {
+      return db.transaction((): boolean => {
+        const info = db
+          .prepare(
+            "UPDATE pending_confirmations SET status = 'executing', used_at = ? WHERE id = ? AND status = 'pending'",
+          )
+          .run(nowIso(), id);
+        if (info.changes !== 1) return false;
+        db.prepare(
+          `UPDATE operation_runs SET status = 'executing', updated_at = ?
+             WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)
+               AND status = 'prepared'`,
+        ).run(nowIso(), id);
+        return true;
+      })();
     },
 
     cancelConfirmation(id) {
@@ -160,6 +191,50 @@ export function buildConfirmationStore(ctx: StoreContext): {
         result === undefined ? null : JSON.stringify(result),
         id,
       );
+    },
+
+    settleConfirmation(id, status, actionName, result) {
+      const settle = db.transaction((): string => {
+        const row = db.prepare(
+          "SELECT session_id, workspace_id, admin_user_id FROM pending_confirmations WHERE id = ?",
+        ).get(id) as { session_id: string; workspace_id: string; admin_user_id: string } | undefined;
+        if (!row) throw new Error("confirmation_not_found");
+        const actionResultId = randomUUID();
+        db.prepare(
+          `INSERT INTO action_results (
+             id, workspace_id, admin_user_id, session_id, action_name, kind, result_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          actionResultId,
+          row.workspace_id,
+          row.admin_user_id,
+          row.session_id,
+          actionName,
+          status,
+          JSON.stringify(result),
+          nowIso(),
+        );
+        const update = db.prepare(
+          `UPDATE pending_confirmations
+             SET status = ?, result_json = ?, action_result_id = ?, nonce_hash = '',
+                 agent_state_json = NULL, operation_json = '{}'
+           WHERE id = ? AND status = 'executing'`,
+        ).run(status, JSON.stringify(result), actionResultId, id);
+        if (update.changes !== 1) throw new Error("confirmation_not_executing");
+        db.prepare(
+          `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
+             WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)`,
+        ).run(status, actionResultId, nowIso(), id);
+        return actionResultId;
+      });
+      return settle();
+    },
+
+    getActionResult(id) {
+      const row = db.prepare("SELECT result_json FROM action_results WHERE id = ?").get(id) as
+        | { result_json: string }
+        | undefined;
+      return row ? JSON.parse(row.result_json) : undefined;
     },
 
     countPendingConfirmations(sessionId, nowIso) {

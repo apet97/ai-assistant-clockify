@@ -13,7 +13,8 @@ import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
 import { idempotencyScopeKey, markReplayed } from "./idempotency.js";
-import { formatZodIssues } from "./arg-shapes.js";
+import { formatZodIssues, unknownArgumentPaths } from "./arg-shapes.js";
+import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../clockify/write-outcome.js";
 
 /**
  * Action executor — the safety boundary (ARCHITECTURE "The model can propose.
@@ -46,6 +47,19 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         code: "unknown_action",
         message: `Unknown action: ${input.actionName}`,
         recovery: { hint, retryable: suggestions.length > 0 },
+      }),
+    };
+  }
+
+  const unknown = unknownArgumentPaths(action.schema, input.args, action.argumentAliases);
+  if (unknown.length > 0) {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: action.name,
+        code: "invalid_args",
+        message: `Unknown argument${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`,
+        recovery: { hint: "Remove unknown fields and try again.", retryable: true },
       }),
     };
   }
@@ -100,8 +114,26 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     return result;
   }
 
-  if (isRead || isSafeWrite(action.risks)) {
+  if (isRead) {
     return action.handler(input.context, parsed.data);
+  }
+  if (isSafeWrite(action.risks)) {
+    const authorityError = await input.context.authorizeWrite?.(action.name);
+    if (authorityError) return { kind: "receipt", receipt: authorityError };
+    let operationId: string | undefined;
+    try {
+      if (input.context.operationJournal) {
+        operationId = input.context.operationJournal.prepare(action.name, parsed.data);
+        input.context.operationJournal.markExecuting(operationId);
+      }
+      const result = await action.handler(input.context, parsed.data);
+      settleImmediateOperation(input.context, operationId, result);
+      return result;
+    } catch (error) {
+      const result: ActionResult = { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
+      settleImmediateOperation(input.context, operationId, result);
+      return result;
+    }
   }
 
   // Fail closed: not a read, not a safe_write, not requiring confirmation.
@@ -114,6 +146,25 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
       recovery: { hint: "This action needs a clearer risk classification.", retryable: false },
     }),
   };
+}
+
+function settleImmediateOperation(ctx: ActionContext, operationId: string | undefined, result: ActionResult): void {
+  if (!operationId || !ctx.operationJournal) return;
+  const status = result.kind === "partial"
+    ? "partial"
+    : result.kind === "receipt" && result.receipt.ok
+      ? "succeeded"
+      : result.kind === "receipt" && !result.receipt.ok && result.receipt.code === "commit_outcome_unknown"
+        ? "outcome_unknown"
+        : "definitive_failed";
+  try {
+    ctx.operationJournal.settle(operationId, status, result);
+  } catch (error) {
+    console.error(
+      "operation journal settlement failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
 }
 
 /**
@@ -135,6 +186,9 @@ export async function commitConfirmedOperation(
       recovery: { hint: "This preview can no longer be executed.", retryable: false },
     });
   }
+
+  const authorityError = await ctx.authorizeWrite?.(operation.actionName);
+  if (authorityError) return authorityError;
 
   const isPermissionChange = operation.risks.includes("permission_change");
   if (!isPermissionChange) {
@@ -160,7 +214,8 @@ export async function commitConfirmedOperation(
   //    intent can't both reach the host (r1-concurrency-races-01).
   //  - LEGACY (a 2-method lookup/record ledger, e.g. tests): the unchanged
   //    lookup→await→record best-effort path.
-  const commit = action.commit;
+  const commit: CommitFn = (commitCtx, commitOperation) =>
+    action.commit!(commitCtx, commitOperation);
   const semantic = action.idempotencyKey?.(operation);
   const ledger = ctx.idempotency;
 
@@ -281,7 +336,7 @@ async function commitViaAtomicLedger(
   }
   try {
     if (receipt.ok) ledger.fill(scopedKey, receipt);
-    else ledger.release(scopedKey);
+    else if (receipt.code !== "commit_outcome_unknown") ledger.release(scopedKey);
   } catch (error) {
     logLedgerBookkeepingFailure(error);
   }
@@ -328,13 +383,37 @@ async function runCommit(
   try {
     return await commit(ctx, operation);
   } catch (error) {
+    return writeFailureReceipt(operation.actionName, error);
+  }
+}
+
+function writeFailureReceipt(actionName: string, error: unknown): ErrorReceipt {
+  if (error instanceof AmbiguousWriteOutcome) {
     return errorReceipt({
-      action: operation.actionName,
-      code: "execution_error",
-      message: error instanceof Error ? error.message : String(error),
-      recovery: { hint: "The action failed during execution.", retryable: true },
+      action: actionName,
+      code: "commit_outcome_unknown",
+      message:
+        "Clockify did not provide a definitive response, so this change may or may not have been applied. I will not retry it automatically.",
+      recovery: {
+        hint: "Check Clockify for the intended change before deciding whether to try again.",
+        retryable: false,
+      },
     });
   }
+  if (error instanceof DefinitiveWriteFailure) {
+    return errorReceipt({
+      action: actionName,
+      code: "definitive_write_failure",
+      message: error.message,
+      recovery: { hint: "Correct the request or permissions, then run a fresh attempt.", retryable: false },
+    });
+  }
+  return errorReceipt({
+    action: actionName,
+    code: "execution_error",
+    message: error instanceof Error ? error.message : String(error),
+    recovery: { hint: "The action failed during execution.", retryable: true },
+  });
 }
 
 /**

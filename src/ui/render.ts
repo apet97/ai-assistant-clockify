@@ -29,9 +29,14 @@ import {
   type PreviewRef,
   type PreviewResult,
   type ReceiptResult,
+  type PartialResult,
 } from "./shared.js";
 
 const PERMISSION_LEVELS = ["off", "read", "read_write"];
+
+function runEventTask(task: () => Promise<void>, onError: () => void): void {
+  void task().catch(onError);
+}
 
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -105,17 +110,17 @@ export function renderPermissionTable(
   const saveButton = el("button", "primary", "Save permissions");
   const saveStatus = el("span", "save-status");
   saveStatus.setAttribute("role", "status"); // "Saved" is announced, not just shown
-  saveButton.addEventListener("click", async () => {
-    saveButton.disabled = true;
-    saveStatus.textContent = "Saving…";
-    let saved = false;
-    try {
-      saved = await onSave({ ...selections });
-    } catch {
-      saved = false;
-    }
-    saveButton.disabled = false;
-    saveStatus.textContent = saved ? "Saved" : ""; // failures speak through the error bar
+  saveButton.addEventListener("click", () => {
+    runEventTask(async () => {
+      saveButton.disabled = true;
+      saveStatus.textContent = "Saving…";
+      const saved = await onSave({ ...selections });
+      saveButton.disabled = false;
+      saveStatus.textContent = saved ? "Saved" : ""; // failures speak through the error bar
+    }, () => {
+      saveButton.disabled = false;
+      saveStatus.textContent = "";
+    });
   });
   const footer = el("div", "permission-footer");
   footer.appendChild(saveButton);
@@ -402,25 +407,30 @@ export interface ReceiptDeps {
 /** Unique ids for the details disclosure (aria-controls). */
 let detailsSeq = 0;
 
-export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLElement {
+export function renderReceipt(result: ReceiptResult | PartialResult, deps: ReceiptDeps): HTMLElement {
   const { controller, showError } = deps;
   const warnings = result.receipt.warnings ?? [];
   // "Done with caveats" when the action succeeded but something was skipped
   // (e.g. an invoice was created but a line item couldn't be added) — never
   // present a partial result as a clean success.
-  const status = result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
-  const card = el("div", `receipt ${result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
+  const isPartial = result.kind === "partial";
+  const status = isPartial ? "Partial — review needed" : result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
+  const card = el("div", `receipt ${isPartial ? "warn" : result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `${status}: ${result.receipt.action}`);
   const head = el("div", "receipt-head");
   const icon = el("span", "receipt-icon");
-  icon.appendChild(svgIcon(result.receipt.ok ? (warnings.length ? ICON_ALERT : ICON_CHECK) : ICON_X));
+  icon.appendChild(svgIcon(isPartial ? ICON_ALERT : result.receipt.ok ? (warnings.length ? ICON_ALERT : ICON_CHECK) : ICON_X));
   head.appendChild(icon);
   head.appendChild(el("strong", undefined, status));
   head.appendChild(el("span", "action", result.receipt.action));
   card.appendChild(head);
+  if (isPartial) {
+    card.appendChild(el("p", "receipt-message", result.message));
+    card.appendChild(el("p", "warning", result.recovery.hint));
+  }
   // The server's own outcome message (e.g. why an action failed) — verbatim.
-  if (result.receipt.message) card.appendChild(el("p", "receipt-message", result.receipt.message));
+  if (!isPartial && result.receipt.message) card.appendChild(el("p", "receipt-message", result.receipt.message));
   // Surface warnings inline (not buried in Details) so the user sees them.
   for (const w of warnings) card.appendChild(el("p", "warning", w.message));
   // One-click undo for a reversible creation (deletes what was just created).
@@ -428,30 +438,27 @@ export function renderReceipt(result: ReceiptResult, deps: ReceiptDeps): HTMLEle
     const undoId = result.undo.id;
     const undoButton = el("button", "link undo", "Undo");
     undoButton.setAttribute("aria-label", `Undo ${result.receipt.action}`);
-    undoButton.addEventListener("click", async () => {
-      undoButton.disabled = true;
-      try {
+    undoButton.addEventListener("click", () => {
+      runEventTask(async () => {
+        undoButton.disabled = true;
         const res = (await controller.undo(undoId)) as { ok?: boolean; message?: string; receipt?: { message?: string } };
-        if (res?.ok) {
-          const done = el("span", "undo-done");
-          done.appendChild(svgIcon(ICON_CHECK));
-          done.appendChild(document.createTextNode("Undone"));
-          undoButton.replaceWith(done);
-          // Replacing the focused button with a non-focusable span drops focus to
-          // <body>; return it to a stable target (the composer) like Confirm/Cancel.
-          deps.returnFocus?.();
-          // The log region announces additions — give non-visual users the outcome.
-          card.appendChild(el("p", "sr-only", "Undo complete"));
-        } else {
+        if (!res?.ok) {
           undoButton.disabled = false;
-          // Surface the route's honest reason (policy denial, failed reversal),
-          // not a generic "Undo failed." that throws the actionable copy away.
           showError(undoFailureMessage(res));
+          return;
         }
-      } catch {
+        const done = el("span", "undo-done");
+        done.appendChild(svgIcon(ICON_CHECK));
+        done.appendChild(document.createTextNode("Undone"));
+        undoButton.replaceWith(done);
+        // Replacing the focused button with a non-focusable span drops focus to
+        // <body>; return it to a stable target (the composer) like Confirm/Cancel.
+        deps.returnFocus?.();
+        card.appendChild(el("p", "sr-only", "Undo complete"));
+      }, () => {
         undoButton.disabled = false;
         showError("Couldn't undo — please try again.");
-      }
+      });
     });
     card.appendChild(undoButton);
   }
@@ -653,7 +660,10 @@ function handleStaleRearm(
       showError(message);
       setButtons(false);
     }
-  })();
+  })().catch(() => {
+    showError(message);
+    setButtons(false);
+  });
 }
 
 /**
@@ -677,10 +687,10 @@ function wireBatchConfirm(
   deps: PreviewDeps,
 ): void {
   const { controller, showError } = deps;
-  confirmButton.addEventListener("click", async () => {
-    // One-use: neither button may fire again (or cross-fire) once clicked.
-    setButtons(true);
-    try {
+  confirmButton.addEventListener("click", () => {
+    runEventTask(async () => {
+      // One-use: neither button may fire again (or cross-fire) once clicked.
+      setButtons(true);
       const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
       stopTimer();
       const list = el("div", "batch-outcomes");
@@ -695,10 +705,10 @@ function wireBatchConfirm(
       countdown?.remove(); // the deadline no longer applies to a settled card
       card.classList.add("settled");
       settleConfirmOutcome(responses, confirmHooks);
-    } catch {
+    }, () => {
       showError("Confirmation failed.");
       setButtons(false);
-    }
+    });
   });
 }
 
@@ -724,27 +734,25 @@ function wireSingleConfirm(
   confirmHooks: ConfirmHooks,
   deps: PreviewDeps,
 ): void {
-  const { controller, returnFocus, setWorking, setStatusLabel } = deps;
-  confirmButton.addEventListener("click", async () => {
-    // One-use: neither button may fire again (or cross-fire) once clicked.
-    setButtons(true);
-    stopTimer();
-    const removeCard = (): void => {
-      if (!state.rearmed) {
-        // Focus sits on the just-clicked Confirm button INSIDE the card; pair the
-        // removal with a focus return so it lands on the composer, not <body>
-        // (WCAG 2.4.3, r1-ux-copy-a11y-04).
-        removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
-      }
-    };
-    // r1-ux-copy-a11y-03: drive the working/typing affordance + the streamed
-    // per-step status labels around the durable resume (which can run 30-120s),
-    // symmetric with a normal chat turn. `runConfirmStreamLive` removes the card
-    // once on the first real outcome (never on a stale-nonce re-arm).
-    await runConfirmStreamLive(controller, refs[0], confirmHooks, {
-      onWorking: (working) => setWorking?.(working),
-      onStatus: (label) => setStatusLabel?.(label),
-      removeCard,
+  const { controller, returnFocus, setWorking, setStatusLabel, showError } = deps;
+  confirmButton.addEventListener("click", () => {
+    runEventTask(async () => {
+      // One-use: neither button may fire again (or cross-fire) once clicked.
+      setButtons(true);
+      stopTimer();
+      const removeCard = (): void => {
+        if (!state.rearmed) {
+          removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
+        }
+      };
+      await runConfirmStreamLive(controller, refs[0], confirmHooks, {
+        onWorking: (working) => setWorking?.(working),
+        onStatus: (label) => setStatusLabel?.(label),
+        removeCard,
+      });
+    }, () => {
+      showError("Confirmation failed.");
+      setButtons(false);
     });
   });
 }
@@ -764,34 +772,28 @@ function wireCancel(
   deps: PreviewDeps,
 ): void {
   const { controller, showError, appendMessage, returnFocus } = deps;
-  cancelButton.addEventListener("click", async () => {
-    setButtons(true);
-    let outcomes: Array<{ ok?: boolean; message?: string } | null | undefined>;
-    try {
+  cancelButton.addEventListener("click", () => {
+    runEventTask(async () => {
+      setButtons(true);
       // controller.cancel resolves the route's JSON body (only a 401 throws). A
       // 409/403/404 comes back as { ok:false, message } — inspect it instead of
       // assuming success, so a concurrent-confirm never reads a false "Cancelled."
-      outcomes = (await Promise.all(refs.map((ref) => controller.cancel(ref.previewId)))) as typeof outcomes;
-    } catch {
+      const outcomes = (await Promise.all(
+        refs.map((ref) => controller.cancel(ref.previewId)),
+      )) as Array<{ ok?: boolean; message?: string } | null | undefined>;
+      const result = cancelOutcome(outcomes);
+      if (!result.ok) {
+        showError(result.error);
+        setButtons(false);
+        return;
+      }
+      stopTimer();
+      removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
+      appendMessage("assistant", "Cancelled.");
+    }, () => {
       showError("Cancel failed.");
       setButtons(false);
-      return;
-    }
-    const result = cancelOutcome(outcomes);
-    if (!result.ok) {
-      // The change may already have COMMITTED — surface the server's verbatim
-      // reason, keep the card, and re-enable the buttons (mirrors the confirm/undo
-      // discipline). r1-ux-copy-a11y-01.
-      showError(result.error);
-      setButtons(false);
-      return;
-    }
-    stopTimer();
-    // Focus sits on the just-clicked Cancel button INSIDE the card; pair the
-    // removal with a focus return so it lands on the composer, not <body>
-    // (WCAG 2.4.3, r1-ux-copy-a11y-04).
-    removeCardReturningFocus(() => card.remove(), () => returnFocus?.());
-    appendMessage("assistant", "Cancelled.");
+    });
   });
 }
 

@@ -1,4 +1,4 @@
-import { DAY_MS } from "../../durations.js";
+import { Temporal } from "@js-temporal/polyfill";
 
 /**
  * Server-side date/period resolution shared by workflows (CLAUDE.md "dates
@@ -10,7 +10,7 @@ import { DAY_MS } from "../../durations.js";
  */
 
 function addDays(isoDay: string, days: number): string {
-  return new Date(Date.parse(`${isoDay}T00:00:00.000Z`) + days * DAY_MS).toISOString().slice(0, 10);
+  return Temporal.PlainDate.from(isoDay).add({ days }).toString();
 }
 
 /** Weekday names in JS `getUTCDay()` order (0 = Sunday). */
@@ -34,7 +34,11 @@ const MONTHS = [
 
 /** A calendar day that exists (rejects 2026-13-99 etc., which Date.parse NaNs). */
 function isRealDay(day: string): boolean {
-  return !Number.isNaN(Date.parse(`${day}T00:00:00Z`));
+  try {
+    return Temporal.PlainDate.from(day).toString() === day;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -83,8 +87,15 @@ function parseMonthNameDay(now: Date, raw: string): string | undefined {
 export function resolveRelativeDay(
   now: Date,
   args: { date?: string; dayOffset?: number },
+  timeZone = "UTC",
 ): string | undefined {
-  const today = now.toISOString().slice(0, 10);
+  let zonedNow: Temporal.ZonedDateTime;
+  try {
+    zonedNow = Temporal.Instant.fromEpochMilliseconds(now.getTime()).toZonedDateTimeISO(timeZone);
+  } catch {
+    return undefined;
+  }
+  const today = zonedNow.toPlainDate().toString();
   if (args.dayOffset !== undefined) return addDays(today, args.dayOffset);
   const raw = args.date?.trim().toLowerCase();
   if (!raw) return today;
@@ -99,7 +110,7 @@ export function resolveRelativeDay(
   if (weekday) {
     const target = WEEKDAYS.indexOf(weekday[2]);
     if (target >= 0) {
-      const current = now.getUTCDay();
+      const current = zonedNow.dayOfWeek % 7;
       if (weekday[1] === "last" || weekday[1] === "previous") {
         return addDays(today, -(((current - target + 7) % 7) || 7));
       }
@@ -107,7 +118,7 @@ export function resolveRelativeDay(
       return addDays(today, weekday[1] === "next" ? ahead || 7 : ahead);
     }
   }
-  const monthDay = parseMonthNameDay(now, raw);
+  const monthDay = parseMonthNameDay(new Date(Date.UTC(zonedNow.year, 0, 1)), raw);
   if (monthDay !== undefined) return monthDay;
   return undefined;
 }
@@ -136,90 +147,75 @@ export const REPORT_PERIODS = [
 export type ReportPeriod = (typeof REPORT_PERIODS)[number];
 
 
-/** Resolve a named period to a UTC date range using `now` (the harness owns the math). */
-export function resolvePeriod(now: Date, period: ReportPeriod): { dateRangeStart: string; dateRangeEnd: string } {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  const startOf = (yy: number, mm: number, dd: number): Date => new Date(Date.UTC(yy, mm, dd, 0, 0, 0, 0));
-  const endOf = (yy: number, mm: number, dd: number): Date => new Date(Date.UTC(yy, mm, dd, 23, 59, 59, 999));
-  const range = (s: Date, e: Date) => ({ dateRangeStart: s.toISOString(), dateRangeEnd: e.toISOString() });
-  const lastDayOf = (yy: number, mm: number): number => new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
-  const dow = (now.getUTCDay() + 6) % 7; // 0 = Monday … 6 = Sunday
-  const qStart = Math.floor(m / 3) * 3;
+/** Resolve a named period with verified zoned calendar arithmetic. */
+export function resolvePeriod(
+  now: Date,
+  period: ReportPeriod,
+  timeZone = "UTC",
+  weekStartsOn = 1,
+): { dateRangeStart: string; dateRangeEnd: string } {
+  const instant = Temporal.Instant.fromEpochMilliseconds(now.getTime());
+  const zoned = instant.toZonedDateTimeISO(timeZone);
+  const today = zoned.toPlainDate();
+  const start = (day: Temporal.PlainDate): string => day
+    .toZonedDateTime({ timeZone, plainTime: "00:00" })
+    .toInstant().toString({ smallestUnit: "millisecond" });
+  const end = (day: Temporal.PlainDate): string => day.add({ days: 1 })
+    .toZonedDateTime({ timeZone, plainTime: "00:00" })
+    .toInstant().subtract({ milliseconds: 1 }).toString({ smallestUnit: "millisecond" });
+  const nowIso = instant.toString({ smallestUnit: "millisecond" });
+  const result = (dateRangeStart: string, dateRangeEnd: string) => ({ dateRangeStart, dateRangeEnd });
+  const weekOffset = (today.dayOfWeek - weekStartsOn + 7) % 7;
+  const thisWeek = today.subtract({ days: weekOffset });
+  const monthStart = today.with({ day: 1 });
+  const quarterMonth = Math.floor((today.month - 1) / 3) * 3 + 1;
+  const quarterStart = Temporal.PlainDate.from({ year: today.year, month: quarterMonth, day: 1 });
+  const yearStart = Temporal.PlainDate.from({ year: today.year, month: 1, day: 1 });
 
   switch (period) {
-    case "today":
-      return range(startOf(y, m, d), endOf(y, m, d));
+    case "today": return result(start(today), end(today));
     case "yesterday": {
-      const yd = new Date(Date.UTC(y, m, d) - DAY_MS);
-      return range(
-        startOf(yd.getUTCFullYear(), yd.getUTCMonth(), yd.getUTCDate()),
-        endOf(yd.getUTCFullYear(), yd.getUTCMonth(), yd.getUTCDate()),
-      );
+      const day = today.subtract({ days: 1 });
+      return result(start(day), end(day));
     }
-    case "this_week": {
-      const ws = new Date(Date.UTC(y, m, d) - dow * DAY_MS);
-      return range(startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()), now);
-    }
+    case "this_week": return result(start(thisWeek), nowIso);
     case "last_week": {
-      const ws = new Date(Date.UTC(y, m, d) - (dow + 7) * DAY_MS);
-      const we = new Date(ws.getTime() + 6 * DAY_MS);
-      return range(
-        startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()),
-        endOf(we.getUTCFullYear(), we.getUTCMonth(), we.getUTCDate()),
-      );
+      const first = thisWeek.subtract({ weeks: 1 });
+      return result(start(first), end(first.add({ days: 6 })));
     }
-    case "this_month":
-      return range(startOf(y, m, 1), now);
-    case "last_month": {
-      const yy = m === 0 ? y - 1 : y;
-      const mm = m === 0 ? 11 : m - 1;
-      return range(startOf(yy, mm, 1), endOf(yy, mm, lastDayOf(yy, mm)));
-    }
-    case "last_7_days":
-      return range(new Date(now.getTime() - 7 * DAY_MS), now);
-    case "last_30_days":
-      return range(new Date(now.getTime() - 30 * DAY_MS), now);
-    case "this_quarter":
-      return range(startOf(y, qStart, 1), now);
-    case "last_quarter": {
-      let qm = qStart - 3;
-      let qy = y;
-      if (qm < 0) {
-        qm += 12;
-        qy -= 1;
-      }
-      return range(startOf(qy, qm, 1), endOf(qy, qm + 2, lastDayOf(qy, qm + 2)));
-    }
-    case "this_year":
-      return range(startOf(y, 0, 1), now);
-    case "last_year":
-      return range(startOf(y - 1, 0, 1), endOf(y - 1, 11, 31));
     case "next_week": {
-      const ws = new Date(Date.UTC(y, m, d) + (7 - dow) * DAY_MS);
-      const we = new Date(ws.getTime() + 6 * DAY_MS);
-      return range(
-        startOf(ws.getUTCFullYear(), ws.getUTCMonth(), ws.getUTCDate()),
-        endOf(we.getUTCFullYear(), we.getUTCMonth(), we.getUTCDate()),
-      );
+      const first = thisWeek.add({ weeks: 1 });
+      return result(start(first), end(first.add({ days: 6 })));
+    }
+    case "this_month": return result(start(monthStart), nowIso);
+    case "last_month": {
+      const first = monthStart.subtract({ months: 1 });
+      return result(start(first), end(monthStart.subtract({ days: 1 })));
     }
     case "next_month": {
-      const yy = m === 11 ? y + 1 : y;
-      const mm = m === 11 ? 0 : m + 1;
-      return range(startOf(yy, mm, 1), endOf(yy, mm, lastDayOf(yy, mm)));
+      const first = monthStart.add({ months: 1 });
+      return result(start(first), end(first.add({ months: 1 }).subtract({ days: 1 })));
+    }
+    case "last_7_days": return result(start(today.subtract({ days: 7 })), nowIso);
+    case "last_30_days": return result(start(today.subtract({ days: 30 })), nowIso);
+    case "this_quarter": return result(start(quarterStart), nowIso);
+    case "last_quarter": {
+      const first = quarterStart.subtract({ months: 3 });
+      return result(start(first), end(quarterStart.subtract({ days: 1 })));
     }
     case "next_quarter": {
-      let qm = qStart + 3;
-      let qy = y;
-      if (qm > 11) {
-        qm -= 12;
-        qy += 1;
-      }
-      return range(startOf(qy, qm, 1), endOf(qy, qm + 2, lastDayOf(qy, qm + 2)));
+      const first = quarterStart.add({ months: 3 });
+      return result(start(first), end(first.add({ months: 3 }).subtract({ days: 1 })));
     }
-    case "next_year":
-      return range(startOf(y + 1, 0, 1), endOf(y + 1, 11, 31));
+    case "this_year": return result(start(yearStart), nowIso);
+    case "last_year": {
+      const first = yearStart.subtract({ years: 1 });
+      return result(start(first), end(yearStart.subtract({ days: 1 })));
+    }
+    case "next_year": {
+      const first = yearStart.add({ years: 1 });
+      return result(start(first), end(first.add({ years: 1 }).subtract({ days: 1 })));
+    }
   }
 }
 
@@ -232,20 +228,52 @@ export function resolvePeriod(now: Date, period: ReportPeriod): { dateRangeStart
  * these as plain date values (live: entries_list start="last_7_days").
  * `undefined` = unparseable — clarify, never send.
  */
-export function resolveInstant(now: Date, raw: string, edge: "start" | "end"): string | undefined {
+export function resolveInstant(
+  now: Date,
+  raw: string,
+  edge: "start" | "end",
+  timeZone = "UTC",
+): string | undefined {
   const trimmed = raw.trim();
   if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
-    const parsed = Date.parse(trimmed);
-    return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString();
+    if (!/([zZ]|[+-]\d{2}:?\d{2})$/.test(trimmed)) return undefined;
+    try {
+      return Temporal.Instant.from(trimmed).toString({ smallestUnit: "millisecond" });
+    } catch {
+      return undefined;
+    }
   }
-  const day = resolveRelativeDay(now, { date: trimmed });
-  if (day !== undefined) return edge === "start" ? `${day}T00:00:00.000Z` : `${day}T23:59:59.999Z`;
+  const day = resolveRelativeDay(now, { date: trimmed }, timeZone);
+  if (day !== undefined) {
+    try {
+      const start = Temporal.PlainDate.from(day).toZonedDateTime({ timeZone, plainTime: "00:00" });
+      const instant = edge === "start"
+        ? start.toInstant()
+        : start.add({ days: 1 }).toInstant().subtract({ milliseconds: 1 });
+      return instant.toString({ smallestUnit: "millisecond" });
+    } catch {
+      return undefined;
+    }
+  }
   const periodKey = trimmed.toLowerCase().replace(/[\s-]+/g, "_");
   if ((REPORT_PERIODS as readonly string[]).includes(periodKey)) {
-    const range = resolvePeriod(now, periodKey as ReportPeriod);
+    const range = resolvePeriod(now, periodKey as ReportPeriod, timeZone);
     return edge === "start" ? range.dateRangeStart : range.dateRangeEnd;
   }
   return undefined;
+}
+
+/** Convert a verified local calendar time to a UTC wire instant. */
+export function zonedDayTimeInstant(day: string, hour: number, minute: number, timeZone: string): string | undefined {
+  try {
+    const zoned = Temporal.PlainDate.from(day).toZonedDateTime({
+      timeZone,
+      plainTime: Temporal.PlainTime.from({ hour, minute }),
+    });
+    return zoned.toInstant().toString({ smallestUnit: "millisecond" });
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -278,14 +306,14 @@ export interface DateEdgeOpts {
  */
 export function resolveDateRange(
   now: Date,
-  opts: { start: DateEdgeOpts; end: DateEdgeOpts; exampleHint: string },
+  opts: { start: DateEdgeOpts; end: DateEdgeOpts; exampleHint: string; timeZone?: string },
 ): { ok: true; start: string | undefined; end: string | undefined } | { ok: false; message: string } {
   const resolveEdge = (
     edge: "start" | "end",
     cfg: DateEdgeOpts,
     fallback: string | undefined,
   ): string | undefined => {
-    if (cfg.raw !== undefined) return resolveInstant(now, cfg.raw, edge);
+    if (cfg.raw !== undefined) return resolveInstant(now, cfg.raw, edge, opts.timeZone);
     if (typeof cfg.defaultTo === "function") return cfg.defaultTo(fallback);
     return cfg.defaultTo;
   };
@@ -299,6 +327,12 @@ export function resolveDateRange(
     return {
       ok: false,
       message: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like ${opts.exampleHint}.`,
+    };
+  }
+  if (start !== undefined && end !== undefined && Date.parse(start) > Date.parse(end)) {
+    return {
+      ok: false,
+      message: "The start date must not be after the end date. Give me a range in chronological order.",
     };
   }
   return { ok: true, start, end };

@@ -37,7 +37,7 @@ describe("confirmations", () => {
     expect(created.record.nonceHash).not.toContain(created.nonce);
   });
 
-  it("confirms with the right admin/session/nonce and marks it used", () => {
+  it("confirms with the right admin/session/nonce and marks it executing", () => {
     const now = new Date("2026-06-05T00:00:00.000Z");
     const created = makePending(now);
     const result = confirmPending({
@@ -51,7 +51,7 @@ describe("confirmations", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.record.status).toBe("used");
+      expect(result.record.status).toBe("executing");
       expect(result.record.usedAt).toBeTruthy();
     }
   });
@@ -106,7 +106,7 @@ describe("confirmations", () => {
     const created = makePending(now);
     // A settled (used/cancelled) preview probed by a DIFFERENT admin must not leak
     // that it exists or its status — binding is checked first, like cancelPending.
-    const settled: PendingConfirmationRecord = { ...created.record, status: "used" };
+    const settled: PendingConfirmationRecord = { ...created.record, status: "succeeded" };
     const result = confirmPending({
       record: settled,
       sessionId: "sess-1",
@@ -247,7 +247,7 @@ describe("rotatePendingNonce (session restore)", () => {
 
   it("refuses non-pending, expired, foreign-session, and tampered records (same gate order as confirm)", () => {
     const used = makePending(now);
-    used.record.status = "used";
+    used.record.status = "succeeded";
     const r1 = rotatePendingNonce({ record: used.record, ...base });
     expect(r1.ok).toBe(false);
     if (!r1.ok) expect(r1.code).toBe("not_pending");

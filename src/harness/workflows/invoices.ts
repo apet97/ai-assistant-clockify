@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { zNumberLike } from "../arg-shapes.js";
 import {
   clarifyResult,
@@ -10,10 +11,10 @@ import {
   type ActionResult,
   type RiskyClarifyResult,
 } from "../action.js";
-import { successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
+import { errorReceipt, successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
-import { describePatch, resolveDateRange, resolveEntityRef, resolveInstant } from "./resolve.js";
+import { describePatch, resolveDateRange, resolveEntityRef, resolveInstant, resolveRelativeDay } from "./resolve.js";
 import { discoverItemTypes, resolveItemType, itemTypeClarify, taxApplyFlag } from "./invoices-schema.js";
 
 /**
@@ -127,7 +128,7 @@ function defineInvoiceRead(def: {
   name: string;
   description: string;
   schema?: z.ZodTypeAny;
-  read(ctx: ActionContext, id: string, args: Record<string, unknown>): Promise<SuccessReceipt>;
+  read(ctx: ActionContext, id: string, args: Record<string, unknown>): Promise<SuccessReceipt | ReturnType<typeof errorReceipt>>;
 }): ActionDefinition {
   return defineAction({
     name: def.name,
@@ -206,7 +207,7 @@ const listInvoicePayments = defineInvoiceRead({
 const exportInvoice = defineInvoiceRead({
   name: "clockify_invoices_export",
   description:
-    "Export an invoice as a PDF (base64), by invoice id or `number`. Read — no confirmation.",
+    "Export an invoice as a short-lived authenticated PDF artifact, by invoice id or `number`. Read — no confirmation.",
   schema: z
     .object({
       id: z.string().min(1).optional(),
@@ -218,19 +219,31 @@ const exportInvoice = defineInvoiceRead({
     }),
   async read(ctx, id, args) {
     const exp = await ctx.clockify.exportInvoice(id, args.format as "PDF" | undefined);
+    if (!ctx.saveArtifact) {
+      return errorReceipt({
+        action: "clockify_invoices_export",
+        code: "artifact_unavailable",
+        message: "The secure artifact store is unavailable; no PDF data was exposed.",
+      });
+    }
+    const artifact = ctx.saveArtifact({
+      contentType: exp.contentType,
+      filename: `clockify-invoice-${id}.pdf`,
+      bytes: exp.bytes,
+    });
     return successReceipt({
       action: "clockify_invoices_export",
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId, invoiceId: id },
-      data: { contentType: exp.contentType, bytes: exp.bytes, truncated: exp.truncated, base64: exp.base64 },
-      warnings: exp.truncated
-        ? [
-            {
-              code: "export_truncated",
-              message: `Invoice PDF is ${exp.bytes} bytes, over the inline cap; base64 omitted. Export it from the Clockify UI.`,
-            },
-          ]
-        : undefined,
+      data: {
+        contentType: exp.contentType,
+        bytes: exp.bytes.byteLength,
+        artifact: {
+          id: artifact.id,
+          downloadUrl: `/api/artifacts/${artifact.id}`,
+          expiresAt: artifact.expiresAt,
+        },
+      },
     });
   },
 });
@@ -301,8 +314,8 @@ const createInvoice = defineRiskyAction({
     const now = nowDate(ctx);
     const stamp = now.toISOString().replace(/[^0-9]/g, "").slice(0, 14);
     const number = args.number ?? `INV-${stamp}`;
-    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start") : now.toISOString();
-    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start") : new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
+    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start", ctx.timeZone) : now.toISOString();
+    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start", ctx.timeZone) : new Date(now.getTime() + THIRTY_DAYS_MS).toISOString();
     const badDates = [
       args.issuedDate !== undefined && issuedDate === undefined ? `issued date "${args.issuedDate}"` : undefined,
       args.dueDate !== undefined && dueDate === undefined ? `due date "${args.dueDate}"` : undefined,
@@ -397,7 +410,12 @@ const createInvoice = defineRiskyAction({
           : []),
         ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
       ],
-      payload: { input, items, ...(Object.keys(percentPatch).length ? { percentPatch } : {}) },
+      payload: {
+        operationId: randomUUID(),
+        input,
+        items,
+        ...(Object.keys(percentPatch).length ? { percentPatch } : {}),
+      },
     };
   },
   async commit(ctx, payload) {
@@ -450,21 +468,11 @@ const createInvoice = defineRiskyAction({
       warnings: warnings.length ? warnings : undefined,
     });
   },
-  // Dedupe by the invoice's SEMANTIC identity (client + items + currency + notes),
-  // excluding the auto-generated number/issuedDate/dueDate — so confirming the same
-  // "invoice qwen for 1000" twice within the window can't create a second invoice.
+  // Operation identity is primary: retries/reconfirms of this exact stored
+  // operation dedupe, while two independently previewed identical invoices remain
+  // intentional and are both allowed.
   idempotencyKey(payload) {
-    const { input, items } = payload as {
-      input: { clientId?: string; currency?: string; note?: string; subject?: string };
-      items?: unknown;
-    };
-    return JSON.stringify({
-      clientId: input.clientId,
-      currency: input.currency,
-      note: input.note,
-      subject: input.subject,
-      items,
-    });
+    return (payload as { operationId: string }).operationId;
   },
 });
 
@@ -515,8 +523,8 @@ const updateInvoice = defineRiskyAction({
     // raw (the REST adapter only normalizes a bare YYYY-MM-DD, so an unresolved
     // string would otherwise reach the live invoice unchanged).
     const now = nowDate(ctx);
-    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start") : undefined;
-    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start") : undefined;
+    const issuedDate = args.issuedDate !== undefined ? resolveInstant(now, args.issuedDate, "start", ctx.timeZone) : undefined;
+    const dueDate = args.dueDate !== undefined ? resolveInstant(now, args.dueDate, "start", ctx.timeZone) : undefined;
     const badDates = [
       args.issuedDate !== undefined && issuedDate === undefined ? `issued date "${args.issuedDate}"` : undefined,
       args.dueDate !== undefined && dueDate === undefined ? `due date "${args.dueDate}"` : undefined,
@@ -703,17 +711,40 @@ const deleteInvoiceItem = defineRiskyAction({
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete an item from");
     if (!invoice.ok) return invoice.clarify;
+    const items = await ctx.clockify.listInvoiceItems(invoice.id);
+    const selectedItem = items[args.index];
+    if (!selectedItem) {
+      return {
+        clarify: `Invoice ${invoice.number ?? invoice.id} has no line item at index ${args.index}.`,
+      };
+    }
+    const itemSnapshot = structuredClone(selectedItem);
     return {
       actionLabel: "Delete invoice item",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
-      expectedChanges: [`Delete invoice line item #${args.index}`],
+      expectedChanges: [
+        `Delete invoice line item #${args.index}${itemSnapshot.description ? ` "${itemSnapshot.description}"` : ""}`,
+      ],
       reversibility: "This cannot be undone; re-add the line to restore it.",
       warnings: ["This changes a live billing document."],
-      payload: { invoiceId: invoice.id, index: args.index },
+      payload: { invoiceId: invoice.id, index: args.index, itemSnapshot },
     };
   },
   async commit(ctx, payload) {
-    const { invoiceId, index } = payload as { invoiceId: string; index: number };
+    const { invoiceId, index, itemSnapshot } = payload as {
+      invoiceId: string;
+      index: number;
+      itemSnapshot: Awaited<ReturnType<typeof ctx.clockify.listInvoiceItems>>[number];
+    };
+    const current = (await ctx.clockify.listInvoiceItems(invoiceId))[index];
+    if (current === undefined || JSON.stringify(current) !== JSON.stringify(itemSnapshot)) {
+      return errorReceipt({
+        action: "clockify_invoices_items_delete",
+        code: "stale_target",
+        message: "The invoice line items changed after preview. Refresh and review a new preview before deleting.",
+        recovery: { hint: "Preview the invoice-item deletion again." },
+      });
+    }
     await ctx.clockify.deleteInvoiceItem(invoiceId, index);
     return invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId);
   },
@@ -736,10 +767,15 @@ const createInvoicePayment = defineRiskyAction({
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "record a payment against");
     if (!invoice.ok) return invoice.clarify;
+    const paymentDate = resolveRelativeDay(nowDate(ctx), { date: args.paymentDate }, ctx.timeZone)
+      ?? resolveInstant(nowDate(ctx), args.paymentDate, "start", ctx.timeZone);
+    if (paymentDate === undefined) {
+      return { clarify: `I couldn't make sense of the payment date "${args.paymentDate}" — give me a real calendar date or an offset-bearing ISO datetime.` };
+    }
     const amountMinor = toMinor(args.amount, args.amountUnit);
     const payment = {
       amountMinor,
-      paymentDate: args.paymentDate,
+      paymentDate,
       ...(args.note !== undefined ? { note: args.note } : {}),
     };
     return {
@@ -749,7 +785,7 @@ const createInvoicePayment = defineRiskyAction({
       // `fromMinor(...)` formatting — never the 100x wire integer, which would
       // read as $5000 on a $50 payment. Minor units stay in the payload only.
       expectedChanges: [
-        `Record a payment of ${fromMinor(amountMinor)} dated ${args.paymentDate}`,
+        `Record a payment of ${fromMinor(amountMinor)} dated ${paymentDate}`,
       ],
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
@@ -842,6 +878,7 @@ const importInvoiceTime = defineRiskyAction({
       start: { raw: args.from },
       end: { raw: args.to },
       exampleHint: "today, last week, or this month",
+      timeZone: ctx.timeZone,
     });
     if (!dates.ok) return { clarify: dates.message };
     // Both edges are required (schema `.min(1)`) and resolved (else `!dates.ok`).

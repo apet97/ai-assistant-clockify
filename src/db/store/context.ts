@@ -109,6 +109,72 @@ export interface ChatMessage {
   payload?: unknown;
 }
 
+export type TurnRunStatus = "prepared" | "executing" | "succeeded" | "failed" | "outcome_unknown";
+
+export interface TurnRunClaimInput {
+  requestId: string;
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  intentHash: string;
+}
+
+export type TurnRunClaimResult =
+  | { state: "won" }
+  | { state: "in_flight" }
+  | { state: "conflict" }
+  | { state: "outcome_unknown" }
+  | { state: "replay"; response: unknown };
+
+export interface TurnRun extends TurnRunClaimInput {
+  status: TurnRunStatus;
+  response?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type OperationRunStatus =
+  | "prepared"
+  | "executing"
+  | "succeeded"
+  | "partial"
+  | "definitive_failed"
+  | "outcome_unknown";
+
+export interface PrepareOperationRunInput {
+  id?: string;
+  requestId?: string;
+  confirmationId?: string;
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  actionName: string;
+  actionFingerprint: string;
+  catalogHash: string;
+  operationHash: string;
+}
+
+export interface OperationRun extends Omit<PrepareOperationRunInput, "id"> {
+  id: string;
+  status: OperationRunStatus;
+  actionResultId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ArtifactRecord {
+  id: string;
+  workspaceId: string;
+  adminUserId: string;
+  sessionId: string;
+  contentType: string;
+  filename: string;
+  bytes: Uint8Array;
+  checksum: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface AuditEventInput {
   workspaceId: string;
   adminUserId: string;
@@ -128,13 +194,16 @@ export interface UndoRecordInput {
 
 export interface UndoRecord extends UndoRecordInput {
   id: string;
-  status: "available" | "undone";
+  status: "available" | "executing" | "partially_undone" | "undone" | "failed" | "outcome_unknown" | "expired";
+  remaining: EntityRef[];
   createdAt: string;
+  expiresAt: string;
   undoneAt?: string;
 }
 
 /** Rows deleted per table by {@link Store.eraseWorkspace}. */
 export interface EraseCounts {
+  installations: number;
   adminPolicies: number;
   chatSessions: number;
   chatMessages: number;
@@ -142,4 +211,9 @@ export interface EraseCounts {
   auditEvents: number;
   undoRecords: number;
   turnTelemetry: number;
+  turnRuns: number;
+  operationSteps: number;
+  operationRuns: number;
+  actionResults: number;
+  artifacts: number;
 }

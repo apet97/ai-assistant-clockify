@@ -127,6 +127,33 @@ describe("store", () => {
     expect(raw?.startsWith("v1:")).toBe(true);
   });
 
+  it("re-encrypts installation tokens from DATA_ENCRYPTION_KEY_PREVIOUS on startup", () => {
+    const dbPath = tempDbPath();
+    const oldKey = "old-encryption-key-32-characters!!";
+    const newKey = "new-encryption-key-32-characters!!";
+    const oldStore = createStore(dbPath, { encryptionKey: oldKey }) as TestStore;
+    oldStore.saveInstallation({
+      workspaceId: "ws-rotate",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "rotating-secret-token",
+    });
+    const oldCiphertext = oldStore.rawAddonTokenForTest("ws-rotate");
+    oldStore.close();
+
+    const rotated = createStore(dbPath, {
+      encryptionKey: newKey,
+      previousEncryptionKey: oldKey,
+    }) as TestStore;
+    expect(rotated.getInstallation("ws-rotate")?.addonToken).toBe("rotating-secret-token");
+    expect(rotated.rawAddonTokenForTest("ws-rotate")).not.toBe(oldCiphertext);
+    rotated.close();
+
+    const reopened = createStore(dbPath, { encryptionKey: newKey });
+    expect(reopened.getInstallation("ws-rotate")?.addonToken).toBe("rotating-secret-token");
+    reopened.close();
+  });
+
   it("eraseWorkspace deletes all workspace-scoped data + tombstones the token, leaving other workspaces intact", () => {
     const store = createStore(":memory:", { encryptionKey: ENC_KEY }) as TestStore;
     const seed = (ws: string) => {
@@ -167,10 +194,8 @@ describe("store", () => {
     expect(counts.chatSessions).toBe(1);
     expect(counts.adminPolicies).toBe(1);
 
-    // ws-1 fully erased; the install is tombstoned with the token wiped (no decrypt throw).
-    const inst1 = store.getInstallation("ws-1");
-    expect(inst1?.status).toBe("deleted");
-    expect(inst1?.addonToken).toBe(""); // token wiped to an empty secret, still decryptable
+    // ws-1 fully erased, including installation metadata and its token.
+    expect(store.getInstallation("ws-1")).toBeUndefined();
     expect(store.getRecentMessages(s1.id, 10)).toHaveLength(0);
     expect(store.listActionOutcomes("ws-1", "admin-1")).toHaveLength(0);
     expect(store.getAdminPolicy("ws-1", "admin-1")).toBeUndefined();
@@ -187,7 +212,7 @@ describe("store", () => {
     store.close();
   });
 
-  it("back-fills feature groups added after a policy was stored (defaults to read_write)", () => {
+  it("migrates missing groups in an existing policy to off while preserving explicit choices", () => {
     const dbPath = tempDbPath();
     // First create + close the store so the schema exists, then write a LEGACY
     // policy row directly (predating custom_fields/approvals/audit_log).
@@ -217,10 +242,10 @@ describe("store", () => {
     const store = createStore(dbPath, { encryptionKey: ENC_KEY });
     const loaded = store.getAdminPolicy("ws-1", "admin-1");
     expect(loaded).toBeDefined();
-    // New groups default to read_write (the locked full-access default).
-    expect(loaded?.groups.custom_fields).toBe("read_write");
-    expect(loaded?.groups.approvals).toBe("read_write");
-    expect(loaded?.groups.audit_log).toBe("read_write");
+    // Existing admins must explicitly opt into newly introduced capabilities.
+    expect(loaded?.groups.custom_fields).toBe("off");
+    expect(loaded?.groups.approvals).toBe("off");
+    expect(loaded?.groups.audit_log).toBe("off");
     // Existing non-default values are preserved through the migration.
     expect(loaded?.groups.invoices).toBe("off");
     expect(loaded?.groups.expenses).toBe("read");
@@ -385,9 +410,36 @@ describe("store", () => {
     expect(store.updateConfirmationNonceHash(created.previewId, "new-hash")).toBe(true);
     expect(store.getPendingConfirmation(created.previewId)?.nonceHash).toBe("new-hash");
 
-    store.markConfirmationUsed(created.previewId);
+    store.markConfirmationExecuting(created.previewId);
     expect(store.updateConfirmationNonceHash(created.previewId, "later-hash")).toBe(false);
     expect(store.getPendingConfirmation(created.previewId)?.nonceHash).toBe("new-hash");
+    store.close();
+  });
+
+  it("settles a confirmation and its canonical action result in one durable transition", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const created = createPendingConfirmation({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      risk: ["destructive"],
+      preview: { summary: "x" },
+      operation: { actionName: "a", featureGroup: "work_structure", risks: ["destructive"], payload: {} },
+      sessionSecret: "s",
+    });
+    store.savePendingConfirmation(created.record);
+    expect(store.markConfirmationExecuting(created.previewId)).toBe(true);
+    const receipt = { ok: true, action: "a" };
+    const actionResultId = store.settleConfirmation(created.previewId, "succeeded", "a", receipt);
+
+    expect(store.getPendingConfirmation(created.previewId)).toMatchObject({
+      status: "succeeded",
+      actionResultId,
+      nonceHash: "",
+      agentState: undefined,
+    });
+    expect(store.getActionResult(actionResultId)).toEqual(receipt);
     store.close();
   });
 

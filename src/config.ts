@@ -31,6 +31,8 @@ export interface AppConfig {
   /** Cache window (ms) for a passed admin re-check. Default 60000. */
   roleRecheckTtlMs?: number;
   dataEncryptionKey?: string;
+  /** Previous at-rest key accepted once at startup to re-encrypt installation tokens. */
+  dataEncryptionKeyPrevious?: string;
   databasePath: string;
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
   llmProvider: "http" | "gemini-cli";
@@ -96,6 +98,7 @@ const envObjectSchema = z.object({
   // A passphrase, SHA-256-derived to the AES-256-GCM key (src/db/encryption.ts);
   // NOT raw hex bytes. Require real entropy (>=32 chars), not a 1-char value.
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
+  DATA_ENCRYPTION_KEY_PREVIOUS: z.string().min(32).optional(),
   DATABASE_PATH: z.string().min(1),
   // The HTTP provider needs base/key/model; the gemini-cli provider needs none
   // (it uses the authenticated CLI), so these are optional here and enforced
@@ -189,6 +192,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     roleRecheckEnabled: parsed.ROLE_RECHECK === "1",
     roleRecheckTtlMs: parsed.ROLE_RECHECK_TTL_MS ?? 60_000,
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
+    dataEncryptionKeyPrevious: parsed.DATA_ENCRYPTION_KEY_PREVIOUS,
     databasePath: parsed.DATABASE_PATH,
     llmProvider: parsed.LLM_PROVIDER,
     llmMode: parsed.LLM_MODE,

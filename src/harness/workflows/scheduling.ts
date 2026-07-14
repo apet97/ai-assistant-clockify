@@ -51,6 +51,7 @@ function resolveSchedulingWindow(
     start: { raw: args.start },
     end: { raw: args.end },
     exampleHint: "today, tomorrow, or next monday",
+    timeZone: ctx.timeZone,
   });
 }
 

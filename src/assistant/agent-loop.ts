@@ -89,6 +89,7 @@ export interface AgentStep {
 export type AgentTurnResult =
   | { kind: "final"; text: string; transcript: ModelMessage[] }
   | { kind: "clarify"; message: string; options?: ClarifyOption[]; transcript: ModelMessage[] }
+  | { kind: "partial"; transcript: ModelMessage[] }
   | {
       kind: "interrupt";
       call: ToolCall;
@@ -187,6 +188,11 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
         // (this transcript is not persisted/resumed).
         transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
         return { kind: "clarify", message: result.message, options: result.options, transcript };
+      }
+
+      if (result.kind === "partial") {
+        transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
+        return { kind: "partial", transcript };
       }
 
       // receipt (read or safe write; success or error) → feed back to the model.

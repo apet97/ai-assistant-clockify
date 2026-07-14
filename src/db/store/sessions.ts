@@ -7,6 +7,7 @@ const DEFAULT_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 export function buildSessionStore(ctx: StoreContext): {
   createSession(input: NewSessionInput): ChatSession;
   getSession(id: string): ChatSession | undefined;
+  invalidateAdminSessions(workspaceId: string, adminUserId: string): number;
   listSessions(workspaceId: string, adminUserId: string, nowIso: string): SessionSummary[];
 } {
   const { db, now, nowIso } = ctx;
@@ -59,6 +60,14 @@ export function buildSessionStore(ctx: StoreContext): {
         lastSeenAt: row.last_seen_at,
         expiresAt: row.expires_at,
       };
+    },
+
+    invalidateAdminSessions(workspaceId, adminUserId) {
+      return db.prepare(
+        `UPDATE chat_sessions
+         SET expires_at = ?, last_seen_at = ?
+         WHERE workspace_id = ? AND admin_user_id = ? AND expires_at > ?`,
+      ).run(nowIso(), nowIso(), workspaceId, adminUserId, nowIso()).changes;
     },
 
     listSessions(workspaceId, adminUserId, nowIso) {

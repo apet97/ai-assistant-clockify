@@ -31,6 +31,19 @@ const DELETABLE_ENTITY_TYPES = [
   "group",
 ] as const;
 
+// Tasks require a project-scoped typed delete and users require a typed
+// deactivate flow. Neither may be reached through the generic capability.
+const GENERIC_DELETE_ENTITY_TYPES = [
+  "project",
+  "client",
+  "tag",
+  "time_entry",
+  "invoice",
+  "expense",
+  "webhook",
+  "group",
+] as const;
+
 const ENTITY_GROUP: Record<(typeof DELETABLE_ENTITY_TYPES)[number], FeatureGroup> = {
   project: "work_structure",
   client: "work_structure",
@@ -73,7 +86,7 @@ const deleteEntity = defineRiskyAction({
   group: "work_structure",
   risks: ["destructive"],
   schema: z.object({
-    entityType: z.enum(DELETABLE_ENTITY_TYPES),
+    entityType: z.enum(GENERIC_DELETE_ENTITY_TYPES),
     id: z.string().min(1),
     name: z.string().optional(),
   }),
@@ -144,6 +157,7 @@ const updatePermissions = defineRiskyAction({
     "Change the admin's OWN assistant access to a feature group — set a group to off, read, or read_write. Use this whenever the admin asks to grant/raise/lower/remove their own access, e.g. 'give me full (read_write) access to reports', 'set invoices to read-only', or 'turn off webhooks'. Not a Clockify write; needs a button save, no Clockify dry-run.",
   group: "workspace_settings",
   risks: ["permission_change"],
+  argumentAliases: ["group", "level", ...FEATURE_GROUPS],
   schema: z.preprocess(
     normalizePermissionArgs,
     z.object({

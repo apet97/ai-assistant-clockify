@@ -79,6 +79,70 @@ async function makeApp(
 }
 
 describe("agentic chat turn (LLM_AGENTIC=1)", () => {
+  it("replays a duplicate requestId without rerunning the model or host write and rejects conflicting reuse", async () => {
+    const fake = createFakeWorkspace();
+    const { app, model, cookie } = await makeApp(
+      [{ text: "", toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "once" } }] }],
+      fake,
+      { agentic: false },
+    );
+    const requestId = "e3956aa4-e39e-42f3-9778-7c40eb715321";
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create tag once", requestId });
+    const replay = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create tag once", requestId });
+    const conflict = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a different tag", requestId });
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+    expect(model.completeWithTools).toHaveBeenCalledTimes(1);
+    expect(fake.counts.createTag).toBe(1);
+    expect(conflict.status).toBe(409);
+    expect(conflict.body.code).toBe("operation_id_conflict");
+  });
+
+  it("serializes two-tab retries so an in-flight duplicate waits and replays", async () => {
+    const fake = createFakeWorkspace();
+    let release!: () => void;
+    let signalStarted!: () => void;
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const delayedModel: ModelClient = {
+      async complete() { return "{}"; },
+      completeWithTools: vi.fn(async () => {
+        signalStarted();
+        await blocked;
+        return { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "once" } }] };
+      }),
+    };
+    const { app, cookie } = await makeApp([], fake, { agentic: false, modelClient: delayedModel });
+    const requestId = "d3a40aeb-4a76-4f3a-85e1-a9686a8e1ab1";
+
+    const first = request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create tag once", requestId })
+      .then((response) => response);
+    await started;
+    const second = request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create tag once", requestId })
+      .then((response) => response);
+    const beforeRelease = await Promise.race([
+      second.then(() => "responded" as const),
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 50)),
+    ]);
+    release();
+    const [firstResponse, secondResponse] = await Promise.all([first, second]);
+
+    expect(beforeRelease).toBe("waiting");
+    expect(firstResponse.status).toBe(200);
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.body).toEqual(firstResponse.body);
+    expect(delayedModel.completeWithTools).toHaveBeenCalledTimes(1);
+    expect(fake.counts.createTag).toBe(1);
+  });
+
   it("chains read-then-act through the chat route, feeding the read back to the model", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, model, cookie } = await makeApp(
@@ -248,6 +312,48 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     // When a turn ends in a clarify, reply.text must not echo the clarify message.
     expect(replyText).not.toBe(clarifyMessage);
     expect(fake.counts.deleteTag ?? 0).toBe(0);
+  });
+
+  it("stops a legacy single-turn plan after the first clarification", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [{
+        text: "",
+        toolCalls: [
+          { id: "c1", name: "clockify_tags_delete", arguments: { name: "missing-tag" } },
+          { id: "c2", name: "clockify_tags_create", arguments: { name: "must-not-run" } },
+        ],
+      }],
+      fake,
+      { agentic: false },
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete one tag and create another" });
+
+    expect(res.status).toBe(200);
+    expect((res.body.results as Array<{ kind: string }>).some((r) => r.kind === "clarify")).toBe(true);
+    expect(fake.counts.createTag ?? 0).toBe(0);
+  });
+
+  it("stops a legacy single-turn plan after the first preview", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const { app, cookie } = await makeApp(
+      [{
+        text: "",
+        toolCalls: [
+          { id: "c1", name: "clockify_tags_delete", arguments: { name: "urgent" } },
+          { id: "c2", name: "clockify_tags_create", arguments: { name: "must-not-run" } },
+        ],
+      }],
+      fake,
+      { agentic: false },
+    );
+
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete one tag and create another" });
+
+    expect(res.status).toBe(200);
+    expect(previewsOf(res.body.results as ResultItem[])).toHaveLength(1);
+    expect(fake.counts.createTag ?? 0).toBe(0);
   });
 
   // fix-clarify-double-render (single-turn worst case): the model's pre-action

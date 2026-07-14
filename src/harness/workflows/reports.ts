@@ -46,6 +46,7 @@ function resolveRange(
     start: { raw: args.dateRangeStart, defaultTo: (end) => (end !== undefined ? new Date(Date.parse(end) - SEVEN_DAYS_MS).toISOString() : undefined) },
     end: { raw: args.dateRangeEnd, defaultTo: now.toISOString() },
     exampleHint: "today, yesterday, or last monday",
+    timeZone: ctx.timeZone,
   });
   if (!resolved.ok) return resolved;
   if (resolved.start === undefined || resolved.end === undefined) {

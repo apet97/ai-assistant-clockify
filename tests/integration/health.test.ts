@@ -25,7 +25,7 @@ afterEach(() => {
   }
 });
 
-async function makeApp(): Promise<{ app: Express; store: Store }> {
+async function makeApp(isReady: () => boolean = () => true): Promise<{ app: Express; store: Store }> {
   const keys = await testKeys();
   const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
@@ -39,6 +39,7 @@ async function makeApp(): Promise<{ app: Express; store: Store }> {
     parser: createSignatureParser(ADDON_KEY, keys.pem),
     modelClient: { complete: async () => "{}" },
     clockifyForWorkspace: () => createFakeWorkspace().client,
+    readiness: { isReady },
   });
   return { app, store };
 }
@@ -51,11 +52,25 @@ describe("GET /health", () => {
     expect(res.body).toEqual({ ok: true });
   });
 
+  it("returns 503 while draining, while /live still proves the process is alive", async () => {
+    const { app } = await makeApp(() => false);
+    expect((await request(app).get("/health")).status).toBe(503);
+    const live = await request(app).get("/live");
+    expect(live.status).toBe(200);
+    expect(live.body).toEqual({ ok: true });
+  });
+
   it("returns 503 {ok:false} when the store can't serve (DB handle dead) — a static healthcheck would falsely pass", async () => {
     const { app, store } = await makeApp();
     store.close(); // simulate a hung/closed handle: healthCheck() now throws
     const res = await request(app).get("/health");
     expect(res.status).toBe(503);
     expect(res.body).toEqual({ ok: false });
+  });
+
+  it("keeps /live healthy even when SQLite readiness fails", async () => {
+    const { app, store } = await makeApp();
+    store.close();
+    expect((await request(app).get("/live")).status).toBe(200);
   });
 });

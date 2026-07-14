@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { executeAction, commitConfirmedOperation } from "../../src/harness/actions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { IdempotencyLedger } from "../../src/harness/idempotency.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
-import type { ActionContext, ConfirmableOperation } from "../../src/harness/catalog.js";
+import type { ActionContext, AtomicIdempotencyLedger, ConfirmableOperation } from "../../src/harness/catalog.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function memoryLedger(): IdempotencyLedger {
   const map = new Map<string, SuccessReceipt>();
@@ -37,6 +38,45 @@ async function previewInvoice(ctx: ActionContext, clientName: string): Promise<C
 }
 
 describe("idempotent commits (Phase 5)", () => {
+  it("keeps the operation claim after an ambiguous write so it cannot be retried automatically", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const clockify = new Proxy(fake.client, {
+      get(target, prop, receiver) {
+        if (prop === "createInvoice") {
+          return async () => {
+            throw new AmbiguousWriteOutcome("POST", "/workspaces/ws-1/invoices", "socket closed");
+          };
+        }
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+    let claimed = false;
+    const release = vi.fn();
+    const ledger: AtomicIdempotencyLedger = {
+      lookup: () => undefined,
+      record: () => undefined,
+      claim: () => {
+        if (claimed) return "in_flight";
+        claimed = true;
+        return "won";
+      },
+      lookupCompleted: () => undefined,
+      fill: vi.fn(),
+      release,
+    };
+    const ctx: ActionContext = { ...ctxWith(fake, ledger), clockify };
+    const op = await previewInvoice(ctx, "qwen");
+
+    const first = await commitConfirmedOperation(ctx, op);
+    const second = await commitConfirmedOperation(ctx, op);
+
+    expect(first.ok).toBe(false);
+    if (!first.ok) expect(first.code).toBe("commit_outcome_unknown");
+    expect(release).not.toHaveBeenCalled();
+    expect(second.ok).toBe(false);
+    if (!second.ok) expect(second.code).toBe("commit_in_progress");
+  });
+
   it("does not create a duplicate invoice when the same intent is confirmed twice", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
     const ledger = memoryLedger();
@@ -51,7 +91,7 @@ describe("idempotent commits (Phase 5)", () => {
     if (r2.ok) expect((r2.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(true);
   });
 
-  it("dedupes by SEMANTIC intent — the auto-generated number/dates don't defeat it", async () => {
+  it("dedupes one stored operation even if volatile invoice fields are reconstructed differently", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
     const ledger = memoryLedger();
     const ctx = ctxWith(fake, ledger);
@@ -69,7 +109,20 @@ describe("idempotent commits (Phase 5)", () => {
     await commitConfirmedOperation(ctx, op1);
     await commitConfirmedOperation(ctx, op2);
 
-    expect(fake.counts.createInvoice).toBe(1); // still deduped — number/dates are excluded from the key
+    expect(fake.counts.createInvoice).toBe(1); // same operation identity, so still one dispatch
+  });
+
+  it("permits intentionally identical invoices from independent operation ids", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    const ledger = memoryLedger();
+    const ctx = ctxWith(fake, ledger);
+    const first = await previewInvoice(ctx, "qwen");
+    const second = await previewInvoice(ctx, "qwen");
+
+    await commitConfirmedOperation(ctx, first);
+    await commitConfirmedOperation(ctx, second);
+
+    expect(fake.counts.createInvoice).toBe(2);
   });
 
   it("creates separate invoices for different clients", async () => {

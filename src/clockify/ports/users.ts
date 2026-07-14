@@ -9,6 +9,12 @@ export interface GroupSummary extends EntitySummary {
   userIds?: string[];
 }
 
+export interface CalendarContext {
+  timeZone: string;
+  /** ISO weekday number (Monday=1 … Sunday=7). */
+  weekStartsOn: number;
+}
+
 /** Workspace member (Team-section) billing-rate write (minor units on the wire). */
 export interface UpdateWorkspaceMemberRateInput {
   userId: string;
@@ -35,6 +41,8 @@ export interface UserPort {
    * admin re-check (authz-surface-01); a single-member read, never a full scan.
    */
   getWorkspaceMemberRole(userId: string): Promise<string | undefined>;
+  /** Current admin settings first, workspace settings second; undefined if unverified. */
+  getCalendarContext(userId: string): Promise<CalendarContext | undefined>;
   inviteUser(email: string, sendEmail: boolean): Promise<EntitySummary>;
   updateUserRole(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary>;
   /** Set a workspace member's default hourly/cost rate (the Team-section rate). */

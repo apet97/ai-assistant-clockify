@@ -24,10 +24,3 @@ export default async function setup({
   provide("addonPublicKeyPem", keys.pem);
   provide("addonPrivateKeyPem", privatePem);
 }
-
-declare module "vitest" {
-  interface ProvidedContext {
-    addonPublicKeyPem: string;
-    addonPrivateKeyPem: string;
-  }
-}

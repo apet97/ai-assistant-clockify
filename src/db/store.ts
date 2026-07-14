@@ -16,6 +16,13 @@ import type {
   UndoRecordInput,
   UndoRecord,
   EraseCounts,
+  TurnRun,
+  TurnRunClaimInput,
+  TurnRunClaimResult,
+  OperationRun,
+  OperationRunStatus,
+  PrepareOperationRunInput,
+  ArtifactRecord,
 } from "./store/context.js";
 import { buildAdminPolicyStore } from "./store/admin-policies.js";
 import { buildTelemetryStore } from "./store/telemetry.js";
@@ -31,6 +38,9 @@ import { buildInstallationStore } from "./store/installations.js";
 import { buildConfirmationStore } from "./store/confirmations.js";
 import { buildIdempotencyStore } from "./store/idempotency.js";
 import { buildRetentionStore, IDEMPOTENCY_RETENTION_MS, type PruneCounts } from "./store/retention.js";
+import { buildTurnRunStore } from "./store/turn-runs.js";
+import { buildOperationRunStore } from "./store/operation-runs.js";
+import { buildArtifactStore } from "./store/artifacts.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
@@ -63,10 +73,19 @@ export type {
   UndoRecordInput,
   UndoRecord,
   EraseCounts,
+  TurnRun,
+  TurnRunClaimInput,
+  TurnRunClaimResult,
+  OperationRun,
+  OperationRunStatus,
+  PrepareOperationRunInput,
+  ArtifactRecord,
 } from "./store/context.js";
 
 export interface StoreOptions {
   encryptionKey?: string;
+  /** One-release fallback used to re-encrypt installation tokens under encryptionKey. */
+  previousEncryptionKey?: string;
   now?: () => Date;
   /** Retention (days) for chat_messages + audit_events; defaults to 90. */
   retentionDays?: number;
@@ -123,6 +142,8 @@ export interface Store {
 
   createSession(input: NewSessionInput): ChatSession;
   getSession(id: string): ChatSession | undefined;
+  /** Expire every live session after a definite role-revocation result. */
+  invalidateAdminSessions(workspaceId: string, adminUserId: string): number;
   /**
    * This admin's live (non-expired), non-empty chat sessions in THIS workspace,
    * newest-first (by last message). Each summary carries the first user message
@@ -139,6 +160,35 @@ export interface Store {
    */
   getRecentMessages(sessionId: string, limit: number, includePayload?: boolean): ChatMessage[];
 
+  claimTurnRun(input: TurnRunClaimInput): TurnRunClaimResult;
+  markTurnRunExecuting(sessionId: string, requestId: string): void;
+  finishTurnRun(
+    sessionId: string,
+    requestId: string,
+    status: "succeeded" | "failed" | "outcome_unknown",
+    response: unknown,
+  ): void;
+  getTurnRun(sessionId: string, requestId: string): TurnRun | undefined;
+  prepareOperationRun(input: PrepareOperationRunInput): string;
+  markOperationExecuting(id: string): boolean;
+  settleOperationRun(
+    id: string,
+    status: Exclude<OperationRunStatus, "prepared" | "executing">,
+    actionResultId?: string,
+  ): void;
+  getOperationRun(id: string): OperationRun | undefined;
+  createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
+  getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
+  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number };
+  recordActionResult(input: {
+    workspaceId: string;
+    adminUserId: string;
+    sessionId?: string;
+    actionName: string;
+    status: Exclude<OperationRunStatus, "prepared" | "executing">;
+    result: unknown;
+  }): string;
+
   savePendingConfirmation(record: PendingConfirmationRecord): void;
   getPendingConfirmation(id: string): PendingConfirmationRecord | undefined;
   /** This session's still-live pending previews (status pending, not expired), oldest-first. */
@@ -147,10 +197,17 @@ export interface Store {
   updateConfirmationNonceHash(id: string, nonceHash: string): boolean;
   /** Atomically transition pending → used. Returns true only for the caller
    *  that won the transition (closes the double-confirm TOCTOU). */
-  markConfirmationUsed(id: string): boolean;
+  markConfirmationExecuting(id: string): boolean;
   /** Atomically transition pending → cancelled. */
   cancelConfirmation(id: string): boolean;
   setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
+  settleConfirmation(
+    id: string,
+    status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
+    actionName: string,
+    result: unknown,
+  ): string;
+  getActionResult(id: string): unknown | undefined;
   /** This session's still-live pending previews (status pending, not expired). */
   countPendingConfirmations(sessionId: string, nowIso: string): number;
 
@@ -191,8 +248,14 @@ export interface Store {
   /** Undo ledger (Phase 5b): a reversible action and its one-use status. */
   recordUndoable(input: UndoRecordInput): string;
   getUndoRecord(id: string): UndoRecord | undefined;
-  /** Atomically transition available → undone. Returns true only for the winner. */
-  markUndone(id: string): boolean;
+  /** Atomically transition available → executing. */
+  markUndoExecuting(id: string): boolean;
+  settleUndo(
+    id: string,
+    status: "partially_undone" | "undone" | "failed" | "outcome_unknown",
+    remaining: import("../harness/receipts.js").EntityRef[],
+    result: unknown,
+  ): void;
 
   addAuditEvent(input: AuditEventInput): void;
 
@@ -218,7 +281,7 @@ export interface Store {
   listTurnTelemetry(workspaceId: string, adminUserId: string, sinceIso?: string): TurnTelemetry[];
 
   /** Delete operational rows + chat_messages/audit_events past their retention windows. */
-  pruneExpired(nowIso: string): PruneCounts;
+  pruneExpired(nowIso: string): Promise<PruneCounts>;
 
   /** Cheap liveness probe — runs a trivial query against the DB handle. THROWS if the
    *  handle is closed/locked/unusable, so a readiness endpoint can 503 a hung instance
@@ -243,7 +306,7 @@ export interface TestStore extends Store {
   /** EXPLAIN QUERY PLAN of each `pruneExpired` DELETE, keyed by table (for the
    *  retention index-seek regression test); joined `detail` lines per table. */
   explainPrunePlan(): Record<
-    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents",
+    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents" | "artifacts" | "operationSteps" | "operationRuns" | "actionResults" | "turnRuns" | "chatSessions",
     string
   >;
 }
@@ -255,6 +318,27 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const now = options.now ?? (() => new Date());
   const nowIso = (): string => now().toISOString();
   const encryptionKey = options.encryptionKey;
+  const previousEncryptionKey = options.previousEncryptionKey;
+
+  if (encryptionKey && previousEncryptionKey && encryptionKey !== previousEncryptionKey) {
+    const rows = db.prepare(
+      "SELECT workspace_id, addon_token_ciphertext FROM installations",
+    ).all() as Array<{ workspace_id: string; addon_token_ciphertext: string }>;
+    db.transaction(() => {
+      const update = db.prepare(
+        "UPDATE installations SET addon_token_ciphertext = ? WHERE workspace_id = ?",
+      );
+      for (const row of rows) {
+        try {
+          decryptSecret(row.addon_token_ciphertext, encryptionKey);
+          continue;
+        } catch {
+          const plaintext = decryptSecret(row.addon_token_ciphertext, previousEncryptionKey);
+          update.run(encryptSecret(plaintext, encryptionKey), row.workspace_id);
+        }
+      }
+    })();
+  }
   const chatAuditRetentionMs = (options.retentionDays ?? DEFAULT_RETENTION_DAYS) * DAY_MS;
 
   const sealToken = (token: string): string =>
@@ -279,6 +363,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildConfirmationStore(ctx),
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
+    ...buildTurnRunStore(ctx),
+    ...buildOperationRunStore(ctx),
+    ...buildArtifactStore(ctx),
 
     tables() {
       const rows = db
@@ -304,15 +391,39 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     },
 
     healthCheck() {
-      // user_version is a near-free pragma; reading it proves the handle is open and
-      // the file is reachable. A closed/locked/corrupt DB throws here.
-      db.pragma("user_version");
+      // A bounded COMMITTED write proves the mounted DB is writable (not merely
+      // open). This detects read-only/full/locked volumes before serving traffic.
+      const priorBusyTimeout = db.pragma("busy_timeout", { simple: true }) as number;
+      db.pragma("busy_timeout = 250");
+      try {
+        db.prepare("UPDATE readiness_probe SET checked_at = ? WHERE id = 1").run(nowIso());
+      } finally {
+        db.pragma(`busy_timeout = ${priorBusyTimeout}`);
+      }
+    },
+
+    recoverOrphanedRuns() {
+      return db.transaction(() => {
+        const timestamp = nowIso();
+        const turns = db.prepare(
+          "UPDATE turn_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
+        ).run(timestamp).changes;
+        const confirmations = db.prepare(
+          "UPDATE pending_confirmations SET status = 'outcome_unknown', nonce_hash = '', agent_state_json = NULL WHERE status = 'executing'",
+        ).run().changes;
+        const operations = db.prepare(
+          "UPDATE operation_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
+        ).run(timestamp).changes;
+        return { turns, operations, confirmations };
+      })();
     },
 
     close() {
       db.close();
     },
   };
+
+  store.recoverOrphanedRuns();
 
   return store;
 }

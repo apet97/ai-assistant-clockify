@@ -134,11 +134,15 @@ export async function surfaceStreamHttpError(
 
 /** Real fetch-backed API client (same-origin; the session cookie authenticates). */
 export function createFetchApi(): ChatApi {
+  let csrfTokenPromise: Promise<string> | undefined;
+
   async function json(path: string, init?: RequestInit): Promise<unknown> {
+    const headers = new Headers(init?.headers);
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
     const res = await fetch(path, {
       credentials: "same-origin",
-      headers: { "content-type": "application/json" },
       ...init,
+      headers,
     });
     let body: unknown;
     try {
@@ -152,24 +156,67 @@ export function createFetchApi(): ChatApi {
     if (res.status === 401) throw new ApiError(401, SESSION_EXPIRED_MESSAGE);
     return body;
   }
+
+  function csrfToken(): Promise<string> {
+    csrfTokenPromise ??= json("/api/me").then((body) => {
+      const token = (body as { csrfToken?: unknown } | undefined)?.csrfToken;
+      if (typeof token !== "string" || !token) {
+        throw new ApiError(403, "Could not verify this browser session. Reload the page and try again.");
+      }
+      return token;
+    }).catch((error: unknown) => {
+      csrfTokenPromise = undefined;
+      throw error;
+    });
+    return csrfTokenPromise;
+  }
+
+  async function mutation(path: string, init: RequestInit): Promise<unknown> {
+    const token = await csrfToken();
+    const headers = new Headers(init.headers);
+    headers.set("x-csrf-token", token);
+    return json(path, { ...init, headers });
+  }
+
+  async function mutationFetch(path: string, init: RequestInit): Promise<Response> {
+    const token = await csrfToken();
+    const headers = new Headers(init.headers);
+    headers.set("x-csrf-token", token);
+    return fetch(path, { credentials: "same-origin", ...init, headers });
+  }
+  const newRequestId = (): string => crypto.randomUUID();
   return {
     getPermissions: () => json("/api/permissions"),
     savePermissions: (groups) =>
-      json("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
+      mutation("/api/permissions/confirm", { method: "POST", body: JSON.stringify({ groups }) }),
     getHistory: () => json("/api/chat/history"),
-    newChat: () => json("/api/chat/new", { method: "POST" }),
+    newChat: () => mutation("/api/chat/new", { method: "POST" }),
     listSessions: () => json("/api/chat/sessions"),
     switchSession: (id) =>
-      json(`/api/chat/sessions/${encodeURIComponent(id)}/open`, { method: "POST", body: JSON.stringify({}) }),
-    sendMessage: (message) =>
-      json("/api/chat/messages", { method: "POST", body: JSON.stringify({ message }) }),
+      mutation(`/api/chat/sessions/${encodeURIComponent(id)}/open`, { method: "POST", body: JSON.stringify({}) }),
+    sendMessage: (message) => {
+      const requestId = newRequestId();
+      const send = () => mutation("/api/chat/messages", { method: "POST", body: JSON.stringify({ message, requestId }) });
+      return send().catch(() => send());
+    },
     streamMessage: async (message, onEvent) => {
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
+      let res: Response;
+      const requestId = newRequestId();
+      try {
+        const send = () => mutationFetch("/api/chat/stream", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message, requestId }),
+        });
+        try {
+          res = await send();
+        } catch {
+          res = await send();
+        }
+      } catch (error) {
+        onEvent({ type: "error", message: error instanceof ApiError ? error.message : "The assistant is temporarily unavailable. Please try again." });
+        return;
+      }
       if (!res.ok || !res.body) {
         // Surface the route's honest JSON copy (rate limit, expired session)
         // instead of a blanket "unavailable".
@@ -179,17 +226,26 @@ export function createFetchApi(): ChatApi {
       await pumpNdjson(res, onEvent);
     },
     confirmPreview: (previewId, nonce) =>
-      json(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
+      mutation(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
         method: "POST",
         body: JSON.stringify({ nonce }),
       }),
     confirmStream: async (ref, onEvent) => {
-      const res = await fetch(`/api/confirmations/${encodeURIComponent(ref.previewId)}/confirm?stream=1`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ nonce: ref.nonce }),
-      });
+      let res: Response;
+      try {
+        res = await mutationFetch(`/api/confirmations/${encodeURIComponent(ref.previewId)}/confirm?stream=1`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ nonce: ref.nonce }),
+        });
+      } catch (error) {
+        onEvent({
+          type: "error",
+          ...(error instanceof ApiError && error.status === 401 ? { code: "unauthorized" } : {}),
+          message: error instanceof ApiError ? error.message : "Confirmation failed.",
+        });
+        return;
+      }
       if (!res.ok || !res.body) {
         // A non-OK confirm is a JSON error (validation/policy/expired) — surface
         // it; a 401 gets the session-expired copy. Carry the server's `code`
@@ -201,10 +257,10 @@ export function createFetchApi(): ChatApi {
       await pumpNdjson(res, onEvent);
     },
     cancelPreview: (previewId) =>
-      json(`/api/confirmations/${encodeURIComponent(previewId)}/cancel`, {
+      mutation(`/api/confirmations/${encodeURIComponent(previewId)}/cancel`, {
         method: "POST",
         body: JSON.stringify({}),
       }),
-    undo: (id) => json(`/api/undo/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({}) }),
+    undo: (id) => mutation(`/api/undo/${encodeURIComponent(id)}`, { method: "POST", body: JSON.stringify({}) }),
   };
 }

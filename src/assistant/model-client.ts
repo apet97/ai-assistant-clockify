@@ -138,19 +138,15 @@ export interface ModelClientConfig {
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Single retry on a transient provider failure (429/5xx), fixed backoff. */
 const RETRY_BACKOFF_MS = 750;
-/** Provider error bodies are kept as a SHORT log/message snippet (no secrets —
- *  our key rides the request header, never the response). */
-const ERROR_BODY_SNIPPET_CHARS = 200;
+function providerRequestId(response: Response): string {
+  return response.headers?.get("x-request-id")
+    ?? response.headers?.get("request-id")
+    ?? response.headers?.get("cf-ray")
+    ?? "unknown";
+}
 
-/** Read a clamped, whitespace-collapsed snippet of the response body; an
- *  unreadable body (e.g. already consumed by a failed json()) yields "" — the
- *  status alone still beats silence. */
-async function readBodySnippet(response: Response): Promise<string> {
-  try {
-    return (await response.text()).replace(/\s+/g, " ").trim().slice(0, ERROR_BODY_SNIPPET_CHARS);
-  } catch {
-    return "";
-  }
+function providerFailure(category: string, response: Response): Error {
+  return new Error(`${category} status=${response.status} request_id=${providerRequestId(response)}`);
 }
 
 interface RawToolCall {
@@ -289,8 +285,8 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
    * bounds a stuck body read). A transient provider failure (429/5xx) retries
    * ONCE — chat completions have no server-side effect, so the retry is safe.
    * A timeout never retries (the 120s budget is already spent); the provider
-   * error body is kept as a short snippet in the thrown message + a server
-   * log, since the route maps any throw to a generic "temporarily unavailable".
+   * error is reduced to a stable category/status/provider request id. Provider
+   * bodies can echo prompts or tool results and must never enter production logs.
    */
   async function postChat(body: Record<string, unknown>): Promise<ChatCompletionResponse> {
     for (let attempt = 0; ; attempt += 1) {
@@ -332,21 +328,20 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           if (name === "TimeoutError" || name === "AbortError") {
             throw new Error(`Model request timed out after ${timeoutMs}ms`);
           }
-          const snippet = await readBodySnippet(response);
-          throw new Error(`Model request failed with status ${response.status}${snippet ? `: ${snippet}` : ""}`);
+          throw providerFailure("provider_malformed_response", response);
         }
       }
 
-      const snippet = await readBodySnippet(response);
+      await response.body?.cancel().catch(() => undefined);
       const willRetry = attempt === 0 && retryable(response.status);
       console.warn(
-        `model request failed: status=${response.status}${snippet ? ` body=${snippet}` : ""}${willRetry ? " (retrying once)" : ""}`,
+        `provider_http_error status=${response.status} request_id=${providerRequestId(response)}${willRetry ? " retry=1" : ""}`,
       );
       if (willRetry) {
         await sleep(RETRY_BACKOFF_MS);
         continue;
       }
-      throw new Error(`Model request failed with status ${response.status}${snippet ? `: ${snippet}` : ""}`);
+      throw providerFailure("provider_http_error", response);
     }
   }
 

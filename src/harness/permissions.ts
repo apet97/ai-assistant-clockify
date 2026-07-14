@@ -59,12 +59,14 @@ export const adminPolicySchema = z.object({
     .strict(),
 });
 
-/** Default posture: full read_write for every feature group (locked V1 decision). */
+export const CURRENT_POLICY_VERSION = 2;
+
+/** Default posture for a genuinely new admin: full read_write for every feature group. */
 export function defaultAdminPolicy(): AdminPolicy {
   const groups = Object.fromEntries(
     FEATURE_GROUPS.map((g) => [g, "read_write" as PermissionLevel]),
   ) as Record<FeatureGroup, PermissionLevel>;
-  return { version: 1, groups };
+  return { version: CURRENT_POLICY_VERSION, groups };
 }
 
 /** A partial change to an admin's policy (used by in-chat permission updates). */

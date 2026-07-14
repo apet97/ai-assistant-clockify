@@ -97,6 +97,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const cookie = cookieMatch[0];
+  const csrfResponse = await fetch(`${BASE_URL}/api/me`, { headers: { cookie } });
+  const csrfToken = ((await csrfResponse.json()) as { csrfToken?: string }).csrfToken;
+  if (!csrfToken) throw new Error("Could not obtain the session CSRF token.");
+  const appHeaders = { "content-type": "application/json", cookie, "x-csrf-token": csrfToken };
 
   const rest = createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
@@ -108,7 +112,7 @@ async function main(): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt++) {
       const r = await fetch(`${BASE_URL}/api/chat/messages`, {
         method: "POST",
-        headers: { "content-type": "application/json", cookie },
+        headers: appHeaders,
         body: JSON.stringify({ message }),
       });
       const body = (await r.json()) as ChatResponse;
@@ -120,7 +124,7 @@ async function main(): Promise<void> {
   async function confirm(previewId: string, nonce: string): Promise<boolean> {
     const r = await fetch(`${BASE_URL}/api/confirmations/${previewId}/confirm`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: appHeaders,
       body: JSON.stringify({ nonce }),
     });
     const body = (await r.json()) as { ok?: boolean };
@@ -252,7 +256,7 @@ async function main(): Promise<void> {
       : Object.fromEntries(FEATURE_GROUPS.map((g) => [g, "read_write"]));
   const rr = await fetch(`${BASE_URL}/api/permissions/confirm`, {
     method: "POST",
-    headers: { "content-type": "application/json", cookie },
+    headers: appHeaders,
     body: JSON.stringify({ groups: restoreGroups }),
   });
   console.log(`  permissions restored: ${rr.ok ? "✓" : `✗ (${rr.status})`}`);

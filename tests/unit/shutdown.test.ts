@@ -22,6 +22,7 @@ function makeDeps(opts: { drainCompletes?: boolean } = {}) {
     exit: vi.fn((code: number) => order.push(`exit(${code})`)),
     log: vi.fn(),
     forceExitAfterMs: 10_000,
+    onDraining: vi.fn(() => order.push("draining")),
   };
   return { deps, order };
 }
@@ -35,7 +36,17 @@ describe("createShutdownHandler", () => {
     const shutdown = createShutdownHandler(deps);
     shutdown("SIGTERM");
     await vi.runAllTimersAsync();
-    expect(order).toEqual(["closeIdle", "close", "storeClose", "exit(0)"]);
+    expect(order).toEqual(["draining", "closeIdle", "close", "storeClose", "exit(0)"]);
+    clearInterval(deps.pruneTimer);
+  });
+
+  it("uses a nonzero requested exit code after a fatal exception drains cleanly", async () => {
+    const { deps, order } = makeDeps();
+    const shutdown = createShutdownHandler(deps);
+    shutdown("uncaughtException", 1);
+    await vi.runAllTimersAsync();
+    expect(order).toContain("exit(1)");
+    expect(order).not.toContain("exit(0)");
     clearInterval(deps.pruneTimer);
   });
 

@@ -46,6 +46,23 @@ describe("switchToSession", () => {
     expect(errors).toEqual([]);
   });
 
+  it("awaits an async switched hook and routes its rejection through the UI error surface", async () => {
+    const events: string[] = [];
+    const api = recordingApi(async () => ({ ok: true }));
+    await switchToSession(api, "sess-1", {
+      onSwitched: async () => {
+        events.push("restore:start");
+        await Promise.resolve();
+        throw new Error("restore failed");
+      },
+      onError: (message) => events.push(`error:${message}`),
+    });
+    expect(events).toEqual([
+      "restore:start",
+      "error:Could not open that conversation. Please try again.",
+    ]);
+  });
+
   it("on a thrown 401 shows the session-expired copy and NEVER switches", async () => {
     let switched = 0;
     const errors: string[] = [];

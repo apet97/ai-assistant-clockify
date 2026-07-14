@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { adminPolicySchema, defaultAdminPolicy, type AdminPolicy } from "../../harness/permissions.js";
+import { adminPolicySchema, CURRENT_POLICY_VERSION, FEATURE_GROUPS, type AdminPolicy, type PermissionLevel } from "../../harness/permissions.js";
 import type { StoreContext } from "./context.js";
 
 /** Admin-policy concern: per-admin, per-workspace assistant permissions. */
@@ -16,18 +16,19 @@ export function buildAdminPolicyStore(ctx: StoreContext): {
         )
         .get(workspaceId, adminUserId) as { policy_json: string } | undefined;
       if (!row) return undefined;
-      // Back-compat migration: feature groups added after this policy was written
-      // are absent from the stored JSON, but `adminPolicySchema` is `.strict()`
-      // and requires every current group. Fill any missing key with the locked
-      // full-access default (`read_write`) before validating, preserving any
-      // non-default values the admin set on the groups that were stored.
+      // Versioned back-compat migration: a genuinely new admin gets the full
+      // default in the route, but an EXISTING policy must opt into capabilities
+      // added after it was saved. Missing groups therefore migrate to `off`.
       const stored = JSON.parse(row.policy_json) as {
         version?: number;
         groups?: Record<string, unknown>;
       };
+      const disabled = Object.fromEntries(
+        FEATURE_GROUPS.map((group) => [group, "off" as PermissionLevel]),
+      );
       const merged = {
-        version: stored.version ?? 1,
-        groups: { ...defaultAdminPolicy().groups, ...(stored.groups ?? {}) },
+        version: CURRENT_POLICY_VERSION,
+        groups: { ...disabled, ...(stored.groups ?? {}) },
       };
       return adminPolicySchema.parse(merged);
     },

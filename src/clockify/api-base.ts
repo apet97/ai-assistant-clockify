@@ -1,3 +1,8 @@
+import {
+  canonicalClockifyServiceUrl,
+  validateClockifyServiceUrl,
+} from "./service-url.js";
+
 /**
  * Resolve the Clockify REST base URL for an installation.
  *
@@ -16,8 +21,10 @@ export function resolveClockifyApiBase(installation: {
   apiUrl?: string;
   backendUrl?: string;
 }): string {
-  const root = (installation.apiUrl ?? installation.backendUrl ?? "https://api.clockify.me/api")
-    .replace(/\/+$/, "");
+  const raw = installation.apiUrl ?? installation.backendUrl ?? "https://api.clockify.me/api";
+  const validated = validateClockifyServiceUrl(raw, "api");
+  const rootPath = validated.pathname === "/" ? "/api" : validated.pathname;
+  const root = `${validated.origin}${rootPath}`.replace(/\/+$/, "");
   return root.endsWith("/v1") ? root : `${root}/v1`;
 }
 
@@ -34,7 +41,7 @@ export function resolveClockifyReportsBase(installation: {
   reportsUrl?: string;
 }): string | undefined {
   if (!installation.reportsUrl) return undefined;
-  const root = installation.reportsUrl.replace(/\/+$/, "");
+  const root = canonicalClockifyServiceUrl(installation.reportsUrl, "reports");
   return root.endsWith("/v1") ? root : `${root}/v1`;
 }
 
@@ -62,12 +69,7 @@ export function resolveClockifyAuditBase(installation: {
 }): string | undefined {
   const root = installation.apiUrl ?? installation.backendUrl;
   if (!root) return undefined;
-  let url: URL;
-  try {
-    url = new URL(root);
-  } catch {
-    return undefined;
-  }
+  const url = validateClockifyServiceUrl(root, "api");
   if (!url.host.startsWith("api.")) return undefined;
   const tenant = url.host.slice("api.".length);
   return `${url.protocol}//auditlog-api.api.${tenant}/v1`;

@@ -33,6 +33,19 @@ async function previewDelete(fake: FakeWorkspace, policy?: AdminPolicy) {
 }
 
 describe("risky preview + confirmation", () => {
+  it("removes task and user from generic deletion so only typed capabilities can target them", async () => {
+    for (const entityType of ["task", "user"] as const) {
+      const fake = createFakeWorkspace();
+      const result = await executeAction({
+        actionName: "clockify_delete_entity",
+        args: { entityType, id: "target-1" },
+        context: makeContext(fake),
+      });
+      expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "invalid_args" } });
+      expect(fake.state.deleted).toHaveLength(0);
+    }
+  });
+
   it("delete returns a preview and does not mutate", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const result = await previewDelete(fake);

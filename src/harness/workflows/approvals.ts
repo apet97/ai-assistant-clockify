@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import { successReceipt } from "../receipts.js";
-import { DAY_MS, nowDate } from "../../durations.js";
-import { resolveRelativeDay } from "./resolve.js";
+import { nowDate } from "../../durations.js";
+import { resolveInstant, resolvePeriod } from "./resolve.js";
 
 /**
  * Typed approval workflows (goclmcp §2.11). Reads (list/get) execute
@@ -17,13 +17,6 @@ import { resolveRelativeDay } from "./resolve.js";
 
 const AP = "approvals" as const;
 
-/** Clockify's approval endpoint wants a full ISO-8601 UTC instant (e.g.
- *  `2026-06-01T00:00:00Z`), NOT a bare date — a bare date 400s with code 501.
- *  Format to seconds + Z (matching Clockify's own example; no millis). */
-function toClockifyInstant(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
 /**
  * Resolve a submit/resubmit period start to the full ISO UTC instant Clockify
  * requires. `week` keywords compute the Monday server-side; an explicit
@@ -35,36 +28,23 @@ function toClockifyInstant(date: Date): string {
 function resolvePeriodStart(
   now: Date,
   args: { week?: "this_week" | "last_week"; periodStart?: string },
+  timeZone: string,
+  weekStartsOn: number,
 ): { kind: "ok"; instant: string } | { kind: "missing" } | { kind: "bad"; raw: string } {
-  if (args.week) return { kind: "ok", instant: weekStartInstant(now, args.week) };
+  if (args.week) {
+    const range = resolvePeriod(now, args.week, timeZone, weekStartsOn);
+    return { kind: "ok", instant: range.dateRangeStart.replace(".000Z", "Z") };
+  }
   const raw = args.periodStart?.trim();
   if (!raw) return { kind: "missing" };
-  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
-    // An OFFSET-NAIVE ISO instant ("2026-06-01T00:00:00") is parsed by `new Date`
-    // in the SERVER's local timezone, then toClockifyInstant's toISOString()
-    // shifts it back to UTC — landing the submitted period hours (or a calendar
-    // day) off what the admin confirmed on a non-UTC host. Anchor a missing
-    // offset to UTC explicitly; a value already carrying Z or a ±HH:MM offset is
-    // left untouched.
-    const hasOffset = /([zZ]|[+-]\d{2}:?\d{2})$/.test(raw);
-    const parsed = new Date(hasOffset ? raw : `${raw}Z`);
-    return Number.isNaN(parsed.getTime()) ? { kind: "bad", raw } : { kind: "ok", instant: toClockifyInstant(parsed) };
-  }
-  const day = resolveRelativeDay(now, { date: raw });
-  return day === undefined ? { kind: "bad", raw } : { kind: "ok", instant: `${day}T00:00:00Z` };
+  const instant = resolveInstant(now, raw, "start", timeZone);
+  return instant === undefined
+    ? { kind: "bad", raw }
+    : { kind: "ok", instant: instant.replace(".000Z", "Z") };
 }
 
 const BAD_PERIOD_START = (raw: string): string =>
   `I couldn't make sense of the period start "${raw}" — give me a calendar date (YYYY-MM-DD) or something like this week, last week, or next monday.`;
-
-/** The Monday (00:00:00Z) of this/last week, computed server-side from ctx.now so
- *  the model never has to guess a calendar date (matching the curated-report pattern). */
-function weekStartInstant(now: Date, which: "this_week" | "last_week"): string {
-  const dow = (now.getUTCDay() + 6) % 7; // 0 = Monday … 6 = Sunday
-  const back = which === "last_week" ? dow + 7 : dow;
-  const monday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - back * DAY_MS);
-  return `${monday.toISOString().slice(0, 10)}T00:00:00Z`;
-}
 
 const listApprovals = defineReadAction({
   name: "clockify_approvals_list",
@@ -103,7 +83,7 @@ const submitApproval = defineRiskyAction({
   }),
   async preview(ctx, args) {
     const now = nowDate(ctx);
-    const resolved = resolvePeriodStart(now, args);
+    const resolved = resolvePeriodStart(now, args, ctx.timeZone ?? "UTC", ctx.weekStartsOn ?? 1);
     if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
     if (resolved.kind === "missing") {
       return {
@@ -197,7 +177,7 @@ const resubmit = defineRiskyAction({
   }),
   async preview(ctx, args) {
     const now = nowDate(ctx);
-    const resolved = resolvePeriodStart(now, args);
+    const resolved = resolvePeriodStart(now, args, ctx.timeZone ?? "UTC", ctx.weekStartsOn ?? 1);
     if (resolved.kind === "bad") return { clarify: BAD_PERIOD_START(resolved.raw) };
     if (resolved.kind === "missing") {
       return {

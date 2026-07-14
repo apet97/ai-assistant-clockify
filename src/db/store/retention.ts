@@ -1,15 +1,13 @@
 import type { StoreContext } from "./context.js";
 
-/**
- * Operational-table retention. Settled/expired confirmations age out on a 30d
- * clock so listConfirmationOutcomes metrics keep a generous recent window.
- */
-const CONFIRMATION_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-const UNDO_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
-/** Must stay comfortably above routes/api.ts IDEMPOTENCY_WINDOW_MS (10 min). */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CONFIRMATION_RETENTION_MS = 30 * DAY_MS;
+const UNDO_RETENTION_MS = 30 * DAY_MS;
 export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
-/** Turn telemetry rows older than this are pruned (cost review needs weeks, not forever). */
-const TELEMETRY_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const TELEMETRY_RETENTION_MS = 30 * DAY_MS;
+const OPERATION_RETENTION_MS = 30 * DAY_MS;
+const BATCH_SIZE = 500;
+const MAX_ROWS_PER_PASS = 10_000;
 
 export interface PruneCounts {
   pendingConfirmations: number;
@@ -18,141 +16,178 @@ export interface PruneCounts {
   turnTelemetry: number;
   chatMessages: number;
   auditEvents: number;
+  artifacts: number;
+  operationSteps: number;
+  operationRuns: number;
+  actionResults: number;
+  turnRuns: number;
+  chatSessions: number;
+  total: number;
+  batches: number;
+  durationMs: number;
+  backlog: boolean;
 }
 
-type PruneTable = keyof PruneCounts;
+type PruneTable = Exclude<keyof PruneCounts, "total" | "batches" | "durationMs" | "backlog">;
 
-/**
- * Single source of truth for the retention DELETEs: one entry per table, each
- * carrying its disjunct SQL string(s) AND the kind of cutoff value its `?`
- * binds (an idempotency cutoff is an epoch INT; every other writer stamps via
- * toISOString(), so those bind the ISO STRING cutoff). Both `pruneExpired`
- * (which runs each DELETE) and `explainPrunePlan` (the index-seek regression
- * test) iterate this SAME const, so the executed predicate shapes and the
- * EXPLAINed ones can never drift.
- *
- * Each OR-predicate retention DELETE is split into single-predicate statements
- * so the planner can SEARCH a narrow index instead of full-SCANning the table:
- * SQLite won't OR-union a low-cardinality `status` index, and a combined OR over
- * two columns is one SCAN (pinned by explainPrunePlan / store-retention.test.ts).
- */
-const PRUNE_DELETES: ReadonlyArray<{
+interface PruneDelete {
   readonly table: PruneTable;
   readonly cutoff: "iso" | "epoch";
   readonly sqls: readonly string[];
-}> = [
+}
+
+const batched = (table: string, predicate: string): string =>
+  `DELETE FROM ${table} WHERE rowid IN (SELECT rowid FROM ${table} WHERE ${predicate} LIMIT ?)`;
+
+/** Ordered so child rows are removed before parent rows with foreign keys. */
+const PRUNE_DELETES: readonly PruneDelete[] = [
   {
     table: "pendingConfirmations",
     cutoff: "iso",
     sqls: [
-      "DELETE FROM pending_confirmations WHERE status != 'pending' AND created_at < ?",
-      "DELETE FROM pending_confirmations WHERE status = 'pending' AND expires_at < ?",
+      batched("pending_confirmations", "status != 'pending' AND created_at < ?"),
+      batched("pending_confirmations", "status = 'pending' AND expires_at < ?"),
     ],
   },
   {
     table: "idempotencyKeys",
     cutoff: "epoch",
     sqls: [
-      "DELETE FROM idempotency_keys WHERE committed_at IS NOT NULL AND committed_at < ?",
-      "DELETE FROM idempotency_keys WHERE receipt_json IS NULL AND claimed_at < ?",
+      batched("idempotency_keys", "committed_at IS NOT NULL AND committed_at < ?"),
+      batched("idempotency_keys", "receipt_json IS NULL AND claimed_at < ?"),
     ],
   },
   {
     table: "undoRecords",
     cutoff: "iso",
-    sqls: ["DELETE FROM undo_records WHERE status = 'undone' AND undone_at IS NOT NULL AND undone_at < ?"],
+    sqls: [
+      batched("undo_records", "status IN ('partially_undone', 'undone', 'failed', 'outcome_unknown') AND undone_at < ?"),
+      batched("undo_records", "status = 'expired' AND expires_at < ?"),
+    ],
+  },
+  { table: "turnTelemetry", cutoff: "iso", sqls: [batched("turn_telemetry", "created_at < ?")] },
+  { table: "chatMessages", cutoff: "iso", sqls: [batched("chat_messages", "created_at < ?")] },
+  { table: "auditEvents", cutoff: "iso", sqls: [batched("audit_events", "created_at < ?")] },
+  { table: "artifacts", cutoff: "iso", sqls: [batched("artifacts", "expires_at < ?")] },
+  {
+    table: "operationSteps",
+    cutoff: "iso",
+    sqls: [batched("operation_steps", "operation_id IN (SELECT id FROM operation_runs WHERE updated_at < ?)")],
   },
   {
-    table: "turnTelemetry",
+    table: "operationRuns",
     cutoff: "iso",
-    sqls: ["DELETE FROM turn_telemetry WHERE created_at < ?"],
+    sqls: [batched("operation_runs", "updated_at < ? AND NOT EXISTS (SELECT 1 FROM operation_steps WHERE operation_id = operation_runs.id)")],
   },
-  // Chat transcripts + audit log past the retention window (data-minimization).
+  { table: "actionResults", cutoff: "iso", sqls: [batched("action_results", "created_at < ?")] },
+  { table: "turnRuns", cutoff: "iso", sqls: [batched("turn_runs", "updated_at < ?")] },
   {
-    table: "chatMessages",
+    table: "chatSessions",
     cutoff: "iso",
-    sqls: ["DELETE FROM chat_messages WHERE created_at < ?"],
-  },
-  {
-    table: "auditEvents",
-    cutoff: "iso",
-    sqls: ["DELETE FROM audit_events WHERE created_at < ?"],
+    sqls: [batched("chat_sessions", `expires_at < ?
+      AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM pending_confirmations WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM undo_records WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM turn_telemetry WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM turn_runs WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM operation_runs WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM action_results WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM artifacts WHERE session_id = chat_sessions.id)`)],
   },
 ];
 
 export interface RetentionStoreOptions {
-  /** Retention window (ms) for chat_messages + audit_events. */
   chatAuditRetentionMs: number;
 }
 
-/**
- * Retention concern: pruneExpired (one transaction) + its test-only
- * explainPrunePlan. The chat/audit window is threaded in (the retentionDays
- * override is resolved in createStore) so this module owns only the
- * operational-table windows.
- */
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
 export function buildRetentionStore(
   ctx: StoreContext,
   { chatAuditRetentionMs }: RetentionStoreOptions,
 ): {
-  pruneExpired(nowIso: string): PruneCounts;
+  pruneExpired(nowIso: string): Promise<PruneCounts>;
   explainPrunePlan(): Record<PruneTable, string>;
 } {
   const { db } = ctx;
   return {
-    pruneExpired(nowIsoArg) {
+    async pruneExpired(nowIsoArg) {
+      const started = Date.now();
       const nowMs = Date.parse(nowIsoArg);
-      // Per-table cutoffs. The idempotency cutoff is a bare epoch int (its
-      // columns store epoch ms); every other table's column is an ISO string
-      // (each writer stamps via toISOString()), so ISO-string comparison is safe.
       const isoCutoff = (windowMs: number): string => new Date(nowMs - windowMs).toISOString();
+      const operationCutoff = isoCutoff(OPERATION_RETENTION_MS);
       const cutoffByTable: Record<PruneTable, string | number> = {
         pendingConfirmations: isoCutoff(CONFIRMATION_RETENTION_MS),
+        idempotencyKeys: nowMs - IDEMPOTENCY_RETENTION_MS,
         undoRecords: isoCutoff(UNDO_RETENTION_MS),
         turnTelemetry: isoCutoff(TELEMETRY_RETENTION_MS),
         chatMessages: isoCutoff(chatAuditRetentionMs),
         auditEvents: isoCutoff(chatAuditRetentionMs),
-        // Crashed-claim backstop (r1-concurrency-races-01): a NULL-receipt claim
-        // for a key that never recurs would leak forever — the committed_at-only
-        // prune NEVER matches it (NULL < n is NULL/falsy in SQLite, proven by
-        // execution). It is swept on the SAME retention clock as a completed row,
-        // NOT at CLAIM_TTL: a claim orphaned by a crash between the host write and
-        // `fill` must survive the whole dedup window so a re-claim sees
-        // `stale_unknown` (crash-before-fill), never a silent re-commit. Sweeping
-        // it at CLAIM_TTL would reopen that duplicate window from this hourly prune.
-        idempotencyKeys: nowMs - IDEMPOTENCY_RETENTION_MS,
+        artifacts: nowIsoArg,
+        operationSteps: operationCutoff,
+        operationRuns: operationCutoff,
+        actionResults: isoCutoff(chatAuditRetentionMs),
+        turnRuns: isoCutoff(chatAuditRetentionMs),
+        chatSessions: nowIsoArg,
       };
-      // One transaction — operational tables ONLY.
-      const run = db.transaction((): PruneCounts => {
-        const counts = {} as PruneCounts;
-        for (const { table, sqls } of PRUNE_DELETES) {
-          const cutoff = cutoffByTable[table];
-          counts[table] = sqls.reduce(
-            (sum, sql) => sum + db.prepare(sql).run(cutoff).changes,
-            0,
-          );
-        }
-        return counts;
-      });
-      return run();
+      const counts: Record<PruneTable, number> = {
+        pendingConfirmations: 0,
+        idempotencyKeys: 0,
+        undoRecords: 0,
+        turnTelemetry: 0,
+        chatMessages: 0,
+        auditEvents: 0,
+        artifacts: 0,
+        operationSteps: 0,
+        operationRuns: 0,
+        actionResults: 0,
+        turnRuns: 0,
+        chatSessions: 0,
+      };
+      let total = 0;
+      let batches = 0;
+      let changed = true;
+      while (changed && total < MAX_ROWS_PER_PASS) {
+        changed = false;
+        const remainingAtRoundStart = MAX_ROWS_PER_PASS - total;
+        const roundLimit = Math.min(BATCH_SIZE, remainingAtRoundStart);
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE undo_records SET status = 'expired', remaining_json = '[]'
+             WHERE rowid IN (SELECT rowid FROM undo_records WHERE status = 'available' AND expires_at < ? LIMIT ?)`,
+          ).run(nowIsoArg, roundLimit);
+          for (const { table, sqls } of PRUNE_DELETES) {
+            for (const sql of sqls) {
+              if (total >= MAX_ROWS_PER_PASS) return;
+              const limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+              const deleted = db.prepare(sql).run(cutoffByTable[table], limit).changes;
+              counts[table] += deleted;
+              total += deleted;
+              if (deleted > 0) changed = true;
+            }
+          }
+        })();
+        batches += 1;
+        if (changed && total < MAX_ROWS_PER_PASS) await yieldToEventLoop();
+      }
+      return {
+        ...counts,
+        total,
+        batches,
+        durationMs: Date.now() - started,
+        backlog: total >= MAX_ROWS_PER_PASS,
+      };
     },
 
     explainPrunePlan() {
-      // The exact prune DELETEs (mirror pruneExpired via the shared PRUNE_DELETES
-      // const); EXPLAIN takes a placeholder bind value of the right type, so the
-      // planner sees the real predicate shapes. The OR-predicate prunes are split
-      // into one DELETE per disjunct (as pruneExpired runs them); the joined plan
-      // must SEARCH an index for each.
       const plan = {} as Record<PruneTable, string>;
       for (const { table, cutoff, sqls } of PRUNE_DELETES) {
         const param: string | number = cutoff === "epoch" ? 0 : "x";
-        plan[table] = sqls
-          .map((sql) =>
-            (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(param) as Array<{ detail: string }>)
-              .map((r) => r.detail)
-              .join(" | "),
-          )
-          .join(" | ");
+        plan[table] = sqls.map((sql) =>
+          (db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(param, BATCH_SIZE) as Array<{ detail: string }>)
+            .map((row) => row.detail)
+            .join(" | "),
+        ).join(" | ");
       }
       return plan;
     },

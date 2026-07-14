@@ -39,6 +39,10 @@ export interface TurnMachinery {
   results: unknown[];
   emit: (result: unknown) => void;
   auditAndEmitReceipt: (actionName: string, receipt: SuccessReceipt | ErrorReceipt) => void;
+  auditAndEmitPartial: (
+    actionName: string,
+    result: Extract<ActionResult, { kind: "partial" }>,
+  ) => void;
   emitPreviewFor: (preview: PreviewCard, operation: ConfirmableOperation, agentState?: AgentState) => void;
   runAction: (call: ToolCall) => Promise<ActionResult>;
   onStep: (step: AgentStep) => void;
@@ -54,6 +58,8 @@ const isReceiptResult = (r: unknown): r is { kind: "receipt"; receipt: SuccessRe
   hasKind(r) && r.kind === "receipt";
 const isClarifyResult = (r: unknown): r is { kind: "clarify"; message?: string } =>
   hasKind(r) && r.kind === "clarify";
+const isPartialResult = (r: unknown): r is { kind: "partial"; message?: string } =>
+  hasKind(r) && r.kind === "partial";
 
 /** Map a finished agent turn onto the result stream: an interrupt becomes a pending preview. */
 export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { replyKind: string; baseText: string } {
@@ -76,6 +82,7 @@ export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { repl
   // message into reply.text too would render it twice in the UI (the clarify
   // bubble AND the assistant reply bubble). fix-clarify-double-render.
   if (turn.kind === "clarify") return { replyKind: "clarify", baseText: "" };
+  if (turn.kind === "partial") return { replyKind: "partial", baseText: "" };
   // The client disconnected mid-turn: no reply is sent (the socket is gone).
   if (turn.kind === "aborted") return { replyKind: "aborted", baseText: "" };
   // "final" and "exhausted" both carry truthful text from the loop.
@@ -89,6 +96,10 @@ export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { repl
 // not-yet-applied instruction — and store THAT (not the false claim) so the
 // model's own history can't convince it the action already happened.
 export function truthfulReplyText(results: unknown[], baseText: string, replyKind: string): string {
+  const partial = results.find(isPartialResult);
+  if (partial) {
+    return partial.message?.trim() || "The request stopped part-way through. Review the recorded changes before continuing.";
+  }
   const pendingPreviews = results.filter(isPreviewResult).length;
   if (pendingPreviews > 0) {
     // Single source of truth (safety-invariants-02): the stored boilerplate and

@@ -38,12 +38,17 @@ describe("gemini CLI model client", () => {
   });
 
   it("throws on a non-zero exit code", async () => {
-    const run = vi.fn(async (_args: string[], _prompt: string) => ({ code: 1, stdout: "", stderr: "boom" }));
-    await expect(createGeminiCliModelClient({ run }).complete(messages)).rejects.toThrow();
+    const run = vi.fn(async (_args: string[], _prompt: string) => ({ code: 1, stdout: "", stderr: "secret prompt and token" }));
+    const error = await createGeminiCliModelClient({ run }).complete(messages).catch((caught: unknown) => caught);
+    expect(String(error)).toContain("gemini_cli_exit");
+    expect(String(error)).not.toContain("secret prompt");
+    expect(String(error)).not.toContain("token");
   });
 
   it("throws when stdout is not a parseable CLI envelope", async () => {
-    const run = vi.fn(async (_args: string[], _prompt: string) => ({ code: 0, stdout: "not json", stderr: "" }));
-    await expect(createGeminiCliModelClient({ run }).complete(messages)).rejects.toThrow();
+    const run = vi.fn(async (_args: string[], _prompt: string) => ({ code: 0, stdout: "secret tool output", stderr: "" }));
+    const error = await createGeminiCliModelClient({ run }).complete(messages).catch((caught: unknown) => caught);
+    expect(String(error)).toContain("gemini_cli_malformed_response");
+    expect(String(error)).not.toContain("secret tool output");
   });
 });

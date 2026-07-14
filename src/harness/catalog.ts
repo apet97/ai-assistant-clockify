@@ -24,6 +24,7 @@ import { ADMIN_ACTIONS } from "./workflows/admin.js";
 import { CURATED_ACTIONS } from "./workflows/curated.js";
 import { SETUP_PROJECT_ACTIONS } from "./workflows/setup-project.js";
 import { SETUP_TASK_ACTIONS } from "./workflows/setup-task.js";
+import { createHash } from "node:crypto";
 
 /**
  * MCP-shaped action catalog (SPEC "Action Catalog Strategy"). Each action maps
@@ -96,4 +97,36 @@ export function catalogForModel(actionNames?: ReadonlySet<string>): ActionCatalo
     }));
   }
   return actionNames ? cachedModelView.filter((entry) => actionNames.has(entry.name)) : cachedModelView;
+}
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+/** Stable confirmation compatibility hash over name/schema summary/group/risk metadata. */
+export function actionFingerprint(name: string): string | undefined {
+  const action = getAction(name);
+  return action
+    ? fingerprint({
+        name: action.name,
+        args: summarizeArgs(action.schema),
+        featureGroup: action.featureGroup,
+        risks: action.risks,
+        argumentAliases: action.argumentAliases ?? [],
+      })
+    : undefined;
+}
+
+let cachedCatalogHash: string | undefined;
+export function catalogHash(): string {
+  cachedCatalogHash ??= fingerprint(
+    ACTION_CATALOG.map(({ name, schema, featureGroup, risks, argumentAliases }) => ({
+      name,
+      args: summarizeArgs(schema),
+      featureGroup,
+      risks,
+      argumentAliases: argumentAliases ?? [],
+    })),
+  );
+  return cachedCatalogHash;
 }

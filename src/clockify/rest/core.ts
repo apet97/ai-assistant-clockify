@@ -18,6 +18,13 @@
  * prompt, never returned.
  */
 import type { ClockifyAuth } from "../types.js";
+import { canonicalClockifyServiceUrl } from "../service-url.js";
+import {
+  AmbiguousWriteOutcome,
+  DefinitiveWriteFailure,
+  isMutationMethod,
+} from "../write-outcome.js";
+import type { WorkspaceRequestGovernor } from "../request-governor.js";
 export type { ClockifyAuth };
 export type ClockifyHost = "api" | "reports" | "audit";
 
@@ -41,6 +48,8 @@ export interface RestCoreOptions {
    * {@link COMMIT_TIMEOUT_MS}.
    */
   commitTimeoutMs?: number;
+  /** Shared per-workspace host-call governor. */
+  requestGovernor?: WorkspaceRequestGovernor;
 }
 
 export interface RestCore {
@@ -83,7 +92,7 @@ export interface RestCore {
     fields: Record<string, string | Blob>,
   ): Promise<unknown>;
   /** GET a binary body (e.g. an invoice/report export) as raw bytes + content type. */
-  getBinary(host: ClockifyHost, path: string): Promise<{ contentType: string; bytes: Uint8Array }>;
+  getBinary(host: ClockifyHost, path: string, maxBytes?: number): Promise<{ contentType: string; bytes: Uint8Array }>;
 }
 
 /** Page size used by `paginate`; Clockify's per-page cap for list endpoints. */
@@ -124,14 +133,15 @@ function retryDelayMs(res: Response, attempt: number): number {
 
 function hostsFor(apiBase: string): { api: string; reports: string; audit: string | undefined } {
   // https://api.clockify.me/api/v1 -> reports.api.clockify.me/v1, auditlog-api.api.clockify.me/v1
-  const u = new URL(apiBase);
+  const trustedApiBase = canonicalClockifyServiceUrl(apiBase, "api");
+  const u = new URL(trustedApiBase);
   const root = u.host.replace(/^api\./, ""); // clockify.me
   // The audit subdomain only exists where the API host is itself an api.<tenant>
   // subdomain (prod / regional). Dev/path hosts (developer.clockify.me/api) have
   // no audit host — leave it undefined (mirrors resolveClockifyAuditBase).
   const audit = u.host.startsWith("api.") ? `${u.protocol}//auditlog-api.api.${root}/v1` : undefined;
   return {
-    api: apiBase.replace(/\/$/, ""),
+    api: trustedApiBase,
     reports: `${u.protocol}//reports.api.${root}/v1`,
     audit,
   };
@@ -145,8 +155,10 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // undefined when the environment publishes no audit host.
   const hosts: Record<ClockifyHost, string | undefined> = {
     api: derived.api,
-    reports: opts.reportsBase ?? derived.reports,
-    audit: opts.auditBase ?? derived.audit,
+    reports: opts.reportsBase
+      ? canonicalClockifyServiceUrl(opts.reportsBase, "reports")
+      : canonicalClockifyServiceUrl(derived.reports, "reports"),
+    audit: opts.auditBase ? canonicalClockifyServiceUrl(opts.auditBase, "audit") : derived.audit,
   };
   const baseFetch = opts.fetchImpl ?? fetch;
   const commitTimeoutMs = opts.commitTimeoutMs ?? COMMIT_TIMEOUT_MS;
@@ -161,13 +173,25 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // no secrets (the url/header are never put in the message).
   async function doFetch(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
     try {
-      return await baseFetch(url, { ...init, signal: AbortSignal.timeout(commitTimeoutMs) });
+      const dispatch = () => baseFetch(url, {
+          ...init,
+          ...("addonToken" in opts.auth ? { redirect: "error" as const } : {}),
+          signal: AbortSignal.timeout(commitTimeoutMs),
+        });
+      return opts.requestGovernor
+        ? await opts.requestGovernor.run(isMutationMethod(method) ? "mutation" : "read", dispatch)
+        : await dispatch();
     } catch (error) {
+      const mutation = isMutationMethod(method);
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
-        throw new Error(`Clockify request timed out after ${commitTimeoutMs}ms (${method} ${path}).`);
+        const message = `Clockify request timed out after ${commitTimeoutMs}ms (${method} ${path}).`;
+        if (mutation) throw new AmbiguousWriteOutcome(method, path, message);
+        throw new Error(message);
       }
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Clockify ${method} ${path} failed: ${reason}`);
+      const message = `Clockify ${method} ${path} failed: ${reason}`;
+      if (mutation) throw new AmbiguousWriteOutcome(method, path, message);
+      throw new Error(message);
     }
   }
   const authHeader: Record<string, string> =
@@ -213,6 +237,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     let res: Response;
     for (let attempt = 0; ; attempt++) {
       res = await doFetch(method, path, url, init);
+      if (res.status === 429) opts.requestGovernor?.noteRateLimited(retryDelayMs(res, attempt));
       const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < MAX_GET_RETRIES;
       if (!willRetry) break;
       await res.text().catch(() => undefined); // drain the body before retrying
@@ -241,7 +266,14 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     if (!res.ok) {
       const text = await res.text();
       mapAddonRestriction(res.status, method, path, text);
-      throw new Error(`Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
+      const message = `Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`;
+      if (isMutationMethod(method)) {
+        if (res.status === 408 || res.status >= 500 || res.status < 400) {
+          throw new AmbiguousWriteOutcome(method, path, message, res.status);
+        }
+        throw new DefinitiveWriteFailure(method, path, message, res.status);
+      }
+      throw new Error(message);
     }
     if (res.status === 204) return null;
     const text = await res.text();
@@ -253,9 +285,11 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(
-        `Clockify ${method} ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`,
-      );
+      const message = `Clockify ${method} ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`;
+      if (isMutationMethod(method)) {
+        throw new AmbiguousWriteOutcome(method, path, message, res.status);
+      }
+      throw new Error(message);
     }
   }
 
@@ -357,6 +391,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   async function getBinary(
     host: ClockifyHost,
     path: string,
+    maxBytes = 1_000_000,
   ): Promise<{ contentType: string; bytes: Uint8Array }> {
     const res = await fetchWithRetry("GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
     if (!res.ok) {
@@ -364,7 +399,38 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       mapAddonRestriction(res.status, "GET", path, text);
       throw new Error(`Clockify GET ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     }
-    const bytes = new Uint8Array(await res.arrayBuffer());
+    const declared = Number(res.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      await res.body?.cancel().catch(() => undefined);
+      throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+    }
+    let bytes: Uint8Array;
+    const reader = res.body?.getReader();
+    if (reader) {
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (true) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        total += chunk.value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => undefined);
+          throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+        }
+        chunks.push(chunk.value);
+      }
+      bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+    } else {
+      bytes = new Uint8Array(await res.arrayBuffer());
+      if (bytes.byteLength > maxBytes) {
+        throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+      }
+    }
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 

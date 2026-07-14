@@ -3,7 +3,14 @@ import { zNumberLike, zStringList } from "../arg-shapes.js";
 import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { successReceipt } from "../receipts.js";
-import { resolveProjectTaskRefs, resolveRelativeDay, resolveTagRefs, resolveUserFilter } from "./resolve.js";
+import {
+  resolveInstant,
+  resolveProjectTaskRefs,
+  resolveRelativeDay,
+  resolveTagRefs,
+  resolveUserFilter,
+  zonedDayTimeInstant,
+} from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS, nowDate, nowIso } from "../../durations.js";
 
 /**
@@ -168,7 +175,7 @@ const stopTimer = defineAction({
  *  `undefined` = unparseable; callers clarify instead of sending it (live: review
  *  crashed with "Invalid time value" on `new Date("today")`). */
 function resolveDay(ctx: ActionContext, args: { date?: string; dayOffset?: number }): string | undefined {
-  return resolveRelativeDay(nowDate(ctx), args);
+  return resolveRelativeDay(nowDate(ctx), args, ctx.timeZone);
 }
 
 const DATE_CLARIFY = (raw: string) =>
@@ -203,8 +210,25 @@ function resolveLogTimes(
   let start: string;
   let end: string | undefined;
   if (args.start) {
-    start = args.start;
-    end = args.end ?? (durationMinutes !== undefined ? addMinutes(args.start, durationMinutes) : undefined);
+    if (!args.start.includes("T")) {
+      return { kind: "clarify", message: "The start must be a full ISO datetime with a Z or numeric offset." };
+    }
+    const parsedStart = resolveInstant(nowDate(ctx), args.start, "start", ctx.timeZone);
+    if (parsedStart === undefined) {
+      return { kind: "clarify", message: "The start must be a full ISO datetime with a Z or numeric offset." };
+    }
+    start = parsedStart;
+    if (args.end !== undefined) {
+      if (!args.end.includes("T")) {
+        return { kind: "clarify", message: "The end must be a full ISO datetime with a Z or numeric offset." };
+      }
+      end = resolveInstant(nowDate(ctx), args.end, "end", ctx.timeZone);
+      if (end === undefined) {
+        return { kind: "clarify", message: "The end must be a full ISO datetime with a Z or numeric offset." };
+      }
+    } else {
+      end = durationMinutes !== undefined ? addMinutes(start, durationMinutes) : undefined;
+    }
   } else {
     if (durationMinutes === undefined) {
       return {
@@ -212,9 +236,17 @@ function resolveLogTimes(
         message: "How long was it (e.g. 2 hours), or what start and end times should I use?",
       };
     }
+    if (!ctx.timeZone) {
+      return {
+        kind: "clarify",
+        message: "I couldn't verify your Clockify timezone, so I won't guess which instant 09:00 means. Refresh the add-on and try again.",
+      };
+    }
     const day = resolveDay(ctx, args);
     if (day === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
-    start = `${day}T09:00:00.000Z`;
+    const localStart = zonedDayTimeInstant(day, 9, 0, ctx.timeZone);
+    if (localStart === undefined) return { kind: "clarify", message: DATE_CLARIFY(args.date as string) };
+    start = localStart;
     end = args.end ?? addMinutes(start, durationMinutes);
   }
   // An explicit end at or before the start is a negative-length entry (e.g.
@@ -234,7 +266,7 @@ function resolveLogTimes(
 const logWork = defineAction({
   name: "clockify_log_work",
   description:
-    "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — when the admin gave none, omit it (never ask for one, never invent one). Give either an explicit `start` (+ `end`), or a `duration` (`durationHours`/`durationMinutes`) with the day — and you do NOT need to know the calendar date: pass `date` as `today`/`yesterday`/`tomorrow` (or YYYY-MM-DD), or `dayOffset` (0=today, -1=yesterday), and the harness anchors the start/end. Use this for \"log 2 hours on Apollo yesterday\" instead of asking for a clock time or date.",
+    "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — never invent one. Use exactly one shape: `start+end`, `start+durationHours|durationMinutes`, or `date|dayOffset + durationHours|durationMinutes`. Explicit datetimes require Z or a numeric offset. Duration is capped at 168 hours.",
   featureGroup: "time_tracking",
   risks: ["safe_write"],
   schema: z.object({
@@ -244,8 +276,8 @@ const logWork = defineAction({
     end: z.string().optional(),
     date: z.string().optional(),
     dayOffset: zNumberLike(z.number().int()).optional(),
-    durationMinutes: zNumberLike(z.number().positive()).optional(),
-    durationHours: zNumberLike(z.number().positive()).optional(),
+    durationMinutes: zNumberLike(z.number().positive().max(168 * 60)).optional(),
+    durationHours: zNumberLike(z.number().positive().max(168)).optional(),
     projectId: z.string().optional(),
     projectName: z.string().optional(),
     taskId: z.string().optional(),
@@ -254,6 +286,18 @@ const logWork = defineAction({
     /** Tag names (or use tagIds) — resolved to verified ids server-side. */
     tagNames: zStringList(z.array(z.string())).optional(),
     billable: z.boolean().optional(),
+  }).superRefine((args, ctx) => {
+    const durationCount = Number(args.durationMinutes !== undefined) + Number(args.durationHours !== undefined);
+    const dateCount = Number(args.date !== undefined) + Number(args.dayOffset !== undefined);
+    const startEnd = args.start !== undefined && args.end !== undefined && durationCount === 0 && dateCount === 0;
+    const startDuration = args.start !== undefined && args.end === undefined && durationCount === 1 && dateCount === 0;
+    const dateDuration = args.start === undefined && args.end === undefined && durationCount === 1 && dateCount === 1;
+    if (!startEnd && !startDuration && !dateDuration) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Use exactly start+end, start+one duration, or date/dayOffset+one duration.",
+      });
+    }
   }),
   async handler(ctx, args) {
     const times = resolveLogTimes(ctx, args);

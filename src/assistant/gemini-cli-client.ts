@@ -86,13 +86,13 @@ export function createGeminiCliModelClient(config: GeminiCliConfig = {}): ModelC
       const args = ["-o", "json", ...(config.model ? ["-m", config.model] : [])];
       const result = await run(args, flattenMessages(messages));
       if (result.code !== 0) {
-        throw new Error(`gemini CLI exited ${result.code}: ${result.stderr.slice(0, 200)}`);
+        throw new Error(`gemini_cli_exit code=${result.code}`);
       }
       let envelope: GeminiJsonEnvelope;
       try {
         envelope = JSON.parse(result.stdout) as GeminiJsonEnvelope;
       } catch {
-        throw new Error(`gemini CLI returned non-JSON output: ${result.stdout.slice(0, 120)}`);
+        throw new Error("gemini_cli_malformed_response");
       }
       return envelope.response ?? "";
     },

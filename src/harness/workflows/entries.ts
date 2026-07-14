@@ -52,6 +52,7 @@ const listEntries = defineAction({
       start: { raw: args.start },
       end: { raw: args.end },
       exampleHint: "today, yesterday, or last monday",
+      timeZone: ctx.timeZone,
     });
     if (!range.ok) return { kind: "clarify", message: range.message };
     const { start, end } = range;

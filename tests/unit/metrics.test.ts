@@ -30,10 +30,10 @@ describe("buildMetrics", () => {
     ]);
   });
 
-  it("summarizes confirmation outcomes (used→confirmed)", () => {
-    // Only statuses the store actually produces: used / cancelled / failed /
+  it("summarizes durable confirmation outcomes", () => {
+    // Only statuses the store actually produces: succeeded / cancelled / definitive_failed /
     // pending, plus the 'expired' the store derives for a lapsed pending row.
-    const m = buildMetrics([], ["used", "used", "cancelled", "expired", "failed", "pending"], "t");
+    const m = buildMetrics([], ["succeeded", "succeeded", "cancelled", "expired", "definitive_failed", "pending"], "t");
     expect(m.confirmations).toEqual({
       previewed: 6,
       confirmed: 2,

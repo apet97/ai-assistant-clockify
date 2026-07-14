@@ -11,6 +11,8 @@ function makeContext(fake: FakeWorkspace): ActionContext {
     policy: defaultAdminPolicy(),
     clockify: fake.client,
     now: () => new Date("2026-06-05T00:00:00.000Z"),
+    timeZone: "UTC",
+    weekStartsOn: 1,
   };
 }
 
@@ -20,6 +22,19 @@ function lastEntry(fake: FakeWorkspace) {
 }
 
 describe("clockify_log_work time resolution (no explicit start)", () => {
+  it("anchors the default 09:00 in the verified admin timezone", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: { durationHours: 2, date: "2026-06-04" },
+      context: { ...makeContext(fake), timeZone: "Europe/Belgrade", weekStartsOn: 1 },
+    });
+
+    expect(result.kind).toBe("receipt");
+    expect(lastEntry(fake).start).toBe("2026-06-04T07:00:00.000Z");
+    expect(lastEntry(fake).end).toBe("2026-06-04T09:00:00.000Z");
+  });
+
   it("logs a duration on a given date by anchoring a deterministic start + computed end", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
@@ -78,7 +93,7 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
       actionName: "clockify_log_work",
-      args: { description: "standup", durationMinutes: 30 },
+      args: { description: "standup", durationMinutes: 30, date: "today" },
       context: makeContext(fake),
     });
     expect(result.kind).toBe("receipt");
@@ -102,14 +117,54 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
     expect(entry.end).toBe("2026-06-05T14:00:00.000Z");
   });
 
-  it("asks one precise clarification when neither a start nor a duration is given (and writes nothing)", async () => {
+  it("rejects input with neither a start nor a duration (and writes nothing)", async () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
       actionName: "clockify_log_work",
       args: { description: "work" },
       context: makeContext(fake),
     });
-    expect(result.kind).toBe("clarify");
+    expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "invalid_args" } });
+    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+  });
+
+  it("requires one exact completed-work shape and rejects offset-less instants", async () => {
+    const fake = createFakeWorkspace();
+    const startOnly = await executeAction({
+      actionName: "clockify_log_work",
+      args: { start: "2026-06-05T13:00:00Z" },
+      context: makeContext(fake),
+    });
+    const offsetless = await executeAction({
+      actionName: "clockify_log_work",
+      args: { start: "2026-06-05T13:00:00", durationHours: 1 },
+      context: makeContext(fake),
+    });
+    const conflicting = await executeAction({
+      actionName: "clockify_log_work",
+      args: { start: "2026-06-05T13:00:00Z", end: "2026-06-05T14:00:00Z", durationHours: 1 },
+      context: makeContext(fake),
+    });
+
+    expect(startOnly).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "invalid_args" } });
+    expect(offsetless.kind).toBe("clarify");
+    expect(conflicting.kind).toBe("receipt");
+    if (conflicting.kind === "receipt" && !conflicting.receipt.ok) {
+      expect(conflicting.receipt.code).toBe("invalid_args");
+    }
+    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+  });
+
+  it("caps completed-work duration at 168 hours", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_log_work",
+      args: { date: "2026-06-01", durationHours: 169 },
+      context: makeContext(fake),
+    });
+
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
     expect(fake.counts.createTimeEntry ?? 0).toBe(0);
   });
 });

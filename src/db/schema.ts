@@ -158,6 +158,8 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON idempotency_keys(claimed_at)`,
   `CREATE INDEX IF NOT EXISTS idx_undo_records_prune
     ON undo_records(status, undone_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_undo_records_prune_expires
+    ON undo_records(status, expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_turn_telemetry_prune_created
     ON turn_telemetry(created_at)`,
   // Chat/audit retention sweep (marketplace data-minimization). The lookup
@@ -167,6 +169,195 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON chat_messages(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_prune_created
     ON audit_events(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_artifacts_prune_expires
+    ON artifacts(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_operation_runs_prune_updated
+    ON operation_runs(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_results_prune_created
+    ON action_results(created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_runs_prune_updated
+    ON turn_runs(updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_chat_sessions_prune_expires
+    ON chat_sessions(expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_undo_records_session
+    ON undo_records(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_telemetry_session
+    ON turn_telemetry(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_runs_session
+    ON turn_runs(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_operation_runs_session
+    ON operation_runs(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_action_results_session
+    ON action_results(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_artifacts_session
+    ON artifacts(session_id)`,
+];
+
+export const LATEST_SCHEMA_VERSION = 3;
+
+const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
+  {
+    version: 1,
+    statements: [
+      `CREATE TABLE IF NOT EXISTS turn_runs (
+        request_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        intent_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('prepared', 'executing', 'succeeded', 'failed', 'outcome_unknown')),
+        response_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (session_id, request_id)
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_turn_runs_workspace_admin_updated
+        ON turn_runs(workspace_id, admin_user_id, updated_at)`,
+      `CREATE TABLE IF NOT EXISTS action_results (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        session_id TEXT,
+        action_name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('succeeded', 'partial', 'definitive_failed', 'outcome_unknown')),
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      )`,
+      `CREATE TABLE IF NOT EXISTS operation_runs (
+        id TEXT PRIMARY KEY,
+        request_id TEXT,
+        confirmation_id TEXT,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        action_fingerprint TEXT NOT NULL,
+        catalog_hash TEXT NOT NULL,
+        operation_hash TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('prepared', 'executing', 'succeeded', 'partial', 'definitive_failed', 'outcome_unknown')),
+        action_result_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_operation_runs_scope_updated
+        ON operation_runs(workspace_id, admin_user_id, updated_at)`,
+      `CREATE TABLE IF NOT EXISTS operation_steps (
+        id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        step_index INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('prepared', 'executing', 'succeeded', 'definitive_failed', 'outcome_unknown', 'compensated', 'compensation_failed')),
+        external_id TEXT,
+        fingerprint TEXT,
+        detail_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (operation_id, step_index),
+        FOREIGN KEY (operation_id) REFERENCES operation_runs(id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        content_type TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        bytes BLOB NOT NULL,
+        checksum TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_artifacts_scope_expires
+        ON artifacts(workspace_id, admin_user_id, expires_at)`,
+      `CREATE TABLE IF NOT EXISTS readiness_probe (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        checked_at TEXT NOT NULL
+      )`,
+      `INSERT OR IGNORE INTO readiness_probe (id, checked_at) VALUES (1, '1970-01-01T00:00:00.000Z')`,
+    ],
+  },
+  {
+    version: 2,
+    statements: [
+      "DROP TABLE IF EXISTS pending_confirmations_v1",
+      "ALTER TABLE pending_confirmations RENAME TO pending_confirmations_v1",
+      `CREATE TABLE pending_confirmations (
+        id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('pending', 'executing', 'succeeded', 'partial', 'definitive_failed', 'outcome_unknown', 'cancelled', 'expired')),
+        risk_json TEXT NOT NULL,
+        preview_json TEXT NOT NULL,
+        operation_json TEXT NOT NULL,
+        operation_hash TEXT NOT NULL,
+        target_fingerprints_json TEXT NOT NULL,
+        action_fingerprint TEXT NOT NULL,
+        catalog_hash TEXT NOT NULL,
+        nonce_hash TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        used_at TEXT,
+        result_json TEXT,
+        action_result_id TEXT,
+        agent_state_json TEXT,
+        FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+      )`,
+      `INSERT INTO pending_confirmations (
+         id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json,
+         preview_json, operation_json, operation_hash, target_fingerprints_json,
+         action_fingerprint, catalog_hash, nonce_hash, expires_at, created_at, used_at,
+         result_json, action_result_id, agent_state_json
+       )
+       SELECT id, id, session_id, workspace_id, admin_user_id,
+         CASE status
+           WHEN 'used' THEN 'succeeded'
+           WHEN 'failed' THEN 'definitive_failed'
+           WHEN 'executing' THEN 'outcome_unknown'
+           ELSE status
+         END,
+         risk_json, preview_json, operation_json, operation_hash, '[]', 'legacy', 'legacy',
+         nonce_hash, expires_at, created_at, used_at, result_json, NULL, agent_state_json
+       FROM pending_confirmations_v1`,
+      "DROP TABLE pending_confirmations_v1",
+      `CREATE INDEX idx_pending_confirmations_lookup
+        ON pending_confirmations(workspace_id, admin_user_id, status, expires_at)`,
+      `CREATE INDEX idx_pending_confirmations_session
+        ON pending_confirmations(session_id, status, expires_at)`,
+    ],
+  },
+  {
+    version: 3,
+    statements: [
+      "DROP TABLE IF EXISTS undo_records_v2",
+      "ALTER TABLE undo_records RENAME TO undo_records_v2",
+      `CREATE TABLE undo_records (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        reversal_json TEXT NOT NULL,
+        remaining_json TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('available', 'executing', 'partially_undone', 'undone', 'failed', 'outcome_unknown', 'expired')),
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        undone_at TEXT,
+        result_json TEXT
+      )`,
+      `INSERT INTO undo_records (
+         id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+         remaining_json, status, created_at, expires_at, undone_at, result_json
+       )
+       SELECT id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+         CASE WHEN status = 'undone' THEN '[]' ELSE reversal_json END,
+         CASE WHEN status = 'undone' THEN 'undone' ELSE 'expired' END,
+         created_at, created_at, undone_at, NULL
+       FROM undo_records_v2`,
+      "DROP TABLE undo_records_v2",
+    ],
+  },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -195,6 +386,14 @@ export function migrate(db: Database.Database): void {
   // then relax receipt_json via a guarded, crash-idempotent rebuild.
   addColumnIfMissing(db, "idempotency_keys", "claimed_at", "INTEGER");
   relaxIdempotencyReceiptNullable(db);
+  const currentVersion = db.pragma("user_version", { simple: true }) as number;
+  for (const migration of VERSIONED_MIGRATIONS) {
+    if (migration.version <= currentVersion) continue;
+    db.transaction(() => {
+      for (const statement of migration.statements) db.prepare(statement).run();
+      db.pragma(`user_version = ${migration.version}`);
+    })();
+  }
   // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
   // in its final (rebuilt) shape, so indexing those columns can't throw.
   for (const statement of PRUNE_INDEX_STATEMENTS) {

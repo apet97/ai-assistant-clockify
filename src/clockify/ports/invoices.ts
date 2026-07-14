@@ -49,16 +49,12 @@ export interface InvoicePayment {
 }
 
 /**
- * Result of an invoice export. The PDF bytes are base64-encoded, but only when
- * within the receipt cap — over the cap, `base64` is omitted and `truncated` is
- * set so the caller can surface an explicit warning (no silent truncation).
+ * Raw export bytes stay backend-only and are stored once as a short-lived,
+ * authenticated artifact. They never enter a receipt or model transcript.
  */
 export interface InvoiceExport {
   contentType: string;
-  /** Raw PDF length in bytes (always reported, even when `base64` is omitted). */
-  bytes: number;
-  base64?: string;
-  truncated: boolean;
+  bytes: Uint8Array;
 }
 
 export interface CreateInvoiceInput {

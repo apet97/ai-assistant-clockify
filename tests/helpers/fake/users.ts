@@ -6,6 +6,7 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   | "listUsers"
   | "getWorkspaceMemberRole"
+  | "getCalendarContext"
   | "inviteUser"
   | "updateUserRole"
   | "updateWorkspaceMemberRate"
@@ -25,7 +26,11 @@ export function makeFakeUsers({ state, bump, nextId }: FakeContext): Pick<
     },
     async getWorkspaceMemberRole(userId): Promise<string | undefined> {
       bump("getWorkspaceMemberRole");
-      return state.memberRoles[userId];
+      return state.memberRoles[userId] ?? "ADMIN";
+    },
+    async getCalendarContext() {
+      bump("getCalendarContext");
+      return state.calendarContext;
     },
     async inviteUser(email, sendEmail) {
       bump("inviteUser");

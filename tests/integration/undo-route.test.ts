@@ -196,11 +196,10 @@ describe("undo route", () => {
     expect(res.status).toBe(401);
   });
 
-  it("an idempotent replay does NOT mint a SECOND undo record (one entity, one undo handle)", async () => {
-    // Confirming the same reversible+idempotency-keyed creation twice within the
-    // window returns the ORIGINAL commit's receipt (changed.created survives, tagged
-    // idempotent_replay). That first commit already minted the undo record, so the
-    // replay must NOT mint a second — else one invoice gets two live undo handles.
+  it("independent identical invoice operations mint distinct undo records", async () => {
+    // Invoice identity is the stored operation id, not a semantic time window.
+    // Two new previews are two intentional operations even when their visible
+    // fields match, and each created invoice needs its own undo handle.
     const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
     isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
     const isoFake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme" }] });
@@ -234,12 +233,13 @@ describe("undo route", () => {
 
     const first = await confirmInvoice();
     expect(first.status).toBe(200);
-    expect(first.body.undo?.id).toBeTruthy(); // the first commit gets an undo handle
+    expect(first.body.undo?.id).toBeTruthy();
 
-    const second = await confirmInvoice(); // same intent within the window → idempotent replay
+    const second = await confirmInvoice();
     expect(second.status).toBe(200);
-    expect(second.body.undo).toBeUndefined(); // NO second undo handle on the replay
-    expect(isoFake.counts.createInvoice).toBe(1); // and no duplicate invoice was created
+    expect(second.body.undo?.id).toBeTruthy();
+    expect(second.body.undo.id).not.toBe(first.body.undo.id);
+    expect(isoFake.counts.createInvoice).toBe(2);
 
     isoStore.close();
   });

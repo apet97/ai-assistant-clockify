@@ -112,6 +112,11 @@ catalog), `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 RS256 key is built in. Never set a real token here; the add-on receives its
 install token from Clockify at runtime.
 
+`DATA_ENCRYPTION_KEY_PREVIOUS` is rotation-only. Set the new key in
+`DATA_ENCRYPTION_KEY` and the old key in `DATA_ENCRYPTION_KEY_PREVIOUS`; startup
+transactionally re-encrypts every installation token. After a successful health
+check, token-backed read, and verified backup, remove the previous key and redeploy.
+
 `BASE_URL` must match the live domain exactly: it is the manifest `baseUrl` and
 the session cookie is `SameSite=None; Secure; Partitioned`, so a mismatched or
 non-HTTPS origin breaks the cross-site iframe.
@@ -130,9 +135,10 @@ embedded chat loads and a read action returns a receipt.
 
 ## 5. Verify the deploy
 
-- `GET https://<your-app>.up.railway.app/health` → `200 {"ok":true}` (this is the
-  Railway healthcheck path — it touches the DB handle, so a hung/locked SQLite
-  instance reports `503` and gets rotated out, which a static `/manifest` couldn't).
+- `GET https://<your-app>.up.railway.app/live` → `200` while the process can serve.
+- `GET https://<your-app>.up.railway.app/health` → `200 {"ok":true}` only while
+  ready. It performs a bounded committed SQLite probe, so draining, locked,
+  read-only, full, or closed storage returns `503`.
 - `GET https://<your-app>.up.railway.app/manifest` → `200` (the add-on manifest).
 - Sidebar chat loads; a read ("list my projects") returns a receipt; a risky write
   shows a preview + Confirm button.
@@ -149,6 +155,48 @@ embedded chat loads and a read action returns a receipt.
   one-use confirmation nonce. Rotating it invalidates ALL live sessions AND ALL
   live pending confirmations at once — expect admins to re-open the panel and
   re-preview after a rotation.
+- Clockify host calls are governed per workspace at 10 requests/second, burst 10,
+  concurrency 4, one mutation at a time, and 60 host calls per chat/resume turn.
+  A `429` pauses new dispatches according to `Retry-After`; writes are never retried.
+
+## Backup, restore, and point-in-time recovery
+
+Back up the live SQLite database with its online backup API; do not copy the live
+`.sqlite`, `-wal`, and `-shm` files independently:
+
+```bash
+npm run db:backup -- /data/ai-assistant.sqlite /data/backups/ai-assistant-$(date +%Y%m%dT%H%M%S).sqlite
+```
+
+The command runs `PRAGMA integrity_check`, creates a consistent snapshot, and writes
+`.sha256` plus JSON metadata sidecars. Copy all three files to encrypted off-volume
+storage. Keep daily backups for 30 days and one monthly backup for the applicable
+legal/contractual period; never retain them longer than the source data policy.
+
+Restore only while the service is stopped/draining:
+
+```bash
+RESTORE_DATABASE=YES npm run db:restore -- backup.sqlite restored.sqlite
+```
+
+The restore refuses a checksum mismatch or failed integrity check and will not
+overwrite an existing target unless `RESTORE_OVERWRITE=YES`. Prefer restoring to a
+new path, start a one-off instance against it, verify `/health`, schema version, and
+a token-backed read, then atomically switch `DATABASE_PATH`. A point-in-time recovery
+can restore only to a completed backup timestamp; application rows written after that
+snapshot may have host-side effects, so all recovered `executing` operations become
+`outcome_unknown` and must be reconciled before another write.
+
+Run and record a restore drill before launch and at least quarterly. The automated
+hardening pass verified a local backup/checksum/restore/data-read drill; production
+volume recovery remains an operator gate.
+
+## Required alerts
+
+Alert on readiness `503`, fatal/draining exits, retention backlog or repeated prune
+failure, SQLite `BUSY`/`FULL`/read-only errors, operation `outcome_unknown`, sustained
+Clockify `429`/5xx responses, model-provider failures, and artifact oversize rejects.
+Do not include prompts, headers, tool results, or tokens in alert payloads.
 
 ## Still human-gated (unchanged by hosting)
 

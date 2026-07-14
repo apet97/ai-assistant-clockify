@@ -34,7 +34,7 @@ const periodReport = defineAction({
     groups: z.array(z.enum(["PROJECT", "CLIENT", "TASK", "TAG", "USER", "DATE"])).optional(),
   }),
   async handler(ctx, args) {
-    let range = resolvePeriod(nowDate(ctx), args.period);
+    let range = resolvePeriod(nowDate(ctx), args.period, ctx.timeZone, ctx.weekStartsOn);
     let weeklyClamped = false;
     if (args.type === "weekly") {
       // Clockify's weekly report REJECTS any range that isn't exactly 7 days

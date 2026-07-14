@@ -20,5 +20,10 @@ export const groupsPatchSchema = z
 // deterministic friendly "what would you like me to do?" handler in
 // executeChatTurn (live finding new-6, tested in chat-empty-message.test.ts) —
 // never to the planner.
-export const chatBodySchema = z.object({ message: z.string().min(1).max(4000) });
-export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) });
+export const chatBodySchema = z
+  .object({
+    message: z.string().min(1).max(4000),
+    requestId: z.string().uuid().optional(),
+  })
+  .strict();
+export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) }).strict();

@@ -568,6 +568,7 @@ export {
   resolvePeriod,
   resolveInstant,
   resolveDateRange,
+  zonedDayTimeInstant,
   REPORT_PERIODS,
 } from "./resolve-dates.js";
 export type { ReportPeriod } from "./resolve-dates.js";

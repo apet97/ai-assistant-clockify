@@ -2,6 +2,7 @@ import { Router, type Request } from "express";
 import { ClockifyHeaders, verifyAddonToken } from "../addon/verify.js";
 import { asyncHandler } from "./async-handler.js";
 import type { AppDeps } from "./deps.js";
+import { canonicalClockifyServiceUrl } from "../clockify/service-url.js";
 
 /**
  * Clockify lifecycle routes (ARCHITECTURE "Lifecycle Install"). Each request is
@@ -74,13 +75,29 @@ export function lifecycleRouter(deps: AppDeps): Router {
         return res.status(400).json({ ok: false, code: "invalid_payload" });
       }
 
+      let bodyApiUrl: string | undefined;
+      let claimApiUrl: string | undefined;
+      try {
+        bodyApiUrl = typeof body.apiUrl === "string"
+          ? canonicalClockifyServiceUrl(body.apiUrl, "api")
+          : undefined;
+        claimApiUrl = typeof claims.backendUrl === "string"
+          ? canonicalClockifyServiceUrl(claims.backendUrl, "api")
+          : undefined;
+      } catch {
+        return res.status(400).json({ ok: false, code: "invalid_service_origin" });
+      }
+      if (bodyApiUrl && claimApiUrl && bodyApiUrl !== claimApiUrl) {
+        return res.status(403).json({ ok: false, code: "service_origin_mismatch" });
+      }
+
       deps.store.saveInstallation({
         workspaceId,
         addonId: body.addonId ?? claims.addonId ?? "",
         addonUserId: body.addonUserId ?? "",
         addonToken,
-        apiUrl: body.apiUrl,
-        backendUrl: claims.backendUrl,
+        apiUrl: bodyApiUrl,
+        backendUrl: claimApiUrl,
         status: "active",
         installedByUserId: body.asUser,
       });
@@ -126,7 +143,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
       // Uninstall = full data erasure (GDPR / data-minimization): every
       // workspace-scoped row is deleted and the installation is tombstoned with the
       // token wiped. The cross-workspace guard above ensures only the token's own
-      // workspace can be erased.
+      // workspace can be erased, including the installation metadata itself.
       // Durable forensic trace: the audit rows are themselves erased, so the erase
       // COUNTS go to the log drain (which survives) — never the token or any content.
       const erased = deps.store.eraseWorkspace(workspaceId);

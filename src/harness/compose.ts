@@ -11,9 +11,9 @@ import type { EntityRef, Warning } from "./receipts.js";
  *   `undo`s run in REVERSE order) and reports a clean failure — no orphans.
  * - A **best-effort** step (`required: false`) that throws becomes a warning and
  *   the run continues (e.g. starting a timer after creating the project).
- * - A step may **stop** the run by returning a clarify/preview `ActionResult` —
- *   that is not a failure (the admin is being asked to choose), so prior creates
- *   are kept, exactly like the pre-composition behavior.
+ * - A step may **stop** the run by returning a clarify/preview `ActionResult`.
+ *   Prior creates are rolled back by default; retaining them requires the caller
+ *   to opt in explicitly and surface the outcome as partial.
  *
  * Only entities a step actually CREATED get an `undo`; reused entities are never
  * rolled back. This module is pure orchestration — all Clockify I/O lives in the
@@ -40,7 +40,13 @@ export interface CompositionStep {
 
 export type CompositionStatus =
   | { kind: "ok" }
-  | { kind: "stopped"; result: ActionResult }
+  | {
+      kind: "stopped";
+      result: ActionResult;
+      retained: boolean;
+      rolledBack: EntityRef[];
+      rollbackWarnings: Warning[];
+    }
   | {
       kind: "failed";
       label: string;
@@ -54,6 +60,11 @@ export interface CompositionOutcome {
   reused: EntityRef[];
   warnings: Warning[];
   status: CompositionStatus;
+}
+
+export interface CompositionOptions {
+  /** Keep completed creates when a later step stops. Callers must report partial. */
+  stopPolicy?: "rollback" | "retain";
 }
 
 /**
@@ -93,7 +104,10 @@ async function rollback(undos: Undoable[]): Promise<{ rolledBack: EntityRef[]; r
   return { rolledBack, rollbackWarnings };
 }
 
-export async function runComposition(steps: CompositionStep[]): Promise<CompositionOutcome> {
+export async function runComposition(
+  steps: CompositionStep[],
+  options: CompositionOptions = {},
+): Promise<CompositionOutcome> {
   const created: EntityRef[] = [];
   const reused: EntityRef[] = [];
   const warnings: Warning[] = [];
@@ -114,7 +128,33 @@ export async function runComposition(steps: CompositionStep[]): Promise<Composit
     }
 
     if (result.kind === "stop") {
-      return { created, reused, warnings, status: { kind: "stopped", result: result.result } };
+      if (options.stopPolicy === "retain") {
+        return {
+          created,
+          reused,
+          warnings,
+          status: {
+            kind: "stopped",
+            result: result.result,
+            retained: true,
+            rolledBack: [],
+            rollbackWarnings: [],
+          },
+        };
+      }
+      const { rolledBack, rollbackWarnings } = await rollback(undos);
+      return {
+        created,
+        reused,
+        warnings,
+        status: {
+          kind: "stopped",
+          result: result.result,
+          retained: false,
+          rolledBack,
+          rollbackWarnings,
+        },
+      };
     }
     if (result.created?.length) created.push(...result.created);
     if (result.reused?.length) reused.push(...result.reused);

@@ -22,7 +22,13 @@ function renderPatchValue(value: unknown): string {
   if (typeof value === "string") text = JSON.stringify(value);
   else if (value === null || value === undefined) text = String(value);
   else if (typeof value === "object") text = JSON.stringify(value);
-  else text = String(value);
+  else if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    text = String(value);
+  } else if (typeof value === "symbol") {
+    text = value.description ?? "Symbol";
+  } else {
+    text = "[function]";
+  }
   return text.length > MAX_PATCH_VALUE_LEN ? `${text.slice(0, MAX_PATCH_VALUE_LEN - 1)}…` : text;
 }
 

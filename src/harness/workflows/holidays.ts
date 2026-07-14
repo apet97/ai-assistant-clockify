@@ -31,9 +31,9 @@ function resolveHolidayDates(
 ): { ok: true; startDate?: string; endDate?: string } | { ok: false; clarify: RiskyClarifyResult } {
   const now = nowDate(ctx);
   const bad: string[] = [];
-  const resolvedStart = startDate !== undefined ? resolveRelativeDay(now, { date: startDate }) : undefined;
+  const resolvedStart = startDate !== undefined ? resolveRelativeDay(now, { date: startDate }, ctx.timeZone) : undefined;
   if (startDate !== undefined && resolvedStart === undefined) bad.push(`start date "${startDate}"`);
-  const resolvedEnd = endDate !== undefined ? resolveRelativeDay(now, { date: endDate }) : undefined;
+  const resolvedEnd = endDate !== undefined ? resolveRelativeDay(now, { date: endDate }, ctx.timeZone) : undefined;
   if (endDate !== undefined && resolvedEnd === undefined) bad.push(`end date "${endDate}"`);
   if (bad.length) {
     return {
@@ -123,6 +123,7 @@ const listInPeriod = defineAction({
       start: { raw: args.start },
       end: { raw: args.end },
       exampleHint: "today, next monday, or next month",
+      timeZone: ctx.timeZone,
     });
     if (!dates.ok) return { kind: "clarify", message: dates.message };
     // The schema requires both edges; this also guards a whitespace-only value.

@@ -9,7 +9,7 @@ import { describePatch, resolveDateRange, resolveEntityRef, resolveProjectTaskRe
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
 function resolveDate(ctx: ActionContext, date?: string): string | undefined {
-  return resolveRelativeDay(nowDate(ctx), { date });
+  return resolveRelativeDay(nowDate(ctx), { date }, ctx.timeZone);
 }
 
 const DATE_CLARIFY = (raw: string) =>
@@ -58,6 +58,7 @@ const listExpenses = defineAction({
       start: { raw: args.start },
       end: { raw: args.end },
       exampleHint: "today, yesterday, or last month",
+      timeZone: ctx.timeZone,
     });
     if (!dates.ok) return { kind: "clarify", message: dates.message };
     const { start, end } = dates;

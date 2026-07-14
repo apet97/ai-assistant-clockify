@@ -23,7 +23,7 @@ describe("runComposition", () => {
     expect(outcome.created.map((r) => r.id)).toEqual(["c1", "p1"]);
   });
 
-  it("short-circuits on a stop step (clarify/preview) WITHOUT rolling back prior creates", async () => {
+  it("rolls back prior creates by default when a step stops for clarification", async () => {
     const undo = vi.fn(async () => {});
     const third = vi.fn();
     const outcome = await runComposition([
@@ -33,9 +33,33 @@ describe("runComposition", () => {
     ]);
     expect(outcome.status.kind).toBe("stopped");
     if (outcome.status.kind === "stopped") expect(outcome.status.result.kind).toBe("clarify");
-    expect(undo).not.toHaveBeenCalled(); // a clarify is not a failure — keep what's done
+    expect(undo).toHaveBeenCalledTimes(1);
     expect(third).not.toHaveBeenCalled(); // and don't run later steps
     expect(outcome.created.map((r) => r.id)).toEqual(["t1"]);
+    if (outcome.status.kind === "stopped") {
+      expect(outcome.status.rolledBack.map((r) => r.id)).toEqual(["t1"]);
+      expect(outcome.status.rollbackWarnings).toEqual([]);
+      expect(outcome.status.retained).toBe(false);
+    }
+  });
+
+  it("retains prior creates only when the composition explicitly opts in", async () => {
+    const undo = vi.fn(async () => {});
+    const outcome = await runComposition(
+      [
+        doneStep("a", [ref("tag", "t1")], undo),
+        { label: "b", required: true, run: async () => ({ kind: "stop", result: { kind: "clarify", message: "which?" } }) },
+      ],
+      { stopPolicy: "retain" },
+    );
+
+    expect(outcome.status.kind).toBe("stopped");
+    expect(undo).not.toHaveBeenCalled();
+    if (outcome.status.kind === "stopped") {
+      expect(outcome.status.rolledBack).toEqual([]);
+      expect(outcome.status.rollbackWarnings).toEqual([]);
+      expect(outcome.status.retained).toBe(true);
+    }
   });
 
   it("rolls back prior created entities in REVERSE order when a required step throws", async () => {

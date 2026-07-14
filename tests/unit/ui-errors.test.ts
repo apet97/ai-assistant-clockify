@@ -17,12 +17,16 @@ import {
 function stubFetch(status: number, body: unknown): void {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => ({
-      ok: status < 400,
-      status,
-      body: null,
-      json: async () => body,
-    })),
+    vi.fn(async (path: string) => {
+      const isMeBootstrap = path === "/api/me" && status !== 401;
+      const responseStatus = isMeBootstrap ? 200 : status;
+      return {
+        ok: responseStatus < 400,
+        status: responseStatus,
+        body: null,
+        json: async () => isMeBootstrap ? { ok: true, csrfToken: "csrf-token" } : body,
+      };
+    }),
   );
 }
 
@@ -138,7 +142,12 @@ describe("createFetchApi chat-history switcher methods", () => {
       "fetch",
       vi.fn(async (path: string, init?: RequestInit) => {
         calls.push({ path, init });
-        return { ok: true, status: 200, body: null, json: async () => ({ ok: true }) };
+        return {
+          ok: true,
+          status: 200,
+          body: null,
+          json: async () => path === "/api/me" ? { ok: true, csrfToken: "csrf-token" } : { ok: true },
+        };
       }),
     );
     return { calls };
@@ -157,8 +166,32 @@ describe("createFetchApi chat-history switcher methods", () => {
   it("switchSession POSTs /api/chat/sessions/<encoded id>/open with an encoded id", async () => {
     const { calls } = recordFetch();
     await createFetchApi().switchSession("a b/../c?d");
-    expect(calls).toHaveLength(1);
-    expect(calls[0].path).toBe(`/api/chat/sessions/${encodeURIComponent("a b/../c?d")}/open`);
-    expect(calls[0].init?.method).toBe("POST");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].path).toBe("/api/me");
+    expect(calls[1].path).toBe(`/api/chat/sessions/${encodeURIComponent("a b/../c?d")}/open`);
+    expect(calls[1].init?.method).toBe("POST");
+  });
+});
+
+describe("createFetchApi CSRF fallback", () => {
+  it("loads the session token once from /api/me and sends it on every mutation", async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      const body = path === "/api/me" ? { ok: true, csrfToken: "csrf-token" } : { ok: true };
+      return { ok: true, status: 200, body: null, json: async () => body };
+    }));
+    const api = createFetchApi();
+    await api.sendMessage("hello");
+    await api.cancelPreview("p1");
+
+    expect(calls.map((call) => call.path)).toEqual([
+      "/api/me",
+      "/api/chat/messages",
+      "/api/confirmations/p1/cancel",
+    ]);
+    for (const call of calls.slice(1)) {
+      expect(new Headers(call.init?.headers).get("x-csrf-token")).toBe("csrf-token");
+    }
   });
 });

@@ -86,6 +86,42 @@ describe("POST /lifecycle/installed", () => {
     expect(saved?.backendUrl).toBe("https://api.clockify.me");
   });
 
+  it("rejects a lifecycle body service URL that disagrees with the signed URL claim", async () => {
+    const token = await lifecycleToken({
+      workspaceId: "ws-origin-mismatch",
+      addonId: "addon-install",
+      backendUrl: "https://api.clockify.me/api",
+    });
+    const res = await request(app)
+      .post("/lifecycle/installed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({
+        authToken: "install-token-xyz",
+        workspaceId: "ws-origin-mismatch",
+        apiUrl: "https://developer.clockify.me/api",
+      });
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("service_origin_mismatch");
+    expect(store.getInstallation("ws-origin-mismatch")).toBeUndefined();
+  });
+
+  it.each([
+    "http://api.clockify.me/api",
+    "https://api.clockify.me.evil.example/api",
+    "https://127.0.0.1/api",
+    "https://api.clockify.me/admin",
+  ])("rejects a malicious installation service URL before persistence: %s", async (apiUrl) => {
+    const token = await lifecycleToken({ workspaceId: `ws-malicious-${Buffer.from(apiUrl).toString("hex").slice(0, 8)}` });
+    const workspaceId = `ws-malicious-${Buffer.from(apiUrl).toString("hex").slice(0, 8)}`;
+    const res = await request(app)
+      .post("/lifecycle/installed")
+      .set(LIFECYCLE_HEADER, token)
+      .send({ authToken: "install-token-xyz", workspaceId, apiUrl });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("invalid_service_origin");
+    expect(store.getInstallation(workspaceId)).toBeUndefined();
+  });
+
   it("rejects an unsigned/invalid lifecycle token with 401", async () => {
     const res = await request(app)
       .post("/lifecycle/installed")
@@ -167,7 +203,7 @@ describe("POST /lifecycle/installed", () => {
 });
 
 describe("POST /lifecycle/deleted", () => {
-  it("erases the workspace's data and tombstones the token on a valid uninstall", async () => {
+  it("hard-deletes the workspace's data and installation metadata on a valid uninstall", async () => {
     store.saveInstallation({
       workspaceId: "ws-erase",
       addonId: "addon-erase",
@@ -185,9 +221,7 @@ describe("POST /lifecycle/deleted", () => {
       .send({ workspaceId: "ws-erase" });
 
     expect(res.status).toBe(200);
-    const inst = store.getInstallation("ws-erase");
-    expect(inst?.status).toBe("deleted");
-    expect(inst?.addonToken).toBe(""); // token wiped on uninstall
+    expect(store.getInstallation("ws-erase")).toBeUndefined();
     expect(store.getRecentMessages(session.id, 10)).toHaveLength(0); // data erased
   });
 

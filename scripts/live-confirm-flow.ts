@@ -150,6 +150,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const cookie = cookieMatch![0];
+  const csrfResponse = await fetch(`${BASE_URL}/api/me`, { headers: { cookie } });
+  const csrfToken = ((await csrfResponse.json()) as { csrfToken?: string }).csrfToken;
+  if (!csrfToken) throw new Error("Could not obtain the session CSRF token.");
+  const appHeaders = { "content-type": "application/json", cookie, "x-csrf-token": csrfToken };
 
   // Direct REST reads (deterministic existence checks) via the SAME add-on-token adapter.
   const rest = createRestWorkspaceClient({
@@ -165,7 +169,7 @@ async function main(): Promise<void> {
   async function chat(message: string): Promise<ChatResponse> {
     const r = await fetch(`${BASE_URL}/api/chat/messages`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: appHeaders,
       body: JSON.stringify({ message }),
     });
     return (await r.json()) as ChatResponse;
@@ -173,7 +177,7 @@ async function main(): Promise<void> {
   async function confirm(previewId: string, nonce: string): Promise<{ status: number; body: { ok?: boolean; code?: string; receipt?: ChatResult["receipt"] } }> {
     const r = await fetch(`${BASE_URL}/api/confirmations/${previewId}/confirm`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: appHeaders,
       body: JSON.stringify({ nonce }),
     });
     return { status: r.status, body: (await r.json()) as { ok?: boolean; code?: string } };
@@ -181,7 +185,7 @@ async function main(): Promise<void> {
   async function setPermission(level: "read" | "read_write"): Promise<void> {
     await fetch(`${BASE_URL}/api/permissions/confirm`, {
       method: "POST",
-      headers: { "content-type": "application/json", cookie },
+      headers: appHeaders,
       body: JSON.stringify({ groups: { work_structure: level } }),
     });
   }

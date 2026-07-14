@@ -266,6 +266,22 @@ describe("time-off actions", () => {
     expect(fake.counts.createTimeOffRequest).toBe(1);
   });
 
+  it("builds HOURS policy windows from 09:00 in the verified local zone", async () => {
+    const fake = createFakeWorkspace({
+      timeOffPolicies: [{ id: "polh", name: "Hourly PTO", status: "ACTIVE", timeUnit: "HOURS" }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_time_off_requests_create",
+      args: { policyName: "Hourly PTO", start: "2026-06-10", hours: 4 },
+      context: { ...makeContext(fake), timeZone: "Europe/Belgrade" },
+    });
+    if (result.kind !== "preview") throw new Error("expected preview");
+    expect((result.operation.payload as any).input).toMatchObject({
+      start: "2026-06-10T07:00:00Z",
+      end: "2026-06-10T11:00:00Z",
+    });
+  });
+
   it("requests_create on an HOURS policy clarifies when hours are missing (never a wrong-shape commit)", async () => {
     const fake = createFakeWorkspace({
       timeOffPolicies: [{ id: "polh", name: "Hourly PTO", status: "ACTIVE", timeUnit: "HOURS" }],

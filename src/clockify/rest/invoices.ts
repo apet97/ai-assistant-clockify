@@ -10,9 +10,8 @@ import type {
 } from "../ports/invoices.js";
 
 /**
- * Largest export the receipt will carry inline (1 MB raw → base64). Over this,
- * the bytes are reported but `base64` is omitted with `truncated:true` so the
- * caller surfaces an explicit warning — never a silent cap.
+ * Hard binary limit. The core checks Content-Length and streamed chunks before
+ * returning accepted bytes to the short-lived artifact store.
  */
 const EXPORT_MAX_BYTES = 1_000_000;
 
@@ -211,16 +210,7 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
         throw new Error(`invoice export format must be PDF; Clockify does not produce ${format}`);
       }
       const qs = new URLSearchParams({ format: "PDF", userLocale: "en-US" });
-      const { contentType, bytes } = await core.getBinary("api", `${ws}/invoices/${id}/export?${qs.toString()}`);
-      if (bytes.byteLength > EXPORT_MAX_BYTES) {
-        return { contentType, bytes: bytes.byteLength, truncated: true };
-      }
-      return {
-        contentType,
-        bytes: bytes.byteLength,
-        base64: Buffer.from(bytes).toString("base64"),
-        truncated: false,
-      };
+      return core.getBinary("api", `${ws}/invoices/${id}/export?${qs.toString()}`, EXPORT_MAX_BYTES);
     },
     async createInvoice(input): Promise<EntitySummary> {
       // POST /invoices accepts ONLY the spec's CreateInvoiceRequest fields
@@ -272,14 +262,27 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       // the receipt. Diff the payments list around the POST to return the
       // genuinely new payment instead.
       const before = new Set((await listPaymentsRaw(id)).map((p) => p.id ?? p._id));
+      const paymentDate = toClockifyDate(payment.paymentDate);
       const body: Record<string, unknown> = {
         amount: payment.amountMinor,
-        paymentDate: toClockifyDate(payment.paymentDate),
+        paymentDate,
         ...(payment.note !== undefined ? { note: payment.note } : {}),
       };
       await core.call("api", "POST", `${ws}/invoices/${id}/payments`, body);
-      const created = (await listPaymentsRaw(id)).find((p) => !before.has(p.id ?? p._id));
-      return created ? mapPayment(created) : {};
+      const matches = (await listPaymentsRaw(id))
+        .filter((row) => !before.has(row.id ?? row._id))
+        .map((row) => mapPayment(row))
+        .filter(
+          (candidate) =>
+            candidate.amount === payment.amountMinor &&
+            candidate.paymentDate === paymentDate &&
+            candidate.note === payment.note,
+        );
+      // Concurrent payments can appear between the two lists. An ID is
+      // authoritative only when exactly one newly observed row matches every
+      // explicit field. Otherwise the payment is recorded but its ID is
+      // intentionally unknown, so callers cannot offer an unsafe undo.
+      return matches.length === 1 ? matches[0] : {};
     },
     async deleteInvoicePayment(id, paymentId) {
       await core.call("api", "DELETE", `${ws}/invoices/${id}/payments/${paymentId}`);

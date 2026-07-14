@@ -22,6 +22,10 @@ import { bestEffort } from "./best-effort.js";
 import { openNdjsonStream } from "./ndjson.js";
 import { sanitizeResultsForHistory } from "./chat-results.js";
 import { createChatPipeline } from "./chat-pipeline.js";
+import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
+import { resolveSession } from "./deps.js";
+import { KeyedFifo } from "./fifo-lock.js";
+import { withHostCallBudget } from "../clockify/request-governor.js";
 
 /**
  * JSON API (SPEC "Chat Flow", "Confirmation Rules", "Permissions Inside Chat").
@@ -46,8 +50,71 @@ export function apiRouter(deps: AppDeps): Router {
   // owns the per-instance chat rate limiter and a derived clock; the route
   // handlers below call its methods.
   const pipeline = createChatPipeline(deps);
-  const { loadPolicy, requireSession, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
+  const { loadPolicy, requireSession, verifyWriteAuthority, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
+
+  const expectedOrigin = new URL(deps.config.baseUrl).origin;
+  const sessionFifo = new KeyedFifo();
+  router.use((req, res, next) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(req.method) || deps.config.nodeEnv === "test") {
+      next();
+      return;
+    }
+    const origin = req.get("origin");
+    const fetchSite = req.get("sec-fetch-site");
+    const explicitCrossSite =
+      (origin !== undefined && origin !== expectedOrigin)
+      || (fetchSite !== undefined && fetchSite !== "same-origin");
+    if (explicitCrossSite) {
+      res.status(403).json({ ok: false, code: "csrf_rejected", message: "Request origin could not be verified." });
+      return;
+    }
+    if (origin === expectedOrigin || fetchSite === "same-origin") {
+      next();
+      return;
+    }
+    const claims = resolveSession(req, deps);
+    if (claims && verifyCsrfToken(req.get(CSRF_HEADER), claims.sessionId, deps.config.sessionSecret)) {
+      next();
+      return;
+    }
+    res.status(403).json({ ok: false, code: "csrf_rejected", message: "Request origin could not be verified." });
+  });
+
+  // Chat execution and its confirmation/undo continuation share one FIFO per
+  // session. The lock is held until the response finishes (including NDJSON),
+  // so a two-tab retry cannot observe an in-flight claim and race the first turn.
+  router.use((req, res, next) => {
+    const serialized = req.method === "POST" && (
+      req.path === "/chat/messages"
+      || req.path === "/chat/stream"
+      || req.path === "/permissions/confirm"
+      || /^\/confirmations\/[^/]+\/(confirm|cancel)$/.test(req.path)
+      || /^\/undo\/[^/]+$/.test(req.path)
+    );
+    if (!serialized) {
+      next();
+      return;
+    }
+    const claims = resolveSession(req, deps);
+    if (!claims) {
+      next();
+      return;
+    }
+    void sessionFifo.run(claims.sessionId, () => new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = (): void => {
+        if (settled) return;
+        settled = true;
+        res.off("finish", finish);
+        res.off("close", finish);
+        resolve();
+      };
+      res.once("finish", finish);
+      res.once("close", finish);
+      next();
+    })).catch(next);
+  });
 
   // Shared validate→apply step for the two permission routes (preview + confirm):
   // Zod-parse the groups patch, load the caller's base policy, and apply the patch.
@@ -83,6 +150,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
+      csrfToken: createCsrfToken(claims.sessionId, deps.config.sessionSecret),
     });
   }));
 
@@ -139,6 +207,10 @@ export function apiRouter(deps: AppDeps): Router {
   router.post("/permissions/confirm", asyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
     if (!claims) return;
+    const authority = await verifyWriteAuthority(claims);
+    if (!authority.ok) {
+      return res.status(authority.status).json({ ok: false, code: authority.code, message: authority.message });
+    }
     const r = resolvePermissionPatch(req, res, claims);
     if (!r) return;
     const next = r.next;
@@ -288,9 +360,22 @@ export function apiRouter(deps: AppDeps): Router {
   router.post("/chat/messages", asyncHandler(async (req, res) => {
     const pre = await chatPreconditions(req, res);
     if (!pre) return;
-    const turn = await executeChatTurn(pre.claims, pre.installation, pre.message);
-    if (!turn.ok) return res.status(502).json({ ok: false, code: turn.code, message: turn.message });
-    return res.json({ ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results });
+    if (pre.replay) return res.status(pre.replay.status).json(pre.replay.body);
+    const turn = await withHostCallBudget(() => executeChatTurn(
+      pre.claims,
+      pre.installation,
+      pre.message,
+      undefined,
+      undefined,
+      undefined,
+      pre.requestId,
+    ));
+    const status = turn.ok ? 200 : 502;
+    const body = turn.ok
+      ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
+      : { ok: false, code: turn.code, message: turn.message };
+    deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, turn.ok ? "succeeded" : "failed", { status, body });
+    return res.status(status).json(body);
   }));
 
   // Streaming variant (NDJSON): the SAME turn, but each harness result is written
@@ -304,22 +389,73 @@ export function apiRouter(deps: AppDeps): Router {
     // cancellation: `signal` fires if the client (iframe/proxy) drops mid-turn,
     // so no further model calls or writes run for a turn nobody is watching.
     const { write, signal } = openNdjsonStream(res);
+    if (pre.replay) {
+      const body = pre.replay.body as { ok?: boolean; reply?: { kind?: string; text?: string }; results?: unknown[]; code?: string; message?: string };
+      if (body.ok) {
+        for (const result of body.results ?? []) write({ type: "result", result });
+        write({ type: "reply", kind: body.reply?.kind ?? "answer", text: body.reply?.text ?? "" });
+      } else {
+        write({ type: "error", code: body.code ?? "operation_failed", message: body.message ?? "The prior request failed." });
+      }
+      write({ type: "done" });
+      return res.end();
+    }
     try {
-      const turn = await executeChatTurn(
+      const turn = await withHostCallBudget(() => executeChatTurn(
         pre.claims,
         pre.installation,
         pre.message,
         (result) => write({ type: "result", result }),
         (status) => write({ type: "status", ...status }),
         signal,
-      );
+        pre.requestId,
+      ));
+      const status = turn.ok ? 200 : 502;
+      const body = turn.ok
+        ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
+        : { ok: false, code: turn.code, message: turn.message };
+      deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, turn.ok ? "succeeded" : "failed", { status, body });
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
       else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
     } catch {
+      deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, "outcome_unknown", {
+        status: 500,
+        body: { ok: false, code: "operation_outcome_unknown", message: "The turn was interrupted and its outcome is unknown." },
+      });
       write({ type: "error", code: "stream_error", message: "Something went wrong." });
     }
     write({ type: "done" });
     res.end();
+  }));
+
+  router.get("/operations/:requestId", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
+    if (!claims) return;
+    const run = deps.store.getTurnRun(claims.sessionId, req.params.requestId);
+    if (!run || run.workspaceId !== claims.workspaceId || run.adminUserId !== claims.adminUserId) {
+      return res.status(404).json({ ok: false, code: "not_found", message: "Operation not found." });
+    }
+    return res.json({ ok: true, requestId: run.requestId, status: run.status, response: run.response });
+  }));
+
+  router.get("/artifacts/:id", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
+    if (!claims) return;
+    const artifact = deps.store.getArtifact(
+      req.params.id,
+      claims.workspaceId,
+      claims.adminUserId,
+      claims.sessionId,
+    );
+    if (!artifact) {
+      return res.status(404).json({ ok: false, code: "not_found", message: "Artifact not found or expired." });
+    }
+    const safeFilename = artifact.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+    res.setHeader("Content-Type", artifact.contentType);
+    res.setHeader("Content-Length", String(artifact.bytes.byteLength));
+    res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    res.setHeader("X-Checksum-Sha256", artifact.checksum);
+    return res.status(200).send(Buffer.from(artifact.bytes));
   }));
 
   router.post("/confirmations/:id/confirm", asyncHandler(async (req, res) => {
@@ -335,7 +471,9 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
     }
 
-    const committed = await commitConfirmation(claims, record, parsed.data.nonce);
+    const committed = await withHostCallBudget(
+      () => commitConfirmation(claims, record, parsed.data.nonce),
+    );
     if (!committed.ok) {
       // Validation/policy/the one-use claim rejected BEFORE any commit — always
       // JSON (the stream is never opened), and a denied confirm never burns the nonce.
@@ -355,7 +493,7 @@ export function apiRouter(deps: AppDeps): Router {
       const { write, signal } = openNdjsonStream(res);
       write({ type: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
       try {
-        const resumed = await runResume(
+        const resumed = await withHostCallBudget(() => runResume(
           claims,
           installation,
           agentState,
@@ -363,7 +501,7 @@ export function apiRouter(deps: AppDeps): Router {
           (result) => write({ type: "result", result }),
           (status) => write({ type: "status", ...status }),
           signal,
-        );
+        ));
         if (resumed) write({ type: "reply", kind: resumed.replyKind, text: resumed.replyText });
       } catch {
         write({ type: "error", code: "resume_error", message: "The follow-up couldn't complete, but your change was applied." });
@@ -373,7 +511,9 @@ export function apiRouter(deps: AppDeps): Router {
     }
 
     // JSON path: collect the resume into the response (unchanged behavior).
-    const resumed = await runResume(claims, installation, agentState, receipt);
+    const resumed = await withHostCallBudget(
+      () => runResume(claims, installation, agentState, receipt),
+    );
     return res.status(receipt.ok ? 200 : 400).json({
       ok: receipt.ok,
       receipt,
@@ -392,7 +532,12 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(404).json({ ok: false, code: "not_found", message: "No such undoable action." });
     }
     if (record.status !== "available") {
-      return res.status(409).json({ ok: false, code: "already_undone", message: "This action was already undone." });
+      const expired = record.status === "expired";
+      return res.status(409).json({
+        ok: false,
+        code: expired ? "undo_expired" : "undo_not_available",
+        message: expired ? "This undo window expired after 30 minutes." : "This undo is no longer available.",
+      });
     }
 
     // Re-check write policy BEFORE consuming the one-use record, so a lowered policy
@@ -411,15 +556,29 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(400).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
     }
 
-    // Atomic one-use claim: only the caller that flips available → undone reverses.
-    if (!deps.store.markUndone(record.id)) {
-      return res.status(409).json({ ok: false, code: "already_undone", message: "This action was already undone." });
+    const authority = await verifyWriteAuthority(claims, installation);
+    if (!authority.ok) {
+      return res.status(authority.status).json({ ok: false, code: authority.code, message: authority.message });
+    }
+
+    // Atomic one-use claim: only the caller that flips available → executing reverses.
+    if (!deps.store.markUndoExecuting(record.id)) {
+      return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
     }
 
     const receipt = await reverseCreation(
       actionContext(claims.workspaceId, claims.adminUserId, installation),
       record.reversal,
     );
+    const deleted = receipt.ok ? (receipt.changed?.deleted ?? []) : [];
+    const deletedKeys = new Set(deleted.map((ref) => `${ref.type}:${ref.id}`));
+    const remaining = record.reversal.filter((ref) => !deletedKeys.has(`${ref.type}:${ref.id}`));
+    const undoStatus = receipt.ok
+      ? remaining.length > 0 ? "partially_undone" : "undone"
+      : receipt.code === "commit_outcome_unknown" ? "outcome_unknown" : "failed";
+    bestEffort("undo settlement failed", () => {
+      deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
+    });
     // The reversal already happened (and the one-use claim is already flipped to
     // undone). A transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.

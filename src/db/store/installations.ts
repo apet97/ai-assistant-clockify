@@ -6,6 +6,11 @@ import type {
   InstallationStatus,
   StoreContext,
 } from "./context.js";
+import { canonicalClockifyServiceUrl } from "../../clockify/service-url.js";
+
+function optionalServiceUrl(value: string | undefined, service: "api" | "reports"): string | undefined {
+  return value === undefined ? undefined : canonicalClockifyServiceUrl(value, service);
+}
 
 interface InstallationRow {
   workspace_id: string;
@@ -37,6 +42,9 @@ export function buildInstallationStore(ctx: StoreContext): {
   return {
     saveInstallation(input) {
       const timestamp = nowIso();
+      const apiUrl = optionalServiceUrl(input.apiUrl, "api");
+      const backendUrl = optionalServiceUrl(input.backendUrl, "api");
+      const reportsUrl = optionalServiceUrl(input.reportsUrl, "reports");
       db.prepare(
         `INSERT INTO installations (
            workspace_id, addon_id, addon_user_id, addon_token_ciphertext,
@@ -57,9 +65,9 @@ export function buildInstallationStore(ctx: StoreContext): {
         input.addonId,
         input.addonUserId,
         sealToken(input.addonToken),
-        input.apiUrl ?? null,
-        input.backendUrl ?? null,
-        input.reportsUrl ?? null,
+        apiUrl ?? null,
+        backendUrl ?? null,
+        reportsUrl ?? null,
         input.status ?? "active",
         input.installedByUserId ?? null,
         timestamp,
@@ -68,6 +76,9 @@ export function buildInstallationStore(ctx: StoreContext): {
     },
 
     updateInstallationEnv(workspaceId, env) {
+      const apiUrl = optionalServiceUrl(env.apiUrl, "api");
+      const backendUrl = optionalServiceUrl(env.backendUrl, "api");
+      const reportsUrl = optionalServiceUrl(env.reportsUrl, "reports");
       db.prepare(
         `UPDATE installations SET
            api_url = COALESCE(?, api_url),
@@ -76,9 +87,9 @@ export function buildInstallationStore(ctx: StoreContext): {
            updated_at = ?
          WHERE workspace_id = ?`,
       ).run(
-        env.apiUrl ?? null,
-        env.backendUrl ?? null,
-        env.reportsUrl ?? null,
+        apiUrl ?? null,
+        backendUrl ?? null,
+        reportsUrl ?? null,
         nowIso(),
         workspaceId,
       );
@@ -118,21 +129,38 @@ export function buildInstallationStore(ctx: StoreContext): {
         // FK-children of chat_sessions (chat_messages, pending_confirmations) MUST
         // be deleted before chat_sessions (foreign_keys = ON). undo_records and
         // turn_telemetry carry session_id but no FK; admin_policies is independent.
+        const operationSteps = del(
+          "DELETE FROM operation_steps WHERE operation_id IN (SELECT id FROM operation_runs WHERE workspace_id = ?)",
+        );
         const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
         const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
         const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
         const undoRecords = del("DELETE FROM undo_records WHERE workspace_id = ?");
         const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
+        const turnRuns = del("DELETE FROM turn_runs WHERE workspace_id = ?");
+        const operationRuns = del("DELETE FROM operation_runs WHERE workspace_id = ?");
+        const actionResults = del("DELETE FROM action_results WHERE workspace_id = ?");
+        const artifacts = del("DELETE FROM artifacts WHERE workspace_id = ?");
         const adminPolicies = del("DELETE FROM admin_policies WHERE workspace_id = ?");
         const chatSessions = del("DELETE FROM chat_sessions WHERE workspace_id = ?");
-        // Tombstone the installation: keep the row but mark it deleted and wipe the
-        // token to an empty (still-decryptable) secret, so no usable credential
-        // remains at rest. idempotency_keys is a global, PII-free ledger with no
-        // workspace_id — intentionally left to its own short TTL.
-        db.prepare(
-          "UPDATE installations SET status = 'deleted', addon_token_ciphertext = ?, updated_at = ? WHERE workspace_id = ?",
-        ).run(sealToken(""), nowIso(), workspaceId);
-        return { adminPolicies, chatSessions, chatMessages, pendingConfirmations, auditEvents, undoRecords, turnTelemetry };
+        const installations = del("DELETE FROM installations WHERE workspace_id = ?");
+        // idempotency_keys has no workspace identifier and contains only bounded,
+        // secret-free receipts; its short global TTL remains the deletion boundary.
+        return {
+          installations,
+          adminPolicies,
+          chatSessions,
+          chatMessages,
+          pendingConfirmations,
+          auditEvents,
+          undoRecords,
+          turnTelemetry,
+          turnRuns,
+          operationSteps,
+          operationRuns,
+          actionResults,
+          artifacts,
+        };
       });
       return run();
     },

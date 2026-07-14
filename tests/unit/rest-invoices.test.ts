@@ -307,6 +307,43 @@ describe("invoice rest", () => {
     expect(body).not.toHaveProperty("date");
   });
 
+  it("identifies a payment only when exactly one new row matches amount, date, and note", async () => {
+    const before: unknown[] = [];
+    const after = [
+      { id: "concurrent", amount: 5000, note: "other", date: "2026-06-06T00:00:00Z" },
+      { id: "ours", amount: 5000, note: "deposit", date: "2026-06-06T00:00:00Z" },
+    ];
+    let listCalls = 0;
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse(listCalls++ === 0 ? before : after)
+        : jsonResponse({ id: "inv1" }),
+    );
+    await expect(rest(f as unknown as typeof fetch).createInvoicePayment("inv1", {
+      amountMinor: 5000,
+      paymentDate: "2026-06-06",
+      note: "deposit",
+    })).resolves.toMatchObject({ id: "ours" });
+  });
+
+  it("returns an unknown payment id when multiple new rows match exactly", async () => {
+    const after = [
+      { id: "p1", amount: 5000, note: "deposit", date: "2026-06-06T00:00:00Z" },
+      { id: "p2", amount: 5000, note: "deposit", date: "2026-06-06T00:00:00Z" },
+    ];
+    let listCalls = 0;
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse(listCalls++ === 0 ? [] : after)
+        : jsonResponse({ id: "inv1" }),
+    );
+    await expect(rest(f as unknown as typeof fetch).createInvoicePayment("inv1", {
+      amountMinor: 5000,
+      paymentDate: "2026-06-06",
+      note: "deposit",
+    })).resolves.toEqual({});
+  });
+
   it("deleteInvoicePayment deletes the payment by id", async () => {
     const f = vi.fn(async () => jsonResponse(null, 204));
     await rest(f as unknown as typeof fetch).deleteInvoicePayment("inv1", "pay1");
@@ -333,27 +370,22 @@ describe("invoice rest", () => {
     expect(body.projectFilter).toEqual({ contains: "CONTAINS", status: "ALL", ids: ["p1", "p2"] });
   });
 
-  it("exportInvoice GETs the PDF export and base64-encodes the bytes under the cap", async () => {
+  it("exportInvoice returns backend-only PDF bytes under the cap", async () => {
     const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
     const f = vi.fn(async () => binaryResponse(pdf));
     const out = await rest(f as unknown as typeof fetch).exportInvoice("inv1");
     expect(out.contentType).toBe("application/pdf");
-    expect(out.bytes).toBe(4);
-    expect(out.truncated).toBe(false);
-    expect(out.base64).toBe(Buffer.from(pdf).toString("base64"));
+    expect(out.bytes).toEqual(pdf);
     const parsed = new URL((f as any).mock.calls[0][0]);
     expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/invoices/inv1/export");
     expect(parsed.searchParams.get("format")).toBe("PDF");
     expect(parsed.searchParams.get("userLocale")).toBe("en-US");
   });
 
-  it("exportInvoice omits base64 and flags truncation when the file exceeds the cap (no silent cap)", async () => {
+  it("exportInvoice cancels and rejects a chunked file over the hard cap", async () => {
     const big = new Uint8Array(1_000_001); // just over the 1 MB cap
     const f = vi.fn(async () => binaryResponse(big));
-    const out = await rest(f as unknown as typeof fetch).exportInvoice("inv1");
-    expect(out.bytes).toBe(1_000_001);
-    expect(out.truncated).toBe(true);
-    expect(out.base64).toBeUndefined();
+    await expect(rest(f as unknown as typeof fetch).exportInvoice("inv1")).rejects.toThrow(/1000000-byte binary limit/);
   });
 
   it("exportInvoice rejects a non-PDF format (Clockify export is PDF-only)", async () => {

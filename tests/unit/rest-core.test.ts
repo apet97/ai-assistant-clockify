@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
+import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 function res(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -21,6 +22,29 @@ describe("rest core host routing + auth", () => {
     expect(url).toBe("https://reports.api.clockify.me/v1/workspaces/ws-1/reports/summary");
     expect(init.headers["X-Addon-Token"]).toBe("tok");
     expect(init.headers["X-Api-Key"]).toBeUndefined();
+    expect(init.redirect).toBe("error");
+  });
+
+  it("does not follow redirects on any request carrying X-Addon-Token", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toThrow(/302/);
+    expect((fetchImpl as any).mock.calls[0][1].redirect).toBe("error");
+  });
+
+  it("allows the dev API-key adapter to retain the platform fetch redirect default", async () => {
+    const fetchImpl = vi.fn(async () => res({ ok: true }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    await core.call("api", "GET", "/workspaces/ws-1/projects");
+    expect((fetchImpl as any).mock.calls[0][1].redirect).toBeUndefined();
   });
 
   it("routes audit to the auditlog host and uses the api-key header", async () => {
@@ -136,6 +160,33 @@ describe("rest core host routing + auth", () => {
     await expect(core.call("api", "GET", "/workspaces/ws-1/projects")).rejects.toThrow(
       /fetch failed/,
     );
+  });
+
+  it.each([
+    ["transport rejection", async () => { throw new TypeError("socket closed"); }],
+    ["HTTP 408", async () => res({ message: "timeout" }, 408)],
+    ["HTTP 503", async () => res({ message: "proxy unavailable" }, 503)],
+    ["malformed 2xx", async () => new Response("<html>accepted?</html>", { status: 200 })],
+  ])("classifies a dispatched write with %s as an ambiguous outcome", async (_label, fetchImpl) => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
+      .rejects.toBeInstanceOf(AmbiguousWriteOutcome);
+  });
+
+  it("classifies a non-408 HTTP 4xx write as a definitive failure", async () => {
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => res({ message: "bad input" }, 400)) as unknown as typeof fetch,
+    });
+
+    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
+      .rejects.toBeInstanceOf(DefinitiveWriteFailure);
   });
 
   it("also names the request on a transport rejection from getBinary", async () => {

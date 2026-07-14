@@ -30,29 +30,20 @@ source of truth), `PRIVACY.md` (data handling/retention), and `DEPLOYMENT.md`.
 - **Chat-history switcher is IDOR-guarded**: opening a past session re-cookies only to a
   LIVE session owned by the same workspace+admin; a foreign/unknown id returns 404 and sets
   no cookie.
+- Authenticated/component responses are `private, no-store`. Mutations require a
+  same-origin `Origin`/Fetch-Metadata signal or the HMAC CSRF token returned by `/api/me`.
+- Stored and token-claimed Clockify service origins are validated before persistence and
+  before use; token-bearing requests reject redirects.
 
-### Role-staleness window (authz-surface-01) — accepted design
+### Role-staleness window (authz-surface-01)
 
-The workspace **role** is read from the Clockify add-on JWT at component load and baked into
-the signed session cookie; it is **not** re-fetched from Clockify on every API request (that
-would add a Clockify call to the hot path). Consequently, **an admin demoted to member keeps
-assistant access until their session expires.** That window is bounded by the session TTL:
-
-- **`SESSION_TTL_HOURS` (default 2h)** — the session lifetime *and* the role-staleness bound.
-  When the session expires the component re-mints it, which re-reads the role from a fresh
-  Clockify JWT, so the demotion takes effect within the window.
-- This TTL is also coupled to the **history switcher**, which lists only *live* sessions — a
-  shorter TTL tightens revocation but shows fewer past chats. Raise `SESSION_TTL_HOURS` for a
-  longer history window at the cost of a longer staleness window.
-
-If near-real-time revocation is ever required (compliance), the stronger option is a
-per-request role re-check against Clockify behind a short cache. This is **now available as an
-opt-in** (T40): set **`ROLE_RECHECK=1`** (and optionally `ROLE_RECHECK_TTL_MS`, default 60000)
-to re-verify the caller is still a Clockify admin/owner on every authenticated `/api` request,
-cached per (workspace, admin) for the TTL. A demoted admin is then denied (`403 forbidden`)
-within ≤ `ROLE_RECHECK_TTL_MS`. It **fails open** on a Clockify outage (no verdict ⇒ the
-session TTL still bounds staleness). Default OFF keeps the request path dependency-free and
-byte-identical to the posture above.
+The component JWT is still the session bootstrap, with `SESSION_TTL_HOURS` (default 2h)
+bounding read-only access when `ROLE_RECHECK=0`. The mutation boundary is stricter:
+immediately before every write, button confirmation, and undo, the backend fetches the
+current role from Clockify without using the read cache. A member verdict invalidates that
+admin's sessions; an outage or malformed verdict fails closed with `503` and dispatches no
+write. `ROLE_RECHECK=1` additionally enables cached role checks for authenticated reads
+(`ROLE_RECHECK_TTL_MS`, default 60000).
 
 ## Abuse / cost controls
 
@@ -64,13 +55,17 @@ byte-identical to the posture above.
   model, a 256 KB cap on the persisted suspension (dropped, not truncated, if exceeded), an
   abort timeout on every model request, and a 6-step agentic loop budget. The request body is
   capped at 32 KB.
+- **Bounded Clockify traffic**: per workspace, 10 requests/second, burst 10, concurrency 4,
+  one host mutation at a time, 60 host calls per turn, and adaptive `429` cooldown. Writes
+  are not automatically retried after dispatch.
 
 ## Data handling
 
 - Installation tokens encrypted at rest (AES-256-GCM); never logged. Lifecycle logging is
   structured and secret-free.
 - Chat transcripts + the audit log are retained `RETENTION_DAYS` (default 90, min 30) and
-  swept hourly; uninstall erases the workspace's data immediately. See `PRIVACY.md`.
+  swept in bounded batches; uninstall hard-deletes the workspace's data and installation
+  metadata immediately. See `PRIVACY.md`.
 
 ## Reporting
 

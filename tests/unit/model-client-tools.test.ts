@@ -437,20 +437,20 @@ describe("createModelClient retry + provider error detail", () => {
     expect(sleeps).toHaveLength(1);
   });
 
-  it("retries once on 5xx then throws with the status AND a provider-body snippet", async () => {
+  it("retries once on 5xx then throws only stable status/request metadata", async () => {
     const sleeps: number[] = [];
     const seq = sequencedFetch([{ status: 503, body: '{"error":"overloaded"}' }]);
     await expect(retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }])).rejects.toThrow(
-      /status 503.*overloaded/,
+      /provider_http_error status=503 request_id=unknown/,
     );
     expect(seq.calls()).toBe(2);
   });
 
-  it("does NOT retry a 4xx (other than 429) — one call, snippet included", async () => {
+  it("does NOT retry a 4xx (other than 429) and does not expose its body", async () => {
     const sleeps: number[] = [];
     const seq = sequencedFetch([{ status: 400, body: "bad request shape" }]);
     await expect(retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }])).rejects.toThrow(
-      /status 400.*bad request shape/,
+      /provider_http_error status=400 request_id=unknown/,
     );
     expect(seq.calls()).toBe(1);
     expect(sleeps).toHaveLength(0);
@@ -552,7 +552,7 @@ describe("createModelClient request timeout", () => {
     );
   });
 
-  it("a malformed 200 body throws a diagnosable error naming the status AND a body snippet", async () => {
+  it("a malformed 200 body throws stable metadata without exposing the body", async () => {
     const malformedFetch = vi.fn(async () => {
       return {
         ok: true,
@@ -569,7 +569,9 @@ describe("createModelClient request timeout", () => {
       model: "test-model",
       fetchImpl: malformedFetch,
     });
-    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(/status 200.*gateway error/);
+    await expect(c.complete([{ role: "user", content: "hi" }])).rejects.toThrow(
+      /provider_malformed_response status=200 request_id=unknown/,
+    );
   });
 
   it("defaults the timeout to 120s and leaves non-abort errors untouched", async () => {

@@ -34,7 +34,7 @@ import { makeWorkspaceRest } from "./rest/workspace.js";
 export type { ClockifyAuth };
 
 export interface RestWorkspaceOptions
-  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs"> {
+  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor"> {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
   workspaceId: string;
 }
@@ -52,6 +52,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     auth: opts.auth,
     fetchImpl: opts.fetchImpl,
     commitTimeoutMs: opts.commitTimeoutMs,
+    requestGovernor: opts.requestGovernor,
   });
   const projectRest = makeProjectRest(core, opts.workspaceId);
   const timeEntryRest = makeTimeEntryRest(core, opts.workspaceId);

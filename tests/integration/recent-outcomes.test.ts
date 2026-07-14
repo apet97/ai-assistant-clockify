@@ -29,7 +29,7 @@ describe("assistant_recent_outcomes — recap answers come from the AUDIT LOG, n
             { actionName: "clockify_log_work", ok: true },
             { actionName: "clockify_approvals_submit", ok: false, code: "clockify_error" },
           ],
-          confirmationStatuses: ["used", "cancelled"],
+          confirmationStatuses: ["succeeded", "cancelled"],
         };
       },
     });

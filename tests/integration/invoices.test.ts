@@ -7,7 +7,14 @@ import type { ActionContext } from "../../src/harness/action.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
-  return { workspaceId: "ws-1", adminUserId: "admin-1", policy, clockify: fake.client, now: () => NOW };
+  return {
+    workspaceId: "ws-1",
+    adminUserId: "admin-1",
+    policy,
+    clockify: fake.client,
+    now: () => NOW,
+    saveArtifact: () => ({ id: "artifact-1", expiresAt: "2026-06-06T01:00:00.000Z" }),
+  };
 }
 const seed = () => ({
   invoices: [
@@ -59,12 +66,16 @@ describe("invoice actions", () => {
     else throw new Error("expected receipt");
   });
 
-  it("clockify_invoices_export returns the PDF base64 envelope (read)", async () => {
+  it("clockify_invoices_export returns only authenticated artifact metadata", async () => {
     const fake = createFakeWorkspace(seed());
     const result = await executeAction({ actionName: "clockify_invoices_export", args: { id: "inv1" }, context: makeContext(fake) });
     if (result.kind === "receipt" && result.receipt.ok) {
       expect((result.receipt.data as any).contentType).toBe("application/pdf");
-      expect((result.receipt.data as any).base64).toBeTruthy();
+      expect((result.receipt.data as any).base64).toBeUndefined();
+      expect((result.receipt.data as any).artifact).toMatchObject({
+        id: "artifact-1",
+        downloadUrl: "/api/artifacts/artifact-1",
+      });
     } else throw new Error("expected receipt");
     expect(fake.counts.exportInvoice).toBe(1);
   });
@@ -500,6 +511,22 @@ describe("invoice actions", () => {
     expect(fake.state.invoices[0].items).toHaveLength(0);
   });
 
+  it("rejects an invoice-item delete when the complete line changed after preview", async () => {
+    const fake = createFakeWorkspace(seed());
+    const preview = await executeAction({
+      actionName: "clockify_invoices_items_delete",
+      args: { invoiceId: "inv1", index: 0 },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    fake.state.invoices[0].items[0].description = "Changed after preview";
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(false);
+    if (!receipt.ok) expect(receipt.code).toBe("stale_target");
+    expect(fake.counts.deleteInvoiceItem ?? 0).toBe(0);
+  });
+
   it("clockify_invoices_payments_create previews payment and stores minor units", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
@@ -519,6 +546,24 @@ describe("invoice actions", () => {
     expect(fake.counts.createInvoicePayment).toBe(1);
     expect(fake.state.invoicePayments["inv1"]).toHaveLength(1);
     expect(fake.state.invoicePayments["inv1"][0].amount).toBe(5000);
+  });
+
+  it("resolves payment calendar dates and rejects impossible dates before preview", async () => {
+    const fake = createFakeWorkspace(seed());
+    const relative = await executeAction({
+      actionName: "clockify_invoices_payments_create",
+      args: { invoiceId: "inv1", amount: 50, paymentDate: "today" },
+      context: makeContext(fake),
+    });
+    if (relative.kind !== "preview") throw new Error("expected preview");
+    expect((relative.operation.payload as any).payment.paymentDate).toBe("2026-06-06");
+
+    const impossible = await executeAction({
+      actionName: "clockify_invoices_payments_create",
+      args: { invoiceId: "inv1", amount: 50, paymentDate: "2026-02-30" },
+      context: makeContext(fake),
+    });
+    expect(impossible.kind).toBe("clarify");
   });
 
   it("clockify_invoices_payments_create does not fabricate a 'payment' id when the list-diff can't identify it", async () => {

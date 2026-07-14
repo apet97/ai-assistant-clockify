@@ -1,6 +1,6 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
-import type { UserPort, UserSummary, GroupSummary } from "../ports/users.js";
+import type { UserPort, UserSummary, GroupSummary, CalendarContext } from "../ports/users.js";
 
 /** A workspace role entry as read by {@link makeUserRest} `getWorkspaceMemberRole`. */
 type RoleEntry = {
@@ -18,6 +18,12 @@ type UserRow = {
   status?: string;
   role?: string;
   roles?: RoleEntry[];
+  timeZone?: string;
+  timezone?: string;
+  weekStartsOn?: number | string;
+  weekStart?: number | string;
+  startOfWeek?: number | string;
+  settings?: Record<string, unknown>;
 };
 
 /** Group row fields read by {@link mapGroup}. */
@@ -38,6 +44,39 @@ function mapGroup(raw: GroupRow): GroupSummary {
   const out: GroupSummary = { id: raw.id, name: raw.name ?? raw.id };
   if (Array.isArray(raw.userIds)) out.userIds = raw.userIds;
   return out;
+}
+
+const WEEKDAY_NUMBER: Record<string, number> = {
+  MONDAY: 1,
+  TUESDAY: 2,
+  WEDNESDAY: 3,
+  THURSDAY: 4,
+  FRIDAY: 5,
+  SATURDAY: 6,
+  SUNDAY: 7,
+};
+
+function calendarFrom(value: unknown): Partial<CalendarContext> {
+  if (!value || typeof value !== "object") return {};
+  const row = value as Record<string, unknown>;
+  const settings = row.settings && typeof row.settings === "object"
+    ? row.settings as Record<string, unknown>
+    : {};
+  const timeZone = [row.timeZone, row.timezone, settings.timeZone, settings.timezone]
+    .find((candidate): candidate is string => typeof candidate === "string" && candidate.length > 0);
+  const rawWeek = row.weekStartsOn ?? row.weekStart ?? row.startOfWeek
+    ?? settings.weekStartsOn ?? settings.weekStart ?? settings.startOfWeek;
+  const numeric = typeof rawWeek === "number"
+    ? rawWeek
+    : typeof rawWeek === "string"
+      ? WEEKDAY_NUMBER[rawWeek.toUpperCase()]
+      : undefined;
+  return {
+    ...(timeZone ? { timeZone } : {}),
+    ...(typeof numeric === "number" && Number.isInteger(numeric) && numeric >= 1 && numeric <= 7
+      ? { weekStartsOn: numeric }
+      : {}),
+  };
 }
 
 /**
@@ -80,6 +119,23 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       const picked = workspaceRole ?? roles[0];
       const roleValue = picked?.role ?? picked?.name;
       return typeof roleValue === "string" && roleValue.length > 0 ? roleValue : undefined;
+    },
+    async getCalendarContext(userId) {
+      const [rows, workspace] = await Promise.all([
+        core.paginate("api", `${ws}/users`) as Promise<UserRow[]>,
+        core.call("api", "GET", ws, undefined, true),
+      ]);
+      const admin = calendarFrom(rows.find((user) => user.id === userId));
+      const fallback = calendarFrom(workspace);
+      const timeZone = admin.timeZone ?? fallback.timeZone;
+      const weekStartsOn = admin.weekStartsOn ?? fallback.weekStartsOn;
+      if (!timeZone || weekStartsOn === undefined) return undefined;
+      try {
+        new Intl.DateTimeFormat("en", { timeZone }).format(0);
+      } catch {
+        return undefined;
+      }
+      return { timeZone, weekStartsOn };
     },
     async inviteUser(email, sendEmail): Promise<EntitySummary> {
       const qs = new URLSearchParams({ "send-email": String(sendEmail) });

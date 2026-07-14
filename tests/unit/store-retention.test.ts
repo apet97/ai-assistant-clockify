@@ -3,18 +3,15 @@ import { createStore, IDEMPOTENCY_RETENTION_MS, type TestStore } from "../../src
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 
-/**
- * Retention pruning for the OPERATIONAL tables only. audit_events (the audit
- * log) and chat_messages (durable history) are product features and must NEVER
- * be pruned — pinned below with a far-future clock.
- */
+/** Retention pruning for operational rows, transcripts, audit, and artifacts. */
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 const DAY_MS = 24 * 60 * 60 * 1000;
 const iso = (offsetMs: number): string => new Date(NOW.getTime() + offsetMs).toISOString();
 
-function confirmation(id: string, sessionId: string, status: "pending" | "used" | "cancelled", createdAt: string, expiresAt: string) {
+function confirmation(id: string, sessionId: string, status: "pending" | "succeeded" | "cancelled", createdAt: string, expiresAt: string) {
   return {
     id,
+    operationId: `op-${id}`,
     sessionId,
     workspaceId: "ws-1",
     adminUserId: "admin-1",
@@ -23,6 +20,9 @@ function confirmation(id: string, sessionId: string, status: "pending" | "used" 
     preview: {},
     operation: {},
     operationHash: "h",
+    targetFingerprints: [],
+    actionFingerprint: "a",
+    catalogHash: "c",
     nonceHash: "n",
     expiresAt,
     createdAt,
@@ -30,16 +30,16 @@ function confirmation(id: string, sessionId: string, status: "pending" | "used" 
 }
 
 describe("store.pruneExpired", () => {
-  it("prunes settled confirmations older than 30d and long-expired pendings; keeps recent + live ones", () => {
+  it("prunes settled confirmations older than 30d and long-expired pendings; keeps recent + live ones", async () => {
     const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
     // pending_confirmations FK-references a real chat session.
     const s = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" }).id;
-    store.savePendingConfirmation(confirmation("old-used", s, "used", iso(-31 * DAY_MS), iso(-31 * DAY_MS)));
-    store.savePendingConfirmation(confirmation("new-used", s, "used", iso(-1 * DAY_MS), iso(-1 * DAY_MS)));
+    store.savePendingConfirmation(confirmation("old-used", s, "succeeded", iso(-31 * DAY_MS), iso(-31 * DAY_MS)));
+    store.savePendingConfirmation(confirmation("new-used", s, "succeeded", iso(-1 * DAY_MS), iso(-1 * DAY_MS)));
     store.savePendingConfirmation(confirmation("stale-pending", s, "pending", iso(-40 * DAY_MS), iso(-39 * DAY_MS)));
     store.savePendingConfirmation(confirmation("live-pending", s, "pending", iso(-60_000), iso(5 * 60_000)));
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.pendingConfirmations).toBe(2);
     expect(store.getPendingConfirmation("old-used")).toBeUndefined();
     expect(store.getPendingConfirmation("new-used")).toBeDefined();
@@ -49,36 +49,37 @@ describe("store.pruneExpired", () => {
     store.close();
   });
 
-  it("prunes idempotency keys past retention (and retention stays ≥ the dedupe window)", () => {
+  it("prunes idempotency keys past retention (and retention stays ≥ the dedupe window)", async () => {
     expect(IDEMPOTENCY_RETENTION_MS).toBeGreaterThan(IDEMPOTENCY_WINDOW_MS);
     const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
     const receipt = successReceipt({ action: "x" });
     store.recordIdempotency("old", receipt, NOW.getTime() - 2 * 60 * 60 * 1000);
     store.recordIdempotency("fresh", receipt, NOW.getTime() - 5 * 60 * 1000);
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.idempotencyKeys).toBe(1);
     // The fresh key still dedupes inside the window.
     expect(store.lookupIdempotency("fresh", NOW.getTime() - IDEMPOTENCY_WINDOW_MS)).toBeDefined();
     store.close();
   });
 
-  it("prunes UNDONE undo records older than 30d but never an available one", () => {
+  it("prunes terminal undo records older than 30d and expires an old available one", async () => {
     const past = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
     const store = createStore(":memory:", { encryptionKey: "k", now: () => past.value });
     const base = { sessionId: "s1", workspaceId: "ws-1", adminUserId: "admin-1", actionName: "x", reversal: [] };
     const undoneId = store.recordUndoable(base);
-    store.markUndone(undoneId); // stamped 31d ago via the injected clock
+    store.markUndoExecuting(undoneId);
+    store.settleUndo(undoneId, "undone", [], { ok: true });
     const availableId = store.recordUndoable(base); // created 31d ago, still available
 
-    const counts = store.pruneExpired(NOW.toISOString());
-    expect(counts.undoRecords).toBe(1);
+    const counts = await store.pruneExpired(NOW.toISOString());
+    expect(counts.undoRecords).toBe(2);
     expect(store.getUndoRecord(undoneId)).toBeUndefined();
-    expect(store.getUndoRecord(availableId)).toBeDefined();
+    expect(store.getUndoRecord(availableId)).toBeUndefined();
     store.close();
   });
 
-  it("records + lists turn telemetry (since-bounded) and prunes rows past 30d", () => {
+  it("records + lists turn telemetry (since-bounded) and prunes rows past 30d", async () => {
     const past = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
     const store = createStore(":memory:", { encryptionKey: "k", now: () => past.value });
     const base = { sessionId: "s1", workspaceId: "ws-1", adminUserId: "admin-1", kind: "chat" as const };
@@ -94,9 +95,37 @@ describe("store.pruneExpired", () => {
     const bounded = store.listTurnTelemetry("ws-1", "admin-1", iso(-DAY_MS));
     expect(bounded).toHaveLength(1);
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.turnTelemetry).toBe(1);
     expect(store.listTurnTelemetry("ws-1", "admin-1")).toHaveLength(1);
+    store.close();
+  });
+
+  it("hard-deletes expired binary artifacts", async () => {
+    const clock = { value: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const expired = store.createArtifact({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: "session-1",
+      contentType: "application/pdf",
+      filename: "old.pdf",
+      bytes: new Uint8Array([1, 2, 3]),
+    });
+    clock.value = NOW;
+    const live = store.createArtifact({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: "session-1",
+      contentType: "application/pdf",
+      filename: "live.pdf",
+      bytes: new Uint8Array([4, 5, 6]),
+    });
+
+    const counts = await store.pruneExpired(NOW.toISOString());
+    expect(counts.artifacts).toBe(1);
+    expect(store.getArtifact(expired.id, "ws-1", "admin-1", "session-1")).toBeUndefined();
+    expect(store.getArtifact(live.id, "ws-1", "admin-1", "session-1")).toBeDefined();
     store.close();
   });
 
@@ -114,10 +143,11 @@ describe("store.pruneExpired", () => {
     // delete on the bare created_at column — they need their own narrow index.
     expect(plan.chatMessages).not.toMatch(/SCAN chat_messages/);
     expect(plan.auditEvents).not.toMatch(/SCAN audit_events/);
+    expect(plan.artifacts).not.toMatch(/SCAN artifacts/);
     store.close();
   });
 
-  it("prunes chat_messages + audit_events older than the default 90d window, keeps recent rows", () => {
+  it("prunes chat_messages + audit_events older than the default 90d window, keeps recent rows", async () => {
     // Data-retention (marketplace/GDPR): chat transcripts + the audit log are no
     // longer kept forever. Default window is 90 days — well above the recap (24h /
     // 30d max) and metrics (30d default) read windows, so those features are intact.
@@ -139,7 +169,7 @@ describe("store.pruneExpired", () => {
     store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "new" });
     store.addAuditEvent(audit);
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.chatMessages).toBe(1);
     expect(counts.auditEvents).toBe(1);
     expect(store.getRecentMessages(session.id, 10)).toHaveLength(1); // only "new" survives
@@ -147,7 +177,30 @@ describe("store.pruneExpired", () => {
     store.close();
   });
 
-  it("honors a custom retentionDays window", () => {
+  it("caps one pass at 10,000 rows and reports backlog for a scheduled continuation", async () => {
+    const clock = { value: new Date(NOW.getTime() - 100 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const audit = {
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      risk: ["safe_write" as const],
+      receipt: successReceipt({ action: "clockify_tags_create" }),
+    };
+    for (let index = 0; index < 10_025; index += 1) store.addAuditEvent(audit);
+    clock.value = NOW;
+
+    const first = await store.pruneExpired(NOW.toISOString());
+    expect(first.total).toBe(10_000);
+    expect(first.backlog).toBe(true);
+    expect(first.batches).toBeGreaterThan(1);
+    const second = await store.pruneExpired(NOW.toISOString());
+    expect(second.auditEvents).toBe(25);
+    expect(second.backlog).toBe(false);
+    store.close();
+  });
+
+  it("honors a custom retentionDays window", async () => {
     // A 45d-old message is KEPT under the 90d default but PRUNED under a 30d override.
     const clock = { value: new Date(NOW.getTime() - 45 * DAY_MS) };
     const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value, retentionDays: 30 });
@@ -156,7 +209,7 @@ describe("store.pruneExpired", () => {
     clock.value = NOW;
     store.addMessage({ sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", role: "user", content: "today" });
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.chatMessages).toBe(1); // 45d > 30d → pruned
     expect(store.getRecentMessages(session.id, 10)).toHaveLength(1);
     store.close();

@@ -89,7 +89,7 @@ export interface StreamingApi {
  */
 export async function submitStreaming(api: StreamingApi, message: string, hooks: ComposerHooks): Promise<void> {
   hooks.onWorking(true);
-  const buffer = new PreviewBuffer(hooks.onResults);
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
   try {
     await api.streamMessage(message, (event) => {
       dispatchStreamEvent(event, hooks, buffer, "Message failed.");
@@ -117,7 +117,7 @@ export interface SwitchApiLike {
  * happen.
  */
 export interface SwitchHooks {
-  onSwitched(id: string): void;
+  onSwitched(id: string): void | Promise<void>;
   onError(message: string): void;
 }
 
@@ -140,7 +140,7 @@ export async function switchToSession(api: SwitchApiLike, id: string, hooks: Swi
       hooks.onError(response.message?.trim() ? response.message : SWITCH_FAILED_MESSAGE);
       return;
     }
-    hooks.onSwitched(id);
+    await hooks.onSwitched(id);
   } catch (error) {
     // A 401 always means "reload" (httpErrorMessage maps it); any other thrown
     // failure shows the friendly switch fallback. The current chat stays intact.

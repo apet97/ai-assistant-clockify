@@ -6,6 +6,7 @@ import { isAdminRole } from "../auth/roles.js";
 import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
 import { asyncHandler } from "./async-handler.js";
 import { buildSessionCookie, resolveSession, type AppDeps } from "./deps.js";
+import { canonicalClockifyServiceUrl } from "../clockify/service-url.js";
 
 /**
  * Admin-only component route (ARCHITECTURE "Component Load"). Verifies the
@@ -49,6 +50,7 @@ function setComponentSecurityHeaders(res: Response): void {
   res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Cache-Control", "private, no-store");
 }
 
 const ADMIN_ONLY_PAGE = `<!doctype html>
@@ -108,11 +110,21 @@ export function componentRouter(deps: AppDeps): Router {
       // token often omits backendUrl/reportsUrl, so the user token loaded here is
       // the reliable source of which Clockify hosts to call (api + reports differ
       // by environment — see resolveClockify*Base). Only present fields change.
-      deps.store.updateInstallationEnv(workspaceId, {
-        apiUrl: claims.backendUrl,
-        backendUrl: claims.backendUrl,
-        reportsUrl: claims.reportsUrl,
-      });
+      try {
+        const apiUrl = typeof claims.backendUrl === "string"
+          ? canonicalClockifyServiceUrl(claims.backendUrl, "api")
+          : undefined;
+        const reportsUrl = typeof claims.reportsUrl === "string"
+          ? canonicalClockifyServiceUrl(claims.reportsUrl, "reports")
+          : undefined;
+        deps.store.updateInstallationEnv(workspaceId, {
+          apiUrl,
+          backendUrl: apiUrl,
+          reportsUrl,
+        });
+      } catch {
+        return res.status(400).type("html").send(ADMIN_ONLY_PAGE);
+      }
 
       // Reuse the SAME session across an iframe RELOAD so the conversation history
       // and the still-live pending previews survive it. resolveSession already

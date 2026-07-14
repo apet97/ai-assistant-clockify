@@ -3,6 +3,7 @@ import { commitConfirmedOperation, executeAction } from "../../src/harness/actio
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { ActionContext } from "../../src/harness/action.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
@@ -46,6 +47,27 @@ describe("tag actions", () => {
     if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "tag" });
     else throw new Error("expected receipt");
     expect(fake.counts.createTag).toBe(1);
+  });
+
+  it("reports an ambiguous safe-write outcome and tells the caller not to retry automatically", async () => {
+    const fake = createFakeWorkspace();
+    const clockify = {
+      ...fake.client,
+      createTag: async () => {
+        throw new AmbiguousWriteOutcome("POST", "/workspaces/ws-1/tags", "socket closed after dispatch");
+      },
+    };
+    const result = await executeAction({
+      actionName: "clockify_tags_create",
+      args: { name: "AIASSIST_UNKNOWN" },
+      context: { ...makeContext(fake), clockify },
+    });
+
+    expect(result.kind).toBe("receipt");
+    if (result.kind === "receipt" && !result.receipt.ok) {
+      expect(result.receipt.code).toBe("commit_outcome_unknown");
+      expect(result.receipt.recovery.retryable).toBe(false);
+    }
   });
 
   it("clockify_tags_update previews then updates once on commit", async () => {

@@ -8,6 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -70,5 +71,13 @@ describe("/api security headers (T51)", () => {
   it("sets HSTS for an https deployment base", async () => {
     const res = await request(app).get("/api/me");
     expect(res.headers["strict-transport-security"]).toContain("max-age=");
+  });
+
+  it("marks authenticated API responses private, no-store", async () => {
+    const cookie = mintAdminCookie(store, makeTestConfig().sessionSecret);
+    const res = await request(app).get("/api/me").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toContain("private");
+    expect(res.headers["cache-control"]).toContain("no-store");
   });
 });

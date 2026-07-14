@@ -63,7 +63,16 @@ export interface ClarifyResult {
   options?: Array<{ id: string; label: string }>;
 }
 
-export type ChatResult = PreviewResult | ReceiptResult | ClarifyResult;
+export interface PartialResult {
+  kind: "partial";
+  receipt: ReceiptResult["receipt"];
+  message: string;
+  options?: ClarifyResult["options"];
+  recovery: { hint: string; retryable?: boolean };
+  undo?: { id: string };
+}
+
+export type ChatResult = PreviewResult | ReceiptResult | PartialResult | ClarifyResult;
 
 /** One response from POST /confirmations/:id/confirm — possibly carrying a resumed agentic turn. */
 export interface ConfirmResponse {
@@ -200,7 +209,7 @@ export function dispatchStreamEvent(
  * its single Confirm card stays intact. Never falls back to the generic "Confirmed."
  */
 export async function submitConfirmStream(api: ConfirmStreamApi, ref: PreviewRef, hooks: ConfirmHooks): Promise<void> {
-  const buffer = new PreviewBuffer(hooks.onResults);
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
   try {
     await api.confirmStream(ref, (event) => {
       // The confirm-resume stream's extra leading event: the committed receipt

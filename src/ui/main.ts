@@ -160,6 +160,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
     errorBar.textContent = message;
     errorBar.classList.remove("hidden");
   }
+  function runUiTask(task: Promise<void>, fallback: string): void {
+    void task.catch((error: unknown) => {
+      showError(error instanceof ApiError ? error.message : fallback);
+    });
+  }
   function clearError(): void {
     errorBar.textContent = "";
     errorBar.classList.add("hidden");
@@ -214,7 +219,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
     chat.querySelector(".welcome")?.remove();
   }
   function showWelcome(): void {
-    chat.insertBefore(renderWelcome({ sendText: (text) => void sendText(text) }), messages);
+    chat.insertBefore(
+      renderWelcome({ sendText: (text) => runUiTask(sendText(text), "Message failed to send.") }),
+      messages,
+    );
   }
 
   // r1-new-session-restore-04: the composer goes live the moment renderChat()
@@ -268,10 +276,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
         }),
       );
     for (const result of results) {
-      if (result.kind === "receipt")
+      if (result.kind === "receipt" || result.kind === "partial")
         messages.appendChild(renderReceipt(result, { controller, showError, returnFocus: () => focusComposer() }));
       else if (result.kind === "clarify")
-        messages.appendChild(renderClarify(result, { sendText: (text) => void sendText(text) }));
+        messages.appendChild(
+          renderClarify(result, { sendText: (text) => runUiTask(sendText(text), "Message failed to send.") }),
+        );
     }
     bumpTyping();
     if (stick) messages.scrollTop = messages.scrollHeight;
@@ -315,7 +325,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
           form.setAttribute("aria-busy", String(working));
           if (!working) {
             input.focus(); // return focus to the composer after the turn
-            void refreshChatsMenu(); // a fresh session now has its first message → appears in the list
+            runUiTask(refreshChatsMenu(), "Could not load your conversations.");
           }
         },
         onAssistant: (assistantText) => appendMessage("assistant", assistantText),
@@ -324,13 +334,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
         onStatus: (label) => setStatusLabel(label),
       });
     };
-    form.addEventListener("submit", async (event) => {
+    form.addEventListener("submit", (event) => {
       event.preventDefault();
       if (busy) return;
       const text = input.value.trim();
       if (!text) return;
       input.value = "";
-      await sendText(text);
+      runUiTask(sendText(text), "Message failed to send.");
     });
     chat.appendChild(form);
     // First visit: a welcome card with example prompts, ABOVE the message log
@@ -342,7 +352,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     settingsButton.classList.remove("hidden");
     newChatButton.classList.remove("hidden");
     chatsSlot.classList.remove("hidden");
-    void refreshChatsMenu(); // populate the history dropdown with the current list
+    runUiTask(refreshChatsMenu(), "Could not load your conversations.");
     input.focus();
   }
 
@@ -412,7 +422,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
   }
 
   settingsButton.addEventListener("click", () => {
-    if (setup.classList.contains("hidden")) void openPermissions(false);
+    if (setup.classList.contains("hidden")) runUiTask(openPermissions(false), "Could not load the assistant.");
     else closePermissions();
   });
   // Escape closes the panel on the gear/reopen path only (aria-expanded="true");
@@ -442,10 +452,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
     messages.replaceChildren(); // drop the transcript + any pending preview cards
     dropWelcome();
     showWelcome();
-    void refreshChatsMenu(); // the prior conversation is now reopenable from the dropdown
+    runUiTask(refreshChatsMenu(), "Could not load your conversations.");
     focusComposer();
   }
-  newChatButton.addEventListener("click", () => void startNewChat());
+  newChatButton.addEventListener("click", () => {
+    runUiTask(startNewChat(), "Could not start a new chat. Please try again.");
+  });
 
   /**
    * Session restore: replay the stored conversation + the session's still-live
@@ -523,15 +535,17 @@ function mount(root: HTMLElement, api: ChatApi): void {
    * honest error and leave the slot's prior widget usable.
    */
   async function refreshChatsMenu(): Promise<void> {
-    let sessions: ChatSessionSummary[] = [];
     try {
       const body = (await api.listSessions()) as { ok?: boolean; sessions?: ChatSessionSummary[] };
-      sessions = body?.sessions ?? [];
+      const sessions: ChatSessionSummary[] = body?.sessions ?? [];
+      chatsSlot.replaceChildren(
+        renderChatsMenu(sessions, {
+          onSelect: (id) => runUiTask(selectSession(id), "Could not open that conversation. Please try again."),
+        }),
+      );
     } catch (error) {
       showError(error instanceof ApiError ? error.message : "Could not load your conversations.");
-      return;
     }
-    chatsSlot.replaceChildren(renderChatsMenu(sessions, { onSelect: (id) => void selectSession(id) }));
   }
 
   async function init(): Promise<void> {
@@ -550,7 +564,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     }
   }
 
-  void init();
+  runUiTask(init(), "Could not load the assistant.");
 }
 
 if (typeof document !== "undefined") {

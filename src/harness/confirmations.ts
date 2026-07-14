@@ -16,13 +16,16 @@ const DEFAULT_TTL_MS = 5 * 60 * 1000;
 export type PendingStatus =
   | "pending"
   | "executing"
-  | "used"
+  | "succeeded"
+  | "partial"
+  | "definitive_failed"
+  | "outcome_unknown"
   | "cancelled"
-  | "expired"
-  | "failed";
+  | "expired";
 
 export interface PendingConfirmationRecord {
   id: string;
+  operationId: string;
   sessionId: string;
   workspaceId: string;
   adminUserId: string;
@@ -31,6 +34,9 @@ export interface PendingConfirmationRecord {
   preview: unknown;
   operation: unknown;
   operationHash: string;
+  targetFingerprints: string[];
+  actionFingerprint: string;
+  catalogHash: string;
   nonceHash: string;
   expiresAt: string;
   createdAt: string;
@@ -43,6 +49,7 @@ export interface PendingConfirmationRecord {
    * as before.
    */
   agentState?: unknown;
+  actionResultId?: string;
 }
 
 export interface CreateConfirmationInput {
@@ -60,6 +67,8 @@ export interface CreateConfirmationInput {
   nonce?: string;
   /** Suspended agentic-turn state to persist with the preview (Phase 3). */
   agentState?: unknown;
+  actionFingerprint?: string;
+  catalogHash?: string;
 }
 
 export interface CreatedConfirmation {
@@ -78,6 +87,8 @@ export interface ConfirmPendingInput {
   nonce: string;
   sessionSecret: string;
   now?: Date;
+  expectedActionFingerprint?: string;
+  expectedCatalogHash?: string;
 }
 
 export type ConfirmPendingResult =
@@ -146,9 +157,11 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
   const nonce = input.nonce ?? randomBytes(32).toString("base64url");
   const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
   const operationHash = hashOperation(input.operation);
+  const previewTargets = (input.preview as { targets?: unknown[] } | undefined)?.targets ?? [];
 
   const record: PendingConfirmationRecord = {
     id,
+    operationId: randomUUID(),
     sessionId: input.sessionId,
     workspaceId: input.workspaceId,
     adminUserId: input.adminUserId,
@@ -157,6 +170,9 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
     preview: input.preview,
     operation: input.operation,
     operationHash,
+    targetFingerprints: previewTargets.map((target) => hashOperation(target)),
+    actionFingerprint: input.actionFingerprint ?? hashOperation({ operation: input.operation, version: 1 }),
+    catalogHash: input.catalogHash ?? "unbound",
     nonceHash: hashNonce(nonce, id, operationHash, input.sessionSecret),
     expiresAt,
     createdAt: now.toISOString(),
@@ -172,6 +188,8 @@ interface ConfirmationGateInput {
   workspaceId: string;
   adminUserId: string;
   now: Date;
+  expectedActionFingerprint?: string;
+  expectedCatalogHash?: string;
 }
 
 /**
@@ -210,6 +228,14 @@ function checkConfirmationGate(
   if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {
     return { ok: false, code: "operation_mismatch", message: "Preview integrity check failed." };
   }
+  if (g.expectedActionFingerprint) {
+    if (!timingSafeStringEqual(record.actionFingerprint, g.expectedActionFingerprint)) {
+      return { ok: false, code: "incompatible_confirmation", message: "This preview was created by incompatible action code. Run a fresh preview." };
+    }
+  }
+  if (g.expectedCatalogHash && !timingSafeStringEqual(record.catalogHash, g.expectedCatalogHash)) {
+    return { ok: false, code: "incompatible_confirmation", message: "The action catalog changed after this preview. Run a fresh preview." };
+  }
   return { ok: true };
 }
 
@@ -223,6 +249,8 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
     workspaceId: input.workspaceId,
     adminUserId: input.adminUserId,
     now,
+    ...(input.expectedActionFingerprint ? { expectedActionFingerprint: input.expectedActionFingerprint } : {}),
+    ...(input.expectedCatalogHash ? { expectedCatalogHash: input.expectedCatalogHash } : {}),
   });
   if (!gate.ok) return gate;
 
@@ -237,7 +265,7 @@ export function confirmPending(input: ConfirmPendingInput): ConfirmPendingResult
 
   return {
     ok: true,
-    record: { ...record, status: "used", usedAt: now.toISOString() },
+    record: { ...record, status: "executing", usedAt: now.toISOString() },
   };
 }
 

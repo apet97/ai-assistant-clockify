@@ -22,7 +22,7 @@ import type { HolidaySummary } from "../../../src/clockify/ports/holidays.js";
 import type { AssignmentSummary } from "../../../src/clockify/ports/scheduling.js";
 import type { ApprovalSummary } from "../../../src/clockify/ports/approvals.js";
 import type { WebhookSummary } from "../../../src/clockify/ports/webhooks.js";
-import type { UserSummary, GroupSummary } from "../../../src/clockify/ports/users.js";
+import type { UserSummary, GroupSummary, CalendarContext } from "../../../src/clockify/ports/users.js";
 
 /**
  * Shape of the seed accepted by the fake. Re-exported through `fake-clockify.ts`.
@@ -41,6 +41,7 @@ export interface FakeWorkspaceSeed {
   users?: UserSummary[];
   /** Per-user workspace role for the opt-in admin re-check (authz-surface-01). */
   memberRoles?: Record<string, string>;
+  calendarContext?: CalendarContext;
   groups?: GroupSummary[];
   webhooks?: WebhookSummary[];
   invoices?: InvoiceDetail[];
@@ -74,6 +75,7 @@ export interface FakeState {
   expenseCategories: ExpenseCategorySummary[];
   users: UserSummary[];
   memberRoles: Record<string, string>;
+  calendarContext: CalendarContext;
   groups: GroupSummary[];
   webhooks: WebhookSummary[];
   invoices: InvoiceDetail[];
@@ -123,6 +125,7 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
     expenseCategories: [...(seed.expenseCategories ?? [])],
     users: [...(seed.users ?? [])],
     memberRoles: { ...(seed.memberRoles ?? {}) },
+    calendarContext: seed.calendarContext ?? { timeZone: "UTC", weekStartsOn: 1 },
     groups: [...(seed.groups ?? [])],
     webhooks: [...(seed.webhooks ?? [])],
     invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),

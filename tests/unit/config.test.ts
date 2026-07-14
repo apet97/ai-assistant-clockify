@@ -121,6 +121,22 @@ describe("loadConfig", () => {
     expect(cfg.dataEncryptionKey).toBe("0123456789abcdef0123456789abcdef");
   });
 
+  it("accepts a strong previous data-encryption key for online token rotation", () => {
+    const cfg = loadConfig({
+      NODE_ENV: "production",
+      ...baseEnv,
+      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+      DATA_ENCRYPTION_KEY_PREVIOUS: "fedcba9876543210fedcba9876543210",
+    });
+    expect(cfg.dataEncryptionKeyPrevious).toBe("fedcba9876543210fedcba9876543210");
+    expect(() => loadConfig({
+      NODE_ENV: "production",
+      ...baseEnv,
+      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+      DATA_ENCRYPTION_KEY_PREVIOUS: "short",
+    })).toThrow();
+  });
+
   it("rejects missing required env", () => {
     expect(() => loadConfig({ PORT: "3001" })).toThrow();
   });

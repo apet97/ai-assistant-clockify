@@ -7,6 +7,7 @@ import { loadConfig } from "./config.js";
 import { createStore, type Installation } from "./db/store.js";
 import type { WorkspaceClient } from "./clockify/client.js";
 import { createRestWorkspaceClient } from "./clockify/rest-workspace.js";
+import { createWorkspaceRequestGovernor, type WorkspaceRequestGovernor } from "./clockify/request-governor.js";
 import {
   resolveClockifyApiBase,
   resolveClockifyAuditBase,
@@ -51,11 +52,17 @@ export function createApp(deps: AppDeps): Express {
     res.json(buildAddon(deps.config.baseUrl).getManifest());
   });
 
+  // Process liveness is deliberately independent of dependencies/draining.
+  app.get("/live", (_req, res) => {
+    res.json({ ok: true });
+  });
+
   // Readiness probe (the platform healthcheck). Unlike the static /manifest, this
   // touches the DB handle, so a hung/locked SQLite instance reports 503 and gets
   // rotated out instead of silently failing live traffic. Public, no auth, no secrets.
   app.get("/health", (_req, res) => {
     try {
+      if (deps.readiness && !deps.readiness.isReady()) throw new Error("draining");
       deps.store.healthCheck();
       res.json({ ok: true });
     } catch {
@@ -74,6 +81,10 @@ export function createApp(deps: AppDeps): Express {
 
   app.use(lifecycleRouter(deps));
   app.use(componentRouter(deps));
+  app.use("/api", (_req, res, next) => {
+    res.setHeader("Cache-Control", "private, no-store");
+    next();
+  });
   app.use("/api", apiRouter(deps));
 
   // Built UI assets (present after `npm run build`); harmless if absent.
@@ -123,7 +134,11 @@ export function createApp(deps: AppDeps): Express {
  * base URL is resolved from the install context (apiUrl/backendUrl + /v1) so dev
  * and regional environments work — see resolveClockifyApiBase. No token is logged.
  */
-function liveClockifyForWorkspace(installation: Installation, commitTimeoutMs?: number): WorkspaceClient {
+function liveClockifyForWorkspace(
+  installation: Installation,
+  commitTimeoutMs?: number,
+  requestGovernor?: WorkspaceRequestGovernor,
+): WorkspaceClient {
   return createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
     reportsBase: resolveClockifyReportsBase(installation),
@@ -131,6 +146,7 @@ function liveClockifyForWorkspace(installation: Installation, commitTimeoutMs?: 
     workspaceId: installation.workspaceId,
     auth: { addonToken: installation.addonToken },
     commitTimeoutMs,
+    requestGovernor,
   });
 }
 
@@ -148,6 +164,7 @@ export interface ShutdownDeps {
   exit?: (code: number) => void;
   forceExitAfterMs?: number;
   log?: (message: string) => void;
+  onDraining?: () => void;
 }
 
 /**
@@ -157,18 +174,22 @@ export interface ShutdownDeps {
  * WAL keeps the DB crash-safe either way. Idempotent: the second signal is a
  * no-op while the first teardown runs.
  */
-export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => void {
+export function createShutdownHandler(deps: ShutdownDeps): (signal: string, exitCode?: number) => void {
   const exit = deps.exit ?? ((code: number) => process.exit(code));
   const log = deps.log ?? ((message: string) => console.log(message));
   let shuttingDown = false;
-  return (signal: string): void => {
+  let finished = false;
+  return (signal: string, exitCode = 0): void => {
     if (shuttingDown) return;
     shuttingDown = true;
+    deps.onDraining?.();
     log(`${signal} received — draining`);
     if (deps.pruneTimer) clearInterval(deps.pruneTimer);
     // Close the store then exit. The store close may throw if the drain still
     // holds a statement open — exit regardless (so a throw never hangs teardown).
     const finish = (code: number): void => {
+      if (finished) return;
+      finished = true;
       try {
         deps.store.close();
       } catch {
@@ -179,68 +200,72 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string) => v
     const force = setTimeout(() => finish(1), deps.forceExitAfterMs ?? FORCE_EXIT_AFTER_MS);
     force.unref?.();
     deps.server.closeIdleConnections?.();
-    deps.server.close(() => {
+    deps.server.close((error) => {
       // clearTimeout BEFORE finish: the force timer must be dead before the store
       // close runs, so a throw there can't be raced by a force-exit (and finish
       // never double-exits).
       clearTimeout(force);
-      finish(0);
+      finish(error ? 1 : exitCode);
     });
   };
 }
 
 export function start(): void {
-  // Last-resort process net: the route asyncHandler + terminal error middleware
-  // catch route-scoped rejections, but a stray floating promise anywhere (e.g. a
-  // best-effort telemetry write) must not crash the whole server and drop every
-  // in-flight turn. Log and keep serving; a truly wedged process is restarted by
-  // the platform health check. Never log secrets — the reason/message only.
-  process.on("unhandledRejection", (reason) => {
-    console.error("unhandledRejection:", reason instanceof Error ? reason.message : String(reason));
-  });
-  process.on("uncaughtException", (error) => {
-    console.error("uncaughtException:", error instanceof Error ? error.message : String(error));
-  });
-
   const config = loadConfig();
   const store = createStore(config.databasePath, {
     encryptionKey: config.dataEncryptionKey,
+    previousEncryptionKey: config.dataEncryptionKeyPrevious,
     retentionDays: config.retentionDays,
   });
   const parser = createSignatureParser(config.clockifyAddonKey, config.clockifyAddonPublicKeyPem);
   const modelClient = selectModelClient(config);
 
+  const readiness = { ready: true };
+  const requestGovernors = new Map<string, WorkspaceRequestGovernor>();
+  const requestGovernorFor = (workspaceId: string): WorkspaceRequestGovernor => {
+    const existing = requestGovernors.get(workspaceId);
+    if (existing) return existing;
+    const created = createWorkspaceRequestGovernor();
+    requestGovernors.set(workspaceId, created);
+    return created;
+  };
   const app = createApp({
     config,
     store,
     parser,
     modelClient,
-    clockifyForWorkspace: (installation) => liveClockifyForWorkspace(installation, config.commitTimeoutMs),
+    clockifyForWorkspace: (installation) => liveClockifyForWorkspace(
+      installation,
+      config.commitTimeoutMs,
+      requestGovernorFor(installation.workspaceId),
+    ),
+    readiness: { isReady: () => readiness.ready },
   });
 
   // Retention: prune expired operational rows + chat transcripts/audit log past
   // the retention window at startup (catches backlog after long-idle deploys) and
   // hourly. chat_messages/audit_events age out on RETENTION_DAYS (default 90).
-  const prune = (): void => {
+  let pruning = false;
+  const prune = async (): Promise<void> => {
+    if (pruning) return;
+    pruning = true;
+    let continueBacklog = false;
     try {
-      const counts = store.pruneExpired(new Date().toISOString());
-      const total =
-        counts.pendingConfirmations +
-        counts.idempotencyKeys +
-        counts.undoRecords +
-        counts.turnTelemetry +
-        counts.chatMessages +
-        counts.auditEvents;
-      if (total > 0) {
+      const counts = await store.pruneExpired(new Date().toISOString());
+      continueBacklog = counts.backlog;
+      if (counts.total > 0 || counts.backlog) {
         console.log(
-          `retention prune: confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents}`,
+          `retention prune: total=${counts.total} batches=${counts.batches} durationMs=${counts.durationMs} backlog=${counts.backlog} confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents} operations=${counts.operationRuns} results=${counts.actionResults} artifacts=${counts.artifacts} sessions=${counts.chatSessions}`,
         );
       }
     } catch (error) {
       console.warn("retention prune failed:", error instanceof Error ? error.message : String(error));
+    } finally {
+      pruning = false;
+      if (continueBacklog) setImmediate(() => { void prune(); });
     }
   };
-  const pruneTimer = setInterval(prune, PRUNE_INTERVAL_MS);
+  const pruneTimer = setInterval(() => { void prune(); }, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 
   const server = app.listen(config.port, () => {
@@ -249,14 +274,29 @@ export function start(): void {
     // Run the at-startup backlog sweep AFTER listen so readiness isn't gated by
     // it — the prune now seeks narrow retention indexes, but on a long-lived
     // instance the first sweep should never delay accepting connections.
-    prune();
+    void prune();
   });
 
   // Railway redeploys SIGTERM the container — drain instead of dropping
   // in-flight turns, and close the store cleanly.
-  const shutdown = createShutdownHandler({ server, store, pruneTimer });
+  const shutdown = createShutdownHandler({
+    server,
+    store,
+    pruneTimer,
+    onDraining: () => {
+      readiness.ready = false;
+    },
+  });
   process.once("SIGTERM", () => shutdown("SIGTERM"));
   process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("unhandledRejection", (reason) => {
+    console.error("unhandledRejection:", reason instanceof Error ? reason.message : String(reason));
+    shutdown("unhandledRejection", 1);
+  });
+  process.once("uncaughtException", (error) => {
+    console.error("uncaughtException:", error.message);
+    shutdown("uncaughtException", 1);
+  });
 }
 
 // Run only when executed directly (not when imported by tests).

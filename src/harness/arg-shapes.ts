@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
 
 /**
  * Forgiving scalar shapes for model-emitted arguments. The planner sometimes
@@ -46,4 +47,84 @@ export function formatZodIssues(error: z.ZodError): string {
   return error.issues
     .map((issue) => (issue.path.length > 0 ? `${issue.path.join(".")}: ${issue.message}` : issue.message))
     .join("; ");
+}
+
+type JsonSchema = Record<string, unknown>;
+const jsonSchemaCache = new WeakMap<z.ZodTypeAny, JsonSchema>();
+
+function jsonSchemaFor(schema: z.ZodTypeAny): JsonSchema {
+  const cached = jsonSchemaCache.get(schema);
+  if (cached) return cached;
+  const generated = zodToJsonSchema(schema, {
+    $refStrategy: "none",
+    target: "jsonSchema7",
+  }) as JsonSchema;
+  jsonSchemaCache.set(schema, generated);
+  return generated;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function matchesType(schema: JsonSchema, value: unknown): boolean {
+  switch (schema.type) {
+    case "object": return isRecord(value);
+    case "array": return Array.isArray(value);
+    case "string": return typeof value === "string";
+    case "number":
+    case "integer": return typeof value === "number";
+    case "boolean": return typeof value === "boolean";
+    case "null": return value === null;
+    default: return true;
+  }
+}
+
+function unknownPaths(
+  schema: JsonSchema,
+  value: unknown,
+  path: string,
+  aliases: ReadonlySet<string> | undefined,
+): string[] {
+  const branches = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
+  if (branches) {
+    const matching = branches.filter((branch) => matchesType(branch, value));
+    const candidates = matching.length > 0 ? matching : branches;
+    const findings = candidates.map((branch) => unknownPaths(branch, value, path, aliases));
+    return findings.find((items) => items.length === 0) ?? findings[0] ?? [];
+  }
+
+  if (Array.isArray(value)) {
+    const items = schema.items;
+    if (!items || typeof items !== "object" || Array.isArray(items)) return [];
+    return value.flatMap((item, index) => unknownPaths(items as JsonSchema, item, `${path}[${index}]`, undefined));
+  }
+
+  if (!isRecord(value) || schema.type !== "object") return [];
+  const properties = isRecord(schema.properties) ? schema.properties : {};
+  const additional = schema.additionalProperties;
+  const findings: string[] = [];
+  for (const [key, child] of Object.entries(value)) {
+    const childPath = path ? `${path}.${key}` : key;
+    const property = properties[key];
+    if (property && typeof property === "object" && !Array.isArray(property)) {
+      findings.push(...unknownPaths(property as JsonSchema, child, childPath, undefined));
+    } else if (!path && aliases?.has(key)) {
+      continue;
+    } else if (additional && typeof additional === "object" && !Array.isArray(additional)) {
+      findings.push(...unknownPaths(additional as JsonSchema, child, childPath, undefined));
+    } else if (additional === false) {
+      findings.push(childPath);
+    }
+  }
+  return findings;
+}
+
+/** Unknown fields are rejected before preprocessors can silently discard them. */
+export function unknownArgumentPaths(
+  schema: z.ZodTypeAny,
+  value: unknown,
+  allowedTopLevelAliases: readonly string[] = [],
+): string[] {
+  return unknownPaths(jsonSchemaFor(schema), value, "", new Set(allowedTopLevelAliases));
 }

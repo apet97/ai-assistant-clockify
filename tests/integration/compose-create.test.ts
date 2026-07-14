@@ -16,6 +16,19 @@ function ctxWith(fake: FakeWorkspace, client: WorkspaceClient = fake.client): Ac
 }
 
 describe("create_work_package — atomic composition (Phase 3)", () => {
+  it("preflights a missing task parent before creating any earlier entity", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_create_work_package",
+      args: { tag: { name: "urgent" }, task: { name: "Login" } },
+      context: ctxWith(fake),
+    });
+
+    expect(result.kind).toBe("clarify");
+    expect(fake.counts.createTag ?? 0).toBe(0);
+    expect(fake.counts.createTask ?? 0).toBe(0);
+  });
+
   it("rolls back a just-created project when a later required step (task) fails", async () => {
     const fake = createFakeWorkspace();
     const client: WorkspaceClient = {

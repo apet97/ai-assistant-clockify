@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import type { AdminPolicy, FeatureGroup } from "./permissions.js";
 import type { RiskLabel } from "./risk.js";
-import type { EntityRef, ErrorReceipt, SuccessReceipt } from "./receipts.js";
+import type { EntityRef, ErrorReceipt, RecoveryHint, SuccessReceipt } from "./receipts.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
 
@@ -16,6 +16,10 @@ export interface ActionContext {
   adminUserId: string;
   policy: AdminPolicy;
   clockify: WorkspaceClient;
+  /** Verified Clockify calendar settings; calendar actions fail closed if absent. */
+  timeZone?: string;
+  /** ISO weekday number (Monday=1 … Sunday=7). */
+  weekStartsOn?: number;
   /** Injectable clock for deterministic timestamps in tests. */
   now?: () => Date;
   /** Optional idempotency ledger; when present, confirmed commits dedupe by intent. */
@@ -32,6 +36,22 @@ export interface ActionContext {
    * windowed chat memory (live items 304/316: recaps contradicted the log).
    */
   recentOutcomes?(sinceIso?: string): { outcomes: ActionOutcome[]; confirmationStatuses: string[] };
+  operationJournal?: {
+    prepare(actionName: string, args: unknown): string;
+    markExecuting(operationId: string): void;
+    settle(
+      operationId: string,
+      status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
+      result: ActionResult,
+    ): void;
+  };
+  /** Fresh role gate injected by the route; returns an error receipt to block. */
+  authorizeWrite?(actionName: string): Promise<ErrorReceipt | undefined>;
+  saveArtifact?(input: {
+    contentType: string;
+    filename: string;
+    bytes: Uint8Array;
+  }): { id: string; expiresAt: string };
 }
 
 /**
@@ -125,6 +145,13 @@ export interface ConfirmableOperation {
 
 export type ActionResult =
   | { kind: "receipt"; receipt: SuccessReceipt | ErrorReceipt }
+  | {
+      kind: "partial";
+      receipt: SuccessReceipt;
+      message: string;
+      options?: ClarifyOption[];
+      recovery: RecoveryHint;
+    }
   | { kind: "clarify"; message: string; options?: ClarifyOption[] }
   | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation };
 
@@ -135,6 +162,8 @@ export interface ActionDefinition {
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
   schema: z.ZodTypeAny;
+  /** Deliberate top-level compatibility aliases accepted before preprocessing. */
+  argumentAliases?: readonly string[];
   /** Override the feature group used for the policy gate from validated args
    *  (e.g. delete_entity maps entityType → group). */
   resolveFeatureGroup?(args: unknown): FeatureGroup;
@@ -167,6 +196,7 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
   schema: S;
+  argumentAliases?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
@@ -218,6 +248,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
   group: FeatureGroup;
   risks: RiskLabel[];
   schema: S;
+  argumentAliases?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   idempotencyKey?(payload: Record<string, unknown>): string | undefined;
   preview(
@@ -232,7 +263,10 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: def.risks,
     schema: def.schema,
-    ...(def.resolveFeatureGroup ? { resolveFeatureGroup: def.resolveFeatureGroup } : {}),
+    ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.resolveFeatureGroup
+      ? { resolveFeatureGroup: (args: z.infer<S>) => def.resolveFeatureGroup!(args) }
+      : {}),
     ...(def.idempotencyKey
       ? {
           idempotencyKey: (operation: ConfirmableOperation) =>

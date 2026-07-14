@@ -9,7 +9,7 @@ import {
 } from "../action.js";
 import { nowDate } from "../../durations.js";
 import { successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef, resolvePeriod, resolveRelativeDay, resolveScopeRefs, resolveUserFilter, resolveUserRefs } from "./resolve.js";
+import { describePatch, resolveEntityRef, resolvePeriod, resolveRelativeDay, resolveScopeRefs, resolveUserFilter, resolveUserRefs, zonedDayTimeInstant } from "./resolve.js";
 
 /** Step a YYYY-MM-DD day forward by n calendar days. */
 function addCalendarDays(day: string, n: number): string {
@@ -337,7 +337,7 @@ const createRequest = defineRiskyAction({
     if (policyUnit === "HOURS") {
       // HOURS request = a server-resolved DAY + a number of hours (the model never
       // computes calendar dates). Build 09:00 → 09:00+N ISO instants for the wire.
-      const day = resolveRelativeDay(now, { date: args.start });
+      const day = resolveRelativeDay(now, { date: args.start }, ctx.timeZone);
       if (day === undefined) {
         return {
           clarify: `For the hour-based policy "${policy.name ?? policy.id}", tell me the day (e.g. "next monday" or 2026-07-06) and how many hours.`,
@@ -347,7 +347,11 @@ const createRequest = defineRiskyAction({
       if (hours === undefined || hours <= 0) {
         return { clarify: `How many hours of time off on ${day} under "${policy.name ?? policy.id}"?` };
       }
-      const startMs = Date.parse(`${day}T09:00:00Z`);
+      const startInstant = zonedDayTimeInstant(day, 9, 0, ctx.timeZone ?? "UTC");
+      if (startInstant === undefined) {
+        return { clarify: `I couldn't resolve 09:00 on ${day} in the workspace time zone.` };
+      }
+      const startMs = Date.parse(startInstant);
       const isoNoMillis = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
       const startIso = isoNoMillis(startMs);
       const endIso = isoNoMillis(startMs + hours * 3_600_000);
@@ -386,8 +390,8 @@ const createRequest = defineRiskyAction({
     let endRef = args.end;
     if ((startRef === undefined || endRef === undefined) && args.week) {
       const dayCount = Math.max(1, Math.round(args.days ?? 1));
-      const monday = resolvePeriod(now, args.week).dateRangeStart.slice(0, 10);
-      const today = now.toISOString().slice(0, 10);
+      const monday = resolvePeriod(now, args.week, ctx.timeZone, ctx.weekStartsOn).dateRangeStart.slice(0, 10);
+      const today = resolveRelativeDay(now, { date: "today" }, ctx.timeZone) ?? now.toISOString().slice(0, 10);
       const anchor = nextWorkday(args.week === "this_week" && today > monday ? today : monday);
       if (args.week === "this_week" && anchor > addCalendarDays(monday, 6)) {
         return {
@@ -399,8 +403,8 @@ const createRequest = defineRiskyAction({
     }
     // The wire wants bare YYYY-MM-DD days; the live loop sent the literal
     // string "next Monday". Resolve here, clarify on anything unparseable.
-    const start = resolveRelativeDay(now, { date: startRef });
-    const end = resolveRelativeDay(now, { date: endRef });
+    const start = resolveRelativeDay(now, { date: startRef }, ctx.timeZone);
+    const end = resolveRelativeDay(now, { date: endRef }, ctx.timeZone);
     const bad = [start === undefined ? startRef : undefined, end === undefined ? endRef : undefined].filter(
       (value): value is string => value !== undefined,
     );
@@ -408,6 +412,9 @@ const createRequest = defineRiskyAction({
       return {
         clarify: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — give me a calendar date (YYYY-MM-DD) or something like tomorrow or next monday.`,
       };
+    }
+    if (start > end) {
+      return { clarify: "The time-off start date must be on or before the end date." };
     }
     const input = {
       start,

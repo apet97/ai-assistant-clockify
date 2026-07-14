@@ -341,7 +341,7 @@ describe("safe writes", () => {
     });
     const result = await executeAction({
       actionName: "clockify_log_work",
-      args: { description: "design work", start: "2026-06-05T09:00:00.000Z", projectName: "Website" },
+      args: { description: "design work", start: "2026-06-05T09:00:00.000Z", durationHours: 1, projectName: "Website" },
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");

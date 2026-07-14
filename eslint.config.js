@@ -3,7 +3,7 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "vendor/**", "src/ui/**"] },
+  { ignores: ["dist/**", "node_modules/**", "vendor/**"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
@@ -16,7 +16,8 @@ export default tseslint.config(
       "@typescript-eslint/no-floating-promises": "error",
       "@typescript-eslint/no-misused-promises": "error",
       "@typescript-eslint/await-thenable": "error",
-      // Boundary `any` is intentional in places (untyped Clockify rows) — warn, don't block:
+      // Boundary `any` is intentional in places (untyped Clockify rows) — warnings
+      // are still release-blocking because the CLI runs with --max-warnings 0:
       "@typescript-eslint/no-explicit-any": "warn",
       "@typescript-eslint/no-unsafe-assignment": "off",
       "@typescript-eslint/no-unsafe-member-access": "off",
@@ -37,8 +38,8 @@ export default tseslint.config(
       "@typescript-eslint/no-unnecessary-type-assertion": "off",
       "@typescript-eslint/no-redundant-type-constituents": "off",
       "preserve-caught-error": "off",
-      // Possibly-real correctness smells — kept VISIBLE as warnings (don't block the
-      // gate, but don't hide them either):
+      // Possibly-real correctness smells remain warnings at rule level, while the
+      // zero-warning CLI gate keeps them release-blocking:
       "@typescript-eslint/no-base-to-string": "warn",
       "@typescript-eslint/unbound-method": "warn",
     },

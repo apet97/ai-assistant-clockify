@@ -174,7 +174,7 @@ describe("claim heartbeat keeps a long multi-call commit's claim from being swep
 
 describe("store pruneExpired backstop for crashed claims", () => {
   const NOW = new Date("2026-06-06T00:00:00.000Z");
-  it("sweeps an orphaned NULL claim past the RETENTION window but KEEPS one still inside it (so a re-claim is stale_unknown, never a silent re-win)", () => {
+  it("sweeps an orphaned NULL claim past the RETENTION window but KEEPS one still inside it (so a re-claim is stale_unknown, never a silent re-win)", async () => {
     store = createStore(":memory:", { now: () => NOW });
     const nowMs = NOW.getTime();
     const win = nowMs - IDEMPOTENCY_RETENTION_MS;
@@ -186,7 +186,7 @@ describe("store pruneExpired backstop for crashed claims", () => {
     // crash-before-fill duplicate window from this hourly prune.
     store.claimIdempotency("recent-crash", nowMs - CLAIM_TTL_MS - 1, win, ttl);
 
-    const counts = store.pruneExpired(NOW.toISOString());
+    const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.idempotencyKeys).toBe(1); // only the past-retention claim
     // The past-retention claim is gone → a fresh claim wins (recovery is bounded).
     expect(store.claimIdempotency("old", nowMs, win, ttl)).toBe("won");

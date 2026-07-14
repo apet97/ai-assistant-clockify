@@ -11,6 +11,22 @@ const ENC_KEY = "test-encryption-key-do-not-use-in-prod";
  * sessions are excluded. Scope ruling: live owned sessions only (plan 007 §3).
  */
 describe("store.listSessions", () => {
+  it("invalidates every live session for one workspace admin", () => {
+    const store = createStore(":memory:", {
+      encryptionKey: ENC_KEY,
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    });
+    const first = store.createSession({ workspaceId: "ws1", adminUserId: "adminA" });
+    const second = store.createSession({ workspaceId: "ws1", adminUserId: "adminA" });
+    const other = store.createSession({ workspaceId: "ws1", adminUserId: "adminB" });
+
+    expect(store.invalidateAdminSessions("ws1", "adminA")).toBe(2);
+    expect(store.getSession(first.id)).toBeUndefined();
+    expect(store.getSession(second.id)).toBeUndefined();
+    expect(store.getSession(other.id)).toBeDefined();
+    store.close();
+  });
+
   it("returns only live, owned, non-empty sessions, newest-first, with title=first user message", () => {
     // A controllable clock so message timestamps + session expiry are deterministic.
     let clockMs = Date.UTC(2026, 5, 14, 9, 0, 0); // 2026-06-14T09:00:00Z

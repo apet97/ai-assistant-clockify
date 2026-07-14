@@ -52,7 +52,7 @@ describe("approval actions", () => {
     expect(fake.state.approvals.at(-1)?.periodStart).toBe("2026-06-01T00:00:00Z");
   });
 
-  it("anchors an OFFSET-NAIVE ISO periodStart to UTC, not server-local TZ (no period shift on a non-UTC host)", async () => {
+  it("rejects an OFFSET-NAIVE ISO periodStart instead of guessing a zone", async () => {
     const originalTz = process.env.TZ;
     process.env.TZ = "America/New_York"; // UTC-4/-5 — a naive instant parsed locally would shift hours
     try {
@@ -62,8 +62,7 @@ describe("approval actions", () => {
         args: { periodStart: "2026-06-01T00:00:00" },
         context: makeContext(fake),
       });
-      if (preview.kind !== "preview") throw new Error("expected a preview");
-      expect((preview.operation.payload as { periodStart: string }).periodStart).toBe("2026-06-01T00:00:00Z");
+      expect(preview.kind).toBe("clarify");
     } finally {
       if (originalTz === undefined) delete process.env.TZ;
       else process.env.TZ = originalTz;
@@ -80,6 +79,18 @@ describe("approval actions", () => {
     const lastWeek = await executeAction({ actionName: "clockify_approvals_submit", args: { week: "last_week" }, context: makeContext(fake) });
     if (lastWeek.kind !== "preview") throw new Error("expected a preview");
     expect((lastWeek.operation.payload as { periodStart: string }).periodStart).toBe("2026-05-25T00:00:00Z");
+  });
+
+  it("uses the verified workspace zone and week start for approval period instants", async () => {
+    const fake = createFakeWorkspace();
+    const context = { ...makeContext(fake), timeZone: "Europe/Belgrade", weekStartsOn: 1 };
+    const preview = await executeAction({
+      actionName: "clockify_approvals_submit",
+      args: { week: "this_week" },
+      context,
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    expect((preview.operation.payload as { periodStart: string }).periodStart).toBe("2026-05-31T22:00:00Z");
   });
 
   it("clarifies (not invalid_args) when neither a week nor a periodStart is given", async () => {

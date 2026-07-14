@@ -16,10 +16,9 @@ model never executes anything itself and never sees a secret.
 **State:** everything buildable is done, live-verified on a real Clockify
 workspace, and deployed.
 
-- **Gate:** `npm run verify` = **1495 tests**, **0** circular deps (madge), a
-  duplication gate (jscpd, `npm run dup`), and a
-  typed **ESLint** gate (`no-floating-promises`/`no-misused-promises` as errors) —
-  all folded into `verify`. Keep them green.
+- **Gate:** `npm run verify` runs both TypeScript projects, the full test/build
+  suite, a zero-warning typed **ESLint** gate, madge circular-dependency analysis,
+  and the jscpd duplication gate. Keep every stage green.
 - **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
@@ -47,26 +46,28 @@ workspace, and deployed.
   (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
   pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
   (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
-- **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, healthcheck
-  `/health`). Redeploy = `railway up` from this dir. The SDK
+- **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, liveness
+  `/live`, committed-write readiness `/health`). Redeploy = `railway up` from this dir. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
   tarball at `vendor/` so `npm ci` is self-contained; a Railway **volume at
   `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so installs survive
   redeploys. Env vars + the volume live in Railway — never commit tokens. See
   `DEPLOYMENT.md`.
 
-**Still human-gated** (operational, not code): rotate the prod LLM credentials and
-do a security review before real users; confirm the prod AUDIT-host
+**Still human-gated** (operational, not code): rotate the prod LLM credentials,
+record the provider DPA/region/retention/training posture, run a production-like
+backup/restore drill and deterministic safety eval, and complete a security review
+before real users; confirm the prod AUDIT-host
 `X-Addon-Token` clearance (run `scripts/host-auth-spike.ts` with a captured prod
-`LIVE_ADDON_TOKEN` — dev cleanly reports "audit log not available"); decide the
-session-TTL / per-request-role posture (`authz-surface-01`) — default is the 2h
-session-TTL bound (`SESSION_TTL_HOURS`); an opt-in per-request admin re-check is
-available via `ROLE_RECHECK=1` (fail-open, cached `ROLE_RECHECK_TTL_MS`).
+`LIVE_ADDON_TOKEN` — dev cleanly reports "audit log not available"). Every write,
+confirmation, and undo performs an uncached role recheck and fails closed;
+`ROLE_RECHECK=1` additionally enables cached checks for authenticated reads.
 
 ## Product contract
 
 - Only Clockify admins/owners; rejected BEFORE a session is created.
-- Per-admin, per-workspace assistant permissions; default full `read_write`;
+- Per-admin, per-workspace assistant permissions; genuinely new admins default to
+  full `read_write`, while missing groups in an existing policy migrate to `off`;
   admins manage only their own (owners don't see others').
 - Safe writes execute immediately with receipts. Risky writes require a dry-run
   preview + BUTTON confirmation; typed "yes" never executes.
@@ -110,9 +111,10 @@ bug was found against the REAL API, not by reading the code.
 
 - `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
   per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
-  ledger, undo, audit/metrics, telemetry, installations, retention — the prune
-  DELETEs are single-sourced so the index-seek test can't validate a stale copy)
-  + token encryption
+  ledger, undo, audit/metrics, telemetry, durable turn/operation journals,
+  canonical action results, short-lived artifacts, installations, and bounded
+  500-row retention batches (10k rows/pass with event-loop yields and continuation)
+  + token encryption/one-release key rotation
   (AES-256-GCM) · `src/auth/` admin check + signed session cookie
   (`SameSite=None; Secure; Partitioned` — required in the cross-site iframe).
 - `src/addon/` manifest + token verification. Inbound add-on JWTs are RS256 with
@@ -128,6 +130,9 @@ bug was found against the REAL API, not by reading the code.
   the INSTALL token claims: api = `apiUrl`+`/v1`, reports = `reportsUrl`+`/v1`;
   audit host has NO claim → derived prod-only, clean "not available" error
   elsewhere).
+- `src/clockify/request-governor.ts` — shared per-workspace FIFO governor: 10
+  requests/sec, burst 10, concurrency 4, one mutation at a time, adaptive `429`
+  cooldown, and 60 host calls per chat/resume turn.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`
@@ -174,6 +179,15 @@ bug was found against the REAL API, not by reading the code.
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 
 ## Safety & planner invariants (all pinned by tests — do not regress)
+
+- **Durable request identity:** chat clients generate a UUID `requestId` and reuse
+  it for transport retries. Same-id/same-intent replays the stored result;
+  same-id/different-intent returns `409 operation_id_conflict`.
+- **Write authority:** immediately before every write/confirmation/undo, refresh
+  the caller's role. Non-admin invalidates that admin's sessions; uncertainty
+  fails closed. Writes are journaled as prepared→executing→terminal, and transport
+  failure/timeout/408/5xx/malformed success after dispatch remains
+  `outcome_unknown` without automatic retry.
 
 - **Truthful previews:** when a turn leaves pending previews, the route REPLACES
   the model's reply with deterministic "review and click Confirm" text and stores
@@ -385,8 +399,8 @@ npm install
 npm run type-check     # tsc --noEmit
 npm test               # vitest run (fakes only; no network)
 npm run build          # tsc + vite -> dist/server, dist/ui
-npm run lint           # eslint src (typed async-safety rules; in verify)
-npm run verify         # type-check + lint + cycles + test + build (the gate)
+npm run lint           # eslint src, including browser UI; zero warnings
+npm run verify         # both type-checks + lint + cycles + dup + test + build
 npm run dev            # tsx src/server.ts (needs env)
 npm run cycles         # madge --circular … (pinned devDep) — keep 0
 ```

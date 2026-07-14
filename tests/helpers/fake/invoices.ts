@@ -50,7 +50,7 @@ export function makeFakeInvoices({ state, seed, bump, nextId }: FakeContext): Pi
     async exportInvoice(id) {
       bump("exportInvoice");
       void id;
-      return { contentType: "application/pdf", bytes: 4, base64: "JVBERg==", truncated: false };
+      return { contentType: "application/pdf", bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]) };
     },
     async createInvoice(input) {
       bump("createInvoice");

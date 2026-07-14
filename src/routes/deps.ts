@@ -20,6 +20,7 @@ export interface AppDeps {
   /** Build a workspace-scoped Clockify client for an installation. */
   clockifyForWorkspace: (installation: Installation) => WorkspaceClient;
   now?: () => Date;
+  readiness?: { isReady(): boolean };
 }
 
 const SESSION_COOKIE = "ai_assistant_session";

@@ -44,6 +44,18 @@ describe("resolveClockifyApiBase", () => {
   it("defaults to the production host when nothing is provided", () => {
     expect(resolveClockifyApiBase({})).toBe("https://api.clockify.me/api/v1");
   });
+
+  it.each([
+    "http://api.clockify.me/api",
+    "https://api.clockify.me:444/api",
+    "https://user:pass@api.clockify.me/api",
+    "https://api.clockify.me.evil.example/api",
+    "https://127.0.0.1/api",
+    "https://api.clockify.me/admin",
+    "https://api.clockify.me/api?next=https://evil.example",
+  ])("rejects an untrusted API service origin before use: %s", (apiUrl) => {
+    expect(() => resolveClockifyApiBase({ apiUrl })).toThrow(/clockify service url/i);
+  });
 });
 
 describe("resolveClockifyReportsBase", () => {
@@ -61,6 +73,16 @@ describe("resolveClockifyReportsBase", () => {
 
   it("returns undefined when not captured (core falls back to derivation)", () => {
     expect(resolveClockifyReportsBase({})).toBeUndefined();
+  });
+
+  it.each([
+    "http://reports.api.clockify.me",
+    "https://reports.api.clockify.me:8443",
+    "https://reports.api.clockify.me.evil.example",
+    "https://localhost/report",
+    "https://developer.clockify.me/api",
+  ])("rejects an untrusted reports service origin before use: %s", (reportsUrl) => {
+    expect(() => resolveClockifyReportsBase({ reportsUrl })).toThrow(/clockify service url/i);
   });
 });
 

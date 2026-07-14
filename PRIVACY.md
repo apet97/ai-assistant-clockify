@@ -8,12 +8,18 @@ to have it deleted. It reflects the behavior in this repository (see `src/db/` a
 
 ## What the model sees — and never sees
 
-The language model is treated as **untrusted**: it proposes actions, a
-deterministic harness validates and executes them. The model receives only the
-action catalog, the admin's current permissions, and a short window of recent chat
-messages. The model **never** receives Clockify tokens, the add-on token, session
-secrets, the model API key, or raw HTTP headers. Entity names/ids are resolved
-server-side. Nothing secret is ever logged.
+The language model is treated as **untrusted**: it proposes actions, while a
+deterministic harness validates and executes them. The model receives the
+admin-authored request, a bounded recent conversation window, the permitted action
+schemas, and the tool results needed to continue that turn. Tool results can contain
+Clockify business data such as entity names and ids, descriptions, dates/times,
+amounts, statuses, user display names, and summarized error/receipt data. Exported
+binaries are never sent to the model; they are stored once as short-lived artifacts.
+
+The model **never** receives Clockify tokens, the add-on token, session secrets, the
+model API key, raw HTTP headers, confirmation nonce hashes, or stored encrypted
+credentials. Provider error bodies are not logged. Prompts, tool-result bodies,
+headers, and tokens are excluded from production provider-error logs.
 
 ## What is stored, and for how long
 
@@ -28,13 +34,16 @@ workspace + admin, and is isolated per workspace.
 | Chat transcripts | Conversation history + session restore | **90 days** (configurable, min 30) |
 | Audit log | Every action + its outcome (accountability, recaps) | **90 days** (configurable, min 30) |
 | Pending confirmations | Risky-write previews awaiting button-confirm | 30 days |
-| Undo records | Reverse a recent creation | 30 days |
+| Undo records | Reverse a recent creation | **30 minutes to use**; terminal metadata retained up to 30 days |
 | Turn telemetry | Model call counts / token usage / latency (cost) | 30 days |
-| Session records | Signed session cookie state (validity `SESSION_TTL_HOURS`, default 2h) | Deleted on uninstall |
+| Durable turn/operation results | Retry replay, write outcome recovery, and truthful history | 30–90 days, depending on whether the row is operational metadata or a canonical result |
+| Export artifacts | Authenticated invoice/report download | 60 minutes; hard limit 1,000,000 bytes |
+| Session records | Signed session cookie state (validity `SESSION_TTL_HOURS`, default 2h) | Pruned only after expired dependent data is gone |
 
-Retention is enforced by an hourly background sweep, so a row may persist for **up to
-~1 hour past** its window before deletion (and expired sessions/previews are already
-treated as gone before then — they're filtered by their expiry on read). The chat/audit
+Retention is enforced at startup and hourly in 500-row transactions. Each pass is
+capped at 10,000 deleted rows, yields between batches, and schedules an immediate
+continuation when backlog remains. Expired sessions/previews/artifacts are treated as
+gone on read even before physical deletion. The chat/audit
 window is set by the `RETENTION_DAYS` environment variable (default **90**, minimum
 **30** so the 30-day metrics view is never truncated). Uninstall erasure (below) is
 **immediate**, not on the hourly schedule.
@@ -43,14 +52,16 @@ window is set by the `RETENTION_DAYS` environment variable (default **90**, mini
 
 Installation tokens are encrypted at rest with **AES-256-GCM**. The key is derived
 (SHA-256) from the operator-supplied `DATA_ENCRYPTION_KEY` passphrase
-(`src/db/encryption.ts`). No other field is secret.
+(`src/db/encryption.ts`). A one-release `DATA_ENCRYPTION_KEY_PREVIOUS` fallback
+transactionally re-encrypts existing installation tokens during key rotation. No
+other stored field is treated as an authentication secret.
 
 ## Deletion & your rights
 
 - **Uninstall** the add-on from Clockify: `POST /lifecycle/deleted` **immediately
-  erases all of that workspace's data** — chat transcripts, audit log, permissions,
-  sessions, and operational rows — and wipes the stored token (a `deleted`
-  tombstone row remains).
+  hard-deletes all of that workspace's data** — including the installation row and
+  encrypted token, chat, audit, permissions, sessions, operation results, undo, and
+  artifacts.
 - **On request**, an operator can erase a single workspace at any time with
   `scripts/erase-workspace.ts` (offline, double-gated), which performs the same
   full erasure.
@@ -58,10 +69,16 @@ Installation tokens are encrypted at rest with **AES-256-GCM**. The key is deriv
 
 ## Sub-processors
 
-Chat turns are sent to the configured model endpoint (`LLM_BASE_URL`) — with **no
-secrets** — for the assistant to function. Clockify API calls go to the workspace's
-Clockify hosts using the encrypted installation token. No other third parties
-receive data.
+Chat turns are sent to the operator-configured model endpoint (`LLM_BASE_URL`) for
+the assistant to function. Clockify API calls go only to validated Clockify service
+origins using the encrypted installation token. No other application subprocessors
+are built into this repository.
+
+The repository cannot determine the configured model provider's retention period,
+processing region, or training posture. Marketplace launch therefore remains blocked
+until the operator records the provider, DPA/subprocessor terms, selected region,
+retention/zero-retention setting, and training opt-out status in
+`MARKETPLACE_READINESS.md` with evidence.
 
 ## Contact
 

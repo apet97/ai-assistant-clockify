@@ -13,7 +13,7 @@ import type { FakeWorkspace, FakeWorkspaceSeed } from "../../tests/helpers/fake-
  * the lift the agentic loop must show.
  */
 export interface AgenticOutcome {
-  kind: "final" | "clarify" | "exhausted" | "interrupted" | "error";
+  kind: "final" | "clarify" | "partial" | "exhausted" | "interrupted" | "error";
   finalText: string;
   /** Action names that produced receipts during loop turns (reads + safe writes + errors). */
   executed: string[];
