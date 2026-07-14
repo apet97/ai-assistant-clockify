@@ -31,6 +31,10 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   re-checked at confirm time.
 - Every mutation/confirmation/undo performs a fresh role check and fails closed;
   Clockify host writes are single-flight per workspace and are never auto-retried.
+- A post-dispatch journal failure never rewrites a known Clockify success as a
+  retryable or definitive failure: single safe writes return success with an
+  explicit degradation warning, composed writes stop as `partial`, and known
+  compensation success is never automatically retried.
 - Client cancellation can stop model work or a not-yet-dispatched action, never a
   Clockify mutation after dispatch. Per-session FIFO locks cover route settlement
   and skip disconnected queued requests.
@@ -96,7 +100,7 @@ npm run dev           # tsx src/server.ts (needs env)
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `mutation-workflow.ts` (operation-scoped prepared→executing→terminal primary
-  and compensation steps; ambiguity stops later dispatch),
+  and compensation steps; ambiguity or degraded settlement stops later dispatch),
   `durable-safe-write.ts` (the real step-journaled safe-write builder),
   `mutation-compatibility.ts` (explicit phase 4/5
   migration exceptions), `compose.ts` (legacy atomic multi-step/rollback),

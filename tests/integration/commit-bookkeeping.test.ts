@@ -150,6 +150,21 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
         onPartial: () => {
           throw new Error("single step cannot be partial");
         },
+        onJournalDegraded: (completed) => ({
+          kind: "partial",
+          receipt: successReceipt({
+            action: operation.actionName,
+            warnings: [{
+              code: "operation_journal_degraded",
+              message: "Clockify confirmed the step, but its full local journal record is degraded.",
+            }],
+            changed: completed[0]?.externalId
+              ? { deleted: [{ type: "tag", id: completed[0].externalId }] }
+              : undefined,
+          }),
+          message: "Clockify confirmed the step; no later step was dispatched.",
+          recovery: { hint: "Verify the known external effect before a fresh operation.", retryable: false },
+        }),
         onFailure: () => errorReceipt({ action: operation.actionName, code: "delete_failed", message: "Delete failed." }),
       });
     });

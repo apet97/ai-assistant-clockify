@@ -43,10 +43,52 @@ function safeFailureDetail(error: unknown): Record<string, unknown> {
   };
 }
 
+function degradedSettlementDetail(input: {
+  settlementError: unknown;
+  dispatchStatus: string;
+  dispatchDetail?: unknown;
+}): Record<string, unknown> {
+  return {
+    journalDegraded: true,
+    fullEffectPersisted: false,
+    dispatchStatus: input.dispatchStatus,
+    settlementError: safeFailureDetail(input.settlementError),
+    ...(input.dispatchDetail === undefined ? {} : { dispatchDetail: input.dispatchDetail }),
+  };
+}
+
+function logDegradedSettlement(kind: "primary" | "compensation", error: unknown): void {
+  console.error(
+    `${kind} mutation step settlement remained degraded after dispatch:`,
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+function runtimeStep(input: {
+  base: JournaledMutationStep;
+  status: JournaledMutationStep["status"];
+  outcome?: MutationDispatchResult;
+  detail?: unknown;
+}): JournaledMutationStep {
+  return {
+    ...input.base,
+    status: input.status,
+    ...(input.outcome?.externalId === undefined ? {} : { externalId: input.outcome.externalId }),
+    ...(input.outcome?.effect === undefined ? {} : { effect: input.outcome.effect }),
+    ...(input.detail === undefined
+      ? input.outcome?.detail === undefined
+        ? {}
+        : { detail: input.outcome.detail }
+      : { detail: input.detail }),
+  };
+}
+
 /**
  * Execute one and only one injected host mutation. The durable ordering is:
  * prepared -> executing (committed synchronously) -> dispatch -> terminal.
- * Any non-definitive exception after dispatch begins is ambiguous by default.
+ * Dispatch classification and post-dispatch persistence are deliberately
+ * separate: a settlement error can degrade the journal, but cannot rewrite a
+ * known host success as a retryable/definitive failure.
  */
 export async function executeStep(input: {
   journal: MutationStepJournal;
@@ -73,15 +115,38 @@ export async function executeStep(input: {
   if (!input.journal.markOperationStepExecuting(stepId)) {
     throw new Error("operation_step_not_prepared");
   }
+  const executing = input.journal.listOperationSteps().find((step) => step.id === stepId);
+  if (!executing) throw new Error("operation_step_not_found");
 
+  let status: "succeeded" | "definitive_failed" | "outcome_unknown";
+  let outcome: MutationDispatchResult;
   try {
-    const dispatched = await input.dispatch();
-    input.journal.settleOperationStep(stepId, "succeeded", dispatched);
+    outcome = await input.dispatch();
+    status = "succeeded";
   } catch (error) {
-    const status = error instanceof DefinitiveWriteFailure
+    status = error instanceof DefinitiveWriteFailure
       ? "definitive_failed"
       : "outcome_unknown";
-    input.journal.settleOperationStep(stepId, status, { detail: safeFailureDetail(error) });
+    outcome = { detail: safeFailureDetail(error) };
+  }
+
+  try {
+    input.journal.settleOperationStep(stepId, status, outcome);
+  } catch (settlementError) {
+    const detail = degradedSettlementDetail({
+      settlementError,
+      dispatchStatus: status,
+      ...(outcome.detail === undefined ? {} : { dispatchDetail: outcome.detail }),
+    });
+    try {
+      input.journal.settleOperationStepDegraded(stepId, status, {
+        ...(outcome.externalId === undefined ? {} : { externalId: outcome.externalId }),
+        detail,
+      });
+    } catch (fallbackError) {
+      logDegradedSettlement("primary", fallbackError);
+    }
+    return runtimeStep({ base: executing, status, outcome, detail });
   }
 
   const settled = input.journal.listOperationSteps().find((step) => step.id === stepId);
@@ -117,15 +182,38 @@ export async function executeCompensationStep(input: {
   if (!input.journal.markOperationStepCompensating(stepId)) {
     throw new Error("compensation_step_not_prepared");
   }
+  const executing = input.journal.listOperationSteps().find((step) => step.id === stepId);
+  if (!executing) throw new Error("compensation_step_not_found");
 
+  let status: "compensated" | "compensation_failed" | "outcome_unknown";
+  let outcome: MutationDispatchResult;
   try {
-    const dispatched = await input.dispatch();
-    input.journal.settleCompensationStep(stepId, "compensated", dispatched);
+    outcome = await input.dispatch();
+    status = "compensated";
   } catch (error) {
-    const status = error instanceof DefinitiveWriteFailure
+    status = error instanceof DefinitiveWriteFailure
       ? "compensation_failed"
       : "outcome_unknown";
-    input.journal.settleCompensationStep(stepId, status, { detail: safeFailureDetail(error) });
+    outcome = { detail: safeFailureDetail(error) };
+  }
+
+  try {
+    input.journal.settleCompensationStep(stepId, status, outcome);
+  } catch (settlementError) {
+    const detail = degradedSettlementDetail({
+      settlementError,
+      dispatchStatus: status,
+      ...(outcome.detail === undefined ? {} : { dispatchDetail: outcome.detail }),
+    });
+    try {
+      input.journal.settleCompensationStepDegraded(stepId, status, {
+        ...(outcome.externalId === undefined ? {} : { externalId: outcome.externalId }),
+        detail,
+      });
+    } catch (fallbackError) {
+      logDegradedSettlement("compensation", fallbackError);
+    }
+    return runtimeStep({ base: executing, status, outcome, detail });
   }
 
   const settled = input.journal.listOperationSteps().find((step) => step.id === stepId);
@@ -143,7 +231,33 @@ export interface ExecuteMutationWorkflowInput {
     completed: JournaledMutationStep[],
     failed: JournaledMutationStep,
   ): Extract<CommitResult, { kind: "partial" }>;
+  onJournalDegraded(
+    completedIncludingDegraded: JournaledMutationStep[],
+    degraded: JournaledMutationStep,
+  ): Extract<CommitResult, { kind: "partial" }>;
   onFailure(failed: JournaledMutationStep): ErrorReceipt;
+}
+
+export function isJournalDegradedStep(step: JournaledMutationStep): boolean {
+  return typeof step.detail === "object" && step.detail !== null &&
+    (step.detail as { journalDegraded?: unknown }).journalDegraded === true;
+}
+
+export function withJournalDegradedWarning(receipt: SuccessReceipt): SuccessReceipt {
+  if (receipt.warnings?.some((warning) => warning.code === "operation_journal_degraded")) {
+    return receipt;
+  }
+  return {
+    ...receipt,
+    warnings: [
+      ...(receipt.warnings ?? []),
+      {
+        code: "operation_journal_degraded",
+        message:
+          "Clockify confirmed the change, but the full local step record could not be saved. The operation will not be retried automatically.",
+      },
+    ],
+  };
 }
 
 /**
@@ -161,6 +275,7 @@ export async function executeMutationWorkflow(
   if (input.journal.getOperationStatus() !== "executing") {
     throw new Error("operation_not_executing");
   }
+  const primaryStepCount = input.steps.filter((step) => step.kind === "primary").length;
   const completed: JournaledMutationStep[] = [];
   for (const step of input.steps) {
     if (step.kind !== "primary") continue;
@@ -170,6 +285,12 @@ export async function executeMutationWorkflow(
       step,
       dispatch: step.dispatch,
     });
+    if (isJournalDegradedStep(result)) {
+      if (primaryStepCount === 1 && result.status === "succeeded") {
+        return withJournalDegradedWarning(input.onSuccess([result]));
+      }
+      return input.onJournalDegraded([...completed, result], result);
+    }
     if (result.status === "succeeded") {
       completed.push(result);
       continue;

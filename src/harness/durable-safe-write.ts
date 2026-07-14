@@ -9,7 +9,12 @@ import {
   type PreparedSafeWrite,
 } from "./action.js";
 import type { FeatureGroup } from "./permissions.js";
-import { executeStep, type MutationDispatchResult } from "./mutation-workflow.js";
+import {
+  executeStep,
+  isJournalDegradedStep,
+  withJournalDegradedWarning,
+  type MutationDispatchResult,
+} from "./mutation-workflow.js";
 import { errorReceipt } from "./receipts.js";
 
 export interface DurableSafeWriteDispatch extends MutationDispatchResult {
@@ -70,7 +75,13 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
         return effect;
       },
     });
-    if (step.status === "succeeded" && dispatched) return dispatched.result;
+    if (step.status === "succeeded" && dispatched) {
+      const result = dispatched.result;
+      if (isJournalDegradedStep(step) && !isPartialCommitResult(result) && result.ok) {
+        return withJournalDegradedWarning(result);
+      }
+      return result;
+    }
     if (step.status === "outcome_unknown") {
       return errorReceipt({
         action: def.name,

@@ -79,12 +79,24 @@ export interface MutationStepJournal {
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
   ): void;
+  /** Minimal terminal write used only when the full effect settlement failed. */
+  settleOperationStepDegraded(
+    id: string,
+    status: "succeeded" | "definitive_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
+  ): void;
   prepareCompensationStep(input: ScopedPrepareCompensationStep): string;
   markOperationStepCompensating(id: string): boolean;
   settleCompensationStep(
     id: string,
     status: "compensated" | "compensation_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+  ): void;
+  /** Minimal atomic compensation settlement used after full settlement failed. */
+  settleCompensationStepDegraded(
+    id: string,
+    status: "compensated" | "compensation_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
   ): void;
   listOperationSteps(): JournaledMutationStep[];
 }

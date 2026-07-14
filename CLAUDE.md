@@ -217,7 +217,14 @@ bug was found against the REAL API, not by reading the code.
   starts fail before host dispatch. A later definitive failure after a known
   effect returns `partial`, while ambiguity stops all later steps. Compensation
   uses its dedicated eligibility/dispatch/settlement path; a rejected or unknown
-  compensation never erases the known-succeeded source. Startup recovery is
+  compensation never erases the known-succeeded source. Host dispatch and local
+  settlement have separate error boundaries: after a known host success, full
+  settlement failure uses a bounded best-effort marker without effect JSON. A
+  safe single-step write still returns success with
+  `operation_journal_degraded`; a composition stops as nonretryable `partial`;
+  compensation preserves the known result. Even if the fallback marker cannot
+  persist, the synthetic result stays truthful and the already-created unique
+  step identity blocks redispatch. Startup recovery is
   read-only: it marks only dispatched orphan steps unknown and never compensates
   automatically. `clockify_tags_create` is the step-journaled safe-write
   reference. Unmigrated writes are enumerated by exact action name and phase in

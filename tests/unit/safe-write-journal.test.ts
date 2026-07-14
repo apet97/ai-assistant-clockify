@@ -73,4 +73,70 @@ describe("prepared safe writes", () => {
     store.close();
   });
 
+  it("preserves a known host success when primary step settlement stays unavailable", async () => {
+    const store = createStore(":memory:");
+    const fake = createFakeWorkspace();
+    let operationId = "";
+
+    const result = await executeAction({
+      actionName: "clockify_tags_create",
+      args: { name: "Settlement degraded" },
+      context: {
+        workspaceId: "workspace",
+        adminUserId: "admin",
+        policy: defaultAdminPolicy(),
+        clockify: fake.client,
+        operationJournal: {
+          prepare(actionName, operation, mutationPlan) {
+            operationId = store.prepareOperationRun({
+              id: "safe-tag-settlement-degraded",
+              sessionId: "session",
+              workspaceId: "workspace",
+              adminUserId: "admin",
+              actionName,
+              actionFingerprint: "action",
+              catalogHash: "catalog",
+              operationHash: "operation",
+              operation,
+              mutationPlan,
+            });
+            return operationId;
+          },
+          markExecuting(id) {
+            if (!store.markOperationExecuting(id)) throw new Error("operation_not_prepared");
+          },
+          scope(id) {
+            return {
+              ...store.mutationStepJournal(id),
+              settleOperationStep() {
+                throw new Error("persistent_step_settlement_failure");
+              },
+            };
+          },
+          settle(id, status, settledResult) {
+            store.settleOperationResult(id, status, settledResult);
+          },
+        },
+      },
+    });
+
+    expect(fake.counts.createTag).toBe(1);
+    expect(result).toMatchObject({
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        warnings: [{ code: "operation_journal_degraded" }],
+      },
+    });
+    expect(store.getOperationRun(operationId)?.status).toBe("succeeded");
+    expect(store.listOperationSteps(operationId)).toMatchObject([
+      {
+        planStepId: "create-tag",
+        status: "succeeded",
+        detail: { journalDegraded: true },
+      },
+    ]);
+    store.close();
+  });
+
 });

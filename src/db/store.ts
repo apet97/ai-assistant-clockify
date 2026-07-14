@@ -208,12 +208,24 @@ export interface Store {
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
     operationId?: string,
   ): void;
+  settleOperationStepDegraded(
+    id: string,
+    status: "succeeded" | "definitive_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
+    operationId?: string,
+  ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
   markOperationStepCompensating(id: string, operationId?: string): boolean;
   settleCompensationStep(
     id: string,
     status: "compensated" | "compensation_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
+  ): void;
+  settleCompensationStepDegraded(
+    id: string,
+    status: "compensated" | "compensation_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
     operationId?: string,
   ): void;
   listOperationSteps(operationId: string): OperationStep[];
@@ -416,12 +428,16 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     }),
     markOperationStepExecuting: (id) => operationRunStore.markOperationStepExecuting(id, operationId),
     settleOperationStep: (id, status, detail) => operationRunStore.settleOperationStep(id, status, detail, operationId),
+    settleOperationStepDegraded: (id, status, detail) =>
+      operationRunStore.settleOperationStepDegraded(id, status, detail, operationId),
     prepareCompensationStep: (input) => operationRunStore.prepareCompensationStep({
       ...input,
       operationId,
     }),
     markOperationStepCompensating: (id) => operationRunStore.markOperationStepCompensating(id, operationId),
     settleCompensationStep: (id, status, detail) => operationRunStore.settleCompensationStep(id, status, detail, operationId),
+    settleCompensationStepDegraded: (id, status, detail) =>
+      operationRunStore.settleCompensationStepDegraded(id, status, detail, operationId),
     listOperationSteps: () => operationRunStore.listOperationSteps(operationId),
   });
 

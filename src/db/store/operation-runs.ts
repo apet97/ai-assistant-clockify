@@ -122,12 +122,24 @@ export function buildOperationRunStore(ctx: StoreContext): {
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
     operationId?: string,
   ): void;
+  settleOperationStepDegraded(
+    id: string,
+    status: "succeeded" | "definitive_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
+    operationId?: string,
+  ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
   markOperationStepCompensating(id: string, operationId?: string): boolean;
   settleCompensationStep(
     id: string,
     status: "compensated" | "compensation_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
+  ): void;
+  settleCompensationStepDegraded(
+    id: string,
+    status: "compensated" | "compensation_failed" | "outcome_unknown",
+    detail: { externalId?: string; detail: unknown },
     operationId?: string,
   ): void;
   listOperationSteps(operationId: string): OperationStep[];
@@ -302,6 +314,26 @@ export function buildOperationRunStore(ctx: StoreContext): {
       );
       if (updated.changes !== 1) throw new Error("operation_step_not_executing");
     },
+    settleOperationStepDegraded(id, status, detail, operationId) {
+      const timestamp = nowIso();
+      const updated = db.prepare(
+        `UPDATE operation_steps
+            SET status = ?, external_id = ?, effect_json = NULL, detail_json = ?,
+                settled_at = ?, updated_at = ?
+          WHERE id = ? AND (? IS NULL OR operation_id = ?)
+            AND status = 'executing' AND kind = 'primary'`,
+      ).run(
+        status,
+        detail.externalId ?? null,
+        actionResultJson(detail.detail),
+        timestamp,
+        timestamp,
+        id,
+        operationId ?? null,
+        operationId ?? null,
+      );
+      if (updated.changes !== 1) throw new Error("operation_step_not_executing");
+    },
     prepareCompensationStep(input) {
       return db.transaction((): string => {
         const source = db.prepare(
@@ -396,6 +428,39 @@ export function buildOperationRunStore(ctx: StoreContext): {
         // The primary effect was known to have succeeded before compensation.
         // A definitive/ambiguous compensation failure does not erase that truth;
         // only an authoritative successful compensation changes the source state.
+        const sourceStatus = status === "compensated" ? "compensated" : "succeeded";
+        const source = db.prepare(
+          `UPDATE operation_steps
+              SET status = ?, settled_at = CASE WHEN ? = 'compensated' THEN ? ELSE settled_at END,
+                  updated_at = ?
+            WHERE id = ? AND status = 'compensating'`,
+        ).run(sourceStatus, status, timestamp, timestamp, row.compensates_step_id);
+        if (source.changes !== 1) throw new Error("compensation_source_not_executing");
+      })();
+    },
+    settleCompensationStepDegraded(id, status, detail, operationId) {
+      db.transaction(() => {
+        const timestamp = nowIso();
+        const row = db.prepare(
+          `SELECT compensates_step_id FROM operation_steps
+            WHERE id = ? AND (? IS NULL OR operation_id = ?)
+              AND status = 'executing' AND kind = 'compensation'`,
+        ).get(id, operationId ?? null, operationId ?? null) as { compensates_step_id: string | null } | undefined;
+        if (!row?.compensates_step_id) throw new Error("compensation_step_not_executing");
+        const updated = db.prepare(
+          `UPDATE operation_steps
+              SET status = ?, external_id = ?, effect_json = NULL, detail_json = ?,
+                  settled_at = ?, updated_at = ?
+            WHERE id = ? AND status = 'executing' AND kind = 'compensation'`,
+        ).run(
+          status,
+          detail.externalId ?? null,
+          actionResultJson(detail.detail),
+          timestamp,
+          timestamp,
+          id,
+        );
+        if (updated.changes !== 1) throw new Error("compensation_step_not_executing");
         const sourceStatus = status === "compensated" ? "compensated" : "succeeded";
         const source = db.prepare(
           `UPDATE operation_steps

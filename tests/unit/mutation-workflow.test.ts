@@ -98,6 +98,166 @@ describe("durable mutation workflow", () => {
     store.close();
   });
 
+  it("keeps a known primary success nonretryable when terminal settlement persistently fails", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-primary-settlement-degraded");
+    store.markOperationExecuting(operationId);
+    const baseJournal = store.mutationStepJournal(operationId);
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleOperationStep() {
+        throw new Error("persistent_step_settlement_failure");
+      },
+      settleOperationStepDegraded() {
+        throw new Error("persistent_step_fallback_failure");
+      },
+    };
+    let dispatches = 0;
+
+    const result = await executeStep({
+      journal,
+      operationId,
+      step: { id: "one", index: 0, name: "First", kind: "primary" },
+      dispatch: async () => {
+        dispatches += 1;
+        return { externalId: "external-1", effect: { created: "external-1" } };
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "succeeded",
+      externalId: "external-1",
+      effect: { created: "external-1" },
+      detail: { journalDegraded: true },
+    });
+    await expect(executeStep({
+      journal,
+      operationId,
+      step: { id: "one", index: 0, name: "First", kind: "primary" },
+      dispatch: async () => {
+        dispatches += 1;
+        return {};
+      },
+    })).rejects.toThrow();
+    expect(dispatches).toBe(1);
+    expect(baseJournal.listOperationSteps()).toMatchObject([{ status: "executing" }]);
+    store.close();
+  });
+
+  it("stops a composed workflow after a degraded known success and settles the operation partial", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-composed-settlement-degraded");
+    store.markOperationExecuting(operationId);
+    const baseJournal = store.mutationStepJournal(operationId);
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleOperationStep() {
+        throw new Error("persistent_step_settlement_failure");
+      },
+    };
+    let laterDispatches = 0;
+
+    const result = await executeMutationWorkflow({
+      journal,
+      operationId,
+      actionName: "test_mutation",
+      steps: [
+        {
+          id: "one",
+          index: 0,
+          name: "First",
+          kind: "primary",
+          dispatch: async () => ({ externalId: "created-1", effect: { created: "created-1" } }),
+        },
+        {
+          id: "two",
+          index: 1,
+          name: "Second",
+          kind: "primary",
+          dispatch: async () => {
+            laterDispatches += 1;
+            return {};
+          },
+        },
+      ],
+      onSuccess: () => successReceipt({ action: "test_mutation" }),
+      onPartial: () => {
+        throw new Error("definitive failure partial should not be built");
+      },
+      onJournalDegraded: (completed) => ({
+        kind: "partial",
+        receipt: successReceipt({
+          action: "test_mutation",
+          changed: { created: [{ type: "thing", id: completed[0]!.externalId! }] },
+          warnings: [{ code: "operation_journal_degraded", message: "Step journal degraded." }],
+        }),
+        message: "Clockify confirmed the first step; no later step was dispatched.",
+        recovery: { hint: "Verify the known effect before a fresh operation.", retryable: false },
+      }),
+      onFailure: () => errorReceipt({ action: "test_mutation", code: "failed", message: "failed" }),
+    });
+
+    expect(laterDispatches).toBe(0);
+    expect(result).toMatchObject({
+      kind: "partial",
+      receipt: {
+        ok: true,
+        changed: { created: [{ id: "created-1" }] },
+        warnings: [{ code: "operation_journal_degraded" }],
+      },
+      recovery: { retryable: false },
+    });
+    store.settleOperationResult(operationId, "partial", result);
+    expect(store.getOperationRun(operationId)?.status).toBe("partial");
+    store.close();
+  });
+
+  it("returns a one-step workflow's known success with a degradation warning", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-single-settlement-degraded");
+    store.markOperationExecuting(operationId);
+    const baseJournal = store.mutationStepJournal(operationId);
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleOperationStep() {
+        throw new Error("persistent_step_settlement_failure");
+      },
+    };
+
+    const result = await executeMutationWorkflow({
+      journal,
+      operationId,
+      actionName: "test_mutation",
+      steps: [{
+        id: "one",
+        index: 0,
+        name: "First",
+        kind: "primary",
+        dispatch: async () => ({ externalId: "created-1", effect: { created: "created-1" } }),
+      }],
+      onSuccess: (completed) => successReceipt({
+        action: "test_mutation",
+        changed: { created: [{ type: "thing", id: completed[0]!.externalId! }] },
+      }),
+      onPartial: () => {
+        throw new Error("definitive failure partial should not be built");
+      },
+      onJournalDegraded: () => {
+        throw new Error("single-step degradation must remain success");
+      },
+      onFailure: () => errorReceipt({ action: "test_mutation", code: "failed", message: "failed" }),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      changed: { created: [{ id: "created-1" }] },
+      warnings: [{ code: "operation_journal_degraded" }],
+    });
+    store.settleOperationResult(operationId, "succeeded", result);
+    expect(store.getOperationRun(operationId)?.status).toBe("succeeded");
+    store.close();
+  });
+
   it("classifies an ambiguous dispatch as outcome_unknown and runs no later step", async () => {
     const store = createStore(":memory:");
     const operationId = operation(store, "operation-unknown");
@@ -132,6 +292,9 @@ describe("durable mutation workflow", () => {
       onSuccess: () => successReceipt({ action: "test_mutation" }),
       onPartial: () => {
         throw new Error("partial should not be built");
+      },
+      onJournalDegraded: () => {
+        throw new Error("degraded partial should not be built");
       },
       onFailure: () => errorReceipt({ action: "test_mutation", code: "failed", message: "failed" }),
     });
@@ -182,6 +345,9 @@ describe("durable mutation workflow", () => {
           message: `Stopped at ${failed.planStepId}`,
           recovery: { hint: "Review the recorded effect before retrying.", retryable: false },
         };
+      },
+      onJournalDegraded: () => {
+        throw new Error("degraded partial should not be built");
       },
       onFailure: () => errorReceipt({ action: "test_mutation", code: "failed", message: "failed" }),
     });
@@ -262,6 +428,116 @@ describe("durable mutation workflow", () => {
       { id: sourceId, status: "succeeded", externalId: "created-1" },
       { id: result.id, status: "outcome_unknown" },
     ]);
+    store.close();
+  });
+
+  it("keeps a known compensation success nonretryable when terminal settlement persistently fails", async () => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal: baseJournal } = compensableOperation(
+      store,
+      "operation-compensation-settlement-degraded",
+    );
+    const executeCompensationStep = (workflowModule as unknown as {
+      executeCompensationStep?: ExecuteCompensationStep;
+    }).executeCompensationStep;
+    expect(executeCompensationStep).toBeTypeOf("function");
+    if (!executeCompensationStep) return;
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleCompensationStep() {
+        throw new Error("persistent_compensation_settlement_failure");
+      },
+      settleCompensationStepDegraded() {
+        throw new Error("persistent_compensation_fallback_failure");
+      },
+    };
+    let dispatches = 0;
+
+    const result = await executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => {
+        dispatches += 1;
+        return { externalId: "created-1", effect: { deleted: "created-1" } };
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "compensated",
+      externalId: "created-1",
+      effect: { deleted: "created-1" },
+      detail: { journalDegraded: true },
+    });
+    await expect(executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => {
+        dispatches += 1;
+        return {};
+      },
+    })).rejects.toThrow();
+    expect(dispatches).toBe(1);
+    expect(baseJournal.listOperationSteps()).toMatchObject([
+      { id: sourceId, status: "compensating" },
+      { status: "executing" },
+    ]);
+    store.close();
+  });
+
+  it("persists a minimal degraded compensation marker without losing the known result", async () => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal: baseJournal } = compensableOperation(
+      store,
+      "operation-compensation-minimal-settlement",
+    );
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleCompensationStep() {
+        throw new Error("full_compensation_settlement_failure");
+      },
+    };
+
+    const result = await workflowModule.executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => ({ externalId: "created-1", effect: { deleted: "created-1" } }),
+    });
+
+    expect(result).toMatchObject({
+      status: "compensated",
+      effect: { deleted: "created-1" },
+      detail: { journalDegraded: true, fullEffectPersisted: false },
+    });
+    expect(baseJournal.listOperationSteps()).toMatchObject([
+      { id: sourceId, status: "compensated" },
+      {
+        status: "compensated",
+        externalId: "created-1",
+        detail: { journalDegraded: true, fullEffectPersisted: false },
+      },
+    ]);
+    expect(baseJournal.listOperationSteps()[1]?.effect).toBeUndefined();
     store.close();
   });
 
