@@ -79,9 +79,23 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
   };
 }
 
+function dispatchUnknownResult(actionName: string): unknown {
+  return {
+    kind: "receipt",
+    receipt: {
+      ok: false,
+      action: actionName,
+      code: "commit_outcome_unknown",
+      message: "This confirmation entered the dispatch window without a durable final receipt, so its outcome is unknown.",
+      recovery: "Verify the result in Clockify before trying the action again.",
+    },
+  };
+}
+
 /**
  * Pending-confirmation concern: persist a preview + the ATOMIC one-use status
- * transitions (the confirm/cancel TOCTOU guards) + the per-session live list.
+ * transitions (the confirm/cancel TOCTOU guards), pre-dispatch canonical result
+ * binding/scrubbing, and the per-session live list.
  */
 export function buildConfirmationStore(ctx: StoreContext): {
   savePendingConfirmation(record: PendingConfirmationRecord): void;
@@ -173,17 +187,63 @@ export function buildConfirmationStore(ctx: StoreContext): {
 
     markConfirmationExecuting(id) {
       return db.transaction((): boolean => {
+        const row = db.prepare(
+          `SELECT c.operation_id, c.session_id, c.workspace_id, c.admin_user_id,
+                  c.operation_json, COALESCE(o.action_name, '') AS operation_action_name
+             FROM pending_confirmations c
+             LEFT JOIN operation_runs o ON o.id = c.operation_id
+            WHERE c.id = ? AND c.status = 'pending'`,
+        ).get(id) as {
+          operation_id: string;
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          operation_json: string | null;
+          operation_action_name: string;
+        } | undefined;
+        if (!row) return false;
+        const operation = row.operation_json
+          ? JSON.parse(row.operation_json) as { actionName?: unknown }
+          : undefined;
+        const actionName = row.operation_action_name ||
+          (typeof operation?.actionName === "string" && operation.actionName.length > 0
+            ? operation.actionName
+            : "unknown_action");
+        const actionResultId = randomUUID();
+        const result = dispatchUnknownResult(actionName);
+        const summary = buildActionResultSummary(actionResultId, result);
+        const claimedAt = nowIso();
         const info = db
           .prepare(
-            "UPDATE pending_confirmations SET status = 'executing', used_at = ? WHERE id = ? AND status = 'pending'",
+            `UPDATE pending_confirmations
+                SET status = 'executing', used_at = ?, action_result_id = ?,
+                    result_summary_json = ?, nonce_hash = '', agent_state_json = NULL,
+                    operation_json = NULL
+              WHERE id = ? AND status = 'pending'`,
           )
-          .run(nowIso(), id);
+          .run(claimedAt, actionResultId, actionResultJson(summary), id);
         if (info.changes !== 1) return false;
         db.prepare(
-          `UPDATE operation_runs SET status = 'executing', updated_at = ?
+          `INSERT INTO action_results (
+             id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
+             result_json, summary_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, 'outcome_unknown', ?, ?, ?)`,
+        ).run(
+          actionResultId,
+          row.operation_id,
+          row.workspace_id,
+          row.admin_user_id,
+          row.session_id,
+          actionName,
+          actionResultJson(result),
+          actionResultJson(summary),
+          claimedAt,
+        );
+        db.prepare(
+          `UPDATE operation_runs SET status = 'executing', action_result_id = ?, updated_at = ?
              WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)
                AND status = 'prepared'`,
-        ).run(nowIso(), id);
+        ).run(actionResultId, claimedAt, id);
         return true;
       })();
     },
@@ -251,36 +311,37 @@ export function buildConfirmationStore(ctx: StoreContext): {
     settleConfirmation(id, status, actionName, result) {
       const settle = db.transaction((): ActionResultRef => {
         const row = db.prepare(
-          `SELECT operation_id, session_id, workspace_id, admin_user_id, idempotency_key
-             FROM pending_confirmations WHERE id = ?`,
+          `SELECT operation_id, session_id, workspace_id, admin_user_id, idempotency_key,
+                  action_result_id
+             FROM pending_confirmations WHERE id = ? AND status = 'executing'`,
         ).get(id) as {
           operation_id: string;
           session_id: string;
           workspace_id: string;
           admin_user_id: string;
           idempotency_key: string | null;
+          action_result_id: string | null;
         } | undefined;
-        if (!row) throw new Error("confirmation_not_found");
-        const actionResultId = randomUUID();
+        if (!row) throw new Error("confirmation_not_executing");
+        if (!row.action_result_id) throw new Error("confirmation_result_not_found");
+        const actionResultId = row.action_result_id;
         const canonicalResult = { kind: "receipt", receipt: result };
         const summary = buildActionResultSummary(actionResultId, canonicalResult);
-        db.prepare(
-          `INSERT INTO action_results (
-             id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
-             result_json, summary_json, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        const settledAt = nowIso();
+        const resultUpdate = db.prepare(
+          `UPDATE action_results
+              SET action_name = ?, kind = ?, result_json = ?, summary_json = ?, created_at = ?
+            WHERE id = ? AND operation_id = ?`,
         ).run(
-          actionResultId,
-          row.operation_id,
-          row.workspace_id,
-          row.admin_user_id,
-          row.session_id,
           actionName,
           status,
           actionResultJson(canonicalResult),
           actionResultJson(summary),
-          nowIso(),
+          settledAt,
+          actionResultId,
+          row.operation_id,
         );
+        if (resultUpdate.changes !== 1) throw new Error("confirmation_result_not_found");
         const update = db.prepare(
           `UPDATE pending_confirmations
              SET status = ?, action_result_id = ?, result_summary_json = ?, nonce_hash = '',
@@ -291,7 +352,7 @@ export function buildConfirmationStore(ctx: StoreContext): {
         db.prepare(
           `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
              WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)`,
-        ).run(status, actionResultId, nowIso(), id);
+        ).run(status, actionResultId, settledAt, id);
         if (row.idempotency_key) {
           if (status === "definitive_failed") {
             db.prepare(

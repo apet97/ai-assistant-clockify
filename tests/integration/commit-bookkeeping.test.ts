@@ -156,7 +156,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     });
   });
 
-  it("surfaces persistent settlement degradation with the host receipt, then orphan recovery scrubs it", async () => {
+  it("pre-scrubs a persistent settlement failure behind exactly one durable unknown result identity", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     let settlementAttempts = 0;
     const { app, cookie, store } = await makeApp([DELETE_TAG], fake, (underlying) => ({
@@ -182,7 +182,23 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     });
     expect(settlementAttempts).toBe(2);
     expect(fake.counts.deleteTag).toBe(1);
-    expect(store.getPendingConfirmation(preview.previewId!)).toMatchObject({ status: "executing" });
+    const degraded = store.getPendingConfirmation(preview.previewId!);
+    expect(degraded).toMatchObject({
+      status: "executing",
+      nonceHash: "",
+      operation: {},
+      agentState: undefined,
+      actionResultId: expect.any(String),
+    });
+    const durableId = degraded!.actionResultId!;
+    expect(store.getActionResult(durableId)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: false, action: "clockify_tags_delete", code: "commit_outcome_unknown" },
+    });
+    expect(store.getOperationRun(degraded!.operationId)).toMatchObject({
+      status: "executing",
+      actionResultId: durableId,
+    });
 
     store.recoverOrphanedRuns();
     expect(store.getPendingConfirmation(preview.previewId!)).toMatchObject({
@@ -190,7 +206,11 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
       nonceHash: "",
       operation: {},
       agentState: undefined,
-      actionResultId: expect.any(String),
+      actionResultId: durableId,
+    });
+    expect(store.getOperationRun(degraded!.operationId)).toMatchObject({
+      status: "outcome_unknown",
+      actionResultId: durableId,
     });
   });
 

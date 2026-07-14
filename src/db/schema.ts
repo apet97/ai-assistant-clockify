@@ -423,6 +423,10 @@ const terminalKind = (value: unknown): ActionResultKind => {
     ? (value as { receipt?: unknown }).receipt
     : value;
   if (receipt && typeof receipt === "object") {
+    if (
+      (receipt as { outcome?: unknown }).outcome === "partial" ||
+      (receipt as { status?: unknown }).status === "partial"
+    ) return "partial";
     if ((receipt as { ok?: unknown }).ok === true) return "succeeded";
     if ((receipt as { code?: unknown }).code === "commit_outcome_unknown") return "outcome_unknown";
   }
@@ -518,15 +522,38 @@ function migrateToV4(db: Database.Database): void {
     adminUserId: string;
     sessionId: string | null;
     actionName: string;
+    kind: ActionResultKind;
     result: unknown;
     createdAt: string;
+  };
+  const stableValue = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+        .map(([key, child]) => [key, stableValue(child)]),
+    );
   };
   const identityOf = (value: unknown): string => {
     const receipt = value && typeof value === "object" && "receipt" in value
       ? (value as { receipt?: unknown }).receipt
       : value;
-    return actionResultJson(withoutNonce(receipt));
+    return actionResultJson(stableValue(withoutNonce(receipt)));
   };
+  const graphKey = (input: {
+    workspaceId: string;
+    adminUserId: string;
+    sessionId: string | null;
+    actionName: string;
+    result: unknown;
+  }): string => actionResultJson([
+    input.workspaceId,
+    input.adminUserId,
+    input.sessionId,
+    input.actionName,
+    identityOf(input.result),
+  ]);
   const canonicalRows: MigratedCanonical[] = legacyResults.map((row) => {
     const operation = db.prepare(
       "SELECT id FROM operation_runs WHERE action_result_id = ? ORDER BY rowid LIMIT 1",
@@ -538,11 +565,28 @@ function migrateToV4(db: Database.Database): void {
       adminUserId: row.admin_user_id,
       sessionId: row.session_id,
       actionName: row.action_name,
+      kind: row.kind,
       result: JSON.parse(row.result_json),
       createdAt: row.created_at,
     };
   });
+  const canonicalById = new Map(canonicalRows.map((row) => [row.id, row]));
+  const canonicalByGraph = new Map<string, MigratedCanonical[]>();
+  for (const row of canonicalRows) {
+    const key = graphKey(row);
+    const graph = canonicalByGraph.get(key) ?? [];
+    graph.push(row);
+    canonicalByGraph.set(key, graph);
+  }
+  const ownerConsumptions = new Map<string, Set<string>>();
+  const ownerConsumption = (owner: string, key: string): Set<string> => {
+    const ownerKey = `${owner}\u0000${key}`;
+    const consumed = ownerConsumptions.get(ownerKey) ?? new Set<string>();
+    ownerConsumptions.set(ownerKey, consumed);
+    return consumed;
+  };
   const createCanonical = (input: {
+    owner: "chat" | "turn" | "confirmation" | "audit" | "undo";
     workspaceId: string;
     adminUserId: string;
     sessionId: string | null;
@@ -553,29 +597,29 @@ function migrateToV4(db: Database.Database): void {
     operationId?: string;
     preferredId?: string;
   }): { id: string; kind: ActionResultKind; summary: unknown } => {
-    const sameGraph = canonicalRows
-      .filter((candidate) =>
-        candidate.workspaceId === input.workspaceId &&
-        candidate.adminUserId === input.adminUserId &&
-        candidate.sessionId === input.sessionId &&
-        candidate.actionName === input.actionName &&
-        identityOf(candidate.result) === identityOf(input.result),
-      )
-      .sort((left, right) =>
-        Math.abs(Date.parse(left.createdAt) - Date.parse(input.createdAt)) -
-        Math.abs(Date.parse(right.createdAt) - Date.parse(input.createdAt)),
-      );
-    const candidate = (input.preferredId
-      ? sameGraph.find((row) => row.id === input.preferredId)
-      : undefined) ?? sameGraph.find((row) =>
-        Math.abs(Date.parse(row.createdAt) - Date.parse(input.createdAt)) <= 60_000,
-      );
+    const key = graphKey(input);
+    const graph = canonicalByGraph.get(key) ?? [];
+    const consumed = ownerConsumption(input.owner, key);
+    const preferred = input.preferredId ? canonicalById.get(input.preferredId) : undefined;
+    const candidate = preferred && graphKey(preferred) === key && !consumed.has(preferred.id)
+      ? preferred
+      : graph.find((row) => !consumed.has(row.id));
     if (candidate) {
-      const stored = db.prepare("SELECT kind, summary_json FROM action_results WHERE id = ?").get(candidate.id) as {
-        kind: ActionResultKind;
+      consumed.add(candidate.id);
+      const desiredKind = input.kind ?? terminalKind(input.result);
+      if (desiredKind === "partial" && candidate.kind !== "partial") {
+        const promotedSummary = buildActionResultSummary(candidate.id, input.result);
+        db.prepare(
+          "UPDATE action_results SET kind = 'partial', result_json = ?, summary_json = ? WHERE id = ?",
+        ).run(actionResultJson(input.result), actionResultJson(promotedSummary), candidate.id);
+        candidate.kind = "partial";
+        candidate.result = input.result;
+        return { id: candidate.id, kind: "partial", summary: promotedSummary };
+      }
+      const stored = db.prepare("SELECT summary_json FROM action_results WHERE id = ?").get(candidate.id) as {
         summary_json: string;
       };
-      return { id: candidate.id, kind: stored.kind, summary: JSON.parse(stored.summary_json) };
+      return { id: candidate.id, kind: candidate.kind, summary: JSON.parse(stored.summary_json) };
     }
     const id = randomUUID();
     const kind = input.kind ?? terminalKind(input.result);
@@ -592,16 +636,22 @@ function migrateToV4(db: Database.Database): void {
       actionResultJson(summary),
       input.createdAt,
     );
-    canonicalRows.push({
+    const created = {
       id,
       operationId: input.operationId ?? null,
       workspaceId: input.workspaceId,
       adminUserId: input.adminUserId,
       sessionId: input.sessionId,
       actionName: input.actionName,
+      kind,
       result: input.result,
       createdAt: input.createdAt,
-    });
+    };
+    canonicalRows.push(created);
+    canonicalById.set(id, created);
+    graph.push(created);
+    canonicalByGraph.set(key, graph);
+    consumed.add(id);
     return { id, kind, summary };
   };
 
@@ -666,6 +716,7 @@ function migrateToV4(db: Database.Database): void {
       const kind = result && typeof result === "object" ? (result as { kind?: unknown }).kind : undefined;
       if (kind === "receipt" || kind === "partial") {
         const ref = createCanonical({
+          owner: "chat",
           workspaceId: row.workspace_id,
           adminUserId: row.admin_user_id,
           sessionId: row.session_id,
@@ -752,23 +803,28 @@ function migrateToV4(db: Database.Database): void {
       row.created_at,
       row.updated_at,
     );
+    const operationOccurrences = new Map<string, number>();
     results.forEach((result, index) => {
       const kind = result && typeof result === "object" ? (result as { kind?: unknown }).kind : undefined;
       if (kind === "receipt" || kind === "partial") {
+        const actionName = resultAction(result, "legacy");
+        const operationOccurrence = operationOccurrences.get(actionName) ?? 0;
+        operationOccurrences.set(actionName, operationOccurrence + 1);
         const operation = db.prepare(
           `SELECT id, action_result_id
              FROM operation_runs
             WHERE request_id = ? AND action_name = ?
-            ORDER BY rowid LIMIT 1`,
-        ).get(row.request_id, resultAction(result, "legacy")) as {
+            ORDER BY rowid LIMIT 1 OFFSET ?`,
+        ).get(row.request_id, actionName, operationOccurrence) as {
           id: string;
           action_result_id: string | null;
         } | undefined;
         const ref = createCanonical({
+          owner: "turn",
           workspaceId: row.workspace_id,
           adminUserId: row.admin_user_id,
           sessionId: row.session_id,
-          actionName: resultAction(result, "legacy"),
+          actionName,
           result,
           createdAt: row.updated_at,
           operationId: operation?.id,
@@ -836,6 +892,7 @@ function migrateToV4(db: Database.Database): void {
       const full = JSON.parse(row.result_json) as unknown;
       const operation = typeof row.operation_json === "string" ? JSON.parse(row.operation_json) as { actionName?: string } : undefined;
       const ref = createCanonical({
+        owner: "confirmation",
         workspaceId: row.workspace_id as string,
         adminUserId: row.admin_user_id as string,
         sessionId: row.session_id as string,
@@ -899,6 +956,7 @@ function migrateToV4(db: Database.Database): void {
     const receipt = JSON.parse(row.receipt_json as string) as unknown;
     const result = { kind: terminalKind(receipt) === "partial" ? "partial" : "receipt", receipt };
     const ref = createCanonical({
+      owner: "audit",
       workspaceId: row.workspace_id as string,
       adminUserId: row.admin_user_id as string,
       sessionId: row.session_id as string | null,
@@ -940,6 +998,7 @@ function migrateToV4(db: Database.Database): void {
     if (typeof row.result_json === "string") {
       const full = JSON.parse(row.result_json) as unknown;
       ref = createCanonical({
+        owner: "undo",
         workspaceId: row.workspace_id as string,
         adminUserId: row.admin_user_id as string,
         sessionId: row.session_id as string,

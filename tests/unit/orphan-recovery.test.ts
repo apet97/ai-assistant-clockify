@@ -214,7 +214,7 @@ describe("orphaned execution recovery", () => {
     db.close();
   });
 
-  it("reconciles a bound idempotency claim to the surviving canonical confirmation result", () => {
+  it("reconciles a bound idempotency claim to the pre-dispatch canonical unknown result", () => {
     const path = databasePath();
     const store = createStore(path, { encryptionKey: "k" });
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
@@ -249,27 +249,26 @@ describe("orphaned execution recovery", () => {
     expect(store.markConfirmationExecuting(created.record.id)).toBe(true);
     expect(store.claimIdempotency("invoice-key", "ws-1", "admin-1", 1_000, 0, 0)).toBe("won");
     store.bindConfirmationIdempotencyKey(created.record.id, "invoice-key");
-    const receipt = { ok: true as const, action: "clockify_invoices_create", entity: "invoice" };
-    const ref = store.recordActionResult({
-      operationId: created.record.operationId,
-      workspaceId: "ws-1",
-      adminUserId: "admin-1",
-      sessionId: session.id,
-      actionName: receipt.action,
-      status: "succeeded",
-      result: { kind: "receipt", receipt },
-    });
+    const refId = store.getPendingConfirmation(created.record.id)?.actionResultId;
+    expect(refId).toBeDefined();
     store.close();
 
     const recovered = createStore(path, { encryptionKey: "k" });
     expect(recovered.getPendingConfirmation(created.record.id)).toMatchObject({
-      status: "succeeded",
+      status: "outcome_unknown",
       nonceHash: "",
       operation: {},
-      actionResultId: ref.id,
+      actionResultId: refId,
     });
-    expect(recovered.claimIdempotency("invoice-key", "ws-1", "admin-1", 2_000, 0, 0)).toBe("replay");
-    expect(recovered.claimIdempotencyReceipt("invoice-key", "ws-1", "admin-1")).toEqual(receipt);
+    expect(recovered.claimIdempotency("invoice-key", "ws-1", "admin-1", 2_000, 0, 0)).toBe("stale_unknown");
+    expect(recovered.getActionResult(refId!)).toMatchObject({
+      kind: "receipt",
+      receipt: {
+        ok: false,
+        action: "clockify_invoices_create",
+        code: "commit_outcome_unknown",
+      },
+    });
     recovered.close();
   });
 

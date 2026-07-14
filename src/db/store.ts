@@ -211,8 +211,8 @@ export interface Store {
   listPendingConfirmations(sessionId: string, nowIso: string): PendingConfirmationRecord[];
   /** Atomically swap the nonce hash; true only while still pending (a concurrent confirm/cancel wins). */
   updateConfirmationNonceHash(id: string, nonceHash: string): boolean;
-  /** Atomically transition pending → used. Returns true only for the caller
-   *  that won the transition (closes the double-confirm TOCTOU). */
+  /** Atomically transition pending → executing, bind one durable unknown result,
+   *  and scrub dispatch material. True only for the winning caller. */
   markConfirmationExecuting(id: string): boolean;
   /** Atomically transition pending → cancelled. */
   cancelConfirmation(id: string): boolean;

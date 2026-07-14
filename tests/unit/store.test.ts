@@ -460,7 +460,13 @@ describe("store", () => {
 
     store.markConfirmationExecuting(created.previewId);
     expect(store.updateConfirmationNonceHash(created.previewId, "later-hash")).toBe(false);
-    expect(store.getPendingConfirmation(created.previewId)?.nonceHash).toBe("new-hash");
+    expect(store.getPendingConfirmation(created.previewId)).toMatchObject({
+      status: "executing",
+      nonceHash: "",
+      operation: {},
+      agentState: undefined,
+      actionResultId: expect.any(String),
+    });
     store.close();
   });
 

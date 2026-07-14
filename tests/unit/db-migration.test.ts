@@ -253,7 +253,210 @@ describe("historical database migration", () => {
   });
 });
 
+function v3GraphDatabase(): Database.Database {
+  const db = new Database(":memory:");
+  migrate(db);
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    DROP TABLE chat_message_result_links;
+    DROP TABLE turn_run_result_links;
+    DROP TABLE chat_messages;
+    DROP TABLE turn_runs;
+    DROP TABLE pending_confirmations;
+    DROP TABLE audit_events;
+    DROP TABLE undo_records;
+    DROP TABLE idempotency_keys;
+    DROP TABLE action_results;
+    CREATE TABLE chat_messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL,
+      payload_json TEXT, created_at TEXT NOT NULL
+    );
+    CREATE TABLE turn_runs (
+      request_id TEXT NOT NULL, session_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL, intent_hash TEXT NOT NULL, status TEXT NOT NULL,
+      response_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY (session_id, request_id)
+    );
+    CREATE TABLE pending_confirmations (
+      id TEXT PRIMARY KEY, operation_id TEXT NOT NULL, session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL, status TEXT NOT NULL,
+      risk_json TEXT NOT NULL, preview_json TEXT NOT NULL, operation_json TEXT,
+      operation_hash TEXT NOT NULL, target_fingerprints_json TEXT NOT NULL,
+      action_fingerprint TEXT NOT NULL, catalog_hash TEXT NOT NULL, nonce_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL, created_at TEXT NOT NULL, used_at TEXT, result_json TEXT,
+      action_result_id TEXT, agent_state_json TEXT
+    );
+    CREATE TABLE audit_events (
+      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL,
+      session_id TEXT, action_name TEXT NOT NULL, risk_json TEXT NOT NULL,
+      receipt_json TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    CREATE TABLE undo_records (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL, action_name TEXT NOT NULL, reversal_json TEXT NOT NULL,
+      remaining_json TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL, undone_at TEXT, result_json TEXT
+    );
+    CREATE TABLE idempotency_keys (
+      key TEXT PRIMARY KEY, receipt_json TEXT, committed_at INTEGER, claimed_at INTEGER
+    );
+    CREATE TABLE action_results (
+      id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL,
+      session_id TEXT, action_name TEXT NOT NULL, kind TEXT NOT NULL,
+      result_json TEXT NOT NULL, created_at TEXT NOT NULL
+    );
+    PRAGMA user_version = 3;
+  `);
+  return db;
+}
+
+function insertGraphSession(db: Database.Database, id: string, at: string): void {
+  db.prepare(
+    `INSERT INTO chat_sessions
+       (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at)
+     VALUES (?, 'ws', 'admin', ?, ?, '2099-01-01T00:00:00.000Z')`,
+  ).run(id, at, at);
+}
+
 describe("schema v4 canonical-result ownership", () => {
+  it("keeps two identical executions in one turn as two occurrence-correlated canonical results", () => {
+    const db = v3GraphDatabase();
+    const at = "2026-01-01T00:00:00.000Z";
+    const action = "clockify_tags_create";
+    const receipt = { ok: true, action, changed: { created: [{ type: "tag", id: "same" }] } };
+    const result = { kind: "receipt", receipt };
+    insertGraphSession(db, "session-occurrences", at);
+    for (const index of [1, 2]) {
+      db.prepare(
+        `INSERT INTO action_results
+           (id, workspace_id, admin_user_id, session_id, action_name, kind, result_json, created_at)
+         VALUES (?, 'ws', 'admin', 'session-occurrences', ?, 'succeeded', ?, ?)`,
+      ).run(`result-${index}`, action, JSON.stringify(result), at);
+      db.prepare(
+        `INSERT INTO operation_runs
+           (id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
+            action_name, action_fingerprint, catalog_hash, operation_hash, status,
+            action_result_id, created_at, updated_at)
+         VALUES (?, 'request-occurrences', NULL, 'session-occurrences', 'ws', 'admin',
+                 ?, 'fingerprint', 'catalog', ?, 'succeeded', ?, ?, ?)`,
+      ).run(`operation-${index}`, action, `hash-${index}`, `result-${index}`, at, at);
+      db.prepare(
+        `INSERT INTO audit_events
+           (id, workspace_id, admin_user_id, session_id, action_name, risk_json, receipt_json, created_at)
+         VALUES (?, 'ws', 'admin', 'session-occurrences', ?, '[]', ?, ?)`,
+      ).run(`audit-${index}`, action, JSON.stringify(receipt), at);
+    }
+    db.prepare(
+      `INSERT INTO chat_messages
+         (id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at)
+       VALUES ('message-occurrences', 'session-occurrences', 'ws', 'admin', 'assistant', 'Created', ?, ?)`,
+    ).run(JSON.stringify({ kind: "answer", results: [result, result] }), at);
+    db.prepare(
+      `INSERT INTO turn_runs
+         (request_id, session_id, workspace_id, admin_user_id, intent_hash, status,
+          response_json, created_at, updated_at)
+       VALUES ('request-occurrences', 'session-occurrences', 'ws', 'admin', 'intent', 'succeeded', ?, ?, ?)`,
+    ).run(JSON.stringify({ status: 200, body: { ok: true, results: [result, result] } }), at, at);
+
+    migrate(db);
+
+    expect(db.prepare("SELECT id FROM action_results ORDER BY id").all()).toEqual([{ id: "result-1" }, { id: "result-2" }]);
+    expect(db.prepare("SELECT action_result_id FROM chat_message_result_links ORDER BY result_index").all()).toEqual([
+      { action_result_id: "result-1" },
+      { action_result_id: "result-2" },
+    ]);
+    expect(db.prepare("SELECT action_result_id FROM turn_run_result_links ORDER BY result_index").all()).toEqual([
+      { action_result_id: "result-1" },
+      { action_result_id: "result-2" },
+    ]);
+    expect(db.prepare("SELECT action_result_id FROM audit_events ORDER BY id").all()).toEqual([
+      { action_result_id: "result-1" },
+      { action_result_id: "result-2" },
+    ]);
+    db.close();
+  });
+
+  it("converges delayed copies of one execution without a time window", () => {
+    const db = v3GraphDatabase();
+    const times = [
+      "2026-01-01T00:00:00.000Z",
+      "2026-01-01T00:02:00.000Z",
+      "2026-01-01T00:04:00.000Z",
+      "2026-01-01T00:06:00.000Z",
+    ];
+    const action = "clockify_tags_create";
+    const receipt = { ok: true, action, changed: { created: [{ type: "tag", id: "tag-delayed" }] } };
+    const result = { kind: "receipt", receipt };
+    insertGraphSession(db, "session-delayed", times[0]);
+    db.prepare(
+      `INSERT INTO action_results VALUES ('result-delayed', 'ws', 'admin', 'session-delayed', ?, 'succeeded', ?, ?)`,
+    ).run(action, JSON.stringify(result), times[0]);
+    db.prepare(
+      `INSERT INTO operation_runs
+         (id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
+          action_name, action_fingerprint, catalog_hash, operation_hash, status,
+          action_result_id, created_at, updated_at)
+       VALUES ('operation-delayed', 'request-delayed', NULL, 'session-delayed', 'ws', 'admin',
+               ?, 'fingerprint', 'catalog', 'hash', 'succeeded', 'result-delayed', ?, ?)`,
+    ).run(action, times[0], times[0]);
+    db.prepare(
+      `INSERT INTO chat_messages VALUES ('message-delayed', 'session-delayed', 'ws', 'admin', 'assistant', 'Created', ?, ?)`,
+    ).run(JSON.stringify({ kind: "answer", results: [result] }), times[1]);
+    db.prepare(
+      `INSERT INTO turn_runs VALUES ('request-delayed', 'session-delayed', 'ws', 'admin', 'intent', 'succeeded', ?, ?, ?)`,
+    ).run(JSON.stringify({ status: 200, body: { ok: true, results: [result] } }), times[0], times[2]);
+    db.prepare(
+      `INSERT INTO audit_events VALUES ('audit-delayed', 'ws', 'admin', 'session-delayed', ?, '[]', ?, ?)`,
+    ).run(action, JSON.stringify(receipt), times[3]);
+
+    migrate(db);
+
+    expect(db.prepare("SELECT id FROM action_results").all()).toEqual([{ id: "result-delayed" }]);
+    expect(db.prepare("SELECT action_result_id FROM chat_message_result_links").get()).toEqual({ action_result_id: "result-delayed" });
+    expect(db.prepare("SELECT action_result_id FROM turn_run_result_links").get()).toEqual({ action_result_id: "result-delayed" });
+    expect(db.prepare("SELECT action_result_id FROM audit_events").get()).toEqual({ action_result_id: "result-delayed" });
+    db.close();
+  });
+
+  it("converges historical partial owners and preserves partial kind", () => {
+    const db = v3GraphDatabase();
+    const at = "2026-01-01T00:00:00.000Z";
+    const delayed = "2026-01-01T00:02:00.000Z";
+    const action = "clockify_tags_create";
+    const receipt = { ok: true, action, outcome: "partial", warnings: ["One of two tags was created."] };
+    const partial = { kind: "partial", receipt, message: "Stopped after one tag.", recovery: { retryable: false } };
+    insertGraphSession(db, "session-partial", at);
+    db.prepare(
+      `INSERT INTO action_results VALUES ('result-partial', 'ws', 'admin', 'session-partial', ?, 'partial', ?, ?)`,
+    ).run(action, JSON.stringify(partial), at);
+    db.prepare(
+      `INSERT INTO operation_runs
+         (id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
+          action_name, action_fingerprint, catalog_hash, operation_hash, status,
+          action_result_id, created_at, updated_at)
+       VALUES ('operation-partial', 'request-partial', NULL, 'session-partial', 'ws', 'admin',
+               ?, 'fingerprint', 'catalog', 'hash', 'partial', 'result-partial', ?, ?)`,
+    ).run(action, at, at);
+    db.prepare(
+      `INSERT INTO chat_messages VALUES ('message-partial', 'session-partial', 'ws', 'admin', 'assistant', 'Partly created', ?, ?)`,
+    ).run(JSON.stringify({ kind: "answer", results: [partial] }), at);
+    db.prepare(
+      `INSERT INTO turn_runs VALUES ('request-partial', 'session-partial', 'ws', 'admin', 'intent', 'succeeded', ?, ?, ?)`,
+    ).run(JSON.stringify({ status: 200, body: { ok: true, results: [partial] } }), at, at);
+    db.prepare(
+      `INSERT INTO audit_events VALUES ('audit-partial', 'ws', 'admin', 'session-partial', ?, '[]', ?, ?)`,
+    ).run(action, JSON.stringify(receipt), delayed);
+
+    migrate(db);
+
+    expect(db.prepare("SELECT id, kind FROM action_results").all()).toEqual([{ id: "result-partial", kind: "partial" }]);
+    expect(db.prepare("SELECT action_result_id FROM chat_message_result_links").get()).toEqual({ action_result_id: "result-partial" });
+    expect(db.prepare("SELECT action_result_id FROM turn_run_result_links").get()).toEqual({ action_result_id: "result-partial" });
+    expect(db.prepare("SELECT action_result_id FROM audit_events").get()).toEqual({ action_result_id: "result-partial" });
+    db.close();
+  });
+
   it("converges one v3 action graph on one canonical result instead of cloning each historical copy", () => {
     const db = new Database(":memory:");
     migrate(db);

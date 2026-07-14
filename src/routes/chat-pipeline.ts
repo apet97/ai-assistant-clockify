@@ -790,8 +790,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
 
     // The host dispatch already happened. Retry only the synchronous SQLite
     // settlement (never the Clockify mutation), then return the truthful host
-    // receipt even if persistence remains degraded. Startup orphan recovery is
-    // the backstop that scrubs any still-executing confirmation.
+    // receipt even if persistence remains degraded. Claim-time persistence has
+    // already scrubbed dispatch material and bound the one unknown result that
+    // startup recovery will reuse if final settlement never persists.
     const terminalStatus = receipt.ok
       ? "succeeded"
       : receipt.code === "commit_outcome_unknown"
