@@ -44,10 +44,13 @@ describe("GitHub Actions workflow contracts", () => {
 
     expect(config).toMatch(/\[extend\]\s+useDefault = true/);
     expect(config).toContain('id = "generic-api-key"');
-    expect(config.match(/condition = "AND"/g)).toHaveLength(2);
-    expect(config.match(/regexTarget = "line"/g)).toHaveLength(2);
+    expect(config.match(/condition = "AND"/g)).toHaveLength(3);
+    expect(config.match(/regexTarget = "line"/g)).toHaveLength(3);
     expect(config).toContain("^\\.env\\.example$");
     expect(config).toContain("^tests/unit/config\\.test\\.ts$");
+    expect(config).toContain("^tests/unit/workflow-contracts\\.test\\.ts$");
+    expect(config).toContain("Historical workflow-contract assertions");
+    expect(config).toContain("regexes = ['''^\\n?    expect\\(config\\)\\.toContain");
     expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-64-hex-chars");
     expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-a-strong-secret-min-32-chars");
     expect(config).toContain("replace-with-the-previous-secret-min-32-chars");
@@ -101,6 +104,13 @@ describe("GitHub Actions workflow contracts", () => {
 
   it("records every machine release gate without asserting human completion", () => {
     const workflow = readWorkflow("release-evidence.yml");
+    const jobsStart = workflow.indexOf("\njobs:");
+    const smokeStart = workflow.indexOf("\n  live-smoke:", jobsStart);
+    const cleanupStart = workflow.indexOf("\n  live-smoke-cleanup:", smokeStart);
+    const recordStart = workflow.indexOf("\n  record:", cleanupStart);
+    const topLevel = workflow.slice(0, jobsStart);
+    const smokeJob = workflow.slice(smokeStart, cleanupStart);
+    const cleanupJob = workflow.slice(cleanupStart, recordStart);
     const recordJob = workflow.slice(workflow.indexOf("\n  record:"));
 
     expect(workflow).toMatch(/workflow_dispatch:/);
@@ -112,8 +122,33 @@ describe("GitHub Actions workflow contracts", () => {
     expect(workflow).toContain("github/codeql-action/init@");
     expect(workflow).toContain("github/codeql-action/analyze@");
     expect(workflow).toContain("gitleaks/gitleaks-action@");
-    expect(workflow).toContain("uses: ./.github/workflows/live-smoke.yml");
+    expect(workflow).not.toContain("uses: ./.github/workflows/live-smoke.yml");
+    expect(topLevel).toContain("group: clockify-live-smoke-sacrificial");
+    expect(topLevel).toContain("cancel-in-progress: false");
+    expect(smokeStart).toBeGreaterThan(jobsStart);
+    expect(cleanupStart).toBeGreaterThan(smokeStart);
+    expect(recordStart).toBeGreaterThan(cleanupStart);
+    expect(smokeJob).toContain("environment: clockify-live-smoke-sacrificial");
+    expect(smokeJob).toContain("Initialize fail-closed smoke evidence");
+    expect(smokeJob).toMatch(/timeout-minutes:\s*20/);
+    expect(smokeJob).toMatch(/timeout --signal=TERM --kill-after=30s 12m npx tsx scripts\/live-smoke\.ts/);
+    expect(smokeJob).toMatch(
+      /name:\s*Upload live-smoke evidence[\s\S]*?if:\s*\$\{\{\s*always\(\)\s*\}\}/,
+    );
+    expect(cleanupJob).toContain("needs: live-smoke");
+    expect(cleanupJob).toMatch(/if:\s*\$\{\{\s*always\(\)\s*\}\}/);
+    expect(cleanupJob).toContain("environment: clockify-live-smoke-sacrificial");
+    expect(cleanupJob).toContain("Initialize fail-closed cleanup evidence");
+    expect(cleanupJob).toMatch(/timeout-minutes:\s*15/);
+    expect(cleanupJob).toMatch(/timeout --signal=TERM --kill-after=30s 7m npx tsx scripts\/live-sweep\.ts/);
+    expect(cleanupJob).toMatch(
+      /name:\s*Upload cleanup evidence[\s\S]*?if:\s*\$\{\{\s*always\(\)\s*\}\}/,
+    );
     expect(workflow).toContain("RELEASE_COMMIT_SHA: ${{ github.sha }}");
+    expect(recordJob).toContain("needs: [machine-gates, codeql, secret-scan, live-smoke, live-smoke-cleanup]");
+    expect(recordJob).toContain(
+      "RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result == 'success' && needs.live-smoke-cleanup.result == 'success' && 'success' || 'failure' }}",
+    );
     expect(recordJob).not.toContain("actions/checkout@");
     expect(recordJob).not.toContain("actions/setup-node@");
     expect(recordJob).not.toContain("npm ci");

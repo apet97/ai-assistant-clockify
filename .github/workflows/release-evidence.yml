@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: clockify-live-smoke-sacrificial
+  cancel-in-progress: false
+
 jobs:
   machine-gates:
     runs-on: ubuntu-latest
@@ -101,11 +105,76 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   live-smoke:
-    uses: ./.github/workflows/live-smoke.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: clockify-live-smoke-sacrificial
+    env:
+      LIVE_SMOKE_EVIDENCE_PATH: /tmp/ai-assistant-live-smoke-evidence/smoke.json
+    steps:
+      - name: Initialize fail-closed smoke evidence
+        shell: bash
+        run: |
+          mkdir -p /tmp/ai-assistant-live-smoke-evidence
+          printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SMOKE_EVIDENCE_PATH}"
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Live smoke
+        run: timeout --signal=TERM --kill-after=30s 12m npx tsx scripts/live-smoke.ts
+        env:
+          LIVE_CLOCKIFY: "1"
+          LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
+          LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
+      - name: Upload live-smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-live-smoke-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-live-smoke-evidence/smoke.json
+          if-no-files-found: error
+          retention-days: 30
+
+  live-smoke-cleanup:
+    needs: live-smoke
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: clockify-live-smoke-sacrificial
+    env:
+      LIVE_SWEEP_EVIDENCE_PATH: /tmp/ai-assistant-live-smoke-evidence/cleanup.json
+    steps:
+      - name: Initialize fail-closed cleanup evidence
+        shell: bash
+        run: |
+          mkdir -p /tmp/ai-assistant-live-smoke-evidence
+          printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SWEEP_EVIDENCE_PATH}"
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Sweep leftovers
+        run: timeout --signal=TERM --kill-after=30s 7m npx tsx scripts/live-sweep.ts
+        env:
+          LIVE_CLOCKIFY: "1"
+          LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
+          LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
+      - name: Upload cleanup evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-live-smoke-cleanup-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-live-smoke-evidence/cleanup.json
+          if-no-files-found: error
+          retention-days: 30
 
   record:
     if: ${{ always() }}
-    needs: [machine-gates, codeql, secret-scan, live-smoke]
+    needs: [machine-gates, codeql, secret-scan, live-smoke, live-smoke-cleanup]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -117,7 +186,7 @@ jobs:
       RELEASE_GATE_SBOM: ${{ needs.machine-gates.outputs.sbom || 'skipped' }}
       RELEASE_GATE_CODEQL: ${{ needs.codeql.result }}
       RELEASE_GATE_SECRET_SCAN: ${{ needs.secret-scan.result }}
-      RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result }}
+      RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result == 'success' && needs.live-smoke-cleanup.result == 'success' && 'success' || 'failure' }}
       RELEASE_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/release-evidence.json
     steps:
       - name: Record machine conclusions and unevaluated human gates

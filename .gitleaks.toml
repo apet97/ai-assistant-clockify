@@ -3,7 +3,7 @@ title = "AI Assistant Gitleaks policy"
 [extend]
 useDefault = true
 
-# These two AND-scoped exceptions cover only the historical, documented
+# These AND-scoped exceptions cover only the historical, documented
 # placeholders and fixed unit-test values that Gitleaks 8.24.3 classifies as the
 # generic-api-key rule. Default rules remain active for every other line/path.
 [[rules]]
@@ -22,3 +22,10 @@ condition = "AND"
 regexTarget = "line"
 paths = ['''^tests/unit/config\.test\.ts$''']
 regexes = ['''DATA_ENCRYPTION_KEY(_PREVIOUS)?: "(0123456789abcdef0123456789abcdef|fedcba9876543210fedcba9876543210)"''']
+
+[[rules.allowlists]]
+description = "Historical workflow-contract assertions"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/unit/workflow-contracts\.test\.ts$''']
+regexes = ['''^\n?    expect\(config\)\.toContain\("(DATA_ENCRYPTION_KEY=replace-with-64-hex-chars|DATA_ENCRYPTION_KEY=replace-with-a-strong-secret-min-32-chars)"\);$''']
