@@ -48,6 +48,8 @@ describe("GitHub Actions workflow contracts", () => {
     expect(config.match(/regexTarget = "line"/g)).toHaveLength(2);
     expect(config).toContain("^\\.env\\.example$");
     expect(config).toContain("^tests/unit/config\\.test\\.ts$");
+    expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-64-hex-chars");
+    expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-a-strong-secret-min-32-chars");
     expect(config).toContain("replace-with-the-previous-secret-min-32-chars");
     expect(config).toContain("0123456789abcdef0123456789abcdef");
     expect(config).toContain("fedcba9876543210fedcba9876543210");
