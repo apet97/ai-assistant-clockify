@@ -258,6 +258,111 @@ describe("durable mutation workflow", () => {
     store.close();
   });
 
+  it.each([
+    {
+      label: "definitive rejection with fallback settlement",
+      makeError: () => new DefinitiveWriteFailure("POST", "/one", "rejected", 400),
+      fallbackFails: false,
+      expectedCode: "failed",
+      expectedOperationStatus: "definitive_failed" as const,
+      expectedOnFailureCalls: 1,
+    },
+    {
+      label: "definitive rejection with total settlement failure",
+      makeError: () => new DefinitiveWriteFailure("POST", "/one", "rejected", 400),
+      fallbackFails: true,
+      expectedCode: "failed",
+      expectedOperationStatus: "definitive_failed" as const,
+      expectedOnFailureCalls: 1,
+    },
+    {
+      label: "ambiguous dispatch with fallback settlement",
+      makeError: () => new AmbiguousWriteOutcome("POST", "/one", "socket closed"),
+      fallbackFails: false,
+      expectedCode: "commit_outcome_unknown",
+      expectedOperationStatus: "outcome_unknown" as const,
+      expectedOnFailureCalls: 0,
+    },
+    {
+      label: "ambiguous dispatch with total settlement failure",
+      makeError: () => new AmbiguousWriteOutcome("POST", "/one", "socket closed"),
+      fallbackFails: true,
+      expectedCode: "commit_outcome_unknown",
+      expectedOperationStatus: "outcome_unknown" as const,
+      expectedOnFailureCalls: 0,
+    },
+  ])("preserves $label classification after the journal degrades", async (scenario) => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, `operation-degraded-${scenario.expectedCode}-${scenario.fallbackFails}`);
+    store.markOperationExecuting(operationId);
+    const baseJournal = store.mutationStepJournal(operationId);
+    const journal: MutationStepJournal = {
+      ...baseJournal,
+      settleOperationStep() {
+        throw new Error("persistent_step_settlement_failure");
+      },
+      settleOperationStepDegraded(id, status, detail) {
+        if (scenario.fallbackFails) throw new Error("persistent_step_fallback_failure");
+        baseJournal.settleOperationStepDegraded(id, status, detail);
+      },
+    };
+    let degradedCalls = 0;
+    let onFailureCalls = 0;
+    let laterDispatches = 0;
+
+    const result = await executeMutationWorkflow({
+      journal,
+      operationId,
+      actionName: "test_mutation",
+      steps: [
+        {
+          id: "one",
+          index: 0,
+          name: "First",
+          kind: "primary",
+          dispatch: async () => {
+            throw scenario.makeError();
+          },
+        },
+        {
+          id: "two",
+          index: 1,
+          name: "Second",
+          kind: "primary",
+          dispatch: async () => {
+            laterDispatches += 1;
+            return {};
+          },
+        },
+      ],
+      onSuccess: () => successReceipt({ action: "test_mutation" }),
+      onPartial: () => {
+        throw new Error("partial should not be built without an earlier success");
+      },
+      onJournalDegraded: () => {
+        degradedCalls += 1;
+        return {
+          kind: "partial",
+          receipt: successReceipt({ action: "test_mutation" }),
+          message: "incorrect degraded success",
+          recovery: { hint: "incorrect", retryable: false },
+        };
+      },
+      onFailure: () => {
+        onFailureCalls += 1;
+        return errorReceipt({ action: "test_mutation", code: "failed", message: "failed" });
+      },
+    });
+
+    expect(degradedCalls).toBe(0);
+    expect(onFailureCalls).toBe(scenario.expectedOnFailureCalls);
+    expect(laterDispatches).toBe(0);
+    expect(result).toMatchObject({ ok: false, code: scenario.expectedCode });
+    store.settleOperationResult(operationId, scenario.expectedOperationStatus, result);
+    expect(store.getOperationRun(operationId)?.status).toBe(scenario.expectedOperationStatus);
+    store.close();
+  });
+
   it("classifies an ambiguous dispatch as outcome_unknown and runs no later step", async () => {
     const store = createStore(":memory:");
     const operationId = operation(store, "operation-unknown");

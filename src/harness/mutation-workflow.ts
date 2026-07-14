@@ -285,8 +285,8 @@ export async function executeMutationWorkflow(
       step,
       dispatch: step.dispatch,
     });
-    if (isJournalDegradedStep(result)) {
-      if (primaryStepCount === 1 && result.status === "succeeded") {
+    if (result.status === "succeeded" && isJournalDegradedStep(result)) {
+      if (primaryStepCount === 1) {
         return withJournalDegradedWarning(input.onSuccess([result]));
       }
       return input.onJournalDegraded([...completed, result], result);
