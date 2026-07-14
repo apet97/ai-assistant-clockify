@@ -424,8 +424,11 @@ describe("schema v4 canonical-result ownership", () => {
     const at = "2026-01-01T00:00:00.000Z";
     const delayed = "2026-01-01T00:02:00.000Z";
     const action = "clockify_tags_create";
-    const receipt = { ok: true, action, outcome: "partial", warnings: ["One of two tags was created."] };
-    const partial = { kind: "partial", receipt, message: "Stopped after one tag.", recovery: { retryable: false } };
+    const receipt = { ok: true, action, warnings: ["One of two tags was created."] };
+    const message = "Stopped after one tag.";
+    const recovery = { hint: "Review the created tag before retrying.", retryable: false };
+    const partial = { kind: "partial", receipt, message, recovery };
+    const auditReceipt = { ...receipt, outcome: "partial", message, recovery };
     insertGraphSession(db, "session-partial", at);
     db.prepare(
       `INSERT INTO action_results VALUES ('result-partial', 'ws', 'admin', 'session-partial', ?, 'partial', ?, ?)`,
@@ -446,7 +449,7 @@ describe("schema v4 canonical-result ownership", () => {
     ).run(JSON.stringify({ status: 200, body: { ok: true, results: [partial] } }), at, at);
     db.prepare(
       `INSERT INTO audit_events VALUES ('audit-partial', 'ws', 'admin', 'session-partial', ?, '[]', ?, ?)`,
-    ).run(action, JSON.stringify(receipt), delayed);
+    ).run(action, JSON.stringify(auditReceipt), delayed);
 
     migrate(db);
 
@@ -454,6 +457,9 @@ describe("schema v4 canonical-result ownership", () => {
     expect(db.prepare("SELECT action_result_id FROM chat_message_result_links").get()).toEqual({ action_result_id: "result-partial" });
     expect(db.prepare("SELECT action_result_id FROM turn_run_result_links").get()).toEqual({ action_result_id: "result-partial" });
     expect(db.prepare("SELECT action_result_id FROM audit_events").get()).toEqual({ action_result_id: "result-partial" });
+    expect(JSON.parse((db.prepare("SELECT result_json FROM action_results WHERE id = 'result-partial'").get() as {
+      result_json: string;
+    }).result_json)).toEqual(partial);
     db.close();
   });
 

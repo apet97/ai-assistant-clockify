@@ -954,7 +954,19 @@ function migrateToV4(db: Database.Database): void {
   );
   for (const row of legacyAudit) {
     const receipt = JSON.parse(row.receipt_json as string) as unknown;
-    const result = { kind: terminalKind(receipt) === "partial" ? "partial" : "receipt", receipt };
+    const partialReceipt = terminalKind(receipt) === "partial" && receipt && typeof receipt === "object" && !Array.isArray(receipt)
+      ? receipt as Record<string, unknown>
+      : undefined;
+    const result = partialReceipt
+      ? {
+          kind: "partial",
+          receipt: Object.fromEntries(
+            Object.entries(partialReceipt).filter(([key]) => !["outcome", "message", "recovery"].includes(key)),
+          ),
+          ...(Object.hasOwn(partialReceipt, "message") ? { message: partialReceipt.message } : {}),
+          ...(Object.hasOwn(partialReceipt, "recovery") ? { recovery: partialReceipt.recovery } : {}),
+        }
+      : { kind: "receipt", receipt };
     const ref = createCanonical({
       owner: "audit",
       workspaceId: row.workspace_id as string,
