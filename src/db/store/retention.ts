@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { StoreContext } from "./context.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -23,13 +24,52 @@ export interface PruneCounts {
   actionResults: number;
   turnRuns: number;
   chatSessions: number;
+  retentionRuns: number;
+  expiredConfirmations: number;
+  expiredUndoRecords: number;
+  deletedTotal: number;
+  expiredTotal: number;
   total: number;
   batches: number;
   durationMs: number;
   backlog: boolean;
+  walCheckpoint: WalCheckpointMetrics;
 }
 
-type PruneTable = Exclude<keyof PruneCounts, "total" | "batches" | "durationMs" | "backlog">;
+export interface WalCheckpointMetrics {
+  mode: "PASSIVE";
+  busy: number;
+  log: number;
+  checkpointed: number;
+}
+
+export interface RetentionRunMetric {
+  id: string;
+  recordedAt: string;
+  durationMs: number;
+  deletedCount: number;
+  expiredCount: number;
+  batches: number;
+  backlog: boolean;
+  walCheckpoint: WalCheckpointMetrics;
+  counts: Record<string, number>;
+}
+
+type PruneTable =
+  | "pendingConfirmations"
+  | "idempotencyKeys"
+  | "undoRecords"
+  | "turnTelemetry"
+  | "chatMessages"
+  | "auditEvents"
+  | "artifacts"
+  | "operationSteps"
+  | "operationRuns"
+  | "intentCapabilities"
+  | "actionResults"
+  | "turnRuns"
+  | "chatSessions"
+  | "retentionRuns";
 
 interface PruneDelete {
   readonly table: PruneTable;
@@ -115,6 +155,7 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
       AND NOT EXISTS (SELECT 1 FROM action_results WHERE session_id = chat_sessions.id)
       AND NOT EXISTS (SELECT 1 FROM artifacts WHERE session_id = chat_sessions.id)`)],
   },
+  { table: "retentionRuns", cutoff: "iso", sqls: [batched("retention_runs", "recorded_at < ?")] },
 ];
 
 export interface RetentionStoreOptions {
@@ -129,6 +170,7 @@ export function buildRetentionStore(
 ): {
   pruneExpired(nowIso: string): Promise<PruneCounts>;
   explainPrunePlan(): Record<PruneTable, string>;
+  retentionMetricsForTest(): RetentionRunMetric[];
 } {
   const { db } = ctx;
   return {
@@ -151,6 +193,7 @@ export function buildRetentionStore(
         actionResults: isoCutoff(chatAuditRetentionMs),
         turnRuns: isoCutoff(chatAuditRetentionMs),
         chatSessions: nowIsoArg,
+        retentionRuns: isoCutoff(chatAuditRetentionMs),
       };
       const counts: Record<PruneTable, number> = {
         pendingConfirmations: 0,
@@ -166,49 +209,116 @@ export function buildRetentionStore(
         actionResults: 0,
         turnRuns: 0,
         chatSessions: 0,
+        retentionRuns: 0,
       };
       let total = 0;
+      let expiredConfirmations = 0;
+      let expiredUndoRecords = 0;
       let batches = 0;
       let changed = true;
+
+      // The helper is deliberately the only retention mutation primitive: one
+      // bounded statement is committed per transaction, then the event loop is
+      // yielded before any later statement begins.
+      const runMutation = async (sql: string, params: readonly unknown[]): Promise<number> => {
+        const changes = db.transaction(() => db.prepare(sql).run(...params).changes)();
+        batches += 1;
+        await yieldToEventLoop();
+        return changes;
+      };
+      const expireConfirmations = `UPDATE pending_confirmations
+        SET status = 'expired', used_at = ?, nonce_hash = '',
+            risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
+            agent_state_json = NULL, operation_json = NULL
+        WHERE rowid IN (
+          SELECT rowid FROM pending_confirmations
+           WHERE status = 'pending' AND expires_at <= ? LIMIT ?
+        )`;
+      const expireUndo = `UPDATE undo_records
+        SET status = 'expired', reversal_json = '[]', remaining_json = '[]'
+        WHERE rowid IN (
+          SELECT rowid FROM undo_records
+           WHERE status = 'available' AND expires_at <= ? LIMIT ?
+        )`;
+
       while (changed && total < MAX_ROWS_PER_PASS) {
         changed = false;
-        const remainingAtRoundStart = MAX_ROWS_PER_PASS - total;
-        const roundLimit = Math.min(BATCH_SIZE, remainingAtRoundStart);
-        db.transaction(() => {
-          db.prepare(
-            `UPDATE undo_records SET status = 'expired', remaining_json = '[]'
-             WHERE rowid IN (SELECT rowid FROM undo_records WHERE status = 'available' AND expires_at < ? LIMIT ?)`,
-          ).run(nowIsoArg, roundLimit);
-          db.prepare(
-            `UPDATE pending_confirmations
-                SET status = 'expired', used_at = ?, nonce_hash = '',
-                    agent_state_json = NULL, operation_json = NULL
-              WHERE rowid IN (
-                SELECT rowid FROM pending_confirmations
-                 WHERE status = 'pending' AND expires_at <= ? LIMIT ?
-              )`,
-          ).run(nowIsoArg, nowIsoArg, roundLimit);
-          for (const { table, sqls } of PRUNE_DELETES) {
-            for (const sql of sqls) {
-              if (total >= MAX_ROWS_PER_PASS) return;
-              const limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
-              const deleted = db.prepare(sql).run(cutoffByTable[table], limit).changes;
-              counts[table] += deleted;
-              total += deleted;
-              if (deleted > 0) changed = true;
-            }
+        let limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+        const confirmationChanges = await runMutation(
+          expireConfirmations,
+          [nowIsoArg, nowIsoArg, limit],
+        );
+        expiredConfirmations += confirmationChanges;
+        total += confirmationChanges;
+        changed ||= confirmationChanges > 0;
+
+        if (total < MAX_ROWS_PER_PASS) {
+          limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+          const undoChanges = await runMutation(expireUndo, [nowIsoArg, limit]);
+          expiredUndoRecords += undoChanges;
+          total += undoChanges;
+          changed ||= undoChanges > 0;
+        }
+
+        for (const { table, sqls } of PRUNE_DELETES) {
+          for (const sql of sqls) {
+            if (total >= MAX_ROWS_PER_PASS) break;
+            limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+            const deleted = await runMutation(sql, [cutoffByTable[table], limit]);
+            counts[table] += deleted;
+            total += deleted;
+            changed ||= deleted > 0;
           }
-        })();
-        batches += 1;
-        if (changed && total < MAX_ROWS_PER_PASS) await yieldToEventLoop();
+          if (total >= MAX_ROWS_PER_PASS) break;
+        }
       }
-      return {
+      const deletedTotal = Object.values(counts).reduce((sum, count) => sum + count, 0);
+      const expiredTotal = expiredConfirmations + expiredUndoRecords;
+      const backlog = total >= MAX_ROWS_PER_PASS;
+      const checkpointRow = (db.pragma("wal_checkpoint(PASSIVE)") as Array<{
+        busy: number;
+        log: number;
+        checkpointed: number;
+      }>)[0];
+      const walCheckpoint: WalCheckpointMetrics = {
+        mode: "PASSIVE",
+        busy: checkpointRow?.busy ?? 0,
+        log: checkpointRow?.log ?? -1,
+        checkpointed: checkpointRow?.checkpointed ?? -1,
+      };
+      const durationMs = Date.now() - started;
+      const result: PruneCounts = {
         ...counts,
+        expiredConfirmations,
+        expiredUndoRecords,
+        deletedTotal,
+        expiredTotal,
         total,
         batches,
-        durationMs: Date.now() - started,
-        backlog: total >= MAX_ROWS_PER_PASS,
+        durationMs,
+        backlog,
+        walCheckpoint,
       };
+      await runMutation(
+        `INSERT INTO retention_runs (
+           id, recorded_at, duration_ms, deleted_count, expired_count, batches,
+           backlog, wal_busy, wal_log, wal_checkpointed, counts_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          randomUUID(),
+          nowIsoArg,
+          durationMs,
+          deletedTotal,
+          expiredTotal,
+          batches,
+          backlog ? 1 : 0,
+          walCheckpoint.busy,
+          walCheckpoint.log,
+          walCheckpoint.checkpointed,
+          JSON.stringify({ ...counts, expiredConfirmations, expiredUndoRecords }),
+        ],
+      );
+      return result;
     },
 
     explainPrunePlan() {
@@ -222,6 +332,38 @@ export function buildRetentionStore(
         ).join(" | ");
       }
       return plan;
+    },
+
+    retentionMetricsForTest() {
+      const rows = db.prepare("SELECT * FROM retention_runs ORDER BY recorded_at, rowid").all() as Array<{
+        id: string;
+        recorded_at: string;
+        duration_ms: number;
+        deleted_count: number;
+        expired_count: number;
+        batches: number;
+        backlog: number;
+        wal_busy: number;
+        wal_log: number;
+        wal_checkpointed: number;
+        counts_json: string;
+      }>;
+      return rows.map((row) => ({
+        id: row.id,
+        recordedAt: row.recorded_at,
+        durationMs: row.duration_ms,
+        deletedCount: row.deleted_count,
+        expiredCount: row.expired_count,
+        batches: row.batches,
+        backlog: row.backlog === 1,
+        walCheckpoint: {
+          mode: "PASSIVE",
+          busy: row.wal_busy,
+          log: row.wal_log,
+          checkpointed: row.wal_checkpointed,
+        },
+        counts: JSON.parse(row.counts_json) as Record<string, number>,
+      }));
     },
   };
 }

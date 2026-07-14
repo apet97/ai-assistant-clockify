@@ -199,9 +199,11 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON action_results(session_id)`,
   `CREATE INDEX IF NOT EXISTS idx_artifacts_session
     ON artifacts(session_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_retention_runs_recorded
+    ON retention_runs(recorded_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 6;
+export const LATEST_SCHEMA_VERSION = 7;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -369,6 +371,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 4, statements: [] },
   { version: 5, statements: [] },
   { version: 6, statements: [] },
+  { version: 7, statements: [] },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -404,10 +407,15 @@ export function migrate(db: Database.Database): void {
       if (migration.version === 4) migrateToV4(db);
       else if (migration.version === 5) migrateToV5(db);
       else if (migration.version === 6) migrateToV6(db);
+      else if (migration.version === 7) migrateToV7(db);
       else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
   }
+  // Also repairs databases opened by an earlier build that already labelled
+  // itself v7 before the INSERT-side invariant was added. IF NOT EXISTS keeps
+  // normal migration reruns idempotent.
+  ensureExpiredPayloadScrubTriggers(db);
   // Backward-compatible additive columns for databases opened by an earlier
   // build of schema v4 before the operation/idempotency ownership links landed.
   addColumnIfMissing(db, "action_results", "operation_id", "TEXT");
@@ -421,6 +429,90 @@ export function migrate(db: Database.Database): void {
   for (const statement of PRUNE_INDEX_STATEMENTS) {
     db.prepare(statement).run();
   }
+}
+
+/**
+ * Bounded operational evidence for retention passes. The scrub triggers finish
+ * the table-level scrub constraints that SQLite cannot add with ALTER TABLE:
+ * an expired confirmation cannot retain dispatch state and an expired undo
+ * cannot retain its reversal payload.
+ */
+function migrateToV7(db: Database.Database): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS retention_runs (
+      id TEXT PRIMARY KEY,
+      recorded_at TEXT NOT NULL,
+      duration_ms INTEGER NOT NULL CHECK (duration_ms >= 0),
+      deleted_count INTEGER NOT NULL CHECK (deleted_count >= 0),
+      expired_count INTEGER NOT NULL CHECK (expired_count >= 0),
+      batches INTEGER NOT NULL CHECK (batches >= 0),
+      backlog INTEGER NOT NULL CHECK (backlog IN (0, 1)),
+      wal_busy INTEGER NOT NULL CHECK (wal_busy >= 0),
+      wal_log INTEGER NOT NULL CHECK (wal_log >= -1),
+      wal_checkpointed INTEGER NOT NULL CHECK (wal_checkpointed >= -1),
+      counts_json TEXT NOT NULL CHECK (
+        json_valid(counts_json) AND length(CAST(counts_json AS BLOB)) <= 65536
+      )
+    );
+    CREATE INDEX IF NOT EXISTS idx_retention_runs_recorded
+      ON retention_runs(recorded_at);
+
+    UPDATE pending_confirmations
+       SET risk_json = '[]', preview_json = '{}', operation_json = NULL,
+           target_fingerprints_json = '[]', nonce_hash = '', agent_state_json = NULL
+     WHERE status = 'expired';
+    UPDATE undo_records
+       SET reversal_json = '[]', remaining_json = '[]'
+     WHERE status = 'expired';
+  `);
+  ensureExpiredPayloadScrubTriggers(db);
+}
+
+function ensureExpiredPayloadScrubTriggers(db: Database.Database): void {
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS pending_confirmations_expired_scrub
+      BEFORE UPDATE OF status, risk_json, preview_json, target_fingerprints_json,
+                       nonce_hash, operation_json, agent_state_json
+      ON pending_confirmations
+      WHEN NEW.status = 'expired' AND (
+        NEW.risk_json <> '[]' OR NEW.preview_json <> '{}' OR
+        NEW.target_fingerprints_json <> '[]' OR NEW.nonce_hash <> '' OR
+        NEW.operation_json IS NOT NULL OR NEW.agent_state_json IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'expired_confirmation_not_scrubbed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmations_expired_insert_scrub
+      BEFORE INSERT ON pending_confirmations
+      WHEN NEW.status = 'expired' AND (
+        NEW.risk_json <> '[]' OR NEW.preview_json <> '{}' OR
+        NEW.target_fingerprints_json <> '[]' OR NEW.nonce_hash <> '' OR
+        NEW.operation_json IS NOT NULL OR NEW.agent_state_json IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'expired_confirmation_not_scrubbed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS undo_records_expired_scrub
+      BEFORE UPDATE OF status, reversal_json, remaining_json
+      ON undo_records
+      WHEN NEW.status = 'expired' AND (
+        NEW.reversal_json <> '[]' OR NEW.remaining_json <> '[]'
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'expired_undo_not_scrubbed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS undo_records_expired_insert_scrub
+      BEFORE INSERT ON undo_records
+      WHEN NEW.status = 'expired' AND (
+        NEW.reversal_json <> '[]' OR NEW.remaining_json <> '[]'
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'expired_undo_not_scrubbed');
+      END;
+  `);
 }
 
 /**

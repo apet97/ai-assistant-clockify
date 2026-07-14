@@ -125,7 +125,9 @@ bug was found against the REAL API, not by reading the code.
   external-mutation-step journals, immutable intent capabilities + operation
   bindings + atomic usage claims in `intent-capabilities.ts`,
   canonical action results, short-lived artifacts, installations, and bounded
-  500-row retention batches (10k rows/pass with event-loop yields and continuation)
+  one-statement/one-transaction 500-row retention batches (10k state
+  transitions/pass with an event-loop yield after every statement, persisted
+  deleted/expired/backlog/duration + passive-WAL evidence, and continuation)
   + token encryption/one-release key rotation
   (AES-256-GCM) · `src/auth/` admin check + signed session cookie
   (`SameSite=None; Secure; Partitioned` — required in the cross-site iframe).

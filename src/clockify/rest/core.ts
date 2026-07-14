@@ -112,6 +112,17 @@ export class MutationDispatchDenied extends Error {
   }
 }
 
+/** Typed, non-secret classification for a bounded binary GET that was cancelled
+ * before its body could enter an artifact, receipt, prompt, or audit record. */
+export class BinaryResponseTooLargeError extends Error {
+  readonly code = "artifact_too_large";
+
+  constructor(readonly path: string, readonly maxBytes: number) {
+    super(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+    this.name = "BinaryResponseTooLargeError";
+  }
+}
+
 function reconciledAmbiguousDescriptor(
   scope: MutationPlanScopeState,
   descriptor: MutationDescriptorState,
@@ -595,7 +606,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     const declared = Number(res.headers.get("content-length"));
     if (Number.isFinite(declared) && declared > maxBytes) {
       await res.body?.cancel().catch(() => undefined);
-      throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+      throw new BinaryResponseTooLargeError(path, maxBytes);
     }
     let bytes: Uint8Array;
     const reader = res.body?.getReader();
@@ -608,7 +619,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
         total += chunk.value.byteLength;
         if (total > maxBytes) {
           await reader.cancel().catch(() => undefined);
-          throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+          throw new BinaryResponseTooLargeError(path, maxBytes);
         }
         chunks.push(chunk.value);
       }
@@ -621,7 +632,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     } else {
       bytes = new Uint8Array(await res.arrayBuffer());
       if (bytes.byteLength > maxBytes) {
-        throw new Error(`Clockify GET ${path} exceeded the ${maxBytes}-byte binary limit.`);
+        throw new BinaryResponseTooLargeError(path, maxBytes);
       }
     }
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };

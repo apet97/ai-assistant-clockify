@@ -485,6 +485,8 @@ export function apiRouter(deps: AppDeps): Router {
     res.setHeader("Content-Type", artifact.contentType);
     res.setHeader("Content-Length", String(artifact.bytes.byteLength));
     res.setHeader("Content-Disposition", `attachment; filename="${safeFilename}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("X-Checksum-Sha256", artifact.checksum);
     return res.status(200).send(Buffer.from(artifact.bytes));
   }));

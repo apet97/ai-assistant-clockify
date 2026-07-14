@@ -49,7 +49,12 @@ import { buildUndoStore } from "./store/undo.js";
 import { buildInstallationStore } from "./store/installations.js";
 import { buildConfirmationStore } from "./store/confirmations.js";
 import { buildIdempotencyStore } from "./store/idempotency.js";
-import { buildRetentionStore, IDEMPOTENCY_RETENTION_MS, type PruneCounts } from "./store/retention.js";
+import {
+  buildRetentionStore,
+  IDEMPOTENCY_RETENTION_MS,
+  type PruneCounts,
+  type RetentionRunMetric,
+} from "./store/retention.js";
 import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import { buildArtifactStore } from "./store/artifacts.js";
@@ -414,9 +419,10 @@ export interface TestStore extends Store {
   /** EXPLAIN QUERY PLAN of each `pruneExpired` DELETE, keyed by table (for the
    *  retention index-seek regression test); joined `detail` lines per table. */
   explainPrunePlan(): Record<
-    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents" | "artifacts" | "operationSteps" | "operationRuns" | "intentCapabilities" | "actionResults" | "turnRuns" | "chatSessions",
+    "pendingConfirmations" | "idempotencyKeys" | "undoRecords" | "turnTelemetry" | "chatMessages" | "auditEvents" | "artifacts" | "operationSteps" | "operationRuns" | "intentCapabilities" | "actionResults" | "turnRuns" | "chatSessions" | "retentionRuns",
     string
   >;
+  retentionMetricsForTest(): RetentionRunMetric[];
 }
 
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {

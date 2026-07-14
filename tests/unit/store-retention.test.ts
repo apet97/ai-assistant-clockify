@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { createStore, IDEMPOTENCY_RETENTION_MS, type TestStore } from "../../src/db/store.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
@@ -32,6 +36,33 @@ function confirmation(id: string, sessionId: string, status: "pending" | "succee
 }
 
 describe("store.pruneExpired", () => {
+  it("scrubs an already-expired confirmation saved through the public store", () => {
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+
+    store.savePendingConfirmation({
+      ...confirmation("already-expired", session.id, "pending", iso(-DAY_MS), iso(-60_000)),
+      status: "expired",
+      risk: ["destructive"],
+      preview: { secretOperationalDetail: "preview" },
+      operation: { secretOperationalDetail: "operation" },
+      targetFingerprints: ["sensitive-target"],
+      nonceHash: "sensitive-nonce",
+      agentState: { secretOperationalDetail: "agent" },
+    });
+
+    expect(store.getPendingConfirmation("already-expired")).toMatchObject({
+      status: "expired",
+      risk: [],
+      preview: {},
+      operation: {},
+      targetFingerprints: [],
+      nonceHash: "",
+      agentState: undefined,
+    });
+    store.close();
+  });
+
   it("prunes settled confirmations older than 30d and long-expired pendings; keeps recent + live ones", async () => {
     const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
     // pending_confirmations FK-references a real chat session.
@@ -50,6 +81,66 @@ describe("store.pruneExpired", () => {
     expect(store.countPendingConfirmations(s, NOW.toISOString())).toBe(1);
     store.close();
   });
+
+  it("expires and scrubs every due confirmation in max-500 batches and counts the transitions", async () => {
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    for (let index = 0; index < 501; index += 1) {
+      store.savePendingConfirmation({
+        ...confirmation(
+          `due-${index}`,
+          session.id,
+          "pending",
+          iso(-DAY_MS),
+          iso(-60_000),
+        ),
+        preview: { secretOperationalDetail: `preview-${index}` },
+        operation: { secretOperationalDetail: `operation-${index}` },
+        agentState: { secretOperationalDetail: `agent-${index}` },
+      });
+    }
+
+    const counts = await store.pruneExpired(NOW.toISOString());
+
+    expect(counts.expiredConfirmations).toBe(501);
+    expect(counts.expiredTotal).toBe(501);
+    expect(counts.deletedTotal).toBe(0);
+    expect(counts.total).toBe(501);
+    expect(counts.batches).toBeGreaterThanOrEqual(2);
+    expect(counts.backlog).toBe(false);
+    expect(store.getPendingConfirmation("due-500")).toMatchObject({
+      status: "expired",
+      operation: {},
+      nonceHash: "",
+      agentState: undefined,
+    });
+    store.close();
+  });
+
+  it("counts expiry transitions toward the 10,000-row pass cap and backlog", async () => {
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    for (let index = 0; index < 10_001; index += 1) {
+      store.savePendingConfirmation(confirmation(
+        `backlog-due-${index}`,
+        session.id,
+        "pending",
+        iso(-DAY_MS),
+        iso(-60_000),
+      ));
+    }
+
+    const first = await store.pruneExpired(NOW.toISOString());
+    expect(first.expiredConfirmations).toBe(10_000);
+    expect(first.total).toBe(10_000);
+    expect(first.backlog).toBe(true);
+
+    const second = await store.pruneExpired(NOW.toISOString());
+    expect(second.expiredConfirmations).toBe(1);
+    expect(second.total).toBe(1);
+    expect(second.backlog).toBe(false);
+    store.close();
+  }, 15_000);
 
   it("retains referenced intent capabilities, then deletes their literal/span JSON after references expire", async () => {
     const clock = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
@@ -167,6 +258,57 @@ describe("store.pruneExpired", () => {
     expect(counts.undoRecords).toBe(2);
     expect(store.getUndoRecord(undoneId)).toBeUndefined();
     expect(store.getUndoRecord(availableId)).toBeUndefined();
+    store.close();
+  });
+
+  it("scrubs reversal payloads when an available undo expires and counts the transition", async () => {
+    const clock = { value: new Date(NOW.getTime() - DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const undoId = store.recordUndoable({
+      sessionId: "s1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [{ type: "tag", id: "tag-sensitive", name: "Sensitive" }],
+    });
+    clock.value = NOW;
+
+    const counts = await store.pruneExpired(NOW.toISOString());
+
+    expect(counts.expiredUndoRecords).toBe(1);
+    expect(counts.expiredTotal).toBe(1);
+    expect(counts.deletedTotal).toBe(0);
+    expect(store.getUndoRecord(undoId)).toMatchObject({
+      status: "expired",
+      reversal: [],
+      remaining: [],
+    });
+    store.close();
+  });
+
+  it("expires and accounts for an undo exactly at its expiry boundary", async () => {
+    const clock = { value: new Date(NOW.getTime() - 30 * 60 * 1000) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const undoId = store.recordUndoable({
+      sessionId: "s1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [{ type: "tag", id: "tag-boundary", name: "Boundary" }],
+    });
+    clock.value = NOW;
+
+    const counts = await store.pruneExpired(NOW.toISOString());
+
+    expect(counts.expiredUndoRecords).toBe(1);
+    expect(counts.expiredTotal).toBe(1);
+    expect(counts.deletedTotal).toBe(0);
+    expect(counts.total).toBe(1);
+    expect(store.getUndoRecord(undoId)).toMatchObject({
+      status: "expired",
+      reversal: [],
+      remaining: [],
+    });
     store.close();
   });
 
@@ -288,6 +430,46 @@ describe("store.pruneExpired", () => {
     store.close();
   });
 
+  it("deletes a canonical action result only after its final durable reference expires", async () => {
+    const clock = { value: new Date(NOW.getTime() - 100 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const receipt = successReceipt({ action: "clockify_tags_create" });
+    const ref = store.recordActionResult({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: session.id,
+      actionName: "clockify_tags_create",
+      status: "succeeded",
+      result: { kind: "receipt", receipt },
+    });
+    store.addAuditEvent({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: session.id,
+      actionName: "clockify_tags_create",
+      risk: ["safe_write"],
+      resultRef: ref,
+    });
+    clock.value = NOW;
+    store.addMessage({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      role: "assistant",
+      content: "Created",
+      resultLinks: [{ kind: "action_result", ref }],
+    });
+
+    await store.pruneExpired(NOW.toISOString());
+    expect(store.getActionResult(ref.id)).toBeDefined();
+
+    clock.value = new Date(NOW.getTime() + 100 * DAY_MS);
+    await store.pruneExpired(clock.value.toISOString());
+    expect(store.getActionResult(ref.id)).toBeUndefined();
+    store.close();
+  });
+
   it("caps one pass at 10,000 rows and reports backlog for a scheduled continuation", async () => {
     const clock = { value: new Date(NOW.getTime() - 100 * DAY_MS) };
     const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
@@ -331,5 +513,34 @@ describe("store.pruneExpired", () => {
     expect(counts.chatMessages).toBe(1); // 45d > 30d → pruned
     expect(store.getRecentMessages(session.id, 10)).toHaveLength(1);
     store.close();
+  });
+
+  it("persists bounded retention-run evidence including passive WAL checkpoint metrics", async () => {
+    const path = join(tmpdir(), `ai-assistant-retention-${randomUUID()}.sqlite`);
+    try {
+      const store = createStore(path, { encryptionKey: "k", now: () => NOW }) as TestStore;
+      await store.pruneExpired(NOW.toISOString());
+      store.close();
+
+      const reopened = createStore(path, { encryptionKey: "k", now: () => NOW }) as TestStore;
+      const metrics = reopened.retentionMetricsForTest();
+      expect(metrics).toHaveLength(1);
+      expect(metrics[0]).toMatchObject({
+        recordedAt: NOW.toISOString(),
+        deletedCount: 0,
+        expiredCount: 0,
+        backlog: false,
+      });
+      expect(metrics[0]?.durationMs).toBeGreaterThanOrEqual(0);
+      expect(metrics[0]?.walCheckpoint.mode).toBe("PASSIVE");
+      expect(Number.isInteger(metrics[0]?.walCheckpoint.busy)).toBe(true);
+      expect(Number.isInteger(metrics[0]?.walCheckpoint.log)).toBe(true);
+      expect(Number.isInteger(metrics[0]?.walCheckpoint.checkpointed)).toBe(true);
+      reopened.close();
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+    }
   });
 });

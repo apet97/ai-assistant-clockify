@@ -59,8 +59,11 @@ export function buildUndoStore(ctx: StoreContext): {
         | undefined;
       if (!row) return undefined;
       if (row.status === "available" && new Date(row.expires_at).getTime() <= now().getTime()) {
-        db.prepare("UPDATE undo_records SET status = 'expired', remaining_json = '[]' WHERE id = ? AND status = 'available'").run(id);
+        db.prepare(
+          "UPDATE undo_records SET status = 'expired', reversal_json = '[]', remaining_json = '[]' WHERE id = ? AND status = 'available'",
+        ).run(id);
         row.status = "expired";
+        row.reversal_json = "[]";
         row.remaining_json = "[]";
       }
       return {

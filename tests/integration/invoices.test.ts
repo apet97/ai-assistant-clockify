@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
+import { BinaryResponseTooLargeError } from "../../src/clockify/rest/core.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
@@ -76,8 +77,60 @@ describe("invoice actions", () => {
         id: "artifact-1",
         downloadUrl: "/api/artifacts/artifact-1",
       });
+      const encoded = JSON.stringify(result);
+      expect(encoded).not.toContain('"0":');
+      expect(encoded).not.toContain("%PDF");
     } else throw new Error("expected receipt");
     expect(fake.counts.exportInvoice).toBe(1);
+  });
+
+  it("clockify_invoices_export returns artifact_too_large without calling persistence", async () => {
+    const fake = createFakeWorkspace(seed());
+    vi.spyOn(fake.client, "exportInvoice").mockResolvedValue({
+      contentType: "application/pdf",
+      bytes: new Uint8Array(1_000_001),
+    });
+    const saveArtifact = vi.fn(() => ({ id: "must-not-exist", expiresAt: "2026-06-06T01:00:00.000Z" }));
+    const context = makeContext(fake);
+    context.saveArtifact = saveArtifact;
+
+    const result = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "inv1" },
+      context,
+    });
+
+    expect(result).toMatchObject({
+      kind: "receipt",
+      receipt: {
+        ok: false,
+        action: "clockify_invoices_export",
+        code: "artifact_too_large",
+      },
+    });
+    expect(saveArtifact).not.toHaveBeenCalled();
+  });
+
+  it("maps the live adapter's cancelled oversize response to artifact_too_large", async () => {
+    const fake = createFakeWorkspace(seed());
+    vi.spyOn(fake.client, "exportInvoice").mockRejectedValue(
+      new BinaryResponseTooLargeError("/workspaces/ws-1/invoices/inv1/export", 1_000_000),
+    );
+    const saveArtifact = vi.fn(() => ({ id: "must-not-exist", expiresAt: "2026-06-06T01:00:00.000Z" }));
+    const context = makeContext(fake);
+    context.saveArtifact = saveArtifact;
+
+    const result = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "inv1" },
+      context,
+    });
+
+    expect(result).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: false, code: "artifact_too_large" },
+    });
+    expect(saveArtifact).not.toHaveBeenCalled();
   });
 
   it("clockify_invoices_create previews billing then creates once on commit", async () => {

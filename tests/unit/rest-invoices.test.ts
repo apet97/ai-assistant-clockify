@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BinaryResponseTooLargeError } from "../../src/clockify/rest/core.js";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeInvoiceRest } from "../../src/clockify/rest/invoices.js";
 
@@ -384,8 +385,19 @@ describe("invoice rest", () => {
 
   it("exportInvoice cancels and rejects a chunked file over the hard cap", async () => {
     const big = new Uint8Array(1_000_001); // just over the 1 MB cap
-    const f = vi.fn(async () => binaryResponse(big));
-    await expect(rest(f as unknown as typeof fetch).exportInvoice("inv1")).rejects.toThrow(/1000000-byte binary limit/);
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(big);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const f = vi.fn(async () => new Response(stream, { headers: { "content-type": "application/pdf" } }));
+    await expect(rest(f as unknown as typeof fetch).exportInvoice("inv1"))
+      .rejects.toBeInstanceOf(BinaryResponseTooLargeError);
+    expect(cancelled).toBe(true);
   });
 
   it("exportInvoice rejects a non-PDF format (Clockify export is PDF-only)", async () => {

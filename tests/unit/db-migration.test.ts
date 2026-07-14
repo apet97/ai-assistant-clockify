@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { decryptSecret, encryptSecret } from "../../src/db/encryption.js";
 import { LATEST_SCHEMA_VERSION, migrate } from "../../src/db/schema.js";
 
@@ -245,7 +247,7 @@ describe("historical database migration", () => {
     ).get("undo-legacy") as { status: string; remaining_json: string; expires_at: string };
     expect(undo).toEqual({
       status: "expired",
-      remaining_json: reversal,
+      remaining_json: "[]",
       expires_at: "2025-01-01T00:00:00.000Z",
     });
     expect(db.prepare("SELECT * FROM idempotency_keys WHERE key = ?").get("legacy-key")).toBeUndefined();
@@ -796,7 +798,7 @@ describe("schema v6 persisted intent capabilities", () => {
                  'allow', ?, '2026-01-01T00:00:00.000Z')`,
     ).run(JSON.stringify({ value: "x".repeat(65_536) }))).toThrow(/CHECK constraint failed/);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
 
@@ -834,7 +836,151 @@ describe("schema v6 persisted intent capabilities", () => {
     expect(db.prepare(
       "SELECT capability_id, capability_hash FROM operation_runs WHERE id = 'legacy-operation'",
     ).get()).toEqual({ capability_id: null, capability_hash: null });
-    expect(db.pragma("user_version", { simple: true })).toBe(6);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
+});
+
+describe("schema v7 retention evidence and scrub constraints", () => {
+  it("adds bounded retention evidence and enforces expired-payload scrubbing", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+
+    expect(() => db.prepare(
+      `INSERT INTO retention_runs (
+         id, recorded_at, duration_ms, deleted_count, expired_count, batches,
+         backlog, wal_busy, wal_log, wal_checkpointed, counts_json
+       ) VALUES ('bad', '2026-01-01T00:00:00.000Z', -1, 0, 0, 0, 0, 0, 0, 0, '{}')`,
+    ).run()).toThrow(/CHECK constraint failed/);
+
+    db.prepare(
+      `INSERT INTO chat_sessions
+         (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at)
+       VALUES ('session-v7', 'ws', 'admin', '2026-01-01T00:00:00.000Z',
+               '2026-01-01T00:00:00.000Z', '2027-01-01T00:00:00.000Z')`,
+    ).run();
+    expect(() => db.prepare(
+      `INSERT INTO pending_confirmations (
+         id, operation_id, session_id, workspace_id, admin_user_id, status,
+         risk_json, preview_json, operation_json, operation_hash,
+         target_fingerprints_json, action_fingerprint, catalog_hash, nonce_hash,
+         expires_at, created_at, agent_state_json
+       ) VALUES ('confirmation-v7-expired-insert', 'operation-v7-expired-insert',
+                 'session-v7', 'ws', 'admin', 'expired', '["destructive"]',
+                 '{"secret":true}', '{"payload":true}', 'hash', '["fingerprint"]',
+                 'action', 'catalog', 'nonce', '2026-01-01T00:00:00.000Z',
+                 '2026-01-01T00:00:00.000Z', '{"resume":true}')`,
+    ).run()).toThrow(/expired_confirmation_not_scrubbed/);
+    db.prepare(
+      `INSERT INTO pending_confirmations (
+         id, operation_id, session_id, workspace_id, admin_user_id, status,
+         risk_json, preview_json, operation_json, operation_hash,
+         target_fingerprints_json, action_fingerprint, catalog_hash, nonce_hash,
+         expires_at, created_at
+       ) VALUES ('confirmation-v7', 'operation-v7', 'session-v7', 'ws', 'admin',
+                 'pending', '["destructive"]', '{"secret":true}', '{}', 'hash',
+                 '["fingerprint"]', 'action', 'catalog',
+                 'nonce', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    expect(() => db.prepare(
+      "UPDATE pending_confirmations SET status = 'expired' WHERE id = 'confirmation-v7'",
+    ).run()).toThrow(/expired_confirmation_not_scrubbed/);
+    expect(() => db.prepare(
+      `UPDATE pending_confirmations
+          SET status = 'expired', nonce_hash = '', operation_json = NULL,
+              agent_state_json = NULL
+        WHERE id = 'confirmation-v7'`,
+    ).run()).toThrow(/expired_confirmation_not_scrubbed/);
+
+    expect(() => db.prepare(
+      `INSERT INTO undo_records (
+         id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+         remaining_json, status, created_at, expires_at
+       ) VALUES ('undo-v7-expired-insert', 'session-v7', 'ws', 'admin', 'x',
+                 '[{"id":"secret"}]', '[{"id":"secret"}]', 'expired',
+                 '2026-01-01T00:00:00.000Z', '2026-01-01T00:30:00.000Z')`,
+    ).run()).toThrow(/expired_undo_not_scrubbed/);
+    db.prepare(
+      `INSERT INTO undo_records (
+         id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+         remaining_json, status, created_at, expires_at
+       ) VALUES ('undo-v7', 'session-v7', 'ws', 'admin', 'x', '[{"id":"secret"}]',
+                 '[{"id":"secret"}]', 'available', '2026-01-01T00:00:00.000Z',
+                 '2026-01-01T00:30:00.000Z')`,
+    ).run();
+    expect(() => db.prepare(
+      "UPDATE undo_records SET status = 'expired' WHERE id = 'undo-v7'",
+    ).run()).toThrow(/expired_undo_not_scrubbed/);
+    db.close();
+  });
+
+  it("scrubs already-expired v6 confirmation and undo payloads during migration", () => {
+    const fixturePath = fileURLToPath(new URL("../fixtures/db/schema-v6.sql", import.meta.url));
+    const db = new Database(":memory:");
+    db.exec(readFileSync(fixturePath, "utf8"));
+    db.prepare(
+      `INSERT INTO chat_sessions
+         (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at)
+       VALUES ('session-v6-expired', 'ws', 'admin', '2026-01-01T00:00:00.000Z',
+               '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO pending_confirmations (
+         id, operation_id, session_id, workspace_id, admin_user_id, status,
+         risk_json, preview_json, operation_json, operation_hash,
+         target_fingerprints_json, action_fingerprint, catalog_hash, nonce_hash,
+         expires_at, created_at, agent_state_json
+       ) VALUES ('confirmation-v6-expired', 'operation-v6-expired', 'session-v6-expired',
+                 'ws', 'admin', 'expired', '["destructive"]', '{"secret":true}',
+                 '{"secret":true}', 'hash', '["fingerprint"]', 'action', 'catalog',
+                 'nonce', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+                 '{"secret":true}')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO undo_records (
+         id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+         remaining_json, status, created_at, expires_at
+       ) VALUES ('undo-v6-expired', 'session-v6-expired', 'ws', 'admin', 'x',
+                 '[{"id":"secret"}]', '[{"id":"secret"}]', 'expired',
+                 '2026-01-01T00:00:00.000Z', '2026-01-01T00:30:00.000Z')`,
+    ).run();
+
+    migrate(db);
+
+    expect(db.prepare(
+      `SELECT risk_json, preview_json, operation_json, target_fingerprints_json,
+              nonce_hash, agent_state_json
+         FROM pending_confirmations WHERE id = 'confirmation-v6-expired'`,
+    ).get()).toEqual({
+      risk_json: "[]",
+      preview_json: "{}",
+      operation_json: null,
+      target_fingerprints_json: "[]",
+      nonce_hash: "",
+      agent_state_json: null,
+    });
+    expect(db.prepare(
+      "SELECT reversal_json, remaining_json FROM undo_records WHERE id = 'undo-v6-expired'",
+    ).get()).toEqual({ reversal_json: "[]", remaining_json: "[]" });
+    db.close();
+  });
+});
+
+describe("checked historical schema fixtures", () => {
+  for (let version = 0; version <= LATEST_SCHEMA_VERSION; version += 1) {
+    it(`migrates schema-v${version} twice`, () => {
+      const path = fileURLToPath(new URL(`../fixtures/db/schema-v${version}.sql`, import.meta.url));
+      const db = new Database(":memory:");
+      db.exec(readFileSync(path, "utf8"));
+      expect(db.pragma("user_version", { simple: true })).toBe(version);
+
+      migrate(db);
+      migrate(db);
+
+      expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+      expect(db.prepare("PRAGMA integrity_check").pluck().get()).toBe("ok");
+      expect(db.prepare("SELECT COUNT(*) FROM retention_runs").pluck().get()).toBeTypeOf("number");
+      db.close();
+    });
+  }
 });

@@ -35,6 +35,7 @@ import { durableMutationContract } from "../durable-mutation-contract.js";
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { dispatchWithReconciliation } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { BinaryResponseTooLargeError } from "../../clockify/rest/core.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -319,7 +320,20 @@ const exportInvoice = defineInvoiceRead({
       message: "Provide the invoice id or its number.",
     }),
   async read(ctx, id, args) {
-    const exp = await ctx.clockify.exportInvoice(id, args.format as "PDF" | undefined);
+    let exp: { contentType: string; bytes: Uint8Array };
+    try {
+      exp = await ctx.clockify.exportInvoice(id, args.format as "PDF" | undefined);
+    } catch (error) {
+      if (error instanceof BinaryResponseTooLargeError) return artifactTooLargeReceipt();
+      throw error;
+    }
+    // Keep binary payloads out of receipts, model transcripts, and audit/result
+    // summaries. The REST adapter and SQLite constraint remain independent
+    // backstops; this guard also covers alternate/test WorkspaceClient ports and
+    // returns a stable structured failure before persistence is attempted.
+    if (exp.bytes.byteLength > 1_000_000) {
+      return artifactTooLargeReceipt();
+    }
     if (!ctx.saveArtifact) {
       return errorReceipt({
         action: "clockify_invoices_export",
@@ -348,6 +362,15 @@ const exportInvoice = defineInvoiceRead({
     });
   },
 });
+
+function artifactTooLargeReceipt(): ReturnType<typeof errorReceipt> {
+  return errorReceipt({
+    action: "clockify_invoices_export",
+    code: "artifact_too_large",
+    message: "The exported invoice exceeds the 1,000,000-byte artifact limit and was not stored.",
+    recovery: { hint: "Reduce the invoice export size and try again.", retryable: true },
+  });
+}
 
 /** A line item the planner can attach when creating the invoice. */
 const invoiceItemSchema = z.object({

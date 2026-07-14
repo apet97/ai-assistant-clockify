@@ -272,7 +272,7 @@ export async function start(): Promise<void> {
       continueBacklog = counts.backlog;
       if (counts.total > 0 || counts.backlog) {
         console.log(
-          `retention prune: total=${counts.total} batches=${counts.batches} durationMs=${counts.durationMs} backlog=${counts.backlog} confirmations=${counts.pendingConfirmations} idempotency=${counts.idempotencyKeys} undo=${counts.undoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents} operations=${counts.operationRuns} results=${counts.actionResults} artifacts=${counts.artifacts} sessions=${counts.chatSessions}`,
+          `retention prune: total=${counts.total} deleted=${counts.deletedTotal} expired=${counts.expiredTotal} batches=${counts.batches} durationMs=${counts.durationMs} backlog=${counts.backlog} confirmationsDeleted=${counts.pendingConfirmations} confirmationsExpired=${counts.expiredConfirmations} idempotency=${counts.idempotencyKeys} undoDeleted=${counts.undoRecords} undoExpired=${counts.expiredUndoRecords} telemetry=${counts.turnTelemetry} chat=${counts.chatMessages} audit=${counts.auditEvents} operations=${counts.operationRuns} results=${counts.actionResults} artifacts=${counts.artifacts} sessions=${counts.chatSessions} walBusy=${counts.walCheckpoint.busy} walLog=${counts.walCheckpoint.log} walCheckpointed=${counts.walCheckpoint.checkpointed}`,
         );
       }
     } catch (error) {

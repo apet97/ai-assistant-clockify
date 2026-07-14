@@ -99,8 +99,9 @@ npm run dev           # tsx src/server.ts (needs env)
   idempotency ledger, undo, audit/metrics, telemetry, durable turn/operation
   journals, canonical action results + ordered replay/history links, short-lived
   artifacts, installations, immutable intent capabilities + operation bindings +
-  usage claims (`store/intent-capabilities.ts`), batched retention + AES-256-GCM
-  token encryption/rotation). Full outcomes live only in `action_results`; linked
+  usage claims (`store/intent-capabilities.ts`), one-statement/one-transaction
+  500-row retention with persisted passive-WAL evidence, and AES-256-GCM token
+  encryption/rotation). Full outcomes live only in `action_results`; linked
   summaries are capped at 65,536 bytes. `src/auth/` — admin role check, CSRF,
   signed session cookie.
 - `src/addon/` — manifest + Clockify token verification (RS256, one platform key

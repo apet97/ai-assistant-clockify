@@ -123,6 +123,7 @@ export function buildConfirmationStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     savePendingConfirmation(record) {
+      const expired = record.status === "expired";
       db.prepare(
         `INSERT INTO pending_confirmations (
            id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
@@ -137,23 +138,23 @@ export function buildConfirmationStore(ctx: StoreContext): {
         record.workspaceId,
         record.adminUserId,
         record.status,
-        JSON.stringify(record.risk),
-        JSON.stringify(record.preview),
-        JSON.stringify(record.operation),
+        JSON.stringify(expired ? [] : record.risk),
+        JSON.stringify(expired ? {} : record.preview),
+        expired ? null : JSON.stringify(record.operation),
         record.operationHash,
-        JSON.stringify(record.targetFingerprints ?? []),
+        JSON.stringify(expired ? [] : (record.targetFingerprints ?? [])),
         record.actionFingerprint ?? "legacy",
         record.catalogHash ?? "legacy",
         record.capabilityId ?? null,
         record.capabilityHash ?? null,
-        record.nonceHash,
+        expired ? "" : record.nonceHash,
         record.expiresAt,
         record.createdAt,
         record.usedAt ?? null,
         record.actionResultId ?? null,
         null,
         null,
-        record.agentState === undefined ? null : JSON.stringify(record.agentState),
+        expired || record.agentState === undefined ? null : JSON.stringify(record.agentState),
       );
     },
 
@@ -170,6 +171,7 @@ export function buildConfirmationStore(ctx: StoreContext): {
         db.prepare(
           `UPDATE pending_confirmations
               SET status = 'expired', used_at = ?, nonce_hash = '',
+                  risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
                   agent_state_json = NULL, operation_json = NULL
             WHERE session_id = ? AND status = 'pending' AND expires_at <= ?`,
         ).run(nowIsoArg, sessionId, nowIsoArg);
@@ -271,6 +273,7 @@ export function buildConfirmationStore(ctx: StoreContext): {
       return db.prepare(
         `UPDATE pending_confirmations
             SET status = 'expired', used_at = ?, nonce_hash = '',
+                risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
                 agent_state_json = NULL, operation_json = NULL
           WHERE id = ? AND status = 'pending' AND expires_at <= ?`,
       ).run(nowIso(), id, nowIso()).changes === 1;
