@@ -114,6 +114,8 @@ export function actionFingerprint(name: string): string | undefined {
         risks: action.risks,
         argumentAliases: action.argumentAliases ?? [],
         argumentOpenPaths: action.argumentOpenPaths ?? [],
+        mutationWorkflow: action.mutationWorkflow,
+        preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
       })
     : undefined;
 }
@@ -121,13 +123,15 @@ export function actionFingerprint(name: string): string | undefined {
 let cachedCatalogHash: string | undefined;
 export function catalogHash(): string {
   cachedCatalogHash ??= fingerprint(
-    ACTION_CATALOG.map(({ name, schema, featureGroup, risks, argumentAliases, argumentOpenPaths }) => ({
-      name,
-      args: summarizeArgs(schema),
-      featureGroup,
-      risks,
-      argumentAliases: argumentAliases ?? [],
-      argumentOpenPaths: argumentOpenPaths ?? [],
+    ACTION_CATALOG.map((action) => ({
+      name: action.name,
+      args: summarizeArgs(action.schema),
+      featureGroup: action.featureGroup,
+      risks: action.risks,
+      argumentAliases: action.argumentAliases ?? [],
+      argumentOpenPaths: action.argumentOpenPaths ?? [],
+      mutationWorkflow: action.mutationWorkflow,
+      preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
     })),
   );
   return cachedCatalogHash;

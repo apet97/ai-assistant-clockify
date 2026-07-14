@@ -30,7 +30,14 @@ import {
   commitConfirmedOperation,
   executeAction,
 } from "../harness/actions.js";
-import type { ActionContext, ActionResult, ConfirmableOperation, PreviewCard } from "../harness/action.js";
+import {
+  isPartialCommitResult,
+  type ActionContext,
+  type ActionResult,
+  type CommitResult,
+  type ConfirmableOperation,
+  type PreviewCard,
+} from "../harness/action.js";
 import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
 import { reversibleCreations } from "../harness/undo.js";
 import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../harness/catalog.js";
@@ -123,6 +130,7 @@ export type CommitConfirmationOutcome =
   | {
       ok: true;
       receipt: SuccessReceipt | ErrorReceipt;
+      partialResult?: Extract<ActionResult, { kind: "partial" }>;
       undoId: string | undefined;
       agentState: AgentState | undefined;
       installation: Installation | undefined;
@@ -347,7 +355,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       ? {
           ...baseCtx,
           operationJournal: {
-            prepare(actionName, actionArgs) {
+            prepare(actionName, actionArgs, mutationPlan) {
               return deps.store.prepareOperationRun({
                 requestId,
                 sessionId: claims.sessionId,
@@ -357,6 +365,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
                 actionFingerprint: actionFingerprint(actionName) ?? hashOperation({ actionName }),
                 catalogHash: catalogHash(),
                 operationHash: hashOperation({ actionName, args: actionArgs }),
+                operation: actionArgs,
+                mutationPlan,
               });
             },
             markExecuting(operationId) {
@@ -480,6 +490,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         actionFingerprint: created.record.actionFingerprint,
         catalogHash: created.record.catalogHash,
         operationHash: created.record.operationHash,
+        operation,
+        mutationPlan: operation.mutationPlan,
       });
       deps.store.savePendingConfirmation(created.record);
       const livePreview = {
@@ -767,9 +779,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // ALL confirmed operations go through the SAME commit path. The action's own
     // `commit` does the work; for a permission change that commit persists the new
     // policy itself via the `savePolicy` capability the context carries.
-    let receipt: SuccessReceipt | ErrorReceipt;
+    let commitResult: CommitResult;
     if (!installation || installation.status !== "active") {
-      receipt = errorReceipt({
+      commitResult = errorReceipt({
         action: operation.actionName,
         code: "not_installed",
         message: "The add-on is not active for this workspace.",
@@ -820,7 +832,21 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // The fresh role verdict above happened before consuming the nonce. Avoid a
       // redundant host lookup inside the generic harness for this same dispatch.
       delete authorizedContext.authorizeWrite;
-      receipt = await commitConfirmedOperation({ ...authorizedContext, idempotency }, operation);
+      commitResult = operation.mutationPlan
+        ? await commitConfirmedOperation(
+            { ...authorizedContext, idempotency },
+            { ...operation, mutationPlan: operation.mutationPlan },
+          )
+        : await commitConfirmedOperation({ ...authorizedContext, idempotency }, operation);
+    }
+
+    let partialResult: Extract<ActionResult, { kind: "partial" }> | undefined;
+    let receipt: SuccessReceipt | ErrorReceipt;
+    if (isPartialCommitResult(commitResult)) {
+      partialResult = commitResult;
+      receipt = commitResult.receipt;
+    } else {
+      receipt = commitResult;
     }
 
     // The host dispatch already happened. Retry only the synchronous SQLite
@@ -828,8 +854,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // receipt even if persistence remains degraded. Claim-time persistence has
     // already scrubbed dispatch material and bound the one unknown result that
     // startup recovery will reuse if final settlement never persists.
-    const terminalStatus = receipt.ok
-      ? "succeeded"
+    const terminalStatus = partialResult
+      ? "partial"
+      : receipt.ok
+        ? "succeeded"
       : receipt.code === "commit_outcome_unknown"
         ? "outcome_unknown"
         : "definitive_failed";
@@ -837,7 +865,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     let settlementError: unknown;
     for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {
       try {
-        resultRef = deps.store.settleConfirmation(record.id, terminalStatus, operation.actionName, receipt);
+        resultRef = deps.store.settleConfirmedOperation(
+          record.id,
+          terminalStatus,
+          operation.actionName,
+          partialResult ?? receipt,
+        );
       } catch (error) {
         settlementError = error;
       }
@@ -864,10 +897,11 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     bestEffort("post-commit undo bookkeeping failed", () => {
       undoId = recordUndoIfReversible(claims, receipt);
     });
-    const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
+    const agentState = receipt.ok && !partialResult ? parseAgentState(record.agentState) : undefined;
     return {
       ok: true,
       receipt,
+      ...(partialResult ? { partialResult } : {}),
       undoId,
       agentState,
       installation,

@@ -20,7 +20,7 @@ export interface PolicyShape {
 export interface ChatController {
   send(message: string): Promise<unknown>;
   confirm(ref: PreviewRef): Promise<unknown>;
-  /** Streaming single confirm: the committed receipt arrives first, then the resume streams. */
+  /** Streaming single confirm: a clean receipt or truthful partial arrives first. */
   confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
   confirmAll(refs: PreviewRef[]): Promise<unknown[]>;
   cancel(previewId: string): Promise<unknown>;
@@ -112,7 +112,7 @@ export const STALE_NONCE_CODE = "invalid_confirmation";
 export interface StreamEvent {
   type: "result" | "reply" | "error" | "done" | "receipt" | "status" | string;
   result?: ChatResult;
-  /** Only on a confirm stream's first `receipt` event: the committed receipt + undo handle. */
+  /** Only on a clean confirm stream's first `receipt` event. Partials use `result`. */
   receipt?: ReceiptResult["receipt"];
   undo?: { id: string };
   kind?: string;
@@ -165,8 +165,8 @@ export class PreviewBuffer {
  * Dispatch ONE streamed NDJSON event into the hook surface, buffering previews so
  * a batch keeps its single Confirm-all card. Shared by the chat stream
  * (`submitStreaming`) and the confirm-resume stream (`submitConfirmStream`); the
- * latter handles the extra leading `receipt` event itself (the committed receipt
- * that must render FIRST) before delegating the rest here.
+ * latter handles a leading clean `receipt` itself, while a partial commit arrives
+ * here as one truthful `result` event (including its undo handle).
  *
  * Truth contract preserved: `result`/`preview` → buffer; other `result` kinds →
  * `onResults`; `reply` → flush the buffer THEN append the (truthful) reply text;

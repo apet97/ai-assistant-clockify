@@ -3,6 +3,7 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
+  defineSafeWriteAction,
   type ActionDefinition,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
@@ -64,23 +65,26 @@ const getTag = defineAction({
   },
 });
 
-const createTag = defineAction({
+const createTag = defineSafeWriteAction({
   name: "clockify_tags_create",
   description: "Create a tag. Safe write — executes immediately when policy allows.",
-  featureGroup: WORK,
-  risks: ["safe_write"],
-  schema: z.object({ name: z.string().min(1) }),
-  async handler(ctx, args) {
-    const tag = await ctx.clockify.createTag({ name: args.name });
+  group: WORK,
+  schema: z.object({ name: z.string().trim().min(1) }),
+  prepare(_ctx, args) {
     return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_tags_create",
-        entity: "tag",
-        ids: { workspaceId: ctx.workspaceId },
-        changed: { created: [{ type: "tag", id: tag.id, name: tag.name }] },
-      }),
+      operation: { body: { name: args.name } },
+      mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
     };
+  },
+  async execute(ctx, operation) {
+    const { body } = operation as { body: { name: string } };
+    const tag = await ctx.clockify.createTag(body);
+    return successReceipt({
+      action: "clockify_tags_create",
+      entity: "tag",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { created: [{ type: "tag", id: tag.id, name: tag.name }] },
+    });
   },
 });
 

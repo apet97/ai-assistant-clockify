@@ -112,7 +112,8 @@ bug was found against the REAL API, not by reading the code.
 
 - `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
   per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
-  ledger, undo, audit/metrics, telemetry, durable turn/operation journals,
+  ledger, undo, audit/metrics, telemetry, durable turn/operation + ordered
+  external-mutation-step journals,
   canonical action results, short-lived artifacts, installations, and bounded
   500-row retention batches (10k rows/pass with event-loop yields and continuation)
   + token encryption/one-release key rotation
@@ -127,7 +128,8 @@ bug was found against the REAL API, not by reading the code.
   (adapter = multi-host `rest/core.ts` + one `rest/<area>.ts` per area; every
   public list/search returns exact `ListResult<T> {rows,truncated}`; plain and
   envelope pagination preserve completeness through `core.paginate*`, while
-  POST/search pagination uses `rest/list-pages.ts`; the one bare-date↔ISO
+  POST/search pagination uses `rest/list-pages.ts`; `core.mutate` performs
+  exactly one external mutation per durable workflow step; the one bare-date↔ISO
   normalization lives in `rest/wire-dates.ts`; `X-Addon-Token` in prod),
   `types.ts` (leaf shapes;
   `ClockifyAuth` lives here), `api-base.ts` (hosts from
@@ -143,8 +145,11 @@ bug was found against the REAL API, not by reading the code.
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
   `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
-  `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `compose.ts` (atomic
-  multi-step + rollback), `idempotency.ts` (intent-hash dedupe, 10-min window),
+  `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `mutation-workflow.ts`
+  (durable one-dispatch steps + partial/unknown classification),
+  `mutation-compatibility.ts` (named phase 4/5 migration exceptions),
+  `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
+  (intent-hash dedupe, 10-min window, canonical partial replay),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
   BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
   `workflows/<area>.ts`. Name→id + date resolution is split across
@@ -204,6 +209,14 @@ bug was found against the REAL API, not by reading the code.
   fails closed. Writes are journaled as prepared→executing→terminal, and transport
   failure/timeout/408/5xx/malformed success after dispatch remains
   `outcome_unknown` without automatic retry.
+- **Durable external effects:** migrated writes persist normalized nonsecret
+  intent and an exact mutation plan before dispatch. Every host effect is an
+  ordered prepared→executing→terminal step; a later definitive failure after a
+  known effect returns `partial`, while ambiguity stops all later steps. A
+  prepared compensation does not alter its known-succeeded source, and startup
+  recovery is read-only: it marks only dispatched orphan steps unknown and never
+  compensates automatically. Unmigrated writes are enumerated by exact action
+  name and phase in `mutation-compatibility.ts`.
 - **Closed nested arguments:** unknown fields are rejected at every object depth.
   A dynamic record is open only when its action declares that exact path in
   `argumentOpenPaths` (array records use `memberships[]` notation). Aliases and open

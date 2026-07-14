@@ -60,6 +60,14 @@ export interface RestCore {
     body?: unknown,
     allow404?: boolean,
   ): Promise<unknown>;
+  /** Dispatch exactly one external mutation. Composite compatibility wrappers
+   *  must be split into workflow steps before using this primitive. */
+  mutate(
+    host: ClockifyHost,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown>;
   paginate(
     host: ClockifyHost,
     path: string,
@@ -318,6 +326,18 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { rows: out, truncated: true };
   }
 
+  async function mutate(
+    host: ClockifyHost,
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    if (!isMutationMethod(method)) {
+      throw new Error(`RestCore.mutate requires a mutation method, received ${method}.`);
+    }
+    return call(host, method, path, body);
+  }
+
   async function paginateEnvelope(
     host: ClockifyHost,
     path: string,
@@ -420,5 +440,5 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 
-  return { call, paginate, paginateEnvelope, getThenPut, postForm, getBinary };
+  return { call, mutate, paginate, paginateEnvelope, getThenPut, postForm, getBinary };
 }

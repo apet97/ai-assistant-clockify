@@ -1,10 +1,18 @@
-import type { ClaimState } from "../../harness/action.js";
+import type { ClaimState, CommitResult } from "../../harness/action.js";
 import type { SuccessReceipt } from "../../harness/receipts.js";
 import type { ActionResultRef } from "../action-results.js";
 import type { StoreContext } from "./context.js";
 
-const receiptFromCanonical = (value: unknown): SuccessReceipt | undefined => {
+const commitResultFromCanonical = (value: unknown): CommitResult | undefined => {
   if (!value || typeof value !== "object") return undefined;
+  if (
+    "kind" in value &&
+    (value as { kind?: unknown }).kind === "partial" &&
+    "receipt" in value &&
+    (value as { receipt?: { ok?: unknown } }).receipt?.ok === true
+  ) {
+    return value as CommitResult;
+  }
   const candidate = "receipt" in value ? (value as { receipt?: unknown }).receipt : value;
   return candidate && typeof candidate === "object" && (candidate as { ok?: unknown }).ok === true
     ? candidate as SuccessReceipt
@@ -22,13 +30,13 @@ export function buildIdempotencyStore(ctx: StoreContext): {
     completedNotBeforeEpochMs: number,
     claimNotBeforeEpochMs: number,
   ): ClaimState;
-  claimIdempotencyReceipt(key: string, workspaceId: string, adminUserId: string): SuccessReceipt | undefined;
+  claimIdempotencyReceipt(key: string, workspaceId: string, adminUserId: string): CommitResult | undefined;
   fillIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
   releaseIdempotency(key: string, workspaceId: string, adminUserId: string): void;
   touchIdempotencyClaim(key: string, workspaceId: string, adminUserId: string, claimedAtEpochMs: number): void;
 } {
   const { db } = ctx;
-  const loadReceipt = (key: string, workspaceId: string, adminUserId: string, notBefore?: number): SuccessReceipt | undefined => {
+  const loadCommitResult = (key: string, workspaceId: string, adminUserId: string, notBefore?: number): CommitResult | undefined => {
     const row = db.prepare(
       `SELECT a.result_json
          FROM idempotency_keys i
@@ -41,7 +49,7 @@ export function buildIdempotencyStore(ctx: StoreContext): {
         ? [key, workspaceId, adminUserId]
         : [key, workspaceId, adminUserId, notBefore]
     )) as { result_json: string } | undefined;
-    return row ? receiptFromCanonical(JSON.parse(row.result_json)) : undefined;
+    return row ? commitResultFromCanonical(JSON.parse(row.result_json)) : undefined;
   };
 
   return {
@@ -60,7 +68,8 @@ export function buildIdempotencyStore(ctx: StoreContext): {
     },
 
     lookupIdempotency(key, workspaceId, adminUserId, notBeforeEpochMs) {
-      return loadReceipt(key, workspaceId, adminUserId, notBeforeEpochMs);
+      const result = loadCommitResult(key, workspaceId, adminUserId, notBeforeEpochMs);
+      return result && !("kind" in result) && result.ok ? result : undefined;
     },
 
     claimIdempotency(key, workspaceId, adminUserId, claimedAtEpochMs, completedNotBeforeEpochMs, claimNotBeforeEpochMs) {
@@ -98,7 +107,7 @@ export function buildIdempotencyStore(ctx: StoreContext): {
     },
 
     claimIdempotencyReceipt(key, workspaceId, adminUserId) {
-      return loadReceipt(key, workspaceId, adminUserId);
+      return loadCommitResult(key, workspaceId, adminUserId);
     },
 
     fillIdempotency(key, workspaceId, adminUserId, ref, committedAtEpochMs) {

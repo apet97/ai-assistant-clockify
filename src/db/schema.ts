@@ -199,7 +199,7 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON artifacts(session_id)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 4;
+export const LATEST_SCHEMA_VERSION = 5;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -365,6 +365,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
     ],
   },
   { version: 4, statements: [] },
+  { version: 5, statements: [] },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -398,6 +399,7 @@ export function migrate(db: Database.Database): void {
     if (migration.version <= currentVersion) continue;
     db.transaction(() => {
       if (migration.version === 4) migrateToV4(db);
+      else if (migration.version === 5) migrateToV5(db);
       else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
@@ -415,6 +417,77 @@ export function migrate(db: Database.Database): void {
   for (const statement of PRUNE_INDEX_STATEMENTS) {
     db.prepare(statement).run();
   }
+}
+
+/**
+ * Durable mutation substrate. Operation intent is the canonical, nonsecret
+ * normalized wire description retained after a confirmation scrubs its payload.
+ * Steps are rebuilt once because SQLite cannot add the stricter status/kind and
+ * compensation-link constraints piecemeal.
+ */
+function migrateToV5(db: Database.Database): void {
+  addColumnIfMissing(
+    db,
+    "operation_runs",
+    "operation_json",
+    "TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(operation_json))",
+  );
+  addColumnIfMissing(db, "operation_runs", "reconciled_at", "TEXT");
+  addColumnIfMissing(
+    db,
+    "operation_runs",
+    "reconciliation_json",
+    "TEXT CHECK (reconciliation_json IS NULL OR json_valid(reconciliation_json))",
+  );
+  addColumnIfMissing(db, "operation_runs", "capability_hash", "TEXT");
+
+  const stepColumns = db.prepare("PRAGMA table_info(operation_steps)").all() as Array<{ name: string }>;
+  if (stepColumns.some((column) => column.name === "plan_step_id")) return;
+
+  db.prepare("DROP TABLE IF EXISTS operation_steps_v4").run();
+  db.prepare("ALTER TABLE operation_steps RENAME TO operation_steps_v4").run();
+  db.exec(`
+    CREATE TABLE operation_steps (
+      id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL,
+      step_index INTEGER NOT NULL CHECK (step_index >= 0),
+      plan_step_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('primary', 'compensation')),
+      status TEXT NOT NULL CHECK (status IN (
+        'prepared', 'executing', 'succeeded', 'definitive_failed',
+        'outcome_unknown', 'compensating', 'compensated',
+        'compensation_failed', 'skipped'
+      )),
+      external_id TEXT,
+      target_fingerprint TEXT,
+      effect_json TEXT CHECK (effect_json IS NULL OR json_valid(effect_json)),
+      detail_json TEXT CHECK (detail_json IS NULL OR json_valid(detail_json)),
+      dispatched_at TEXT,
+      settled_at TEXT,
+      compensates_step_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (operation_id, step_index),
+      UNIQUE (operation_id, plan_step_id),
+      FOREIGN KEY (operation_id) REFERENCES operation_runs(id),
+      FOREIGN KEY (compensates_step_id) REFERENCES operation_steps(id)
+    );
+    INSERT INTO operation_steps (
+      id, operation_id, step_index, plan_step_id, name, kind, status,
+      external_id, target_fingerprint, effect_json, detail_json,
+      dispatched_at, settled_at, compensates_step_id, created_at, updated_at
+    )
+    SELECT
+      id, operation_id, step_index, name || ':' || step_index, name, 'primary', status,
+      external_id, fingerprint, NULL, detail_json,
+      CASE WHEN status <> 'prepared' THEN updated_at ELSE NULL END,
+      CASE WHEN status NOT IN ('prepared', 'executing') THEN updated_at ELSE NULL END,
+      NULL, created_at, updated_at
+    FROM operation_steps_v4;
+    DROP TABLE operation_steps_v4;
+    CREATE INDEX idx_operation_steps_operation ON operation_steps(operation_id, step_index);
+  `);
 }
 
 const terminalKind = (value: unknown): ActionResultKind => {

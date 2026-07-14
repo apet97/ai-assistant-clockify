@@ -23,6 +23,9 @@ import type {
   OperationRun,
   OperationRunStatus,
   PrepareOperationRunInput,
+  OperationStep,
+  PrepareOperationStepInput,
+  PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
 } from "./store/context.js";
@@ -51,7 +54,7 @@ import { buildArtifactStore } from "./store/artifacts.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
-import type { ClaimState } from "../harness/action.js";
+import type { ClaimState, CommitResult } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
 
 /**
@@ -86,6 +89,9 @@ export type {
   OperationRun,
   OperationRunStatus,
   PrepareOperationRunInput,
+  OperationStep,
+  PrepareOperationStepInput,
+  PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
 } from "./store/context.js";
@@ -192,6 +198,18 @@ export interface Store {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  recordOperationReconciliation(id: string, result: unknown, authoritative: boolean): void;
+  prepareOperationStep(input: PrepareOperationStepInput): string;
+  markOperationStepExecuting(id: string): boolean;
+  settleOperationStep(
+    id: string,
+    status: "succeeded" | "definitive_failed" | "outcome_unknown",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+  ): void;
+  prepareCompensationStep(input: PrepareCompensationStepInput): string;
+  markOperationStepCompensating(id: string): boolean;
+  settleCompensationStep(id: string, status: "compensated" | "compensation_failed", detail?: unknown): void;
+  listOperationSteps(operationId: string): OperationStep[];
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
   recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number };
@@ -227,6 +245,13 @@ export interface Store {
     actionName: string,
     result: unknown,
   ): ActionResultRef;
+  /** Atomic operation + confirmation + canonical-result terminal transition. */
+  settleConfirmedOperation(
+    id: string,
+    status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
+    actionName: string,
+    result: unknown,
+  ): ActionResultRef;
   getActionResult(id: string): unknown | undefined;
   /** This session's still-live pending previews (status pending, not expired). */
   countPendingConfirmations(sessionId: string, nowIso: string): number;
@@ -252,7 +277,7 @@ export interface Store {
     claimNotBeforeEpochMs: number,
   ): ClaimState;
   /** The completed receipt for a key the claim reported as `replay`. */
-  claimIdempotencyReceipt(key: string, workspaceId: string, adminUserId: string): SuccessReceipt | undefined;
+  claimIdempotencyReceipt(key: string, workspaceId: string, adminUserId: string): CommitResult | undefined;
   /** Complete the OWN claim (guarded on action_result_id IS NULL — fills once). */
   fillIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
   /** Release the OWN claim (guarded on action_result_id IS NULL — never drops a completed row). */
@@ -371,6 +396,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   // The shared primitives each concern builder needs (Step 1). Built once here,
   // exactly as the inline methods used them.
   const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
+  const confirmationStore = buildConfirmationStore(ctx);
 
   // Built as TestStore (the concrete object implements the test-only methods),
   // returned as the narrower Store so production callers never see them.
@@ -382,7 +408,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildSessionStore(ctx),
     ...buildUndoStore(ctx),
     ...buildInstallationStore(ctx),
-    ...buildConfirmationStore(ctx),
+    ...confirmationStore,
+    settleConfirmedOperation: (...args) => confirmationStore.settleConfirmation(...args),
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
@@ -430,6 +457,23 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         const turns = db.prepare(
           "UPDATE turn_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
         ).run(timestamp).changes;
+        // A dispatched step can have reached Clockify before the process died.
+        // Preserve prepared steps as undispatched, but classify executing primary
+        // or compensation effects as unknown. Recovery remains read-only: it
+        // never creates or dispatches a compensation step in the background.
+        // `compensating` is the known-succeeded source marker paired atomically
+        // with an executing compensation row. Preserve that known source truth;
+        // only the dispatched compensation itself has an unknown outcome.
+        db.prepare(
+          `UPDATE operation_steps
+              SET status = 'succeeded', updated_at = ?
+            WHERE status = 'compensating'`,
+        ).run(timestamp);
+        db.prepare(
+          `UPDATE operation_steps
+              SET status = 'outcome_unknown', settled_at = ?, updated_at = ?
+            WHERE status = 'executing'`,
+        ).run(timestamp, timestamp);
 
         const insertUnknownResult = (row: {
           session_id: string;

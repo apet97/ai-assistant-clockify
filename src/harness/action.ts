@@ -38,7 +38,7 @@ export interface ActionContext {
    */
   recentOutcomes?(sinceIso?: string): { outcomes: ActionOutcome[]; confirmationStatuses: string[] };
   operationJournal?: {
-    prepare(actionName: string, args: unknown): string;
+    prepare(actionName: string, operation: unknown, mutationPlan?: ExternalMutationPlan): string;
     markExecuting(operationId: string): void;
     settle(
       operationId: string,
@@ -89,9 +89,9 @@ export interface AtomicIdempotencyLedger extends IdempotencyLedger {
   /** Atomically claim the key (taken BEFORE the commit await). */
   claim(scopedKey: string): ClaimState;
   /** Read the completed receipt for a key the claim reported as `replay`. */
-  lookupCompleted(scopedKey: string): SuccessReceipt | undefined;
-  /** Complete the OWN claim with its success receipt. */
-  fill(scopedKey: string, receipt: SuccessReceipt): void;
+  lookupCompleted(scopedKey: string): CommitResult | undefined;
+  /** Complete the OWN claim with its canonical terminal commit result. */
+  fill(scopedKey: string, receipt: CommitResult): void;
   /** Release the OWN claim (commit failed/threw) so a retry can re-claim. */
   release(scopedKey: string): void;
   /**
@@ -136,6 +136,16 @@ export interface PreviewCard {
   warnings: string[];
 }
 
+/** Exact external dispatch order persisted before the first host mutation. */
+export interface ExternalMutationPlan {
+  mode: "single" | "curated" | "batch";
+  steps: Array<{
+    id: string;
+    kind: "primary" | "compensation";
+    targetFingerprint?: string;
+  }>;
+}
+
 /** The exact payload executed after button confirmation. Never reconstructed from chat. */
 export interface ConfirmableOperation {
   operationId: string;
@@ -143,7 +153,13 @@ export interface ConfirmableOperation {
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
   payload: Record<string, unknown>;
+  mutationPlan?: ExternalMutationPlan;
 }
+
+/** A migrated confirmation whose exact host dispatch plan is durable. */
+export type PlannedConfirmableOperation = ConfirmableOperation & {
+  mutationPlan: ExternalMutationPlan;
+};
 
 export type ActionResult = (
   | { kind: "receipt"; receipt: SuccessReceipt | ErrorReceipt }
@@ -157,6 +173,18 @@ export type ActionResult = (
   | { kind: "clarify"; message: string; options?: ClarifyOption[] }
   | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation }
 ) & { operationId?: string };
+
+/** A confirmed commit can truthfully stop after applying only earlier steps. */
+export type CommitResult =
+  | SuccessReceipt
+  | ErrorReceipt
+  | Extract<ActionResult, { kind: "partial" }>;
+
+export function isPartialCommitResult(
+  result: CommitResult,
+): result is Extract<ActionResult, { kind: "partial" }> {
+  return "kind" in result && result.kind === "partial";
+}
 
 /** Uniform stored form of an action (args already validated by its schema). */
 export interface ActionDefinition {
@@ -175,8 +203,14 @@ export interface ActionDefinition {
    *  (e.g. delete_entity maps entityType → group). */
   resolveFeatureGroup?(args: unknown): FeatureGroup;
   handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
+  /** New safe-write path: normalize nonsecret wire intent without mutation. */
+  prepareSafeWrite?(ctx: ActionContext, args: unknown): Promise<PreparedSafeWrite>;
+  /** Dispatch exactly the prepared safe-write intent. */
+  executeSafeWrite?(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
+  /** Marks a confirmed action whose external effects use mutation-workflow steps. */
+  mutationWorkflow?: "durable";
   /** Executes the stored operation after confirmation (risky actions only). */
-  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
+  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   /** Opt into idempotent commits: return the operation's SEMANTIC identity (e.g.
    *  client + items), excluding volatile defaults, so a repeated confirm of the
    *  same intent returns the prior receipt instead of creating a duplicate. */
@@ -207,7 +241,10 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
-  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
+  prepareSafeWrite?(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite>;
+  executeSafeWrite?(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
+  mutationWorkflow?: "durable";
+  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }): ActionDefinition {
   return def as unknown as ActionDefinition;
@@ -225,6 +262,12 @@ export interface RiskyPreviewResult {
   reversibility: string;
   warnings?: string[];
   payload: Record<string, unknown>;
+}
+
+export interface PreparedSafeWrite {
+  /** Normalized, nonsecret wire intent. */
+  operation: unknown;
+  mutationPlan: ExternalMutationPlan;
 }
 
 /** The alternative a preview callback returns to stop and ask for clarification. */
@@ -264,7 +307,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     ctx: ActionContext,
     args: z.infer<S>,
   ): Promise<RiskyPreviewResult | RiskyClarifyResult>;
-  commit(ctx: ActionContext, payload: Record<string, unknown>): Promise<SuccessReceipt | ErrorReceipt>;
+  commit(ctx: ActionContext, payload: Record<string, unknown>): Promise<CommitResult>;
 }): ActionDefinition {
   return defineAction({
     name: def.name,
@@ -317,6 +360,41 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     },
     commit(ctx, operation) {
       return def.commit(ctx, operation.payload);
+    },
+  });
+}
+
+/**
+ * Define a safe write with an explicit prepare/execute split. `prepare` may do
+ * reads/resolution but must not mutate; `execute` receives only the durable,
+ * normalized nonsecret intent persisted before dispatch.
+ */
+export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
+  name: string;
+  description: string;
+  group: FeatureGroup;
+  schema: S;
+  argumentAliases?: readonly string[];
+  argumentOpenPaths?: readonly string[];
+  prepare(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite> | PreparedSafeWrite;
+  execute(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
+}): ActionDefinition {
+  return defineAction({
+    name: def.name,
+    description: def.description,
+    featureGroup: def.group,
+    risks: ["safe_write"],
+    schema: def.schema,
+    ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
+    prepareSafeWrite: async (ctx, args) => def.prepare(ctx, args),
+    executeSafeWrite: (ctx, operation) => def.execute(ctx, operation),
+    async handler(ctx, args): Promise<ActionResult> {
+      const prepared = await def.prepare(ctx, args);
+      const result = await def.execute(ctx, prepared.operation);
+      return isPartialCommitResult(result)
+        ? result
+        : { kind: "receipt", receipt: result };
     },
   });
 }

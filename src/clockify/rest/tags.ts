@@ -22,7 +22,7 @@ export function makeTagRest(core: RestCore, workspaceId: string): TagPort {
       return t ? map(t) : null;
     },
     async createTag({ name }) {
-      const t = await core.call("api", "POST", `${ws}/tags`, { name });
+      const t = await core.mutate("api", "POST", `${ws}/tags`, { name });
       return map(t);
     },
     async updateTag(id, patch) {

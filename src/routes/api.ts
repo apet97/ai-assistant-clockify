@@ -472,7 +472,7 @@ export function apiRouter(deps: AppDeps): Router {
       // JSON (the stream is never opened), and a denied confirm never burns the nonce.
       return res.status(committed.status).json(committed.body);
     }
-    const { receipt, undoId, agentState, installation, persistenceDegraded } = committed;
+    const { receipt, partialResult, undoId, agentState, installation, persistenceDegraded } = committed;
 
     // Streaming confirm (?stream=1, used by the embedded UI): the committed
     // receipt flushes IMMEDIATELY so the button is responsive, then the durable
@@ -484,22 +484,32 @@ export function apiRouter(deps: AppDeps): Router {
       // openNdjsonStream sets the streaming headers and fires `signal` if the
       // client drops mid-resume (see /chat/stream).
       const { write, signal } = openNdjsonStream(res);
-      write({
-        type: "receipt",
-        receipt,
-        ...(undoId ? { undo: { id: undoId } } : {}),
-        ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
-      });
-      try {
-        const resumed = await withHostCallBudget(() => runResume(
-          claims,
-          installation,
-          agentState,
+      if (partialResult) {
+        write({
+          type: "result",
+          result: { ...partialResult, ...(undoId ? { undo: { id: undoId } } : {}) },
+          ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
+        });
+      } else {
+        write({
+          type: "receipt",
           receipt,
-          (result) => write({ type: "result", result }),
-          (status) => write({ type: "status", ...status }),
-          signal,
-        ));
+          ...(undoId ? { undo: { id: undoId } } : {}),
+          ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
+        });
+      }
+      try {
+        const resumed = partialResult
+          ? undefined
+          : await withHostCallBudget(() => runResume(
+              claims,
+              installation,
+              agentState,
+              receipt,
+              (result) => write({ type: "result", result }),
+              (status) => write({ type: "status", ...status }),
+              signal,
+            ));
         if (resumed) write({ type: "reply", kind: resumed.replyKind, text: resumed.replyText });
       } catch {
         write({ type: "error", code: "resume_error", message: "The follow-up couldn't complete, but your change was applied." });
@@ -509,12 +519,15 @@ export function apiRouter(deps: AppDeps): Router {
     }
 
     // JSON path: collect the resume into the response (unchanged behavior).
-    const resumed = await withHostCallBudget(
-      () => runResume(claims, installation, agentState, receipt),
-    );
+    const resumed = partialResult
+      ? undefined
+      : await withHostCallBudget(
+          () => runResume(claims, installation, agentState, receipt),
+        );
     return res.status(receipt.ok ? 200 : 400).json({
       ok: receipt.ok,
       receipt,
+      ...(partialResult ? { result: partialResult } : {}),
       ...(undoId ? { undo: { id: undoId } } : {}),
       ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
       ...(resumed ? { resume: { reply: { kind: resumed.replyKind, text: resumed.replyText }, results: resumed.results } } : {}),

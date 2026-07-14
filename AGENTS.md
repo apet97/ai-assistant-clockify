@@ -78,7 +78,9 @@ npm run dev           # tsx src/server.ts (needs env)
   `rest-workspace.ts` (live REST adapter, `X-Addon-Token`; I/O only; per-area
   `rest/*` over `rest/core.ts`; plain/envelope/POST pagination preserves
   `ListResult.truncated`, with shared bounded-page collection in
-  `rest/list-pages.ts`; shared date normalization in `rest/wire-dates.ts`),
+  `rest/list-pages.ts`; `core.mutate` is the exactly-one-external-mutation
+  primitive used by durable workflow steps; shared date normalization in
+  `rest/wire-dates.ts`),
   `api-base.ts` (hosts from the install token claims), `service-url.ts` (strict
   Clockify-origin validation), `request-governor.ts` (per-workspace rate,
   concurrency, write, and per-turn host-call bounds).
@@ -93,8 +95,11 @@ npm run dev           # tsx src/server.ts (needs env)
   `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
-  `compose.ts` (atomic multi-step/rollback), `idempotency.ts` (dedup confirmed
-  commits), `undo.ts`, `money.ts` (the one major↔minor mapping, both ways —
+  `mutation-workflow.ts` (prepared→executing→terminal external steps; ambiguity
+  stops later dispatch), `mutation-compatibility.ts` (explicit phase 4/5
+  migration exceptions), `compose.ts` (legacy atomic multi-step/rollback),
+  `idempotency.ts` (dedup confirmed commits, including partial replay), `undo.ts`,
+  `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
   `resolve.ts` (entities), `resolve-dates.ts` (calendar + `resolveDateRange`),
   `preview-patch.ts`, all re-exported via `resolve.ts`; plus shared

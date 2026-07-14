@@ -126,10 +126,10 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     let settlementAttempts = 0;
     const { app, cookie, store } = await makeApp([DELETE_TAG], fake, (underlying) => ({
       ...underlying,
-      settleConfirmation: (...args: Parameters<Store["settleConfirmation"]>) => {
+      settleConfirmedOperation: (...args: Parameters<Store["settleConfirmedOperation"]>) => {
         settlementAttempts += 1;
         if (settlementAttempts === 1) throw new Error("db busy");
-        return underlying.settleConfirmation(...args);
+        return underlying.settleConfirmedOperation(...args);
       },
     }));
 
@@ -161,7 +161,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     let settlementAttempts = 0;
     const { app, cookie, store } = await makeApp([DELETE_TAG], fake, (underlying) => ({
       ...underlying,
-      settleConfirmation: () => {
+      settleConfirmedOperation: () => {
         settlementAttempts += 1;
         throw new Error("db unavailable");
       },

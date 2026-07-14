@@ -10,6 +10,8 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
+import { getAction } from "../../src/harness/catalog.js";
+import { successReceipt } from "../../src/harness/receipts.js";
 
 /**
  * r2-new-ops-layer-04: the per-session chat rate limit exists to damp the cost
@@ -24,6 +26,7 @@ const ADDON_KEY = "ai-assistant";
 
 let stores: Store[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const s of stores) s.close();
   stores = [];
 });
@@ -32,6 +35,7 @@ interface TestApp {
   app: Express;
   model: ScriptedToolModel;
   cookie: string;
+  store: Store;
 }
 
 async function makeApp(
@@ -66,7 +70,7 @@ async function makeApp(
   const res = await request(app).get("/component/assistant").query({ auth_token: token });
   const setCookie = res.headers["set-cookie"];
   const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
-  return { app, model, cookie };
+  return { app, model, cookie, store };
 }
 
 type ResultItem = { kind: string; previewId?: string; nonce?: string };
@@ -77,7 +81,92 @@ function parseEvents(body: string): Array<Record<string, unknown>> {
   return body.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+const CREATE_INVOICE: ToolCompletion = {
+  text: "",
+  toolCalls: [{ id: "r1", name: "clockify_invoices_create", arguments: { clientName: "Acme" } }],
+};
+
 describe("confirm-resume is charged against the chat rate budget (r2-new-ops-layer-04)", () => {
+  it("persists and exposes a confirmed partial without resuming the model", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "client-1", name: "Acme" }] });
+    const action = getAction("clockify_invoices_create")!;
+    vi.spyOn(action, "commit").mockResolvedValue({
+      kind: "partial",
+      receipt: successReceipt({
+        action: action.name,
+        changed: { created: [{ type: "invoice", id: "invoice-partial" }] },
+      }),
+      message: "The invoice exists, but a later step failed.",
+      recovery: { hint: "Review the invoice before retrying.", retryable: false },
+    });
+    const { app, model, cookie, store } = await makeApp(
+      [CREATE_INVOICE, { text: "must not run", toolCalls: [] }],
+      fake,
+      10,
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for Acme" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0]!;
+    const callsAfterChat = (model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(confirm.status).toBe(200);
+    expect(confirm.body).toMatchObject({
+      ok: true,
+      receipt: { ok: true, action: action.name },
+      result: { kind: "partial", message: "The invoice exists, but a later step failed." },
+      undo: { id: expect.any(String) },
+    });
+    expect(confirm.body.resume).toBeUndefined();
+    expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
+    const pending = store.getPendingConfirmation(preview.previewId!);
+    expect(pending?.status).toBe("partial");
+    expect(store.getActionResult(pending!.actionResultId!)).toMatchObject({ kind: "partial" });
+    expect(store.getUndoRecord(confirm.body.undo.id)).toMatchObject({
+      status: "available",
+      reversal: [{ type: "invoice", id: "invoice-partial" }],
+    });
+  });
+
+  it("streams partial truth before any clean-success receipt and skips resume", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "client-1", name: "Acme" }] });
+    const action = getAction("clockify_invoices_create")!;
+    vi.spyOn(action, "commit").mockResolvedValue({
+      kind: "partial",
+      receipt: successReceipt({
+        action: action.name,
+        changed: { created: [{ type: "invoice", id: "invoice-partial-stream" }] },
+      }),
+      message: "The invoice exists, but a later step failed.",
+      recovery: { hint: "Review the invoice before retrying.", retryable: false },
+    });
+    const { app, model, cookie } = await makeApp(
+      [CREATE_INVOICE, { text: "must not run", toolCalls: [] }],
+      fake,
+      10,
+    );
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create an invoice for Acme" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0]!;
+    const callsAfterChat = (model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm?stream=1`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    const events = parseEvents(confirm.text);
+    expect(events[0]).toMatchObject({
+      type: "result",
+      result: { kind: "partial", undo: { id: expect.any(String) } },
+    });
+    expect(events.some((event) => event.type === "receipt")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
+  });
+
   it("commits but SKIPS the paid resume loop when the session budget is exhausted (JSON path)", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, model, cookie } = await makeApp(

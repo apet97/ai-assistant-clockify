@@ -10,6 +10,23 @@ function res(body: unknown, status = 200): Response {
 }
 
 describe("rest core host routing + auth", () => {
+  it("exposes a one-dispatch mutation primitive and rejects reads before I/O", async () => {
+    const fetchImpl = vi.fn(async () => res({ id: "tag-1" }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(core.mutate("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
+      .resolves.toEqual({ id: "tag-1" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    await expect(core.mutate("api", "GET", "/workspaces/ws-1/tags"))
+      .rejects.toThrow(/mutation method/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("routes /reports/* to the reports host and keeps the add-on auth header", async () => {
     const fetchImpl = vi.fn(async () => res({ ok: true }));
     const core = createRestCore({

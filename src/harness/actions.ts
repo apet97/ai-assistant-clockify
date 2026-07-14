@@ -1,18 +1,20 @@
 import { getAction, suggestActionNames } from "./catalog.js";
-import { isAtomicLedger } from "./action.js";
+import { isAtomicLedger, isPartialCommitResult } from "./action.js";
 import type {
   ActionContext,
   ActionResult,
   AtomicIdempotencyLedger,
   ClaimState,
   ConfirmableOperation,
+  CommitResult,
+  ExternalMutationPlan,
   IdempotencyLedger,
 } from "./action.js";
 import { canRead, canWrite } from "./permissions.js";
 import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
-import { idempotencyScopeKey, markReplayed } from "./idempotency.js";
+import { idempotencyScopeKey, markCommitReplayed, markReplayed } from "./idempotency.js";
 import { formatZodIssues, unknownArgumentPaths } from "./arg-shapes.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../clockify/write-outcome.js";
 
@@ -123,15 +125,32 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     return action.handler(input.context, parsed.data);
   }
   if (isSafeWrite(action.risks)) {
+    let prepared: Awaited<ReturnType<NonNullable<typeof action.prepareSafeWrite>>> | undefined;
+    try {
+      prepared = await action.prepareSafeWrite?.(input.context, parsed.data);
+    } catch (error) {
+      return { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
+    }
     const authorityError = await input.context.authorizeWrite?.(action.name);
     if (authorityError) return { kind: "receipt", receipt: authorityError };
     let operationId: string | undefined;
     try {
       if (input.context.operationJournal) {
-        operationId = input.context.operationJournal.prepare(action.name, parsed.data);
+        operationId = input.context.operationJournal.prepare(
+          action.name,
+          prepared?.operation ?? parsed.data,
+          prepared?.mutationPlan,
+        );
         input.context.operationJournal.markExecuting(operationId);
       }
-      const result = await action.handler(input.context, parsed.data);
+      const executed = prepared && action.executeSafeWrite
+        ? await action.executeSafeWrite(input.context, prepared.operation)
+        : undefined;
+      const result: ActionResult = executed
+        ? isPartialCommitResult(executed)
+          ? executed
+          : { kind: "receipt", receipt: executed }
+        : await action.handler(input.context, parsed.data);
       return settleImmediateOperation(input.context, operationId, result);
     } catch (error) {
       const result: ActionResult = { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
@@ -177,10 +196,18 @@ function settleImmediateOperation(ctx: ActionContext, operationId: string | unde
  * "current policy still allows the operation") and runs the action's `commit`.
  * Never throws — a failing commit becomes an error receipt.
  */
+export function commitConfirmedOperation(
+  ctx: ActionContext,
+  operation: ConfirmableOperation & { mutationPlan: ExternalMutationPlan },
+): Promise<CommitResult>;
+export function commitConfirmedOperation(
+  ctx: ActionContext,
+  operation: ConfirmableOperation,
+): Promise<SuccessReceipt | ErrorReceipt>;
 export async function commitConfirmedOperation(
   ctx: ActionContext,
   operation: ConfirmableOperation,
-): Promise<SuccessReceipt | ErrorReceipt> {
+): Promise<CommitResult> {
   const action = getAction(operation.actionName);
   if (!action || !action.commit) {
     return errorReceipt({
@@ -237,7 +264,7 @@ export async function commitConfirmedOperation(
 type CommitFn = (
   ctx: ActionContext,
   operation: ConfirmableOperation,
-) => Promise<SuccessReceipt | ErrorReceipt>;
+) => Promise<CommitResult>;
 
 /**
  * LEGACY PATH (2-method ledgers, tests only — the route always wires the atomic
@@ -252,11 +279,11 @@ async function commitViaLegacyLedger(
   operation: ConfirmableOperation,
   ledger: IdempotencyLedger,
   scopedKey: string,
-): Promise<SuccessReceipt | ErrorReceipt> {
+): Promise<CommitResult> {
   const prior = ledger.lookup(scopedKey);
   if (prior) return markReplayed(prior);
   const receipt = await runCommit(commit, ctx, operation);
-  if (receipt.ok) {
+  if (!isPartialCommitResult(receipt) && receipt.ok) {
     try {
       ledger.record(scopedKey, receipt);
     } catch (error) {
@@ -283,7 +310,7 @@ async function commitViaAtomicLedger(
   operation: ConfirmableOperation,
   ledger: AtomicIdempotencyLedger,
   scopedKey: string,
-): Promise<SuccessReceipt | ErrorReceipt> {
+): Promise<CommitResult> {
   let state: ClaimState;
   try {
     state = ledger.claim(scopedKey);
@@ -291,7 +318,7 @@ async function commitViaAtomicLedger(
     return ledgerUnavailable(operation.actionName);
   }
   if (state === "replay") {
-    let prior: SuccessReceipt | undefined;
+    let prior: CommitResult | undefined;
     try {
       prior = ledger.lookupCompleted(scopedKey);
     } catch {
@@ -299,7 +326,7 @@ async function commitViaAtomicLedger(
       // already happened and is recorded — report in-progress, never re-commit.
       return commitInProgress(operation.actionName);
     }
-    return prior ? markReplayed(prior) : commitInProgress(operation.actionName);
+    return prior ? markCommitReplayed(prior) : commitInProgress(operation.actionName);
   }
   if (state === "in_flight") return commitInProgress(operation.actionName);
   // A crash-orphaned claim within the dedup window: a prior commit died between
@@ -332,14 +359,18 @@ async function commitViaAtomicLedger(
       }, CLAIM_HEARTBEAT_MS)
     : undefined;
   heartbeat?.unref?.();
-  let receipt: SuccessReceipt | ErrorReceipt;
+  let receipt: CommitResult;
   try {
     receipt = await runCommit(commit, ctx, operation);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
   }
   try {
-    if (receipt.ok) ledger.fill(scopedKey, receipt);
+    // Partial proves that at least one host effect happened. Fill the claim so
+    // in-memory ledgers can replay it; production defers this fill and atomically
+    // binds the canonical result during confirmation settlement.
+    if (isPartialCommitResult(receipt)) ledger.fill(scopedKey, receipt);
+    else if (receipt.ok) ledger.fill(scopedKey, receipt);
     else if (receipt.code !== "commit_outcome_unknown") ledger.release(scopedKey);
   } catch (error) {
     logLedgerBookkeepingFailure(error);
@@ -383,7 +414,7 @@ async function runCommit(
   commit: CommitFn,
   ctx: ActionContext,
   operation: ConfirmableOperation,
-): Promise<SuccessReceipt | ErrorReceipt> {
+): Promise<CommitResult> {
   try {
     return await commit(ctx, operation);
   } catch (error) {

@@ -590,7 +590,7 @@ describe("schema v4 canonical-result ownership", () => {
       (row) => row.name,
     );
     expect(tables).toEqual(expect.arrayContaining(["turn_run_result_links", "chat_message_result_links"]));
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     db.close();
   });
 
@@ -606,6 +606,138 @@ describe("schema v4 canonical-result ownership", () => {
          ) VALUES ('too-big', 'w', 'a', 's', 'x', 'x', ?, 'x', '2026-01-01', '2026-01-02')`,
       ).run(Buffer.alloc(1_000_001)),
     ).toThrow(/CHECK constraint failed/);
+    db.close();
+  });
+});
+
+describe("schema v5 durable mutation substrate", () => {
+  it("adds durable normalized operation and reconciliation columns and reruns safely", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+
+    const operationColumns = (db.prepare("PRAGMA table_info(operation_runs)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
+    expect(operationColumns).toEqual(expect.arrayContaining([
+      "operation_json",
+      "reconciled_at",
+      "reconciliation_json",
+      "capability_hash",
+    ]));
+
+    const stepColumns = (db.prepare("PRAGMA table_info(operation_steps)").all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    );
+    expect(stepColumns).toEqual(expect.arrayContaining([
+      "plan_step_id",
+      "kind",
+      "effect_json",
+      "dispatched_at",
+      "settled_at",
+      "compensates_step_id",
+    ]));
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
+    db.close();
+  });
+
+  it("preserves legacy operation rows with a valid empty normalized intent", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    db.pragma("foreign_keys = OFF");
+    db.exec(`
+      DROP INDEX IF EXISTS idx_operation_steps_operation;
+      ALTER TABLE operation_steps RENAME TO operation_steps_v5_fixture;
+      CREATE TABLE operation_steps (
+        id TEXT PRIMARY KEY,
+        operation_id TEXT NOT NULL,
+        step_index INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        external_id TEXT,
+        fingerprint TEXT,
+        detail_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE (operation_id, step_index),
+        FOREIGN KEY (operation_id) REFERENCES operation_runs(id)
+      );
+      DROP TABLE operation_steps_v5_fixture;
+      ALTER TABLE operation_runs RENAME TO operation_runs_v5_fixture;
+      CREATE TABLE operation_runs (
+        id TEXT PRIMARY KEY,
+        request_id TEXT,
+        confirmation_id TEXT,
+        session_id TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        admin_user_id TEXT NOT NULL,
+        action_name TEXT NOT NULL,
+        action_fingerprint TEXT NOT NULL,
+        catalog_hash TEXT NOT NULL,
+        operation_hash TEXT NOT NULL,
+        status TEXT NOT NULL,
+        action_result_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      DROP TABLE operation_runs_v5_fixture;
+    `);
+    db.pragma("user_version = 4");
+    db.exec(`
+      INSERT INTO operation_runs (
+        id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
+        action_name, action_fingerprint, catalog_hash, operation_hash, status,
+        action_result_id, created_at, updated_at
+      ) VALUES (
+        'legacy-operation', NULL, NULL, 'session', 'workspace', 'admin',
+        'clockify_tags_create', 'action', 'catalog', 'operation', 'prepared',
+        NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'
+      );
+      INSERT INTO operation_steps (
+        id, operation_id, step_index, name, status, external_id, fingerprint,
+        detail_json, created_at, updated_at
+      ) VALUES (
+        'legacy-step', 'legacy-operation', 0, 'create-tag', 'succeeded',
+        'tag-legacy', 'target-legacy', '{"legacy":true}',
+        '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:01.000Z'
+      );
+      INSERT INTO operation_steps (
+        id, operation_id, step_index, name, status, external_id, fingerprint,
+        detail_json, created_at, updated_at
+      ) VALUES (
+        'legacy-step-2', 'legacy-operation', 1, 'create-tag', 'prepared',
+        NULL, NULL, NULL,
+        '2026-01-01T00:00:01.000Z', '2026-01-01T00:00:01.000Z'
+      );
+    `);
+    db.pragma("foreign_keys = ON");
+
+    migrate(db);
+    migrate(db);
+
+    const row = db.prepare(
+      "SELECT operation_json, reconciled_at, reconciliation_json, capability_hash FROM operation_runs WHERE id = ?",
+    ).get("legacy-operation") as Record<string, unknown>;
+    expect(JSON.parse(row.operation_json as string)).toEqual({});
+    expect(row).toMatchObject({ reconciled_at: null, reconciliation_json: null, capability_hash: null });
+    expect(db.prepare(
+      `SELECT plan_step_id, kind, status, external_id, target_fingerprint,
+              effect_json, detail_json, dispatched_at, settled_at
+         FROM operation_steps WHERE id = 'legacy-step'`,
+    ).get()).toEqual({
+      plan_step_id: "create-tag:0",
+      kind: "primary",
+      status: "succeeded",
+      external_id: "tag-legacy",
+      target_fingerprint: "target-legacy",
+      effect_json: null,
+      detail_json: '{"legacy":true}',
+      dispatched_at: "2026-01-01T00:00:01.000Z",
+      settled_at: "2026-01-01T00:00:01.000Z",
+    });
+    expect(db.prepare(
+      "SELECT plan_step_id, status FROM operation_steps WHERE id = 'legacy-step-2'",
+    ).get()).toEqual({ plan_step_id: "create-tag:1", status: "prepared" });
     db.close();
   });
 });

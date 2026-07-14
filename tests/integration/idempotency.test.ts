@@ -3,9 +3,11 @@ import { executeAction, commitConfirmedOperation } from "../../src/harness/actio
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { IdempotencyLedger } from "../../src/harness/idempotency.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
-import type { ActionContext, AtomicIdempotencyLedger, ConfirmableOperation } from "../../src/harness/catalog.js";
+import type { ActionContext, AtomicIdempotencyLedger, CommitResult, ConfirmableOperation } from "../../src/harness/catalog.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
+import { getAction } from "../../src/harness/catalog.js";
+import { successReceipt } from "../../src/harness/receipts.js";
 
 function memoryLedger(): IdempotencyLedger {
   const map = new Map<string, SuccessReceipt>();
@@ -38,6 +40,51 @@ async function previewInvoice(ctx: ActionContext, clientName: string): Promise<C
 }
 
 describe("idempotent commits (Phase 5)", () => {
+  it("keeps a partial claim terminal so an identical confirmation cannot repeat earlier effects", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
+    let completed: CommitResult | undefined;
+    const release = vi.fn();
+    const ledger: AtomicIdempotencyLedger = {
+      lookup: () => undefined,
+      record: () => undefined,
+      claim: () => completed ? "replay" : "won",
+      lookupCompleted: () => completed,
+      fill: vi.fn((_key, result) => { completed = result; }),
+      release,
+    };
+    const ctx = ctxWith(fake, ledger);
+    const op = await previewInvoice(ctx, "qwen");
+    const planned = {
+      ...op,
+      mutationPlan: { mode: "single" as const, steps: [{ id: "create-invoice", kind: "primary" as const }] },
+    };
+    const action = getAction(op.actionName)!;
+    const partialReceipt = successReceipt({
+      action: op.actionName,
+      changed: { created: [{ type: "invoice", id: "invoice-partial" }] },
+    });
+    const dispatch = vi.spyOn(action, "commit").mockResolvedValue({
+      kind: "partial",
+      receipt: partialReceipt,
+      message: "Invoice exists, but enrichment failed.",
+      recovery: { hint: "Review the invoice before retrying.", retryable: false },
+    });
+    try {
+      const first = await commitConfirmedOperation(ctx, planned);
+      const second = await commitConfirmedOperation(ctx, planned);
+
+      expect(first).toMatchObject({ kind: "partial", receipt: { ok: true } });
+      expect(second).toMatchObject({
+        kind: "partial",
+        receipt: { ok: true, warnings: [{ code: "idempotent_replay" }] },
+      });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      dispatch.mockRestore();
+    }
+  });
+
   it("keeps the operation claim after an ambiguous write so it cannot be retried automatically", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
     const clockify = new Proxy(fake.client, {

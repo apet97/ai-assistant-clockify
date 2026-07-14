@@ -482,6 +482,18 @@ describe("store", () => {
       operation: { actionName: "a", featureGroup: "work_structure", risks: ["destructive"], payload: {} },
       sessionSecret: "s",
     });
+    store.prepareOperationRun({
+      id: created.record.operationId,
+      confirmationId: created.record.id,
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "a",
+      actionFingerprint: created.record.actionFingerprint,
+      catalogHash: created.record.catalogHash,
+      operationHash: created.record.operationHash,
+      operation: created.record.operation,
+    });
     store.savePendingConfirmation(created.record);
     expect(store.markConfirmationExecuting(created.previewId)).toBe(true);
     const receipt = { ok: true, action: "a" };

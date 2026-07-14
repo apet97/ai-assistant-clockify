@@ -3,6 +3,7 @@ import { createStore, CLAIM_TTL_MS, IDEMPOTENCY_RETENTION_MS, type Store } from 
 import { CLAIM_HEARTBEAT_MS } from "../../src/harness/actions.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
+import { isPartialCommitResult, type CommitResult } from "../../src/harness/action.js";
 
 const receipt: SuccessReceipt = { ok: true, action: "clockify_invoices_create", entity: "invoice" };
 const WS = "ws-1";
@@ -22,6 +23,9 @@ const resultRef = (target: Store, value = receipt) => target.recordActionResult(
 const record = (target: Store, key: string, committedAt: number, workspaceId = WS, adminUserId = ADMIN): void => {
   target.recordIdempotency(key, workspaceId, adminUserId, resultRef(target), committedAt);
 };
+
+const commitAction = (result: CommitResult | undefined): string | undefined =>
+  result ? (isPartialCommitResult(result) ? result.receipt.action : result.action) : undefined;
 
 describe("store idempotency ledger", () => {
   it("returns a recorded receipt only within the window", () => {
@@ -72,6 +76,28 @@ describe("store atomic idempotency claim", () => {
   const claim = (key: string, claimedAt = T, completedNotBefore = T, claimNotBefore = T - 1) =>
     store!.claimIdempotency(key, WS, ADMIN, claimedAt, completedNotBefore, claimNotBefore);
 
+  it("replays a canonical partial without flattening it to a clean receipt", () => {
+    store = createStore(":memory:");
+    expect(claim("partial-key")).toBe("won");
+    const partial = {
+      kind: "partial" as const,
+      receipt,
+      message: "Created the invoice before enrichment failed.",
+      recovery: { hint: "Review the invoice.", retryable: false },
+    };
+    const ref = store.recordActionResult({
+      workspaceId: WS,
+      adminUserId: ADMIN,
+      actionName: receipt.action,
+      status: "partial",
+      result: partial,
+    });
+    store.fillIdempotency("partial-key", WS, ADMIN, ref, T);
+
+    expect(claim("partial-key")).toBe("replay");
+    expect(store.claimIdempotencyReceipt("partial-key", WS, ADMIN)).toEqual(partial);
+  });
+
   it("three-state machine: won → in_flight → replay → (release) → won", () => {
     store = createStore(":memory:");
     // First claim wins; the row is CLAIMED (receipt NULL).
@@ -84,7 +110,7 @@ describe("store atomic idempotency claim", () => {
     store.fillIdempotency("k", WS, ADMIN, resultRef(store), T);
     // Now a same-key claim within window is a replay, and the receipt is readable.
     expect(claim("k")).toBe("replay");
-    expect(store.claimIdempotencyReceipt("k", WS, ADMIN)?.action).toBe("clockify_invoices_create");
+    expect(commitAction(store.claimIdempotencyReceipt("k", WS, ADMIN))).toBe("clockify_invoices_create");
     expect(store.lookupIdempotency("k", WS, ADMIN, T)?.action).toBe("clockify_invoices_create");
   });
 
@@ -100,14 +126,14 @@ describe("store atomic idempotency claim", () => {
     expect(claim("k")).toBe("won");
     store.fillIdempotency("k", WS, ADMIN, resultRef(store), T);
     store.releaseIdempotency("k", WS, ADMIN); // stray release after fill must be a no-op
-    expect(store.claimIdempotencyReceipt("k", WS, ADMIN)?.action).toBe("clockify_invoices_create");
+    expect(commitAction(store.claimIdempotencyReceipt("k", WS, ADMIN))).toBe("clockify_invoices_create");
   });
 
   it("STALE-ROW RECLAIM: an out-of-window COMPLETED row is swept, not treated as a blocking conflict", () => {
     store = createStore(":memory:");
     // A completed row at T.
     record(store, "k", T);
-    expect(store.claimIdempotencyReceipt("k", WS, ADMIN)?.action).toBe("clockify_invoices_create");
+    expect(commitAction(store.claimIdempotencyReceipt("k", WS, ADMIN))).toBe("clockify_invoices_create");
     // Claim with completedNotBefore = T + 1 → the row at T is now OUT of window.
     // The claim's stale-sweep deletes it and the fresh claim wins.
     expect(claim("k", T + 100, T + 1)).toBe("won");
@@ -151,20 +177,32 @@ describe("store atomic idempotency claim", () => {
   it("binds a won claim to its confirmation so settlement completes both rows atomically", () => {
     store = createStore(":memory:", { encryptionKey: "k" });
     const session = store.createSession({ workspaceId: WS, adminUserId: ADMIN });
+    const operation = {
+      operationId: "op-idempotent-confirmation",
+      actionName: "clockify_invoices_create",
+      featureGroup: "invoices" as const,
+      risks: ["high_risk_write" as const],
+      payload: { clientId: "client-1" },
+    };
     const created = createPendingConfirmation({
       sessionId: session.id,
       workspaceId: WS,
       adminUserId: ADMIN,
       risk: ["high_risk_write"],
       preview: { summary: "Create invoice" },
-      operation: {
-        operationId: "op-idempotent-confirmation",
-        actionName: "clockify_invoices_create",
-        featureGroup: "invoices",
-        risks: ["high_risk_write"],
-        payload: { clientId: "client-1" },
-      },
+      operation,
       sessionSecret: "secret",
+    });
+    store.prepareOperationRun({
+      id: operation.operationId,
+      sessionId: session.id,
+      workspaceId: WS,
+      adminUserId: ADMIN,
+      actionName: operation.actionName,
+      actionFingerprint: "test-action-fingerprint",
+      catalogHash: "test-catalog-hash",
+      operationHash: "test-operation-hash",
+      operation,
     });
     store.savePendingConfirmation(created.record);
     expect(store.markConfirmationExecuting(created.record.id)).toBe(true);
@@ -228,7 +266,7 @@ describe("claim heartbeat keeps a long multi-call commit's claim from being swep
     expect(claim("done", T, T - 1)).toBe("won");
     store.fillIdempotency("done", WS, ADMIN, resultRef(store), T);
     store.touchIdempotencyClaim("done", WS, ADMIN, T + 999_999); // no-op on a filled row
-    expect(store.claimIdempotencyReceipt("done", WS, ADMIN)?.action).toBe("clockify_invoices_create");
+    expect(commitAction(store.claimIdempotencyReceipt("done", WS, ADMIN))).toBe("clockify_invoices_create");
     expect(claim("done", T + 1, T)).toBe("replay"); // still a normal completed replay
   });
 });

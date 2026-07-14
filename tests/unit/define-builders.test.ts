@@ -142,7 +142,7 @@ describe("defineRiskyAction", () => {
     };
     const receipt = await action.commit!(ctx, operation);
     expect(seen).toEqual({ id: "p9" });
-    expect(receipt.ok).toBe(true);
+    expect(receipt).toMatchObject({ ok: true });
   });
 
   it("(iv) idempotencyKey unwraps operation.payload", async () => {

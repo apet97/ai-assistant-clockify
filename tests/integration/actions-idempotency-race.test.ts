@@ -6,7 +6,7 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import { getAction, type ActionContext, type ConfirmableOperation } from "../../src/harness/catalog.js";
 import { idempotencyScopeKey } from "../../src/harness/idempotency.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
-import type { AtomicIdempotencyLedger } from "../../src/harness/action.js";
+import { isPartialCommitResult, type AtomicIdempotencyLedger, type CommitResult } from "../../src/harness/action.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 
@@ -21,13 +21,14 @@ const NOW = new Date("2026-06-05T00:00:00.000Z");
 const WS = "ws-1";
 const ADMIN = "admin-1";
 
-function resultRef(store: Store, receipt: SuccessReceipt) {
+function resultRef(store: Store, result: CommitResult) {
+  const receipt = isPartialCommitResult(result) ? result.receipt : result;
   return store.recordActionResult({
     workspaceId: WS,
     adminUserId: ADMIN,
     actionName: receipt.action,
-    status: "succeeded",
-    result: { kind: "receipt", receipt },
+    status: isPartialCommitResult(result) ? "partial" : receipt.ok ? "succeeded" : "definitive_failed",
+    result: isPartialCommitResult(result) ? result : { kind: "receipt", receipt },
   });
 }
 

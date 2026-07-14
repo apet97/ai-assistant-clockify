@@ -164,6 +164,27 @@ describe("dispatchStreamEvent", () => {
     expect(log).toContain("results:receipt"); // rendered immediately
   });
 
+  it("forwards a streamed partial with its undo handle intact", () => {
+    const rendered: ChatResult[] = [];
+    const { hooks } = dispatchRecorder();
+    hooks.onResults = (results) => rendered.push(...results);
+    const buffer = new PreviewBuffer((results) => hooks.onResults(results));
+    dispatchStreamEvent({
+      type: "result",
+      result: {
+        kind: "partial",
+        receipt: { ok: true, action: "clockify_invoices_create" },
+        message: "Invoice created; enrichment failed.",
+        recovery: { hint: "Review the invoice.", retryable: false },
+        undo: { id: "undo-partial" },
+      },
+    }, hooks, buffer, "fallback");
+    expect(rendered).toMatchObject([{
+      kind: "partial",
+      undo: { id: "undo-partial" },
+    }]);
+  });
+
   it("a reply FLUSHES the buffer THEN appends the reply text (order matters)", () => {
     const { hooks, log } = dispatchRecorder();
     const buffer = new PreviewBuffer((r) => hooks.onResults(r));

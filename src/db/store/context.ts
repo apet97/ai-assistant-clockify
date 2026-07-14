@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import type { RiskLabel } from "../../harness/risk.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../../harness/receipts.js";
 import type { ActionResultRef } from "../action-results.js";
+import type { ExternalMutationPlan } from "../../harness/action.js";
 
 /**
  * Shared primitives every store concern module needs. Built once inside
@@ -158,12 +159,59 @@ export interface PrepareOperationRunInput {
   actionFingerprint: string;
   catalogHash: string;
   operationHash: string;
+  /** Normalized nonsecret wire intent. Legacy callers omit it explicitly. */
+  operation?: unknown;
+  mutationPlan?: ExternalMutationPlan;
+  /** Reserved for the persisted intent-capability phase. */
+  capabilityHash?: string;
 }
 
 export interface OperationRun extends Omit<PrepareOperationRunInput, "id"> {
   id: string;
   status: OperationRunStatus;
   actionResultId?: string;
+  reconciledAt?: string;
+  reconciliation?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type OperationStepKind = "primary" | "compensation";
+export type OperationStepStatus =
+  | "prepared"
+  | "executing"
+  | "succeeded"
+  | "definitive_failed"
+  | "outcome_unknown"
+  | "compensating"
+  | "compensated"
+  | "compensation_failed"
+  | "skipped";
+
+export interface PrepareOperationStepInput {
+  id?: string;
+  operationId: string;
+  planStepId: string;
+  index: number;
+  name: string;
+  kind: OperationStepKind;
+  targetFingerprint?: string;
+  compensatesStepId?: string;
+}
+
+export interface PrepareCompensationStepInput
+  extends Omit<PrepareOperationStepInput, "kind" | "compensatesStepId"> {
+  compensatesStepId: string;
+}
+
+export interface OperationStep extends Omit<PrepareOperationStepInput, "id"> {
+  id: string;
+  status: OperationStepStatus;
+  externalId?: string;
+  effect?: unknown;
+  detail?: unknown;
+  dispatchedAt?: string;
+  settledAt?: string;
   createdAt: string;
   updatedAt: string;
 }

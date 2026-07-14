@@ -325,7 +325,10 @@ export function buildConfirmationStore(ctx: StoreContext): {
         if (!row) throw new Error("confirmation_not_executing");
         if (!row.action_result_id) throw new Error("confirmation_result_not_found");
         const actionResultId = row.action_result_id;
-        const canonicalResult = { kind: "receipt", receipt: result };
+        const canonicalResult = result && typeof result === "object" &&
+          (result as { kind?: unknown }).kind === "partial"
+          ? result
+          : { kind: "receipt", receipt: result };
         const summary = buildActionResultSummary(actionResultId, canonicalResult);
         const settledAt = nowIso();
         const resultUpdate = db.prepare(
@@ -349,10 +352,12 @@ export function buildConfirmationStore(ctx: StoreContext): {
            WHERE id = ? AND status = 'executing'`,
         ).run(status, actionResultId, actionResultJson(summary), id);
         if (update.changes !== 1) throw new Error("confirmation_not_executing");
-        db.prepare(
+        const operationUpdate = db.prepare(
           `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
-             WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)`,
-        ).run(status, actionResultId, settledAt, id);
+             WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)
+               AND status = 'executing' AND action_result_id = ?`,
+        ).run(status, actionResultId, settledAt, id, actionResultId);
+        if (operationUpdate.changes !== 1) throw new Error("operation_not_found");
         if (row.idempotency_key) {
           if (status === "definitive_failed") {
             db.prepare(
