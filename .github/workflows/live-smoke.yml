@@ -28,7 +28,7 @@ jobs:
         run: |
           mkdir -p /tmp/ai-assistant-live-smoke-evidence
           printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SMOKE_EVIDENCE_PATH}"
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -63,7 +63,7 @@ jobs:
         run: |
           mkdir -p /tmp/ai-assistant-live-smoke-evidence
           printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SWEEP_EVIDENCE_PATH}"
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
