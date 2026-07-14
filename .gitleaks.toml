@@ -1,0 +1,24 @@
+title = "AI Assistant Gitleaks policy"
+
+[extend]
+useDefault = true
+
+# These two AND-scoped exceptions cover only the historical, documented
+# placeholder and fixed unit-test values that Gitleaks 8.24.3 classifies as the
+# generic-api-key rule. Default rules remain active for every other line/path.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Documented previous encryption-key placeholder"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^\.env\.example$''']
+regexes = ['''DATA_ENCRYPTION_KEY_PREVIOUS=replace-with-the-previous-secret-min-32-chars''']
+
+[[rules.allowlists]]
+description = "Fixed encryption-key unit-test fixtures"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/unit/config\.test\.ts$''']
+regexes = ['''DATA_ENCRYPTION_KEY(_PREVIOUS)?: "(0123456789abcdef0123456789abcdef|fedcba9876543210fedcba9876543210)"''']

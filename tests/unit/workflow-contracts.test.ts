@@ -8,6 +8,11 @@ const readWorkflow = (name: string): string => readFileSync(
   "utf8",
 );
 
+const readRepoFile = (name: string): string => readFileSync(
+  fileURLToPath(new URL(`../../${name}`, import.meta.url)),
+  "utf8",
+);
+
 const expectRemoteActionsPinned = (workflow: string): void => {
   const uses = [...workflow.matchAll(/^\s*-?\s*uses:\s*([^\s#]+)/gm)].map((match) => match[1]);
   expect(uses.length).toBeGreaterThan(0);
@@ -32,6 +37,21 @@ describe("GitHub Actions workflow contracts", () => {
       /uses:\s*actions\/upload-artifact@[\s\S]*?path:\s*\|[\s\S]*?sbom\.cdx\.json[\s\S]*?evidence\/dependency-gates\/production-licenses\.json/,
     );
     expectRemoteActionsPinned(workflow);
+  });
+
+  it("keeps secret-scan exceptions line-and-path scoped while extending default rules", () => {
+    const config = readRepoFile(".gitleaks.toml");
+
+    expect(config).toMatch(/\[extend\]\s+useDefault = true/);
+    expect(config).toContain('id = "generic-api-key"');
+    expect(config.match(/condition = "AND"/g)).toHaveLength(2);
+    expect(config.match(/regexTarget = "line"/g)).toHaveLength(2);
+    expect(config).toContain("^\\.env\\.example$");
+    expect(config).toContain("^tests/unit/config\\.test\\.ts$");
+    expect(config).toContain("replace-with-the-previous-secret-min-32-chars");
+    expect(config).toContain("0123456789abcdef0123456789abcdef");
+    expect(config).toContain("fedcba9876543210fedcba9876543210");
+    expect(config).not.toMatch(/commits\s*=/);
   });
 
   it("serializes scheduled/manual live smoke in a protected sacrificial environment", () => {
