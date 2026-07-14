@@ -39,6 +39,8 @@ export interface TurnMachinery {
   ctx: ActionContext;
   results: unknown[];
   resultLinks: DurableResultLink[];
+  /** Admin-authored context that must be assembled before durable-state capping. */
+  selectionContext?: string;
   emit: (result: unknown, link: DurableResultLink) => void;
   auditAndEmitReceipt: (actionName: string, receipt: SuccessReceipt | ErrorReceipt, operationId?: string) => void;
   auditAndEmitPartial: (
@@ -69,13 +71,15 @@ export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { repl
   if (turn.kind === "interrupt") {
     // capAgentState drops (never truncates) an oversized suspension — the
     // confirm still commits, it just won't resume (the pre-agentic behavior).
+    const assembledState: AgentState = {
+      transcript: turn.transcript,
+      call: { id: turn.call.id, name: turn.call.name },
+      ...(m.selectionContext ? { selectionContext: m.selectionContext } : {}),
+    };
     m.emitPreviewFor(
       turn.preview,
       turn.operation,
-      capAgentState({
-        transcript: turn.transcript,
-        call: { id: turn.call.id, name: turn.call.name },
-      }),
+      capAgentState(assembledState),
     );
     // The truthful-preview override supplies the reply text for a pending preview.
     return { replyKind: "actions", baseText: "" };

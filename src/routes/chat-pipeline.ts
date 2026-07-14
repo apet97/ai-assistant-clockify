@@ -466,9 +466,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         operation,
         sessionSecret: deps.config.sessionSecret,
         now: now(),
-        agentState: agentState && selectionContext
-          ? { ...agentState, selectionContext }
-          : agentState,
+        agentState,
         actionFingerprint: actionFingerprint(operation.actionName),
         catalogHash: catalogHash(),
       });
@@ -526,7 +524,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       }
     };
 
-    return { ctx, results, resultLinks, emit, auditAndEmitReceipt, auditAndEmitPartial, emitPreviewFor, runAction, onStep };
+    return {
+      ctx,
+      results,
+      resultLinks,
+      selectionContext,
+      emit,
+      auditAndEmitReceipt,
+      auditAndEmitPartial,
+      emitPreviewFor,
+      runAction,
+      onStep,
+    };
   }
 
   function persistAssistantReply(
