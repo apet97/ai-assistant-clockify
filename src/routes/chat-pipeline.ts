@@ -49,7 +49,7 @@ import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
-import { selectActionsForMessage, selectionDroppedGroups, CORE_ACTION_NAMES } from "../harness/tool-select.js";
+import { selectActionsForMessage } from "../harness/tool-select.js";
 import type { Installation } from "../db/store.js";
 import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
@@ -83,13 +83,24 @@ import { bestEffort } from "./best-effort.js";
  * so the most recent user message IS the current request — the SAME text
  * `executeChatTurn` subsetted on for the initial turn (never an older history turn;
  * "first" would route the resume off a stale topic). Empty string if somehow none,
- * which `selectActionsForMessage` collapses to just the core.
+ * which `selectActionsForMessage` safely widens to the full catalog.
  */
 function lastUserMessage(transcript: ModelMessage[]): string {
   for (let i = transcript.length - 1; i >= 0; i -= 1) {
     if (transcript[i].role === "user") return transcript[i].content;
   }
   return "";
+}
+
+const MAX_SELECTION_CONTEXT_CHARS = 8_000;
+
+/** Keep the original request and latest terse clarification answer within a
+ * bounded, admin-authored-only string used solely for deterministic selection. */
+function combineSelectionContext(previous: string | undefined, message: string): string {
+  const combined = previous ? `${previous}\n\n${message}` : message;
+  if (combined.length <= MAX_SELECTION_CONTEXT_CHARS) return combined;
+  const half = Math.floor((MAX_SELECTION_CONTEXT_CHARS - 2) / 2);
+  return `${combined.slice(0, half)}\n\n${combined.slice(-half)}`;
 }
 
 /** The outcome of one chat turn, shared by the JSON route and the streaming route. */
@@ -319,6 +330,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     onStatus?: (status: { action: string; label: string }) => void,
     requestId?: string,
     calendar?: CalendarContext,
+    selectionContext?: string,
   ): TurnMachinery {
     const results: unknown[] = [];
     const resultLinks: DurableResultLink[] = [];
@@ -454,7 +466,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         operation,
         sessionSecret: deps.config.sessionSecret,
         now: now(),
-        agentState,
+        agentState: agentState && selectionContext
+          ? { ...agentState, selectionContext }
+          : agentState,
         actionFingerprint: actionFingerprint(operation.actionName),
         catalogHash: catalogHash(),
       });
@@ -521,6 +535,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     replyText: string,
     results: unknown[],
     resultLinks: DurableResultLink[],
+    clarificationContext?: string,
   ): void {
     // Persisting the assistant reply is post-execution bookkeeping: it runs AFTER
     // the turn's action(s) executed (a safe write already hit the host; a risky one
@@ -537,7 +552,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         adminUserId: claims.adminUserId,
         role: "assistant",
         content: storedContentForReply(replyText, results),
-        payload: { kind: replyKind },
+        payload: {
+          kind: replyKind,
+          ...(replyKind === "clarify" && clarificationContext
+            ? { clarificationContext }
+            : {}),
+        },
         resultLinks,
       });
     } catch (error) {
@@ -613,28 +633,27 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return undefined;
     }
     const calendar = await deps.clockifyForWorkspace(installation).getCalendarContext(claims.adminUserId).catch(() => undefined);
-    const m = createTurnMachinery(claims, installation, onResult, onStatus, undefined, calendar);
+    const resumeSelectionContext = agentState.selectionContext ?? lastUserMessage(agentState.transcript);
+    const m = createTurnMachinery(
+      claims,
+      installation,
+      onResult,
+      onStatus,
+      undefined,
+      calendar,
+      resumeSelectionContext,
+    );
     const resumeStartMs = now().getTime();
     const tracked = trackUsage(deps.modelClient, now);
-    // STEP 6: subset the resume too. When LLM_TOOL_SELECT is on, re-derive the SAME
-    // menu the initial turn used — from the user request preserved in the suspended
-    // transcript — so the resume re-sends only the relevant tools (~7K vs ~18K per
-    // round-trip) instead of the full catalog. OFF ⇒ full catalog (byte-identical to
-    // before). There is deliberately NO resume escape hatch: a resume that ends with
-    // no tool calls is the NORMAL "done" narration, so the initial-turn guard
-    // (results empty → retry full) would fire on every completion and double the cost.
-    //
-    // EXCEPTION (recall safety): a request spanning more areas than the 3-group clamp
-    // keeps would have a later step's tool DROPPED on every resume round-trip — and
-    // with no escape hatch the model would silently skip that admin-requested step.
-    // For such sprawling 4+-area requests the resume widens to the full catalog;
-    // coverage beats the token saving there, and those requests are rare. Single/dual-
-    // area turns (the common case + every eval case) stay subsetted and proven.
-    const resumeMessage = lastUserMessage(agentState.transcript);
-    const resumeTools =
-      deps.config.llmToolSelect && !selectionDroppedGroups(resumeMessage)
-        ? toolsForModel(new Set(selectActionsForMessage(resumeMessage)))
-        : toolsForModel();
+    // STEP 6: subset the resume too, using the admin-authored selection context
+    // persisted with the suspended agent state. This includes unresolved
+    // clarification context, so a terse follow-up cannot hide the original domain.
+    // Recall-risk inputs (no lexical match, non-ASCII, or >3 matched areas) already
+    // fail open to the full catalog. There is deliberately no post-resume retry: a
+    // no-tool result is the normal "done" narration and must not double provider cost.
+    const resumeTools = deps.config.llmToolSelect
+      ? toolsForModel(new Set(selectActionsForMessage(resumeSelectionContext)))
+      : toolsForModel();
     let turn: AgentTurnResult | undefined;
     try {
       turn = await runAgentTurn({
@@ -661,7 +680,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // keep using m.results so the committed receipt is never double-counted.
     const resultsForTruthfulness = receipt.ok ? [{ kind: "receipt" as const, receipt }, ...m.results] : m.results;
     const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind);
-    persistAssistantReply(claims, replyKind, replyText, m.results, m.resultLinks);
+    persistAssistantReply(
+      claims,
+      replyKind,
+      replyText,
+      m.results,
+      m.resultLinks,
+      resumeSelectionContext,
+    );
     recordTurnTelemetrySafely(claims, "resume", tracked.usage, now().getTime() - resumeStartMs);
     return { replyKind, replyText, results: m.results };
   }
@@ -920,14 +946,26 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       );
   }
 
+  /** The prior turn's unresolved, admin-authored selection context. It lives in
+   * the assistant payload (not model text), and is consumed only when that most
+   * recent assistant turn was a clarification. */
+  function unresolvedClarificationContext(sessionId: string): string | undefined {
+    const latest = deps.store.getRecentMessages(sessionId, 1, true)[0];
+    if (latest?.role !== "assistant" || !latest.payload || typeof latest.payload !== "object") return undefined;
+    const payload = latest.payload as { kind?: unknown; clarificationContext?: unknown };
+    return payload.kind === "clarify" && typeof payload.clarificationContext === "string"
+      ? payload.clarificationContext
+      : undefined;
+  }
+
   /**
    * Tool subsetting (LLM_TOOL_SELECT=1): show the model only the actions relevant
    * to THIS message (+ the always-on core), for weak-model consistency. OFF ⇒
    * undefined tools/full catalog (byte-identical). The harness still validates and
    * gates every proposed action — subsetting changes only what the model SEES.
-   * `subsetNarrowed` is true only when a domain intent matched (more than the core)
-   * vs collapsing to just the core (smalltalk) — only a narrowed turn that executed
-   * NOTHING is a possible recall miss worth a full-catalog retry.
+   * Recall-risk inputs fail open to the full catalog. `subsetNarrowed` is true only
+   * for an actual strict subset, so only a narrowed turn that executed NOTHING is a
+   * possible recall miss worth a full-catalog retry.
    */
   function deriveToolSubset(message: string): {
     subsetTools: ReturnType<typeof toolsForModel> | undefined;
@@ -938,7 +976,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return {
       subsetTools: subsetNames ? toolsForModel(subsetNames) : undefined,
       subsetCatalog: subsetNames ? catalogForModel(subsetNames) : catalogForModel(),
-      subsetNarrowed: subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size,
+      subsetNarrowed: subsetNames !== undefined && subsetNames.size < catalogForModel().length,
     };
   }
 
@@ -1013,10 +1051,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         // Native tool-calling by default (provider validates args); LLM_MODE=json
         // forces the JSON + repair path. The harness re-validates either way.
         useTools,
+        signal,
       });
     let plan;
     try {
       plan = await runPlan(subsetCatalog, subsetTools);
+      if (signal?.aborted) return { replyKind: "aborted", baseText: "" };
       // Recall escape hatch (mirrors the agentic path): a NARROWED turn that
       // proposed no action may have hidden the needed tool — re-plan ONCE with the
       // full catalog before executing (nothing has run yet → no double side effects).
@@ -1024,14 +1064,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // keep them distinct.)
       if (subsetNarrowed && plan.kind !== "actions") {
         plan = await runPlan(catalogForModel(), undefined);
+        if (signal?.aborted) return { replyKind: "aborted", baseText: "" };
       }
     } catch {
-      return { failed: true };
+      return signal?.aborted
+        ? { replyKind: "aborted", baseText: "" }
+        : { failed: true };
     }
 
     let emittedClarify = false;
     if (plan.kind === "actions" && plan.actions) {
       for (const proposed of plan.actions) {
+        if (signal?.aborted) return { replyKind: "aborted", baseText: "" };
         // The single-turn path runs each proposed action through the same
         // machinery: a throwing action becomes an audited error receipt, a
         // risky one becomes a pending preview (no agent state — no resume).
@@ -1071,6 +1115,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     signal?: AbortSignal,
     requestId?: string,
   ): Promise<ChatTurnOutcome> {
+    const priorClarificationContext = unresolvedClarificationContext(claims.sessionId);
+    const selectionContext = combineSelectionContext(priorClarificationContext, message);
     // The user message is persisted BEFORE the deterministic guards so even a
     // short-circuited turn keeps a faithful transcript record.
     deps.store.addMessage({
@@ -1088,10 +1134,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
 
     const policy = loadPolicy(claims.workspaceId, claims.adminUserId);
     const messages = buildModelHistory(claims);
-    const { subsetTools, subsetCatalog, subsetNarrowed } = deriveToolSubset(message);
+    const { subsetTools, subsetCatalog, subsetNarrowed } = deriveToolSubset(selectionContext);
 
     const calendar = await deps.clockifyForWorkspace(installation).getCalendarContext(claims.adminUserId).catch(() => undefined);
-    const m = createTurnMachinery(claims, installation, onResult, onStatus, requestId, calendar);
+    const m = createTurnMachinery(
+      claims,
+      installation,
+      onResult,
+      onStatus,
+      requestId,
+      calendar,
+      selectionContext,
+    );
 
     // Cost/latency telemetry: every model-touching turn records one row (the
     // deterministic early returns above never reach here — no model, no row).
@@ -1130,11 +1184,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     if ("failed" in turn) return modelUnavailable();
     const { replyKind, baseText } = turn;
 
-    // Client disconnected mid-turn (settleAgentTurn → "aborted"): the socket is gone,
-    // no reply will be sent, and the loop's abort guard sits before each runAction, so
-    // nothing was committed for a turn nobody is watching. Persist nothing and record
-    // nothing — both are store writes for an abandoned turn (and would otherwise be a
-    // write that can land after the request has already closed). The caller discards it.
+    // Client disconnected mid-turn (settleAgentTurn → "aborted"): the socket is gone.
+    // Both planner paths check the signal before every not-yet-dispatched action, but
+    // never pass it into a Clockify mutation once dispatch starts. Persist no abandoned
+    // reply; any earlier completed result still has its own canonical journal/receipt.
     if (replyKind === "aborted") {
       return { ok: true, replyKind, replyText: "", results: m.results, resultLinks: m.resultLinks };
     }
@@ -1143,7 +1196,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // replaces the model's text. The streaming route emits this replyText AFTER
     // the results — the truthful text isn't known until execution finishes.
     const replyText = truthfulReplyText(m.results, baseText, replyKind);
-    persistAssistantReply(claims, replyKind, replyText, m.results, m.resultLinks);
+    persistAssistantReply(
+      claims,
+      replyKind,
+      replyText,
+      m.results,
+      m.resultLinks,
+      selectionContext,
+    );
     recordTurn();
     return { ok: true, replyKind, replyText, results: m.results, resultLinks: m.resultLinks };
   }

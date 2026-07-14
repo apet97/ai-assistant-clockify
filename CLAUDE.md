@@ -39,10 +39,11 @@ workspace, and deployed.
   6604→3195ms; flash-lite p50 2560→1704ms). A recall escape hatch retries the full catalog
   when a narrowed CHAT turn does nothing (DeepSeek fired 9.1% of narrowed runs, BOTH Gemini
   tiers 0%; net still −61/−65%). The RESUME has no escape hatch, so a request spanning more areas than
-  the 3-group clamp keeps (`selectionDroppedGroups`) widens the resume to the full
-  catalog — else a later step's tool would be hidden and silently skipped (only triggers
-  for rare 4+-area requests; ≤3-area turns stay subsetted). `LLM_SEED` adds a sampling
-  seed for reproducibility. `unknown_action` errors carry a "did you mean"
+  the 3-group clamp, any non-ASCII request, or a request with no lexical match
+  fails open to the full catalog immediately. Unresolved admin-authored clarification
+  context is persisted and reused for the terse follow-up and confirm resume, so the
+  original domain is not lost. `LLM_SEED` adds a sampling seed for reproducibility.
+  `unknown_action` errors carry a "did you mean"
   (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
   pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
   (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
@@ -154,7 +155,8 @@ bug was found against the REAL API, not by reading the code.
   `src/durations.ts`.
 - `src/assistant/` — model client (`LLM_PROVIDER=http` OpenAI-compatible DeepSeek
   default, or `gemini-cli`), `prompts.ts`, `planner.ts`, `agent-loop.ts` +
-  `agent-state.ts` (the durable agentic loop).
+  `agent-state.ts` (the durable agentic loop, including bounded selection context
+  and provider cancellation).
 - `src/routes/api.ts` — chat (JSON + NDJSON stream), confirm/cancel/undo/metrics +
   `POST /chat/new` (mints a fresh session/cookie → empty transcript; the prior
   session's messages are NOT deleted — kept under retention + the audit log) + the
@@ -167,7 +169,8 @@ bug was found against the REAL API, not by reading the code.
   pure result transforms + guards in `chat-results.ts`, shared constants in
   `chat-constants.ts`. Earlier sibling helpers: `history-sanitizer.ts`
   (model-visible-history rewrite + truthful-preview text), `request-schemas.ts`
-  (Zod bodies), `consent-guard.ts` (typed-consent), `async-handler.ts`,
+  (Zod bodies), `consent-guard.ts` (typed-consent), `async-handler.ts` (session FIFO
+  owns the full async handler promise and skips disconnected queued requests),
   `best-effort.ts` (the one never-break-a-turn bookkeeping wrapper), `ndjson.ts`
   (the one NDJSON-stream setup → `{write, signal}`, used by both streaming routes).
   `src/ui/` vanilla TS chat (a11y; previews batched so "Confirm all" stays one
@@ -197,6 +200,15 @@ bug was found against the REAL API, not by reading the code.
   fails closed. Writes are journaled as prepared→executing→terminal, and transport
   failure/timeout/408/5xx/malformed success after dispatch remains
   `outcome_unknown` without automatic retry.
+- **Closed nested arguments:** unknown fields are rejected at every object depth.
+  A dynamic record is open only when its action declares that exact path in
+  `argumentOpenPaths` (array records use `memberships[]` notation). Aliases and open
+  paths are part of action fingerprints/catalog compatibility hashes, so a pending
+  confirmation cannot silently outlive a validation-contract change.
+- **Session FIFO covers settlement:** mutation routes hold their per-session FIFO
+  lock until the route, journaling, and best-effort bookkeeping promise settles —
+  never merely until the response closes. A queued request that disconnects is
+  skipped, and its fulfilled tail cannot block later requests.
 
 - **Truthful previews:** when a turn leaves pending previews, the route REPLACES
   the model's reply with deterministic "review and click Confirm" text and stores
@@ -296,12 +308,12 @@ bug was found against the REAL API, not by reading the code.
   chain another preview, never commit inline.
 - **Cooperative cancellation on client disconnect:** the two streaming routes
   (`/chat/stream`, `/confirmations/:id/confirm?stream=1`) thread an `AbortSignal`
-  (fired by `res.on("close")`) through `runAgentConversation`/`runResume` into
-  `runAgentTurn`. The loop checks it before each model call and each tool execution
-  and returns an `aborted` outcome — so when the admin closes the iframe (or a
-  proxy times out) mid-turn, no further (paid) model calls or safe writes run for a
-  turn nobody is watching. The in-flight model fetch is left to its own timeout;
-  the single-turn JSON path is unchanged.
+  (fired by `res.on("close")`) through agentic and single-turn planners into every
+  model call. HTTP abort cancels the active fetch/backoff without a provider retry;
+  Gemini sends one kill and waits for the child to close. Both planner paths check
+  cancellation before every not-yet-dispatched tool call. The signal is never
+  passed into a Clockify mutation after dispatch starts, so cancellation cannot
+  interrupt or retry an external write with an unknown outcome.
 - **Idempotent commits** (intent hash; invoices key on client+items+currency,
   excluding auto number/dates) + **undo** for creations (one-use, re-checks policy,
   reverse order). A created TASK ref carries its `projectId` on the `EntityRef`

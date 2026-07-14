@@ -20,7 +20,7 @@ export interface CliRunResult {
 }
 
 /** Injectable for tests; given the CLI args and the prompt, runs it and captures output. */
-export type CliRunner = (args: string[], prompt: string) => Promise<CliRunResult>;
+export type CliRunner = (args: string[], prompt: string, signal?: AbortSignal) => Promise<CliRunResult>;
 
 export interface GeminiCliConfig {
   /** Pin a Gemini model (passed as `-m`); when omitted the CLI router chooses. */
@@ -52,26 +52,60 @@ function flattenMessages(messages: ModelMessage[]): string {
     .join("\n\n");
 }
 
-function spawnRunner(bin: string, timeoutMs: number): CliRunner {
-  return (args, prompt) =>
+/** Spawn-backed runner exported for deterministic process-lifecycle tests. Abort
+ * sends one kill and settles only on `close`, so the child is reaped exactly once. */
+export function createGeminiCliRunner(
+  bin: string,
+  timeoutMs: number,
+  spawnImpl: typeof spawn = spawn,
+): CliRunner {
+  return (args, prompt, signal) =>
     new Promise<CliRunResult>((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error("gemini CLI aborted by caller"));
+        return;
+      }
       // No shell: argv array, so prompt content can never be interpreted as a command.
-      const child = spawn(bin, [...args, "-p", prompt], { stdio: ["ignore", "pipe", "pipe"] });
+      const child = spawnImpl(
+        bin,
+        [...args, "-p", prompt],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
       let stdout = "";
       let stderr = "";
-      const timer = setTimeout(() => {
+      let terminalError: Error | undefined;
+      let killSent = false;
+      let settled = false;
+      const requestStop = (error: Error): void => {
+        terminalError ??= error;
+        if (killSent) return;
+        killSent = true;
         child.kill("SIGKILL");
-        reject(new Error(`gemini CLI timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+      };
+      const onAbort = (): void => requestStop(new Error("gemini CLI aborted by caller"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const timer = setTimeout(
+        () => requestStop(new Error(`gemini CLI timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      };
       child.stdout.on("data", (d) => (stdout += String(d)));
       child.stderr.on("data", (d) => (stderr += String(d)));
       child.on("error", (err) => {
-        clearTimeout(timer);
+        if (terminalError || settled) return;
+        settled = true;
+        cleanup();
         reject(err);
       });
       child.on("close", (code) => {
-        clearTimeout(timer);
-        resolve({ code: code ?? 0, stdout, stderr });
+        if (settled) return;
+        settled = true;
+        cleanup();
+        if (terminalError) reject(terminalError);
+        else resolve({ code: code ?? 0, stdout, stderr });
       });
     });
 }
@@ -79,12 +113,12 @@ function spawnRunner(bin: string, timeoutMs: number): CliRunner {
 export function createGeminiCliModelClient(config: GeminiCliConfig = {}): ModelClient {
   const bin = config.bin ?? "gemini";
   const timeoutMs = config.timeoutMs ?? 90_000;
-  const run = config.run ?? spawnRunner(bin, timeoutMs);
+  const run = config.run ?? createGeminiCliRunner(bin, timeoutMs);
 
   return {
-    async complete(messages: ModelMessage[]): Promise<string> {
+    async complete(messages: ModelMessage[], _onUsage, signal): Promise<string> {
       const args = ["-o", "json", ...(config.model ? ["-m", config.model] : [])];
-      const result = await run(args, flattenMessages(messages));
+      const result = await run(args, flattenMessages(messages), signal);
       if (result.code !== 0) {
         throw new Error(`gemini_cli_exit code=${result.code}`);
       }

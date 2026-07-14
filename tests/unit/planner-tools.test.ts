@@ -78,6 +78,27 @@ describe("planConversation — tool-calling branch", () => {
     expect(plan.kind).toBe("answer");
     expect(jsonOnly.complete).toHaveBeenCalledTimes(1);
   });
+
+  it("passes the route abort signal through both tool and JSON planner calls", async () => {
+    const controller = new AbortController();
+    let toolSignal: AbortSignal | undefined;
+    let jsonSignal: AbortSignal | undefined;
+    const model: ModelClient = {
+      async complete(_messages, _onUsage, signal) {
+        jsonSignal = signal;
+        return JSON.stringify({ kind: "answer", text: "json" });
+      },
+      async completeWithTools(_messages, _tools, signal) {
+        toolSignal = signal;
+        return { text: "tool", toolCalls: [] };
+      },
+    };
+
+    await planConversation(input(model, { signal: controller.signal }));
+    await planConversation(input(model, { signal: controller.signal, useTools: false }));
+    expect(toolSignal).toBe(controller.signal);
+    expect(jsonSignal).toBe(controller.signal);
+  });
 });
 
 describe("runAgentConversation — the agentic planning entry", () => {

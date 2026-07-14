@@ -103,7 +103,8 @@ CLI equivalent: `railway variables --set "BASE_URL=https://…" --set
 
 Optional knobs (defaults are fine): `LLM_PROVIDER=http`, `LLM_MODE=tool`,
 `LLM_AGENTIC=1`, `LLM_TOOL_SELECT=1` (deterministic tool subsetting, **default on** —
-the model sees only the message-relevant actions; eval-proven 100% on DeepSeek + both
+the model sees only the message-relevant actions; no-match/non-ASCII/>3-area requests
+fail open to the full catalog; eval-proven 100% on DeepSeek + both
 Gemini tiers with ~61–65% fewer prompt tokens; set `=0` to roll back to the full
 catalog), `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 120000 — **must be < 290000** so it stays below the idempotency claim TTL),

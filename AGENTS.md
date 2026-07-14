@@ -31,6 +31,9 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   re-checked at confirm time.
 - Every mutation/confirmation/undo performs a fresh role check and fails closed;
   Clockify host writes are single-flight per workspace and are never auto-retried.
+- Client cancellation can stop model work or a not-yet-dispatched action, never a
+  Clockify mutation after dispatch. Per-session FIFO locks cover route settlement
+  and skip disconnected queued requests.
 - The model never receives Clockify tokens, add-on tokens, session secrets, the
   model API key, or raw headers. Never log tokens/headers. Tokens are encrypted at
   rest (AES-256-GCM).
@@ -75,14 +78,14 @@ npm run dev           # tsx src/server.ts (needs env)
   concurrency, write, and per-turn host-call bounds).
 - `src/assistant/` — model client (OpenAI-compatible HTTP or `gemini-cli`), prompt
   builder, planner (native tool-calling default, JSON fallback),
-  `agent-loop.ts`/`agent-state.ts` (durable agentic loop; stops on client
-  disconnect).
+  `agent-loop.ts`/`agent-state.ts` (durable agentic loop; provider cancellation and
+  bounded selection context survive clarification/confirm resume).
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
   `commitConfirmedOperation`), `catalog.ts`, `permissions.ts`, `risk.ts`,
   `receipts.ts`, `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
-  tool subsetting — the model sees only the message-relevant actions + a core, on the
-  chat turn and its resume; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
+  tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
+  full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `compose.ts` (atomic multi-step/rollback), `idempotency.ts` (dedup confirmed
   commits), `undo.ts`, `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
@@ -94,8 +97,8 @@ npm run dev           # tsx src/server.ts (needs env)
   chat + stream + confirm + undo + metrics + new chat + history switcher). The
   turn/confirm/commit machinery lives in `chat-pipeline.ts` (`createChatPipeline`),
   pure result transforms + guards in `chat-results.ts`, the never-break-a-turn
-  bookkeeping wrapper `best-effort.ts`, NDJSON-stream setup `ndjson.ts`; shared
-  `deps.ts`. Chat mutations require a client UUID `requestId`; retries replay the
+  bookkeeping wrapper `best-effort.ts`, session FIFO wrapper in `async-handler.ts`,
+  NDJSON-stream setup `ndjson.ts`; shared `deps.ts`. Chat mutations require a client UUID `requestId`; retries replay the
   durable turn from nonce-free result/preview links (only a still-pending preview
   gets a freshly rotated nonce). Terminal confirmations scrub their nonce hash,
   saved agent state, and operation payload. `server.ts` — `createApp(deps)` + `start()`; `/live` is liveness and

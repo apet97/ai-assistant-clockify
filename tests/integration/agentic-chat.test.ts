@@ -780,6 +780,33 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(fake.counts.listTags ?? 0).toBe(0);
   });
 
+  it("does not dispatch a single-turn action returned after the client disconnects", async () => {
+    const fake = createFakeWorkspace();
+    const reqHolder: { abort: () => void } = { abort: () => undefined };
+    const disconnectingModel: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
+        reqHolder.abort();
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        // A provider adapter may resolve despite cancellation. The route must
+        // still check the signal before dispatching this not-yet-started write.
+        return {
+          text: "",
+          toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "too-late" } }],
+        };
+      }),
+    };
+    const { app, cookie } = await makeApp([], fake, { agentic: false, modelClient: disconnectingModel });
+
+    const req = request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "create a tag" });
+    reqHolder.abort = () => req.abort();
+    await req.catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(disconnectingModel.completeWithTools).toHaveBeenCalledTimes(1);
+    expect(fake.counts.createTag ?? 0).toBe(0);
+  });
+
   // plan-009 (sibling of the chat-stream abort test above): the CONFIRM-resume
   // stream route (/api/confirmations/:id/confirm?stream=1) wires the SAME signal
   // through runResume → runAgentTurn. CLAUDE.md pins BOTH streaming routes; only

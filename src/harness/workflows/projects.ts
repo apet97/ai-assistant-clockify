@@ -449,6 +449,7 @@ const estimateUpdate = defineRiskyAction({
     "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["high_risk_write"],
+  argumentOpenPaths: ["fields"],
   schema: z.object({
     id: z.string().min(1),
     fields: z.record(z.string(), z.unknown()).refine((f) => Object.keys(f).length > 0, {
@@ -488,6 +489,7 @@ const membershipsUpdate = defineRiskyAction({
   // executor intentionally exempts from the Clockify feature-group gate; using it
   // here would BYPASS that gate. `high_risk_write` keeps confirmation AND the gate.
   risks: ["high_risk_write"],
+  argumentOpenPaths: ["memberships[]"],
   schema: z
     .object({
       id: z.string().min(1).optional(),

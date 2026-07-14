@@ -15,6 +15,9 @@ export interface AgentState {
   transcript: ModelMessage[];
   /** The risky tool call awaiting its tool result (filled by the commit receipt). */
   call: { id: string; name: string };
+  /** Admin-authored request context used for deterministic tool selection. It
+   *  survives terse clarification follow-ups and the confirmation round-trip. */
+  selectionContext?: string;
 }
 
 const modelMessageSchema = z.object({
@@ -43,6 +46,7 @@ const modelMessageSchema = z.object({
 const agentStateSchema = z.object({
   transcript: z.array(modelMessageSchema).min(1),
   call: z.object({ id: z.string().min(1), name: z.string().min(1) }),
+  selectionContext: z.string().min(1).max(8_000).optional(),
 });
 
 /**

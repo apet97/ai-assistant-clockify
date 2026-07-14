@@ -11,7 +11,6 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient, ToolDefinition } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { ACTION_CATALOG } from "../../src/harness/catalog.js";
-import { CORE_ACTION_NAMES } from "../../src/harness/tool-select.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
 
 /**
@@ -108,7 +107,7 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
     b.store.close();
   });
 
-  it("ON + smalltalk: collapses to the core and does NOT retry (not narrowed)", async () => {
+  it("ON + smalltalk: fails open to the full catalog and does NOT retry", async () => {
     const b = build(true);
     const cookie = await cookieFor(b.app);
     const res = await request(b.app)
@@ -116,8 +115,8 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
       .set("Cookie", cookie)
       .send({ message: "hello there, how are you" });
     expect(res.status).toBe(200);
-    expect(b.captured).toHaveLength(1); // no escape-hatch retry for smalltalk
-    expect(new Set(b.captured[0])).toEqual(CORE_ACTION_NAMES);
+    expect(b.captured).toHaveLength(1); // already full; no escape-hatch retry
+    expect(b.captured[0]).toHaveLength(ACTION_CATALOG.length);
     b.store.close();
   });
 });
@@ -219,11 +218,80 @@ describe("tool subsetting on RESUME (STEP 6)", () => {
     expect(confirmStatus).toBe(200);
     expect(confirmOk).toBe(true);
     expect(b.model.calls).toHaveLength(2);
-    // The INITIAL turn is still subsetted (the clamp focuses the first decision)…
-    expect(b.model.calls[0].tools.length).toBeLessThan(ACTION_CATALOG.length);
-    // …but the RESUME widens to the full catalog because the request dropped a group,
-    // so a later step's tool can never be hidden with no way to recover it.
+    // Recall safety is immediate: both the initial turn and resume fail open.
+    expect(b.model.calls[0].tools).toHaveLength(ACTION_CATALOG.length);
     expect(b.model.calls[1].tools).toHaveLength(ACTION_CATALOG.length);
+    b.store.close();
+  });
+});
+
+function buildClarificationResume(): { app: Express; model: ScriptedToolModel; store: Store } {
+  const model = scriptedToolModel([
+    // First turn: an unknown project produces a grounded harness clarification.
+    { text: "", toolCalls: [{ id: "c1", name: "clockify_projects_delete", arguments: { name: "GhostProject" } }] },
+    // Follow-up: the admin's terse reply mentions another domain, but the original
+    // project request must remain part of tool selection and durable resume state.
+    { text: "", toolCalls: [{ id: "c2", name: "clockify_projects_delete", arguments: { name: "Acme Corp" } }] },
+    { text: "Done — the project is gone.", toolCalls: [] },
+  ]);
+  const store = createStore(":memory:", { encryptionKey: "test-key" });
+  store.saveInstallation({
+    workspaceId: "ws-1",
+    addonId: "addon-1",
+    addonUserId: "addon-user-1",
+    addonToken: "addon-token",
+  });
+  const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme Corp" }] });
+  const app = createApp({
+    config: config(true),
+    store,
+    parser: createSignatureParser(ADDON_KEY, keys.pem),
+    modelClient: model,
+    clockifyForWorkspace: () => fake.client,
+  });
+  return { app, model, store };
+}
+
+describe("tool subsetting preserves unresolved clarification context", () => {
+  it("persists the admin-authored context and reuses it on the next turn and resume", async () => {
+    const b = buildClarificationResume();
+    const cookie = await cookieFor(b.app);
+    const first = await request(b.app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "delete the project GhostProject" });
+    expect(first.status).toBe(200);
+    expect(first.body.results).toEqual(expect.arrayContaining([expect.objectContaining({ kind: "clarify" })]));
+
+    const session = b.store.listSessions("ws-1", "admin-1", new Date().toISOString())[0];
+    const persisted = b.store.getRecentMessages(session.id, 2, true).find((message) => message.role === "assistant");
+    expect(persisted?.payload).toMatchObject({
+      kind: "clarify",
+      clarificationContext: "delete the project GhostProject",
+    });
+
+    const followUp = await request(b.app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "use the invoice one" });
+    expect(followUp.status).toBe(200);
+    const preview = (followUp.body.results as PreviewItem[]).find((result) => result.kind === "preview");
+    expect(preview).toBeDefined();
+
+    const nextTurnTools = b.model.calls[1].tools.map((tool) => tool.name);
+    expect(nextTurnTools).toContain("clockify_projects_delete");
+    expect(nextTurnTools).toContain("clockify_invoices_create");
+    expect(nextTurnTools.length).toBeLessThan(ACTION_CATALOG.length);
+
+    const confirm = await request(b.app)
+      .post(`/api/confirmations/${preview!.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview!.nonce });
+    expect(confirm.status).toBe(200);
+    const resumeTools = b.model.calls[2].tools.map((tool) => tool.name);
+    expect(resumeTools).toContain("clockify_projects_delete");
+    expect(resumeTools).toContain("clockify_invoices_create");
+    expect(resumeTools.length).toBeLessThan(ACTION_CATALOG.length);
     b.store.close();
   });
 });

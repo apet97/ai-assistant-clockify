@@ -167,6 +167,10 @@ export interface ActionDefinition {
   schema: z.ZodTypeAny;
   /** Deliberate top-level compatibility aliases accepted before preprocessing. */
   argumentAliases?: readonly string[];
+  /** Deliberate object/map paths whose keys are dynamic (for example `groups`
+   *  or an array item map such as `memberships[]`). Every other object path is
+   *  closed before Zod preprocessing can strip unknown keys. */
+  argumentOpenPaths?: readonly string[];
   /** Override the feature group used for the policy gate from validated args
    *  (e.g. delete_entity maps entityType → group). */
   resolveFeatureGroup?(args: unknown): FeatureGroup;
@@ -200,6 +204,7 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   risks: RiskLabel[];
   schema: S;
   argumentAliases?: readonly string[];
+  argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<SuccessReceipt | ErrorReceipt>;
@@ -252,6 +257,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
   risks: RiskLabel[];
   schema: S;
   argumentAliases?: readonly string[];
+  argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   idempotencyKey?(payload: Record<string, unknown>): string | undefined;
   preview(
@@ -267,6 +273,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     risks: def.risks,
     schema: def.schema,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     ...(def.resolveFeatureGroup
       ? { resolveFeatureGroup: (args: z.infer<S>) => def.resolveFeatureGroup!(args) }
       : {}),
@@ -323,6 +330,7 @@ export function defineReadAction<S extends z.ZodTypeAny>(def: {
   description: string;
   group: FeatureGroup;
   schema: S;
+  argumentOpenPaths?: readonly string[];
   handler(ctx: ActionContext, args: z.infer<S>): Promise<SuccessReceipt | ErrorReceipt>;
 }): ActionDefinition {
   return defineAction({
@@ -331,6 +339,7 @@ export function defineReadAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: ["read"],
     schema: def.schema,
+    ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     async handler(ctx, args): Promise<ActionResult> {
       return { kind: "receipt", receipt: await def.handler(ctx, args) };
     },

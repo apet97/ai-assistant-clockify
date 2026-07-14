@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 import { executeAction } from "../../src/harness/actions.js";
+import { unknownArgumentPaths } from "../../src/harness/arg-shapes.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
@@ -56,5 +58,16 @@ describe("strict action arguments", () => {
     });
 
     expect(result).toMatchObject({ kind: "receipt", receipt: { ok: true } });
+  });
+
+  it("rejects keys under an undeclared open-object path and permits only an explicitly declared path", () => {
+    const schema = z.object({
+      fields: z.record(z.string(), z.unknown()),
+      nested: z.object({ values: z.record(z.string(), z.unknown()) }),
+    });
+    const args = { fields: { allowed: 1 }, nested: { values: { hidden: true } } };
+
+    expect(unknownArgumentPaths(schema, args, [], ["fields"])).toEqual(["nested.values.hidden"]);
+    expect(unknownArgumentPaths(schema, args, [], ["fields", "nested.values"])).toEqual([]);
   });
 });

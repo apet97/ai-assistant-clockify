@@ -34,7 +34,7 @@ import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { errorReceipt } from "../src/harness/receipts.js";
 import { requiresConfirmation } from "../src/harness/risk.js";
 import { toolsForModel } from "../src/harness/tools.js";
-import { selectActionsForMessage, selectionDroppedGroups, CORE_ACTION_NAMES } from "../src/harness/tool-select.js";
+import { selectActionsForMessage } from "../src/harness/tool-select.js";
 import { trackUsage, type TurnUsage } from "../src/assistant/usage.js";
 import { mean } from "../src/eval/consistency.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
@@ -106,12 +106,10 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase, toolSele
   // resume-subset of STEP 6). The harness still validates + gates every proposed call.
   const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
   const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
-  const narrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
-  // Mirror production runResume: a request spanning more areas than the clamp keeps
-  // widens the RESUME to the full catalog (so no later step's tool is hidden). For the
-  // current corpus this is always false (every case is ≤3 groups), so it's a no-op
-  // here — but it keeps the instrument faithful for any future multi-area case.
-  const resumeTools = toolSelect && subsetTools && !selectionDroppedGroups(c.message) ? subsetTools : toolsForModel();
+  const narrowed = subsetNames !== undefined && subsetNames.size < toolsForModel().length;
+  // Production's selector already fails open to the full catalog for recall-risk
+  // inputs, so the selected tools can be reused verbatim on resume.
+  const resumeTools = toolSelect && subsetTools ? subsetTools : toolsForModel();
 
   // One usage tracker per case-run captures wall-clock + token cost across the
   // initial turn, the escape-hatch retry, and every resume round-trip (the same
@@ -181,8 +179,8 @@ async function runAgenticCase(modelClient: ModelClient, c: AgenticCase, toolSele
       turn = await runAgentTurn({
         modelClient: tracked.client,
         messages,
-        // Subset on resume too (STEP 6's production shape): the subset, unless the
-        // request spans dropped groups (then full catalog), or tool-select is off.
+        // Subset on resume too (STEP 6's production shape); recall-risk inputs
+        // already produced a full-catalog `resumeTools` value above.
         tools: resumeTools,
         runAction,
       });
@@ -241,7 +239,7 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
   const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
   const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
   const subsetCatalog = subsetNames ? catalogForModel(subsetNames) : catalogForModel();
-  const narrowed = subsetNames !== undefined && subsetNames.size > CORE_ACTION_NAMES.size;
+  const narrowed = subsetNames !== undefined && subsetNames.size < toolsForModel().length;
   const tracked = trackUsage(modelClient, () => new Date());
 
   try {

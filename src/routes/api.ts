@@ -17,7 +17,7 @@ import {
   groupsPatchSchema,
   confirmBodySchema,
 } from "./request-schemas.js";
-import { asyncHandler } from "./async-handler.js";
+import { asyncHandler, fifoAsyncHandler } from "./async-handler.js";
 import { bestEffort } from "./best-effort.js";
 import { openNdjsonStream } from "./ndjson.js";
 import { sanitizeResultsForHistory } from "./chat-results.js";
@@ -55,6 +55,14 @@ export function apiRouter(deps: AppDeps): Router {
 
   const expectedOrigin = new URL(deps.config.baseUrl).origin;
   const sessionFifo = new KeyedFifo();
+  const sessionAsyncHandler = (
+    handler: (req: Request, res: Response) => Promise<unknown>,
+  ): ReturnType<typeof fifoAsyncHandler> =>
+    fifoAsyncHandler(
+      sessionFifo,
+      (req) => resolveSession(req, deps)?.sessionId,
+      handler,
+    );
   router.use((req, res, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method) || deps.config.nodeEnv === "test") {
       next();
@@ -79,41 +87,6 @@ export function apiRouter(deps: AppDeps): Router {
       return;
     }
     res.status(403).json({ ok: false, code: "csrf_rejected", message: "Request origin could not be verified." });
-  });
-
-  // Chat execution and its confirmation/undo continuation share one FIFO per
-  // session. The lock is held until the response finishes (including NDJSON),
-  // so a two-tab retry cannot observe an in-flight claim and race the first turn.
-  router.use((req, res, next) => {
-    const serialized = req.method === "POST" && (
-      req.path === "/chat/messages"
-      || req.path === "/chat/stream"
-      || req.path === "/permissions/confirm"
-      || /^\/confirmations\/[^/]+\/(confirm|cancel)$/.test(req.path)
-      || /^\/undo\/[^/]+$/.test(req.path)
-    );
-    if (!serialized) {
-      next();
-      return;
-    }
-    const claims = resolveSession(req, deps);
-    if (!claims) {
-      next();
-      return;
-    }
-    void sessionFifo.run(claims.sessionId, () => new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = (): void => {
-        if (settled) return;
-        settled = true;
-        res.off("finish", finish);
-        res.off("close", finish);
-        resolve();
-      };
-      res.once("finish", finish);
-      res.once("close", finish);
-      next();
-    })).catch(next);
   });
 
   // Shared validate→apply step for the two permission routes (preview + confirm):
@@ -204,7 +177,7 @@ export function apiRouter(deps: AppDeps): Router {
     res.json({ ok: true, preview: { current: r.base, next: r.next, changedGroups: r.changedGroups } });
   }));
 
-  router.post("/permissions/confirm", asyncHandler(async (req, res) => {
+  router.post("/permissions/confirm", sessionAsyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
     if (!claims) return;
     const authority = await verifyWriteAuthority(claims);
@@ -365,7 +338,7 @@ export function apiRouter(deps: AppDeps): Router {
   // below; this is the tested fallback surface (its client is `submitMessage`).
   // A failed turn returns 502 {ok:false,code,message} — the client surfaces that
   // copy (json() only throws on 401), it never silently renders nothing.
-  router.post("/chat/messages", asyncHandler(async (req, res) => {
+  router.post("/chat/messages", sessionAsyncHandler(async (req, res) => {
     const pre = await chatPreconditions(req, res);
     if (!pre) return;
     if (pre.replay) return res.status(pre.replay.status).json(pre.replay.body);
@@ -396,7 +369,7 @@ export function apiRouter(deps: AppDeps): Router {
   // as it is produced, then the truthful reply, then `done`. This streams the
   // harness's progress (receipts/clarifies/previews) — never the model's tokens,
   // which would conflict with the truthful-preview override.
-  router.post("/chat/stream", asyncHandler(async (req, res) => {
+  router.post("/chat/stream", sessionAsyncHandler(async (req, res) => {
     const pre = await chatPreconditions(req, res);
     if (!pre) return;
     // openNdjsonStream sets the streaming headers and wires cooperative
@@ -478,7 +451,7 @@ export function apiRouter(deps: AppDeps): Router {
     return res.status(200).send(Buffer.from(artifact.bytes));
   }));
 
-  router.post("/confirmations/:id/confirm", asyncHandler(async (req, res) => {
+  router.post("/confirmations/:id/confirm", sessionAsyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
     if (!claims) return;
     const parsed = confirmBodySchema.safeParse(req.body);
@@ -549,7 +522,7 @@ export function apiRouter(deps: AppDeps): Router {
   }));
 
   // Undo the last reversible action (Phase 5b): delete the entities it created.
-  router.post("/undo/:id", asyncHandler(async (req, res) => {
+  router.post("/undo/:id", sessionAsyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
     if (!claims) return;
 
@@ -638,7 +611,7 @@ export function apiRouter(deps: AppDeps): Router {
     });
   }));
 
-  router.post("/confirmations/:id/cancel", asyncHandler(async (req, res) => {
+  router.post("/confirmations/:id/cancel", sessionAsyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
     if (!claims) return;
     const record = deps.store.getPendingConfirmation(req.params.id);

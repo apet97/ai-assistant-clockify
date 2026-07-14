@@ -64,6 +64,8 @@ export interface PlanConversationInput extends ToolPromptInput {
   actionCatalog: ActionCatalogEntry[];
   /** Prefer native tool-calling when the client supports it (default true). */
   useTools?: boolean;
+  /** Cooperative cancellation for provider work; never threaded into actions. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -151,7 +153,7 @@ export async function planConversation(input: PlanConversationInput): Promise<Mo
  */
 async function planWithTools(input: PlanConversationInput): Promise<ModelPlan> {
   const { messages, tools } = buildToolMessages(input);
-  const completion = await input.modelClient.completeWithTools!(messages, tools);
+  const completion = await input.modelClient.completeWithTools!(messages, tools, input.signal);
 
   if (completion.toolCalls.length > 0) {
     return {
@@ -178,15 +180,19 @@ async function planWithJson(input: PlanConversationInput): Promise<ModelPlan> {
   });
   const baseMessages: ModelMessage[] = [{ role: "system", content: system }, ...input.messages];
 
-  const first = await input.modelClient.complete(baseMessages);
+  const first = await input.modelClient.complete(baseMessages, undefined, input.signal);
   let parsed = parsePlan(first);
 
   if (!parsed.ok) {
-    const repaired = await input.modelClient.complete([
-      ...baseMessages,
-      { role: "assistant", content: first },
-      { role: "user", content: buildRepairMessage(parsed.error) },
-    ]);
+    const repaired = await input.modelClient.complete(
+      [
+        ...baseMessages,
+        { role: "assistant", content: first },
+        { role: "user", content: buildRepairMessage(parsed.error) },
+      ],
+      undefined,
+      input.signal,
+    );
     parsed = parsePlan(repaired);
   }
 

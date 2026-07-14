@@ -18,6 +18,7 @@ const FAKE_CATALOG: SelectableAction[] = [
 ];
 const FAKE_CORE = new Set(["meta"]);
 const fakeOpts = { catalog: FAKE_CATALOG, alwaysInclude: FAKE_CORE };
+const ALL_ACTION_NAMES = ACTION_CATALOG.map((action) => action.name);
 
 describe("selectActionsForMessage — isolated group logic", () => {
   it("selects only the matched group's actions plus the always-on core", () => {
@@ -36,9 +37,9 @@ describe("selectActionsForMessage — isolated group logic", () => {
     expect(sel.has("t_start")).toBe(false);
   });
 
-  it("falls back to ONLY the core when nothing matches (smalltalk / gibberish)", () => {
+  it("fails open to the full catalog when nothing matches", () => {
     const sel = selectActionsForMessage("zzzq wbbn hello", fakeOpts);
-    expect(new Set(sel)).toEqual(FAKE_CORE);
+    expect(sel).toEqual(FAKE_CATALOG.map((action) => action.name));
   });
 
   it("is deterministic — identical input yields an identical array", () => {
@@ -61,7 +62,7 @@ describe("selectActionsForMessage — isolated group logic", () => {
 });
 
 describe("selectActionsForMessage — against the real catalog", () => {
-  const ALL = ACTION_CATALOG.map((a) => a.name);
+  const ALL = ALL_ACTION_NAMES;
 
   it("CORE_ACTION_NAMES are all real catalog actions (no drift)", () => {
     for (const name of CORE_ACTION_NAMES) expect(ALL).toContain(name);
@@ -80,8 +81,8 @@ describe("selectActionsForMessage — against the real catalog", () => {
     expect(sel).not.toContain("clockify_start_timer");
   });
 
-  it("gibberish collapses to exactly the always-on core", () => {
-    expect(new Set(selectActionsForMessage("xqz pllk nnnn"))).toEqual(CORE_ACTION_NAMES);
+  it("gibberish fails open to the full catalog", () => {
+    expect(selectActionsForMessage("xqz pllk nnnn")).toEqual(ALL);
   });
 
   it("the curated intents + assistant meta are ALWAYS present", () => {
@@ -104,7 +105,8 @@ describe("selectActionsForMessage — matrix regression guards", () => {
   });
 
   it("gives a bare proper-noun command a generic entity tool (core safety net)", () => {
-    // "delete Beacon" has no lexical area signal → core only; it must still carry a delete tool.
+    // "delete Beacon" has no lexical area signal → full fail-open catalog, which
+    // necessarily retains the generic delete safety net.
     expect(new Set(selectActionsForMessage("delete Beacon")).has("clockify_delete_entity")).toBe(true);
   });
 
@@ -132,7 +134,7 @@ describe("selectActionsForMessage — matrix regression guards", () => {
   });
 });
 
-describe("selectionDroppedGroups (resume widens to full when the clamp dropped a group)", () => {
+describe("selectionDroppedGroups (telemetry for requests beyond the clamp)", () => {
   it("is false for single/dual-area requests (the clamp keeps every matched group)", () => {
     for (const msg of [
       "delete the urgent tag",
@@ -147,7 +149,25 @@ describe("selectionDroppedGroups (resume widens to full when the clamp dropped a
   it("is true for a request spanning MORE areas than the 3-group clamp keeps", () => {
     const fourArea = "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme";
     expect(selectionDroppedGroups(fourArea)).toBe(true);
-    // The dropped group is real: a scheduling tool the request asked for is hidden by the clamp.
-    expect(selectActionsForMessage(fourArea)).not.toContain("clockify_scheduling_assignments_create");
+    // Recall safety is immediate now: the selector itself fails open, so both the
+    // initial turn and any resume receive every requested domain.
+    expect(selectActionsForMessage(fourArea)).toEqual(ALL_ACTION_NAMES);
+  });
+});
+
+describe("selectActionsForMessage — fail-open language boundary", () => {
+  const ALL = ALL_ACTION_NAMES;
+
+  it("narrows an ASCII Serbian Latin request using scripted domain vocabulary", () => {
+    const selected = selectActionsForMessage("obrisi projekat Apollo");
+    expect(selected).toContain("clockify_projects_delete");
+    expect(selected.length).toBeLessThan(ALL.length);
+  });
+
+  it.each([
+    ["Serbian Latin with diacritics", "obriši projekat Čukarica"],
+    ["Serbian Cyrillic", "обриши пројекат Чукрица"],
+  ])("returns the full catalog for %s", (_label, message) => {
+    expect(selectActionsForMessage(message)).toEqual(ALL);
   });
 });

@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from "express";
+import type { KeyedFifo } from "./fifo-lock.js";
 
 /**
  * Express 4 does NOT catch rejections from async route handlers: a store write
@@ -15,5 +16,42 @@ export function asyncHandler(
 ): (req: Request, res: Response, next: NextFunction) => void {
   return (req, res, next) => {
     handler(req, res).catch(next);
+  };
+}
+
+/**
+ * Async route wrapper for session-scoped mutation flows. Unlike response-event
+ * middleware, the FIFO owns the handler promise itself, so the lock is held
+ * through post-response journaling/bookkeeping. A request that disconnects while
+ * queued is skipped before its handler starts; the fulfilled skip still advances
+ * the keyed tail, so later requests are never poisoned.
+ */
+export function fifoAsyncHandler(
+  fifo: KeyedFifo,
+  keyForRequest: (req: Request) => string | undefined,
+  handler: (req: Request, res: Response) => Promise<unknown>,
+): (req: Request, res: Response, next: NextFunction) => void {
+  return (req, res, next) => {
+    const key = keyForRequest(req);
+    if (!key) {
+      handler(req, res).catch(next);
+      return;
+    }
+
+    let disconnected = req.aborted || res.destroyed;
+    const markDisconnected = (): void => {
+      if (!res.writableEnded) disconnected = true;
+    };
+    res.once("close", markDisconnected);
+
+    void fifo
+      .run(key, async () => {
+        if (disconnected || req.aborted || res.destroyed) return;
+        await handler(req, res);
+      })
+      .catch(next)
+      .finally(() => {
+        res.off("close", markDisconnected);
+      });
   };
 }

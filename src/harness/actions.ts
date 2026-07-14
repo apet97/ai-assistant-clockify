@@ -51,7 +51,12 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     };
   }
 
-  const unknown = unknownArgumentPaths(action.schema, input.args, action.argumentAliases);
+  const unknown = unknownArgumentPaths(
+    action.schema,
+    input.args,
+    action.argumentAliases,
+    action.argumentOpenPaths,
+  );
   if (unknown.length > 0) {
     return {
       kind: "receipt",

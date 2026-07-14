@@ -62,6 +62,36 @@ describe("agent loop cooperative cancellation (client disconnect)", () => {
     expect(actions).toBe(1);
   });
 
+  it("passes the signal into an in-flight model call and settles as aborted", async () => {
+    const controller = new AbortController();
+    let started!: () => void;
+    const modelStarted = new Promise<void>((resolve) => { started = resolve; });
+    let captured: AbortSignal | undefined;
+    const client: ModelClient = {
+      async complete() { return ""; },
+      async completeWithTools(_messages, _tools, signal): Promise<ToolCompletion> {
+        captured = signal;
+        started();
+        if (!signal) throw new Error("model call did not receive the route signal");
+        return new Promise<ToolCompletion>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })), { once: true });
+        });
+      },
+    };
+    const pending = runAgentTurn({
+      modelClient: client,
+      messages: [{ role: "user", content: "list tags" }],
+      tools: [],
+      runAction: async () => okRead,
+      signal: controller.signal,
+    });
+    await modelStarted;
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ kind: "aborted" });
+    expect(captured).toBe(controller.signal);
+  });
+
   it("an unset signal is a no-op (the loop completes normally)", async () => {
     // A model that calls a tool once, then answers.
     let step = 0;

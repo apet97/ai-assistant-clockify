@@ -85,19 +85,22 @@ function unknownPaths(
   value: unknown,
   path: string,
   aliases: ReadonlySet<string> | undefined,
+  openPaths: ReadonlySet<string>,
+  schemaPath: string,
 ): string[] {
   const branches = (schema.anyOf ?? schema.oneOf) as JsonSchema[] | undefined;
   if (branches) {
     const matching = branches.filter((branch) => matchesType(branch, value));
     const candidates = matching.length > 0 ? matching : branches;
-    const findings = candidates.map((branch) => unknownPaths(branch, value, path, aliases));
+    const findings = candidates.map((branch) => unknownPaths(branch, value, path, aliases, openPaths, schemaPath));
     return findings.find((items) => items.length === 0) ?? findings[0] ?? [];
   }
 
   if (Array.isArray(value)) {
     const items = schema.items;
     if (!items || typeof items !== "object" || Array.isArray(items)) return [];
-    return value.flatMap((item, index) => unknownPaths(items as JsonSchema, item, `${path}[${index}]`, undefined));
+    return value.flatMap((item, index) =>
+      unknownPaths(items as JsonSchema, item, `${path}[${index}]`, undefined, openPaths, `${schemaPath}[]`));
   }
 
   if (!isRecord(value) || schema.type !== "object") return [];
@@ -108,12 +111,15 @@ function unknownPaths(
     const childPath = path ? `${path}.${key}` : key;
     const property = properties[key];
     if (property && typeof property === "object" && !Array.isArray(property)) {
-      findings.push(...unknownPaths(property as JsonSchema, child, childPath, undefined));
+      const childSchemaPath = schemaPath ? `${schemaPath}.${key}` : key;
+      findings.push(...unknownPaths(property as JsonSchema, child, childPath, undefined, openPaths, childSchemaPath));
     } else if (!path && aliases?.has(key)) {
       continue;
-    } else if (additional && typeof additional === "object" && !Array.isArray(additional)) {
-      findings.push(...unknownPaths(additional as JsonSchema, child, childPath, undefined));
-    } else if (additional === false) {
+    } else if (openPaths.has(schemaPath)) {
+      if (additional && typeof additional === "object" && !Array.isArray(additional)) {
+        findings.push(...unknownPaths(additional as JsonSchema, child, childPath, undefined, openPaths, schemaPath));
+      }
+    } else {
       findings.push(childPath);
     }
   }
@@ -125,6 +131,14 @@ export function unknownArgumentPaths(
   schema: z.ZodTypeAny,
   value: unknown,
   allowedTopLevelAliases: readonly string[] = [],
+  allowedOpenPaths: readonly string[] = [],
 ): string[] {
-  return unknownPaths(jsonSchemaFor(schema), value, "", new Set(allowedTopLevelAliases));
+  return unknownPaths(
+    jsonSchemaFor(schema),
+    value,
+    "",
+    new Set(allowedTopLevelAliases),
+    new Set(allowedOpenPaths),
+    "",
+  );
 }

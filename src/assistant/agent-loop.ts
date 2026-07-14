@@ -154,7 +154,13 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   for (let step = 0; step < maxSteps; step += 1) {
     // Client gone → stop BEFORE the next (paid) model call.
     if (input.signal?.aborted) return { kind: "aborted", transcript };
-    const completion = await input.modelClient.completeWithTools(transcript, input.tools);
+    let completion: ToolCompletion;
+    try {
+      completion = await input.modelClient.completeWithTools(transcript, input.tools, input.signal);
+    } catch (error) {
+      if (input.signal?.aborted) return { kind: "aborted", transcript };
+      throw error;
+    }
     const calls = completion.toolCalls.slice(0, maxCalls);
 
     if (calls.length === 0) {

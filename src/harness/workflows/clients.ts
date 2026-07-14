@@ -121,6 +121,7 @@ const updateClient = defineRiskyAction({
     'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR"). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
   group: WORK,
   risks: ["high_risk_write"],
+  argumentOpenPaths: ["fields"],
   schema: z
     .object({
       id: z.string().min(1).optional(),

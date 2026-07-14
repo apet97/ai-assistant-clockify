@@ -158,6 +158,7 @@ const updatePermissions = defineRiskyAction({
   group: "workspace_settings",
   risks: ["permission_change"],
   argumentAliases: ["group", "level", ...FEATURE_GROUPS],
+  argumentOpenPaths: ["groups"],
   schema: z.preprocess(
     normalizePermissionArgs,
     z.object({
@@ -222,6 +223,7 @@ const updateEntity = defineRiskyAction({
     "Update simple fields of a project, client, or tag (rename etc.). For every other type use its typed action instead (tasks_update, fix_entry for time entries, invoices_update, expenses_update, webhooks_update, users_role_update, groups_update). Elevated write — always previews and requires confirmation.",
   group: "work_structure",
   risks: ["high_risk_write"],
+  argumentOpenPaths: ["fields"],
   schema: z.object({
     entityType: z.enum(DELETABLE_ENTITY_TYPES),
     id: z.string().min(1),

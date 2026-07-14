@@ -95,7 +95,7 @@ export interface ModelClient {
    * reported token counts — the bare-string return can't carry them, but cost
    * telemetry still needs them (see {@link UsageSink}).
    */
-  complete(messages: ModelMessage[], onUsage?: UsageSink): Promise<string>;
+  complete(messages: ModelMessage[], onUsage?: UsageSink, signal?: AbortSignal): Promise<string>;
   /**
    * Optional native tool-calling. When present, the planner prefers it: the model
    * calls typed tools whose args the provider validates against the JSON schema,
@@ -104,7 +104,7 @@ export interface ModelClient {
    * every proposed action against its Zod schema + risk/policy gate — provider
    * validation is a convenience, not the trust boundary.
    */
-  completeWithTools?(messages: ModelMessage[], tools: ToolDefinition[]): Promise<ToolCompletion>;
+  completeWithTools?(messages: ModelMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ToolCompletion>;
 }
 
 export interface ModelClientConfig {
@@ -280,6 +280,33 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   let syntheticSeq = 0;
   const nextSyntheticSeq = (): number => syntheticSeq++;
 
+  const callerAborted = (): Error => new Error("Model request aborted by caller");
+
+  async function retryBackoff(signal: AbortSignal | undefined): Promise<void> {
+    if (!signal) {
+      await sleep(RETRY_BACKOFF_MS);
+      return;
+    }
+    if (signal.aborted) throw callerAborted();
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        signal.removeEventListener("abort", onAbort);
+        reject(callerAborted());
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      void sleep(RETRY_BACKOFF_MS).then(
+        () => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", onAbort);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        },
+      );
+    });
+  }
+
   /**
    * POST one chat-completion body with the abort timeout (the signal also
    * bounds a stuck body read). A transient provider failure (429/5xx) retries
@@ -288,8 +315,11 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
    * error is reduced to a stable category/status/provider request id. Provider
    * bodies can echo prompts or tool results and must never enter production logs.
    */
-  async function postChat(body: Record<string, unknown>): Promise<ChatCompletionResponse> {
+  async function postChat(body: Record<string, unknown>, signal?: AbortSignal): Promise<ChatCompletionResponse> {
     for (let attempt = 0; ; attempt += 1) {
+      if (signal?.aborted) throw callerAborted();
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       let response: Response;
       try {
         response = await doFetch(endpoint, {
@@ -305,10 +335,11 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           ...(config.seed !== undefined ? { seed: config.seed } : {}),
           ...body,
         }),
-          signal: AbortSignal.timeout(timeoutMs),
+          signal: requestSignal,
         });
       } catch (error) {
         const name = (error as { name?: string } | null)?.name;
+        if (signal?.aborted) throw callerAborted();
         if (name === "TimeoutError" || name === "AbortError") {
           throw new Error(`Model request timed out after ${timeoutMs}ms`);
         }
@@ -325,6 +356,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           return (await response.json()) as ChatCompletionResponse;
         } catch (error) {
           const name = (error as { name?: string } | null)?.name;
+          if (signal?.aborted) throw callerAborted();
           if (name === "TimeoutError" || name === "AbortError") {
             throw new Error(`Model request timed out after ${timeoutMs}ms`);
           }
@@ -333,12 +365,13 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
       }
 
       await response.body?.cancel().catch(() => undefined);
+      if (signal?.aborted) throw callerAborted();
       const willRetry = attempt === 0 && retryable(response.status);
       console.warn(
         `provider_http_error status=${response.status} request_id=${providerRequestId(response)}${willRetry ? " retry=1" : ""}`,
       );
       if (willRetry) {
-        await sleep(RETRY_BACKOFF_MS);
+        await retryBackoff(signal);
         continue;
       }
       throw providerFailure("provider_http_error", response);
@@ -346,17 +379,17 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   }
 
   return {
-    async complete(messages: ModelMessage[], onUsage?: UsageSink): Promise<string> {
+    async complete(messages: ModelMessage[], onUsage?: UsageSink, signal?: AbortSignal): Promise<string> {
       const data = await postChat({
         messages: messages.map(toWireMessage),
         response_format: { type: "json_object" },
-      });
+      }, signal);
       const usage = parseUsage(data.usage);
       if (usage) onUsage?.(usage);
       return data.choices?.[0]?.message?.content ?? "";
     },
 
-    async completeWithTools(messages: ModelMessage[], tools: ToolDefinition[]): Promise<ToolCompletion> {
+    async completeWithTools(messages: ModelMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ToolCompletion> {
       const data = await postChat({
         messages: messages.map(toWireMessage),
         tools: tools.map((tool) => ({
@@ -364,7 +397,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           function: { name: tool.name, description: tool.description, parameters: tool.parameters },
         })),
         tool_choice: "auto",
-      });
+      }, signal);
       const message = data.choices?.[0]?.message;
       const usage = parseUsage(data.usage);
       return {

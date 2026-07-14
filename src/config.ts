@@ -52,7 +52,8 @@ export interface AppConfig {
    *  the actions relevant to the message (+ an always-on core) instead of all 139, for
    *  weak-model consistency. Default ON after the agentic eval proved it (DeepSeek 100%
    *  held, ~61% fewer prompt tokens/turn, 0 safety); LLM_TOOL_SELECT=0 is the rollback.
-   *  The harness still validates + gates every proposed action. */
+   *  No-match/non-ASCII/>3-area inputs fail open to the full catalog. The harness still
+   *  validates + gates every proposed action. */
   llmToolSelect: boolean;
   llmBaseUrl?: string;
   llmApiKey?: string;

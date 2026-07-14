@@ -113,6 +113,7 @@ export function actionFingerprint(name: string): string | undefined {
         featureGroup: action.featureGroup,
         risks: action.risks,
         argumentAliases: action.argumentAliases ?? [],
+        argumentOpenPaths: action.argumentOpenPaths ?? [],
       })
     : undefined;
 }
@@ -120,12 +121,13 @@ export function actionFingerprint(name: string): string | undefined {
 let cachedCatalogHash: string | undefined;
 export function catalogHash(): string {
   cachedCatalogHash ??= fingerprint(
-    ACTION_CATALOG.map(({ name, schema, featureGroup, risks, argumentAliases }) => ({
+    ACTION_CATALOG.map(({ name, schema, featureGroup, risks, argumentAliases, argumentOpenPaths }) => ({
       name,
       args: summarizeArgs(schema),
       featureGroup,
       risks,
       argumentAliases: argumentAliases ?? [],
+      argumentOpenPaths: argumentOpenPaths ?? [],
     })),
   );
   return cachedCatalogHash;

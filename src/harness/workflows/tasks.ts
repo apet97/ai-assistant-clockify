@@ -159,6 +159,7 @@ const updateTask = defineRiskyAction({
     "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. `assigneeIds` entries may be user ids, exact names, or 'me' (resolved server-side, clarifies on an unknown name). Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
+  argumentOpenPaths: ["fields"],
   schema: z
     .object({
       projectId: z.string().min(1).optional(),

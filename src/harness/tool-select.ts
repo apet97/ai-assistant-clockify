@@ -103,7 +103,7 @@ const SYNONYMS: Record<string, string[]> = {
   time_tracking: "timer time track tracking log hours hour clock stopwatch start stop running entry entries duration billable".split(
     " ",
   ),
-  work_structure: "project projects task tasks subtask client clients tag tags label milestone".split(" "),
+  work_structure: "project projects task tasks subtask client clients tag tags label milestone projekat projekti zadatak zadaci klijent klijenti oznaka oznake".split(" "),
   reports: "report reports summary total totals breakdown weekly monthly analytics dashboard export".split(" "),
   invoices: "invoice invoices bill billing charge payment paid due receivable".split(" "),
   expenses: "expense expenses cost costs spend spending receipt reimburse reimbursement".split(" "),
@@ -185,11 +185,19 @@ const DEFAULT_CATALOG: SelectableAction[] = ACTION_CATALOG.map((a) => ({
 }));
 const DEFAULT_INDEX = buildIndex(DEFAULT_CATALOG);
 
+function isAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
+}
+
 /**
  * Select the relevant action NAMES for a message: the always-on core plus the
  * actions of the top {@link SelectOptions.maxGroups} feature groups by lexical
- * relevance. Returns names in CATALOG ORDER (deterministic). When nothing matches
- * (smalltalk / gibberish), returns just the core — the model needs no domain tool.
+ * relevance. Returns names in CATALOG ORDER (deterministic). Recall-risk inputs
+ * (no lexical match, non-ASCII, or more than the group clamp) fail open to the
+ * full catalog instead of hiding a requested tool.
  */
 export function selectActionsForMessage(message: string, opts: SelectOptions = {}): string[] {
   const catalog = opts.catalog ?? DEFAULT_CATALOG;
@@ -197,11 +205,16 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
   const maxGroups = opts.maxGroups ?? DEFAULT_MAX_GROUPS;
   const index = catalog === DEFAULT_CATALOG ? DEFAULT_INDEX : buildIndex(catalog);
 
+  // The lexical index is intentionally ASCII-only. Any non-ASCII input may be a
+  // language/script the curated vocabulary cannot safely classify, so fail open
+  // to the full catalog rather than hiding a requested tool.
+  if (!isAscii(message)) return catalog.map((action) => action.name);
+
   const messageTokens = tokenize(message);
   // Score each group by message tokens hitting its TRIGGER words (name + synonyms)
   // plus its action NAMES — but a name token counts ONLY when it isn't a DIFFERENT
   // group's topic word, so an unrelated area (notably invoices) never rides along on
-  // a cross-cutting noun. Nothing matches ⇒ no group selected (core only).
+  // a cross-cutting noun. Nothing matches ⇒ fail open below.
   const score = new Map<string, number>();
   const bump = (group: string, points: number): void => {
     if (points) score.set(group, (score.get(group) ?? 0) + points);
@@ -221,13 +234,16 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
     bump(action.group, hits);
   }
   // Most-relevant first; deterministic alphabetical tiebreak.
-  const selectedGroups = new Set(
-    [...score.entries()]
-      .filter(([, s]) => s > 0)
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .slice(0, maxGroups)
-      .map(([group]) => group),
-  );
+  const rankedGroups = [...score.entries()]
+    .filter(([, s]) => s > 0)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  // No lexical evidence, or a request spanning beyond the safe narrowing clamp,
+  // is a recall-risk boundary: return every tool immediately on both chat and
+  // resume rather than relying on a later escape hatch.
+  if (rankedGroups.length === 0 || rankedGroups.length > maxGroups) {
+    return catalog.map((action) => action.name);
+  }
+  const selectedGroups = new Set(rankedGroups.map(([group]) => group));
 
   const chosen = new Set<string>(core);
   for (const action of catalog) {
@@ -253,17 +269,27 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
 }
 
 /**
- * True when a message matches MORE feature groups than {@link SelectOptions.maxGroups}
- * keeps — i.e. {@link selectActionsForMessage} dropped a relevant group to honor the
- * clamp. The clamp focuses a weak model on the INITIAL decision, but on the RESUME of a
- * multi-step turn a dropped group hides a later step's tool, and the resume has no
- * escape hatch — so the model would silently skip an admin-requested step. The resume
- * path widens to the full catalog when this returns true (a sprawling 4+-area request
- * is exactly where coverage beats the token saving; single/dual-area turns are
- * unaffected). Pure + deterministic — two selector passes, no model, no I/O.
+ * True when a message matches MORE feature groups than {@link SelectOptions.maxGroups}.
+ * The selector itself now fails open to the full catalog at that boundary; this helper
+ * remains for evaluation/telemetry that measures how often the clamp would otherwise
+ * have hidden a relevant group. Pure + deterministic — no model and no I/O.
  */
 export function selectionDroppedGroups(message: string, opts: SelectOptions = {}): boolean {
-  const clamped = selectActionsForMessage(message, opts).length;
-  const unclamped = selectActionsForMessage(message, { ...opts, maxGroups: Number.MAX_SAFE_INTEGER }).length;
-  return unclamped > clamped;
+  if (!isAscii(message)) return false;
+  const catalog = opts.catalog ?? DEFAULT_CATALOG;
+  const maxGroups = opts.maxGroups ?? DEFAULT_MAX_GROUPS;
+  const index = catalog === DEFAULT_CATALOG ? DEFAULT_INDEX : buildIndex(catalog);
+  const tokens = tokenize(message);
+  const matched = new Set<string>();
+  for (const [group, triggers] of index.groupSyn) {
+    if ([...tokens].some((token) => triggers.has(token))) matched.add(group);
+  }
+  for (const action of index.actions) {
+    for (const token of tokens) {
+      if (!action.nameTokens.has(token)) continue;
+      const owners = index.synonymOwners.get(token);
+      if (!owners || owners.has(action.group)) matched.add(action.group);
+    }
+  }
+  return matched.size > maxGroups;
 }

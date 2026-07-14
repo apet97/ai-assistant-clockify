@@ -487,6 +487,28 @@ describe("createModelClient retry + provider error detail", () => {
     expect(calls).toBe(1);
     expect(sleeps).toHaveLength(0);
   });
+
+  it("a caller abort during retry backoff performs no provider retry", async () => {
+    const controller = new AbortController();
+    const calls: number[] = [];
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      fetchImpl: vi.fn(async () => {
+        calls.push(1);
+        return new Response("", { status: 503 });
+      }) as unknown as typeof fetch,
+      sleepImpl: async () => {
+        controller.abort();
+      },
+    });
+
+    await expect(
+      c.complete([{ role: "user", content: "hi" }], undefined, controller.signal),
+    ).rejects.toThrow(/aborted/i);
+    expect(calls).toHaveLength(1);
+  });
 });
 
 describe("createModelClient request timeout", () => {
@@ -509,6 +531,23 @@ describe("createModelClient request timeout", () => {
     await c.completeWithTools!([{ role: "user", content: "hi" }], tools);
     expect(captured.signals).toHaveLength(2);
     for (const signal of captured.signals) expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("combines the caller signal with the timeout signal on both model methods", async () => {
+    const captured: { signals: Array<AbortSignal | undefined> } = { signals: [] };
+    const caller = new AbortController();
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "test-model",
+      fetchImpl: signalCapturingFetch(captured),
+    });
+    await c.complete([{ role: "user", content: "hi" }], undefined, caller.signal);
+    await c.completeWithTools!([{ role: "user", content: "hi" }], tools, caller.signal);
+
+    caller.abort();
+    expect(captured.signals).toHaveLength(2);
+    for (const signal of captured.signals) expect(signal?.aborted).toBe(true);
   });
 
   it("maps a timeout abort to a clean error naming the configured limit", async () => {
