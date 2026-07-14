@@ -4,6 +4,21 @@ Marketplace submission is **blocked** until every row below has an owner, date, 
 evidence link. A green local test run is necessary but is not a production-readiness
 claim. Do not tag, deploy, or submit from this checklist while any required row is open.
 
+## Exact local automated gates
+
+```bash
+npm run verify
+npm run audit:prod
+npm run license:prod
+npm run eval:smoke
+```
+
+`verify` covers both TypeScript projects, lint, circular dependencies, duplication,
+the fake-only test suite, and builds. `audit:prod` and `license:prod` enforce the
+checked-in production dependency policies; the license gate rewrites deterministic
+`evidence/dependency-gates/production-licenses.json`. `eval:smoke` is the offline
+scripted-model safety corpus, not the configured-provider evaluation required by row 6.
+
 ## Required gates (must be signed off)
 
 | # | Gate | Status | Owner | Date | Evidence |
@@ -14,9 +29,9 @@ claim. Do not tag, deploy, or submit from this checklist while any required row 
 | 4 | **Model-provider privacy posture.** Record provider/subprocessor, DPA, processing region, retention/zero-retention setting, and evidence that customer content is not used for training. | ☐ OPEN — operator/provider evidence required | | | |
 | 5 | **Production backup + restore drill.** Run `db:backup`/`db:restore` against an encrypted production-like volume, verify checksum/integrity and a token-backed read, and record RTO/RPO. | ☐ OPEN — local drill only | | | |
 | 6 | **Deterministic planner/agentic safety evaluation.** Run the pinned safety corpus for the release model/config and attach the zero-regression report. | ☐ OPEN — requires configured provider | | | |
-| 7 | **Sacrificial-workspace smoke.** Run the full preview/confirm/commit/cleanup workflow and attach the cleanup proof. | ☐ OPEN — requires sacrificial credentials | | | |
-| 8 | **Repository security gates.** Required CI, blocking high/critical runtime audit, CodeQL, dependency/license review, secret scan, and SBOM artifact are green on the release commit. | ☐ OPEN — workflows added; remote run required | | | |
-| 9 | **Ambiguous-write recovery review.** Fault-injection/restart evidence demonstrates that unknown outcomes do not retry and that every supported write class reconciles or stays blocked. | ☐ OPEN — review evidence required | | | |
+| 7 | **Sacrificial-workspace smoke.** Run the full preview/confirm/commit/cleanup workflow and attach both sanitized smoke and cleanup artifacts. | ☐ OPEN — workflow added; protected environment, credentials, and successful remote run evidence required | | | |
+| 8 | **Repository security gates.** Required CI, blocking high/critical runtime audit, production license policy, CodeQL, dependency review, secret scan, and SBOM/license artifacts are green on the release commit. | ☐ OPEN — workflows added; release-commit remote conclusions and links required | | | |
+| 9 | **Ambiguous-write recovery review.** Fault-injection/restart evidence demonstrates canonical result ownership, exact-plan/target enforcement, no retry of unknown effects, and authoritative reconciliation or continued blocking for every supported write class. | ☐ OPEN — internal controls complete; independent review evidence required | | | |
 
 ## Decisions made (recorded for the reviewer)
 
@@ -55,10 +70,39 @@ none of which the autonomous run had. The *code/docs* they depend on are in plac
 
 ## Automated evidence from the hardening workspace
 
-As of 2026-07-14 on Node 22, `npm run verify` completed with zero ESLint warnings,
-zero circular dependencies, the full fake-only test suite passing, and production
-server/UI builds succeeding. A local SQLite backup/checksum/restore/data-read drill
-also passed. This is local evidence only; rows 1–9 remain the release authority.
+The completed internal controls include one canonical `action_results` owner for full
+outcomes; persisted immutable intent capabilities and operation bindings; normalized
+nonsecret operation data; exact mutation plans; authoritative target/parent snapshots;
+ordered primary/compensation step journals; and read-only startup reconciliation that
+never resumes prepared work, retries an ambiguous host effect, or auto-compensates.
+Invoice replay is anchored to its durable operation id, exact step journal, and
+reconciliation evidence — not semantic/payload-level idempotency.
+
+As of 2026-07-14, the last pre-Phase-8 Node 22 full `npm run verify` was green at
+commit `18cdd0e`. The hardening reports record focused dependency/workflow tests,
+TypeScript checks, local `audit:prod`/`license:prod`, actionlint, fail-closed evidence
+probes, and a local SQLite backup/checksum/restore/data-read drill. They do not record
+a post-integration full verify, a real live-smoke run, or any remote release-evidence
+run. Rows 1–9 therefore remain open release authority.
+
+## Workflow evidence boundaries
+
+- Push/PR CI runs `audit:prod`, `license:prod`, and `verify`, and retains the
+  CycloneDX SBOM beside the deterministic production-license report. Dependency
+  review, gitleaks, and CodeQL remain separate automated checks.
+- `live-smoke.yml` is weekly, manual, and reusable. It serializes all runs against
+  `clockify-live-smoke-sacrificial`, uses only that environment's API-key/workspace
+  secrets, always executes a separately bounded cleanup job, and uploads
+  prefix/count/status JSON that excludes secrets and resource identities.
+- Manual `release-evidence.yml` records the exact commit SHA and machine conclusions
+  for verify, audit, license, CodeQL, secret scan, `eval:smoke`, SBOM, and live smoke.
+  Credential rotation, provider governance, backup/restore, configured-model
+  evaluation, security review, AUDIT-host clearance, and Marketplace approval are
+  always `not_evaluated`; no caller can turn them into machine passes.
+
+These workflow definitions do not prove a remote run, deployment, production drill,
+review, submission, or approval. Put the real run URL/artifact, owner, and date in the
+table; do not infer them from checked-in YAML or local output.
 
 ## Notes
 

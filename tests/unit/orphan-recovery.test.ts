@@ -302,4 +302,56 @@ describe("orphaned execution recovery", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM action_results").get()).toEqual({ count: 1 });
     db.close();
   });
+
+  it("shares one canonical unknown result when a route-backed undo is orphaned", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const reversal = [{ type: "tag", id: "tag-route-undo", name: "urgent" }] as const;
+    const undoId = store.recordUndoable({
+      sessionId: "session-route-undo",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [...reversal],
+    });
+    const operationId = store.startUndoOperation(undoId, {
+      id: "op-route-undo",
+      sessionId: "session-route-undo",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "undo",
+      actionFingerprint: "undo-fingerprint",
+      catalogHash: "catalog",
+      operationHash: "operation",
+      operation: { undoId, reversal },
+      mutationPlan: {
+        mode: "batch",
+        steps: [{ id: "undo-0-tag-delete", kind: "primary", reconciliationStrategy: "delete" }],
+      },
+    });
+    expect(operationId).toBe("op-route-undo");
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    const operation = recovered.getOperationRun(operationId!);
+    const undo = recovered.getUndoRecord(undoId);
+    expect(operation).toMatchObject({ status: "outcome_unknown" });
+    expect(undo).toMatchObject({ status: "outcome_unknown", remaining: reversal });
+    expect(operation?.actionResultId).toBeDefined();
+    expect(undo?.actionResultId).toBe(operation?.actionResultId);
+    expect(recovered.getActionResult(operation!.actionResultId!)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: false, action: "undo", code: "commit_outcome_unknown" },
+    });
+    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0 });
+    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0 });
+    recovered.close();
+
+    const db = new Database(path, { readonly: true });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM action_results").get()).toEqual({ count: 1 });
+    expect(db.prepare(
+      "SELECT operation_id FROM action_results WHERE id = ?",
+    ).get(operation!.actionResultId!)).toEqual({ operation_id: operationId });
+    db.close();
+  });
 });

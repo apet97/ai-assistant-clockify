@@ -316,6 +316,7 @@ export interface UndoRecord extends UndoRecordInput {
   createdAt: string;
   expiresAt: string;
   undoneAt?: string;
+  actionResultId?: string;
 }
 
 /** Rows deleted per table by {@link Store.eraseWorkspace}. */

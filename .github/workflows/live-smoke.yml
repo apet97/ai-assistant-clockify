@@ -1,22 +1,33 @@
-# Manual, opt-in live smoke against a sacrificial Clockify workspace. NEVER runs
-# on push/PR (the normal CI is fakes-only, no network, no creds) — only when an
-# operator triggers it. It drives the real preview -> confirm -> commit -> cleanup
-# flow with a personal API key, creating only AIASSIST_SMOKE_* resources and
-# deleting them; a final sweep runs even on failure so nothing is left behind.
-#
-# Requires two repo secrets (Settings -> Secrets and variables -> Actions):
-#   LIVE_CLOCKIFY_API_KEY  — a Clockify API key for the sacrificial workspace
-#   LIVE_WORKSPACE_ID      — that workspace's id
-# The key is never committed; it exists only as an encrypted Actions secret.
-name: Live smoke (manual)
+# Scheduled/manual live smoke against a sacrificial Clockify workspace. The
+# named environment owns the two LIVE_* secrets and any operator protections.
+name: Live smoke (sacrificial)
 
 on:
   workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clockify-live-smoke-sacrificial
+  cancel-in-progress: false
 
 jobs:
-  live-smoke:
+  smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: clockify-live-smoke-sacrificial
+    env:
+      LIVE_SMOKE_EVIDENCE_PATH: /tmp/ai-assistant-live-smoke-evidence/smoke.json
     steps:
+      - name: Initialize fail-closed smoke evidence
+        shell: bash
+        run: |
+          mkdir -p /tmp/ai-assistant-live-smoke-evidence
+          printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SMOKE_EVIDENCE_PATH}"
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -24,15 +35,51 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Live smoke
-        run: npx tsx scripts/live-smoke.ts
+        run: timeout --signal=TERM --kill-after=30s 12m npx tsx scripts/live-smoke.ts
         env:
           LIVE_CLOCKIFY: "1"
           LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
           LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
-      - name: Sweep leftovers (always)
-        if: always()
-        run: npx tsx scripts/live-sweep.ts
+      - name: Upload live-smoke evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-smoke-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-live-smoke-evidence/smoke.json
+          if-no-files-found: error
+          retention-days: 30
+
+  cleanup:
+    needs: smoke
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: clockify-live-smoke-sacrificial
+    env:
+      LIVE_SWEEP_EVIDENCE_PATH: /tmp/ai-assistant-live-smoke-evidence/cleanup.json
+    steps:
+      - name: Initialize fail-closed cleanup evidence
+        shell: bash
+        run: |
+          mkdir -p /tmp/ai-assistant-live-smoke-evidence
+          printf '%s\n' '{"resourcePrefixes":["AIASSIST_SMOKE_"],"counts":{"failures":1},"status":"failed"}' > "${LIVE_SWEEP_EVIDENCE_PATH}"
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Sweep leftovers
+        run: timeout --signal=TERM --kill-after=30s 7m npx tsx scripts/live-sweep.ts
         env:
           LIVE_CLOCKIFY: "1"
           LIVE_CLOCKIFY_API_KEY: ${{ secrets.LIVE_CLOCKIFY_API_KEY }}
           LIVE_WORKSPACE_ID: ${{ secrets.LIVE_WORKSPACE_ID }}
+      - name: Upload cleanup evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: live-smoke-cleanup-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-live-smoke-evidence/cleanup.json
+          if-no-files-found: error
+          retention-days: 30

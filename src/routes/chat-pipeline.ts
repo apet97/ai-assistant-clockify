@@ -90,6 +90,8 @@ import {
 import { HISTORY_WINDOW_MESSAGES, IDEMPOTENCY_WINDOW_MS } from "./chat-constants.js";
 import { bestEffort } from "./best-effort.js";
 import { authorizeIntentWriteArguments } from "../harness/intent-authority.js";
+import { boundedCompleteSanitizedJson } from "../harness/safe-json.js";
+import { ACTION_RESULT_SUMMARY_MAX_BYTES } from "../db/action-results.js";
 
 /**
  * The user request that drove a suspended turn: the LAST user-role message in the
@@ -107,6 +109,25 @@ function lastUserMessage(transcript: ModelMessage[]): string {
 }
 
 const MAX_SELECTION_CONTEXT_CHARS = 8_000;
+const DEGRADED_INLINE_SUMMARY_MAX_BYTES = 48_000;
+
+/** Keep ordinary degraded results exact, but never persist an unbounded inline
+ * fallback when the canonical result row is unavailable. */
+function degradedInlineDescriptor(result: Record<string, unknown>): unknown {
+  const bounded = boundedCompleteSanitizedJson(result, ACTION_RESULT_SUMMARY_MAX_BYTES);
+  if (
+    bounded && typeof bounded === "object" && !Array.isArray(bounded) &&
+    (bounded as { persistenceDegraded?: unknown }).persistenceDegraded === true
+  ) {
+    return bounded;
+  }
+  const kind = result.kind === "partial" ? "partial" : "receipt";
+  return {
+    kind,
+    persistenceDegraded: true,
+    summary: boundedCompleteSanitizedJson(result, DEGRADED_INLINE_SUMMARY_MAX_BYTES),
+  };
+}
 
 /** Keep the original request and latest terse clarification answer within a
  * bounded, admin-authored-only string used solely for deterministic selection. */
@@ -461,6 +482,39 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
 
     // Every executed action — success or error, single-turn or agentic — is
     // audited under the catalog's risk labels and offered an undo if reversible.
+    const persistCanonicalResult = (
+      actionName: string,
+      status: ActionResultKind,
+      result: unknown,
+      operationId?: string,
+    ): ActionResultRef | undefined => {
+      const attempts = 2;
+      for (let attempt = 0; attempt < attempts; attempt += 1) {
+        try {
+          return operationId
+            ? deps.store.settleOperationResult(operationId, status, result)
+            : deps.store.recordActionResult({
+                workspaceId: claims.workspaceId,
+                adminUserId: claims.adminUserId,
+                sessionId: claims.sessionId,
+                actionName,
+                status,
+                result,
+              });
+        } catch {
+          // A known host outcome is never redispatched because its local result
+          // row is temporarily unavailable. Retry only this synchronous store
+          // transition, then preserve the truthful result as an inline link.
+        }
+      }
+      console.error("canonical action-result persistence degraded; response preserved", {
+        status,
+        operationBound: operationId !== undefined,
+        attempts,
+      });
+      return undefined;
+    };
+
     const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt, operationId?: string): void => {
       // Post-execution bookkeeping is best-effort: a safe write executes
       // immediately (no confirm round-trip), so by the time we audit it the
@@ -483,27 +537,23 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         receipt,
         ...(undoId ? { undo: { id: undoId } } : {}),
       };
-      const resultRef = operationId
-        ? deps.store.settleOperationResult(operationId, status, canonicalResult)
-        : deps.store.recordActionResult({
+      const resultRef = persistCanonicalResult(actionName, status, canonicalResult, operationId);
+      if (resultRef) {
+        bestEffort("post-execution bookkeeping failed", () => {
+          deps.store.addAuditEvent({
             workspaceId: claims.workspaceId,
             adminUserId: claims.adminUserId,
             sessionId: claims.sessionId,
             actionName,
-            status,
-            result: canonicalResult,
+            risk: getAction(actionName)?.risks ?? [],
+            resultRef,
           });
-      bestEffort("post-execution bookkeeping failed", () => {
-        deps.store.addAuditEvent({
-          workspaceId: claims.workspaceId,
-          adminUserId: claims.adminUserId,
-          sessionId: claims.sessionId,
-          actionName,
-          risk: getAction(actionName)?.risks ?? [],
-          resultRef,
         });
-      });
-      emit(canonicalResult, { kind: "action_result", ref: resultRef });
+        emit(canonicalResult, { kind: "action_result", ref: resultRef });
+        return;
+      }
+      const degradedResult = { ...canonicalResult, persistenceDegraded: true as const };
+      emit(degradedResult, { kind: "inline", descriptor: degradedInlineDescriptor(degradedResult) });
     };
 
     const auditAndEmitPartial = (
@@ -517,27 +567,23 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       });
       const canonicalResult = { ...result, ...(undoId ? { undo: { id: undoId } } : {}) };
       delete canonicalResult.operationId;
-      const resultRef = operationId
-        ? deps.store.settleOperationResult(operationId, "partial", canonicalResult)
-        : deps.store.recordActionResult({
+      const resultRef = persistCanonicalResult(actionName, "partial", canonicalResult, operationId);
+      if (resultRef) {
+        bestEffort("partial-result bookkeeping failed", () => {
+          deps.store.addAuditEvent({
             workspaceId: claims.workspaceId,
             adminUserId: claims.adminUserId,
             sessionId: claims.sessionId,
             actionName,
-            status: "partial",
-            result: canonicalResult,
+            risk: getAction(actionName)?.risks ?? [],
+            resultRef,
           });
-      bestEffort("partial-result bookkeeping failed", () => {
-        deps.store.addAuditEvent({
-          workspaceId: claims.workspaceId,
-          adminUserId: claims.adminUserId,
-          sessionId: claims.sessionId,
-          actionName,
-          risk: getAction(actionName)?.risks ?? [],
-          resultRef,
         });
-      });
-      emit(canonicalResult, { kind: "action_result", ref: resultRef });
+        emit(canonicalResult, { kind: "action_result", ref: resultRef });
+        return;
+      }
+      const degradedResult = { ...canonicalResult, persistenceDegraded: true as const };
+      emit(degradedResult, { kind: "inline", descriptor: degradedInlineDescriptor(degradedResult) });
     };
 
     // An agentic interrupt persists its suspended transcript alongside the
@@ -699,11 +745,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         },
         resultLinks,
       });
-    } catch (error) {
-      console.error(
-        "assistant-reply persistence failed (turn already executed; reply preserved):",
-        error instanceof Error ? error.message : String(error),
-      );
+    } catch {
+      // Driver errors can contain SQL values or serialized result payloads.
+      console.error("assistant-reply persistence failed (turn already executed; reply preserved; error details suppressed)");
     }
   }
 

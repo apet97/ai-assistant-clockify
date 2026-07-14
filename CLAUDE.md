@@ -19,6 +19,10 @@ workspace, and deployed.
 - **Gate:** `npm run verify` runs both TypeScript projects, the full test/build
   suite, a zero-warning typed **ESLint** gate, madge circular-dependency analysis,
   and the jscpd duplication gate. Keep every stage green.
+- **Release checks:** `npm run audit:prod` applies the fail-closed production
+  advisory policy; `npm run license:prod` applies the production-license policy
+  and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
+  offline scripted-model safety corpus without credentials.
 - **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
@@ -56,9 +60,10 @@ workspace, and deployed.
   `DEPLOYMENT.md`.
 
 **Still human-gated** (operational, not code): rotate the prod LLM credentials,
-record the provider DPA/region/retention/training posture, run a production-like
-backup/restore drill and deterministic safety eval, and complete a security review
-before real users; confirm the prod AUDIT-host
+record the provider DPA/region/retention/training posture, run and record the
+production-like backup/restore drill and release-model deterministic safety eval,
+review the security posture, and attach a successful sacrificial live-smoke +
+cleanup run before real users; confirm the prod AUDIT-host
 `X-Addon-Token` clearance (run `scripts/host-auth-spike.ts` with a captured prod
 `LIVE_ADDON_TOKEN` — dev cleanly reports "audit log not available"). Every write,
 confirmation, and undo performs an uncached role recheck and fails closed;
@@ -173,8 +178,9 @@ bug was found against the REAL API, not by reading the code.
   `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
   (workspace/admin/action-scoped semantic confirmed-commit dedupe for
   `clockify_setup_project` and `clockify_setup_task`, with a 10-min window and
-  canonical partial replay; invoices instead use the durable operation ID, never
-  a second semantic payload ID),
+  canonical partial replay; invoice replay and duplicate suppression instead use
+  the persisted durable operation ID, exact step journal, and reconciliation
+  evidence — never a semantic payload hash or second payload-level id),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
   BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
   `workflows/<area>.ts`. Name→id + date resolution is split across
@@ -408,16 +414,19 @@ bug was found against the REAL API, not by reading the code.
   cancellation before every not-yet-dispatched tool call. The signal is never
   passed into a Clockify mutation after dispatch starts, so cancellation cannot
   interrupt or retry an external write with an unknown outcome.
-- **Idempotent commits** (workspace/admin/action-scoped semantic dedupe remains
-  for `clockify_setup_project` and `clockify_setup_task`; an invoice replay instead
-  reuses the same durable `operationId`, while a separately authored preview is a
-  distinct intentional operation) + **undo** for creations (one-use, re-checks policy,
-  reverse order). A created TASK ref carries its `projectId` on the `EntityRef`
+- **Operation identity and selective semantic dedupe:** workspace/admin/action-scoped
+  semantic dedupe remains only for `clockify_setup_project` and
+  `clockify_setup_task`. Invoice safety is operation-level: replay reuses the same
+  durable `operationId` and its prepared/executing/terminal step journal and
+  reconciliation evidence; a separately authored preview is a distinct intentional
+  operation, even if its payload is equal. **Undo** for creations runs in reverse
+  order, is one-use, and re-checks policy. A created TASK ref carries its
+  `projectId` on the `EntityRef`
   (a task delete is project-scoped), so `reverseCreation` can delete it; a task
   ref missing its `projectId` can't be reversed and returns an honest
   `undo_failed`, never a silent success (the fake mirrors this — it no longer
   "deletes" a task without a projectId). `compose.ts` rolls back required-step
-  failures. The atomic-claim
+  failures. For the two semantically deduplicated setup actions, the atomic-claim
   ledger is the cross-row serialization point: the claim is taken BEFORE the commit
   await, so two concurrent confirms reach the host at most once. A long multi-call
   commit **heartbeats** its claim (`touchIdempotencyClaim` on `CLAIM_HEARTBEAT_MS`)
@@ -530,15 +539,33 @@ npm test               # vitest run (fakes only; no network)
 npm run build          # tsc + vite -> dist/server, dist/ui
 npm run lint           # eslint src, including browser UI; zero warnings
 npm run verify         # both type-checks + lint + cycles + dup + test + build
+npm run audit:prod     # fail-closed production advisory gate
+npm run license:prod   # production license gate + deterministic JSON report
+npm run eval:smoke     # offline scripted safety corpus; no network/credentials
 npm run dev            # tsx src/server.ts (needs env)
 npm run cycles         # madge --circular … (pinned devDep) — keep 0
 ```
 
-CI runs `npm run verify` + the cycles check + `npm audit` on every push/PR; `main`
-carries a required `verify` status check (branch protection, no forced PR — admins
-can still direct-push). A manual `live-smoke.yml` (`workflow_dispatch` only) drives
-the real read→safe-write→preview→confirm→commit→cleanup flow against a sacrificial
-workspace via `LIVE_*` secrets.
+Push/PR CI runs `audit:prod`, `license:prod`, and `verify`; it retains the
+CycloneDX SBOM and deterministic production-license report together. Dependency
+review, gitleaks, and CodeQL are separate checks. `main` carries the required
+`verify` status check (branch protection, no forced PR — admins can still
+direct-push).
+
+`live-smoke.yml` runs weekly, manually, or as a reusable workflow against the
+named `clockify-live-smoke-sacrificial` environment. The two required secrets are
+`LIVE_CLOCKIFY_API_KEY` and `LIVE_WORKSPACE_ID`. Repository-wide concurrency
+serializes smoke and its separate always-run cleanup job; both are timeout-bounded
+and always upload sanitized prefix/count/status evidence without credentials,
+resource ids/names, payloads, response bodies, or prompts.
+
+Manual `release-evidence.yml` records the exact commit SHA plus machine
+conclusions for verify, production audit/license, CodeQL, gitleaks,
+`eval:smoke`, SBOM, and live smoke. It writes all credential rotation, provider
+governance, recovery drill, release-model evaluation, security review, AUDIT-host,
+and Marketplace approval gates as `not_evaluated`. Workflow presence or an
+artifact is not operator sign-off, deployment evidence, or Marketplace approval;
+no release workflow deploys or submits the add-on.
 
 ## Runtime constraints
 
@@ -566,6 +593,7 @@ checks are opt-in, gated by env (`LIVE_CLOCKIFY=1` + the relevant tokens/IDs), a
 **must target a throwaway workspace**.
 
 ```bash
+npm run eval:smoke                                                                   # deterministic offline safety floor
 LIVE_CLOCKIFY=1 LIVE_CLOCKIFY_API_KEY=… LIVE_WORKSPACE_ID=… npx tsx scripts/live-full.ts   # every action, self-cleaning
 LIVE_CLOCKIFY=1 npx tsx scripts/live-sweep.ts                                              # leftover sweep → must report 0
 npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3                          # planner meter (pass-rate + consistency + spread)

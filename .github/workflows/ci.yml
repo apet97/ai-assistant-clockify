@@ -27,18 +27,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # High/critical runtime advisories block release. Any temporary exception
-      # must be an explicit, expiring repository change rather than continue-on-error.
-      - run: npm audit --omit=dev --audit-level=high
+      - name: Production dependency audit policy
+        run: npm run audit:prod
+      - name: Production license policy and report
+        run: npm run license:prod
       # `npm run verify` now runs the cycles check (madge) itself, so no
       # separate cycles step is needed — the local gate equals the CI gate.
       - run: npm run verify
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - name: Upload supply-chain evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: sbom-cyclonedx
-          path: sbom.cdx.json
+          name: supply-chain-evidence
+          path: |
+            sbom.cdx.json
+            evidence/dependency-gates/production-licenses.json
           retention-days: 30
 
   dependency-review:

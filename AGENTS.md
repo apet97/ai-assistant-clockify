@@ -49,6 +49,10 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   but never expand it. Safe and confirmed writes bind and atomically consume the
   capability; exact operation replay consumes no additional execution, and
   resume reloads the original capability.
+- Full action outcomes live only in `action_results`; turns, chat history, audit,
+  confirmations, undo, operation journals, and replay state keep ordered links
+  plus bounded summaries. Terminal confirmation/recovery paths scrub nonce
+  hashes, saved agent state, and executable operation payloads.
 - Every Clockify external write persists normalized nonsecret operation data, an
   exact mutation plan, authoritative target/parent snapshots where applicable,
   and step-bound reconciliation metadata. The catalog has no legacy mutation or
@@ -88,9 +92,28 @@ npm run type-check    # tsc --noEmit
 npm test              # vitest run (fakes only, no network)
 npm run build         # -> dist/server, dist/ui
 npm run lint          # eslint src (typed async-safety rules)
-npm run verify        # type-check + lint + cycles + test + build (the gate)
+npm run verify        # both type-checks + lint + cycles + dup + test + build
+npm run audit:prod    # fail-closed production advisory policy
+npm run license:prod  # production license policy + deterministic JSON evidence
+npm run eval:smoke    # offline scripted-model safety corpus (no credentials)
 npm run dev           # tsx src/server.ts (needs env)
 ```
+
+## Release evidence boundaries
+
+- Push/PR CI runs `audit:prod`, `license:prod`, and `verify`, and retains the
+  CycloneDX SBOM plus production-license report. Dependency review, gitleaks, and
+  CodeQL remain separate automated checks.
+- `.github/workflows/live-smoke.yml` is weekly, manual, and reusable. It uses the
+  named `clockify-live-smoke-sacrificial` environment, requires only
+  `LIVE_CLOCKIFY_API_KEY` and `LIVE_WORKSPACE_ID`, serializes the whole smoke +
+  cleanup sequence, always runs a bounded cleanup job, and uploads secret-free
+  count/status evidence. Configuring those credentials and proving a real run
+  remain operator work.
+- Manual `.github/workflows/release-evidence.yml` records the exact commit SHA and
+  machine conclusions for verify, audit, license, CodeQL, secret scan,
+  `eval:smoke`, SBOM, and live smoke. Human/operator gates are always emitted as
+  `not_evaluated`; the workflow does not deploy, approve, or submit the add-on.
 
 ## Layout
 
@@ -146,8 +169,9 @@ npm run dev           # tsx src/server.ts (needs env)
   `compose.ts` (legacy atomic multi-step/rollback),
   `idempotency.ts` (workspace/admin/action-scoped semantic confirmed-commit
   dedupe for `clockify_setup_project` and `clockify_setup_task`, including partial
-  replay; invoices instead use the durable operation ID, not a second semantic
-  payload ID), `undo.ts`,
+  replay; invoice safety is instead anchored to the persisted durable operation
+  ID, exact step journal, and reconciliation evidence — never a semantic payload
+  hash or second payload-level id), `undo.ts`,
   `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
   `resolve.ts` (entities), `resolve-dates.ts` (calendar + `resolveDateRange`),

@@ -363,8 +363,18 @@ export interface Store {
   getUndoRecord(id: string): UndoRecord | undefined;
   /** Atomically transition available → executing. */
   markUndoExecuting(id: string): boolean;
+  /** Atomically claim one undo and create its executing durable operation. */
+  startUndoOperation(id: string, input: PrepareOperationRunInput): string | undefined;
   settleUndo(
     id: string,
+    status: "partially_undone" | "undone" | "failed" | "outcome_unknown",
+    remaining: import("../harness/receipts.js").EntityRef[],
+    result: unknown,
+  ): ActionResultRef;
+  /** Atomic undo + operation + canonical-result terminal transition. */
+  settleUndoOperation(
+    id: string,
+    operationId: string,
     status: "partially_undone" | "undone" | "failed" | "outcome_unknown",
     remaining: import("../harness/receipts.js").EntityRef[],
     result: unknown,
@@ -464,6 +474,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   // exactly as the inline methods used them.
   const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
   const confirmationStore = buildConfirmationStore(ctx);
+  const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
   const mutationStepJournal = (operationId: string): MutationStepJournal => ({
     operationId,
@@ -499,7 +510,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildAuditMetricsStore(ctx),
     ...buildMessageStore(ctx),
     ...buildSessionStore(ctx),
-    ...buildUndoStore(ctx),
+    ...undoStore,
     ...buildInstallationStore(ctx),
     ...confirmationStore,
     settleConfirmedOperation: (...args) => confirmationStore.settleConfirmation(...args),
@@ -508,6 +519,16 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildTurnRunStore(ctx),
     ...buildIntentCapabilityStore(ctx),
     ...operationRunStore,
+    startUndoOperation(id, input) {
+      return db.transaction(() => {
+        if (!undoStore.markUndoExecuting(id)) return undefined;
+        const operationId = operationRunStore.prepareOperationRun(input);
+        if (!operationRunStore.markOperationExecuting(operationId)) {
+          throw new Error("operation_not_prepared");
+        }
+        return operationId;
+      })();
+    },
     mutationStepJournal,
     ...buildArtifactStore(ctx),
 
@@ -667,6 +688,47 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           }
         }
 
+        // Route-backed undos persist their undo id inside the operation envelope.
+        // Recover each pair before the generic operation/undo passes so both
+        // terminal rows share the operation-owned canonical result. Legacy undo
+        // rows have no matching operation and continue through the standalone
+        // undo path below.
+        const linkedUndoRows = db.prepare(
+          `SELECT u.id, u.session_id, u.workspace_id, u.admin_user_id, o.id AS operation_id,
+                  o.action_name
+             FROM undo_records u
+             JOIN operation_runs o
+               ON o.session_id = u.session_id
+              AND o.workspace_id = u.workspace_id
+              AND o.admin_user_id = u.admin_user_id
+              AND o.action_name = 'undo'
+              AND o.status = 'executing'
+              AND json_extract(o.operation_json, '$.operation.undoId') = u.id
+            WHERE u.status = 'executing'`,
+        ).all() as Array<{
+          id: string;
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          operation_id: string;
+          action_name: string;
+        }>;
+        let undos = 0;
+        for (const row of linkedUndoRows) {
+          const ref = operationResult(row.operation_id) ?? insertUnknownResult(row, row.operation_id);
+          operations += db.prepare(
+            `UPDATE operation_runs
+                SET status = ?, action_result_id = ?, updated_at = ?
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.kind, ref.id, timestamp, row.operation_id).changes;
+          undos += db.prepare(
+            `UPDATE undo_records
+                SET status = 'outcome_unknown', action_result_id = ?,
+                    result_summary_json = ?, undone_at = ?
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
+        }
+
         const standaloneOperations = db.prepare(
           `SELECT session_id, workspace_id, admin_user_id, action_name, id
              FROM operation_runs
@@ -695,7 +757,6 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           workspace_id: string;
           admin_user_id: string;
         }>;
-        let undos = 0;
         for (const row of undoRows) {
           const ref = insertUnknownResult({ ...row, action_name: "undo" });
           undos += db.prepare(

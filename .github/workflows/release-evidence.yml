@@ -1,0 +1,179 @@
+name: Release evidence (manual)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  machine-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      verify: ${{ steps.verify.outcome }}
+      audit: ${{ steps.audit.outcome }}
+      license: ${{ steps.license.outcome }}
+      scripted-safety-corpus: ${{ steps.scripted-safety-corpus.outcome }}
+      sbom: ${{ steps.sbom.outcome }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - id: install
+        continue-on-error: true
+        run: npm ci
+      - id: verify
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run verify
+      - id: audit
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run audit:prod
+      - id: license
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run license:prod
+      - id: scripted-safety-corpus
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm run eval:smoke
+      - id: sbom
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
+      - name: Upload release supply-chain evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-supply-chain-evidence-${{ github.run_id }}
+          path: |
+            sbom.cdx.json
+            evidence/dependency-gates/production-licenses.json
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Enforce machine gates
+        if: ${{ always() }}
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          VERIFY: ${{ steps.verify.outcome }}
+          AUDIT: ${{ steps.audit.outcome }}
+          LICENSE: ${{ steps.license.outcome }}
+          SCRIPTED_SAFETY_CORPUS: ${{ steps.scripted-safety-corpus.outcome }}
+          SBOM: ${{ steps.sbom.outcome }}
+        run: |
+          node <<'NODE'
+          const gates = ["INSTALL", "VERIFY", "AUDIT", "LICENSE", "SCRIPTED_SAFETY_CORPUS", "SBOM"];
+          const failed = gates.filter((gate) => process.env[gate] !== "success");
+          if (failed.length > 0) {
+            console.error(`Machine gates not successful: ${failed.join(", ")}`);
+            process.exit(1);
+          }
+          NODE
+
+  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: github/codeql-action/init@f411752efdf656cb71aa17b755b22c890960da1d # v3.35.5
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@f411752efdf656cb71aa17b755b22c890960da1d # v3.35.5
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  live-smoke:
+    uses: ./.github/workflows/live-smoke.yml
+
+  record:
+    if: ${{ always() }}
+    needs: [machine-gates, codeql, secret-scan, live-smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      RELEASE_COMMIT_SHA: ${{ github.sha }}
+      RELEASE_GATE_VERIFY: ${{ needs.machine-gates.outputs.verify || 'skipped' }}
+      RELEASE_GATE_AUDIT: ${{ needs.machine-gates.outputs.audit || 'skipped' }}
+      RELEASE_GATE_LICENSE: ${{ needs.machine-gates.outputs.license || 'skipped' }}
+      RELEASE_GATE_SCRIPTED_SAFETY_CORPUS: ${{ needs.machine-gates.outputs.scripted-safety-corpus || 'skipped' }}
+      RELEASE_GATE_SBOM: ${{ needs.machine-gates.outputs.sbom || 'skipped' }}
+      RELEASE_GATE_CODEQL: ${{ needs.codeql.result }}
+      RELEASE_GATE_SECRET_SCAN: ${{ needs.secret-scan.result }}
+      RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result }}
+      RELEASE_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/release-evidence.json
+    steps:
+      - name: Record machine conclusions and unevaluated human gates
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { mkdirSync, renameSync, rmSync, writeFileSync } = require("node:fs");
+          const { dirname } = require("node:path");
+
+          const outputPath = process.env.RELEASE_EVIDENCE_PATH;
+          if (!outputPath) throw new Error("release evidence path missing");
+          const temporaryPath = `${outputPath}.tmp`;
+          mkdirSync(dirname(outputPath), { recursive: true });
+          rmSync(outputPath, { force: true });
+          rmSync(temporaryPath, { force: true });
+
+          const commitSha = process.env.RELEASE_COMMIT_SHA ?? "";
+          if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
+            throw new Error("release commit SHA is invalid");
+          }
+          const status = (value) => ({
+            success: "passed",
+            failure: "failed",
+            cancelled: "cancelled",
+            skipped: "skipped",
+          })[value] ?? "unknown";
+          const evidence = {
+            commitSha,
+            machineGates: {
+              verify: status(process.env.RELEASE_GATE_VERIFY),
+              audit: status(process.env.RELEASE_GATE_AUDIT),
+              license: status(process.env.RELEASE_GATE_LICENSE),
+              codeql: status(process.env.RELEASE_GATE_CODEQL),
+              secretScan: status(process.env.RELEASE_GATE_SECRET_SCAN),
+              scriptedSafetyCorpus: status(process.env.RELEASE_GATE_SCRIPTED_SAFETY_CORPUS),
+              sbom: status(process.env.RELEASE_GATE_SBOM),
+              liveSmoke: status(process.env.RELEASE_GATE_LIVE_SMOKE),
+            },
+            humanGates: {
+              productionCredentialRotation: "not_evaluated",
+              providerDataGovernanceReview: "not_evaluated",
+              backupRestoreDrill: "not_evaluated",
+              deterministicSafetyEvaluation: "not_evaluated",
+              securityReview: "not_evaluated",
+              productionAuditHostClearance: "not_evaluated",
+              marketplaceApproval: "not_evaluated",
+            },
+          };
+          writeFileSync(temporaryPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+          renameSync(temporaryPath, outputPath);
+          NODE
+      - name: Upload release evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-release-evidence/release-evidence.json
+          if-no-files-found: error
+          retention-days: 90

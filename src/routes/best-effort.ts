@@ -8,9 +8,9 @@
 export function bestEffort(label: string, fn: () => void): void {
   try {
     fn();
-  } catch (error) {
-    console.error(
-      `${label} (change already applied; preserved): ${error instanceof Error ? error.message : String(error)}`,
-    );
+  } catch {
+    // Store/driver errors can embed SQL values or serialized payloads. The label
+    // is a fixed call-site string; exception text is intentionally suppressed.
+    console.error(`${label} (change already applied; preserved; error details suppressed)`);
   }
 }

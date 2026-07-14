@@ -1,0 +1,672 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "packages": [
+    {
+      "package": "@apet97/clockify-addon-sdk",
+      "version": "1.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "@js-temporal/polyfill",
+      "version": "0.5.1",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "accepts",
+      "version": "1.3.8",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "array-flatten",
+      "version": "1.1.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "base64-js",
+      "version": "1.5.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "better-sqlite3",
+      "version": "12.10.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "bindings",
+      "version": "1.5.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "bl",
+      "version": "4.1.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "body-parser",
+      "version": "1.20.5",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "buffer",
+      "version": "5.7.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "bytes",
+      "version": "3.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "call-bind-apply-helpers",
+      "version": "1.0.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "call-bound",
+      "version": "1.0.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "chownr",
+      "version": "1.1.4",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "content-disposition",
+      "version": "0.5.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "content-type",
+      "version": "1.0.5",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "cookie",
+      "version": "0.7.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "cookie-signature",
+      "version": "1.0.7",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "debug",
+      "version": "2.6.9",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "decompress-response",
+      "version": "6.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "deep-extend",
+      "version": "0.6.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "depd",
+      "version": "2.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "destroy",
+      "version": "1.2.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "detect-libc",
+      "version": "2.1.2",
+      "license": "Apache-2.0",
+      "status": "allowed"
+    },
+    {
+      "package": "dunder-proto",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "ee-first",
+      "version": "1.1.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "encodeurl",
+      "version": "2.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "end-of-stream",
+      "version": "1.4.5",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "es-define-property",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "es-errors",
+      "version": "1.3.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "es-object-atoms",
+      "version": "1.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "escape-html",
+      "version": "1.0.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "etag",
+      "version": "1.8.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "expand-template",
+      "version": "2.0.3",
+      "license": "(MIT OR WTFPL)",
+      "status": "allowed"
+    },
+    {
+      "package": "express",
+      "version": "4.22.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "file-uri-to-path",
+      "version": "1.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "finalhandler",
+      "version": "1.3.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "forwarded",
+      "version": "0.2.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "fresh",
+      "version": "0.5.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "fs-constants",
+      "version": "1.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "function-bind",
+      "version": "1.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "get-intrinsic",
+      "version": "1.3.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "get-proto",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "github-from-package",
+      "version": "0.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "gopd",
+      "version": "1.2.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "has-symbols",
+      "version": "1.1.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "hasown",
+      "version": "2.0.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "http-errors",
+      "version": "2.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "iconv-lite",
+      "version": "0.4.24",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "ieee754",
+      "version": "1.2.1",
+      "license": "BSD-3-Clause",
+      "status": "allowed"
+    },
+    {
+      "package": "inherits",
+      "version": "2.0.4",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "ini",
+      "version": "1.3.8",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "ipaddr.js",
+      "version": "1.9.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "jose",
+      "version": "5.10.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "jsbi",
+      "version": "4.3.2",
+      "license": "Apache-2.0",
+      "status": "allowed"
+    },
+    {
+      "package": "math-intrinsics",
+      "version": "1.1.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "media-typer",
+      "version": "0.3.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "merge-descriptors",
+      "version": "1.0.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "methods",
+      "version": "1.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "mime",
+      "version": "1.6.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "mime-db",
+      "version": "1.52.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "mime-types",
+      "version": "2.1.35",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "mimic-response",
+      "version": "3.1.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "minimist",
+      "version": "1.2.8",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "mkdirp-classic",
+      "version": "0.5.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "ms",
+      "version": "2.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "ms",
+      "version": "2.1.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "napi-build-utils",
+      "version": "2.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "negotiator",
+      "version": "0.6.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "node-abi",
+      "version": "3.92.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "object-inspect",
+      "version": "1.13.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "on-finished",
+      "version": "2.4.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "once",
+      "version": "1.4.0",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "parseurl",
+      "version": "1.3.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "path-to-regexp",
+      "version": "0.1.13",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "prebuild-install",
+      "version": "7.1.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "proxy-addr",
+      "version": "2.0.7",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "pump",
+      "version": "3.0.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "qs",
+      "version": "6.15.2",
+      "license": "BSD-3-Clause",
+      "status": "allowed"
+    },
+    {
+      "package": "range-parser",
+      "version": "1.2.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "raw-body",
+      "version": "2.5.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "rc",
+      "version": "1.2.8",
+      "license": "(BSD-2-Clause OR MIT OR Apache-2.0)",
+      "status": "allowed"
+    },
+    {
+      "package": "readable-stream",
+      "version": "3.6.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "safe-buffer",
+      "version": "5.2.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "safer-buffer",
+      "version": "2.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "semver",
+      "version": "7.8.2",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "send",
+      "version": "0.19.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "serve-static",
+      "version": "1.16.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "setprototypeof",
+      "version": "1.2.0",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "side-channel",
+      "version": "1.1.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "side-channel-list",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "side-channel-map",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "side-channel-weakmap",
+      "version": "1.0.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "simple-concat",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "simple-get",
+      "version": "4.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "statuses",
+      "version": "2.0.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "string_decoder",
+      "version": "1.3.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "strip-json-comments",
+      "version": "2.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "tar-fs",
+      "version": "2.1.4",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "tar-stream",
+      "version": "2.2.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "toidentifier",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "tunnel-agent",
+      "version": "0.6.0",
+      "license": "Apache-2.0",
+      "status": "allowed"
+    },
+    {
+      "package": "type-is",
+      "version": "1.6.18",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "unpipe",
+      "version": "1.0.0",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "util-deprecate",
+      "version": "1.0.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "utils-merge",
+      "version": "1.0.1",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "vary",
+      "version": "1.1.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "wrappy",
+      "version": "1.0.2",
+      "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "zod",
+      "version": "3.25.76",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "zod-to-json-schema",
+      "version": "3.25.2",
+      "license": "ISC",
+      "status": "allowed"
+    }
+  ],
+  "blockingPackages": [],
+  "summary": {
+    "allowed": 110,
+    "exceptions": 0,
+    "blocked": 0
+  }
+}

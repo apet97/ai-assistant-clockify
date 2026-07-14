@@ -15,6 +15,9 @@ schemas, and the tool results needed to continue that turn. Tool results can con
 Clockify business data such as entity names and ids, descriptions, dates/times,
 amounts, statuses, user display names, and summarized error/receipt data. Exported
 binaries are never sent to the model; they are stored once as short-lived artifacts.
+Before the main planner can receive Clockify results, a constrained declaration call
+sees only the current and unresolved prior admin-authored text plus trusted action/catalog
+metadata; it cannot inspect Clockify tool output.
 
 The model **never** receives Clockify tokens, the add-on token, session secrets, the
 model API key, raw HTTP headers, confirmation nonce hashes, or stored encrypted
@@ -36,7 +39,7 @@ workspace + admin, and is isolated per workspace.
 | Pending confirmations | Risky-write previews awaiting button-confirm | 30 days |
 | Undo records | Reverse a recent creation | **30 minutes to use**; terminal metadata retained up to 30 days |
 | Turn telemetry | Model call counts / token usage / latency (cost) | 30 days |
-| Durable turn/operation results | Retry replay, write outcome recovery, and truthful history | 30–90 days, depending on whether the row is operational metadata or a canonical result |
+| Durable safety/replay state | Canonical action outcomes, immutable intent capabilities and bindings, retry replay, normalized nonsecret mutation plans, authoritative target snapshots, step reconciliation, and truthful history | 30–90 days, depending on whether the row is operational metadata or a canonical result |
 | Export artifacts | Authenticated invoice/report download | 60 minutes; hard limit 1,000,000 bytes |
 | Session records | Signed session cookie state (validity `SESSION_TTL_HOURS`, default 2h) | Pruned only after expired dependent data is gone |
 
@@ -46,14 +49,20 @@ continuation when backlog remains. Expired sessions/previews/artifacts are treat
 gone on read even before physical deletion. The chat/audit
 window is set by the `RETENTION_DAYS` environment variable (default **90**, minimum
 **30** so the 30-day metrics view is never truncated). Uninstall erasure (below) is
-**immediate**, not on the hourly schedule.
+**immediate**, not on the hourly schedule. Each retention pass persists only operational
+evidence (deleted/expired/backlog counts, duration, and passive-WAL checkpoint status),
+not an extra copy of customer content.
 
 Full action outcomes are stored once in the canonical `action_results` table.
 Turn replay, chat history, audit, confirmation, undo, operation-journal, and
 idempotency rows store ordered references plus summaries capped at 65,536 bytes.
+Persisted intent capabilities constrain write authority, while durable mutation rows may
+contain the nonsecret entity ids/names, dates, amounts, target snapshots, and exact steps
+needed to prevent duplicate or misdirected writes and reconcile uncertain outcomes.
 Plaintext confirmation nonces are never stored in replay/history envelopes. When a
-confirmation is cancelled, expires, settles, or is recovered after a restart, its
-nonce hash, saved agent state, and executable operation payload are erased.
+confirmation is cancelled, expires, settles, or is recovered after a restart, its nonce
+hash, saved agent state, and executable operation payload are erased; canonical receipts
+and bounded audit/recovery evidence remain until their applicable retention window ends.
 
 ## Encryption
 
@@ -73,6 +82,10 @@ other stored field is treated as an authentication secret.
   `scripts/erase-workspace.ts` (offline, double-gated), which performs the same
   full erasure.
 - Self-hosters can also delete the SQLite file at `DATABASE_PATH`.
+
+Backups are operator-controlled copies and are not removed by the application's hourly
+sweep or uninstall handler. Operators must keep them encrypted and off-volume and delete
+them no later than the source-data retention policy permits; see `DEPLOYMENT.md`.
 
 ## Sub-processors
 

@@ -27,6 +27,8 @@ import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import type { ActionContext, ConfirmableOperation } from "../src/harness/action.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
+import { writeLiveEvidence } from "./evidence/live-evidence.js";
+import { createLiveMutationJournal } from "./live-mutation-journal.js";
 
 // Load a gitignored .env (KEY=VALUE lines) so creds need not be passed inline.
 // Existing process.env always wins. The key is never echoed.
@@ -39,17 +41,14 @@ function loadDotEnv(): void {
 }
 loadDotEnv();
 
-if (process.env.LIVE_CLOCKIFY !== "1") {
-  console.error("Refusing to run: set LIVE_CLOCKIFY=1 to opt in.");
-  process.exit(2);
-}
 const API_KEY = process.env.LIVE_CLOCKIFY_API_KEY;
 const WORKSPACE_ID = process.env.LIVE_WORKSPACE_ID;
 const BASE = (process.env.LIVE_BASE_URL ?? "https://api.clockify.me/api/v1").replace(/\/$/, "");
-if (!API_KEY || !WORKSPACE_ID) {
-  console.error("Missing LIVE_CLOCKIFY_API_KEY or LIVE_WORKSPACE_ID.");
-  process.exit(2);
-}
+const PFX = "AIASSIST_SMOKE_";
+const EVIDENCE_PATH = process.env.LIVE_SMOKE_EVIDENCE_PATH
+  ?? "/tmp/ai-assistant-live-smoke-evidence/smoke.json";
+let createdCount = 0;
+let remainingCount: number | undefined;
 
 async function call(method: string, path: string, body?: unknown): Promise<unknown> {
   const res = await fetch(`${BASE}${path}`, {
@@ -58,16 +57,24 @@ async function call(method: string, path: string, body?: unknown): Promise<unkno
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${method} ${path} -> ${res.status}: ${text.slice(0, 160)}`);
+    await res.arrayBuffer();
+    throw new Error(`${method} request failed with status ${String(res.status)}`);
   }
   if (res.status === 204) return null;
   const text = await res.text();
   return text ? JSON.parse(text) : null;
 }
 
-async function main(): Promise<void> {
-  const me = (await call("GET", "/user")) as { id: string; name: string };
+async function main(): Promise<{ created: number; remaining: number }> {
+  if (process.env.LIVE_CLOCKIFY !== "1") {
+    throw new Error("live smoke opt-in is required");
+  }
+  if (!API_KEY || !WORKSPACE_ID) {
+    throw new Error("live smoke credentials are required");
+  }
+
+  const me = (await call("GET", "/user")) as { id: string };
+  const journal = createLiveMutationJournal(WORKSPACE_ID as string, me.id);
   const ctx: ActionContext = {
     workspaceId: WORKSPACE_ID as string,
     adminUserId: me.id,
@@ -80,14 +87,16 @@ async function main(): Promise<void> {
       auth: { apiKey: API_KEY as string },
     }),
     now: () => new Date(),
+    operationJournal: journal.operationJournal,
   };
-  const tagName = `AIASSIST_SMOKE_20260605_${randomBytes(3).toString("hex")}`;
-  console.log(`User: ${me.name} (${me.id}) | workspace ${WORKSPACE_ID}`);
-  console.log(`Smoke tag: ${tagName}\n`);
+  try {
+    const tagName = `${PFX}${randomBytes(6).toString("hex")}`;
+    console.log("Live smoke target authenticated.");
 
   // 1) READ via harness
   const status = await executeAction({ actionName: "clockify_status", args: {}, context: ctx });
-  console.log("1. clockify_status ->", status.kind, status.kind === "receipt" ? status.receipt.ok : "");
+  if (status.kind !== "receipt" || !status.receipt.ok) throw new Error("status read failed");
+  console.log("1. read status: passed");
 
   // 2) SAFE WRITE via harness (creates the tag, returns a receipt, no confirmation)
   const created = await executeAction({
@@ -96,11 +105,12 @@ async function main(): Promise<void> {
     context: ctx,
   });
   if (created.kind !== "receipt" || !created.receipt.ok) {
-    throw new Error(`safe write failed: ${JSON.stringify(created)}`);
+    throw new Error("safe write did not return a successful receipt");
   }
   const tagRef = created.receipt.changed?.created?.find((c) => c.type === "tag");
-  console.log("2. create_work_package -> created tag", tagRef?.id, `(${tagRef?.name})`);
   if (!tagRef) throw new Error("no tag created");
+  createdCount = 1;
+  console.log("2. safe write: passed");
 
   // 3) RISKY WRITE: preview must NOT delete
   const preview = await executeAction({
@@ -109,7 +119,7 @@ async function main(): Promise<void> {
     context: ctx,
   });
   if (preview.kind !== "preview") throw new Error(`expected preview, got ${preview.kind}`);
-  console.log("3. delete_entity -> PREVIEW only (no deletion yet):", preview.preview.actionLabel);
+  console.log("3. risky write preview: passed");
 
   // 4) Button confirmation: create pending, confirm with the nonce, then commit
   const pending = createPendingConfirmation({
@@ -132,23 +142,44 @@ async function main(): Promise<void> {
     now: new Date(),
   });
   if (!confirm.ok) throw new Error(`confirm failed: ${confirm.code}`);
-  const commit = await commitConfirmedOperation(ctx, preview.operation as ConfirmableOperation);
-  console.log("4. confirm + commit -> deleted:", commit.ok, commit.ok ? commit.changed?.deleted?.map((d) => d.id) : commit);
+  const operation = preview.operation as ConfirmableOperation & { mutationPlan: NonNullable<ConfirmableOperation["mutationPlan"]> };
+  const confirmedCtx: ActionContext = { ...ctx, mutationJournal: journal.startConfirmed(operation) };
+  const commit = await commitConfirmedOperation(confirmedCtx, operation);
+  journal.settleConfirmed(operation.operationId, commit);
+  if (("kind" in commit && commit.kind === "partial") || (!("kind" in commit) && !commit.ok)) {
+    throw new Error("confirmed commit failed");
+  }
+  console.log("4. button confirmation and commit: passed");
 
   // 5) Verify cleanup: no AIASSIST_SMOKE_* tags remain
   const remaining = requireCompleteRows(
     await ctx.clockify.listTags(),
     "verify live smoke tag cleanup",
-  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
-  console.log("5. leftover AIASSIST_SMOKE_ tags:", remaining.length);
+  ).filter((t) => t.name.startsWith(PFX));
+  remainingCount = remaining.length;
+  console.log("5. resources remaining after smoke:", remainingCount);
   if (remaining.length > 0) {
-    console.warn("   WARNING leftovers:", remaining.map((t) => `${t.name}(${t.id})`).join(", "));
-    process.exit(1);
+    throw new Error("live smoke resources remain");
   }
   console.log("\nLIVE SMOKE PASSED: safe write + read + risky preview→confirm→commit + cleanup all worked against live Clockify.");
+  return { created: createdCount, remaining: remainingCount };
+  } finally {
+    journal.close();
+  }
 }
 
-main().catch((err) => {
-  console.error("LIVE SMOKE FAILED:", err instanceof Error ? err.message : err);
-  process.exit(1);
+main().then((counts) => {
+  writeLiveEvidence(EVIDENCE_PATH, {
+    resourcePrefixes: [PFX],
+    counts,
+    passed: true,
+  });
+}).catch(() => {
+  writeLiveEvidence(EVIDENCE_PATH, {
+    resourcePrefixes: [PFX],
+    counts: { created: createdCount, remaining: remainingCount, failures: 1 },
+    passed: false,
+  });
+  console.error("LIVE SMOKE FAILED");
+  process.exitCode = 1;
 });

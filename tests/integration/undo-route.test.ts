@@ -10,6 +10,9 @@ import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { mintAdminCookie } from "../helpers/session.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
+import { createRestWorkspaceClient } from "../../src/clockify/rest-workspace.js";
+import { signSessionCookie } from "../../src/auth/sessions.js";
+import { buildSessionCookie } from "../../src/routes/deps.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -45,6 +48,18 @@ function adminCookie(): string {
   return adminCookieFor(store);
 }
 
+function sessionAndCookie(targetStore: Store): { sessionId: string; cookie: string } {
+  const session = targetStore.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+  const value = signSessionCookie({
+    sessionId: session.id,
+    workspaceId: "ws-1",
+    adminUserId: "admin-1",
+    workspaceRole: "ADMIN",
+    expiresAt: session.expiresAt,
+  }, "test-session-secret");
+  return { sessionId: session.id, cookie: buildSessionCookie(value, false).split(";")[0] };
+}
+
 beforeAll(async () => {
   keys = await testKeys();
   const config = makeTestConfig({
@@ -61,6 +76,144 @@ beforeAll(async () => {
 afterAll(() => store.close());
 
 describe("undo route", () => {
+  it("journals a production-scoped undo and atomically links its canonical result", async () => {
+    const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
+    isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const { cookie, sessionId } = sessionAndCookie(isoStore);
+    const undoId = isoStore.recordUndoable({
+      sessionId,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [{ type: "tag", id: "tag-live", name: "Live tag" }],
+    });
+    const mutationPaths: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname === "/api/v1/workspaces/ws-1/users") {
+        return new Response(JSON.stringify([{ id: "admin-1", role: "ADMIN" }]), { status: 200 });
+      }
+      if (method === "DELETE" && url.pathname === "/api/v1/workspaces/ws-1/tags/tag-live") {
+        mutationPaths.push(url.pathname);
+        return new Response(null, { status: 204 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    const rest = createRestWorkspaceClient({
+      baseUrl: "https://api.clockify.me/api/v1",
+      workspaceId: "ws-1",
+      auth: { addonToken: "addon-token" },
+      fetchImpl,
+      testOnlyEnforceMutationScope: true,
+    });
+    const isoApp = createApp({
+      config: makeTestConfig({ clockifyAddonPublicKeyPem: keys.pem, clockifyAddonKey: ADDON_KEY }),
+      store: isoStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => rest,
+    });
+
+    const response = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", cookie).send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({ ok: true, receipt: { ok: true } });
+    expect(mutationPaths).toEqual(["/api/v1/workspaces/ws-1/tags/tag-live"]);
+    const run = isoStore.listScopedOperationRuns("ws-1", "admin-1", sessionId, 10)
+      .find((candidate) => candidate.actionName === "undo");
+    expect(run).toMatchObject({
+      status: "succeeded",
+      steps: [{ planStepId: "undo-0-tag-delete", index: 0, status: "succeeded" }],
+      result: { id: expect.any(String), kind: "succeeded" },
+    });
+    expect(isoStore.getUndoRecord(undoId)).toMatchObject({
+      status: "undone",
+      remaining: [],
+      actionResultId: run!.result!.id,
+    });
+    expect(isoStore.getActionResult(run!.result!.id)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: true, action: "undo" },
+    });
+    isoStore.close();
+  });
+
+  it("rechecks authority for each undo step and stops later dispatch after demotion", async () => {
+    const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
+    isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const { cookie, sessionId } = sessionAndCookie(isoStore);
+    const undoId = isoStore.recordUndoable({
+      sessionId,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "seed",
+      // Reverse execution order is tag -> invoice -> webhook.
+      reversal: [
+        { type: "webhook", id: "hook-later" },
+        { type: "invoice", id: "invoice-denied" },
+        { type: "tag", id: "tag-first" },
+      ],
+    });
+    let roleReads = 0;
+    const mutationPaths: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      const method = init?.method ?? "GET";
+      if (url.pathname === "/api/v1/workspaces/ws-1/users") {
+        roleReads += 1;
+        const role = roleReads <= 2 ? "ADMIN" : "USER";
+        return new Response(JSON.stringify([{ id: "admin-1", role }]), { status: 200 });
+      }
+      if (method === "DELETE") {
+        mutationPaths.push(url.pathname);
+        return new Response(null, { status: 204 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    const rest = createRestWorkspaceClient({
+      baseUrl: "https://api.clockify.me/api/v1",
+      workspaceId: "ws-1",
+      auth: { addonToken: "addon-token" },
+      fetchImpl,
+      testOnlyEnforceMutationScope: true,
+    });
+    const isoApp = createApp({
+      config: makeTestConfig({ clockifyAddonPublicKeyPem: keys.pem, clockifyAddonKey: ADDON_KEY }),
+      store: isoStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => rest,
+    });
+
+    const response = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", cookie).send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.receipt).toMatchObject({ ok: true, action: "undo" });
+    expect(response.body.receipt.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "undo_failed" }),
+    ]));
+    expect(mutationPaths).toEqual(["/api/v1/workspaces/ws-1/tags/tag-first"]);
+    const run = isoStore.listScopedOperationRuns("ws-1", "admin-1", sessionId, 10)
+      .find((candidate) => candidate.actionName === "undo");
+    expect(run).toMatchObject({
+      status: "partial",
+      steps: [
+        { planStepId: "undo-0-tag-delete", status: "succeeded" },
+        { planStepId: "undo-1-invoice-delete", status: "definitive_failed" },
+      ],
+    });
+    expect(isoStore.getUndoRecord(undoId)).toMatchObject({
+      status: "partially_undone",
+      remaining: [
+        { type: "webhook", id: "hook-later" },
+        { type: "invoice", id: "invoice-denied" },
+      ],
+      actionResultId: run!.result!.id,
+    });
+    isoStore.close();
+  });
+
   it("attaches an undo handle to a create receipt and reverses it on POST /undo/:id", async () => {
     const cookie = adminCookie();
     const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "create a tag" });

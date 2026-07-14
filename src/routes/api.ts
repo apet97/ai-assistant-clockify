@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { buildMetrics, buildUsageMetrics } from "../metrics/metrics.js";
-import { reverseCreation, firstDeniedGroup } from "../harness/undo.js";
+import { firstDeniedGroup, reverseCreationDurably, undoMutationPlan } from "../harness/undo.js";
 import {
   FEATURE_GROUPS,
   applyPolicyPatch,
@@ -26,6 +26,8 @@ import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
 import { KeyedFifo } from "./fifo-lock.js";
 import { withHostCallBudget } from "../clockify/request-governor.js";
+import { hashOperation } from "../harness/confirmations.js";
+import { catalogHash } from "../harness/catalog.js";
 
 /**
  * JSON API (SPEC "Chat Flow", "Confirmation Rules", "Permissions Inside Chat").
@@ -63,6 +65,16 @@ export function apiRouter(deps: AppDeps): Router {
       (req) => resolveSession(req, deps)?.sessionId,
       handler,
     );
+  const finishTurnRunSafely = (...args: Parameters<AppDeps["store"]["finishTurnRun"]>): void => {
+    try {
+      deps.store.finishTurnRun(...args);
+    } catch {
+      // A host mutation may already be known successful. Do not replace its
+      // truthful response with a retry invitation, and do not claim this turn
+      // reached a durable terminal state: the existing executing row remains.
+      console.error("turn-run finalization degraded; response preserved");
+    }
+  };
   router.use((req, res, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method) || deps.config.nodeEnv === "test") {
       next();
@@ -378,7 +390,7 @@ export function apiRouter(deps: AppDeps): Router {
     const body = turn.ok
       ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
       : { ok: false, code: turn.code, message: turn.message };
-    deps.store.finishTurnRun(
+    finishTurnRunSafely(
       pre.claims.sessionId,
       pre.requestId,
       turn.ok ? "succeeded" : "failed",
@@ -424,7 +436,7 @@ export function apiRouter(deps: AppDeps): Router {
       const body = turn.ok
         ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
         : { ok: false, code: turn.code, message: turn.message };
-      deps.store.finishTurnRun(
+      finishTurnRunSafely(
         pre.claims.sessionId,
         pre.requestId,
         turn.ok ? "succeeded" : "failed",
@@ -434,7 +446,7 @@ export function apiRouter(deps: AppDeps): Router {
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
       else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
     } catch {
-      deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, "outcome_unknown", {
+      finishTurnRunSafely(pre.claims.sessionId, pre.requestId, "outcome_unknown", {
         status: 500,
         body: { ok: false, code: "operation_outcome_unknown", message: "The turn was interrupted and its outcome is unknown." },
       });
@@ -613,26 +625,38 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(authority.status).json({ ok: false, code: authority.code, message: authority.message });
     }
 
-    // Atomic one-use claim: only the caller that flips available → executing reverses.
-    if (!deps.store.markUndoExecuting(record.id)) {
+    const mutationPlan = undoMutationPlan(record.reversal);
+    const operation = { undoId: record.id, reversal: record.reversal };
+    const operationId = deps.store.startUndoOperation(record.id, {
+      sessionId: claims.sessionId,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      actionName: "undo",
+      actionFingerprint: hashOperation({ actionName: "undo", version: 1 }),
+      catalogHash: catalogHash(),
+      operationHash: hashOperation({ actionName: "undo", operation, mutationPlan }),
+      operation,
+      mutationPlan,
+    });
+    // Atomic one-use + durable-operation claim: only its winner may dispatch.
+    if (!operationId) {
       return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
     }
 
-    const receipt = await reverseCreation(
-      actionContext(claims.workspaceId, claims.adminUserId, installation),
+    const undoContext = actionContext(claims.workspaceId, claims.adminUserId, installation, claims.sessionId);
+    undoContext.mutationJournal = deps.store.mutationStepJournal(operationId);
+    const undo = await reverseCreationDurably(
+      undoContext,
       record.reversal,
+      operationId,
+      mutationPlan,
     );
-    const deleted = receipt.ok ? (receipt.changed?.deleted ?? []) : [];
-    const deletedKeys = new Set(deleted.map((ref) => `${ref.type}:${ref.id}`));
-    const remaining = record.reversal.filter((ref) => !deletedKeys.has(`${ref.type}:${ref.id}`));
-    const undoStatus = receipt.ok
-      ? remaining.length > 0 ? "partially_undone" : "undone"
-      : receipt.code === "commit_outcome_unknown" ? "outcome_unknown" : "failed";
+    const { receipt, remaining, status: undoStatus } = undo;
     let undoResultRef: import("../db/store.js").ActionResultRef | undefined;
     let undoSettlementError: unknown;
     for (let attempt = 0; attempt < 2 && !undoResultRef; attempt += 1) {
       try {
-        undoResultRef = deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
+        undoResultRef = deps.store.settleUndoOperation(record.id, operationId, undoStatus, remaining, receipt);
       } catch (error) {
         undoSettlementError = error;
       }

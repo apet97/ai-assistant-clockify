@@ -9,14 +9,21 @@ source of truth), `PRIVACY.md` (data handling/retention), and `DEPLOYMENT.md`.
   harness (`src/harness/*`) validates every proposal against the action's Zod schema, the
   per-admin permission policy, and a risk policy, and is the **only** thing that calls
   Clockify. The model never executes anything and is never on the write path.
+- **Admin-authored write authority is persisted before tool execution.** A constrained
+  declaration pass receives only current and unresolved prior admin text plus trusted
+  action/catalog metadata and creates an immutable `IntentCapabilityV1`. Raw model
+  arguments must match its exact actions, UTF-8 spans, literal constraints, and
+  cardinality before Zod preprocessing or server-side id/date resolution. Invalid or
+  unavailable declarations deny writes while preserving reads.
 - **The model never receives secrets** — no Clockify install token, session secret, model
   API key, or raw headers. The system prompt carries only the action catalog + the admin's
   permission policy. A tripwire test asserts no secret leaks into the persisted
   `agent_state_json` suspension; the install token is encrypted at rest (AES-256-GCM).
 - **Risky writes require a dry-run preview + a one-use button confirmation** (5-min TTL,
-  bound to session/workspace/admin + a salted nonce hash + an operation hash; policy is
-  re-checked at confirm time). A typed "yes" never executes. The raw nonce lives only in
-  the live HTTP response — only its hash is stored.
+  bound to session/workspace/admin + a salted nonce hash + operation hash + immutable
+  capability id/hash; policy, capability, catalog, and action compatibility are re-checked
+  at confirm time). A typed "yes" never executes. The raw nonce lives only in the live
+  HTTP response — only its hash is stored.
 
 ## Authentication & authorization
 
@@ -45,6 +52,27 @@ admin's sessions; an outage or malformed verdict fails closed with `503` and dis
 write. `ROLE_RECHECK=1` additionally enables cached role checks for authenticated reads
 (`ROLE_RECHECK_TTL_MS`, default 60000).
 
+## Mutation integrity and recovery
+
+- Full action outcomes live only in canonical `action_results` rows. Turns, chat history,
+  audit, confirmations, undo, operation journals, and retry state retain ordered links and
+  bounded summaries instead of independent mutable result copies.
+- Every external write durably stores normalized nonsecret operation data, an exact
+  mutation plan, authoritative target/parent snapshots where applicable, and step-bound
+  reconciliation metadata before dispatch. Where applicable, immediate pre-dispatch
+  target verification fails closed on drift. The REST mutation scope rejects unscoped, repeated, excess,
+  out-of-order, or incomplete plan execution and allows at most one mutation call per host
+  step.
+- Primary and compensation effects are journaled as ordered
+  `prepared` → `executing` → terminal steps, with a fresh role check immediately before
+  each dispatch. Ambiguous post-dispatch outcomes are never automatically retried; they
+  stop later steps. Startup reconciliation performs only complete-list or exact-target
+  reads and settles only authoritative compatible evidence. It never resumes prepared
+  work or compensates automatically.
+- Invoice duplicate suppression is not semantic or payload-level. A replay is bound to
+  the persisted durable operation id, exact step journal, and reconciliation evidence; an
+  equal payload from a separately authored preview is a separate intentional operation.
+
 ## Abuse / cost controls
 
 - **Per-session chat rate limit** (`CHAT_RATE_LIMIT_MAX`, default 30 / 5 min) bounds the paid
@@ -64,8 +92,25 @@ write. `ROLE_RECHECK=1` additionally enables cached role checks for authenticate
 - Installation tokens encrypted at rest (AES-256-GCM); never logged. Lifecycle logging is
   structured and secret-free.
 - Chat transcripts + the audit log are retained `RETENTION_DAYS` (default 90, min 30) and
-  swept in bounded batches; uninstall hard-deletes the workspace's data and installation
-  metadata immediately. See `PRIVACY.md`.
+  swept in bounded batches with persisted deleted/expired/backlog/duration and passive-WAL
+  evidence; uninstall hard-deletes the workspace's data and installation metadata
+  immediately. Terminal confirmations and recovery scrub nonce hashes, saved agent state,
+  and executable operation payloads. See `PRIVACY.md`.
+
+## Automated evidence and human gates
+
+The exact local automated gates are `npm run verify`, `npm run audit:prod`,
+`npm run license:prod`, and `npm run eval:smoke`. Push/PR CI retains the CycloneDX SBOM
+and deterministic production-license report. Scheduled/manual live smoke uses a named
+sacrificial GitHub environment, serialized execution, an always-run bounded cleanup job,
+and secret-free count/status artifacts. The manual release-evidence workflow records the
+exact commit SHA and machine conclusions, while emitting credential rotation, provider
+governance, recovery drill, release-model evaluation, security review, AUDIT-host, and
+Marketplace approval only as `not_evaluated`.
+
+Those workflow definitions are automated controls, not proof that a remote run,
+production drill, deployment, or review occurred. The corresponding operator evidence,
+owner, date, and link remain required in `MARKETPLACE_READINESS.md`.
 
 ## Reporting
 

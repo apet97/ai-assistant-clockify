@@ -48,6 +48,24 @@ git add vendor/ package.json package-lock.json
 (If you later publish the SDK to npm, swap the dependency to a version range like
 `"^1.0.0"` and drop the `vendor/` tarball — see git history for the publish path.)
 
+## Local release gates
+
+Run these exact automated checks on the candidate commit before any operator deploy:
+
+```bash
+npm run verify
+npm run audit:prod
+npm run license:prod
+npm run eval:smoke
+```
+
+`verify` covers both TypeScript projects, lint, cycles, duplication, fake-only tests,
+and builds. `audit:prod` fails on malformed audit data and unallowlisted high/critical
+production advisories. `license:prod` fail-closes on the production license policy and atomically
+rewrites `evidence/dependency-gates/production-licenses.json`; it never leaves stale
+passing evidence after a failed inspection. `eval:smoke` is an offline scripted-model
+safety floor, not the credentialed release-model evaluation.
+
 ## 1. Create the Railway service
 
 Railway auto-detects Nixpacks; `railway.json` pins the build/start/healthcheck
@@ -68,6 +86,7 @@ railway domain               # generate the public URL -> use it as BASE_URL bel
 Note: `railway up` uploads this repo dir and runs `npm ci` in the container; the
 SDK is vendored in-repo (`vendor/…tgz`), so the install is self-contained. After
 `railway domain` gives you the URL, set `BASE_URL` to it (step 3) and redeploy.
+No repository workflow runs `railway up` or otherwise deploys the service.
 
 ## 2. Attach a Volume — REQUIRED (do not skip)
 
@@ -107,7 +126,9 @@ the model sees only the message-relevant actions; no-match/non-ASCII/>3-area req
 fail open to the full catalog; eval-proven 100% on DeepSeek + both
 Gemini tiers with ~61–65% fewer prompt tokens; set `=0` to roll back to the full
 catalog), `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
-120000 — **must be < 290000** so it stays below the idempotency claim TTL),
+120000 — **must be < 290000** so the two setup-composite semantic-dedupe claims
+stay below their claim TTL; invoice replay instead uses its persisted durable
+operation identity and step journal),
 `RETENTION_DAYS` (chat-transcript + audit-log retention in days, default 90,
 **min 30**; see [`PRIVACY.md`](./PRIVACY.md)). Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform
 RS256 key is built in. Never set a real token here; the add-on receives its
@@ -160,6 +181,49 @@ embedded chat loads and a read action returns a receipt.
   concurrency 4, one mutation at a time, and 60 host calls per chat/resume turn.
   A `429` pauses new dispatches according to `Retry-After`; writes are never retried.
 
+## Automated release evidence (does not deploy)
+
+- Push/PR CI runs `audit:prod`, `license:prod`, and `verify`, then uploads the
+  CycloneDX SBOM and deterministic production-license report together. Dependency
+  review, gitleaks, and CodeQL are separate automated checks.
+- `.github/workflows/live-smoke.yml` runs weekly, manually, or as a reusable
+  workflow. Create the named GitHub environment
+  `clockify-live-smoke-sacrificial`, apply the required operator protections, and
+  add only `LIVE_CLOCKIFY_API_KEY` and `LIVE_WORKSPACE_ID` for a throwaway
+  workspace. Repository-wide single-flight
+  concurrency covers both smoke and cleanup. The cleanup job runs under `always()`,
+  has its own install and timeout, and fails if any matched resource cannot be
+  removed. Both jobs always upload sanitized prefix/count/status JSON; logs and
+  artifacts omit credentials, workspace/user/resource identities, payloads,
+  response bodies, and prompts.
+- Manual `.github/workflows/release-evidence.yml` records the exact commit SHA and
+  machine conclusions for verify, audit, license, CodeQL, secret scan,
+  `eval:smoke`, SBOM, and the reusable live smoke. It always records credential
+  rotation, provider governance, recovery drill, release-model evaluation,
+  security review, AUDIT-host clearance, and Marketplace approval as
+  `not_evaluated`.
+
+The workflow definitions and local checks are implementation evidence only. This
+document does not attest that a GitHub workflow, live smoke, deployment, production
+drill, or Marketplace submission has run.
+
+## Startup retention and write recovery
+
+Startup and the hourly scheduler prune expired state in one-statement/one-transaction
+500-row batches, persist deleted/expired/backlog/duration plus passive-WAL checkpoint
+evidence, and continue immediately when backlog remains. Full action outcomes remain
+canonical in `action_results`; replay, audit, confirmation, undo, and operation rows
+retain ordered links and bounded summaries.
+
+Before an external write, the backend persists the immutable intent capability,
+normalized nonsecret operation data, exact mutation plan, authoritative target/parent
+snapshots where applicable, and step-bound reconciliation strategy. Each host effect
+is journaled `prepared` → `executing` → terminal and rechecks the admin role immediately
+before dispatch. After restart, only dispatched orphan steps become unknown; startup
+reconciliation uses complete-list or exact-target reads and settles only authoritative
+compatible evidence. It never dispatches prepared work, retries an ambiguous mutation,
+or compensates automatically.
+
 ## Backup, restore, and point-in-time recovery
 
 Back up the live SQLite database with its online backup API; do not copy the live
@@ -201,5 +265,14 @@ Do not include prompts, headers, tool results, or tokens in alert payloads.
 
 ## Still human-gated (unchanged by hosting)
 
-- Prod security review + token rotation before real users.
-- Prod AUDIT-host `X-Addon-Token` clearance (the spike above).
+- Configure/protect the sacrificial GitHub environment and attach a successful
+  release-commit live-smoke plus cleanup artifact.
+- Rotate production model credentials and record the provider DPA, processing
+  region, retention/training posture, and subprocessor terms.
+- Run the production-like backup/restore drill with RTO/RPO and a token-backed read,
+  plus the deterministic evaluation against the configured release model.
+- Complete the independent security/recovery review and prod AUDIT-host
+  `X-Addon-Token` clearance (the spike above).
+- Record owner, date, and evidence link for every open gate in
+  `MARKETPLACE_READINESS.md`; Marketplace approval/submission is never inferred from
+  an automated artifact.
