@@ -56,6 +56,23 @@ export type FakeListFamily =
   | "listWebhookLogs"
   | "listTemplates";
 
+export type FakeInvoiceMutation =
+  | "createInvoiceBase"
+  | "updateInvoiceFields"
+  | "updateInvoiceStatus"
+  | "deleteInvoiceAtomic"
+  | "addInvoiceItemAtomic"
+  | "deleteInvoiceItemAtomic"
+  | "createInvoicePaymentAtomic"
+  | "deleteInvoicePaymentAtomic"
+  | "importInvoiceTimeAtomic";
+
+export interface FakeInvoiceFault {
+  outcome: "definitive" | "ambiguous";
+  /** Simulate a socket close after Clockify applied the request. */
+  applyBeforeThrow?: boolean;
+}
+
 /**
  * Shape of the seed accepted by the fake. Re-exported through `fake-clockify.ts`.
  */
@@ -92,6 +109,14 @@ export interface FakeWorkspaceSeed {
   listTruncated?: Partial<Record<FakeListFamily, boolean>>;
   /** addInvoiceItem throws (simulates a workspace with no matching invoice item type). */
   failAddInvoiceItem?: boolean;
+  /** Per-atomic-mutation durable outcome injection. */
+  invoiceFaults?: Partial<Record<FakeInvoiceMutation, FakeInvoiceFault>>;
+  /** Return a malformed successful invoice-create response with no id. */
+  omitCreatedInvoiceId?: boolean;
+  /** Rows injected after payment POST to model concurrent payments. */
+  concurrentInvoicePayments?: InvoicePayment[];
+  /** Throw on payment reads after the first payment POST. */
+  failPaymentReadAfterPost?: boolean;
 }
 
 /** The mutable in-memory state the fake holds. */

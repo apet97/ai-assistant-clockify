@@ -5,17 +5,6 @@ export interface ExternalMutationCompatibilityException {
   migrateIn: "phase-4-invoice-workflows" | "phase-5-remaining-write-classes";
 }
 
-const PHASE_4_ACTIONS = [
-  "clockify_invoices_create",
-  "clockify_invoices_update",
-  "clockify_invoices_delete",
-  "clockify_invoices_items_add",
-  "clockify_invoices_items_delete",
-  "clockify_invoices_payments_create",
-  "clockify_invoices_payments_delete",
-  "clockify_invoices_import_time",
-] as const;
-
 const PHASE_5_ACTIONS = [
   "clockify_start_timer",
   "clockify_stop_timer",
@@ -93,7 +82,6 @@ const PHASE_5_ACTIONS = [
 
 /** Temporary, reviewable bridge while phases 4-5 migrate every named action. */
 export const EXTERNAL_MUTATION_COMPATIBILITY_EXCEPTIONS: readonly ExternalMutationCompatibilityException[] = [
-  ...PHASE_4_ACTIONS.map((actionName) => ({ actionName, migrateIn: "phase-4-invoice-workflows" as const })),
   ...PHASE_5_ACTIONS.map((actionName) => ({ actionName, migrateIn: "phase-5-remaining-write-classes" as const })),
 ];
 

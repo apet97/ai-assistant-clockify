@@ -147,7 +147,10 @@ bug was found against the REAL API, not by reading the code.
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `mutation-workflow.ts`
   (durable one-dispatch steps + partial/unknown classification),
-  `mutation-compatibility.ts` (named phase 4/5 migration exceptions),
+  `durable-risky-write.ts` (confirmed one-dispatch adapter), the focused
+  `invoice-create-workflow.ts`/`invoice-update-workflow.ts`/
+  `invoice-payment-workflow.ts` reconciliation modules,
+  `mutation-compatibility.ts` (named phase 5 migration exceptions),
   `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
   (intent-hash dedupe, 10-min window, canonical partial replay),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
@@ -228,7 +231,9 @@ bug was found against the REAL API, not by reading the code.
   read-only: it marks only dispatched orphan steps unknown and never compensates
   automatically. `clockify_tags_create` is the step-journaled safe-write
   reference. Unmigrated writes are enumerated by exact action name and phase in
-  `mutation-compatibility.ts`.
+  `mutation-compatibility.ts`. Invoice writes are the confirmed-write reference:
+  they persist the exact operation plan and journal each base create,
+  enrichment, item, status, payment, delete, and import mutation separately.
 - **Closed nested arguments:** unknown fields are rejected at every object depth.
   A dynamic record is open only when its action declares that exact path in
   `argumentOpenPaths` (array records use `memberships[]` notation). Aliases and open
@@ -346,8 +351,9 @@ bug was found against the REAL API, not by reading the code.
   cancellation before every not-yet-dispatched tool call. The signal is never
   passed into a Clockify mutation after dispatch starts, so cancellation cannot
   interrupt or retry an external write with an unknown outcome.
-- **Idempotent commits** (intent hash; invoices key on client+items+currency,
-  excluding auto number/dates) + **undo** for creations (one-use, re-checks policy,
+- **Idempotent commits** (scoped operation identity; an invoice replay reuses the
+  same durable `operationId`, while a separately authored preview is a distinct
+  intentional operation) + **undo** for creations (one-use, re-checks policy,
   reverse order). A created TASK ref carries its `projectId` on the `EntityRef`
   (a task delete is project-scoped), so `reverseCreation` can delete it; a task
   ref missing its `projectId` can't be reversed and returns an honest
@@ -385,9 +391,19 @@ bug was found against the REAL API, not by reading the code.
   Invoice POST `/invoices` accepts ONLY CreateInvoiceRequest fields
   (clientId/currency/dueDate/issuedDate/number) — **`note`/`subject` sent on CREATE
   are SILENTLY DROPPED** (POST + GET both echo the workspace placeholder).
-  `createInvoice` POSTs the minimal body then applies note/subject via the verified
-  GET-then-clean-PUT update path (same silent-drop class as the tax/discount
-  zeroing — never trust a create-receipt for a field the spec omits).
+  The durable invoice workflow POSTs the minimal base body, performs one
+  read-prepared clean enrichment PUT for note/subject/tax/tax2/discount, then one
+  stored-order POST per item. Only a base-only create can reconcile an ambiguous
+  POST, using complete immediately-pre-dispatch/post lists and one exact
+  complete-final fingerprint match. A composite create remains unknown and
+  dispatches no enrichment/items. The refreshed baseline is stored on the
+  prepared step before it enters `executing`; zero, multiple, or truncated
+  matches remain unknown. Payments use a POST-only mutation with the same durable
+  pre-dispatch baseline; the harness owns list-diff matching and exposes an id
+  only for one exact, complete new match. A failed/truncated immediate baseline
+  dispatches no POST.
+  Compatibility wrappers remain closure-bound and delegate to the same atomic
+  methods.
 - Invoice ITEM TYPES are per-workspace configured NAMES, no list/create API —
   discovered from existing invoices (`discoverItemTypes`); a fresh workspace has
   none → $0 caveat surfaced in the PREVIEW. items POST requires

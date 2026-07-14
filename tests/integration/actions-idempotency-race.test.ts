@@ -9,6 +9,7 @@ import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import { isPartialCommitResult, type AtomicIdempotencyLedger, type CommitResult } from "../../src/harness/action.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
+import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * r1-concurrency-races-01 — the headline race. TWO concurrent confirms of ONE
@@ -67,14 +68,14 @@ async function previewInvoice(ctx: ActionContext, clientName: string): Promise<C
   return result.operation;
 }
 
-/** Wrap createInvoice so the next call blocks on a manually-resolved promise. */
+/** Wrap the atomic invoice base POST so the next call blocks on a manually-resolved promise. */
 function deferredCreateInvoice(fake: FakeWorkspace): {
   client: WorkspaceClient;
   resolve: () => void;
   reject: (e: unknown) => void;
   calls: () => number;
 } {
-  const real = fake.client.createInvoice.bind(fake.client);
+  const real = fake.client.createInvoiceBase.bind(fake.client);
   let gate!: { resolve: (v?: unknown) => void; reject: (e?: unknown) => void };
   const barrier = new Promise((resolve, reject) => {
     gate = { resolve, reject };
@@ -82,7 +83,7 @@ function deferredCreateInvoice(fake: FakeWorkspace): {
   let calls = 0;
   const client = new Proxy(fake.client, {
     get(target, prop, receiver) {
-      if (prop === "createInvoice") {
+      if (prop === "createInvoiceBase") {
         return async (...args: Parameters<typeof real>) => {
           calls += 1;
           await barrier; // block until the test resolves the gate
@@ -118,7 +119,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const [r1, r2] = await both;
 
     expect(deferred.calls()).toBe(1); // the host was reached EXACTLY ONCE
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
 
     // Exactly one real ok-commit (no replay warning); the other is EITHER a
     // markReplayed receipt OR a benign commit_in_progress error — never a 2nd ok.
@@ -157,7 +158,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const third = await commitConfirmedOperation(ctx, op);
     expect(third.ok).toBe(true);
     if (third.ok) expect((third.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
   });
 
   it("FAILED-COMMIT RELEASE: a failed winner frees the claim so a fresh confirm commits for real", async () => {
@@ -170,7 +171,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
 
     const winner = commitConfirmedOperation(ctx, op);
     await new Promise((r) => setTimeout(r, 10));
-    deferred.reject(new Error("transient host failure"));
+    deferred.reject(new DefinitiveWriteFailure("POST", "/workspaces/ws-1/invoices", "host rejected invoice", 400));
     const r1 = await winner;
     expect(r1.ok).toBe(false); // surfaced honestly
 
@@ -179,11 +180,11 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const r2 = await commitConfirmedOperation(ctx2, await previewInvoice(ctx2, "qwen"));
     expect(r2.ok).toBe(true);
     if (r2.ok) expect((r2.warnings ?? []).some((w) => w.code === "idempotent_replay")).toBe(false);
-    expect(fake.counts.createInvoice).toBe(1); // exactly one invoice (the failure created none)
+    expect(fake.counts.createInvoiceBase).toBe(1); // exactly one invoice (the failure created none)
   });
 
   it("HEARTBEAT WIRING: a long in-flight commit refreshes its claim via ledger.touch (so it is never swept mid-flight)", async () => {
-    // A multi-call commit (createInvoice = POST+GET+PUT+tax+N items) can run past
+    // A journaled invoice workflow can run past
     // CLAIM_TTL_MS; without a heartbeat its still-LIVE claim would be swept and a
     // re-confirm would double-commit. commitConfirmedOperation must touch the
     // claim on CLAIM_HEARTBEAT_MS while the commit is in flight, and stop after.
@@ -244,10 +245,10 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     expect((receipt as { recovery?: { retryable?: boolean } }).recovery?.retryable).toBe(true);
     // The important half: the commit closure was NEVER invoked — the host was not
     // touched. The fake only registers a count key once a method runs, so an
-    // untouched host leaves createInvoice unrecorded (the deferred wrapper is the
+    // untouched host leaves createInvoiceBase unrecorded (the deferred wrapper is the
     // primary witness: its barrier would still be pending had the closure run).
     expect(deferred.calls()).toBe(0);
-    expect(fake.counts.createInvoice ?? 0).toBe(0);
+    expect(fake.counts.createInvoiceBase ?? 0).toBe(0);
   });
 });
 
@@ -297,7 +298,7 @@ describe("crash-before-fill residual (a crash between the host write and fill mu
     // (fill is a no-op) — the claim row is left NULL at NOW.
     const crashed = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, false)), op);
     expect(crashed.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
 
     // 6 minutes later: past CLAIM_TTL (5m), still inside the IDEMPOTENCY_WINDOW (10m).
     clock.ms = NOW.getTime() + 6 * 60 * 1000;
@@ -305,7 +306,7 @@ describe("crash-before-fill residual (a crash between the host write and fill mu
     // Re-confirm the SAME intent. The crash outcome is unknown, so it must NOT be
     // silently re-committed — the host stays at exactly one call.
     const reconfirm = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, true)), op);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
     expect(reconfirm.ok).toBe(false);
     if (!reconfirm.ok) expect(reconfirm.code).toBe("commit_outcome_unknown");
   });
@@ -316,14 +317,14 @@ describe("crash-before-fill residual (a crash between the host write and fill mu
     const fake = createFakeWorkspace({ clients: [{ id: "c-qwen", name: "qwen" }] });
     const op = await previewInvoice(clockCtx(fake, clock, clockLedger(store, clock, true)), "qwen");
     await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, false)), op); // crash → NULL claim
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
 
     // 11 minutes later: PAST the dedup window — a re-confirm is a deliberate new
     // intent (same as re-issuing any invoice past the window) and commits.
     clock.ms = NOW.getTime() + 11 * 60 * 1000;
     const reissue = await commitConfirmedOperation(clockCtx(fake, clock, clockLedger(store, clock, true)), op);
     expect(reissue.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(2);
+    expect(fake.counts.createInvoiceBase).toBe(2);
   });
 });
 
@@ -389,7 +390,7 @@ describe("commit_outcome_unknown end-to-end (a seeded stale claim drives the con
       expect((receipt as { code?: string }).code).toBe("commit_outcome_unknown");
       // The host was NEVER reached: the seed never committed and stale_unknown
       // short-circuits BEFORE the commit — so there is no (duplicate) host write.
-      expect(fake.counts.createInvoice ?? 0).toBe(0);
+      expect(fake.counts.createInvoiceBase ?? 0).toBe(0);
     } finally {
       vi.useRealTimers();
     }

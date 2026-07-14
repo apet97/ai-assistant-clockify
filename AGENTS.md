@@ -102,8 +102,10 @@ npm run dev           # tsx src/server.ts (needs env)
   `mutation-workflow.ts` (operation-scoped prepared→executing→terminal primary
   and compensation steps; ambiguity or degraded settlement stops later dispatch),
   `durable-safe-write.ts` (the real step-journaled safe-write builder),
-  `mutation-compatibility.ts` (explicit phase 4/5
-  migration exceptions), `compose.ts` (legacy atomic multi-step/rollback),
+  `durable-risky-write.ts` (confirmed step adapter), billing fingerprints,
+  provenance, create/update/payment reconciliation in the focused `invoice-*`
+  modules, `mutation-compatibility.ts` (explicit phase 5 migration exceptions),
+  `compose.ts` (legacy atomic multi-step/rollback),
   `idempotency.ts` (dedup confirmed commits, including partial replay), `undo.ts`,
   `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
@@ -147,4 +149,13 @@ npm run dev           # tsx src/server.ts (needs env)
 - Client CREATE silently drops `ccEmails`/`currencyId` (adapter applies them via a
   follow-up PUT); scheduling `publish` is range-scoped, with an optional
   `userFilter` to narrow it to one user.
+- Invoice create is the durable reference workflow: minimal base POST, at most
+  one enrichment PUT, then one item POST per stored item. Only a base-only create
+  can reconcile ambiguity: it requires a complete immediately-pre-dispatch
+  baseline, complete post-list, and one exact complete-final fingerprint match.
+  A composite create with ambiguous base POST remains unknown and dispatches no
+  enrichment/items. The refreshed baseline is durable on the prepared step.
+  Payment POST is atomic and POST-only; the harness owns the same durable
+  pre-dispatch baseline and authoritative ID matching. Invoice item/payment
+  deletes revalidate complete raw snapshots.
 - Full set + the money/rate/scoping subtleties: `CLAUDE.md` → "Clockify API facts".

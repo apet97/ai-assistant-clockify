@@ -53,6 +53,8 @@ export interface ScopedPreparePrimaryStep {
   name: string;
   kind: "primary";
   targetFingerprint?: string;
+  /** Sanitized evidence committed with the prepared row before dispatch. */
+  preparedDetail?: unknown;
 }
 
 export interface ScopedPrepareCompensationStep {
@@ -85,6 +87,12 @@ export interface MutationStepJournal {
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail: { externalId?: string; detail: unknown },
   ): void;
+  /** Authoritatively resolve a previously ambiguous dispatch after read-only reconciliation. */
+  settleReconciledStep(
+    id: string,
+    status: "succeeded" | "definitive_failed",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+  ): void;
   prepareCompensationStep(input: ScopedPrepareCompensationStep): string;
   markOperationStepCompensating(id: string): boolean;
   settleCompensationStep(
@@ -99,4 +107,6 @@ export interface MutationStepJournal {
     detail: { externalId?: string; detail: unknown },
   ): void;
   listOperationSteps(): JournaledMutationStep[];
+  /** Persist bounded read-only evidence bound to this exact ambiguous step. */
+  recordReconciliation(stepId: string, result: unknown, authoritative: boolean): void;
 }

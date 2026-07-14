@@ -21,6 +21,12 @@ export interface InvoiceSummary {
   /** Tax 1 / Tax 2 rate as the GET's ×100 integer (PUT taxPercent=3 reads back as tax=300). */
   tax?: number;
   tax2?: number;
+  /** Discount rate as the GET's ×100 integer. */
+  discount?: number;
+  issuedDate?: string;
+  dueDate?: string;
+  note?: string;
+  subject?: string;
 }
 
 /** A line item on an invoice. `order` is the index used by the delete-item path. */
@@ -33,7 +39,13 @@ export interface InvoiceItem {
   /** Minor units (cents). */
   amount?: number;
   itemType?: string;
+  applyTaxes?: string;
+  taxAmount?: number;
+  tax2Amount?: number;
 }
+
+/** Complete wire invoice-item projection used only for authoritative snapshots. */
+export type RawInvoiceItem = Record<string, unknown>;
 
 /** Single-GET invoice (superset of {@link InvoiceSummary}) with embedded line items. */
 export interface InvoiceDetail extends InvoiceSummary {
@@ -112,14 +124,30 @@ export interface InvoicePort {
   listInvoices(filter?: InvoiceFilter): Promise<ListResult<InvoiceSummary>>;
   getInvoice(id: string): Promise<InvoiceDetail | null>;
   listInvoiceItems(id: string): Promise<ListResult<InvoiceItem>>;
+  listRawInvoiceItems(id: string): Promise<ListResult<RawInvoiceItem>>;
   listInvoicePayments(id: string): Promise<ListResult<InvoicePayment>>;
   exportInvoice(id: string, format?: string): Promise<InvoiceExport>;
   createInvoice(input: CreateInvoiceInput): Promise<EntitySummary>;
+  /** Atomic base POST using only CreateInvoiceRequest fields. */
+  createInvoiceBase(input: CreateInvoiceInput): Promise<EntitySummary>;
+  /** Read-only construction of the complete clean PUT body. */
+  prepareInvoiceFieldUpdate(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
   updateInvoice(id: string, input: UpdateInvoiceInput): Promise<EntitySummary>;
+  /** One field PUT; the preceding GET is read-only. */
+  updateInvoiceFields(id: string, body: Record<string, unknown>): Promise<EntitySummary>;
+  /** One status PATCH. */
+  updateInvoiceStatus(id: string, status: string): Promise<EntitySummary>;
   deleteInvoice(id: string): Promise<void>;
+  deleteInvoiceAtomic(id: string): Promise<void>;
   addInvoiceItem(id: string, item: AddInvoiceItemInput): Promise<void>;
+  addInvoiceItemAtomic(id: string, item: AddInvoiceItemInput): Promise<void>;
   deleteInvoiceItem(id: string, index: number): Promise<void>;
+  deleteInvoiceItemAtomic(id: string, index: number): Promise<void>;
   createInvoicePayment(id: string, payment: CreateInvoicePaymentInput): Promise<InvoicePayment>;
+  /** Atomic POST only; payment identity is resolved by the harness. */
+  createInvoicePaymentAtomic(id: string, payment: CreateInvoicePaymentInput): Promise<void>;
   deleteInvoicePayment(id: string, paymentId: string): Promise<void>;
+  deleteInvoicePaymentAtomic(id: string, paymentId: string): Promise<void>;
   importInvoiceTime(id: string, range: ImportInvoiceTimeInput): Promise<void>;
+  importInvoiceTimeAtomic(id: string, range: ImportInvoiceTimeInput): Promise<void>;
 }

@@ -8,6 +8,7 @@ import type {
   InvoiceDetail,
   InvoicePayment,
 } from "../ports/invoices.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /**
  * Hard binary limit. The core checks Content-Length and streamed chunks before
@@ -66,6 +67,11 @@ function mapSummary(raw: Record<string, unknown>): InvoiceSummary {
   if (raw.balance !== undefined) out.balance = raw.balance as number;
   if (typeof raw.tax === "number") out.tax = raw.tax;
   if (typeof raw.tax2 === "number") out.tax2 = raw.tax2;
+  if (typeof raw.discount === "number") out.discount = raw.discount;
+  if (typeof raw.issuedDate === "string") out.issuedDate = raw.issuedDate;
+  if (typeof raw.dueDate === "string") out.dueDate = raw.dueDate;
+  if (typeof raw.note === "string") out.note = raw.note;
+  if (typeof raw.subject === "string") out.subject = raw.subject;
   return out;
 }
 
@@ -86,6 +92,9 @@ function mapItem(raw: Record<string, unknown>): InvoiceItem {
   else if (raw.unitPrice !== undefined) out.unitPrice = raw.unitPrice as number;
   if (raw.amount !== undefined) out.amount = raw.amount as number;
   if (raw.itemType !== undefined) out.itemType = raw.itemType as string;
+  if (raw.applyTaxes !== undefined) out.applyTaxes = raw.applyTaxes as string;
+  if (raw.taxAmount !== undefined) out.taxAmount = raw.taxAmount as number;
+  if (raw.tax2Amount !== undefined) out.tax2Amount = raw.tax2Amount as number;
   return out;
 }
 
@@ -144,40 +153,117 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
     return Array.isArray(env) ? env : (env?.payments ?? env?.items ?? env?.data ?? []);
   }
 
-  // Closure-scoped so createInvoice can route note/subject through the SAME
-  // verified GET-then-clean-PUT path the public update uses (no `this`, which
-  // would break once the port is spread into the combined WorkspaceClient).
-  async function updateInvoiceImpl(
+  function createBody(input: Parameters<InvoicePort["createInvoiceBase"]>[0]): Record<string, unknown> {
+    return {
+      clientId: input.clientId,
+      number: input.number,
+      issuedDate: toClockifyDate(input.issuedDate),
+      currency: input.currency,
+      dueDate: toClockifyDate(input.dueDate),
+    };
+  }
+
+  function itemBody(item: Parameters<InvoicePort["addInvoiceItemAtomic"]>[1]): Record<string, unknown> {
+    return {
+      ...(item.description !== undefined ? { description: item.description } : {}),
+      ...(item.quantity !== undefined ? { quantity: item.quantity } : {}),
+      ...(item.unitPriceMinor !== undefined
+        ? { unitPrice: item.unitPriceMinor * UNIT_PRICE_WIRE_SCALE }
+        : {}),
+      applyTaxes: item.applyTaxes ?? "NONE",
+      itemType: item.itemType,
+    };
+  }
+
+  async function prepareInvoiceFieldUpdateImpl(
     id: string,
-    { patch, status }: { patch?: Record<string, unknown>; status?: string },
-  ): Promise<EntitySummary> {
-    const hasPatch = !!patch && Object.keys(patch).length > 0;
-    let number: string | undefined;
-    // GET once when there is anything to do — it feeds BOTH the clean PUT body
-    // (field updates) and the receipt's invoice number (status-only changes).
-    if (hasPatch || status) {
-      const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
-      number = existing.number as string | undefined;
-      if (hasPatch) {
-        const body: Record<string, unknown> = {};
-        for (const key of INVOICE_EDITABLE_FIELDS) {
-          if (existing[key] !== undefined) body[key] = existing[key];
-        }
-        for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
-          const value = existing[getKey];
-          if (typeof value === "number") body[putKey] = value / 100;
-        }
-        Object.assign(body, patch);
-        if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
-        if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
-        const updated = (await core.call("api", "PUT", `${ws}/invoices/${id}`, body)) as { number?: string };
-        number = updated?.number ?? number;
-      }
+    patch: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
+    const body: Record<string, unknown> = {};
+    for (const key of INVOICE_EDITABLE_FIELDS) {
+      if (existing[key] !== undefined) body[key] = existing[key];
     }
-    if (status) {
-      await core.call("api", "PATCH", `${ws}/invoices/${id}/status`, { invoiceStatus: status });
+    for (const [getKey, putKey] of INVOICE_PERCENT_FIELDS) {
+      const value = existing[getKey];
+      if (typeof value === "number") body[putKey] = value / 100;
     }
+    Object.assign(body, patch);
+    if (typeof body.issuedDate === "string") body.issuedDate = toClockifyDate(body.issuedDate);
+    if (typeof body.dueDate === "string") body.dueDate = toClockifyDate(body.dueDate);
+    return body;
+  }
+
+  async function updateInvoiceFieldsImpl(id: string, body: Record<string, unknown>): Promise<EntitySummary> {
+    const updated = (await core.mutate("api", "PUT", `${ws}/invoices/${id}`, body)) as
+      | { number?: string }
+      | null;
+    const number = updated?.number ?? (body.number as string | undefined);
     return { id, name: number ?? id };
+  }
+
+  async function updateInvoiceStatusImpl(id: string, status: string): Promise<EntitySummary> {
+    await core.mutate("api", "PATCH", `${ws}/invoices/${id}/status`, { invoiceStatus: status });
+    return { id, name: id };
+  }
+
+  async function createInvoiceBaseImpl(input: Parameters<InvoicePort["createInvoiceBase"]>[0]): Promise<EntitySummary> {
+    const inv = (await core.mutate("api", "POST", `${ws}/invoices`, createBody(input))) as
+      | { id?: unknown; number?: unknown }
+      | null;
+    if (typeof inv?.id !== "string" || inv.id.length === 0) {
+      throw new AmbiguousWriteOutcome(
+        "POST",
+        `${ws}/invoices`,
+        "Clockify returned a successful invoice response without a usable id.",
+      );
+    }
+    return { id: inv.id, name: typeof inv.number === "string" ? inv.number : input.number };
+  }
+
+  async function deleteInvoiceImpl(id: string): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/invoices/${id}`);
+  }
+
+  async function addInvoiceItemImpl(
+    id: string,
+    item: Parameters<InvoicePort["addInvoiceItemAtomic"]>[1],
+  ): Promise<void> {
+    await core.mutate("api", "POST", `${ws}/invoices/${id}/items`, itemBody(item));
+  }
+
+  async function deleteInvoiceItemImpl(id: string, index: number): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/invoices/${id}/items/${index}`);
+  }
+
+  async function createInvoicePaymentImpl(
+    id: string,
+    payment: Parameters<InvoicePort["createInvoicePaymentAtomic"]>[1],
+  ): Promise<void> {
+    await core.mutate("api", "POST", `${ws}/invoices/${id}/payments`, {
+      amount: payment.amountMinor,
+      paymentDate: toClockifyDate(payment.paymentDate),
+      ...(payment.note !== undefined ? { note: payment.note } : {}),
+    });
+  }
+
+  async function deleteInvoicePaymentImpl(id: string, paymentId: string): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/invoices/${id}/payments/${paymentId}`);
+  }
+
+  async function importInvoiceTimeImpl(
+    id: string,
+    range: Parameters<InvoicePort["importInvoiceTimeAtomic"]>[1],
+  ): Promise<void> {
+    const projectFilter: Record<string, unknown> = { contains: "CONTAINS", status: "ALL" };
+    if (range.projectIds?.length) projectFilter.ids = range.projectIds;
+    await core.mutate("api", "POST", `${ws}/invoices/${id}/items/import`, {
+      from: toClockifyDate(range.from),
+      to: toClockifyDate(range.to),
+      importExpenses: false,
+      timeEntryGroupType: "DETAILED",
+      projectFilter,
+    });
   }
 
   return {
@@ -201,6 +287,12 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       const items = detail?.items;
       return { rows: Array.isArray(items) ? items.map(mapItem) : [], truncated: false };
     },
+    async listRawInvoiceItems(id) {
+      const detail = (await core.call("api", "GET", `${ws}/invoices/${id}`, undefined, true)) as
+        | { items?: Record<string, unknown>[] }
+        | null;
+      return { rows: Array.isArray(detail?.items) ? detail.items : [], truncated: false };
+    },
     async listInvoicePayments(id) {
       return { rows: (await listPaymentsRaw(id)).map(mapPayment), truncated: false };
     },
@@ -212,49 +304,64 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       const qs = new URLSearchParams({ format: "PDF", userLocale: "en-US" });
       return core.getBinary("api", `${ws}/invoices/${id}/export?${qs.toString()}`, EXPORT_MAX_BYTES);
     },
+    async createInvoiceBase(input): Promise<EntitySummary> {
+      return createInvoiceBaseImpl(input);
+    },
     async createInvoice(input): Promise<EntitySummary> {
-      // POST /invoices accepts ONLY the spec's CreateInvoiceRequest fields
-      // (clientId, currency, dueDate, issuedDate, number). note/subject sent
-      // here are SILENTLY DROPPED — live-probed 2026-06-11: the POST response
-      // and a follow-up GET both show the workspace's default placeholder
-      // ("INPUT BILL INFO HERE"), never the supplied text. Apply them via the
-      // verified GET-then-clean-PUT update path so the billing doc is truthful.
-      const body: Record<string, unknown> = {
-        clientId: input.clientId,
-        number: input.number,
-        issuedDate: toClockifyDate(input.issuedDate),
-        currency: input.currency,
-        dueDate: toClockifyDate(input.dueDate),
-        status: "UNSENT",
-      };
-      const inv = (await core.call("api", "POST", `${ws}/invoices`, body)) as { id: string; number?: string };
+      const inv = await createInvoiceBaseImpl(input);
       if (input.note !== undefined || input.subject !== undefined) {
         const patch: Record<string, unknown> = {};
         if (input.note !== undefined) patch.note = input.note;
         if (input.subject !== undefined) patch.subject = input.subject;
-        return updateInvoiceImpl(inv.id, { patch });
+        const body = await prepareInvoiceFieldUpdateImpl(inv.id, patch);
+        return updateInvoiceFieldsImpl(inv.id, body);
       }
-      return { id: inv.id, name: inv.number ?? input.number };
+      return inv;
+    },
+    async prepareInvoiceFieldUpdate(id, patch) {
+      return prepareInvoiceFieldUpdateImpl(id, patch);
     },
     async updateInvoice(id, opts): Promise<EntitySummary> {
-      return updateInvoiceImpl(id, opts);
+      let entity: EntitySummary = { id, name: id };
+      let compatibilityName: string | undefined;
+      if (opts.patch && Object.keys(opts.patch).length > 0) {
+        const body = await prepareInvoiceFieldUpdateImpl(id, opts.patch);
+        entity = await updateInvoiceFieldsImpl(id, body);
+      }
+      if (opts.status && (!opts.patch || Object.keys(opts.patch).length === 0)) {
+        const existing = ((await core.call("api", "GET", `${ws}/invoices/${id}`)) ?? {}) as Record<string, unknown>;
+        if (typeof existing.number === "string") compatibilityName = existing.number;
+      }
+      if (opts.status) entity = await updateInvoiceStatusImpl(id, opts.status);
+      if (compatibilityName) entity = { id, name: compatibilityName };
+      return entity;
+    },
+    async updateInvoiceFields(id, patch) {
+      return updateInvoiceFieldsImpl(id, patch);
+    },
+    async updateInvoiceStatus(id, status) {
+      return updateInvoiceStatusImpl(id, status);
+    },
+    async deleteInvoiceAtomic(id) {
+      await deleteInvoiceImpl(id);
     },
     async deleteInvoice(id) {
-      await core.call("api", "DELETE", `${ws}/invoices/${id}`);
+      await deleteInvoiceImpl(id);
+    },
+    async addInvoiceItemAtomic(id, item) {
+      await addInvoiceItemImpl(id, item);
     },
     async addInvoiceItem(id, item) {
-      const body: Record<string, unknown> = {
-        ...(item.description !== undefined ? { description: item.description } : {}),
-        ...(item.quantity !== undefined ? { quantity: item.quantity } : {}),
-        // minor → the wire's minor×100 scale (see UNIT_PRICE_WIRE_SCALE).
-        ...(item.unitPriceMinor !== undefined ? { unitPrice: item.unitPriceMinor * UNIT_PRICE_WIRE_SCALE } : {}),
-        applyTaxes: item.applyTaxes ?? "NONE",
-        itemType: item.itemType,
-      };
-      await core.call("api", "POST", `${ws}/invoices/${id}/items`, body);
+      await addInvoiceItemImpl(id, item);
+    },
+    async deleteInvoiceItemAtomic(id, index) {
+      await deleteInvoiceItemImpl(id, index);
     },
     async deleteInvoiceItem(id, index) {
-      await core.call("api", "DELETE", `${ws}/invoices/${id}/items/${index}`);
+      await deleteInvoiceItemImpl(id, index);
+    },
+    async createInvoicePaymentAtomic(id, payment) {
+      await createInvoicePaymentImpl(id, payment);
     },
     async createInvoicePayment(id, payment): Promise<InvoicePayment> {
       // The POST response is the updated INVOICE document, not the payment
@@ -263,12 +370,7 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       // genuinely new payment instead.
       const before = new Set((await listPaymentsRaw(id)).map((p) => p.id ?? p._id));
       const paymentDate = toClockifyDate(payment.paymentDate);
-      const body: Record<string, unknown> = {
-        amount: payment.amountMinor,
-        paymentDate,
-        ...(payment.note !== undefined ? { note: payment.note } : {}),
-      };
-      await core.call("api", "POST", `${ws}/invoices/${id}/payments`, body);
+      await createInvoicePaymentImpl(id, payment);
       const matches = (await listPaymentsRaw(id))
         .filter((row) => !before.has(row.id ?? row._id))
         .map((row) => mapPayment(row))
@@ -284,19 +386,17 @@ export function makeInvoiceRest(core: RestCore, workspaceId: string): InvoicePor
       // intentionally unknown, so callers cannot offer an unsafe undo.
       return matches.length === 1 ? matches[0] : {};
     },
+    async deleteInvoicePaymentAtomic(id, paymentId) {
+      await deleteInvoicePaymentImpl(id, paymentId);
+    },
     async deleteInvoicePayment(id, paymentId) {
-      await core.call("api", "DELETE", `${ws}/invoices/${id}/payments/${paymentId}`);
+      await deleteInvoicePaymentImpl(id, paymentId);
+    },
+    async importInvoiceTimeAtomic(id, range) {
+      await importInvoiceTimeImpl(id, range);
     },
     async importInvoiceTime(id, range) {
-      const projectFilter: Record<string, unknown> = { contains: "CONTAINS", status: "ALL" };
-      if (range.projectIds?.length) projectFilter.ids = range.projectIds;
-      await core.call("api", "POST", `${ws}/invoices/${id}/items/import`, {
-        from: toClockifyDate(range.from),
-        to: toClockifyDate(range.to),
-        importExpenses: false,
-        timeEntryGroupType: "DETAILED",
-        projectFilter,
-      });
+      await importInvoiceTimeImpl(id, range);
     },
   };
 }

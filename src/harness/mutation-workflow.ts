@@ -23,6 +23,8 @@ export interface ExecutableMutationStep {
   name: string;
   kind: "primary" | "compensation";
   targetFingerprint?: string;
+  /** Sanitized evidence persisted on the prepared row before dispatch. */
+  preparedDetail?: unknown;
   compensatesStepId?: string;
   dispatch: () => Promise<MutationDispatchResult>;
 }
@@ -83,6 +85,15 @@ function runtimeStep(input: {
   };
 }
 
+function combinePreparedDetail(prepared: unknown, dispatched: unknown): unknown {
+  if (prepared === undefined) return dispatched;
+  if (dispatched === undefined) return prepared;
+  if (prepared && typeof prepared === "object" && !Array.isArray(prepared)) {
+    return { ...(prepared as Record<string, unknown>), dispatch: dispatched };
+  }
+  return { preDispatch: prepared, dispatch: dispatched };
+}
+
 /**
  * Execute one and only one injected host mutation. The durable ordering is:
  * prepared -> executing (committed synchronously) -> dispatch -> terminal.
@@ -111,6 +122,7 @@ export async function executeStep(input: {
     name: input.step.name,
     kind: "primary",
     ...(input.step.targetFingerprint ? { targetFingerprint: input.step.targetFingerprint } : {}),
+    ...(input.step.preparedDetail === undefined ? {} : { preparedDetail: input.step.preparedDetail }),
   });
   if (!input.journal.markOperationStepExecuting(stepId)) {
     throw new Error("operation_step_not_prepared");
@@ -129,6 +141,12 @@ export async function executeStep(input: {
       : "outcome_unknown";
     outcome = { detail: safeFailureDetail(error) };
   }
+  outcome = {
+    ...outcome,
+    ...(input.step.preparedDetail === undefined
+      ? {}
+      : { detail: combinePreparedDetail(input.step.preparedDetail, outcome.detail) }),
+  };
 
   try {
     input.journal.settleOperationStep(stepId, status, outcome);

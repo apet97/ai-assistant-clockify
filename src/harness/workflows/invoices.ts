@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import { zNumberLike } from "../arg-shapes.js";
 import {
   clarifyResult,
@@ -11,12 +10,26 @@ import {
   type ActionResult,
   type RiskyClarifyResult,
 } from "../action.js";
-import { errorReceipt, listReceipt, successReceipt, type SuccessReceipt, type Warning } from "../receipts.js";
+import { errorReceipt, listReceipt, successReceipt, type SuccessReceipt } from "../receipts.js";
 import type { ListResult } from "../../clockify/types.js";
 import { fromMinor, toMinor } from "../money.js";
 import { THIRTY_DAYS_MS } from "../../durations.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveInstant, resolveRelativeDay } from "./resolve.js";
 import { discoverItemTypes, resolveItemType, itemTypeClarify, taxApplyFlag } from "./invoices-schema.js";
+import { buildInvoiceCreateProvenance } from "../invoice-provenance.js";
+import {
+  buildInvoiceCreatePayload,
+  commitInvoiceCreate,
+  type InvoiceCreatePayload,
+} from "../invoice-create-workflow.js";
+import { commitInvoiceUpdate, type InvoiceUpdatePayload } from "../invoice-update-workflow.js";
+import {
+  commitInvoicePaymentCreate,
+  type InvoicePaymentCreatePayload,
+} from "../invoice-payment-workflow.js";
+import { paymentBaseline } from "../invoice-reconciliation.js";
+import { billingFingerprint } from "../billing-fingerprint.js";
+import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -261,7 +274,7 @@ const invoiceItemSchema = z.object({
   quantity: zNumberLike(z.number().positive()).optional(),
   amount: zNumberLike(z.number().nonnegative()).optional(),
   /** `major` (e.g. 100.00) is converted ×100 to the minor units Clockify wants. */
-  amountUnit: z.enum(["major", "minor"]).default("major"),
+  amountUnit: z.enum(["major", "minor"]).optional(),
   itemType: z.string().min(1).optional(),
   applyTaxes: z.enum(["TAX1", "TAX2", "TAX1TAX2", "NONE"]).optional(),
 });
@@ -272,6 +285,7 @@ const createInvoice = defineRiskyAction({
     "Create an invoice for a client (by `clientName` — resolved server-side — or `clientId`). `issuedDate`/`dueDate` accept YYYY-MM-DD or a relative day/period (today, next monday, next month — resolved server-side; never guess a calendar date); `number`, dates, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step — use this for \"create an invoice and add an item\" so the new invoice id is resolved server-side. Set the invoice tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` (whole percents, e.g. 3 for 3%) — when a tax rate is set, the line items you add are taxed by default (Clockify item-based tax). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
+  mutationWorkflow: "durable",
   schema: z
     .object({
       clientId: z.string().min(1).optional(),
@@ -334,21 +348,22 @@ const createInvoice = defineRiskyAction({
     }
     const currency = args.currency ?? "USD";
 
-    const input = {
+    const base = {
       clientId,
       number,
       issuedDate,
       currency,
       dueDate,
-      ...(args.note !== undefined ? { note: args.note } : {}),
-      ...(args.subject !== undefined ? { subject: args.subject } : {}),
     };
 
     // Build the line items (amounts converted to minor units now, so commit never
     // re-derives them). Resolve each item's type against the workspace's actual
     // configured types — if a named type isn't configured (and some ARE), clarify
     // with the real list instead of creating a doomed $0 invoice.
-    const discovered = args.items?.length ? await discoverItemTypes(ctx) : { rows: [], truncated: false };
+    const invoiceBaseline = await ctx.clockify.listInvoices();
+    const discovered = args.items?.length
+      ? await discoverItemTypes(ctx, invoiceBaseline)
+      : { rows: [], truncated: false };
     // Item-based tax: when the create sets a rate, its items default to taxed
     // (matches Clockify's checked-by-default TAX/TAX2 columns). An explicit
     // per-item applyTaxes still wins.
@@ -363,7 +378,7 @@ const createInvoice = defineRiskyAction({
         // "Description is required."); default them visibly in the preview.
         description: it.description ?? resolved.itemType,
         quantity: it.quantity ?? 1,
-        ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit) } : {}),
+        ...(it.amount !== undefined ? { unitPriceMinor: toMinor(it.amount, it.amountUnit ?? "major") } : {}),
         ...(it.applyTaxes !== undefined
           ? { applyTaxes: it.applyTaxes }
           : defaultApplyTaxes !== undefined
@@ -373,10 +388,12 @@ const createInvoice = defineRiskyAction({
     }
     // Invoice-level tax/discount live on the invoice doc (POST /invoices ignores
     // them) — applied in commit via the verified GET-then-PUT update path.
-    const percentPatch: Record<string, number> = {};
-    if (args.taxPercent !== undefined) percentPatch.taxPercent = args.taxPercent;
-    if (args.tax2Percent !== undefined) percentPatch.tax2Percent = args.tax2Percent;
-    if (args.discountPercent !== undefined) percentPatch.discountPercent = args.discountPercent;
+    const enrichment: Record<string, unknown> = {};
+    if (args.note !== undefined) enrichment.note = args.note;
+    if (args.subject !== undefined) enrichment.subject = args.subject;
+    if (args.taxPercent !== undefined) enrichment.taxPercent = args.taxPercent;
+    if (args.tax2Percent !== undefined) enrichment.tax2Percent = args.tax2Percent;
+    if (args.discountPercent !== undefined) enrichment.discountPercent = args.discountPercent;
 
     const defaulted = [
       args.number === undefined ? "number" : null,
@@ -417,69 +434,39 @@ const createInvoice = defineRiskyAction({
           : []),
         ...(defaulted.length ? [`Defaulted: ${defaulted.join(", ")} — say the values to override.`] : []),
       ],
-      payload: {
-        operationId: randomUUID(),
-        input,
+      payload: buildInvoiceCreatePayload({
+        base,
+        enrichment,
         items,
-        ...(Object.keys(percentPatch).length ? { percentPatch } : {}),
+        provenance: buildInvoiceCreateProvenance(args),
+        invoiceBaseline: {
+          ids: invoiceBaseline.rows.map((invoice) => invoice.id),
+          truncated: invoiceBaseline.truncated,
+        },
+      }),
+      mutationPlan: {
+        mode: "curated",
+        steps: [
+          { id: "create-invoice", kind: "primary" as const },
+          ...(Object.keys(enrichment).length
+            ? [{ id: "enrich-invoice", kind: "primary" as const }]
+            : []),
+          ...items.map((_item, index) => ({
+            id: `add-invoice-item-${index}`,
+            kind: "primary" as const,
+          })),
+        ],
       },
     };
   },
-  async commit(ctx, payload) {
-    const { input, items, percentPatch } = payload as {
-      input: Parameters<typeof ctx.clockify.createInvoice>[0];
-      items?: Array<Parameters<typeof ctx.clockify.addInvoiceItem>[1]>;
-      percentPatch?: Record<string, number>;
-    };
-    const invoice = await ctx.clockify.createInvoice(input);
-    // Add the line items onto the just-created invoice. A failed item is reported
-    // (partial failure is never hidden), not silently dropped — the invoice exists.
-    const warnings: Warning[] = [];
-    let added = 0;
-    // Apply invoice-level tax/discount via the verified GET-then-PUT update path
-    // (POST /invoices silently drops these, like note/subject). Failure ⇒ warning.
-    if (percentPatch && Object.keys(percentPatch).length > 0) {
-      try {
-        await ctx.clockify.updateInvoice(invoice.id, { patch: percentPatch });
-      } catch (error) {
-        warnings.push({
-          code: "tax_not_applied",
-          message: `Tax/discount could not be applied: ${error instanceof Error ? error.message.slice(0, 120) : "error"}`,
-        });
-      }
-    }
-    for (const item of items ?? []) {
-      try {
-        await ctx.clockify.addInvoiceItem(invoice.id, item);
-        added += 1;
-      } catch (error) {
-        const raw = error instanceof Error ? error.message : "error";
-        // Invoice item types are auto-created when a line item is added in the
-        // Clockify UI; a workspace that's never had one has none. Make that
-        // actionable instead of a raw 404 (there's no "settings" screen for them).
-        const actionable = /item type/i.test(raw)
-          ? "this workspace has no matching invoice item type. Add a line item once in the Clockify invoice editor (it auto-creates a type), or tell me an existing item type name."
-          : raw.slice(0, 120);
-        warnings.push({
-          code: "item_not_added",
-          message: `Line item${item.description ? ` "${item.description}"` : ""} could not be added: ${actionable}`,
-        });
-      }
-    }
-    return successReceipt({
-      action: "clockify_invoices_create",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "invoice", id: invoice.id, name: invoice.name }] },
-      data: items && items.length ? { itemsRequested: items.length, itemsAdded: added } : undefined,
-      warnings: warnings.length ? warnings : undefined,
-    });
+  async commit(ctx, payload, operation) {
+    return commitInvoiceCreate({ ctx, operation, payload: payload as unknown as InvoiceCreatePayload });
   },
   // Operation identity is primary: retries/reconfirms of this exact stored
   // operation dedupe, while two independently previewed identical invoices remain
   // intentional and are both allowed.
-  idempotencyKey(payload) {
-    return (payload as { operationId: string }).operationId;
+  idempotencyKey(_payload, operation) {
+    return operation.operationId;
   },
 });
 
@@ -489,6 +476,7 @@ const updateInvoice = defineRiskyAction({
     "Update an invoice (note/subject/number/dates/currency/client, status, or tax/discount). `id` accepts the invoice id or its NUMBER (resolved server-side); `number` sets a NEW number. Set tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` (whole percents, e.g. 3 for 3%). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
+  mutationWorkflow: "durable",
   schema: z
     .object({
       id: z.string().min(1),
@@ -570,24 +558,39 @@ const updateInvoice = defineRiskyAction({
     };
     const changes = describePatch(patch);
     if (args.status !== undefined) changes.push(`set status → ${args.status}`);
+    let updateBody: Record<string, unknown> | undefined;
+    if (Object.keys(patch).length > 0) {
+      try {
+        updateBody = await ctx.clockify.prepareInvoiceFieldUpdate(resolved.id, patch);
+      } catch {
+        return { clarify: "I couldn't read the current invoice fields safely. Refresh the invoice and preview the update again." };
+      }
+    }
     return {
       actionLabel: "Update invoice",
       targets: [{ type: "invoice", id: resolved.id, name: resolved.number }],
       expectedChanges: changes,
       reversibility: "You can update the invoice again to revert most fields.",
       warnings: ["Updating an invoice changes a live billing document."],
-      payload: { id: resolved.id, patch, ...(args.status !== undefined ? { status: args.status } : {}) },
+      payload: {
+        id: resolved.id,
+        patch,
+        ...(updateBody ? { updateBody } : {}),
+        ...(args.status !== undefined ? { status: args.status } : {}),
+      },
+      mutationPlan: {
+        mode: "curated",
+        steps: [
+          ...(updateBody ? [{ id: "update-invoice-fields", kind: "primary" as const }] : []),
+          ...(args.status !== undefined
+            ? [{ id: "update-invoice-status", kind: "primary" as const }]
+            : []),
+        ],
+      },
     };
   },
-  async commit(ctx, payload) {
-    const typed = payload as { id: string; patch: Record<string, unknown>; status?: string };
-    const updated = await ctx.clockify.updateInvoice(typed.id, { patch: typed.patch, status: typed.status });
-    return successReceipt({
-      action: "clockify_invoices_update",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "invoice", id: updated.id, name: updated.name }] },
-    });
+  async commit(ctx, payload, operation) {
+    return commitInvoiceUpdate({ ctx, operation, payload: payload as InvoiceUpdatePayload });
   },
 });
 
@@ -597,6 +600,7 @@ const deleteInvoice = defineRiskyAction({
     "Delete an invoice, by id or by its `number` (resolved server-side). Destructive billing action — previews and requires confirmation.",
   group: INV,
   risks: ["destructive", "billing"],
+  mutationWorkflow: "durable",
   schema: z
     .object({ id: z.string().min(1).optional(), number: z.string().min(1).optional() })
     .refine((v) => v.id !== undefined || v.number !== undefined, {
@@ -613,16 +617,26 @@ const deleteInvoice = defineRiskyAction({
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an invoice permanently removes a billing document."],
       payload: { id: resolved.id, number },
+      mutationPlan: { mode: "single", steps: [{ id: "delete-invoice", kind: "primary" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, number } = payload as { id: string; number?: string };
-    await ctx.clockify.deleteInvoice(id);
-    return successReceipt({
-      action: "clockify_invoices_delete",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "invoice", id, name: number }] },
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "delete-invoice",
+      name: "Delete invoice",
+      dispatch: async () => {
+        await ctx.clockify.deleteInvoiceAtomic(id);
+        return { effect: { deleted: { type: "invoice", id, name: number } } };
+      },
+      success: () => successReceipt({
+        action: "clockify_invoices_delete",
+        entity: "invoice",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { deleted: [{ type: "invoice", id, name: number }] },
+      }),
     });
   },
 });
@@ -633,6 +647,7 @@ const addInvoiceItem = defineRiskyAction({
     "Add a line item to an invoice. An amount alone is enough — description (defaults to the item type), quantity (1) and itemType (discovered from the workspace) all default server-side, so don't ask the admin for them. Billing action — previews and requires confirmation. `itemType` names a workspace-configured invoice item type; pass the one the admin asked for (e.g. \"service\") — the harness checks it against the workspace's actual types and, if it isn't configured, asks the admin to pick from the real list (it never guesses).",
   group: INV,
   risks: ["billing"],
+  mutationWorkflow: "durable",
   schema: z.object({
     invoiceId: z.string().min(1),
     itemType: z.string().min(1).optional(),
@@ -696,15 +711,25 @@ const addInvoiceItem = defineRiskyAction({
       reversibility: "You can delete the line item afterward.",
       warnings: ["This changes a live billing document."],
       payload: { invoiceId: invoice.id, item },
+      mutationPlan: { mode: "single", steps: [{ id: "add-invoice-item", kind: "primary" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const typed = payload as {
       invoiceId: string;
       item: Parameters<typeof ctx.clockify.addInvoiceItem>[1];
     };
-    await ctx.clockify.addInvoiceItem(typed.invoiceId, typed.item);
-    return invoiceUpdatedReceipt(ctx, "clockify_invoices_items_add", typed.invoiceId);
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "add-invoice-item",
+      name: "Add invoice item",
+      dispatch: async () => {
+        await ctx.clockify.addInvoiceItemAtomic(typed.invoiceId, typed.item);
+        return { effect: { addedItem: { invoiceId: typed.invoiceId } } };
+      },
+      success: () => invoiceUpdatedReceipt(ctx, "clockify_invoices_items_add", typed.invoiceId),
+    });
   },
 });
 
@@ -714,11 +739,12 @@ const deleteInvoiceItem = defineRiskyAction({
     "Delete an invoice line item by its index (line order). Destructive billing action — previews and requires confirmation.",
   group: INV,
   risks: ["destructive", "billing"],
+  mutationWorkflow: "durable",
   schema: z.object({ invoiceId: z.string().min(1), index: z.number().int().nonnegative() }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete an item from");
     if (!invoice.ok) return invoice.clarify;
-    const items = await ctx.clockify.listInvoiceItems(invoice.id);
+    const items = await ctx.clockify.listRawInvoiceItems(invoice.id);
     const selectedItem = items.rows[args.index];
     if (!selectedItem) {
       return {
@@ -727,26 +753,38 @@ const deleteInvoiceItem = defineRiskyAction({
           : `Invoice ${invoice.number ?? invoice.id} has no line item at index ${args.index}.`,
       };
     }
+    if (items.truncated) {
+      return { clarify: "Clockify returned an incomplete invoice item list, so I can't authorize deletion. Refresh the invoice and preview again." };
+    }
+    const rawItems = structuredClone(items.rows);
+    const rawItemsFingerprint = billingFingerprint(rawItems);
     const itemSnapshot = structuredClone(selectedItem);
+    const itemDescription = typeof itemSnapshot.description === "string"
+      ? itemSnapshot.description
+      : undefined;
     return {
       actionLabel: "Delete invoice item",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [
-        `Delete invoice line item #${args.index}${itemSnapshot.description ? ` "${itemSnapshot.description}"` : ""}`,
+        `Delete invoice line item #${args.index}${itemDescription ? ` "${itemDescription}"` : ""}`,
       ],
       reversibility: "This cannot be undone; re-add the line to restore it.",
       warnings: ["This changes a live billing document."],
-      payload: { invoiceId: invoice.id, index: args.index, itemSnapshot },
+      payload: { invoiceId: invoice.id, index: args.index, itemSnapshot, rawItems, rawItemsFingerprint },
+      mutationPlan: {
+        mode: "single",
+        steps: [{ id: "delete-invoice-item", kind: "primary", targetFingerprint: rawItemsFingerprint }],
+      },
     };
   },
-  async commit(ctx, payload) {
-    const { invoiceId, index, itemSnapshot } = payload as {
+  async commit(ctx, payload, operation) {
+    const { invoiceId, index, rawItemsFingerprint } = payload as {
       invoiceId: string;
       index: number;
-      itemSnapshot: Awaited<ReturnType<typeof ctx.clockify.listInvoiceItems>>["rows"][number];
+      rawItemsFingerprint: string;
     };
-    const current = (await ctx.clockify.listInvoiceItems(invoiceId)).rows[index];
-    if (current === undefined || JSON.stringify(current) !== JSON.stringify(itemSnapshot)) {
+    const current = await ctx.clockify.listRawInvoiceItems(invoiceId);
+    if (current.truncated || billingFingerprint(current.rows) !== rawItemsFingerprint) {
       return errorReceipt({
         action: "clockify_invoices_items_delete",
         code: "stale_target",
@@ -754,8 +792,17 @@ const deleteInvoiceItem = defineRiskyAction({
         recovery: { hint: "Preview the invoice-item deletion again." },
       });
     }
-    await ctx.clockify.deleteInvoiceItem(invoiceId, index);
-    return invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId);
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "delete-invoice-item",
+      name: "Delete invoice item",
+      dispatch: async () => {
+        await ctx.clockify.deleteInvoiceItemAtomic(invoiceId, index);
+        return { effect: { deletedItemIndex: index, invoiceId } };
+      },
+      success: () => invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId),
+    });
   },
 });
 
@@ -765,11 +812,12 @@ const createInvoicePayment = defineRiskyAction({
     "Record a payment against an invoice. Payment action — previews and requires confirmation.",
   group: INV,
   risks: ["payment"],
+  mutationWorkflow: "durable",
   schema: z.object({
     invoiceId: z.string().min(1),
     amount: zNumberLike(z.number().positive()),
     /** `major` (e.g. 50.00) is converted ×100 to the minor units Clockify wants. */
-    amountUnit: z.enum(["major", "minor"]).default("major"),
+    amountUnit: z.enum(["major", "minor"]).optional(),
     paymentDate: z.string().min(1), // full ISO or YYYY-MM-DD
     note: z.string().optional(),
   }),
@@ -781,12 +829,13 @@ const createInvoicePayment = defineRiskyAction({
     if (paymentDate === undefined) {
       return { clarify: `I couldn't make sense of the payment date "${args.paymentDate}" — give me a real calendar date or an offset-bearing ISO datetime.` };
     }
-    const amountMinor = toMinor(args.amount, args.amountUnit);
+    const amountMinor = toMinor(args.amount, args.amountUnit ?? "major");
     const payment = {
       amountMinor,
       paymentDate,
       ...(args.note !== undefined ? { note: args.note } : {}),
     };
+    const payments = await ctx.clockify.listInvoicePayments(invoice.id);
     return {
       actionLabel: "Record invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
@@ -798,38 +847,16 @@ const createInvoicePayment = defineRiskyAction({
       ],
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
-      payload: { invoiceId: invoice.id, payment },
+      payload: { invoiceId: invoice.id, payment, paymentBaseline: paymentBaseline(payments) },
+      mutationPlan: { mode: "single", steps: [{ id: "record-payment", kind: "primary" }] },
     };
   },
-  async commit(ctx, payload) {
-    const typed = payload as {
-      invoiceId: string;
-      payment: Parameters<typeof ctx.clockify.createInvoicePayment>[1];
-    };
-    const created = await ctx.clockify.createInvoicePayment(typed.invoiceId, typed.payment);
-    // The payment id comes from a list-diff around the POST and can be
-    // undetermined (concurrent payment, id-less rows). Never invent one — when
-    // it's unknown, record the invoice itself as updated and warn honestly
-    // rather than fabricating a payment EntityRef with a placeholder id.
-    return created.id
-      ? successReceipt({
-          action: "clockify_invoices_payments_create",
-          entity: "invoice",
-          ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
-          changed: { created: [{ type: "payment", id: created.id }] },
-        })
-      : successReceipt({
-          action: "clockify_invoices_payments_create",
-          entity: "invoice",
-          ids: { workspaceId: ctx.workspaceId, invoiceId: typed.invoiceId },
-          changed: { updated: [{ type: "invoice", id: typed.invoiceId }] },
-          warnings: [
-            {
-              code: "payment_id_unknown",
-              message: "Payment recorded, but its id could not be determined from the invoice.",
-            },
-          ],
-        });
+  async commit(ctx, payload, operation) {
+    return commitInvoicePaymentCreate({
+      ctx,
+      operation,
+      payload: payload as InvoicePaymentCreatePayload,
+    });
   },
 });
 
@@ -839,27 +866,70 @@ const deleteInvoicePayment = defineRiskyAction({
     "Delete a recorded invoice payment. Destructive payment action — previews and requires confirmation.",
   group: INV,
   risks: ["destructive", "payment"],
+  mutationWorkflow: "durable",
   schema: z.object({ invoiceId: z.string().min(1), paymentId: z.string().min(1) }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete a payment from");
     if (!invoice.ok) return invoice.clarify;
+    const payments = await ctx.clockify.listInvoicePayments(invoice.id);
+    if (payments.truncated) {
+      return { clarify: "Clockify returned an incomplete payment list, so I can't authorize deletion. Refresh the invoice and preview again." };
+    }
+    const matches = payments.rows.filter((payment) => payment.id === args.paymentId);
+    if (matches.length !== 1) {
+      return { clarify: `Payment ${args.paymentId} could not be verified uniquely on this invoice.` };
+    }
+    const paymentSnapshot = structuredClone(matches[0]!);
     return {
       actionLabel: "Delete invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
       expectedChanges: [`Delete payment ${args.paymentId}`],
       reversibility: "This cannot be undone; re-record the payment to restore it.",
       warnings: ["This removes a recorded payment from a live invoice."],
-      payload: { invoiceId: invoice.id, paymentId: args.paymentId },
+      payload: {
+        invoiceId: invoice.id,
+        paymentId: args.paymentId,
+        paymentSnapshot,
+        paymentListTruncated: false,
+      },
+      mutationPlan: {
+        mode: "single",
+        steps: [{ id: "delete-invoice-payment", kind: "primary", targetFingerprint: billingFingerprint(paymentSnapshot) }],
+      },
     };
   },
-  async commit(ctx, payload) {
-    const { invoiceId, paymentId } = payload as { invoiceId: string; paymentId: string };
-    await ctx.clockify.deleteInvoicePayment(invoiceId, paymentId);
-    return successReceipt({
-      action: "clockify_invoices_payments_delete",
-      entity: "invoice",
-      ids: { workspaceId: ctx.workspaceId, invoiceId },
-      changed: { deleted: [{ type: "payment", id: paymentId }] },
+  async commit(ctx, payload, operation) {
+    const { invoiceId, paymentId, paymentSnapshot } = payload as {
+      invoiceId: string;
+      paymentId: string;
+      paymentSnapshot: Record<string, unknown>;
+    };
+    const current = await ctx.clockify.listInvoicePayments(invoiceId);
+    const matches = current.rows.filter((payment) => payment.id === paymentId);
+    if (current.truncated || matches.length !== 1 ||
+      billingFingerprint(matches[0]) !== billingFingerprint(paymentSnapshot)) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "stale_target",
+        message: "The payment changed or could not be verified completely after preview. No deletion was sent.",
+        recovery: { hint: "Refresh the invoice and preview payment deletion again." },
+      });
+    }
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "delete-invoice-payment",
+      name: "Delete invoice payment",
+      dispatch: async () => {
+        await ctx.clockify.deleteInvoicePaymentAtomic(invoiceId, paymentId);
+        return { effect: { deleted: { type: "payment", id: paymentId } } };
+      },
+      success: () => successReceipt({
+        action: "clockify_invoices_payments_delete",
+        entity: "invoice",
+        ids: { workspaceId: ctx.workspaceId, invoiceId },
+        changed: { deleted: [{ type: "payment", id: paymentId }] },
+      }),
     });
   },
 });
@@ -870,6 +940,7 @@ const importInvoiceTime = defineRiskyAction({
     "Import billable time entries into an invoice by date range. `from`/`to` accept YYYY-MM-DD or a relative day/period (today, last week, this month — resolved server-side; never guess a calendar date). Billing action — previews and requires confirmation.",
   group: INV,
   risks: ["billing"],
+  mutationWorkflow: "durable",
   schema: z.object({
     invoiceId: z.string().min(1),
     from: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
@@ -905,15 +976,25 @@ const importInvoiceTime = defineRiskyAction({
       reversibility: "Delete the imported line items to revert.",
       warnings: ["This adds billable time as invoice line items."],
       payload: { invoiceId: invoice.id, range },
+      mutationPlan: { mode: "single", steps: [{ id: "import-invoice-time", kind: "primary" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const typed = payload as {
       invoiceId: string;
       range: Parameters<typeof ctx.clockify.importInvoiceTime>[1];
     };
-    await ctx.clockify.importInvoiceTime(typed.invoiceId, typed.range);
-    return invoiceUpdatedReceipt(ctx, "clockify_invoices_import_time", typed.invoiceId);
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "import-invoice-time",
+      name: "Import invoice time",
+      dispatch: async () => {
+        await ctx.clockify.importInvoiceTimeAtomic(typed.invoiceId, typed.range);
+        return { effect: { importedTime: { invoiceId: typed.invoiceId } } };
+      },
+      success: () => invoiceUpdatedReceipt(ctx, "clockify_invoices_import_time", typed.invoiceId),
+    });
   },
 });
 

@@ -484,7 +484,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     expect((events[replyIdx] as { text: string }).text).toContain("qwen");
     expect(events[events.length - 1].type).toBe("done");
     // The invoice committed exactly once; the resume only re-planned (1 model call).
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat + 1);
   });
 
@@ -1008,7 +1008,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(chat.status).toBe(200);
     const previews = previewsOf(chat.body.results as ResultItem[]);
     expect(previews).toHaveLength(1);
-    expect(fake.counts.createInvoice ?? 0).toBe(0);
+    expect(fake.counts.createInvoiceBase ?? 0).toBe(0);
 
     const confirm = await request(app)
       .post(`/api/confirmations/${previews[0].previewId}/confirm`)
@@ -1017,7 +1017,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
 
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
     // The loop resumed: the model saw the COMMITTED receipt as the risky call's tool result...
     const resumeCall = model.calls[2];
     const toolMsg = resumeCall.messages[resumeCall.messages.length - 1];

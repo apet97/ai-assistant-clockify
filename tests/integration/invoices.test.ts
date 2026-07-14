@@ -90,10 +90,10 @@ describe("invoice actions", () => {
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("billing");
-    expect(fake.counts.createInvoice ?? 0).toBe(0);
+    expect(fake.counts.createInvoiceBase ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
     expect(fake.state.invoices.find((i) => i.number === "AIASSIST_SMOKE_inv")).toBeDefined();
   });
 
@@ -105,7 +105,7 @@ describe("invoice actions", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
-    const input = (preview.operation.payload as { input: Record<string, string> }).input;
+    const input = (preview.operation.payload as { base: Record<string, string> }).base;
     expect(input.clientId).toBe("c-asd");
     expect(input.number).toBeTruthy();
     expect(input.issuedDate).toBeTruthy();
@@ -113,7 +113,7 @@ describe("invoice actions", () => {
     expect(input.currency).toBeTruthy();
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
   });
 
   it("clockify_invoices_create adds inline items in the same step (resolves the new invoice id server-side)", async () => {
@@ -126,8 +126,8 @@ describe("invoice actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createInvoice).toBe(1);
-    expect(fake.counts.addInvoiceItem).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
+    expect(fake.counts.addInvoiceItemAtomic).toBe(1);
     // The created invoice carries the item, converted to minor units (100.00 -> 10000),
     // with Clockify's default item type when the caller didn't name one.
     const inv = fake.state.invoices[fake.state.invoices.length - 1];
@@ -135,7 +135,7 @@ describe("invoice actions", () => {
     expect(inv.items[0]).toMatchObject({ description: "charge", quantity: 1, unitPrice: 10000, itemType: "NEW DEFAULT" });
   });
 
-  it("clockify_invoices_create still creates the invoice and warns actionably when the item can't be added", async () => {
+  it("clockify_invoices_create truthfully returns partial when the item can't be added", async () => {
     const fake = createFakeWorkspace({ clients: [{ id: "c-asd", name: "asdqwe123" }], failAddInvoiceItem: true });
     const preview = await executeAction({
       actionName: "clockify_invoices_create",
@@ -144,11 +144,11 @@ describe("invoice actions", () => {
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(receipt.ok).toBe(true); // the invoice itself was created
-    expect(receipt.ok && receipt.changed?.created?.[0]?.type).toBe("invoice");
-    const warnings = (receipt.ok && receipt.warnings) || [];
-    expect(warnings.length).toBeGreaterThan(0);
-    expect(warnings.some((w) => /item type/i.test(w.message))).toBe(true);
+    expect(receipt).toMatchObject({
+      kind: "partial",
+      receipt: { ok: true, changed: { created: [{ type: "invoice" }] } },
+      recovery: { retryable: false },
+    });
   });
 
   it("clockify_invoices_create clarifies (not punt) when the client name matches none / many", async () => {
@@ -176,7 +176,7 @@ describe("invoice actions", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
-    const input = (preview.operation.payload as any).input;
+    const input = (preview.operation.payload as any).base;
     expect(input.issuedDate).toBe("2026-06-06T00:00:00.000Z");
     expect(input.dueDate.slice(0, 10)).toBe("2026-07-01");
     // Truthful preview: the resolved dates are what the admin verifies.
@@ -202,7 +202,7 @@ describe("invoice actions", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect((preview.operation.payload as any).input.clientId).toBe("c-asd");
+    expect((preview.operation.payload as any).base.clientId).toBe("c-asd");
 
     const unknown = await executeAction({
       actionName: "clockify_invoices_create",
@@ -235,7 +235,7 @@ describe("invoice actions", () => {
     expect(preview.operation.risks).toContain("billing");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateInvoice).toBe(1);
+    expect(fake.counts.updateInvoiceFields).toBe(1);
     expect((fake.state.invoices[0] as any).note).toBe("Thanks for your business");
   });
 
@@ -317,7 +317,7 @@ describe("invoice actions", () => {
     expect(preview.operation.risks).toEqual(expect.arrayContaining(["destructive", "billing"]));
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteInvoice).toBe(1);
+    expect(fake.counts.deleteInvoiceAtomic).toBe(1);
     expect(fake.state.invoices.find((i) => i.id === "inv1")).toBeUndefined();
   });
 
@@ -432,7 +432,7 @@ describe("invoice actions", () => {
     expect(preview.operation.payload).toMatchObject({ item: { unitPriceMinor: 12500 } });
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.addInvoiceItem).toBe(1);
+    expect(fake.counts.addInvoiceItemAtomic).toBe(1);
     expect(fake.state.invoices[0].items).toHaveLength(2);
   });
 
@@ -507,7 +507,7 @@ describe("invoice actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toEqual(expect.arrayContaining(["destructive", "billing"]));
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.deleteInvoiceItem).toBe(1);
+    expect(fake.counts.deleteInvoiceItemAtomic).toBe(1);
     expect(fake.state.invoices[0].items).toHaveLength(0);
   });
 
@@ -543,7 +543,7 @@ describe("invoice actions", () => {
     expect(preview.preview.expectedChanges[0]).not.toContain("5000 (minor units)");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createInvoicePayment).toBe(1);
+    expect(fake.counts.createInvoicePaymentAtomic).toBe(1);
     expect(fake.state.invoicePayments["inv1"]).toHaveLength(1);
     expect(fake.state.invoicePayments["inv1"][0].amount).toBe(5000);
   });
@@ -568,9 +568,22 @@ describe("invoice actions", () => {
 
   it("clockify_invoices_payments_create does not fabricate a 'payment' id when the list-diff can't identify it", async () => {
     const fake = createFakeWorkspace(seed());
-    // Simulate the live list-diff returning nothing identifiable (e.g. a
-    // concurrent payment or id-less rows) → the adapter returns {}.
-    fake.client.createInvoicePayment = async () => ({});
+    const listPayments = fake.client.listInvoicePayments;
+    let paymentReads = 0;
+    fake.client.listInvoicePayments = async (id) => {
+      const result = await listPayments(id);
+      paymentReads += 1;
+      return paymentReads < 3
+        ? result
+        : {
+            rows: [...result.rows, {
+              id: "concurrent-match",
+              amount: 5000,
+              paymentDate: "2026-06-06",
+            }],
+            truncated: false,
+          };
+    };
     const preview = await executeAction({
       actionName: "clockify_invoices_payments_create",
       args: { invoiceId: "inv1", amount: 50, paymentDate: "2026-06-06" },
@@ -607,7 +620,7 @@ describe("invoice actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toEqual(expect.arrayContaining(["destructive", "payment"]));
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.deleteInvoicePayment).toBe(1);
+    expect(fake.counts.deleteInvoicePaymentAtomic).toBe(1);
     expect(fake.state.invoicePayments["inv1"]).toHaveLength(0);
   });
 
@@ -622,7 +635,7 @@ describe("invoice actions", () => {
     expect(preview.operation.risks).toContain("billing");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.importInvoiceTime).toBe(1);
+    expect(fake.counts.importInvoiceTimeAtomic).toBe(1);
   });
 
   it("clockify_invoices_import_time resolves RELATIVE dates server-side (billing must never wire raw 'today' → Clockify 400 '[to] can't be null')", async () => {
@@ -682,16 +695,16 @@ describe("invoice actions", () => {
     });
     if (preview.kind !== "preview") throw new Error(`expected a preview, got ${preview.kind}`);
     const payload = preview.operation.payload as {
-      percentPatch?: Record<string, number>;
+      enrichment: Record<string, number>;
       items: Array<{ applyTaxes?: string }>;
     };
-    expect(payload.percentPatch?.taxPercent).toBe(3);
+    expect(payload.enrichment.taxPercent).toBe(3);
     expect(payload.items[0].applyTaxes).toBe("TAX1"); // rate set ⇒ item taxed by default
     expect(preview.preview.expectedChanges.join(" ")).toContain("Tax 3%"); // truthful preview
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateInvoice).toBe(1); // rate applied via the verified update path
-    expect((fake.state.invoices[fake.state.invoices.length - 1] as any).taxPercent).toBe(3);
+    expect(fake.counts.updateInvoiceFields).toBe(1);
+    expect((fake.state.invoices[fake.state.invoices.length - 1] as any).tax).toBe(300);
   });
 });
 
@@ -749,7 +762,7 @@ describe("invoice actions — number→id resolution at preview time (live-loop 
     expect((preview.operation.payload as { id: string }).id).toBe("inv1");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteInvoice).toBe(1);
+    expect(fake.counts.deleteInvoiceAtomic).toBe(1);
   });
 
   it("items_list / payments_list / export resolve a number in the id slot", async () => {
@@ -779,6 +792,11 @@ describe("invoice actions — number→id resolution at preview time (live-loop 
 
   it("items_add / items_delete / payments_create / payments_delete / import_time resolve a number in the invoiceId slot", async () => {
     const fake = createFakeWorkspace(seed());
+    fake.state.invoicePayments.inv1 = [{
+      id: "pay-1",
+      amount: 500,
+      paymentDate: "2026-06-06",
+    }];
     const add = await executeAction({
       actionName: "clockify_invoices_items_add",
       args: { invoiceId: "INV-1", description: "Work", unitPrice: 10 },

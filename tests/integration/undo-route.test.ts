@@ -239,7 +239,7 @@ describe("undo route", () => {
     expect(second.status).toBe(200);
     expect(second.body.undo?.id).toBeTruthy();
     expect(second.body.undo.id).not.toBe(first.body.undo.id);
-    expect(isoFake.counts.createInvoice).toBe(2);
+    expect(isoFake.counts.createInvoiceBase).toBe(2);
 
     isoStore.close();
   });

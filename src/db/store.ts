@@ -199,7 +199,7 @@ export interface Store {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
-  recordOperationReconciliation(id: string, result: unknown, authoritative: boolean): void;
+  recordOperationReconciliation(id: string, stepId: string, result: unknown, authoritative: boolean): void;
   prepareOperationStep(input: PrepareOperationStepInput): string;
   markOperationStepExecuting(id: string, operationId?: string): boolean;
   settleOperationStep(
@@ -212,6 +212,12 @@ export interface Store {
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail: { externalId?: string; detail: unknown },
+    operationId?: string,
+  ): void;
+  settleReconciledStep(
+    id: string,
+    status: "succeeded" | "definitive_failed",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
     operationId?: string,
   ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
@@ -430,6 +436,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     settleOperationStep: (id, status, detail) => operationRunStore.settleOperationStep(id, status, detail, operationId),
     settleOperationStepDegraded: (id, status, detail) =>
       operationRunStore.settleOperationStepDegraded(id, status, detail, operationId),
+    settleReconciledStep: (id, status, detail) =>
+      operationRunStore.settleReconciledStep(id, status, detail, operationId),
     prepareCompensationStep: (input) => operationRunStore.prepareCompensationStep({
       ...input,
       operationId,
@@ -439,6 +447,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     settleCompensationStepDegraded: (id, status, detail) =>
       operationRunStore.settleCompensationStepDegraded(id, status, detail, operationId),
     listOperationSteps: () => operationRunStore.listOperationSteps(operationId),
+    recordReconciliation: (stepId, result, authoritative) =>
+      operationRunStore.recordOperationReconciliation(operationId, stepId, result, authoritative),
   });
 
   // Built as TestStore (the concrete object implements the test-only methods),

@@ -113,7 +113,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
-  recordOperationReconciliation(id: string, result: unknown, authoritative: boolean): void;
+  recordOperationReconciliation(id: string, stepId: string, result: unknown, authoritative: boolean): void;
   prepareOperationStep(input: PrepareOperationStepInput): string;
   markOperationStepExecuting(id: string, operationId?: string): boolean;
   settleOperationStep(
@@ -126,6 +126,12 @@ export function buildOperationRunStore(ctx: StoreContext): {
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail: { externalId?: string; detail: unknown },
+    operationId?: string,
+  ): void;
+  settleReconciledStep(
+    id: string,
+    status: "succeeded" | "definitive_failed",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
     operationId?: string,
   ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
@@ -248,13 +254,26 @@ export function buildOperationRunStore(ctx: StoreContext): {
       const row = db.prepare("SELECT * FROM operation_runs WHERE id = ?").get(id) as OperationRunRow | undefined;
       return row ? toRun(row) : undefined;
     },
-    recordOperationReconciliation(id, result, authoritative) {
-      const updated = db.prepare(
-        `UPDATE operation_runs
-            SET reconciled_at = ?, reconciliation_json = ?, updated_at = ?
-          WHERE id = ?`,
-      ).run(nowIso(), actionResultJson({ authoritative, result }), nowIso(), id);
-      if (updated.changes !== 1) throw new Error("operation_not_found");
+    recordOperationReconciliation(id, stepId, result, authoritative) {
+      db.transaction(() => {
+        const step = db.prepare(
+          `SELECT id FROM operation_steps
+            WHERE id = ? AND operation_id = ? AND kind = 'primary' AND status = 'outcome_unknown'`,
+        ).get(stepId, id);
+        if (!step) throw new Error("reconciliation_step_not_unknown");
+        const timestamp = nowIso();
+        const updated = db.prepare(
+          `UPDATE operation_runs
+              SET reconciled_at = ?, reconciliation_json = ?, updated_at = ?
+            WHERE id = ?`,
+        ).run(
+          timestamp,
+          actionResultJson({ stepId, authoritative, result }),
+          timestamp,
+          id,
+        );
+        if (updated.changes !== 1) throw new Error("operation_not_found");
+      })();
     },
     prepareOperationStep(input) {
       if (input.kind !== "primary") throw new Error("compensation_requires_eligibility");
@@ -263,8 +282,8 @@ export function buildOperationRunStore(ctx: StoreContext): {
       db.prepare(
         `INSERT INTO operation_steps (
            id, operation_id, step_index, plan_step_id, name, kind, status,
-           target_fingerprint, compensates_step_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?)`,
+           target_fingerprint, detail_json, compensates_step_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'prepared', ?, ?, ?, ?, ?)`,
       ).run(
         id,
         input.operationId,
@@ -273,6 +292,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
         input.name,
         input.kind,
         input.targetFingerprint ?? null,
+        input.preparedDetail === undefined ? null : actionResultJson(input.preparedDetail),
         input.compensatesStepId ?? null,
         timestamp,
         timestamp,
@@ -334,6 +354,55 @@ export function buildOperationRunStore(ctx: StoreContext): {
       );
       if (updated.changes !== 1) throw new Error("operation_step_not_executing");
     },
+    settleReconciledStep(id, status, detail = {}, operationId) {
+      db.transaction(() => {
+        const row = db.prepare(
+          `SELECT s.operation_id, s.status, s.detail_json, o.reconciliation_json
+             FROM operation_steps s
+             JOIN operation_runs o ON o.id = s.operation_id
+            WHERE s.id = ? AND (? IS NULL OR s.operation_id = ?)`,
+        ).get(id, operationId ?? null, operationId ?? null) as {
+          operation_id: string;
+          status: OperationStep["status"];
+          detail_json: string | null;
+          reconciliation_json: string | null;
+        } | undefined;
+        const reconciliation = row?.reconciliation_json
+          ? JSON.parse(row.reconciliation_json) as { stepId?: unknown; authoritative?: unknown }
+          : undefined;
+        if (
+          row?.status !== "outcome_unknown" ||
+          reconciliation?.stepId !== id ||
+          reconciliation.authoritative !== true
+        ) {
+          throw new Error("authoritative_reconciliation_required");
+        }
+        const timestamp = nowIso();
+        const priorDetail = row.detail_json ? JSON.parse(row.detail_json) as unknown : undefined;
+        const reconciledDetail = detail.detail === undefined
+          ? priorDetail
+          : priorDetail && typeof priorDetail === "object" && !Array.isArray(priorDetail) &&
+              detail.detail && typeof detail.detail === "object" && !Array.isArray(detail.detail)
+            ? { ...(priorDetail as Record<string, unknown>), ...(detail.detail as Record<string, unknown>) }
+            : detail.detail;
+        const updated = db.prepare(
+          `UPDATE operation_steps
+              SET status = ?, external_id = ?, effect_json = ?, detail_json = ?,
+                  settled_at = ?, updated_at = ?
+            WHERE id = ? AND operation_id = ? AND status = 'outcome_unknown' AND kind = 'primary'`,
+        ).run(
+          status,
+          detail.externalId ?? null,
+          detail.effect === undefined ? null : actionResultJson(detail.effect),
+          reconciledDetail === undefined ? null : actionResultJson(reconciledDetail),
+          timestamp,
+          timestamp,
+          id,
+          row.operation_id,
+        );
+        if (updated.changes !== 1) throw new Error("operation_step_not_unknown");
+      })();
+    },
     prepareCompensationStep(input) {
       return db.transaction((): string => {
         const source = db.prepare(
@@ -348,10 +417,11 @@ export function buildOperationRunStore(ctx: StoreContext): {
           reconciliation_json: string | null;
         } | undefined;
         const reconciliation = source?.reconciliation_json
-          ? JSON.parse(source.reconciliation_json) as { authoritative?: unknown }
+          ? JSON.parse(source.reconciliation_json) as { stepId?: unknown; authoritative?: unknown }
           : undefined;
         const eligible = source?.step_status === "succeeded" && (
-          source.operation_status === "definitive_failed" || reconciliation?.authoritative === true
+          source.operation_status === "definitive_failed" ||
+          (reconciliation?.stepId === input.compensatesStepId && reconciliation.authoritative === true)
         );
         if (!eligible) throw new Error("compensation_not_eligible");
         const id = input.id ?? randomUUID();

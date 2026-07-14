@@ -261,6 +261,8 @@ export interface RiskyPreviewResult {
   reversibility: string;
   warnings?: string[];
   payload: Record<string, unknown>;
+  /** Exact durable host-step order persisted with the confirmation. */
+  mutationPlan?: ExternalMutationPlan;
 }
 
 export interface PreparedSafeWrite {
@@ -300,13 +302,22 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
   schema: S;
   argumentAliases?: readonly string[];
   argumentOpenPaths?: readonly string[];
+  mutationWorkflow?: "durable";
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
-  idempotencyKey?(payload: Record<string, unknown>): string | undefined;
+  idempotencyKey?(
+    payload: Record<string, unknown>,
+    operation: ConfirmableOperation,
+  ): string | undefined;
   preview(
     ctx: ActionContext,
     args: z.infer<S>,
+    operationId: string,
   ): Promise<RiskyPreviewResult | RiskyClarifyResult>;
-  commit(ctx: ActionContext, payload: Record<string, unknown>): Promise<CommitResult>;
+  commit(
+    ctx: ActionContext,
+    payload: Record<string, unknown>,
+    operation: ConfirmableOperation,
+  ): Promise<CommitResult>;
 }): ActionDefinition {
   return defineAction({
     name: def.name,
@@ -316,13 +327,14 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     schema: def.schema,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
+    ...(def.mutationWorkflow ? { mutationWorkflow: def.mutationWorkflow } : {}),
     ...(def.resolveFeatureGroup
       ? { resolveFeatureGroup: (args: z.infer<S>) => def.resolveFeatureGroup!(args) }
       : {}),
     ...(def.idempotencyKey
       ? {
           idempotencyKey: (operation: ConfirmableOperation) =>
-            def.idempotencyKey!(operation.payload),
+            def.idempotencyKey!(operation.payload, operation),
         }
       : {}),
     async handler(ctx, args): Promise<ActionResult> {
@@ -333,7 +345,8 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
       // (`commitConfirmedOperation`/the route, both keyed on `operation.featureGroup`)
       // gates on the same group — never the static `def.group`.
       const group = def.resolveFeatureGroup ? def.resolveFeatureGroup(args) : def.group;
-      const r = await def.preview(ctx, args);
+      const operationId = randomUUID();
+      const r = await def.preview(ctx, args, operationId);
       if ("clarify" in r) {
         return { kind: "clarify", message: r.clarify, options: r.options };
       }
@@ -349,16 +362,17 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
           warnings: r.warnings ?? [],
         },
         operation: {
-          operationId: randomUUID(),
+          operationId,
           actionName: def.name,
           featureGroup: group,
           risks: def.risks,
           payload: r.payload,
+          ...(r.mutationPlan ? { mutationPlan: r.mutationPlan } : {}),
         },
       };
     },
     commit(ctx, operation) {
-      return def.commit(ctx, operation.payload);
+      return def.commit(ctx, operation.payload, operation);
     },
   });
 }

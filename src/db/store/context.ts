@@ -197,6 +197,8 @@ export interface PrepareOperationStepInput {
   kind: OperationStepKind;
   targetFingerprint?: string;
   compensatesStepId?: string;
+  /** Sanitized evidence that must be durable before this step enters executing. */
+  preparedDetail?: unknown;
 }
 
 export interface PrepareCompensationStepInput
@@ -204,7 +206,7 @@ export interface PrepareCompensationStepInput
   compensatesStepId: string;
 }
 
-export interface OperationStep extends Omit<PrepareOperationStepInput, "id"> {
+export interface OperationStep extends Omit<PrepareOperationStepInput, "id" | "preparedDetail"> {
   id: string;
   status: OperationStepStatus;
   externalId?: string;

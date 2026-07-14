@@ -107,7 +107,6 @@ describe("invoice rest", () => {
       issuedDate: "2026-06-06T00:00:00Z",
       currency: "GBP",
       dueDate: "2026-07-06T00:00:00Z",
-      status: "UNSENT",
     });
   });
 

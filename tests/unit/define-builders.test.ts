@@ -186,6 +186,57 @@ describe("defineRiskyAction", () => {
     expect(action.idempotencyKey).toBeUndefined();
   });
 
+  it("makes the one durable operation id available to preview, commit, and idempotency", async () => {
+    const seen: { preview?: string; commit?: string; idempotency?: string } = {};
+    const action = defineRiskyAction({
+      name: "demo_durable",
+      description: "Durable risky action.",
+      group: "invoices",
+      risks: ["billing"],
+      schema,
+      mutationWorkflow: "durable",
+      async preview(_c, args, operationId) {
+        seen.preview = operationId;
+        return {
+          actionLabel: "Create invoice",
+          targets: [],
+          expectedChanges: [],
+          reversibility: "Delete it.",
+          payload: { id: args.id },
+          mutationPlan: {
+            mode: "single" as const,
+            steps: [{ id: "create-invoice", kind: "primary" as const }],
+          },
+        };
+      },
+      async commit(_c, _payload, operation) {
+        seen.commit = operation.operationId;
+        return successReceipt({ action: "demo_durable" });
+      },
+      idempotencyKey(_payload, operation) {
+        seen.idempotency = operation.operationId;
+        return operation.operationId;
+      },
+    });
+
+    const preview = await action.handler(ctx, { id: "invoice-input" });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    expect(preview.operation.mutationPlan).toEqual({
+      mode: "single",
+      steps: [{ id: "create-invoice", kind: "primary" }],
+    });
+    expect(seen.preview).toBe(preview.operation.operationId);
+    expect(action.mutationWorkflow).toBe("durable");
+
+    await action.commit!(ctx, preview.operation);
+    expect(action.idempotencyKey!(preview.operation)).toBe(preview.operation.operationId);
+    expect(seen).toEqual({
+      preview: preview.operation.operationId,
+      commit: preview.operation.operationId,
+      idempotency: preview.operation.operationId,
+    });
+  });
+
   it("passes resolveFeatureGroup through unchanged (receives args)", async () => {
     let seenArgs: { id: string } | undefined;
     const action = build(

@@ -98,7 +98,135 @@ const CREATE_INVOICE: ToolCompletion = {
   toolCalls: [{ id: "r1", name: "clockify_invoices_create", arguments: { clientName: "Acme" } }],
 };
 
+const CREATE_MULTI_STEP_INVOICE: ToolCompletion = {
+  text: "Preparing the invoice.",
+  toolCalls: [{
+    id: "invoice-multi",
+    name: "clockify_invoices_create",
+    arguments: {
+      clientName: "Acme",
+      number: "INV-ROUTE-1",
+      note: "Route proof",
+      items: [{ itemType: "TIME", description: "Consulting", quantity: 2, amount: 25 }],
+    },
+  }],
+};
+
 describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a committed receipt)", () => {
+  it("runs a multi-step invoice plan through the real confirmation claim and cannot redispatch it", async () => {
+    const fake = createFakeWorkspace({
+      clients: [{ id: "c1", name: "Acme" }],
+      invoices: [{
+        id: "template",
+        number: "OLD",
+        clientId: "c1",
+        currency: "USD",
+        status: "UNSENT",
+        items: [{ order: 0, itemType: "TIME", description: "Old", quantity: 1, unitPrice: 100 }],
+      }],
+    });
+    const { app, cookie, store } = await makeApp([CREATE_MULTI_STEP_INVOICE], fake);
+    const observed: string[] = [];
+    const originalCreate = fake.client.createInvoiceBase;
+    const originalUpdate = fake.client.updateInvoiceFields;
+    const originalAdd = fake.client.addInvoiceItemAtomic;
+    let operationId: string | undefined;
+    fake.client.createInvoiceBase = async (...args) => {
+      const steps = store.listOperationSteps(operationId!);
+      expect(steps.at(-1)?.detail).toMatchObject({
+        preDispatch: { strategy: "invoice_create_baseline", ids: ["template"], truncated: false },
+      });
+      observed.push(`${steps.at(-1)?.planStepId}:${steps.at(-1)?.status}`);
+      return originalCreate(...args);
+    };
+    fake.client.updateInvoiceFields = async (...args) => {
+      const steps = store.listOperationSteps(operationId!);
+      observed.push(`${steps.at(-1)?.planStepId}:${steps.at(-1)?.status}`);
+      return originalUpdate(...args);
+    };
+    fake.client.addInvoiceItemAtomic = async (...args) => {
+      const steps = store.listOperationSteps(operationId!);
+      observed.push(`${steps.at(-1)?.planStepId}:${steps.at(-1)?.status}`);
+      return originalAdd(...args);
+    };
+
+    const requestId = "836ba965-f0e3-4822-9ccd-e1bb059bd440";
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "Create the route-proof invoice", requestId });
+    expect(chat.status).toBe(200);
+    const preview = previewsOf(chat.body.results as ResultItem[])[0]!;
+    const pending = store.getPendingConfirmation(preview.previewId!);
+    expect(pending).toBeDefined();
+    operationId = pending!.operationId;
+    const expectedPlan = {
+      mode: "curated",
+      steps: [
+        { id: "create-invoice", kind: "primary" },
+        { id: "enrich-invoice", kind: "primary" },
+        { id: "add-invoice-item-0", kind: "primary" },
+      ],
+    };
+    expect(pending!.operation).toMatchObject({
+      operationId,
+      mutationPlan: expectedPlan,
+    });
+    expect(store.getOperationRun(operationId)).toMatchObject({
+      id: operationId,
+      status: "prepared",
+      operation: { operationId },
+      mutationPlan: expectedPlan,
+    });
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(confirm.status).toBe(200);
+    expect(confirm.body.receipt).toMatchObject({ ok: true, action: "clockify_invoices_create" });
+    expect(observed).toEqual([
+      "create-invoice:executing",
+      "enrich-invoice:executing",
+      "add-invoice-item-0:executing",
+    ]);
+    expect(store.listOperationSteps(operationId).map((step) => [step.planStepId, step.status]))
+      .toEqual([
+        ["create-invoice", "succeeded"],
+        ["enrich-invoice", "succeeded"],
+        ["add-invoice-item-0", "succeeded"],
+      ]);
+    const run = store.getOperationRun(operationId);
+    expect(run).toMatchObject({ status: "succeeded", actionResultId: expect.any(String) });
+    expect(store.getActionResult(run!.actionResultId!)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: true, action: "clockify_invoices_create" },
+    });
+    expect(fake.counts).toMatchObject({
+      createInvoiceBase: 1,
+      updateInvoiceFields: 1,
+      addInvoiceItemAtomic: 1,
+    });
+
+    const duplicateConfirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    const duplicateRequest = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "Create the route-proof invoice", requestId });
+
+    expect(duplicateConfirm.status).toBe(400);
+    expect(duplicateRequest.status).toBe(200);
+    expect(fake.counts).toMatchObject({
+      createInvoiceBase: 1,
+      updateInvoiceFields: 1,
+      addInvoiceItemAtomic: 1,
+    });
+  });
+
   it("gives the one-use confirmation winner a scoped journal and dispatches one durable planned step", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const action = getAction("clockify_tags_delete")!;
@@ -364,7 +492,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     // The throwing path WAS exercised (sanity: the 3rd write actually ran), and
     // the commit happened exactly once on the underlying host.
     expect(undoableThrows).toBe(1);
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
   });
 
   it("binds the idempotency claim during canonical confirmation settlement without a separate fill write", async () => {
@@ -412,6 +540,6 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
       ok: true,
       action: "clockify_invoices_create",
     });
-    expect(fake.counts.createInvoice).toBe(1);
+    expect(fake.counts.createInvoiceBase).toBe(1);
   });
 });

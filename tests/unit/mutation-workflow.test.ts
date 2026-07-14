@@ -73,6 +73,130 @@ type ExecuteCompensationStep = (input: {
 }) => Promise<JournaledMutationStep>;
 
 describe("durable mutation workflow", () => {
+  it("terminalizes an unknown step when read-only reconciliation proves one authoritative effect", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-reconciled-create");
+    store.markOperationExecuting(operationId);
+    const journal = store.mutationStepJournal(operationId);
+    const unknown = await executeStep({
+      journal,
+      operationId,
+      step: {
+        id: "one",
+        index: 0,
+        name: "Create",
+        kind: "primary",
+        preparedDetail: { preDispatch: { baselineIds: ["existing-1"] } },
+      },
+      dispatch: async () => {
+        throw new AmbiguousWriteOutcome("POST", "/things", "socket closed");
+      },
+    });
+    expect(unknown.status).toBe("outcome_unknown");
+
+    journal.recordReconciliation(unknown.id, { strategy: "exact_create", matches: 1 }, true);
+    journal.settleReconciledStep(unknown.id, "succeeded", {
+      externalId: "thing-1",
+      effect: { created: { type: "thing", id: "thing-1" } },
+      detail: { authoritativeReconciliation: true },
+    });
+
+    expect(journal.listOperationSteps()).toMatchObject([{
+      status: "succeeded",
+      externalId: "thing-1",
+      detail: {
+        preDispatch: { baselineIds: ["existing-1"] },
+        authoritativeReconciliation: true,
+      },
+    }]);
+    expect(store.getOperationRun(operationId)?.reconciliation).toMatchObject({
+      authoritative: true,
+      result: { matches: 1 },
+    });
+    store.close();
+  });
+
+  it("rejects non-authoritative and cross-operation reconciliation settlement", async () => {
+    const store = createStore(":memory:");
+    const first = operation(store, "operation-reconcile-denied");
+    const second = operation(store, "operation-reconcile-other");
+    store.markOperationExecuting(first);
+    store.markOperationExecuting(second);
+    const firstJournal = store.mutationStepJournal(first);
+    const unknown = await executeStep({
+      journal: firstJournal,
+      operationId: first,
+      step: { id: "one", index: 0, name: "Create", kind: "primary" },
+      dispatch: async () => { throw new AmbiguousWriteOutcome("POST", "/things", "closed"); },
+    });
+    firstJournal.recordReconciliation(unknown.id, { matches: 0 }, false);
+    expect(() => firstJournal.settleReconciledStep(unknown.id, "succeeded"))
+      .toThrow("authoritative_reconciliation_required");
+
+    const otherJournal = store.mutationStepJournal(second);
+    expect(() => otherJournal.recordReconciliation(unknown.id, { matches: 1 }, true))
+      .toThrow("reconciliation_step_not_unknown");
+    expect(() => otherJournal.settleReconciledStep(unknown.id, "succeeded"))
+      .toThrow("authoritative_reconciliation_required");
+    expect(firstJournal.listOperationSteps()[0]?.status).toBe("outcome_unknown");
+    store.close();
+  });
+
+  it("does not let authoritative evidence for one step settle another unknown step in the same operation", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-reconcile-step-bound");
+    store.markOperationExecuting(operationId);
+    const journal = store.mutationStepJournal(operationId);
+    const first = await executeStep({
+      journal,
+      operationId,
+      step: { id: "one", index: 0, name: "First", kind: "primary" },
+      dispatch: async () => { throw new AmbiguousWriteOutcome("POST", "/one", "closed"); },
+    });
+    const second = await executeStep({
+      journal,
+      operationId,
+      step: { id: "two", index: 1, name: "Second", kind: "primary" },
+      dispatch: async () => { throw new AmbiguousWriteOutcome("POST", "/two", "closed"); },
+    });
+    journal.recordReconciliation(first.id, { strategy: "first_only", matches: 1 }, true);
+
+    expect(() => journal.settleReconciledStep(second.id, "succeeded"))
+      .toThrow("authoritative_reconciliation_required");
+    expect(journal.listOperationSteps().map((step) => step.status))
+      .toEqual(["outcome_unknown", "outcome_unknown"]);
+    store.close();
+  });
+
+  it("does not let authoritative evidence for one step authorize compensation of another step", async () => {
+    const store = createStore(":memory:");
+    const operationId = operation(store, "operation-reconcile-compensation-bound");
+    store.markOperationExecuting(operationId);
+    const journal = store.mutationStepJournal(operationId);
+    const first = await executeStep({
+      journal,
+      operationId,
+      step: { id: "one", index: 0, name: "First", kind: "primary" },
+      dispatch: async () => { throw new AmbiguousWriteOutcome("POST", "/one", "closed"); },
+    });
+    journal.recordReconciliation(first.id, { strategy: "first_only", matches: 1 }, true);
+    journal.settleReconciledStep(first.id, "succeeded");
+    const second = await executeStep({
+      journal,
+      operationId,
+      step: { id: "two", index: 1, name: "Second", kind: "primary" },
+      dispatch: async () => ({ effect: { updated: "two" } }),
+    });
+
+    expect(() => journal.prepareCompensationStep({
+      planStepId: "compensate-two",
+      index: 2,
+      name: "Compensate second",
+      compensatesStepId: second.id,
+    })).toThrow("compensation_not_eligible");
+    store.close();
+  });
+
   it("persists prepared then executing before dispatch and settles the external effect", async () => {
     const store = createStore(":memory:");
     const operationId = operation(store, "operation-order");
@@ -82,9 +206,17 @@ describe("durable mutation workflow", () => {
     const result = await executeStep({
       journal: store.mutationStepJournal(operationId),
       operationId,
-      step: { id: "one", index: 0, name: "First", kind: "primary" },
+      step: {
+        id: "one",
+        index: 0,
+        name: "First",
+        kind: "primary",
+        preparedDetail: { preDispatch: { baselineIds: ["before-1"] } },
+      },
       async dispatch() {
-        observed.push(store.listOperationSteps(operationId)[0]?.status ?? "missing");
+        const executing = store.listOperationSteps(operationId)[0];
+        observed.push(executing?.status ?? "missing");
+        expect(executing?.detail).toEqual({ preDispatch: { baselineIds: ["before-1"] } });
         return { externalId: "external-1", effect: { created: "external-1" } };
       },
     });
@@ -94,6 +226,7 @@ describe("durable mutation workflow", () => {
       status: "succeeded",
       externalId: "external-1",
       effect: { created: "external-1" },
+      detail: { preDispatch: { baselineIds: ["before-1"] } },
     });
     store.close();
   });
