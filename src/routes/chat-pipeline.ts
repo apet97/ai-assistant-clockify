@@ -40,6 +40,7 @@ import {
   confirmPending,
   createPendingConfirmation,
   hashOperation,
+  rotatePendingNonce,
 } from "../harness/confirmations.js";
 import { errorReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
@@ -50,6 +51,7 @@ import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { toolsForModel } from "../harness/tools.js";
 import { selectActionsForMessage, selectionDroppedGroups, CORE_ACTION_NAMES } from "../harness/tool-select.js";
 import type { Installation } from "../db/store.js";
+import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
 import { resolveSession, type AppDeps } from "./deps.js";
@@ -68,7 +70,6 @@ import {
 import {
   settleAgentTurn,
   truthfulReplyText,
-  redactNonceForStorage,
   storedContentForReply,
   type Claims,
   type TurnMachinery,
@@ -93,7 +94,7 @@ function lastUserMessage(transcript: ModelMessage[]): string {
 
 /** The outcome of one chat turn, shared by the JSON route and the streaming route. */
 export type ChatTurnOutcome =
-  | { ok: true; replyKind: string; replyText: string; results: unknown[] }
+  | { ok: true; replyKind: string; replyText: string; results: unknown[]; resultLinks: DurableResultLink[] }
   | { ok: false; code: string; message: string };
 
 /** What `chatPreconditions` returns when a request is cleared to run a turn. */
@@ -319,8 +320,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     calendar?: CalendarContext,
   ): TurnMachinery {
     const results: unknown[] = [];
-    const emit = (result: unknown): void => {
+    const resultLinks: DurableResultLink[] = [];
+    const emit = (result: unknown, link: DurableResultLink): void => {
       results.push(result);
+      resultLinks.push(link);
       onResult?.(result);
     };
     const baseCtx = {
@@ -346,17 +349,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
             markExecuting(operationId) {
               if (!deps.store.markOperationExecuting(operationId)) throw new Error("operation_not_prepared");
             },
-            settle(operationId, status, result) {
-              const actionName = deps.store.getOperationRun(operationId)?.actionName ?? "unknown";
-              const actionResultId = deps.store.recordActionResult({
-                workspaceId: claims.workspaceId,
-                adminUserId: claims.adminUserId,
-                sessionId: claims.sessionId,
-                actionName,
-                status,
-                result,
-              });
-              deps.store.settleOperationRun(operationId, status, actionResultId);
+            settle(_operationId, _status, _result) {
+              // The emitter below owns the terminal transition because it creates
+              // the canonical result and links both in one synchronous turn. Keep
+              // the journal executing until then: if the process dies in this
+              // narrow handoff, startup recovery records outcome_unknown instead
+              // of leaving a terminal operation with no canonical result.
             },
           },
         }
@@ -364,7 +362,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
 
     // Every executed action — success or error, single-turn or agentic — is
     // audited under the catalog's risk labels and offered an undo if reversible.
-    const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt): void => {
+    const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt, operationId?: string): void => {
       // Post-execution bookkeeping is best-effort: a safe write executes
       // immediately (no confirm round-trip), so by the time we audit it the
       // change has ALREADY happened on the host. A transient DB error here (e.g.
@@ -372,7 +370,29 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // (agentic) / 500 (single-turn), drop the committed receipt, and invite a
       // duplicate write. Mirror the confirm-tail fix: log (message only, no
       // secrets) and still emit the receipt for the change that already ran.
+      const status: ActionResultKind = receipt.ok
+        ? "succeeded"
+        : receipt.code === "commit_outcome_unknown"
+          ? "outcome_unknown"
+          : "definitive_failed";
       let undoId: string | undefined;
+      bestEffort("post-execution undo bookkeeping failed", () => {
+        undoId = recordUndoIfReversible(claims, receipt);
+      });
+      const canonicalResult = {
+        kind: "receipt" as const,
+        receipt,
+        ...(undoId ? { undo: { id: undoId } } : {}),
+      };
+      const resultRef = deps.store.recordActionResult({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        actionName,
+        status,
+        result: canonicalResult,
+      });
+      if (operationId) deps.store.settleOperationRun(operationId, status, resultRef.id);
       bestEffort("post-execution bookkeeping failed", () => {
         deps.store.addAuditEvent({
           workspaceId: claims.workspaceId,
@@ -380,18 +400,32 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           sessionId: claims.sessionId,
           actionName,
           risk: getAction(actionName)?.risks ?? [],
-          receipt,
+          resultRef,
         });
-        undoId = recordUndoIfReversible(claims, receipt);
       });
-      emit({ kind: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
+      emit(canonicalResult, { kind: "action_result", ref: resultRef });
     };
 
     const auditAndEmitPartial = (
       actionName: string,
       result: Extract<ActionResult, { kind: "partial" }>,
+      operationId?: string,
     ): void => {
       let undoId: string | undefined;
+      bestEffort("partial-result undo bookkeeping failed", () => {
+        undoId = recordUndoIfReversible(claims, result.receipt);
+      });
+      const canonicalResult = { ...result, ...(undoId ? { undo: { id: undoId } } : {}) };
+      delete canonicalResult.operationId;
+      const resultRef = deps.store.recordActionResult({
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        sessionId: claims.sessionId,
+        actionName,
+        status: "partial",
+        result: canonicalResult,
+      });
+      if (operationId) deps.store.settleOperationRun(operationId, "partial", resultRef.id);
       bestEffort("partial-result bookkeeping failed", () => {
         deps.store.addAuditEvent({
           workspaceId: claims.workspaceId,
@@ -399,11 +433,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           sessionId: claims.sessionId,
           actionName,
           risk: getAction(actionName)?.risks ?? [],
-          receipt: { ...result.receipt, outcome: "partial", message: result.message, recovery: result.recovery },
+          resultRef,
         });
-        undoId = recordUndoIfReversible(claims, result.receipt);
       });
-      emit({ ...result, ...(undoId ? { undo: { id: undoId } } : {}) });
+      emit(canonicalResult, { kind: "action_result", ref: resultRef });
     };
 
     // An agentic interrupt persists its suspended transcript alongside the
@@ -434,13 +467,15 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         operationHash: created.record.operationHash,
       });
       deps.store.savePendingConfirmation(created.record);
-      emit({
+      const livePreview = {
         kind: "preview",
         previewId: created.previewId,
         nonce: created.nonce,
         expiresAt: created.expiresAt,
         preview,
-      });
+      };
+      const { nonce: _nonce, ...descriptor } = livePreview;
+      emit(livePreview, { kind: "preview", descriptor });
     };
 
     // Execute one model tool call through the harness trust boundary; an action
@@ -466,15 +501,24 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     };
 
     const onStep = ({ call, result }: AgentStep): void => {
-      if (result.kind === "receipt") auditAndEmitReceipt(call.name, result.receipt);
-      else if (result.kind === "partial") auditAndEmitPartial(call.name, result);
-      else if (result.kind === "clarify") emit({ kind: "clarify", message: result.message, options: result.options });
+      if (result.kind === "receipt") auditAndEmitReceipt(call.name, result.receipt, result.operationId);
+      else if (result.kind === "partial") auditAndEmitPartial(call.name, result, result.operationId);
+      else if (result.kind === "clarify") {
+        const descriptor = { kind: "clarify", message: result.message, options: result.options };
+        emit(descriptor, { kind: "inline", descriptor });
+      }
     };
 
-    return { ctx, results, emit, auditAndEmitReceipt, auditAndEmitPartial, emitPreviewFor, runAction, onStep };
+    return { ctx, results, resultLinks, emit, auditAndEmitReceipt, auditAndEmitPartial, emitPreviewFor, runAction, onStep };
   }
 
-  function persistAssistantReply(claims: Claims, replyKind: string, replyText: string, results: unknown[]): void {
+  function persistAssistantReply(
+    claims: Claims,
+    replyKind: string,
+    replyText: string,
+    results: unknown[],
+    resultLinks: DurableResultLink[],
+  ): void {
     // Persisting the assistant reply is post-execution bookkeeping: it runs AFTER
     // the turn's action(s) executed (a safe write already hit the host; a risky one
     // is already a stored pending preview). A transient DB error on this write
@@ -490,7 +534,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         adminUserId: claims.adminUserId,
         role: "assistant",
         content: storedContentForReply(replyText, results),
-        payload: { kind: replyKind, results: redactNonceForStorage(results) },
+        payload: { kind: replyKind },
+        resultLinks,
       });
     } catch (error) {
       console.error(
@@ -613,7 +658,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // keep using m.results so the committed receipt is never double-counted.
     const resultsForTruthfulness = receipt.ok ? [{ kind: "receipt" as const, receipt }, ...m.results] : m.results;
     const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind);
-    persistAssistantReply(claims, replyKind, replyText, m.results);
+    persistAssistantReply(claims, replyKind, replyText, m.results, m.resultLinks);
     recordTurnTelemetrySafely(claims, "resume", tracked.usage, now().getTime() - resumeStartMs);
     return { replyKind, replyText, results: m.results };
   }
@@ -642,6 +687,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       expectedCatalogHash: catalogHash(),
     });
     if (!validation.ok) {
+      if (validation.code === "expired") deps.store.expireConfirmation(record.id);
       return { ok: false, status: 400, body: { ok: false, code: validation.code, message: validation.message } };
     }
 
@@ -684,6 +730,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // `commit` does the work; for a permission change that commit persists the new
     // policy itself via the `savePolicy` capability the context carries.
     let receipt: SuccessReceipt | ErrorReceipt;
+    let idempotencyKeyToFill: string | undefined;
     if (!installation || installation.status !== "active") {
       receipt = errorReceipt({
         action: operation.actionName,
@@ -696,21 +743,31 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // under CONCURRENT confirms: claim is taken before the commit await, so two
       // simultaneous confirms reach the host at most once (r1-concurrency-races-01).
       const idempotency: AtomicIdempotencyLedger = {
-        lookup: (key) => deps.store.lookupIdempotency(key, now().getTime() - IDEMPOTENCY_WINDOW_MS),
-        record: (key, r) => deps.store.recordIdempotency(key, r, now().getTime()),
+        lookup: (key) => deps.store.lookupIdempotency(
+          key,
+          claims.workspaceId,
+          claims.adminUserId,
+          now().getTime() - IDEMPOTENCY_WINDOW_MS,
+        ),
+        // The atomic path never calls legacy record; canonical persistence owns fill.
+        record: () => undefined,
         claim: (key) =>
           deps.store.claimIdempotency(
             key,
+            claims.workspaceId,
+            claims.adminUserId,
             now().getTime(),
             now().getTime() - IDEMPOTENCY_WINDOW_MS,
             now().getTime() - CLAIM_TTL_MS,
           ),
-        lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key),
-        fill: (key, r) => deps.store.fillIdempotency(key, r, now().getTime()),
-        release: (key) => deps.store.releaseIdempotency(key),
+        lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key, claims.workspaceId, claims.adminUserId),
+        // Defer the durable fill until settleConfirmation has created the one
+        // canonical result row. Until then the claim stays in-flight.
+        fill: (key) => { idempotencyKeyToFill = key; },
+        release: (key) => deps.store.releaseIdempotency(key, claims.workspaceId, claims.adminUserId),
         // Heartbeat a long multi-call commit's live claim so it is never swept
         // mid-flight and double-committed (r1-concurrency-races-01 follow-up).
-        touch: (key) => deps.store.touchIdempotencyClaim(key, now().getTime()),
+        touch: (key) => deps.store.touchIdempotencyClaim(key, claims.workspaceId, claims.adminUserId, now().getTime()),
       };
       const authorizedContext = actionContext(claims.workspaceId, claims.adminUserId, installation);
       // The fresh role verdict above happened before consuming the nonce. Avoid a
@@ -732,19 +789,33 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       : receipt.code === "commit_outcome_unknown"
         ? "outcome_unknown"
         : "definitive_failed";
+    let resultRef: ActionResultRef | undefined;
     bestEffort("canonical action-result persistence failed", () => {
-      deps.store.settleConfirmation(record.id, terminalStatus, operation.actionName, receipt);
+      resultRef = deps.store.settleConfirmation(record.id, terminalStatus, operation.actionName, receipt);
     });
-    bestEffort("post-commit audit failed", () => {
-      deps.store.addAuditEvent({
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        sessionId: claims.sessionId,
-        actionName: operation.actionName,
-        risk: operation.risks,
-        receipt,
+    if (resultRef && idempotencyKeyToFill) {
+      bestEffort("idempotency result-link persistence failed", () => {
+        deps.store.fillIdempotency(
+          idempotencyKeyToFill!,
+          claims.workspaceId,
+          claims.adminUserId,
+          resultRef!,
+          now().getTime(),
+        );
       });
-    });
+    }
+    if (resultRef) {
+      bestEffort("post-commit audit failed", () => {
+        deps.store.addAuditEvent({
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          sessionId: claims.sessionId,
+          actionName: operation.actionName,
+          risk: operation.risks,
+          resultRef: resultRef!,
+        });
+      });
+    }
     let undoId: string | undefined;
     bestEffort("post-commit undo bookkeeping failed", () => {
       undoId = recordUndoIfReversible(claims, receipt);
@@ -761,8 +832,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
    * never reach `recordTurn()` (no model call ⇒ no telemetry row).
    */
   function deterministicAnswer(claims: Claims, text: string): ChatTurnOutcome {
-    persistAssistantReply(claims, "answer", text, []);
-    return { ok: true, replyKind: "answer", replyText: text, results: [] };
+    persistAssistantReply(claims, "answer", text, [], []);
+    return { ok: true, replyKind: "answer", replyText: text, results: [], resultLinks: [] };
   }
 
   /**
@@ -950,12 +1021,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         // risky one becomes a pending preview (no agent state — no resume).
         const outcome = await m.runAction({ id: "", name: proposed.name, arguments: proposed.arguments });
         if (outcome.kind === "receipt") {
-          m.auditAndEmitReceipt(proposed.name, outcome.receipt);
+          m.auditAndEmitReceipt(proposed.name, outcome.receipt, outcome.operationId);
         } else if (outcome.kind === "partial") {
-          m.auditAndEmitPartial(proposed.name, outcome);
+          m.auditAndEmitPartial(proposed.name, outcome, outcome.operationId);
           break;
         } else if (outcome.kind === "clarify") {
-          m.emit({ kind: "clarify", message: outcome.message, options: outcome.options });
+          const descriptor = { kind: "clarify", message: outcome.message, options: outcome.options };
+          m.emit(descriptor, { kind: "inline", descriptor });
           emittedClarify = true;
           break;
         } else {
@@ -1048,16 +1120,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // nothing — both are store writes for an abandoned turn (and would otherwise be a
     // write that can land after the request has already closed). The caller discards it.
     if (replyKind === "aborted") {
-      return { ok: true, replyKind, replyText: "", results: m.results };
+      return { ok: true, replyKind, replyText: "", results: m.results, resultLinks: m.resultLinks };
     }
 
     // The truthful-preview override (see truthfulReplyText): a pending preview
     // replaces the model's text. The streaming route emits this replyText AFTER
     // the results — the truthful text isn't known until execution finishes.
     const replyText = truthfulReplyText(m.results, baseText, replyKind);
-    persistAssistantReply(claims, replyKind, replyText, m.results);
+    persistAssistantReply(claims, replyKind, replyText, m.results, m.resultLinks);
     recordTurn();
-    return { ok: true, replyKind, replyText, results: m.results };
+    return { ok: true, replyKind, replyText, results: m.results, resultLinks: m.resultLinks };
   }
 
   async function chatPreconditions(req: Request, res: Response): Promise<ChatPreconditions | undefined> {
@@ -1123,12 +1195,53 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return undefined;
     }
     if (claim.state === "replay") {
+      const storedResponse = claim.response as { status: number; body: unknown };
+      const storedBody = storedResponse.body && typeof storedResponse.body === "object"
+        ? storedResponse.body as Record<string, unknown>
+        : undefined;
+      const storedResults = Array.isArray(storedBody?.results) ? storedBody.results : [];
+      const replayResults: unknown[] = [];
+      for (const result of storedResults) {
+        const previewId = result && typeof result === "object" && (result as { kind?: unknown }).kind === "preview"
+          ? (result as { previewId?: unknown }).previewId
+          : undefined;
+        if (typeof previewId !== "string") {
+          replayResults.push(result);
+          continue;
+        }
+        const record = deps.store.getPendingConfirmation(previewId);
+        if (
+          !record ||
+          record.status !== "pending" ||
+          record.sessionId !== claims.sessionId ||
+          record.workspaceId !== claims.workspaceId ||
+          record.adminUserId !== claims.adminUserId
+        ) {
+          continue;
+        }
+        const rotated = rotatePendingNonce({
+          record,
+          sessionId: claims.sessionId,
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          sessionSecret: deps.config.sessionSecret,
+          now: now(),
+        });
+        if (!rotated.ok) {
+          if (rotated.code === "expired") deps.store.expireConfirmation(record.id);
+          continue;
+        }
+        if (!deps.store.updateConfirmationNonceHash(record.id, rotated.record.nonceHash)) continue;
+        replayResults.push({ ...result as object, nonce: rotated.nonce });
+      }
       return {
         claims,
         installation,
         message: parsed.data.message,
         requestId,
-        replay: claim.response as { status: number; body: unknown },
+        replay: storedBody
+          ? { ...storedResponse, body: { ...storedBody, results: replayResults } }
+          : storedResponse,
       };
     }
     deps.store.markTurnRunExecuting(claims.sessionId, requestId);

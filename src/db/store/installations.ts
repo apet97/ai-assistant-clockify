@@ -132,6 +132,12 @@ export function buildInstallationStore(ctx: StoreContext): {
         const operationSteps = del(
           "DELETE FROM operation_steps WHERE operation_id IN (SELECT id FROM operation_runs WHERE workspace_id = ?)",
         );
+        const chatMessageResultLinks = del(
+          "DELETE FROM chat_message_result_links WHERE message_id IN (SELECT id FROM chat_messages WHERE workspace_id = ?)",
+        );
+        const turnRunResultLinks = del(
+          "DELETE FROM turn_run_result_links WHERE session_id IN (SELECT session_id FROM turn_runs WHERE workspace_id = ?)",
+        );
         const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
         const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
         const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
@@ -141,11 +147,10 @@ export function buildInstallationStore(ctx: StoreContext): {
         const operationRuns = del("DELETE FROM operation_runs WHERE workspace_id = ?");
         const actionResults = del("DELETE FROM action_results WHERE workspace_id = ?");
         const artifacts = del("DELETE FROM artifacts WHERE workspace_id = ?");
+        const idempotencyKeys = del("DELETE FROM idempotency_keys WHERE workspace_id = ?");
         const adminPolicies = del("DELETE FROM admin_policies WHERE workspace_id = ?");
         const chatSessions = del("DELETE FROM chat_sessions WHERE workspace_id = ?");
         const installations = del("DELETE FROM installations WHERE workspace_id = ?");
-        // idempotency_keys has no workspace identifier and contains only bounded,
-        // secret-free receipts; its short global TTL remains the deletion boundary.
         return {
           installations,
           adminPolicies,
@@ -160,6 +165,9 @@ export function buildInstallationStore(ctx: StoreContext): {
           operationRuns,
           actionResults,
           artifacts,
+          idempotencyKeys,
+          turnRunResultLinks,
+          chatMessageResultLinks,
         };
       });
       return run();

@@ -4,6 +4,7 @@ import type { RiskLabel } from "./risk.js";
 import type { EntityRef, ErrorReceipt, RecoveryHint, SuccessReceipt } from "./receipts.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
+import { randomUUID } from "node:crypto";
 
 /**
  * Action contracts and the typed `defineAction` helper. This is a leaf module
@@ -137,13 +138,14 @@ export interface PreviewCard {
 
 /** The exact payload executed after button confirmation. Never reconstructed from chat. */
 export interface ConfirmableOperation {
+  operationId: string;
   actionName: string;
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
   payload: Record<string, unknown>;
 }
 
-export type ActionResult =
+export type ActionResult = (
   | { kind: "receipt"; receipt: SuccessReceipt | ErrorReceipt }
   | {
       kind: "partial";
@@ -153,7 +155,8 @@ export type ActionResult =
       recovery: RecoveryHint;
     }
   | { kind: "clarify"; message: string; options?: ClarifyOption[] }
-  | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation };
+  | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation }
+) & { operationId?: string };
 
 /** Uniform stored form of an action (args already validated by its schema). */
 export interface ActionDefinition {
@@ -297,6 +300,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
           warnings: r.warnings ?? [],
         },
         operation: {
+          operationId: randomUUID(),
           actionName: def.name,
           featureGroup: group,
           risks: def.risks,

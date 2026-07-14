@@ -67,12 +67,13 @@ describe("defineRiskyAction", () => {
       reversibility: "reversible",
       warnings: ["careful"],
     });
-    expect(result.operation).toEqual({
+    expect(result.operation).toMatchObject({
       actionName: "demo_risky",
       featureGroup: "work_structure",
       risks: ["high_risk_write"],
       payload: { id: "x1" },
     });
+    expect(result.operation.operationId).toEqual(expect.any(String));
 
     // Stored ActionDefinition identity is also derived from group/risks/name.
     expect(action.name).toBe("demo_risky");
@@ -133,6 +134,7 @@ describe("defineRiskyAction", () => {
     });
 
     const operation: ConfirmableOperation = {
+      operationId: "op-p9",
       actionName: "demo_risky",
       featureGroup: "work_structure",
       risks: ["high_risk_write"],
@@ -162,6 +164,7 @@ describe("defineRiskyAction", () => {
     );
 
     const operation: ConfirmableOperation = {
+      operationId: "op-k7",
       actionName: "demo_risky",
       featureGroup: "work_structure",
       risks: ["high_risk_write"],

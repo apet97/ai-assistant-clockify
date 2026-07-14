@@ -182,7 +182,16 @@ bug was found against the REAL API, not by reading the code.
 
 - **Durable request identity:** chat clients generate a UUID `requestId` and reuse
   it for transport retries. Same-id/same-intent replays the stored result;
-  same-id/different-intent returns `409 operation_id_conflict`.
+  same-id/different-intent returns `409 operation_id_conflict`. Replay envelopes
+  never store plaintext confirmation nonces: ordered result links hydrate the one
+  canonical `action_results` row per executed action, while still-pending preview
+  descriptors receive a freshly rotated nonce only when served.
+- **Canonical result ownership:** full action outcomes live only in
+  `action_results`; chat messages, turn runs, audits, confirmations, undo, operation
+  journals, and the workspace+admin-scoped idempotency ledger hold ordered links
+  and bounded summaries (65,536 bytes). Cancel, expiry, settlement, and restart
+  recovery atomically scrub confirmation nonce hashes, agent state, and operation
+  payloads. A restart during execution records one linked `outcome_unknown` result.
 - **Write authority:** immediately before every write/confirmation/undo, refresh
   the caller's role. Non-admin invalidates that admin's sessions; uncertainty
   fails closed. Writes are journaled as prepared→executing→terminal, and transport
@@ -269,6 +278,8 @@ bug was found against the REAL API, not by reading the code.
   pendings with a rotated one-use nonce (`rotatePendingNonce` mirrors
   confirmPending's gates; the old plaintext DIES, `expiresAt` byte-unchanged; the
   store swap is conditional on `status='pending'` so a concurrent confirm wins).
+  Request-id retry replay uses the same nonce-free descriptor path and rotation
+  rule; terminal previews are omitted rather than revived.
   Status stream lines (`{type:"status", action, label}`) are emitted before each
   tool execution — label from the action NAME only (args can carry admin text),
   never persisted. Turn telemetry (`turn_telemetry`) records model

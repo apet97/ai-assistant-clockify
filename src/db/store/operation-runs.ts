@@ -5,6 +5,11 @@ import type {
   PrepareOperationRunInput,
   StoreContext,
 } from "./context.js";
+import {
+  actionResultJson,
+  buildActionResultSummary,
+  type ActionResultRef,
+} from "../action-results.js";
 
 interface OperationRunRow {
   id: string;
@@ -54,7 +59,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
     actionName: string;
     status: Exclude<OperationRunStatus, "prepared" | "executing">;
     result: unknown;
-  }): string;
+  }): ActionResultRef;
 } {
   const { db, nowIso } = ctx;
   return {
@@ -99,10 +104,13 @@ export function buildOperationRunStore(ctx: StoreContext): {
     },
     recordActionResult(input) {
       const id = randomUUID();
+      const resultJson = actionResultJson(input.result);
+      const summary = buildActionResultSummary(id, input.result);
       db.prepare(
         `INSERT INTO action_results (
-           id, workspace_id, admin_user_id, session_id, action_name, kind, result_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           id, workspace_id, admin_user_id, session_id, action_name, kind,
+           result_json, summary_json, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         input.workspaceId,
@@ -110,10 +118,11 @@ export function buildOperationRunStore(ctx: StoreContext): {
         input.sessionId ?? null,
         input.actionName,
         input.status,
-        JSON.stringify(input.result),
+        resultJson,
+        actionResultJson(summary),
         nowIso(),
       );
-      return id;
+      return { id, kind: input.status, summary };
     },
   };
 }

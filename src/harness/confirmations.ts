@@ -159,9 +159,12 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
   const operationHash = hashOperation(input.operation);
   const previewTargets = (input.preview as { targets?: unknown[] } | undefined)?.targets ?? [];
 
+  const suppliedOperationId = input.operation && typeof input.operation === "object"
+    ? (input.operation as { operationId?: unknown }).operationId
+    : undefined;
   const record: PendingConfirmationRecord = {
     id,
-    operationId: randomUUID(),
+    operationId: typeof suppliedOperationId === "string" ? suppliedOperationId : randomUUID(),
     sessionId: input.sessionId,
     workspaceId: input.workspaceId,
     adminUserId: input.adminUserId,

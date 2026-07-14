@@ -24,6 +24,7 @@ function previewResult(): Extract<ActionResult, { kind: "preview" }> {
       warnings: [],
     },
     operation: {
+      operationId: "op-c9",
       actionName: "clockify_clients_delete",
       featureGroup: "work_structure",
       risks: ["high_risk_write"],

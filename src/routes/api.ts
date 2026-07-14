@@ -220,13 +220,21 @@ export function apiRouter(deps: AppDeps): Router {
       entity: "assistant_policy",
       data: { policy: next },
     });
+    const resultRef = deps.store.recordActionResult({
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      sessionId: claims.sessionId,
+      actionName: "assistant_update_permissions",
+      status: "succeeded",
+      result: { kind: "receipt", receipt },
+    });
     deps.store.addAuditEvent({
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       sessionId: claims.sessionId,
       actionName: "assistant_update_permissions",
       risk: ["permission_change"],
-      receipt,
+      resultRef,
     });
     res.json({ ok: true, receipt, policy: next });
   }));
@@ -374,7 +382,13 @@ export function apiRouter(deps: AppDeps): Router {
     const body = turn.ok
       ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
       : { ok: false, code: turn.code, message: turn.message };
-    deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, turn.ok ? "succeeded" : "failed", { status, body });
+    deps.store.finishTurnRun(
+      pre.claims.sessionId,
+      pre.requestId,
+      turn.ok ? "succeeded" : "failed",
+      { status, body },
+      turn.ok ? turn.resultLinks : [],
+    );
     return res.status(status).json(body);
   }));
 
@@ -414,7 +428,13 @@ export function apiRouter(deps: AppDeps): Router {
       const body = turn.ok
         ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
         : { ok: false, code: turn.code, message: turn.message };
-      deps.store.finishTurnRun(pre.claims.sessionId, pre.requestId, turn.ok ? "succeeded" : "failed", { status, body });
+      deps.store.finishTurnRun(
+        pre.claims.sessionId,
+        pre.requestId,
+        turn.ok ? "succeeded" : "failed",
+        { status, body },
+        turn.ok ? turn.resultLinks : [],
+      );
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
       else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
     } catch {
@@ -576,21 +596,22 @@ export function apiRouter(deps: AppDeps): Router {
     const undoStatus = receipt.ok
       ? remaining.length > 0 ? "partially_undone" : "undone"
       : receipt.code === "commit_outcome_unknown" ? "outcome_unknown" : "failed";
+    let undoResultRef: import("../db/store.js").ActionResultRef | undefined;
     bestEffort("undo settlement failed", () => {
-      deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
+      undoResultRef = deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
     });
     // The reversal already happened (and the one-use claim is already flipped to
     // undone). A transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.
     // Mirror commitConfirmation: best-effort audit, message-only log, return the receipt.
-    bestEffort("undo bookkeeping", () => {
+    if (undoResultRef) bestEffort("undo bookkeeping", () => {
       deps.store.addAuditEvent({
         workspaceId: claims.workspaceId,
         adminUserId: claims.adminUserId,
         sessionId: claims.sessionId,
         actionName: "undo",
         risk: ["destructive"],
-        receipt,
+        resultRef: undoResultRef!,
       });
     });
     return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });

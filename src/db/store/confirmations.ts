@@ -2,6 +2,7 @@ import type { RiskLabel } from "../../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../../harness/confirmations.js";
 import type { StoreContext } from "./context.js";
 import { randomUUID } from "node:crypto";
+import { actionResultJson, buildActionResultSummary, type ActionResultRef } from "../action-results.js";
 
 interface PendingRow {
   id: string;
@@ -12,7 +13,7 @@ interface PendingRow {
   status: PendingStatus;
   risk_json: string;
   preview_json: string;
-  operation_json: string;
+  operation_json: string | null;
   operation_hash: string;
   target_fingerprints_json: string;
   action_fingerprint: string;
@@ -21,7 +22,7 @@ interface PendingRow {
   expires_at: string;
   created_at: string;
   used_at: string | null;
-  result_json: string | null;
+  result_summary_json: string | null;
   agent_state_json: string | null;
   action_result_id: string | null;
 }
@@ -63,7 +64,7 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     status: row.status,
     risk: JSON.parse(row.risk_json) as RiskLabel[],
     preview: JSON.parse(row.preview_json),
-    operation: JSON.parse(row.operation_json),
+    operation: row.operation_json ? JSON.parse(row.operation_json) : {},
     operationHash: row.operation_hash,
     targetFingerprints: JSON.parse(row.target_fingerprints_json) as string[],
     actionFingerprint: row.action_fingerprint,
@@ -72,7 +73,6 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     usedAt: row.used_at ?? undefined,
-    result: row.result_json ? JSON.parse(row.result_json) : undefined,
     agentState: parseStoredAgentState(row.agent_state_json),
     actionResultId: row.action_result_id ?? undefined,
   };
@@ -89,13 +89,13 @@ export function buildConfirmationStore(ctx: StoreContext): {
   updateConfirmationNonceHash(id: string, nonceHash: string): boolean;
   markConfirmationExecuting(id: string): boolean;
   cancelConfirmation(id: string): boolean;
-  setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
+  expireConfirmation(id: string): boolean;
   settleConfirmation(
     id: string,
     status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
     actionName: string,
     result: unknown,
-  ): string;
+  ): ActionResultRef;
   getActionResult(id: string): unknown | undefined;
   countPendingConfirmations(sessionId: string, nowIso: string): number;
 } {
@@ -106,7 +106,7 @@ export function buildConfirmationStore(ctx: StoreContext): {
         `INSERT INTO pending_confirmations (
            id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
            operation_json, operation_hash, target_fingerprints_json, action_fingerprint, catalog_hash,
-           nonce_hash, expires_at, created_at, used_at, result_json, action_result_id, agent_state_json
+           nonce_hash, expires_at, created_at, used_at, action_result_id, result_summary_json, agent_state_json
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
@@ -126,8 +126,8 @@ export function buildConfirmationStore(ctx: StoreContext): {
         record.expiresAt,
         record.createdAt,
         record.usedAt ?? null,
-        record.result === undefined ? null : JSON.stringify(record.result),
         record.actionResultId ?? null,
+        null,
         record.agentState === undefined ? null : JSON.stringify(record.agentState),
       );
     },
@@ -141,15 +141,22 @@ export function buildConfirmationStore(ctx: StoreContext): {
     },
 
     listPendingConfirmations(sessionId, nowIsoArg) {
-      // Rides idx_pending_confirmations_session(session_id, status, expires_at).
-      const rows = db
-        .prepare(
-          `SELECT * FROM pending_confirmations
-            WHERE session_id = ? AND status = 'pending' AND expires_at > ?
-            ORDER BY created_at ASC`,
-        )
-        .all(sessionId, nowIsoArg) as PendingRow[];
-      return rows.map(pendingRowToRecord);
+      return db.transaction(() => {
+        db.prepare(
+          `UPDATE pending_confirmations
+              SET status = 'expired', used_at = ?, nonce_hash = '',
+                  agent_state_json = NULL, operation_json = NULL
+            WHERE session_id = ? AND status = 'pending' AND expires_at <= ?`,
+        ).run(nowIsoArg, sessionId, nowIsoArg);
+        const rows = db
+          .prepare(
+            `SELECT * FROM pending_confirmations
+              WHERE session_id = ? AND status = 'pending' AND expires_at > ?
+              ORDER BY created_at ASC`,
+          )
+          .all(sessionId, nowIsoArg) as PendingRow[];
+        return rows.map(pendingRowToRecord);
+      })();
     },
 
     updateConfirmationNonceHash(id, nonceHash) {
@@ -179,31 +186,38 @@ export function buildConfirmationStore(ctx: StoreContext): {
     cancelConfirmation(id) {
       const info = db
         .prepare(
-          "UPDATE pending_confirmations SET status = 'cancelled', used_at = ? WHERE id = ? AND status = 'pending'",
+          `UPDATE pending_confirmations
+              SET status = 'cancelled', used_at = ?, nonce_hash = '',
+                  agent_state_json = NULL, operation_json = NULL
+            WHERE id = ? AND status = 'pending'`,
         )
         .run(nowIso(), id);
       return info.changes === 1;
     },
 
-    setConfirmationResult(id, status, result) {
-      db.prepare("UPDATE pending_confirmations SET status = ?, result_json = ? WHERE id = ?").run(
-        status,
-        result === undefined ? null : JSON.stringify(result),
-        id,
-      );
+    expireConfirmation(id) {
+      return db.prepare(
+        `UPDATE pending_confirmations
+            SET status = 'expired', used_at = ?, nonce_hash = '',
+                agent_state_json = NULL, operation_json = NULL
+          WHERE id = ? AND status = 'pending' AND expires_at <= ?`,
+      ).run(nowIso(), id, nowIso()).changes === 1;
     },
 
     settleConfirmation(id, status, actionName, result) {
-      const settle = db.transaction((): string => {
+      const settle = db.transaction((): ActionResultRef => {
         const row = db.prepare(
           "SELECT session_id, workspace_id, admin_user_id FROM pending_confirmations WHERE id = ?",
         ).get(id) as { session_id: string; workspace_id: string; admin_user_id: string } | undefined;
         if (!row) throw new Error("confirmation_not_found");
         const actionResultId = randomUUID();
+        const canonicalResult = { kind: "receipt", receipt: result };
+        const summary = buildActionResultSummary(actionResultId, canonicalResult);
         db.prepare(
           `INSERT INTO action_results (
-             id, workspace_id, admin_user_id, session_id, action_name, kind, result_json, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             id, workspace_id, admin_user_id, session_id, action_name, kind,
+             result_json, summary_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         ).run(
           actionResultId,
           row.workspace_id,
@@ -211,21 +225,22 @@ export function buildConfirmationStore(ctx: StoreContext): {
           row.session_id,
           actionName,
           status,
-          JSON.stringify(result),
+          actionResultJson(canonicalResult),
+          actionResultJson(summary),
           nowIso(),
         );
         const update = db.prepare(
           `UPDATE pending_confirmations
-             SET status = ?, result_json = ?, action_result_id = ?, nonce_hash = '',
-                 agent_state_json = NULL, operation_json = '{}'
+             SET status = ?, action_result_id = ?, result_summary_json = ?, nonce_hash = '',
+                 agent_state_json = NULL, operation_json = NULL
            WHERE id = ? AND status = 'executing'`,
-        ).run(status, JSON.stringify(result), actionResultId, id);
+        ).run(status, actionResultId, actionResultJson(summary), id);
         if (update.changes !== 1) throw new Error("confirmation_not_executing");
         db.prepare(
           `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
              WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)`,
         ).run(status, actionResultId, nowIso(), id);
-        return actionResultId;
+        return { id: actionResultId, kind: status, summary };
       });
       return settle();
     },
@@ -238,12 +253,20 @@ export function buildConfirmationStore(ctx: StoreContext): {
     },
 
     countPendingConfirmations(sessionId, nowIso) {
-      const row = db
-        .prepare(
-          "SELECT COUNT(*) AS n FROM pending_confirmations WHERE session_id = ? AND status = 'pending' AND expires_at > ?",
-        )
-        .get(sessionId, nowIso) as { n: number };
-      return row.n;
+      return db.transaction(() => {
+        db.prepare(
+          `UPDATE pending_confirmations
+              SET status = 'expired', used_at = ?, nonce_hash = '',
+                  agent_state_json = NULL, operation_json = NULL
+            WHERE session_id = ? AND status = 'pending' AND expires_at <= ?`,
+        ).run(nowIso, sessionId, nowIso);
+        const row = db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM pending_confirmations WHERE session_id = ? AND status = 'pending' AND expires_at > ?",
+          )
+          .get(sessionId, nowIso) as { n: number };
+        return row.n;
+      })();
     },
   };
 }

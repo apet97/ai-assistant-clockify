@@ -1318,7 +1318,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(previewsOf(first.body.results as ResultItem[])).toHaveLength(1);
     const callsAfterPreview = model.calls.length;
     const follow = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: phrase });
-    expect(follow.status).toBe(200);
+    expect(follow.status, JSON.stringify(follow.body)).toBe(200);
     expect(model.calls.length).toBe(callsAfterPreview + 1); // guard did NOT intercept
   });
 

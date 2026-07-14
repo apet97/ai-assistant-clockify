@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { zStringList } from "../arg-shapes.js";
 import {
   clarifyResult,
@@ -245,7 +246,7 @@ const deactivateUser = defineAction({
         reversibility: "Reactivate the user from the Clockify UI to restore access.",
         warnings: ["This removes the user's access to the workspace."],
       },
-      operation: { actionName: "clockify_users_deactivate", featureGroup: UG, risks: ["high_risk_write"], payload: { userId: member.userId } },
+      operation: { operationId: randomUUID(), actionName: "clockify_users_deactivate", featureGroup: UG, risks: ["high_risk_write"], payload: { userId: member.userId } },
     };
   },
   async commit(ctx, operation) {

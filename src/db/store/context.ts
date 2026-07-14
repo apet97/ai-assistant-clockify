@@ -1,6 +1,7 @@
 import type Database from "better-sqlite3";
 import type { RiskLabel } from "../../harness/risk.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../../harness/receipts.js";
+import type { ActionResultRef } from "../action-results.js";
 
 /**
  * Shared primitives every store concern module needs. Built once inside
@@ -101,6 +102,7 @@ export interface NewMessageInput {
   role: ChatRole;
   content: string;
   payload?: unknown;
+  resultLinks?: DurableResultLink[];
 }
 
 export interface ChatMessage {
@@ -108,6 +110,10 @@ export interface ChatMessage {
   content: string;
   payload?: unknown;
 }
+
+export type DurableResultLink =
+  | { kind: "action_result"; ref: ActionResultRef }
+  | { kind: "preview" | "inline"; descriptor: unknown };
 
 export type TurnRunStatus = "prepared" | "executing" | "succeeded" | "failed" | "outcome_unknown";
 
@@ -175,14 +181,18 @@ export interface ArtifactRecord {
   expiresAt: string;
 }
 
-export interface AuditEventInput {
+interface AuditEventBase {
   workspaceId: string;
   adminUserId: string;
   sessionId?: string;
   actionName: string;
   risk: RiskLabel[];
-  receipt: SuccessReceipt | ErrorReceipt | Record<string, unknown>;
 }
+
+export type AuditEventInput = AuditEventBase & (
+  | { resultRef: ActionResultRef; receipt?: never }
+  | { resultRef?: never; receipt: SuccessReceipt | ErrorReceipt | Record<string, unknown> }
+);
 
 export interface UndoRecordInput {
   sessionId: string;
@@ -216,4 +226,7 @@ export interface EraseCounts {
   operationRuns: number;
   actionResults: number;
   artifacts: number;
+  idempotencyKeys: number;
+  turnRunResultLinks: number;
+  chatMessageResultLinks: number;
 }

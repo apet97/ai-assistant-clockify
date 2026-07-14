@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { EntityRef } from "../../harness/receipts.js";
 import type { UndoRecord, UndoRecordInput, StoreContext } from "./context.js";
+import { actionResultJson, buildActionResultSummary, type ActionResultKind, type ActionResultRef } from "../action-results.js";
 
 const UNDO_TTL_MS = 30 * 60 * 1000;
 
@@ -14,7 +15,7 @@ export function buildUndoStore(ctx: StoreContext): {
     status: "partially_undone" | "undone" | "failed" | "outcome_unknown",
     remaining: EntityRef[],
     result: unknown,
-  ): void;
+  ): ActionResultRef;
 } {
   const { db, now, nowIso } = ctx;
   return {
@@ -85,11 +86,45 @@ export function buildUndoStore(ctx: StoreContext): {
     },
 
     settleUndo(id, status, remaining, result) {
-      db.prepare(
-        `UPDATE undo_records
-         SET status = ?, remaining_json = ?, result_json = ?, undone_at = ?
-         WHERE id = ? AND status = 'executing'`,
-      ).run(status, JSON.stringify(remaining), JSON.stringify(result), nowIso(), id);
+      return db.transaction((): ActionResultRef => {
+        const row = db.prepare(
+          "SELECT session_id, workspace_id, admin_user_id FROM undo_records WHERE id = ? AND status = 'executing'",
+        ).get(id) as { session_id: string; workspace_id: string; admin_user_id: string } | undefined;
+        if (!row) throw new Error("undo_not_executing");
+        const kind: ActionResultKind = status === "partially_undone"
+          ? "partial"
+          : status === "undone"
+            ? "succeeded"
+            : status === "outcome_unknown"
+              ? "outcome_unknown"
+              : "definitive_failed";
+        const actionResultId = randomUUID();
+        const canonicalResult = { kind: "receipt", receipt: result };
+        const summary = buildActionResultSummary(actionResultId, canonicalResult);
+        db.prepare(
+          `INSERT INTO action_results (
+             id, workspace_id, admin_user_id, session_id, action_name, kind,
+             result_json, summary_json, created_at
+           ) VALUES (?, ?, ?, ?, 'undo', ?, ?, ?, ?)`,
+        ).run(
+          actionResultId,
+          row.workspace_id,
+          row.admin_user_id,
+          row.session_id,
+          kind,
+          actionResultJson(canonicalResult),
+          actionResultJson(summary),
+          nowIso(),
+        );
+        const update = db.prepare(
+          `UPDATE undo_records
+              SET status = ?, remaining_json = ?, action_result_id = ?,
+                  result_summary_json = ?, undone_at = ?
+            WHERE id = ? AND status = 'executing'`,
+        ).run(status, JSON.stringify(remaining), actionResultId, actionResultJson(summary), nowIso(), id);
+        if (update.changes !== 1) throw new Error("undo_not_executing");
+        return { id: actionResultId, kind, summary };
+      })();
     },
   };
 }

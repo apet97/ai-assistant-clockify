@@ -30,7 +30,7 @@ function receiptNotNull(db: Database.Database): boolean {
 }
 
 describe("idempotency_keys migration", () => {
-  it("relaxes receipt_json to NULLABLE, adds claimed_at, and preserves existing completed rows", () => {
+  it("rebuilds the ledger with explicit tenant scope and deletes legacy unscoped rows", () => {
     const db = new Database(":memory:");
     oldSchema(db);
     db.prepare(
@@ -40,24 +40,19 @@ describe("idempotency_keys migration", () => {
 
     expect(() => migrate(db)).not.toThrow();
 
-    // receipt_json is now nullable: a NULL-receipt CLAIM insert succeeds.
-    expect(receiptNotNull(db)).toBe(false);
-    expect(() =>
-      db
-        .prepare("INSERT INTO idempotency_keys (key, receipt_json, committed_at, claimed_at) VALUES (?, NULL, NULL, ?)")
-        .run("claim", 2_000),
-    ).not.toThrow();
-
-    // claimed_at column exists.
+    // The v4 ledger carries explicit tenant scope and no full receipt copy.
     const cols = db.prepare("PRAGMA table_info(idempotency_keys)").all() as Array<{ name: string }>;
     expect(cols.some((c) => c.name === "claimed_at")).toBe(true);
-
-    // The pre-existing completed row survived the rebuild unchanged.
-    const legacy = db
-      .prepare("SELECT receipt_json, committed_at FROM idempotency_keys WHERE key = ?")
-      .get("legacy") as { receipt_json: string; committed_at: number };
-    expect(JSON.parse(legacy.receipt_json).action).toBe("x");
-    expect(legacy.committed_at).toBe(1_000);
+    expect(cols.map((c) => c.name)).toEqual([
+      "key",
+      "workspace_id",
+      "admin_user_id",
+      "action_result_id",
+      "result_summary_json",
+      "committed_at",
+      "claimed_at",
+    ]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys").get()).toEqual({ n: 0 });
     db.close();
   });
 
@@ -79,23 +74,19 @@ describe("idempotency_keys migration", () => {
 
     expect(() => migrate(db)).not.toThrow();
 
-    // The scratch table is gone, the rebuild completed, the data survived.
+    // The scratch table is gone and the drained migration discarded unscoped data.
     const tables = (
       db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
     ).map((r) => r.name);
     expect(tables).not.toContain("idempotency_keys_new");
-    expect(receiptNotNull(db)).toBe(false);
-    const legacy = db.prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ?").get("legacy") as
-      | { receipt_json: string }
-      | undefined;
-    expect(legacy && JSON.parse(legacy.receipt_json).action).toBe("x");
+    expect(db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys").get()).toEqual({ n: 0 });
     db.close();
   });
 
   it("is a no-op on an already-migrated (new-schema) DB", () => {
     const db = new Database(":memory:");
     migrate(db); // fresh install gets the nullable schema directly
-    expect(receiptNotNull(db)).toBe(false);
+    expect(() => migrate(db)).not.toThrow();
     expect(() => migrate(db)).not.toThrow(); // re-running stays clean
     expect(receiptNotNull(db)).toBe(false);
     db.close();
@@ -257,9 +248,47 @@ describe("historical database migration", () => {
       remaining_json: reversal,
       expires_at: "2025-01-01T00:00:00.000Z",
     });
-    expect(db.prepare("SELECT receipt_json FROM idempotency_keys WHERE key = ?").get("legacy-key")).toEqual({
-      receipt_json: '{"ok":true,"action":"clockify_tags_create"}',
-    });
+    expect(db.prepare("SELECT * FROM idempotency_keys WHERE key = ?").get("legacy-key")).toBeUndefined();
+    db.close();
+  });
+});
+
+describe("schema v4 canonical-result ownership", () => {
+  it("keeps full result JSON only in action_results and adds ordered durable result links", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+
+    const tablesWithResultJson = (db
+      .prepare(
+        `SELECT m.name AS table_name, p.name AS column_name
+           FROM sqlite_master m
+           JOIN pragma_table_info(m.name) p
+          WHERE m.type = 'table' AND p.name = 'result_json'
+          ORDER BY m.name`,
+      )
+      .all() as Array<{ table_name: string }>).map((row) => row.table_name);
+    expect(tablesWithResultJson).toEqual(["action_results"]);
+
+    const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    );
+    expect(tables).toEqual(expect.arrayContaining(["turn_run_result_links", "chat_message_result_links"]));
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    db.close();
+  });
+
+  it("enforces the one-megabyte artifact limit in SQLite and reruns safely", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    expect(() => migrate(db)).not.toThrow();
+    expect(() =>
+      db.prepare(
+        `INSERT INTO artifacts (
+           id, workspace_id, admin_user_id, session_id, content_type, filename,
+           bytes, checksum, created_at, expires_at
+         ) VALUES ('too-big', 'w', 'a', 's', 'x', 'x', ?, 'x', '2026-01-01', '2026-01-02')`,
+      ).run(Buffer.alloc(1_000_001)),
+    ).toThrow(/CHECK constraint failed/);
     db.close();
   });
 });

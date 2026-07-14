@@ -21,6 +21,9 @@ anything) runs.
 - **One-use, time-limited confirmations** (5 min) bound to session + workspace +
   admin, a salted nonce hash, and an operation hash. Policy is re-checked at
   confirm time.
+- **Durable, nonce-free retries.** Each executed action has one canonical result;
+  chat/history/audit/retry records link to it. A duplicate request hydrates those
+  links and rotates a fresh nonce only for a preview that is still pending.
 - **The model receives no secrets** — never Clockify tokens, add-on tokens,
   session secrets, the model API key, or raw headers. Tokens are encrypted at
   rest (AES-256-GCM). Clockify-sourced text is treated as untrusted data, not

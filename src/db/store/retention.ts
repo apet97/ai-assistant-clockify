@@ -54,7 +54,7 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     cutoff: "epoch",
     sqls: [
       batched("idempotency_keys", "committed_at IS NOT NULL AND committed_at < ?"),
-      batched("idempotency_keys", "receipt_json IS NULL AND claimed_at < ?"),
+      batched("idempotency_keys", "action_result_id IS NULL AND claimed_at < ?"),
     ],
   },
   {
@@ -79,8 +79,19 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     cutoff: "iso",
     sqls: [batched("operation_runs", "updated_at < ? AND NOT EXISTS (SELECT 1 FROM operation_steps WHERE operation_id = operation_runs.id)")],
   },
-  { table: "actionResults", cutoff: "iso", sqls: [batched("action_results", "created_at < ?")] },
   { table: "turnRuns", cutoff: "iso", sqls: [batched("turn_runs", "updated_at < ?")] },
+  {
+    table: "actionResults",
+    cutoff: "iso",
+    sqls: [batched("action_results", `created_at < ?
+      AND NOT EXISTS (SELECT 1 FROM pending_confirmations WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM audit_events WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM undo_records WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM idempotency_keys WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM operation_runs WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM chat_message_result_links WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM turn_run_result_links WHERE action_result_id = action_results.id)`)],
+  },
   {
     table: "chatSessions",
     cutoff: "iso",
@@ -156,6 +167,15 @@ export function buildRetentionStore(
             `UPDATE undo_records SET status = 'expired', remaining_json = '[]'
              WHERE rowid IN (SELECT rowid FROM undo_records WHERE status = 'available' AND expires_at < ? LIMIT ?)`,
           ).run(nowIsoArg, roundLimit);
+          db.prepare(
+            `UPDATE pending_confirmations
+                SET status = 'expired', used_at = ?, nonce_hash = '',
+                    agent_state_json = NULL, operation_json = NULL
+              WHERE rowid IN (
+                SELECT rowid FROM pending_confirmations
+                 WHERE status = 'pending' AND expires_at <= ? LIMIT ?
+              )`,
+          ).run(nowIsoArg, nowIsoArg, roundLimit);
           for (const { table, sqls } of PRUNE_DELETES) {
             for (const sql of sqls) {
               if (total >= MAX_ROWS_PER_PASS) return;

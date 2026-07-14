@@ -53,13 +53,15 @@ describe("store.pruneExpired", () => {
     expect(IDEMPOTENCY_RETENTION_MS).toBeGreaterThan(IDEMPOTENCY_WINDOW_MS);
     const store = createStore(":memory:", { encryptionKey: "k", now: () => NOW });
     const receipt = successReceipt({ action: "x" });
-    store.recordIdempotency("old", receipt, NOW.getTime() - 2 * 60 * 60 * 1000);
-    store.recordIdempotency("fresh", receipt, NOW.getTime() - 5 * 60 * 1000);
+    const oldRef = store.recordActionResult({ workspaceId: "ws-1", adminUserId: "admin-1", actionName: "x", status: "succeeded", result: { kind: "receipt", receipt } });
+    const freshRef = store.recordActionResult({ workspaceId: "ws-1", adminUserId: "admin-1", actionName: "x", status: "succeeded", result: { kind: "receipt", receipt } });
+    store.recordIdempotency("old", "ws-1", "admin-1", oldRef, NOW.getTime() - 2 * 60 * 60 * 1000);
+    store.recordIdempotency("fresh", "ws-1", "admin-1", freshRef, NOW.getTime() - 5 * 60 * 1000);
 
     const counts = await store.pruneExpired(NOW.toISOString());
     expect(counts.idempotencyKeys).toBe(1);
     // The fresh key still dedupes inside the window.
-    expect(store.lookupIdempotency("fresh", NOW.getTime() - IDEMPOTENCY_WINDOW_MS)).toBeDefined();
+    expect(store.lookupIdempotency("fresh", "ws-1", "admin-1", NOW.getTime() - IDEMPOTENCY_WINDOW_MS)).toBeDefined();
     store.close();
   });
 
@@ -194,11 +196,18 @@ describe("store.pruneExpired", () => {
     expect(first.total).toBe(10_000);
     expect(first.backlog).toBe(true);
     expect(first.batches).toBeGreaterThan(1);
-    const second = await store.pruneExpired(NOW.toISOString());
-    expect(second.auditEvents).toBe(25);
-    expect(second.backlog).toBe(false);
+    let auditEvents = first.auditEvents;
+    let actionResults = first.actionResults;
+    let pass = first;
+    while (pass.backlog) {
+      pass = await store.pruneExpired(NOW.toISOString());
+      auditEvents += pass.auditEvents;
+      actionResults += pass.actionResults;
+    }
+    expect(auditEvents).toBe(10_025);
+    expect(actionResults).toBe(10_025);
     store.close();
-  });
+  }, 15_000);
 
   it("honors a custom retentionDays window", async () => {
     // A 45d-old message is KEPT under the 90d default but PRUNED under a 30d override.

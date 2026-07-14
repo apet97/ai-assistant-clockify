@@ -127,12 +127,10 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         input.context.operationJournal.markExecuting(operationId);
       }
       const result = await action.handler(input.context, parsed.data);
-      settleImmediateOperation(input.context, operationId, result);
-      return result;
+      return settleImmediateOperation(input.context, operationId, result);
     } catch (error) {
       const result: ActionResult = { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
-      settleImmediateOperation(input.context, operationId, result);
-      return result;
+      return settleImmediateOperation(input.context, operationId, result);
     }
   }
 
@@ -148,8 +146,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
   };
 }
 
-function settleImmediateOperation(ctx: ActionContext, operationId: string | undefined, result: ActionResult): void {
-  if (!operationId || !ctx.operationJournal) return;
+function settleImmediateOperation(ctx: ActionContext, operationId: string | undefined, result: ActionResult): ActionResult {
+  if (!operationId || !ctx.operationJournal) return result;
   const status = result.kind === "partial"
     ? "partial"
     : result.kind === "receipt" && result.receipt.ok
@@ -165,6 +163,7 @@ function settleImmediateOperation(ctx: ActionContext, operationId: string | unde
       error instanceof Error ? error.message : String(error),
     );
   }
+  return { ...result, operationId };
 }
 
 /**

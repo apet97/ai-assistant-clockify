@@ -1,4 +1,10 @@
 import type Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+import {
+  actionResultJson,
+  buildActionResultSummary,
+  type ActionResultKind,
+} from "./action-results.js";
 
 /**
  * SQLite schema (DATA_MODEL). All tables small and explicit. IDs are strings,
@@ -193,7 +199,7 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON artifacts(session_id)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 3;
+export const LATEST_SCHEMA_VERSION = 4;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -358,6 +364,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
       "DROP TABLE undo_records_v2",
     ],
   },
+  { version: 4, statements: [] },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -390,7 +397,8 @@ export function migrate(db: Database.Database): void {
   for (const migration of VERSIONED_MIGRATIONS) {
     if (migration.version <= currentVersion) continue;
     db.transaction(() => {
-      for (const statement of migration.statements) db.prepare(statement).run();
+      if (migration.version === 4) migrateToV4(db);
+      else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
   }
@@ -399,6 +407,525 @@ export function migrate(db: Database.Database): void {
   for (const statement of PRUNE_INDEX_STATEMENTS) {
     db.prepare(statement).run();
   }
+}
+
+const terminalKind = (value: unknown): ActionResultKind => {
+  if (value && typeof value === "object" && (value as { kind?: unknown }).kind === "partial") return "partial";
+  const receipt = value && typeof value === "object" && "receipt" in value
+    ? (value as { receipt?: unknown }).receipt
+    : value;
+  if (receipt && typeof receipt === "object") {
+    if ((receipt as { ok?: unknown }).ok === true) return "succeeded";
+    if ((receipt as { code?: unknown }).code === "commit_outcome_unknown") return "outcome_unknown";
+  }
+  return "definitive_failed";
+};
+
+const resultAction = (value: unknown, fallback: string): string => {
+  const receipt = value && typeof value === "object" && "receipt" in value
+    ? (value as { receipt?: unknown }).receipt
+    : value;
+  const action = receipt && typeof receipt === "object" ? (receipt as { action?: unknown }).action : undefined;
+  return typeof action === "string" && action.length > 0 ? action : fallback;
+};
+
+const withoutNonce = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(withoutNonce);
+  if (!value || typeof value !== "object") return value;
+  const next: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key !== "nonce") next[key] = withoutNonce(child);
+  }
+  return next;
+};
+
+function migrateToV4(db: Database.Database): void {
+  for (const scratch of [
+    "action_results_v3",
+    "chat_messages_v3",
+    "turn_runs_v3",
+    "pending_confirmations_v3",
+    "audit_events_v3",
+    "undo_records_v3",
+    "idempotency_keys_v3",
+    "artifacts_v3",
+  ]) {
+    db.prepare(`DROP TABLE IF EXISTS ${scratch}`).run();
+  }
+
+  db.prepare("ALTER TABLE action_results RENAME TO action_results_v3").run();
+  db.exec(`
+    CREATE TABLE action_results (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      session_id TEXT,
+      action_name TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('succeeded', 'partial', 'definitive_failed', 'outcome_unknown')),
+      result_json TEXT NOT NULL CHECK (json_valid(result_json)),
+      summary_json TEXT NOT NULL CHECK (json_valid(summary_json) AND length(CAST(summary_json AS BLOB)) <= 65536),
+      created_at TEXT NOT NULL
+    );
+  `);
+  const legacyResults = db.prepare("SELECT * FROM action_results_v3 ORDER BY rowid").all() as Array<{
+    id: string;
+    workspace_id: string;
+    admin_user_id: string;
+    session_id: string | null;
+    action_name: string;
+    kind: ActionResultKind;
+    result_json: string;
+    created_at: string;
+  }>;
+  const insertResult = db.prepare(
+    `INSERT INTO action_results (
+       id, workspace_id, admin_user_id, session_id, action_name, kind,
+       result_json, summary_json, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of legacyResults) {
+    const result = JSON.parse(row.result_json) as unknown;
+    insertResult.run(
+      row.id,
+      row.workspace_id,
+      row.admin_user_id,
+      row.session_id,
+      row.action_name,
+      row.kind,
+      row.result_json,
+      actionResultJson(buildActionResultSummary(row.id, result)),
+      row.created_at,
+    );
+  }
+
+  const createCanonical = (input: {
+    workspaceId: string;
+    adminUserId: string;
+    sessionId: string | null;
+    actionName: string;
+    result: unknown;
+    kind?: ActionResultKind;
+    createdAt: string;
+  }): { id: string; kind: ActionResultKind; summary: unknown } => {
+    const id = randomUUID();
+    const kind = input.kind ?? terminalKind(input.result);
+    const summary = buildActionResultSummary(id, input.result);
+    insertResult.run(
+      id,
+      input.workspaceId,
+      input.adminUserId,
+      input.sessionId,
+      input.actionName,
+      kind,
+      actionResultJson(input.result),
+      actionResultJson(summary),
+      input.createdAt,
+    );
+    return { id, kind, summary };
+  };
+
+  db.prepare("ALTER TABLE chat_messages RENAME TO chat_messages_v3").run();
+  db.exec(`
+    CREATE TABLE chat_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'system')),
+      content TEXT NOT NULL,
+      payload_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+    );
+    CREATE TABLE chat_message_result_links (
+      message_id TEXT NOT NULL,
+      result_index INTEGER NOT NULL CHECK (result_index >= 0),
+      descriptor_kind TEXT NOT NULL CHECK (descriptor_kind IN ('action_result', 'preview', 'inline')),
+      action_result_id TEXT,
+      descriptor_json TEXT CHECK (descriptor_json IS NULL OR json_valid(descriptor_json)),
+      PRIMARY KEY (message_id, result_index),
+      FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+    );
+  `);
+  const insertMessage = db.prepare(
+    `INSERT INTO chat_messages (
+       id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertMessageLink = db.prepare(
+    `INSERT INTO chat_message_result_links (
+       message_id, result_index, descriptor_kind, action_result_id, descriptor_json
+     ) VALUES (?, ?, ?, ?, ?)`,
+  );
+  const legacyMessages = db.prepare("SELECT * FROM chat_messages_v3 ORDER BY rowid").all() as Array<{
+    id: string;
+    session_id: string;
+    workspace_id: string;
+    admin_user_id: string;
+    role: string;
+    content: string;
+    payload_json: string | null;
+    created_at: string;
+  }>;
+  for (const row of legacyMessages) {
+    const payload = row.payload_json ? JSON.parse(row.payload_json) as Record<string, unknown> : undefined;
+    const results = Array.isArray(payload?.results) ? payload.results : [];
+    const envelope = payload ? withoutNonce(Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "results"))) : undefined;
+    insertMessage.run(
+      row.id,
+      row.session_id,
+      row.workspace_id,
+      row.admin_user_id,
+      row.role,
+      row.content,
+      envelope === undefined ? null : actionResultJson(envelope),
+      row.created_at,
+    );
+    results.forEach((result, index) => {
+      const kind = result && typeof result === "object" ? (result as { kind?: unknown }).kind : undefined;
+      if (kind === "receipt" || kind === "partial") {
+        const ref = createCanonical({
+          workspaceId: row.workspace_id,
+          adminUserId: row.admin_user_id,
+          sessionId: row.session_id,
+          actionName: resultAction(result, "legacy"),
+          result,
+          createdAt: row.created_at,
+        });
+        insertMessageLink.run(row.id, index, "action_result", ref.id, null);
+      } else {
+        insertMessageLink.run(
+          row.id,
+          index,
+          kind === "preview" ? "preview" : "inline",
+          null,
+          actionResultJson(withoutNonce(result)),
+        );
+      }
+    });
+  }
+
+  db.prepare("ALTER TABLE turn_runs RENAME TO turn_runs_v3").run();
+  db.exec(`
+    CREATE TABLE turn_runs (
+      request_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      intent_hash TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('prepared', 'executing', 'succeeded', 'failed', 'outcome_unknown')),
+      response_envelope_json TEXT CHECK (response_envelope_json IS NULL OR json_valid(response_envelope_json)),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (session_id, request_id)
+    );
+    CREATE TABLE turn_run_result_links (
+      session_id TEXT NOT NULL,
+      request_id TEXT NOT NULL,
+      result_index INTEGER NOT NULL CHECK (result_index >= 0),
+      descriptor_kind TEXT NOT NULL CHECK (descriptor_kind IN ('action_result', 'preview', 'inline')),
+      action_result_id TEXT,
+      descriptor_json TEXT CHECK (descriptor_json IS NULL OR json_valid(descriptor_json)),
+      PRIMARY KEY (session_id, request_id, result_index),
+      FOREIGN KEY (session_id, request_id) REFERENCES turn_runs(session_id, request_id) ON DELETE CASCADE
+    );
+  `);
+  const insertTurn = db.prepare(
+    `INSERT INTO turn_runs (
+       request_id, session_id, workspace_id, admin_user_id, intent_hash, status,
+       response_envelope_json, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const insertTurnLink = db.prepare(
+    `INSERT INTO turn_run_result_links (
+       session_id, request_id, result_index, descriptor_kind, action_result_id, descriptor_json
+     ) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  const legacyTurns = db.prepare("SELECT * FROM turn_runs_v3 ORDER BY rowid").all() as Array<{
+    request_id: string;
+    session_id: string;
+    workspace_id: string;
+    admin_user_id: string;
+    intent_hash: string;
+    status: string;
+    response_json: string | null;
+    created_at: string;
+    updated_at: string;
+  }>;
+  for (const row of legacyTurns) {
+    const response = row.response_json ? JSON.parse(row.response_json) as Record<string, unknown> : undefined;
+    const body = response?.body && typeof response.body === "object" ? response.body as Record<string, unknown> : undefined;
+    const results = Array.isArray(body?.results) ? body.results : [];
+    const cleanBody = body ? Object.fromEntries(Object.entries(body).filter(([key]) => key !== "results")) : body;
+    const envelope = response
+      ? withoutNonce({ ...response, ...(cleanBody ? { body: cleanBody } : {}) })
+      : undefined;
+    insertTurn.run(
+      row.request_id,
+      row.session_id,
+      row.workspace_id,
+      row.admin_user_id,
+      row.intent_hash,
+      row.status,
+      envelope === undefined ? null : actionResultJson(envelope),
+      row.created_at,
+      row.updated_at,
+    );
+    results.forEach((result, index) => {
+      const kind = result && typeof result === "object" ? (result as { kind?: unknown }).kind : undefined;
+      if (kind === "receipt" || kind === "partial") {
+        const ref = createCanonical({
+          workspaceId: row.workspace_id,
+          adminUserId: row.admin_user_id,
+          sessionId: row.session_id,
+          actionName: resultAction(result, "legacy"),
+          result,
+          createdAt: row.updated_at,
+        });
+        insertTurnLink.run(row.session_id, row.request_id, index, "action_result", ref.id, null);
+      } else {
+        insertTurnLink.run(
+          row.session_id,
+          row.request_id,
+          index,
+          kind === "preview" ? "preview" : "inline",
+          null,
+          actionResultJson(withoutNonce(result)),
+        );
+      }
+    });
+  }
+
+  db.prepare("ALTER TABLE pending_confirmations RENAME TO pending_confirmations_v3").run();
+  db.exec(`
+    CREATE TABLE pending_confirmations (
+      id TEXT PRIMARY KEY,
+      operation_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'executing', 'succeeded', 'partial', 'definitive_failed', 'outcome_unknown', 'cancelled', 'expired')),
+      risk_json TEXT NOT NULL,
+      preview_json TEXT NOT NULL,
+      operation_json TEXT,
+      operation_hash TEXT NOT NULL,
+      target_fingerprints_json TEXT NOT NULL,
+      action_fingerprint TEXT NOT NULL,
+      catalog_hash TEXT NOT NULL,
+      nonce_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      used_at TEXT,
+      action_result_id TEXT,
+      result_summary_json TEXT CHECK (result_summary_json IS NULL OR (json_valid(result_summary_json) AND length(CAST(result_summary_json AS BLOB)) <= 65536)),
+      agent_state_json TEXT,
+      FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
+    );
+  `);
+  const legacyConfirmations = db.prepare("SELECT * FROM pending_confirmations_v3 ORDER BY rowid").all() as Array<Record<string, unknown>>;
+  const insertConfirmation = db.prepare(
+    `INSERT INTO pending_confirmations (
+       id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json,
+       preview_json, operation_json, operation_hash, target_fingerprints_json,
+       action_fingerprint, catalog_hash, nonce_hash, expires_at, created_at, used_at,
+       action_result_id, result_summary_json, agent_state_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of legacyConfirmations) {
+    const status = row.status as string;
+    const terminal = !["pending", "executing"].includes(status);
+    let actionResultId = row.action_result_id as string | null;
+    let summary: unknown;
+    if (actionResultId) {
+      const result = db.prepare("SELECT summary_json FROM action_results WHERE id = ?").get(actionResultId) as { summary_json: string } | undefined;
+      summary = result ? JSON.parse(result.summary_json) : undefined;
+    } else if (terminal && typeof row.result_json === "string") {
+      const full = JSON.parse(row.result_json) as unknown;
+      const operation = typeof row.operation_json === "string" ? JSON.parse(row.operation_json) as { actionName?: string } : undefined;
+      const ref = createCanonical({
+        workspaceId: row.workspace_id as string,
+        adminUserId: row.admin_user_id as string,
+        sessionId: row.session_id as string,
+        actionName: resultAction(full, operation?.actionName ?? "legacy"),
+        result: full,
+        kind: status === "partial" || status === "outcome_unknown" || status === "definitive_failed" || status === "succeeded"
+          ? status
+          : undefined,
+        createdAt: row.used_at as string || row.created_at as string,
+      });
+      actionResultId = ref.id;
+      summary = ref.summary;
+    }
+    insertConfirmation.run(
+      row.id,
+      row.operation_id,
+      row.session_id,
+      row.workspace_id,
+      row.admin_user_id,
+      status,
+      row.risk_json,
+      row.preview_json,
+      terminal ? null : row.operation_json,
+      row.operation_hash,
+      row.target_fingerprints_json,
+      row.action_fingerprint,
+      row.catalog_hash,
+      terminal ? "" : row.nonce_hash,
+      row.expires_at,
+      row.created_at,
+      row.used_at,
+      actionResultId,
+      summary === undefined ? null : actionResultJson(summary),
+      terminal ? null : row.agent_state_json,
+    );
+  }
+
+  db.prepare("ALTER TABLE audit_events RENAME TO audit_events_v3").run();
+  db.exec(`
+    CREATE TABLE audit_events (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      session_id TEXT,
+      action_name TEXT NOT NULL,
+      risk_json TEXT NOT NULL,
+      action_result_id TEXT NOT NULL,
+      result_summary_json TEXT NOT NULL CHECK (json_valid(result_summary_json) AND length(CAST(result_summary_json AS BLOB)) <= 65536),
+      created_at TEXT NOT NULL
+    );
+  `);
+  const legacyAudit = db.prepare("SELECT * FROM audit_events_v3 ORDER BY rowid").all() as Array<Record<string, unknown>>;
+  const insertAudit = db.prepare(
+    `INSERT INTO audit_events (
+       id, workspace_id, admin_user_id, session_id, action_name, risk_json,
+       action_result_id, result_summary_json, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of legacyAudit) {
+    const receipt = JSON.parse(row.receipt_json as string) as unknown;
+    const result = { kind: terminalKind(receipt) === "partial" ? "partial" : "receipt", receipt };
+    const ref = createCanonical({
+      workspaceId: row.workspace_id as string,
+      adminUserId: row.admin_user_id as string,
+      sessionId: row.session_id as string | null,
+      actionName: row.action_name as string,
+      result,
+      createdAt: row.created_at as string,
+    });
+    insertAudit.run(row.id, row.workspace_id, row.admin_user_id, row.session_id, row.action_name, row.risk_json, ref.id, actionResultJson(ref.summary), row.created_at);
+  }
+
+  db.prepare("ALTER TABLE undo_records RENAME TO undo_records_v3").run();
+  db.exec(`
+    CREATE TABLE undo_records (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      action_name TEXT NOT NULL,
+      reversal_json TEXT NOT NULL,
+      remaining_json TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('available', 'executing', 'partially_undone', 'undone', 'failed', 'outcome_unknown', 'expired')),
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      undone_at TEXT,
+      action_result_id TEXT,
+      result_summary_json TEXT CHECK (result_summary_json IS NULL OR (json_valid(result_summary_json) AND length(CAST(result_summary_json AS BLOB)) <= 65536))
+    );
+  `);
+  const legacyUndo = db.prepare("SELECT * FROM undo_records_v3 ORDER BY rowid").all() as Array<Record<string, unknown>>;
+  const insertUndo = db.prepare(
+    `INSERT INTO undo_records (
+       id, session_id, workspace_id, admin_user_id, action_name, reversal_json,
+       remaining_json, status, created_at, expires_at, undone_at,
+       action_result_id, result_summary_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const row of legacyUndo) {
+    let ref: { id: string; summary: unknown } | undefined;
+    if (typeof row.result_json === "string") {
+      const full = JSON.parse(row.result_json) as unknown;
+      ref = createCanonical({
+        workspaceId: row.workspace_id as string,
+        adminUserId: row.admin_user_id as string,
+        sessionId: row.session_id as string,
+        actionName: "undo",
+        result: { kind: "receipt", receipt: full },
+        createdAt: row.undone_at as string || row.created_at as string,
+      });
+    }
+    insertUndo.run(
+      row.id,
+      row.session_id,
+      row.workspace_id,
+      row.admin_user_id,
+      row.action_name,
+      row.reversal_json,
+      row.remaining_json,
+      row.status,
+      row.created_at,
+      row.expires_at,
+      row.undone_at,
+      ref?.id ?? null,
+      ref ? actionResultJson(ref.summary) : null,
+    );
+  }
+
+  db.prepare("ALTER TABLE idempotency_keys RENAME TO idempotency_keys_v3").run();
+  db.exec(`
+    CREATE TABLE idempotency_keys (
+      key TEXT NOT NULL,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      action_result_id TEXT,
+      result_summary_json TEXT CHECK (result_summary_json IS NULL OR (json_valid(result_summary_json) AND length(CAST(result_summary_json AS BLOB)) <= 65536)),
+      committed_at INTEGER,
+      claimed_at INTEGER,
+      PRIMARY KEY (key, workspace_id, admin_user_id)
+    );
+  `);
+
+  db.prepare("ALTER TABLE artifacts RENAME TO artifacts_v3").run();
+  db.exec(`
+    CREATE TABLE artifacts (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      admin_user_id TEXT NOT NULL,
+      session_id TEXT NOT NULL,
+      content_type TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      bytes BLOB NOT NULL CHECK (length(bytes) <= 1000000),
+      checksum TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    INSERT INTO artifacts
+      SELECT * FROM artifacts_v3 WHERE length(bytes) <= 1000000;
+  `);
+
+  for (const table of [
+    "action_results_v3",
+    "chat_messages_v3",
+    "turn_runs_v3",
+    "pending_confirmations_v3",
+    "audit_events_v3",
+    "undo_records_v3",
+    "idempotency_keys_v3",
+    "artifacts_v3",
+  ]) {
+    db.prepare(`DROP TABLE ${table}`).run();
+  }
+
+  db.exec(`
+    CREATE INDEX idx_chat_messages_session_created ON chat_messages(session_id, created_at);
+    CREATE INDEX idx_pending_confirmations_lookup ON pending_confirmations(workspace_id, admin_user_id, status, expires_at);
+    CREATE INDEX idx_pending_confirmations_session ON pending_confirmations(session_id, status, expires_at);
+    CREATE INDEX idx_audit_events_workspace_admin_created ON audit_events(workspace_id, admin_user_id, created_at);
+    CREATE INDEX idx_turn_runs_workspace_admin_updated ON turn_runs(workspace_id, admin_user_id, updated_at);
+    CREATE INDEX idx_artifacts_scope_expires ON artifacts(workspace_id, admin_user_id, expires_at);
+    CREATE INDEX idx_chat_message_result_links_action ON chat_message_result_links(action_result_id);
+    CREATE INDEX idx_turn_run_result_links_action ON turn_run_result_links(action_result_id);
+  `);
 }
 
 /**

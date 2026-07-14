@@ -60,8 +60,11 @@ npm run dev           # tsx src/server.ts (needs env)
 - `src/config.ts` — env config (Zod). `src/db/` — SQLite schema; `store.ts` is a
   thin facade composing per-concern builders in `store/` (sessions, confirmations,
   idempotency ledger, undo, audit/metrics, telemetry, durable turn/operation
-  journals, short-lived artifacts, installations, batched retention + AES-256-GCM
-  token encryption/rotation). `src/auth/` — admin role check, CSRF, signed session cookie.
+  journals, canonical action results + ordered replay/history links, short-lived
+  artifacts, installations, batched retention + AES-256-GCM token
+  encryption/rotation). Full outcomes live only in `action_results`; linked
+  summaries are capped at 65,536 bytes. `src/auth/` — admin role check, CSRF,
+  signed session cookie.
 - `src/addon/` — manifest + Clockify token verification (RS256, one platform key
   built in).
 - `src/clockify/` — `client.ts` (the `WorkspaceClient` port, the seam),
@@ -93,7 +96,9 @@ npm run dev           # tsx src/server.ts (needs env)
   pure result transforms + guards in `chat-results.ts`, the never-break-a-turn
   bookkeeping wrapper `best-effort.ts`, NDJSON-stream setup `ndjson.ts`; shared
   `deps.ts`. Chat mutations require a client UUID `requestId`; retries replay the
-  durable turn. `server.ts` — `createApp(deps)` + `start()`; `/live` is liveness and
+  durable turn from nonce-free result/preview links (only a still-pending preview
+  gets a freshly rotated nonce). Terminal confirmations scrub their nonce hash,
+  saved agent state, and operation payload. `server.ts` — `createApp(deps)` + `start()`; `/live` is liveness and
   `/health` performs a committed readiness probe.
 - `src/ui/` — vanilla TS chat UI (a11y; "New chat" + "Chats ▾" history dropdown);
   HTTP/NDJSON client in `api-client.ts`, composer/stream flows in

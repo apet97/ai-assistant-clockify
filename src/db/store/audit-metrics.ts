@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ActionOutcome } from "../../metrics/metrics.js";
 import type { AuditEventInput, StoreContext } from "./context.js";
+import { actionResultJson, buildActionResultSummary } from "../action-results.js";
 
 /**
  * SQL for {@link Store.listActionOutcomes}. The `created_at >= ?` predicate is
@@ -15,8 +16,8 @@ import type { AuditEventInput, StoreContext } from "./context.js";
  */
 export function actionOutcomesSql(bounded: boolean): string {
   return `SELECT action_name,
-            json_extract(receipt_json, '$.ok') AS ok,
-            json_extract(receipt_json, '$.code') AS code
+            COALESCE(json_extract(result_summary_json, '$.receipt.ok'), json_extract(result_summary_json, '$.ok')) AS ok,
+            COALESCE(json_extract(result_summary_json, '$.receipt.code'), json_extract(result_summary_json, '$.code')) AS code
           FROM audit_events
           WHERE workspace_id = ? AND admin_user_id = ?${bounded ? " AND created_at >= ?" : ""}`;
 }
@@ -51,9 +52,40 @@ export function buildAuditMetricsStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     addAuditEvent(input) {
+      const resultRef = input.resultRef ?? (() => {
+        const id = randomUUID();
+        const receipt = input.receipt;
+        const canonical = { kind: "receipt", receipt };
+        const kind = (receipt as { ok?: unknown; code?: unknown }).ok === true
+          ? "succeeded"
+          : (receipt as { code?: unknown }).code === "commit_outcome_unknown"
+            ? "outcome_unknown"
+            : "definitive_failed";
+        const summary = buildActionResultSummary(id, canonical);
+        db.prepare(
+          `INSERT INTO action_results (
+             id, workspace_id, admin_user_id, session_id, action_name, kind,
+             result_json, summary_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          id,
+          input.workspaceId,
+          input.adminUserId,
+          input.sessionId ?? null,
+          input.actionName,
+          kind,
+          actionResultJson(canonical),
+          actionResultJson(summary),
+          nowIso(),
+        );
+        return { id, kind, summary };
+      })();
       db.prepare(
-        `INSERT INTO audit_events (id, workspace_id, admin_user_id, session_id, action_name, risk_json, receipt_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO audit_events (
+           id, workspace_id, admin_user_id, session_id, action_name, risk_json,
+           action_result_id, result_summary_json, created_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         randomUUID(),
         input.workspaceId,
@@ -61,7 +93,8 @@ export function buildAuditMetricsStore(ctx: StoreContext): {
         input.sessionId ?? null,
         input.actionName,
         JSON.stringify(input.risk),
-        JSON.stringify(input.receipt),
+        resultRef.id,
+        JSON.stringify(resultRef.summary),
         nowIso(),
       );
     },

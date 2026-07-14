@@ -161,12 +161,31 @@ describe("store", () => {
       store.upsertAdminPolicy(ws, "admin-1", defaultAdminPolicy());
       const session = store.createSession({ workspaceId: ws, adminUserId: "admin-1" });
       store.addMessage({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", role: "user", content: "hi" });
+      const receipt = successReceipt({ action: "clockify_tags_create" });
+      const result = { kind: "receipt", receipt };
+      const resultRef = store.recordActionResult({
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        sessionId: session.id,
+        actionName: "clockify_tags_create",
+        status: "succeeded",
+        result,
+      });
+      store.addMessage({
+        sessionId: session.id,
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        role: "assistant",
+        content: "done",
+        payload: { kind: "answer" },
+        resultLinks: [{ kind: "action_result", ref: resultRef }],
+      });
       store.addAuditEvent({
         workspaceId: ws,
         adminUserId: "admin-1",
         actionName: "clockify_tags_create",
         risk: ["safe_write"],
-        receipt: successReceipt({ action: "clockify_tags_create" }),
+        resultRef,
       });
       const pc = createPendingConfirmation({
         sessionId: session.id,
@@ -180,17 +199,46 @@ describe("store", () => {
       store.savePendingConfirmation(pc.record);
       store.recordUndoable({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", actionName: "x", reversal: [] });
       store.recordTurnTelemetry({ sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", kind: "chat", modelCalls: 1, turnMs: 10, modelMs: 5 });
+      const requestId = `request-${ws}`;
+      store.claimTurnRun({ requestId, sessionId: session.id, workspaceId: ws, adminUserId: "admin-1", intentHash: "intent" });
+      store.finishTurnRun(session.id, requestId, "succeeded", { status: 200, body: { ok: true } }, [{ kind: "action_result", ref: resultRef }]);
+      const operationId = store.prepareOperationRun({
+        sessionId: session.id,
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        actionName: "clockify_tags_create",
+        actionFingerprint: "action",
+        catalogHash: "catalog",
+        operationHash: "operation",
+      });
+      store.settleOperationRun(operationId, "succeeded", resultRef.id);
+      store.recordIdempotency("same-key", ws, "admin-1", resultRef, Date.now());
+      store.createArtifact({
+        workspaceId: ws,
+        adminUserId: "admin-1",
+        sessionId: session.id,
+        contentType: "text/plain",
+        filename: "result.txt",
+        bytes: new Uint8Array([1]),
+      });
       return session;
     };
     const s1 = seed("ws-1");
     const s2 = seed("ws-2");
 
     const counts = store.eraseWorkspace("ws-1");
-    expect(counts.chatMessages).toBe(1);
+    expect(counts.chatMessages).toBe(2);
     expect(counts.auditEvents).toBe(1);
     expect(counts.pendingConfirmations).toBe(1);
     expect(counts.undoRecords).toBe(1);
     expect(counts.turnTelemetry).toBe(1);
+    expect(counts.turnRuns).toBe(1);
+    expect(counts.operationRuns).toBe(1);
+    expect(counts.actionResults).toBe(1);
+    expect(counts.artifacts).toBe(1);
+    expect(counts.idempotencyKeys).toBe(1);
+    expect(counts.turnRunResultLinks).toBe(1);
+    expect(counts.chatMessageResultLinks).toBe(1);
     expect(counts.chatSessions).toBe(1);
     expect(counts.adminPolicies).toBe(1);
 
@@ -205,7 +253,7 @@ describe("store", () => {
     // ws-2 is completely untouched.
     expect(store.getInstallation("ws-2")?.addonToken).toBe("tok-ws-2");
     expect(store.getInstallation("ws-2")?.status).toBe("active");
-    expect(store.getRecentMessages(s2.id, 10)).toHaveLength(1);
+    expect(store.getRecentMessages(s2.id, 10)).toHaveLength(2);
     expect(store.listActionOutcomes("ws-2", "admin-1")).toHaveLength(1);
     expect(store.getAdminPolicy("ws-2", "admin-1")).toBeDefined();
     expect(store.getSession(s2.id)).toBeDefined();
@@ -431,15 +479,15 @@ describe("store", () => {
     store.savePendingConfirmation(created.record);
     expect(store.markConfirmationExecuting(created.previewId)).toBe(true);
     const receipt = { ok: true, action: "a" };
-    const actionResultId = store.settleConfirmation(created.previewId, "succeeded", "a", receipt);
+    const actionResult = store.settleConfirmation(created.previewId, "succeeded", "a", receipt);
 
     expect(store.getPendingConfirmation(created.previewId)).toMatchObject({
       status: "succeeded",
-      actionResultId,
+      actionResultId: actionResult.id,
       nonceHash: "",
       agentState: undefined,
     });
-    expect(store.getActionResult(actionResultId)).toEqual(receipt);
+    expect(store.getActionResult(actionResult.id)).toEqual({ kind: "receipt", receipt });
     store.close();
   });
 
@@ -447,7 +495,16 @@ describe("store", () => {
     const store = createStore(":memory:", { encryptionKey: ENC_KEY });
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
     // A fat assistant payload (the kind persisted with full list/report receipts).
-    const payload = { kind: "answer", results: [{ kind: "receipt", blob: "x".repeat(2000) }] };
+    const result = { kind: "receipt", blob: "x".repeat(2000) };
+    const payload = { kind: "answer", results: [result] };
+    const ref = store.recordActionResult({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: session.id,
+      actionName: "x",
+      status: "succeeded",
+      result,
+    });
     store.addMessage({
       sessionId: session.id,
       workspaceId: "ws-1",
@@ -455,6 +512,7 @@ describe("store", () => {
       role: "assistant",
       content: "here you go",
       payload,
+      resultLinks: [{ kind: "action_result", ref }],
     });
 
     // The model-visible window (the sole request-path consumer) only needs
@@ -466,7 +524,7 @@ describe("store", () => {
     expect(lean[0]?.content).toBe("here you go");
     expect(lean[0]?.payload).toBeUndefined();
 
-    // Opt-in callers (e.g. the persisted-nonce safety check) can still read it.
+    // Opt-in callers hydrate the result from its canonical action_results row.
     const full = store.getRecentMessages(session.id, 12, true);
     expect(full[0]?.payload).toEqual(payload);
     store.close();

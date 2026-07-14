@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { migrate } from "./schema.js";
 import { decryptSecret, encryptSecret } from "./encryption.js";
 import type {
@@ -23,7 +24,13 @@ import type {
   OperationRunStatus,
   PrepareOperationRunInput,
   ArtifactRecord,
+  DurableResultLink,
 } from "./store/context.js";
+import {
+  actionResultJson,
+  buildActionResultSummary,
+  type ActionResultRef,
+} from "./action-results.js";
 import { buildAdminPolicyStore } from "./store/admin-policies.js";
 import { buildTelemetryStore } from "./store/telemetry.js";
 import {
@@ -42,7 +49,7 @@ import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import type { AdminPolicy } from "../harness/permissions.js";
-import type { PendingConfirmationRecord, PendingStatus } from "../harness/confirmations.js";
+import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
 import type { ClaimState } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
@@ -80,7 +87,9 @@ export type {
   OperationRunStatus,
   PrepareOperationRunInput,
   ArtifactRecord,
+  DurableResultLink,
 } from "./store/context.js";
+export type { ActionResultKind, ActionResultRef } from "./action-results.js";
 
 export interface StoreOptions {
   encryptionKey?: string;
@@ -167,6 +176,7 @@ export interface Store {
     requestId: string,
     status: "succeeded" | "failed" | "outcome_unknown",
     response: unknown,
+    resultLinks?: DurableResultLink[],
   ): void;
   getTurnRun(sessionId: string, requestId: string): TurnRun | undefined;
   prepareOperationRun(input: PrepareOperationRunInput): string;
@@ -187,7 +197,7 @@ export interface Store {
     actionName: string;
     status: Exclude<OperationRunStatus, "prepared" | "executing">;
     result: unknown;
-  }): string;
+  }): ActionResultRef;
 
   savePendingConfirmation(record: PendingConfirmationRecord): void;
   getPendingConfirmation(id: string): PendingConfirmationRecord | undefined;
@@ -200,20 +210,20 @@ export interface Store {
   markConfirmationExecuting(id: string): boolean;
   /** Atomically transition pending → cancelled. */
   cancelConfirmation(id: string): boolean;
-  setConfirmationResult(id: string, status: PendingStatus, result: unknown): void;
+  expireConfirmation(id: string): boolean;
   settleConfirmation(
     id: string,
     status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
     actionName: string,
     result: unknown,
-  ): string;
+  ): ActionResultRef;
   getActionResult(id: string): unknown | undefined;
   /** This session's still-live pending previews (status pending, not expired). */
   countPendingConfirmations(sessionId: string, nowIso: string): number;
 
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
-  recordIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
-  lookupIdempotency(key: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
+  recordIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
+  lookupIdempotency(key: string, workspaceId: string, adminUserId: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
 
   /**
    * Atomic-claim ledger (r1-concurrency-races-01). One synchronous
@@ -225,25 +235,27 @@ export interface Store {
    */
   claimIdempotency(
     key: string,
+    workspaceId: string,
+    adminUserId: string,
     claimedAtEpochMs: number,
     completedNotBeforeEpochMs: number,
     claimNotBeforeEpochMs: number,
   ): ClaimState;
   /** The completed receipt for a key the claim reported as `replay`. */
-  claimIdempotencyReceipt(key: string): SuccessReceipt | undefined;
-  /** Complete the OWN claim (guarded on receipt_json IS NULL — fills once). */
-  fillIdempotency(key: string, receipt: SuccessReceipt, committedAtEpochMs: number): void;
-  /** Release the OWN claim (guarded on receipt_json IS NULL — never drops a completed row). */
-  releaseIdempotency(key: string): void;
+  claimIdempotencyReceipt(key: string, workspaceId: string, adminUserId: string): SuccessReceipt | undefined;
+  /** Complete the OWN claim (guarded on action_result_id IS NULL — fills once). */
+  fillIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
+  /** Release the OWN claim (guarded on action_result_id IS NULL — never drops a completed row). */
+  releaseIdempotency(key: string, workspaceId: string, adminUserId: string): void;
   /**
    * Heartbeat a LIVE claim: refresh `claimed_at` so a long multi-call commit's
    * claim is never swept as dead while it is still in flight (a single
    * createInvoice commit issues POST+GET+PUT+tax+N items, whose summed latency
    * can exceed CLAIM_TTL_MS — only the per-call timeout bounds each one).
-   * Guarded on receipt_json IS NULL — never touches a completed row, and a
+   * Guarded on action_result_id IS NULL — never touches a completed row, and a
    * missing key no-ops.
    */
-  touchIdempotencyClaim(key: string, claimedAtEpochMs: number): void;
+  touchIdempotencyClaim(key: string, workspaceId: string, adminUserId: string, claimedAtEpochMs: number): void;
 
   /** Undo ledger (Phase 5b): a reversible action and its one-use status. */
   recordUndoable(input: UndoRecordInput): string;
@@ -255,7 +267,7 @@ export interface Store {
     status: "partially_undone" | "undone" | "failed" | "outcome_unknown",
     remaining: import("../harness/receipts.js").EntityRef[],
     result: unknown,
-  ): void;
+  ): ActionResultRef;
 
   addAuditEvent(input: AuditEventInput): void;
 
@@ -408,12 +420,93 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         const turns = db.prepare(
           "UPDATE turn_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
         ).run(timestamp).changes;
-        const confirmations = db.prepare(
-          "UPDATE pending_confirmations SET status = 'outcome_unknown', nonce_hash = '', agent_state_json = NULL WHERE status = 'executing'",
-        ).run().changes;
-        const operations = db.prepare(
-          "UPDATE operation_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
-        ).run(timestamp).changes;
+
+        const insertUnknownResult = (row: {
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          action_name: string;
+        }): ActionResultRef => {
+          const id = randomUUID();
+          const result = {
+            kind: "receipt",
+            receipt: {
+              ok: false,
+              action: row.action_name,
+              code: "commit_outcome_unknown",
+              message: "The server restarted while this action was executing, so its outcome is unknown.",
+              recovery: "Verify the result in Clockify before trying the action again.",
+            },
+          };
+          const summary = buildActionResultSummary(id, result);
+          db.prepare(
+            `INSERT INTO action_results (
+               id, workspace_id, admin_user_id, session_id, action_name, kind,
+               result_json, summary_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, 'outcome_unknown', ?, ?, ?)`,
+          ).run(
+            id,
+            row.workspace_id,
+            row.admin_user_id,
+            row.session_id,
+            row.action_name,
+            actionResultJson(result),
+            actionResultJson(summary),
+            timestamp,
+          );
+          return { id, kind: "outcome_unknown", summary };
+        };
+
+        const confirmationRows = db.prepare(
+          `SELECT c.id, c.operation_id, c.session_id, c.workspace_id, c.admin_user_id,
+                  COALESCE(o.action_name, 'unknown_action') AS action_name
+             FROM pending_confirmations c
+             LEFT JOIN operation_runs o ON o.id = c.operation_id
+            WHERE c.status = 'executing'`,
+        ).all() as Array<{
+          id: string;
+          operation_id: string;
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          action_name: string;
+        }>;
+        let operations = 0;
+        for (const row of confirmationRows) {
+          const ref = insertUnknownResult(row);
+          db.prepare(
+            `UPDATE pending_confirmations
+                SET status = 'outcome_unknown', action_result_id = ?, result_summary_json = ?,
+                    nonce_hash = '', operation_json = NULL, agent_state_json = NULL
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.id, actionResultJson(ref.summary), row.id);
+          operations += db.prepare(
+            `UPDATE operation_runs
+                SET status = 'outcome_unknown', action_result_id = ?, updated_at = ?
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.id, timestamp, row.operation_id).changes;
+        }
+
+        const standaloneOperations = db.prepare(
+          `SELECT session_id, workspace_id, admin_user_id, action_name, id
+             FROM operation_runs
+            WHERE status = 'executing'`,
+        ).all() as Array<{
+          id: string;
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          action_name: string;
+        }>;
+        for (const row of standaloneOperations) {
+          const ref = insertUnknownResult(row);
+          operations += db.prepare(
+            `UPDATE operation_runs
+                SET status = 'outcome_unknown', action_result_id = ?, updated_at = ?
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.id, timestamp, row.id).changes;
+        }
+        const confirmations = confirmationRows.length;
         return { turns, operations, confirmations };
       })();
     },

@@ -48,6 +48,13 @@ window is set by the `RETENTION_DAYS` environment variable (default **90**, mini
 **30** so the 30-day metrics view is never truncated). Uninstall erasure (below) is
 **immediate**, not on the hourly schedule.
 
+Full action outcomes are stored once in the canonical `action_results` table.
+Turn replay, chat history, audit, confirmation, undo, operation-journal, and
+idempotency rows store ordered references plus summaries capped at 65,536 bytes.
+Plaintext confirmation nonces are never stored in replay/history envelopes. When a
+confirmation is cancelled, expires, settles, or is recovered after a restart, its
+nonce hash, saved agent state, and executable operation payload are erased.
+
 ## Encryption
 
 Installation tokens are encrypted at rest with **AES-256-GCM**. The key is derived

@@ -8,6 +8,7 @@ import { idempotencyScopeKey } from "../../src/harness/idempotency.js";
 import { IDEMPOTENCY_WINDOW_MS } from "../../src/routes/chat-constants.js";
 import type { AtomicIdempotencyLedger } from "../../src/harness/action.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
+import type { SuccessReceipt } from "../../src/harness/receipts.js";
 
 /**
  * r1-concurrency-races-01 — the headline race. TWO concurrent confirms of ONE
@@ -17,18 +18,30 @@ import type { WorkspaceClient } from "../../src/clockify/client.js";
  */
 
 const NOW = new Date("2026-06-05T00:00:00.000Z");
+const WS = "ws-1";
+const ADMIN = "admin-1";
+
+function resultRef(store: Store, receipt: SuccessReceipt) {
+  return store.recordActionResult({
+    workspaceId: WS,
+    adminUserId: ADMIN,
+    actionName: receipt.action,
+    status: "succeeded",
+    result: { kind: "receipt", receipt },
+  });
+}
 
 /** A store-backed atomic ledger, wired exactly like routes/api.ts. */
 function atomicLedger(store: Store): AtomicIdempotencyLedger {
   const WINDOW = 10 * 60 * 1000;
   const t = () => NOW.getTime();
   return {
-    lookup: (k) => store.lookupIdempotency(k, t() - WINDOW),
-    record: (k, r) => store.recordIdempotency(k, r, t()),
-    claim: (k) => store.claimIdempotency(k, t(), t() - WINDOW, t() - CLAIM_TTL_MS),
-    lookupCompleted: (k) => store.claimIdempotencyReceipt(k),
-    fill: (k, r) => store.fillIdempotency(k, r, t()),
-    release: (k) => store.releaseIdempotency(k),
+    lookup: (k) => store.lookupIdempotency(k, WS, ADMIN, t() - WINDOW),
+    record: (k, r) => store.recordIdempotency(k, WS, ADMIN, resultRef(store, r), t()),
+    claim: (k) => store.claimIdempotency(k, WS, ADMIN, t(), t() - WINDOW, t() - CLAIM_TTL_MS),
+    lookupCompleted: (k) => store.claimIdempotencyReceipt(k, WS, ADMIN),
+    fill: (k, r) => store.fillIdempotency(k, WS, ADMIN, resultRef(store, r), t()),
+    release: (k) => store.releaseIdempotency(k, WS, ADMIN),
   };
 }
 
@@ -254,12 +267,12 @@ describe("crash-before-fill residual (a crash between the host write and fill mu
   function clockLedger(s: Store, clock: { ms: number }, fillOn: boolean): AtomicIdempotencyLedger {
     const WINDOW = 10 * 60 * 1000;
     return {
-      lookup: (k) => s.lookupIdempotency(k, clock.ms - WINDOW),
-      record: (k, r) => s.recordIdempotency(k, r, clock.ms),
-      claim: (k) => s.claimIdempotency(k, clock.ms, clock.ms - WINDOW, clock.ms - CLAIM_TTL_MS),
-      lookupCompleted: (k) => s.claimIdempotencyReceipt(k),
-      fill: fillOn ? (k, r) => s.fillIdempotency(k, r, clock.ms) : () => undefined,
-      release: (k) => s.releaseIdempotency(k),
+      lookup: (k) => s.lookupIdempotency(k, WS, ADMIN, clock.ms - WINDOW),
+      record: (k, r) => s.recordIdempotency(k, WS, ADMIN, resultRef(s, r), clock.ms),
+      claim: (k) => s.claimIdempotency(k, WS, ADMIN, clock.ms, clock.ms - WINDOW, clock.ms - CLAIM_TTL_MS),
+      lookupCompleted: (k) => s.claimIdempotencyReceipt(k, WS, ADMIN),
+      fill: fillOn ? (k, r) => s.fillIdempotency(k, WS, ADMIN, resultRef(s, r), clock.ms) : () => undefined,
+      release: (k) => s.releaseIdempotency(k, WS, ADMIN),
     };
   }
   function clockCtx(fake: FakeWorkspace, clock: { ms: number }, ledger: AtomicIdempotencyLedger): ActionContext {
@@ -330,12 +343,12 @@ describe("commit_outcome_unknown end-to-end (a seeded stale claim drives the con
   function liveClockLedger(s: Store): AtomicIdempotencyLedger {
     const t = () => Date.now();
     return {
-      lookup: (k) => s.lookupIdempotency(k, t() - IDEMPOTENCY_WINDOW_MS),
-      record: (k, r) => s.recordIdempotency(k, r, t()),
-      claim: (k) => s.claimIdempotency(k, t(), t() - IDEMPOTENCY_WINDOW_MS, t() - CLAIM_TTL_MS),
-      lookupCompleted: (k) => s.claimIdempotencyReceipt(k),
-      fill: (k, r) => s.fillIdempotency(k, r, t()),
-      release: (k) => s.releaseIdempotency(k),
+      lookup: (k) => s.lookupIdempotency(k, WS, ADMIN, t() - IDEMPOTENCY_WINDOW_MS),
+      record: (k, r) => s.recordIdempotency(k, WS, ADMIN, resultRef(s, r), t()),
+      claim: (k) => s.claimIdempotency(k, WS, ADMIN, t(), t() - IDEMPOTENCY_WINDOW_MS, t() - CLAIM_TTL_MS),
+      lookupCompleted: (k) => s.claimIdempotencyReceipt(k, WS, ADMIN),
+      fill: (k, r) => s.fillIdempotency(k, WS, ADMIN, resultRef(s, r), t()),
+      release: (k) => s.releaseIdempotency(k, WS, ADMIN),
     };
   }
 

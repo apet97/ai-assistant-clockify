@@ -14,6 +14,7 @@ import { hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/r
 import type { AgentStep, AgentTurnResult } from "../assistant/agent-loop.js";
 import { capAgentState, type AgentState } from "../assistant/agent-state.js";
 import type { ToolCall } from "../assistant/model-client.js";
+import type { DurableResultLink } from "../db/store.js";
 import {
   pruneHistoryResult,
   previewReplyText,
@@ -37,11 +38,13 @@ export type Claims = { sessionId: string; workspaceId: string; adminUserId: stri
 export interface TurnMachinery {
   ctx: ActionContext;
   results: unknown[];
-  emit: (result: unknown) => void;
-  auditAndEmitReceipt: (actionName: string, receipt: SuccessReceipt | ErrorReceipt) => void;
+  resultLinks: DurableResultLink[];
+  emit: (result: unknown, link: DurableResultLink) => void;
+  auditAndEmitReceipt: (actionName: string, receipt: SuccessReceipt | ErrorReceipt, operationId?: string) => void;
   auditAndEmitPartial: (
     actionName: string,
     result: Extract<ActionResult, { kind: "partial" }>,
+    operationId?: string,
   ) => void;
   emitPreviewFor: (preview: PreviewCard, operation: ConfirmableOperation, agentState?: AgentState) => void;
   runAction: (call: ToolCall) => Promise<ActionResult>;
