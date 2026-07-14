@@ -186,10 +186,15 @@ export interface Store {
     status: Exclude<OperationRunStatus, "prepared" | "executing">,
     actionResultId?: string,
   ): void;
+  settleOperationResult(
+    id: string,
+    status: Exclude<OperationRunStatus, "prepared" | "executing">,
+    result: unknown,
+  ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
-  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number };
+  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number };
   recordActionResult(input: {
     workspaceId: string;
     adminUserId: string;
@@ -197,6 +202,7 @@ export interface Store {
     actionName: string;
     status: Exclude<OperationRunStatus, "prepared" | "executing">;
     result: unknown;
+    operationId?: string;
   }): ActionResultRef;
 
   savePendingConfirmation(record: PendingConfirmationRecord): void;
@@ -211,6 +217,10 @@ export interface Store {
   /** Atomically transition pending → cancelled. */
   cancelConfirmation(id: string): boolean;
   expireConfirmation(id: string): boolean;
+  /** Bind the pre-host idempotency claim to this executing confirmation. */
+  bindConfirmationIdempotencyKey(id: string, key: string): void;
+  /** Release a failed commit's bound claim and association atomically. */
+  releaseConfirmationIdempotencyKey(id: string, key: string): void;
   settleConfirmation(
     id: string,
     status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
@@ -426,7 +436,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           workspace_id: string;
           admin_user_id: string;
           action_name: string;
-        }): ActionResultRef => {
+        }, operationId?: string): ActionResultRef => {
           const id = randomUUID();
           const result = {
             kind: "receipt",
@@ -441,11 +451,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           const summary = buildActionResultSummary(id, result);
           db.prepare(
             `INSERT INTO action_results (
-               id, workspace_id, admin_user_id, session_id, action_name, kind,
+               id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
                result_json, summary_json, created_at
-             ) VALUES (?, ?, ?, ?, ?, 'outcome_unknown', ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, 'outcome_unknown', ?, ?, ?)`,
           ).run(
             id,
+            operationId ?? null,
             row.workspace_id,
             row.admin_user_id,
             row.session_id,
@@ -456,9 +467,21 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           );
           return { id, kind: "outcome_unknown", summary };
         };
+        const operationResult = (operationId: string): ActionResultRef | undefined => {
+          const row = db.prepare(
+            `SELECT id, kind, summary_json FROM action_results WHERE operation_id = ?`,
+          ).get(operationId) as {
+            id: string;
+            kind: ActionResultRef["kind"];
+            summary_json: string;
+          } | undefined;
+          return row
+            ? { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) }
+            : undefined;
+        };
 
         const confirmationRows = db.prepare(
-          `SELECT c.id, c.operation_id, c.session_id, c.workspace_id, c.admin_user_id,
+          `SELECT c.id, c.operation_id, c.idempotency_key, c.session_id, c.workspace_id, c.admin_user_id,
                   COALESCE(o.action_name, 'unknown_action') AS action_name
              FROM pending_confirmations c
              LEFT JOIN operation_runs o ON o.id = c.operation_id
@@ -466,6 +489,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         ).all() as Array<{
           id: string;
           operation_id: string;
+          idempotency_key: string | null;
           session_id: string;
           workspace_id: string;
           admin_user_id: string;
@@ -473,18 +497,35 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         }>;
         let operations = 0;
         for (const row of confirmationRows) {
-          const ref = insertUnknownResult(row);
+          const ref = operationResult(row.operation_id) ?? insertUnknownResult(row, row.operation_id);
           db.prepare(
             `UPDATE pending_confirmations
-                SET status = 'outcome_unknown', action_result_id = ?, result_summary_json = ?,
-                    nonce_hash = '', operation_json = NULL, agent_state_json = NULL
+                SET status = ?, action_result_id = ?, result_summary_json = ?,
+                    nonce_hash = '', operation_json = NULL, agent_state_json = NULL,
+                    idempotency_key = NULL
               WHERE id = ? AND status = 'executing'`,
-          ).run(ref.id, actionResultJson(ref.summary), row.id);
+          ).run(ref.kind, ref.id, actionResultJson(ref.summary), row.id);
           operations += db.prepare(
             `UPDATE operation_runs
-                SET status = 'outcome_unknown', action_result_id = ?, updated_at = ?
+                SET status = ?, action_result_id = ?, updated_at = ?
               WHERE id = ? AND status = 'executing'`,
-          ).run(ref.id, timestamp, row.operation_id).changes;
+          ).run(ref.kind, ref.id, timestamp, row.operation_id).changes;
+          if (row.idempotency_key) {
+            db.prepare(
+              `UPDATE idempotency_keys
+                  SET action_result_id = ?, result_summary_json = ?, committed_at = ?, claimed_at = ?
+                WHERE key = ? AND workspace_id = ? AND admin_user_id = ?
+                  AND action_result_id IS NULL`,
+            ).run(
+              ref.id,
+              actionResultJson(ref.summary),
+              now().getTime(),
+              now().getTime(),
+              row.idempotency_key,
+              row.workspace_id,
+              row.admin_user_id,
+            );
+          }
         }
 
         const standaloneOperations = db.prepare(
@@ -499,15 +540,34 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           action_name: string;
         }>;
         for (const row of standaloneOperations) {
-          const ref = insertUnknownResult(row);
+          const ref = operationResult(row.id) ?? insertUnknownResult(row, row.id);
           operations += db.prepare(
             `UPDATE operation_runs
-                SET status = 'outcome_unknown', action_result_id = ?, updated_at = ?
+                SET status = ?, action_result_id = ?, updated_at = ?
               WHERE id = ? AND status = 'executing'`,
-          ).run(ref.id, timestamp, row.id).changes;
+          ).run(ref.kind, ref.id, timestamp, row.id).changes;
+        }
+        const undoRows = db.prepare(
+          `SELECT id, session_id, workspace_id, admin_user_id
+             FROM undo_records WHERE status = 'executing'`,
+        ).all() as Array<{
+          id: string;
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+        }>;
+        let undos = 0;
+        for (const row of undoRows) {
+          const ref = insertUnknownResult({ ...row, action_name: "undo" });
+          undos += db.prepare(
+            `UPDATE undo_records
+                SET status = 'outcome_unknown', action_result_id = ?,
+                    result_summary_json = ?, undone_at = ?
+              WHERE id = ? AND status = 'executing'`,
+          ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
         }
         const confirmations = confirmationRows.length;
-        return { turns, operations, confirmations };
+        return { turns, operations, confirmations, undos };
       })();
     },
 

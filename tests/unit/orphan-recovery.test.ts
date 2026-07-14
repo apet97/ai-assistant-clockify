@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createStore } from "../../src/db/store.js";
+import { createStore, type Store } from "../../src/db/store.js";
 import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 
 const directories: string[] = [];
@@ -19,6 +19,56 @@ afterEach(() => {
 });
 
 describe("orphaned execution recovery", () => {
+  it("atomically records and settles a safe-write result", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const operationId = store.prepareOperationRun({
+      id: "op-atomic-safe-write",
+      requestId: "request-atomic",
+      sessionId: "session-atomic",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "fingerprint",
+      catalogHash: "catalog",
+      operationHash: "operation",
+    });
+    expect(store.markOperationExecuting(operationId)).toBe(true);
+    const raw = new Database(path);
+    raw.exec(`
+      CREATE TRIGGER reject_operation_settlement
+      BEFORE UPDATE OF status ON operation_runs
+      WHEN NEW.id = 'op-atomic-safe-write'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced operation settlement failure');
+      END;
+    `);
+    raw.close();
+
+    type AtomicStore = Store & {
+      settleOperationResult?: (id: string, status: "succeeded", result: unknown) => unknown;
+    };
+    const settle = (store as AtomicStore).settleOperationResult;
+    expect(settle).toBeTypeOf("function");
+    if (!settle) {
+      store.close();
+      return;
+    }
+    expect(() => settle(operationId, "succeeded", {
+      kind: "receipt",
+      receipt: { ok: true, action: "clockify_tags_create" },
+    })).toThrow(/forced operation settlement failure/);
+    store.close();
+
+    const verify = new Database(path, { readonly: true });
+    expect(verify.prepare("SELECT COUNT(*) AS count FROM action_results").get()).toEqual({ count: 0 });
+    expect(verify.prepare("SELECT status, action_result_id FROM operation_runs WHERE id = ?").get(operationId)).toEqual({
+      status: "executing",
+      action_result_id: null,
+    });
+    verify.close();
+  });
+
   it("records one canonical unknown result and scrubs an executing confirmation", () => {
     const path = databasePath();
     const store = createStore(path, { encryptionKey: "k" });
@@ -116,6 +166,141 @@ describe("orphaned execution recovery", () => {
 
     const db = new Database(path, { readonly: true });
     expect((db.prepare("SELECT COUNT(*) AS count FROM action_results").get() as { count: number }).count).toBe(1);
+    db.close();
+  });
+
+  it("reuses a canonical safe-write result that survived a crash before operation settlement", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const operationId = store.prepareOperationRun({
+      id: "op-safe-write-with-result",
+      requestId: "request-2",
+      sessionId: "session-2",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "fingerprint",
+      catalogHash: "catalog",
+      operationHash: "operation",
+    });
+    expect(store.markOperationExecuting(operationId)).toBe(true);
+    const ref = store.recordActionResult({
+      operationId,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: "session-2",
+      actionName: "clockify_tags_create",
+      status: "succeeded",
+      result: {
+        kind: "receipt",
+        receipt: { ok: true, action: "clockify_tags_create", changed: { created: [{ id: "tag-1" }] } },
+      },
+    } as Parameters<Store["recordActionResult"]>[0] & { operationId: string });
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    expect(recovered.getOperationRun(operationId)).toMatchObject({
+      status: "succeeded",
+      actionResultId: ref.id,
+    });
+    expect(recovered.getActionResult(ref.id)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: true, action: "clockify_tags_create" },
+    });
+    recovered.close();
+
+    const db = new Database(path, { readonly: true });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM action_results").get()).toEqual({ count: 1 });
+    db.close();
+  });
+
+  it("reconciles a bound idempotency claim to the surviving canonical confirmation result", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const created = createPendingConfirmation({
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      risk: ["high_risk_write"],
+      preview: { summary: "Create an invoice" },
+      operation: {
+        operationId: "op-idempotency-recovery",
+        actionName: "clockify_invoices_create",
+        featureGroup: "invoices",
+        risks: ["high_risk_write"],
+        payload: { clientId: "client-1" },
+      },
+      sessionSecret: "secret",
+      agentState: { messages: [{ role: "user", content: "create it" }] },
+    });
+    store.savePendingConfirmation(created.record);
+    store.prepareOperationRun({
+      id: created.record.operationId,
+      confirmationId: created.record.id,
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_invoices_create",
+      actionFingerprint: created.record.actionFingerprint,
+      catalogHash: created.record.catalogHash,
+      operationHash: created.record.operationHash,
+    });
+    expect(store.markConfirmationExecuting(created.record.id)).toBe(true);
+    expect(store.claimIdempotency("invoice-key", "ws-1", "admin-1", 1_000, 0, 0)).toBe("won");
+    store.bindConfirmationIdempotencyKey(created.record.id, "invoice-key");
+    const receipt = { ok: true as const, action: "clockify_invoices_create", entity: "invoice" };
+    const ref = store.recordActionResult({
+      operationId: created.record.operationId,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionId: session.id,
+      actionName: receipt.action,
+      status: "succeeded",
+      result: { kind: "receipt", receipt },
+    });
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    expect(recovered.getPendingConfirmation(created.record.id)).toMatchObject({
+      status: "succeeded",
+      nonceHash: "",
+      operation: {},
+      actionResultId: ref.id,
+    });
+    expect(recovered.claimIdempotency("invoice-key", "ws-1", "admin-1", 2_000, 0, 0)).toBe("replay");
+    expect(recovered.claimIdempotencyReceipt("invoice-key", "ws-1", "admin-1")).toEqual(receipt);
+    recovered.close();
+  });
+
+  it("settles an orphaned undo as outcome-unknown without erasing its remaining work", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const reversal = [{ type: "tag", id: "tag-1", name: "urgent" }] as const;
+    const undoId = store.recordUndoable({
+      sessionId: "session-undo",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [...reversal],
+    });
+    expect(store.markUndoExecuting(undoId)).toBe(true);
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    expect(recovered.getUndoRecord(undoId)).toMatchObject({
+      status: "outcome_unknown",
+      remaining: reversal,
+    });
+    recovered.close();
+
+    const db = new Database(path, { readonly: true });
+    const row = db.prepare(
+      "SELECT action_result_id, result_summary_json FROM undo_records WHERE id = ?",
+    ).get(undoId) as { action_result_id: string | null; result_summary_json: string | null };
+    expect(row.action_result_id).toBeTruthy();
+    expect(row.result_summary_json).toContain("recovery");
+    expect(db.prepare("SELECT COUNT(*) AS count FROM action_results").get()).toEqual({ count: 1 });
     db.close();
   });
 });

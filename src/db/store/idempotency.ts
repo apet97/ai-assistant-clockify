@@ -80,12 +80,19 @@ export function buildIdempotencyStore(ctx: StoreContext): {
         ).run(key, workspaceId, adminUserId, claimedAtEpochMs);
         if (inserted.changes === 1) return "won";
         const row = db.prepare(
-          `SELECT action_result_id, claimed_at
-             FROM idempotency_keys
-            WHERE key = ? AND workspace_id = ? AND admin_user_id = ?`,
-        ).get(key, workspaceId, adminUserId) as { action_result_id: string | null; claimed_at: number } | undefined;
+          `SELECT i.action_result_id, i.claimed_at, a.kind AS action_result_kind
+             FROM idempotency_keys i
+             LEFT JOIN action_results a ON a.id = i.action_result_id
+            WHERE i.key = ? AND i.workspace_id = ? AND i.admin_user_id = ?`,
+        ).get(key, workspaceId, adminUserId) as {
+          action_result_id: string | null;
+          claimed_at: number;
+          action_result_kind: string | null;
+        } | undefined;
         if (!row) return "won";
-        if (row.action_result_id !== null) return "replay";
+        if (row.action_result_id !== null) {
+          return row.action_result_kind === "outcome_unknown" ? "stale_unknown" : "replay";
+        }
         return row.claimed_at < claimNotBeforeEpochMs ? "stale_unknown" : "in_flight";
       })();
     },

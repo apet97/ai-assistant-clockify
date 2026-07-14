@@ -51,6 +51,11 @@ export function buildOperationRunStore(ctx: StoreContext): {
   prepareOperationRun(input: PrepareOperationRunInput): string;
   markOperationExecuting(id: string): boolean;
   settleOperationRun(id: string, status: Exclude<OperationRunStatus, "prepared" | "executing">, actionResultId?: string): void;
+  settleOperationResult(
+    id: string,
+    status: Exclude<OperationRunStatus, "prepared" | "executing">,
+    result: unknown,
+  ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
   recordActionResult(input: {
     workspaceId: string;
@@ -59,6 +64,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
     actionName: string;
     status: Exclude<OperationRunStatus, "prepared" | "executing">;
     result: unknown;
+    operationId?: string;
   }): ActionResultRef;
 } {
   const { db, nowIso } = ctx;
@@ -98,6 +104,55 @@ export function buildOperationRunStore(ctx: StoreContext): {
         "UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ? WHERE id = ?",
       ).run(status, actionResultId ?? null, nowIso(), id);
     },
+    settleOperationResult(id, status, result) {
+      return db.transaction((): ActionResultRef => {
+        const operation = db.prepare(
+          `SELECT session_id, workspace_id, admin_user_id, action_name, status, action_result_id
+             FROM operation_runs WHERE id = ?`,
+        ).get(id) as {
+          session_id: string;
+          workspace_id: string;
+          admin_user_id: string;
+          action_name: string;
+          status: OperationRunStatus;
+          action_result_id: string | null;
+        } | undefined;
+        if (!operation) throw new Error("operation_not_found");
+        if (operation.action_result_id) {
+          const existing = db.prepare(
+            "SELECT kind, summary_json FROM action_results WHERE id = ?",
+          ).get(operation.action_result_id) as { kind: ActionResultRef["kind"]; summary_json: string } | undefined;
+          if (!existing) throw new Error("operation_result_not_found");
+          return { id: operation.action_result_id, kind: existing.kind, summary: JSON.parse(existing.summary_json) };
+        }
+        if (operation.status !== "executing") throw new Error("operation_not_executing");
+        const actionResultId = randomUUID();
+        const summary = buildActionResultSummary(actionResultId, result);
+        db.prepare(
+          `INSERT INTO action_results (
+             id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
+             result_json, summary_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(
+          actionResultId,
+          id,
+          operation.workspace_id,
+          operation.admin_user_id,
+          operation.session_id,
+          operation.action_name,
+          status,
+          actionResultJson(result),
+          actionResultJson(summary),
+          nowIso(),
+        );
+        const update = db.prepare(
+          `UPDATE operation_runs SET status = ?, action_result_id = ?, updated_at = ?
+            WHERE id = ? AND status = 'executing' AND action_result_id IS NULL`,
+        ).run(status, actionResultId, nowIso(), id);
+        if (update.changes !== 1) throw new Error("operation_not_executing");
+        return { id: actionResultId, kind: status, summary };
+      })();
+    },
     getOperationRun(id) {
       const row = db.prepare("SELECT * FROM operation_runs WHERE id = ?").get(id) as OperationRunRow | undefined;
       return row ? toRun(row) : undefined;
@@ -108,11 +163,12 @@ export function buildOperationRunStore(ctx: StoreContext): {
       const summary = buildActionResultSummary(id, input.result);
       db.prepare(
         `INSERT INTO action_results (
-           id, workspace_id, admin_user_id, session_id, action_name, kind,
+           id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
            result_json, summary_json, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
+        input.operationId ?? null,
         input.workspaceId,
         input.adminUserId,
         input.sessionId ?? null,

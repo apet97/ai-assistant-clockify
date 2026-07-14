@@ -115,6 +115,7 @@ export type CommitConfirmationOutcome =
       undoId: string | undefined;
       agentState: AgentState | undefined;
       installation: Installation | undefined;
+      persistenceDegraded?: true;
     };
 
 export type WriteAuthorityOutcome =
@@ -384,15 +385,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         receipt,
         ...(undoId ? { undo: { id: undoId } } : {}),
       };
-      const resultRef = deps.store.recordActionResult({
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        sessionId: claims.sessionId,
-        actionName,
-        status,
-        result: canonicalResult,
-      });
-      if (operationId) deps.store.settleOperationRun(operationId, status, resultRef.id);
+      const resultRef = operationId
+        ? deps.store.settleOperationResult(operationId, status, canonicalResult)
+        : deps.store.recordActionResult({
+            workspaceId: claims.workspaceId,
+            adminUserId: claims.adminUserId,
+            sessionId: claims.sessionId,
+            actionName,
+            status,
+            result: canonicalResult,
+          });
       bestEffort("post-execution bookkeeping failed", () => {
         deps.store.addAuditEvent({
           workspaceId: claims.workspaceId,
@@ -417,15 +419,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       });
       const canonicalResult = { ...result, ...(undoId ? { undo: { id: undoId } } : {}) };
       delete canonicalResult.operationId;
-      const resultRef = deps.store.recordActionResult({
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        sessionId: claims.sessionId,
-        actionName,
-        status: "partial",
-        result: canonicalResult,
-      });
-      if (operationId) deps.store.settleOperationRun(operationId, "partial", resultRef.id);
+      const resultRef = operationId
+        ? deps.store.settleOperationResult(operationId, "partial", canonicalResult)
+        : deps.store.recordActionResult({
+            workspaceId: claims.workspaceId,
+            adminUserId: claims.adminUserId,
+            sessionId: claims.sessionId,
+            actionName,
+            status: "partial",
+            result: canonicalResult,
+          });
       bestEffort("partial-result bookkeeping failed", () => {
         deps.store.addAuditEvent({
           workspaceId: claims.workspaceId,
@@ -730,7 +733,6 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // `commit` does the work; for a permission change that commit persists the new
     // policy itself via the `savePolicy` capability the context carries.
     let receipt: SuccessReceipt | ErrorReceipt;
-    let idempotencyKeyToFill: string | undefined;
     if (!installation || installation.status !== "active") {
       receipt = errorReceipt({
         action: operation.actionName,
@@ -751,20 +753,30 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         ),
         // The atomic path never calls legacy record; canonical persistence owns fill.
         record: () => undefined,
-        claim: (key) =>
-          deps.store.claimIdempotency(
+        claim: (key) => {
+          const state = deps.store.claimIdempotency(
             key,
             claims.workspaceId,
             claims.adminUserId,
             now().getTime(),
             now().getTime() - IDEMPOTENCY_WINDOW_MS,
             now().getTime() - CLAIM_TTL_MS,
-          ),
+          );
+          if (state === "won") {
+            try {
+              deps.store.bindConfirmationIdempotencyKey(record.id, key);
+            } catch (error) {
+              deps.store.releaseIdempotency(key, claims.workspaceId, claims.adminUserId);
+              throw error;
+            }
+          }
+          return state;
+        },
         lookupCompleted: (key) => deps.store.claimIdempotencyReceipt(key, claims.workspaceId, claims.adminUserId),
-        // Defer the durable fill until settleConfirmation has created the one
-        // canonical result row. Until then the claim stays in-flight.
-        fill: (key) => { idempotencyKeyToFill = key; },
-        release: (key) => deps.store.releaseIdempotency(key, claims.workspaceId, claims.adminUserId),
+        // The claim was bound before dispatch; settleConfirmation fills it in
+        // the same transaction as the canonical result + confirmation scrub.
+        fill: () => undefined,
+        release: (key) => deps.store.releaseConfirmationIdempotencyKey(record.id, key),
         // Heartbeat a long multi-call commit's live claim so it is never swept
         // mid-flight and double-committed (r1-concurrency-races-01 follow-up).
         touch: (key) => deps.store.touchIdempotencyClaim(key, claims.workspaceId, claims.adminUserId, now().getTime()),
@@ -776,33 +788,29 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       receipt = await commitConfirmedOperation({ ...authorizedContext, idempotency }, operation);
     }
 
-    // Post-commit bookkeeping is best-effort: the commit already happened and
-    // is durably recorded in the idempotency ledger. A DB hiccup here (e.g. a
-    // transient SQLITE_BUSY) must NOT drop the receipt on the floor or 500 the
-    // turn — log (message only, no secrets) and still return the receipt. The
-    // committed write stays safe and the receipt still reaches the admin, but a
-    // failure here is PERMANENT for this receipt: the confirmation was marked
-    // 'used' above (before the commit), so a re-confirm 409s and never re-runs
-    // this block — a dropped audit entry / undo handle is lost for good.
+    // The host dispatch already happened. Retry only the synchronous SQLite
+    // settlement (never the Clockify mutation), then return the truthful host
+    // receipt even if persistence remains degraded. Startup orphan recovery is
+    // the backstop that scrubs any still-executing confirmation.
     const terminalStatus = receipt.ok
       ? "succeeded"
       : receipt.code === "commit_outcome_unknown"
         ? "outcome_unknown"
         : "definitive_failed";
     let resultRef: ActionResultRef | undefined;
-    bestEffort("canonical action-result persistence failed", () => {
-      resultRef = deps.store.settleConfirmation(record.id, terminalStatus, operation.actionName, receipt);
-    });
-    if (resultRef && idempotencyKeyToFill) {
-      bestEffort("idempotency result-link persistence failed", () => {
-        deps.store.fillIdempotency(
-          idempotencyKeyToFill!,
-          claims.workspaceId,
-          claims.adminUserId,
-          resultRef!,
-          now().getTime(),
-        );
-      });
+    let settlementError: unknown;
+    for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {
+      try {
+        resultRef = deps.store.settleConfirmation(record.id, terminalStatus, operation.actionName, receipt);
+      } catch (error) {
+        settlementError = error;
+      }
+    }
+    if (!resultRef) {
+      console.error(
+        "canonical action-result persistence degraded (change already applied; receipt preserved):",
+        settlementError instanceof Error ? settlementError.message : String(settlementError),
+      );
     }
     if (resultRef) {
       bestEffort("post-commit audit failed", () => {
@@ -821,7 +829,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       undoId = recordUndoIfReversible(claims, receipt);
     });
     const agentState = receipt.ok ? parseAgentState(record.agentState) : undefined;
-    return { ok: true, receipt, undoId, agentState, installation };
+    return {
+      ok: true,
+      receipt,
+      undoId,
+      agentState,
+      installation,
+      ...(!resultRef ? { persistenceDegraded: true as const } : {}),
+    };
   }
 
   /**

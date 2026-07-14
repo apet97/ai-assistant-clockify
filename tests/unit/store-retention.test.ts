@@ -81,6 +81,25 @@ describe("store.pruneExpired", () => {
     store.close();
   });
 
+  it("prunes an abandoned executing undo after the retention window", async () => {
+    const clock = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
+    const store = createStore(":memory:", { encryptionKey: "k", now: () => clock.value });
+    const undoId = store.recordUndoable({
+      sessionId: "s1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [{ type: "tag", id: "tag-1" }],
+    });
+    expect(store.markUndoExecuting(undoId)).toBe(true);
+    clock.value = NOW;
+
+    const counts = await store.pruneExpired(NOW.toISOString());
+    expect(counts.undoRecords).toBe(1);
+    expect(store.getUndoRecord(undoId)).toBeUndefined();
+    store.close();
+  });
+
   it("records + lists turn telemetry (since-bounded) and prunes rows past 30d", async () => {
     const past = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
     const store = createStore(":memory:", { encryptionKey: "k", now: () => past.value });

@@ -110,4 +110,46 @@ describe("canonical action results", () => {
     expect(byteLength(ref.summary)).toBeLessThanOrEqual(65_536);
     store.close();
   });
+
+  it("preserves every required summary field even when pathological metadata forces the final fallback", () => {
+    const store = createStore(":memory:");
+    const pathologicalIds = Object.fromEntries(
+      Array.from({ length: 2_000 }, (_, index) => [`pathological${index}Id`, `id-${index}-${"x".repeat(300)}`]),
+    );
+    const ref = store.recordActionResult({
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_reports_detailed",
+      status: "definitive_failed",
+      result: {
+        kind: "receipt",
+        receipt: {
+          ok: false,
+          action: "clockify_reports_detailed",
+          status: "definitive_failed",
+          ids: ["report-1", "report-2"],
+          changed: { created: [{ type: "report", id: "report-1" }] },
+          warnings: [{ code: "bounded", message: "Review filters" }],
+          error: { code: "invalid_args", message: "Invalid filters" },
+          recovery: { hint: "Verify the date range", retryable: true },
+          ...pathologicalIds,
+        },
+      },
+    });
+
+    expect(ref.summary).toMatchObject({
+      kind: "receipt",
+      receipt: {
+        action: "clockify_reports_detailed",
+        status: "definitive_failed",
+        ids: ["report-1", "report-2"],
+        changed: { created: [{ type: "report", id: "report-1" }] },
+        warnings: [{ code: "bounded", message: "Review filters" }],
+        error: { code: "invalid_args", message: "Invalid filters" },
+        recovery: { hint: "Verify the date range", retryable: true },
+      },
+    });
+    expect(byteLength(ref.summary)).toBeLessThanOrEqual(65_536);
+    store.close();
+  });
 });

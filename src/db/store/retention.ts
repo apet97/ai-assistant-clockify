@@ -63,6 +63,7 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     sqls: [
       batched("undo_records", "status IN ('partially_undone', 'undone', 'failed', 'outcome_unknown') AND undone_at < ?"),
       batched("undo_records", "status = 'expired' AND expires_at < ?"),
+      batched("undo_records", "status = 'executing' AND created_at < ?"),
     ],
   },
   { table: "turnTelemetry", cutoff: "iso", sqls: [batched("turn_telemetry", "created_at < ?")] },

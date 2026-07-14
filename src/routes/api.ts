@@ -499,7 +499,7 @@ export function apiRouter(deps: AppDeps): Router {
       // JSON (the stream is never opened), and a denied confirm never burns the nonce.
       return res.status(committed.status).json(committed.body);
     }
-    const { receipt, undoId, agentState, installation } = committed;
+    const { receipt, undoId, agentState, installation, persistenceDegraded } = committed;
 
     // Streaming confirm (?stream=1, used by the embedded UI): the committed
     // receipt flushes IMMEDIATELY so the button is responsive, then the durable
@@ -511,7 +511,12 @@ export function apiRouter(deps: AppDeps): Router {
       // openNdjsonStream sets the streaming headers and fires `signal` if the
       // client drops mid-resume (see /chat/stream).
       const { write, signal } = openNdjsonStream(res);
-      write({ type: "receipt", receipt, ...(undoId ? { undo: { id: undoId } } : {}) });
+      write({
+        type: "receipt",
+        receipt,
+        ...(undoId ? { undo: { id: undoId } } : {}),
+        ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
+      });
       try {
         const resumed = await withHostCallBudget(() => runResume(
           claims,
@@ -538,6 +543,7 @@ export function apiRouter(deps: AppDeps): Router {
       ok: receipt.ok,
       receipt,
       ...(undoId ? { undo: { id: undoId } } : {}),
+      ...(persistenceDegraded ? { persistenceDegraded: true } : {}),
       ...(resumed ? { resume: { reply: { kind: resumed.replyKind, text: resumed.replyText }, results: resumed.results } } : {}),
     });
   }));
@@ -597,11 +603,22 @@ export function apiRouter(deps: AppDeps): Router {
       ? remaining.length > 0 ? "partially_undone" : "undone"
       : receipt.code === "commit_outcome_unknown" ? "outcome_unknown" : "failed";
     let undoResultRef: import("../db/store.js").ActionResultRef | undefined;
-    bestEffort("undo settlement failed", () => {
-      undoResultRef = deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
-    });
-    // The reversal already happened (and the one-use claim is already flipped to
-    // undone). A transient audit-write failure must NOT surface as a 500 — the admin
+    let undoSettlementError: unknown;
+    for (let attempt = 0; attempt < 2 && !undoResultRef; attempt += 1) {
+      try {
+        undoResultRef = deps.store.settleUndo(record.id, undoStatus, remaining, receipt);
+      } catch (error) {
+        undoSettlementError = error;
+      }
+    }
+    if (!undoResultRef) {
+      console.error(
+        "undo settlement persistence degraded (reversal already dispatched; receipt preserved):",
+        undoSettlementError instanceof Error ? undoSettlementError.message : String(undoSettlementError),
+      );
+    }
+    // The reversal already happened (and the one-use claim is executing). A
+    // transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.
     // Mirror commitConfirmation: best-effort audit, message-only log, return the receipt.
     if (undoResultRef) bestEffort("undo bookkeeping", () => {
@@ -614,7 +631,11 @@ export function apiRouter(deps: AppDeps): Router {
         resultRef: undoResultRef!,
       });
     });
-    return res.status(receipt.ok ? 200 : 400).json({ ok: receipt.ok, receipt });
+    return res.status(receipt.ok ? 200 : 400).json({
+      ok: receipt.ok,
+      receipt,
+      ...(!undoResultRef ? { persistenceDegraded: true } : {}),
+    });
   }));
 
   router.post("/confirmations/:id/cancel", asyncHandler(async (req, res) => {

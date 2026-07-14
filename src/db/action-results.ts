@@ -77,6 +77,64 @@ function compactCritical(value: unknown, stringLimit: number, arrayLimit: number
   return result;
 }
 
+function boundedRequiredField(value: unknown): unknown {
+  if (jsonBytes(value) <= 4_096) return value;
+  for (const [stringLimit, arrayLimit] of [[512, 8], [256, 4], [128, 2]] as const) {
+    const compact = compactCritical(value, stringLimit, arrayLimit);
+    if (jsonBytes(compact) <= 4_096) return compact;
+  }
+  const encoded = JSON.stringify(value);
+  return {
+    truncated: true,
+    originalByteCount: Buffer.byteLength(encoded, "utf8"),
+    preview: encoded.slice(0, 512),
+  };
+}
+
+function requiredFieldFallback(actionResultId: string, full: unknown, withoutData: unknown): unknown {
+  const root = withoutData && typeof withoutData === "object" && !Array.isArray(withoutData)
+    ? withoutData as Record<string, unknown>
+    : {};
+  const receipt = root.receipt && typeof root.receipt === "object" && !Array.isArray(root.receipt)
+    ? root.receipt as Record<string, unknown>
+    : root;
+  const fields = [
+    "ok",
+    "action",
+    "status",
+    "id",
+    "ids",
+    "changed",
+    "changes",
+    "warnings",
+    "error",
+    "recovery",
+    "message",
+    "code",
+    "outcome",
+    "data",
+  ] as const;
+  const required: Record<string, unknown> = {};
+  for (const field of fields) {
+    const source = Object.hasOwn(receipt, field) ? receipt : root;
+    if (Object.hasOwn(source, field)) required[field] = boundedRequiredField(source[field]);
+  }
+  const dynamicIds = Object.fromEntries(
+    Object.entries(receipt).filter(([key]) => /(?:^id$|Id$|Ids$|_id$|_ids$)/.test(key) && !fields.includes(key as typeof fields[number])),
+  );
+  if (Object.keys(dynamicIds).length > 0) required.identifiers = boundedRequiredField(dynamicIds);
+
+  const summary = "receipt" in root
+    ? { ...(root.kind !== undefined ? { kind: root.kind } : {}), receipt: required }
+    : required;
+  return {
+    ...summary,
+    actionResultId,
+    originalByteCount: jsonBytes(full),
+    truncated: true,
+  };
+}
+
 /**
  * Build the one durable summary representation. Small results remain exact.
  * Oversized `data` is replaced by a pointer to the canonical row plus its
@@ -95,11 +153,7 @@ export function buildActionResultSummary(actionResultId: string, result: unknown
     if (jsonBytes(compact) <= ACTION_RESULT_SUMMARY_MAX_BYTES) return compact;
   }
 
-  return {
-    actionResultId,
-    originalByteCount: jsonBytes(full),
-    truncated: true,
-  };
+  return requiredFieldFallback(actionResultId, full, withoutData);
 }
 
 export function actionResultJson(value: unknown): string {

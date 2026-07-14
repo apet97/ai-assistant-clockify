@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createStore, CLAIM_TTL_MS, IDEMPOTENCY_RETENTION_MS, type Store } from "../../src/db/store.js";
 import { CLAIM_HEARTBEAT_MS } from "../../src/harness/actions.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
+import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 
 const receipt: SuccessReceipt = { ok: true, action: "clockify_invoices_create", entity: "invoice" };
 const WS = "ws-1";
@@ -145,6 +146,41 @@ describe("store atomic idempotency claim", () => {
   it("CLAIM_TTL_MS is strictly above the commit-timeout ceiling so a live claim is provably not swept", async () => {
     const { COMMIT_TIMEOUT_MS } = await import("../../src/clockify/rest/core.js");
     expect(CLAIM_TTL_MS).toBeGreaterThan(COMMIT_TIMEOUT_MS);
+  });
+
+  it("binds a won claim to its confirmation so settlement completes both rows atomically", () => {
+    store = createStore(":memory:", { encryptionKey: "k" });
+    const session = store.createSession({ workspaceId: WS, adminUserId: ADMIN });
+    const created = createPendingConfirmation({
+      sessionId: session.id,
+      workspaceId: WS,
+      adminUserId: ADMIN,
+      risk: ["high_risk_write"],
+      preview: { summary: "Create invoice" },
+      operation: {
+        operationId: "op-idempotent-confirmation",
+        actionName: "clockify_invoices_create",
+        featureGroup: "invoices",
+        risks: ["high_risk_write"],
+        payload: { clientId: "client-1" },
+      },
+      sessionSecret: "secret",
+    });
+    store.savePendingConfirmation(created.record);
+    expect(store.markConfirmationExecuting(created.record.id)).toBe(true);
+    expect(claim("bound-key")).toBe("won");
+
+    type BoundStore = Store & {
+      bindConfirmationIdempotencyKey?: (confirmationId: string, key: string) => void;
+    };
+    const bind = (store as BoundStore).bindConfirmationIdempotencyKey;
+    expect(bind).toBeTypeOf("function");
+    if (!bind) return;
+    bind(created.record.id, "bound-key");
+    store.settleConfirmation(created.record.id, "succeeded", receipt.action, receipt);
+
+    expect(claim("bound-key", T + 1, T)).toBe("replay");
+    expect(store.claimIdempotencyReceipt("bound-key", WS, ADMIN)).toEqual(receipt);
   });
 });
 

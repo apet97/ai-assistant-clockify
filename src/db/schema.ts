@@ -402,6 +402,14 @@ export function migrate(db: Database.Database): void {
       db.pragma(`user_version = ${migration.version}`);
     })();
   }
+  // Backward-compatible additive columns for databases opened by an earlier
+  // build of schema v4 before the operation/idempotency ownership links landed.
+  addColumnIfMissing(db, "action_results", "operation_id", "TEXT");
+  addColumnIfMissing(db, "pending_confirmations", "idempotency_key", "TEXT");
+  db.prepare(
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_results_operation
+       ON action_results(operation_id) WHERE operation_id IS NOT NULL`,
+  ).run();
   // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
   // in its final (rebuilt) shape, so indexing those columns can't throw.
   for (const statement of PRUNE_INDEX_STATEMENTS) {
@@ -457,6 +465,7 @@ function migrateToV4(db: Database.Database): void {
   db.exec(`
     CREATE TABLE action_results (
       id TEXT PRIMARY KEY,
+      operation_id TEXT,
       workspace_id TEXT NOT NULL,
       admin_user_id TEXT NOT NULL,
       session_id TEXT,
@@ -479,14 +488,18 @@ function migrateToV4(db: Database.Database): void {
   }>;
   const insertResult = db.prepare(
     `INSERT INTO action_results (
-       id, workspace_id, admin_user_id, session_id, action_name, kind,
+       id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
        result_json, summary_json, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of legacyResults) {
     const result = JSON.parse(row.result_json) as unknown;
+    const operation = db.prepare(
+      "SELECT id FROM operation_runs WHERE action_result_id = ? ORDER BY rowid LIMIT 1",
+    ).get(row.id) as { id: string } | undefined;
     insertResult.run(
       row.id,
+      operation?.id ?? null,
       row.workspace_id,
       row.admin_user_id,
       row.session_id,
@@ -498,6 +511,37 @@ function migrateToV4(db: Database.Database): void {
     );
   }
 
+  type MigratedCanonical = {
+    id: string;
+    operationId: string | null;
+    workspaceId: string;
+    adminUserId: string;
+    sessionId: string | null;
+    actionName: string;
+    result: unknown;
+    createdAt: string;
+  };
+  const identityOf = (value: unknown): string => {
+    const receipt = value && typeof value === "object" && "receipt" in value
+      ? (value as { receipt?: unknown }).receipt
+      : value;
+    return actionResultJson(withoutNonce(receipt));
+  };
+  const canonicalRows: MigratedCanonical[] = legacyResults.map((row) => {
+    const operation = db.prepare(
+      "SELECT id FROM operation_runs WHERE action_result_id = ? ORDER BY rowid LIMIT 1",
+    ).get(row.id) as { id: string } | undefined;
+    return {
+      id: row.id,
+      operationId: operation?.id ?? null,
+      workspaceId: row.workspace_id,
+      adminUserId: row.admin_user_id,
+      sessionId: row.session_id,
+      actionName: row.action_name,
+      result: JSON.parse(row.result_json),
+      createdAt: row.created_at,
+    };
+  });
   const createCanonical = (input: {
     workspaceId: string;
     adminUserId: string;
@@ -506,12 +550,39 @@ function migrateToV4(db: Database.Database): void {
     result: unknown;
     kind?: ActionResultKind;
     createdAt: string;
+    operationId?: string;
+    preferredId?: string;
   }): { id: string; kind: ActionResultKind; summary: unknown } => {
+    const sameGraph = canonicalRows
+      .filter((candidate) =>
+        candidate.workspaceId === input.workspaceId &&
+        candidate.adminUserId === input.adminUserId &&
+        candidate.sessionId === input.sessionId &&
+        candidate.actionName === input.actionName &&
+        identityOf(candidate.result) === identityOf(input.result),
+      )
+      .sort((left, right) =>
+        Math.abs(Date.parse(left.createdAt) - Date.parse(input.createdAt)) -
+        Math.abs(Date.parse(right.createdAt) - Date.parse(input.createdAt)),
+      );
+    const candidate = (input.preferredId
+      ? sameGraph.find((row) => row.id === input.preferredId)
+      : undefined) ?? sameGraph.find((row) =>
+        Math.abs(Date.parse(row.createdAt) - Date.parse(input.createdAt)) <= 60_000,
+      );
+    if (candidate) {
+      const stored = db.prepare("SELECT kind, summary_json FROM action_results WHERE id = ?").get(candidate.id) as {
+        kind: ActionResultKind;
+        summary_json: string;
+      };
+      return { id: candidate.id, kind: stored.kind, summary: JSON.parse(stored.summary_json) };
+    }
     const id = randomUUID();
     const kind = input.kind ?? terminalKind(input.result);
     const summary = buildActionResultSummary(id, input.result);
     insertResult.run(
       id,
+      input.operationId ?? null,
       input.workspaceId,
       input.adminUserId,
       input.sessionId,
@@ -521,6 +592,16 @@ function migrateToV4(db: Database.Database): void {
       actionResultJson(summary),
       input.createdAt,
     );
+    canonicalRows.push({
+      id,
+      operationId: input.operationId ?? null,
+      workspaceId: input.workspaceId,
+      adminUserId: input.adminUserId,
+      sessionId: input.sessionId,
+      actionName: input.actionName,
+      result: input.result,
+      createdAt: input.createdAt,
+    });
     return { id, kind, summary };
   };
 
@@ -674,6 +755,15 @@ function migrateToV4(db: Database.Database): void {
     results.forEach((result, index) => {
       const kind = result && typeof result === "object" ? (result as { kind?: unknown }).kind : undefined;
       if (kind === "receipt" || kind === "partial") {
+        const operation = db.prepare(
+          `SELECT id, action_result_id
+             FROM operation_runs
+            WHERE request_id = ? AND action_name = ?
+            ORDER BY rowid LIMIT 1`,
+        ).get(row.request_id, resultAction(result, "legacy")) as {
+          id: string;
+          action_result_id: string | null;
+        } | undefined;
         const ref = createCanonical({
           workspaceId: row.workspace_id,
           adminUserId: row.admin_user_id,
@@ -681,6 +771,8 @@ function migrateToV4(db: Database.Database): void {
           actionName: resultAction(result, "legacy"),
           result,
           createdAt: row.updated_at,
+          operationId: operation?.id,
+          preferredId: operation?.action_result_id ?? undefined,
         });
         insertTurnLink.run(row.session_id, row.request_id, index, "action_result", ref.id, null);
       } else {
@@ -717,6 +809,7 @@ function migrateToV4(db: Database.Database): void {
       created_at TEXT NOT NULL,
       used_at TEXT,
       action_result_id TEXT,
+      idempotency_key TEXT,
       result_summary_json TEXT CHECK (result_summary_json IS NULL OR (json_valid(result_summary_json) AND length(CAST(result_summary_json AS BLOB)) <= 65536)),
       agent_state_json TEXT,
       FOREIGN KEY (session_id) REFERENCES chat_sessions(id)
@@ -728,8 +821,8 @@ function migrateToV4(db: Database.Database): void {
        id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json,
        preview_json, operation_json, operation_hash, target_fingerprints_json,
        action_fingerprint, catalog_hash, nonce_hash, expires_at, created_at, used_at,
-       action_result_id, result_summary_json, agent_state_json
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       action_result_id, idempotency_key, result_summary_json, agent_state_json
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of legacyConfirmations) {
     const status = row.status as string;
@@ -775,6 +868,7 @@ function migrateToV4(db: Database.Database): void {
       row.created_at,
       row.used_at,
       actionResultId,
+      null,
       summary === undefined ? null : actionResultJson(summary),
       terminal ? null : row.agent_state_json,
     );
