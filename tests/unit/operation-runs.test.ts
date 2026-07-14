@@ -114,6 +114,42 @@ describe("durable operation runs", () => {
     store.close();
   });
 
+  it("a scoped journal cannot dispatch or settle a step owned by another operation", () => {
+    const store = createStore(":memory:");
+    const prepareRun = (id: string) => store.prepareOperationRun({
+      id,
+      sessionId: "s1",
+      workspaceId: "w1",
+      adminUserId: "a1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "af",
+      catalogHash: "ch",
+      operationHash: id,
+    });
+    const operationA = prepareRun("operation-a");
+    const operationB = prepareRun("operation-b");
+    store.markOperationExecuting(operationA);
+    store.markOperationExecuting(operationB);
+    const stepB = store.prepareOperationStep({
+      operationId: operationB,
+      planStepId: "create-tag",
+      index: 0,
+      name: "Create tag",
+      kind: "primary",
+    });
+    const journalA = store.mutationStepJournal(operationA);
+    const journalB = store.mutationStepJournal(operationB);
+
+    expect(journalA.markOperationStepExecuting(stepB)).toBe(false);
+    expect(store.listOperationSteps(operationB)[0]?.status).toBe("prepared");
+    expect(journalB.markOperationStepExecuting(stepB)).toBe(true);
+    expect(() => journalA.settleOperationStep(stepB, "succeeded"))
+      .toThrow(/operation_step_not_executing/);
+    expect(store.listOperationSteps(operationB)[0]?.status).toBe("executing");
+    journalB.settleOperationStep(stepB, "succeeded");
+    store.close();
+  });
+
   it("permits compensation only after a definitive failure or authoritative reconciliation", () => {
     const store = createStore(":memory:");
     const operationId = store.prepareOperationRun({
@@ -180,15 +216,27 @@ describe("durable operation runs", () => {
       id: primaryId,
       status: "succeeded",
     });
+    const otherOperationId = store.prepareOperationRun({
+      id: "operation-compensation-other",
+      sessionId: "s1",
+      workspaceId: "w1",
+      adminUserId: "a1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "af",
+      catalogHash: "ch",
+      operationHash: "other",
+    });
+    expect(store.mutationStepJournal(otherOperationId).markOperationStepCompensating(compensationId))
+      .toBe(false);
     expect(store.markOperationStepCompensating(compensationId)).toBe(true);
     expect(store.listOperationSteps(operationId)).toMatchObject([
       { id: primaryId, status: "compensating" },
       { id: compensationId, status: "executing" },
     ]);
-    store.settleCompensationStep(compensationId, "compensated", { deleted: "tag-1" });
+    store.settleCompensationStep(compensationId, "compensated", { effect: { deleted: "tag-1" } });
     expect(store.listOperationSteps(operationId)).toMatchObject([
       { id: primaryId, status: "compensated" },
-      { id: compensationId, status: "compensated", detail: { deleted: "tag-1" } },
+      { id: compensationId, status: "compensated", effect: { deleted: "tag-1" } },
     ]);
     store.close();
   });
@@ -231,6 +279,54 @@ describe("durable operation runs", () => {
       expect(after.listOperationSteps(operationId)).toMatchObject([
         { id: sourceId, status: "succeeded" },
         { id: compensationId, status: "prepared", kind: "compensation" },
+      ]);
+      after.close();
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+    }
+  });
+
+  it("marks only a dispatched compensation unknown on restart and restores its known source", () => {
+    const path = join(tmpdir(), `executing-compensation-${randomUUID()}.sqlite`);
+    try {
+      const before = createStore(path);
+      const operationId = before.prepareOperationRun({
+        id: "operation-executing-compensation",
+        sessionId: "s1",
+        workspaceId: "w1",
+        adminUserId: "a1",
+        actionName: "clockify_tags_create",
+        actionFingerprint: "af",
+        catalogHash: "ch",
+        operationHash: "oh",
+      });
+      before.markOperationExecuting(operationId);
+      const sourceId = before.prepareOperationStep({
+        operationId,
+        planStepId: "create",
+        index: 0,
+        name: "Create",
+        kind: "primary",
+      });
+      before.markOperationStepExecuting(sourceId);
+      before.settleOperationStep(sourceId, "succeeded", { externalId: "tag-1" });
+      before.settleOperationRun(operationId, "definitive_failed");
+      const compensationId = before.prepareCompensationStep({
+        operationId,
+        planStepId: "delete-created",
+        index: 1,
+        name: "Delete created tag",
+        compensatesStepId: sourceId,
+      });
+      before.markOperationStepCompensating(compensationId);
+      before.close();
+
+      const after = createStore(path);
+      expect(after.listOperationSteps(operationId)).toMatchObject([
+        { id: sourceId, status: "succeeded", externalId: "tag-1" },
+        { id: compensationId, status: "outcome_unknown", kind: "compensation" },
       ]);
       after.close();
     } finally {

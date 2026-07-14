@@ -54,6 +54,22 @@ function preparedConfirmation(store: Store) {
 }
 
 describe("atomic confirmed-operation settlement", () => {
+  it("does not claim a confirmation whose operation lifecycle was already started", () => {
+    const store = createStore(":memory:", { now: () => now });
+    const confirmation = preparedConfirmation(store);
+    expect(store.markOperationExecuting(confirmation.operationId)).toBe(true);
+
+    expect(() => store.markConfirmationExecuting(confirmation.id))
+      .toThrow(/operation_not_prepared/);
+    expect(store.getPendingConfirmation(confirmation.id)).toMatchObject({
+      status: "pending",
+      actionResultId: undefined,
+    });
+    expect(store.getOperationRun(confirmation.operationId)).toMatchObject({ status: "executing" });
+    expect(store.getOperationRun(confirmation.operationId)?.actionResultId).toBeUndefined();
+    store.close();
+  });
+
   it("keeps normalized operation intent after claim-time confirmation scrubbing", () => {
     const store = createStore(":memory:", { now: () => now });
     const confirmation = preparedConfirmation(store);

@@ -56,6 +56,7 @@ import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
 import type { ClaimState, CommitResult } from "../harness/action.js";
 import type { ActionOutcome, TurnTelemetry } from "../metrics/metrics.js";
+import type { MutationStepJournal } from "../harness/mutation-contract.js";
 
 /**
  * The single SQLite access module (backend rule: all DB access goes through
@@ -200,16 +201,24 @@ export interface Store {
   getOperationRun(id: string): OperationRun | undefined;
   recordOperationReconciliation(id: string, result: unknown, authoritative: boolean): void;
   prepareOperationStep(input: PrepareOperationStepInput): string;
-  markOperationStepExecuting(id: string): boolean;
+  markOperationStepExecuting(id: string, operationId?: string): boolean;
   settleOperationStep(
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
   ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
-  markOperationStepCompensating(id: string): boolean;
-  settleCompensationStep(id: string, status: "compensated" | "compensation_failed", detail?: unknown): void;
+  markOperationStepCompensating(id: string, operationId?: string): boolean;
+  settleCompensationStep(
+    id: string,
+    status: "compensated" | "compensation_failed" | "outcome_unknown",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
+  ): void;
   listOperationSteps(operationId: string): OperationStep[];
+  /** Step capabilities scoped to exactly one durable operation id. */
+  mutationStepJournal(operationId: string): MutationStepJournal;
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
   recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number };
@@ -397,6 +406,24 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   // exactly as the inline methods used them.
   const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
   const confirmationStore = buildConfirmationStore(ctx);
+  const operationRunStore = buildOperationRunStore(ctx);
+  const mutationStepJournal = (operationId: string): MutationStepJournal => ({
+    operationId,
+    getOperationStatus: () => operationRunStore.getOperationRun(operationId)?.status,
+    prepareOperationStep: (input) => operationRunStore.prepareOperationStep({
+      ...input,
+      operationId,
+    }),
+    markOperationStepExecuting: (id) => operationRunStore.markOperationStepExecuting(id, operationId),
+    settleOperationStep: (id, status, detail) => operationRunStore.settleOperationStep(id, status, detail, operationId),
+    prepareCompensationStep: (input) => operationRunStore.prepareCompensationStep({
+      ...input,
+      operationId,
+    }),
+    markOperationStepCompensating: (id) => operationRunStore.markOperationStepCompensating(id, operationId),
+    settleCompensationStep: (id, status, detail) => operationRunStore.settleCompensationStep(id, status, detail, operationId),
+    listOperationSteps: () => operationRunStore.listOperationSteps(operationId),
+  });
 
   // Built as TestStore (the concrete object implements the test-only methods),
   // returned as the narrower Store so production callers never see them.
@@ -413,7 +440,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
-    ...buildOperationRunStore(ctx),
+    ...operationRunStore,
+    mutationStepJournal,
     ...buildArtifactStore(ctx),
 
     tables() {

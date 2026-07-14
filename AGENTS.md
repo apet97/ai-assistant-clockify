@@ -95,8 +95,10 @@ npm run dev           # tsx src/server.ts (needs env)
   `confirmations.ts`, `tools.ts`, `tool-select.ts` (deterministic
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
-  `mutation-workflow.ts` (prepared→executing→terminal external steps; ambiguity
-  stops later dispatch), `mutation-compatibility.ts` (explicit phase 4/5
+  `mutation-workflow.ts` (operation-scoped prepared→executing→terminal primary
+  and compensation steps; ambiguity stops later dispatch),
+  `durable-safe-write.ts` (the real step-journaled safe-write builder),
+  `mutation-compatibility.ts` (explicit phase 4/5
   migration exceptions), `compose.ts` (legacy atomic multi-step/rollback),
   `idempotency.ts` (dedup confirmed commits, including partial replay), `undo.ts`,
   `money.ts` (the one major↔minor mapping, both ways —

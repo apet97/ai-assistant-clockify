@@ -1,26 +1,14 @@
 import type {
-  OperationStep,
-  PrepareOperationStepInput,
-} from "../db/store.js";
+  JournaledMutationStep,
+  MutationStepJournal,
+} from "./mutation-contract.js";
+export type { MutationStepJournal } from "./mutation-contract.js";
 import {
   AmbiguousWriteOutcome,
   DefinitiveWriteFailure,
 } from "../clockify/write-outcome.js";
 import type { CommitResult } from "./action.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
-
-/** The synchronous durable boundary required by one external mutation step. */
-export interface MutationStepJournal {
-  markOperationExecuting(operationId: string): boolean;
-  prepareOperationStep(input: PrepareOperationStepInput): string;
-  markOperationStepExecuting(id: string): boolean;
-  settleOperationStep(
-    id: string,
-    status: "succeeded" | "definitive_failed" | "outcome_unknown",
-    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
-  ): void;
-  listOperationSteps(operationId: string): OperationStep[];
-}
 
 export interface MutationDispatchResult {
   externalId?: string;
@@ -65,15 +53,22 @@ export async function executeStep(input: {
   operationId: string;
   step: Omit<ExecutableMutationStep, "dispatch">;
   dispatch: () => Promise<MutationDispatchResult>;
-}): Promise<OperationStep> {
+}): Promise<JournaledMutationStep> {
+  if (input.step.kind !== "primary") {
+    throw new Error("compensation_requires_dedicated_executor");
+  }
+  if (input.journal.operationId !== input.operationId) {
+    throw new Error("operation_journal_scope_mismatch");
+  }
+  if (input.journal.getOperationStatus() !== "executing") {
+    throw new Error("operation_not_executing");
+  }
   const stepId = input.journal.prepareOperationStep({
-    operationId: input.operationId,
     planStepId: input.step.id,
     index: input.step.index,
     name: input.step.name,
-    kind: input.step.kind,
+    kind: "primary",
     ...(input.step.targetFingerprint ? { targetFingerprint: input.step.targetFingerprint } : {}),
-    ...(input.step.compensatesStepId ? { compensatesStepId: input.step.compensatesStepId } : {}),
   });
   if (!input.journal.markOperationStepExecuting(stepId)) {
     throw new Error("operation_step_not_prepared");
@@ -89,8 +84,52 @@ export async function executeStep(input: {
     input.journal.settleOperationStep(stepId, status, { detail: safeFailureDetail(error) });
   }
 
-  const settled = input.journal.listOperationSteps(input.operationId).find((step) => step.id === stepId);
+  const settled = input.journal.listOperationSteps().find((step) => step.id === stepId);
   if (!settled) throw new Error("operation_step_not_found");
+  return settled;
+}
+
+/**
+ * Execute one eligible compensation step through its distinct durable state
+ * machine. Eligibility is decided transactionally by prepareCompensationStep;
+ * dispatch begins only after the source and compensation rows move atomically
+ * to compensating/executing.
+ */
+export async function executeCompensationStep(input: {
+  journal: MutationStepJournal;
+  operationId: string;
+  step: Omit<ExecutableMutationStep, "dispatch"> & {
+    kind: "compensation";
+    compensatesStepId: string;
+  };
+  dispatch: () => Promise<MutationDispatchResult>;
+}): Promise<JournaledMutationStep> {
+  if (input.journal.operationId !== input.operationId) {
+    throw new Error("operation_journal_scope_mismatch");
+  }
+  const stepId = input.journal.prepareCompensationStep({
+    planStepId: input.step.id,
+    index: input.step.index,
+    name: input.step.name,
+    compensatesStepId: input.step.compensatesStepId,
+    ...(input.step.targetFingerprint ? { targetFingerprint: input.step.targetFingerprint } : {}),
+  });
+  if (!input.journal.markOperationStepCompensating(stepId)) {
+    throw new Error("compensation_step_not_prepared");
+  }
+
+  try {
+    const dispatched = await input.dispatch();
+    input.journal.settleCompensationStep(stepId, "compensated", dispatched);
+  } catch (error) {
+    const status = error instanceof DefinitiveWriteFailure
+      ? "compensation_failed"
+      : "outcome_unknown";
+    input.journal.settleCompensationStep(stepId, status, { detail: safeFailureDetail(error) });
+  }
+
+  const settled = input.journal.listOperationSteps().find((step) => step.id === stepId);
+  if (!settled) throw new Error("compensation_step_not_found");
   return settled;
 }
 
@@ -99,12 +138,12 @@ export interface ExecuteMutationWorkflowInput {
   operationId: string;
   actionName: string;
   steps: ExecutableMutationStep[];
-  onSuccess(completed: OperationStep[]): SuccessReceipt;
+  onSuccess(completed: JournaledMutationStep[]): SuccessReceipt;
   onPartial(
-    completed: OperationStep[],
-    failed: OperationStep,
+    completed: JournaledMutationStep[],
+    failed: JournaledMutationStep,
   ): Extract<CommitResult, { kind: "partial" }>;
-  onFailure(failed: OperationStep): ErrorReceipt;
+  onFailure(failed: JournaledMutationStep): ErrorReceipt;
 }
 
 /**
@@ -116,10 +155,13 @@ export interface ExecuteMutationWorkflowInput {
 export async function executeMutationWorkflow(
   input: ExecuteMutationWorkflowInput,
 ): Promise<CommitResult> {
-  if (!input.journal.markOperationExecuting(input.operationId)) {
-    throw new Error("operation_not_prepared");
+  if (input.journal.operationId !== input.operationId) {
+    throw new Error("operation_journal_scope_mismatch");
   }
-  const completed: OperationStep[] = [];
+  if (input.journal.getOperationStatus() !== "executing") {
+    throw new Error("operation_not_executing");
+  }
+  const completed: JournaledMutationStep[] = [];
   for (const step of input.steps) {
     if (step.kind !== "primary") continue;
     const result = await executeStep({

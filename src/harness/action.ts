@@ -5,6 +5,12 @@ import type { EntityRef, ErrorReceipt, RecoveryHint, SuccessReceipt } from "./re
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
 import { randomUUID } from "node:crypto";
+import type {
+  ExternalMutationPlan,
+  MutationStepJournal,
+} from "./mutation-contract.js";
+
+export type { ExternalMutationPlan } from "./mutation-contract.js";
 
 /**
  * Action contracts and the typed `defineAction` helper. This is a leaf module
@@ -40,12 +46,15 @@ export interface ActionContext {
   operationJournal?: {
     prepare(actionName: string, operation: unknown, mutationPlan?: ExternalMutationPlan): string;
     markExecuting(operationId: string): void;
+    scope(operationId: string): MutationStepJournal;
     settle(
       operationId: string,
       status: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown",
       result: ActionResult,
     ): void;
   };
+  /** Durable host-step capabilities bound to the one operation being executed. */
+  mutationJournal?: MutationStepJournal;
   /** Fresh role gate injected by the route; returns an error receipt to block. */
   authorizeWrite?(actionName: string): Promise<ErrorReceipt | undefined>;
   saveArtifact?(input: {
@@ -136,16 +145,6 @@ export interface PreviewCard {
   warnings: string[];
 }
 
-/** Exact external dispatch order persisted before the first host mutation. */
-export interface ExternalMutationPlan {
-  mode: "single" | "curated" | "batch";
-  steps: Array<{
-    id: string;
-    kind: "primary" | "compensation";
-    targetFingerprint?: string;
-  }>;
-}
-
 /** The exact payload executed after button confirmation. Never reconstructed from chat. */
 export interface ConfirmableOperation {
   operationId: string;
@@ -206,7 +205,7 @@ export interface ActionDefinition {
   /** New safe-write path: normalize nonsecret wire intent without mutation. */
   prepareSafeWrite?(ctx: ActionContext, args: unknown): Promise<PreparedSafeWrite>;
   /** Dispatch exactly the prepared safe-write intent. */
-  executeSafeWrite?(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
+  executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   /** Marks a confirmed action whose external effects use mutation-workflow steps. */
   mutationWorkflow?: "durable";
   /** Executes the stored operation after confirmation (risky actions only). */
@@ -242,7 +241,7 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
   prepareSafeWrite?(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite>;
-  executeSafeWrite?(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
+  executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   mutationWorkflow?: "durable";
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
@@ -388,7 +387,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     prepareSafeWrite: async (ctx, args) => def.prepare(ctx, args),
-    executeSafeWrite: (ctx, operation) => def.execute(ctx, operation),
+    executeSafeWrite: (ctx, prepared) => def.execute(ctx, prepared.operation),
     async handler(ctx, args): Promise<ActionResult> {
       const prepared = await def.prepare(ctx, args);
       const result = await def.execute(ctx, prepared.operation);

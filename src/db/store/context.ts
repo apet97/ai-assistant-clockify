@@ -2,7 +2,7 @@ import type Database from "better-sqlite3";
 import type { RiskLabel } from "../../harness/risk.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../../harness/receipts.js";
 import type { ActionResultRef } from "../action-results.js";
-import type { ExternalMutationPlan } from "../../harness/action.js";
+import type { ExternalMutationPlan } from "../../harness/mutation-contract.js";
 
 /**
  * Shared primitives every store concern module needs. Built once inside

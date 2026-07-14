@@ -3,9 +3,9 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
-  defineSafeWriteAction,
   type ActionDefinition,
 } from "../action.js";
+import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
@@ -65,10 +65,11 @@ const getTag = defineAction({
   },
 });
 
-const createTag = defineSafeWriteAction({
+const createTag = defineDurableSafeWriteAction({
   name: "clockify_tags_create",
   description: "Create a tag. Safe write — executes immediately when policy allows.",
   group: WORK,
+  stepName: "Create tag",
   schema: z.object({ name: z.string().trim().min(1) }),
   prepare(_ctx, args) {
     return {
@@ -76,15 +77,20 @@ const createTag = defineSafeWriteAction({
       mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
     };
   },
-  async execute(ctx, operation) {
+  async dispatch(ctx, operation) {
     const { body } = operation as { body: { name: string } };
     const tag = await ctx.clockify.createTag(body);
-    return successReceipt({
-      action: "clockify_tags_create",
-      entity: "tag",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "tag", id: tag.id, name: tag.name }] },
-    });
+    const created = { type: "tag", id: tag.id, name: tag.name };
+    return {
+      result: successReceipt({
+        action: "clockify_tags_create",
+        entity: "tag",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [created] },
+      }),
+      externalId: tag.id,
+      effect: { created },
+    };
   },
 });
 

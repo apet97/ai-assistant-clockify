@@ -115,6 +115,16 @@ describe("canonical persistence safety", () => {
     expect((raw.prepare("SELECT action_result_id FROM audit_events").get() as { action_result_id: string }).action_result_id).toBe(id);
     expect((raw.prepare("SELECT action_result_id FROM chat_message_result_links").get() as { action_result_id: string }).action_result_id).toBe(id);
     expect((raw.prepare("SELECT action_result_id FROM turn_run_result_links").get() as { action_result_id: string }).action_result_id).toBe(id);
+    expect(raw.prepare(
+      "SELECT plan_step_id, kind, status, external_id FROM operation_steps ORDER BY step_index",
+    ).all()).toEqual([
+      {
+        plan_step_id: "create-tag",
+        kind: "primary",
+        status: "succeeded",
+        external_id: expect.any(String),
+      },
+    ]);
     raw.close();
 
     const replay = await request(app)

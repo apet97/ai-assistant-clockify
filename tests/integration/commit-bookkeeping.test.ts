@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
@@ -10,6 +10,13 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
+import { getAction } from "../../src/harness/catalog.js";
+import {
+  executeMutationWorkflow,
+  type MutationStepJournal,
+} from "../../src/harness/mutation-workflow.js";
+import type { ActionContext } from "../../src/harness/action.js";
+import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
 
 /**
  * Post-host bookkeeping must preserve the truthful receipt. Canonical
@@ -28,6 +35,7 @@ const ADDON_KEY = "ai-assistant";
 
 let stores: Store[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const s of stores) s.close();
   stores = [];
 });
@@ -91,6 +99,93 @@ const CREATE_INVOICE: ToolCompletion = {
 };
 
 describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a committed receipt)", () => {
+  it("gives the one-use confirmation winner a scoped journal and dispatches one durable planned step", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
+    const action = getAction("clockify_tags_delete")!;
+    const originalHandler = action.handler;
+    vi.spyOn(action, "handler").mockImplementation(async (ctx, args) => {
+      const result = await originalHandler(ctx, args);
+      return result.kind === "preview"
+        ? {
+            ...result,
+            operation: {
+              ...result.operation,
+              mutationPlan: {
+                mode: "single" as const,
+                steps: [{ id: "delete-tag", kind: "primary" as const }],
+              },
+            },
+          }
+        : result;
+    });
+    let operationIdAtDispatch: string | undefined;
+    const observed: string[] = [];
+    type ExpectedScopedJournal = MutationStepJournal & {
+      operationId: string;
+      getOperationStatus(): string | undefined;
+      listOperationSteps(): ReturnType<Store["listOperationSteps"]>;
+    };
+    vi.spyOn(action, "commit").mockImplementation(async (ctx, operation) => {
+      const journal = (ctx as ActionContext & { mutationJournal?: ExpectedScopedJournal }).mutationJournal;
+      if (!journal) throw new Error("missing_scoped_mutation_journal");
+      expect(journal.operationId).toBe(operation.operationId);
+      return executeMutationWorkflow({
+        journal,
+        operationId: operation.operationId,
+        actionName: operation.actionName,
+        steps: [{
+          id: "delete-tag",
+          index: 0,
+          name: "Delete tag",
+          kind: "primary",
+          dispatch: async () => {
+            operationIdAtDispatch = operation.operationId;
+            observed.push(`operation:${journal.getOperationStatus()}`);
+            observed.push(`step:${journal.listOperationSteps()[0]?.status ?? "missing"}`);
+            await ctx.clockify.deleteTag(operation.payload.id as string);
+            return { externalId: operation.payload.id as string, effect: { deleted: operation.payload.id } };
+          },
+        }],
+        onSuccess: () => successReceipt({ action: operation.actionName }),
+        onPartial: () => {
+          throw new Error("single step cannot be partial");
+        },
+        onFailure: () => errorReceipt({ action: operation.actionName, code: "delete_failed", message: "Delete failed." }),
+      });
+    });
+
+    const { app, cookie, store } = await makeApp([DELETE_TAG], fake);
+    const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    const preview = previewsOf(chat.body.results as ResultItem[])[0]!;
+    const pending = store.getPendingConfirmation(preview.previewId!);
+    expect(pending).toBeDefined();
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    const replay = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(confirm.status).toBe(200);
+    expect(replay.status).toBe(400);
+    expect(operationIdAtDispatch).toBe(pending!.operationId);
+    expect(observed).toEqual(["operation:executing", "step:executing"]);
+    expect(fake.counts.deleteTag).toBe(1);
+    expect(store.getOperationRun(pending!.operationId)).toMatchObject({ status: "succeeded" });
+    expect(store.listOperationSteps(pending!.operationId)).toMatchObject([
+      {
+        planStepId: "delete-tag",
+        kind: "primary",
+        status: "succeeded",
+        externalId: "t1",
+        effect: { deleted: "t1" },
+      },
+    ]);
+  });
+
   it("addAuditEvent throwing at confirm does NOT 500: the receipt returns and the commit ran exactly once", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, cookie } = await makeApp([DELETE_TAG], fake, (store) => ({

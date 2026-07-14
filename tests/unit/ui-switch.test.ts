@@ -12,6 +12,7 @@ import { ApiError, SESSION_EXPIRED_MESSAGE, switchToSession, type ChatApi } from
  */
 function recordingApi(impl: () => Promise<unknown>): ChatApi {
   const stub = async (): Promise<unknown> => ({ ok: true });
+  const confirm = async () => ({ ok: true });
   return {
     getPermissions: stub,
     savePermissions: stub,
@@ -21,7 +22,7 @@ function recordingApi(impl: () => Promise<unknown>): ChatApi {
     switchSession: impl,
     sendMessage: stub,
     streamMessage: async () => {},
-    confirmPreview: stub,
+    confirmPreview: confirm,
     confirmStream: async () => {},
     cancelPreview: stub,
     undo: stub,

@@ -239,11 +239,12 @@ export function buildConfirmationStore(ctx: StoreContext): {
           actionResultJson(summary),
           claimedAt,
         );
-        db.prepare(
+        const operationClaim = db.prepare(
           `UPDATE operation_runs SET status = 'executing', action_result_id = ?, updated_at = ?
              WHERE id = (SELECT operation_id FROM pending_confirmations WHERE id = ?)
                AND status = 'prepared'`,
         ).run(actionResultId, claimedAt, id);
+        if (operationClaim.changes !== 1) throw new Error("operation_not_prepared");
         return true;
       })();
     },

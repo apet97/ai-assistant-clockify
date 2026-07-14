@@ -11,7 +11,7 @@
  * reaches a confirmation endpoint (that contract lives at the call sites).
  */
 
-import type { StreamEvent } from "./shared.js";
+import type { ConfirmResponse, StreamEvent } from "./shared.js";
 
 /** The full API surface the chat UI talks to (the real client implements it). */
 export interface ChatApi {
@@ -28,7 +28,7 @@ export interface ChatApi {
   sendMessage(message: string): Promise<unknown>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
-  confirmPreview(previewId: string, nonce: string): Promise<unknown>;
+  confirmPreview(previewId: string, nonce: string): Promise<ConfirmResponse>;
   /** Streaming single confirm: the receipt arrives first, then the resume streams. */
   confirmStream(ref: { previewId: string; nonce: string }, onEvent: (event: StreamEvent) => void): Promise<void>;
   cancelPreview(previewId: string): Promise<unknown>;
@@ -225,11 +225,11 @@ export function createFetchApi(): ChatApi {
       }
       await pumpNdjson(res, onEvent);
     },
-    confirmPreview: (previewId, nonce) =>
-      mutation(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
+    confirmPreview: async (previewId, nonce) =>
+      await mutation(`/api/confirmations/${encodeURIComponent(previewId)}/confirm`, {
         method: "POST",
         body: JSON.stringify({ nonce }),
-      }),
+      }) as ConfirmResponse,
     confirmStream: async (ref, onEvent) => {
       let res: Response;
       try {

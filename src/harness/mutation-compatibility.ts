@@ -102,8 +102,7 @@ function isExternalWrite(action: ActionDefinition): boolean {
 }
 
 function hasDurableMutationPath(action: ActionDefinition): boolean {
-  return action.mutationWorkflow === "durable" ||
-    (typeof action.prepareSafeWrite === "function" && typeof action.executeSafeWrite === "function");
+  return action.mutationWorkflow === "durable";
 }
 
 export function mutationCatalogCoverage(

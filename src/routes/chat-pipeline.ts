@@ -372,6 +372,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
             markExecuting(operationId) {
               if (!deps.store.markOperationExecuting(operationId)) throw new Error("operation_not_prepared");
             },
+            scope(operationId) {
+              return deps.store.mutationStepJournal(operationId);
+            },
             settle(_operationId, _status, _result) {
               // The emitter below owns the terminal transition because it creates
               // the canonical result and links both in one synchronous turn. Keep
@@ -828,7 +831,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         // mid-flight and double-committed (r1-concurrency-races-01 follow-up).
         touch: (key) => deps.store.touchIdempotencyClaim(key, claims.workspaceId, claims.adminUserId, now().getTime()),
       };
-      const authorizedContext = actionContext(claims.workspaceId, claims.adminUserId, installation);
+      const authorizedContext = {
+        ...actionContext(claims.workspaceId, claims.adminUserId, installation),
+        mutationJournal: deps.store.mutationStepJournal(record.operationId),
+      };
       // The fresh role verdict above happened before consuming the nonce. Avoid a
       // redundant host lookup inside the generic harness for this same dispatch.
       delete authorizedContext.authorizeWrite;

@@ -183,6 +183,34 @@ describe("settleConfirmOutcome (truthful confirm flow)", () => {
     expect(committed).toBe(2);
     expect(events).toEqual(["assistant:Batch confirmed."]);
   });
+
+  it("renders a JSON partial result with recovery and undo instead of claiming clean confirmation", () => {
+    const results: unknown[] = [];
+    const assistant: string[] = [];
+    const partial = {
+      kind: "partial" as const,
+      receipt: { ok: true, action: "clockify_invoices_create" },
+      message: "The invoice exists, but enrichment failed.",
+      recovery: { hint: "Review the invoice before retrying.", retryable: false },
+    };
+    const committed = settleConfirmOutcome(
+      [{
+        ok: true,
+        receipt: partial.receipt,
+        result: partial,
+        undo: { id: "undo-partial" },
+      } as unknown as ConfirmResponse],
+      {
+        onAssistant: (text) => assistant.push(text),
+        onResults: (items) => results.push(...items),
+        onError: () => undefined,
+      },
+    );
+
+    expect(committed).toBe(1);
+    expect(results).toEqual([{ ...partial, undo: { id: "undo-partial" } }]);
+    expect(assistant).toEqual([]);
+  });
 });
 
 function streamApi(events: StreamEvent[]): ConfirmStreamApi {
@@ -364,6 +392,24 @@ describe("runConfirmStreamLive (confirm-resume shows the working affordance + st
 });
 
 describe("batchItemOutcomes (per-item truth on the settled batch card)", () => {
+  it("marks an ok:true partial response as partial, never cleanly confirmed", () => {
+    const partial = {
+      kind: "partial" as const,
+      receipt: { ok: true, action: "clockify_invoices_create" },
+      message: "The invoice exists, but enrichment failed.",
+      recovery: { hint: "Review it.", retryable: false },
+    };
+    expect(batchItemOutcomes(
+      ["Create invoice"],
+      [{ ok: true, receipt: partial.receipt, result: partial } as unknown as ConfirmResponse],
+    )).toEqual([{
+      label: "Create invoice",
+      ok: true,
+      status: "partial",
+      detail: "The invoice exists, but enrichment failed.",
+    }]);
+  });
+
   it("maps each label to its response: ok → Confirmed, failure → the server's message verbatim", () => {
     const out = batchItemOutcomes(
       ["Delete tag Old", "Archive project Apollo"],

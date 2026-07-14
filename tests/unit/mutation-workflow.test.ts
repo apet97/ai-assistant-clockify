@@ -3,6 +3,8 @@ import { createStore } from "../../src/db/store.js";
 import { executeMutationWorkflow, executeStep } from "../../src/harness/mutation-workflow.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
+import * as workflowModule from "../../src/harness/mutation-workflow.js";
+import type { JournaledMutationStep, MutationStepJournal } from "../../src/harness/mutation-contract.js";
 
 function operation(store: ReturnType<typeof createStore>, id: string): string {
   return store.prepareOperationRun({
@@ -25,6 +27,51 @@ function operation(store: ReturnType<typeof createStore>, id: string): string {
   });
 }
 
+function compensableOperation(store: ReturnType<typeof createStore>, id: string) {
+  const operationId = store.prepareOperationRun({
+    id,
+    sessionId: "session",
+    workspaceId: "workspace",
+    adminUserId: "admin",
+    actionName: "test_mutation",
+    actionFingerprint: "action",
+    catalogHash: "catalog",
+    operationHash: "operation",
+    mutationPlan: {
+      mode: "curated",
+      steps: [
+        { id: "create", kind: "primary" },
+        { id: "delete-created", kind: "compensation" },
+      ],
+    },
+  });
+  store.markOperationExecuting(operationId);
+  const sourceId = store.prepareOperationStep({
+    operationId,
+    planStepId: "create",
+    index: 0,
+    name: "Create",
+    kind: "primary",
+  });
+  store.markOperationStepExecuting(sourceId);
+  store.settleOperationStep(sourceId, "succeeded", { externalId: "created-1" });
+  store.settleOperationRun(operationId, "definitive_failed");
+  return { operationId, sourceId, journal: store.mutationStepJournal(operationId) };
+}
+
+type ExecuteCompensationStep = (input: {
+  journal: MutationStepJournal;
+  operationId: string;
+  step: {
+    id: string;
+    index: number;
+    name: string;
+    kind: "compensation";
+    compensatesStepId: string;
+  };
+  dispatch: () => Promise<{ externalId?: string; effect?: unknown; detail?: unknown }>;
+}) => Promise<JournaledMutationStep>;
+
 describe("durable mutation workflow", () => {
   it("persists prepared then executing before dispatch and settles the external effect", async () => {
     const store = createStore(":memory:");
@@ -33,7 +80,7 @@ describe("durable mutation workflow", () => {
     const observed: string[] = [];
 
     const result = await executeStep({
-      journal: store,
+      journal: store.mutationStepJournal(operationId),
       operationId,
       step: { id: "one", index: 0, name: "First", kind: "primary" },
       async dispatch() {
@@ -54,10 +101,11 @@ describe("durable mutation workflow", () => {
   it("classifies an ambiguous dispatch as outcome_unknown and runs no later step", async () => {
     const store = createStore(":memory:");
     const operationId = operation(store, "operation-unknown");
+    store.markOperationExecuting(operationId);
     let laterCalls = 0;
 
     const result = await executeMutationWorkflow({
-      journal: store,
+      journal: store.mutationStepJournal(operationId),
       operationId,
       actionName: "test_mutation",
       steps: [
@@ -98,9 +146,10 @@ describe("durable mutation workflow", () => {
   it("propagates a known earlier effect plus later definitive failure as partial", async () => {
     const store = createStore(":memory:");
     const operationId = operation(store, "operation-partial");
+    store.markOperationExecuting(operationId);
 
     const result = await executeMutationWorkflow({
-      journal: store,
+      journal: store.mutationStepJournal(operationId),
       operationId,
       actionName: "test_mutation",
       steps: [
@@ -146,6 +195,98 @@ describe("durable mutation workflow", () => {
       "succeeded",
       "definitive_failed",
     ]);
+    store.close();
+  });
+
+  it("uses the dedicated compensation executor and preserves the known source on definitive rejection", async () => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal } = compensableOperation(store, "operation-compensation-definite");
+    const executeCompensationStep = (workflowModule as unknown as {
+      executeCompensationStep?: ExecuteCompensationStep;
+    }).executeCompensationStep;
+    expect(executeCompensationStep).toBeTypeOf("function");
+    if (!executeCompensationStep) return;
+
+    const result = await executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => {
+        throw new DefinitiveWriteFailure("DELETE", "/created-1", "rejected", 409);
+      },
+    });
+
+    expect(result.status).toBe("compensation_failed");
+    expect(journal.listOperationSteps()).toMatchObject([
+      { id: sourceId, status: "succeeded", externalId: "created-1" },
+      { id: result.id, status: "compensation_failed" },
+    ]);
+    store.close();
+  });
+
+  it("settles an ambiguous compensation unknown, preserves source truth, and performs one dispatch", async () => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal } = compensableOperation(store, "operation-compensation-unknown");
+    const executeCompensationStep = (workflowModule as unknown as {
+      executeCompensationStep?: ExecuteCompensationStep;
+    }).executeCompensationStep;
+    expect(executeCompensationStep).toBeTypeOf("function");
+    if (!executeCompensationStep) return;
+    let dispatches = 0;
+
+    const result = await executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => {
+        dispatches += 1;
+        throw new AmbiguousWriteOutcome("DELETE", "/created-1", "socket closed");
+      },
+    });
+
+    expect(dispatches).toBe(1);
+    expect(result.status).toBe("outcome_unknown");
+    expect(journal.listOperationSteps()).toMatchObject([
+      { id: sourceId, status: "succeeded", externalId: "created-1" },
+      { id: result.id, status: "outcome_unknown" },
+    ]);
+    store.close();
+  });
+
+  it("rejects compensation through the generic primary executor before dispatch", async () => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal } = compensableOperation(store, "operation-compensation-bypass");
+    let dispatches = 0;
+
+    await expect(executeStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => {
+        dispatches += 1;
+        return {};
+      },
+    })).rejects.toThrow(/compensation_requires_dedicated_executor/);
+    expect(dispatches).toBe(0);
+    expect(journal.listOperationSteps()).toHaveLength(1);
     store.close();
   });
 });

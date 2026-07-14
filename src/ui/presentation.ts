@@ -56,6 +56,8 @@ export function isNearBottom(
 export interface BatchItemOutcome {
   label: string;
   ok: boolean;
+  /** Present only when an ok response is not a clean confirmation. */
+  status?: "partial";
   detail: string;
 }
 
@@ -68,6 +70,9 @@ export function batchItemOutcomes(labels: string[], responses: ConfirmResponse[]
   return labels.map((label, i) => {
     const response = responses[i];
     if (!response) return { label, ok: false, detail: "No response." };
+    if (response.result?.kind === "partial") {
+      return { label, ok: true, status: "partial", detail: response.result.message };
+    }
     if (response.ok) return { label, ok: true, detail: "Confirmed" };
     // A failed COMMIT carries its reason on `receipt.message` (the route adds no
     // top-level `message` for it); pre-commit rejections carry a top-level one.

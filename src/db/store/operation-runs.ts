@@ -115,15 +115,21 @@ export function buildOperationRunStore(ctx: StoreContext): {
   getOperationRun(id: string): OperationRun | undefined;
   recordOperationReconciliation(id: string, result: unknown, authoritative: boolean): void;
   prepareOperationStep(input: PrepareOperationStepInput): string;
-  markOperationStepExecuting(id: string): boolean;
+  markOperationStepExecuting(id: string, operationId?: string): boolean;
   settleOperationStep(
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
     detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
   ): void;
   prepareCompensationStep(input: PrepareCompensationStepInput): string;
-  markOperationStepCompensating(id: string): boolean;
-  settleCompensationStep(id: string, status: "compensated" | "compensation_failed", detail?: unknown): void;
+  markOperationStepCompensating(id: string, operationId?: string): boolean;
+  settleCompensationStep(
+    id: string,
+    status: "compensated" | "compensation_failed" | "outcome_unknown",
+    detail?: { externalId?: string; effect?: unknown; detail?: unknown },
+    operationId?: string,
+  ): void;
   listOperationSteps(operationId: string): OperationStep[];
   recordActionResult(input: {
     workspaceId: string;
@@ -261,27 +267,28 @@ export function buildOperationRunStore(ctx: StoreContext): {
       );
       return id;
     },
-    markOperationStepExecuting(id) {
+    markOperationStepExecuting(id, operationId) {
       const timestamp = nowIso();
       return db.prepare(
         `UPDATE operation_steps
             SET status = 'executing', dispatched_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'prepared'
+          WHERE id = ? AND (? IS NULL OR operation_id = ?) AND status = 'prepared'
             AND kind = 'primary'
             AND EXISTS (
               SELECT 1 FROM operation_runs
                WHERE operation_runs.id = operation_steps.operation_id
                  AND operation_runs.status = 'executing'
             )`,
-      ).run(timestamp, timestamp, id).changes === 1;
+      ).run(timestamp, timestamp, id, operationId ?? null, operationId ?? null).changes === 1;
     },
-    settleOperationStep(id, status, detail = {}) {
+    settleOperationStep(id, status, detail = {}, operationId) {
       const timestamp = nowIso();
       const updated = db.prepare(
         `UPDATE operation_steps
             SET status = ?, external_id = ?, effect_json = ?, detail_json = ?,
                 settled_at = ?, updated_at = ?
-          WHERE id = ? AND status = 'executing' AND kind = 'primary'`,
+          WHERE id = ? AND (? IS NULL OR operation_id = ?)
+            AND status = 'executing' AND kind = 'primary'`,
       ).run(
         status,
         detail.externalId ?? null,
@@ -290,6 +297,8 @@ export function buildOperationRunStore(ctx: StoreContext): {
         timestamp,
         timestamp,
         id,
+        operationId ?? null,
+        operationId ?? null,
       );
       if (updated.changes !== 1) throw new Error("operation_step_not_executing");
     },
@@ -313,7 +322,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
           source.operation_status === "definitive_failed" || reconciliation?.authoritative === true
         );
         if (!eligible) throw new Error("compensation_not_eligible");
-        const id = randomUUID();
+        const id = input.id ?? randomUUID();
         const timestamp = nowIso();
         db.prepare(
           `INSERT INTO operation_steps (
@@ -334,13 +343,14 @@ export function buildOperationRunStore(ctx: StoreContext): {
         return id;
       })();
     },
-    markOperationStepCompensating(id) {
+    markOperationStepCompensating(id, operationId) {
       return db.transaction((): boolean => {
         const row = db.prepare(
           `SELECT compensates_step_id
              FROM operation_steps
-            WHERE id = ? AND status = 'prepared' AND kind = 'compensation'`,
-        ).get(id) as { compensates_step_id: string | null } | undefined;
+            WHERE id = ? AND (? IS NULL OR operation_id = ?)
+              AND status = 'prepared' AND kind = 'compensation'`,
+        ).get(id, operationId ?? null, operationId ?? null) as { compensates_step_id: string | null } | undefined;
         if (!row?.compensates_step_id) return false;
         const timestamp = nowIso();
         const compensation = db.prepare(
@@ -359,28 +369,40 @@ export function buildOperationRunStore(ctx: StoreContext): {
         return true;
       })();
     },
-    settleCompensationStep(id, status, detail) {
+    settleCompensationStep(id, status, detail, operationId) {
       db.transaction(() => {
         const timestamp = nowIso();
         const row = db.prepare(
-          "SELECT compensates_step_id FROM operation_steps WHERE id = ? AND status = 'executing' AND kind = 'compensation'",
-        ).get(id) as { compensates_step_id: string | null } | undefined;
+          `SELECT compensates_step_id FROM operation_steps
+            WHERE id = ? AND (? IS NULL OR operation_id = ?)
+              AND status = 'executing' AND kind = 'compensation'`,
+        ).get(id, operationId ?? null, operationId ?? null) as { compensates_step_id: string | null } | undefined;
         if (!row?.compensates_step_id) throw new Error("compensation_step_not_executing");
         const updated = db.prepare(
           `UPDATE operation_steps
-              SET status = ?, detail_json = ?, settled_at = ?, updated_at = ?
+              SET status = ?, external_id = ?, effect_json = ?, detail_json = ?,
+                  settled_at = ?, updated_at = ?
             WHERE id = ? AND status = 'executing' AND kind = 'compensation'`,
         ).run(
           status,
-          detail === undefined ? null : actionResultJson(detail),
+          detail?.externalId ?? null,
+          detail?.effect === undefined ? null : actionResultJson(detail.effect),
+          detail?.detail === undefined ? null : actionResultJson(detail.detail),
           timestamp,
           timestamp,
           id,
         );
         if (updated.changes !== 1) throw new Error("compensation_step_not_executing");
+        // The primary effect was known to have succeeded before compensation.
+        // A definitive/ambiguous compensation failure does not erase that truth;
+        // only an authoritative successful compensation changes the source state.
+        const sourceStatus = status === "compensated" ? "compensated" : "succeeded";
         const source = db.prepare(
-          "UPDATE operation_steps SET status = ?, settled_at = ?, updated_at = ? WHERE id = ? AND status = 'compensating'",
-        ).run(status, timestamp, timestamp, row.compensates_step_id);
+          `UPDATE operation_steps
+              SET status = ?, settled_at = CASE WHEN ? = 'compensated' THEN ? ELSE settled_at END,
+                  updated_at = ?
+            WHERE id = ? AND status = 'compensating'`,
+        ).run(sourceStatus, status, timestamp, timestamp, row.compensates_step_id);
         if (source.changes !== 1) throw new Error("compensation_source_not_executing");
       })();
     },

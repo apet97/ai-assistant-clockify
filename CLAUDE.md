@@ -211,12 +211,17 @@ bug was found against the REAL API, not by reading the code.
   `outcome_unknown` without automatic retry.
 - **Durable external effects:** migrated writes persist normalized nonsecret
   intent and an exact mutation plan before dispatch. Every host effect is an
-  ordered prepared→executing→terminal step; a later definitive failure after a
-  known effect returns `partial`, while ambiguity stops all later steps. A
-  prepared compensation does not alter its known-succeeded source, and startup
-  recovery is read-only: it marks only dispatched orphan steps unknown and never
-  compensates automatically. Unmigrated writes are enumerated by exact action
-  name and phase in `mutation-compatibility.ts`.
+  ordered prepared→executing→terminal step. Safe writes own the single operation
+  start; confirmed writes inherit the one-use claim's start and receive only a
+  step journal scoped to that exact operation. Duplicate/cross-operation step
+  starts fail before host dispatch. A later definitive failure after a known
+  effect returns `partial`, while ambiguity stops all later steps. Compensation
+  uses its dedicated eligibility/dispatch/settlement path; a rejected or unknown
+  compensation never erases the known-succeeded source. Startup recovery is
+  read-only: it marks only dispatched orphan steps unknown and never compensates
+  automatically. `clockify_tags_create` is the step-journaled safe-write
+  reference. Unmigrated writes are enumerated by exact action name and phase in
+  `mutation-compatibility.ts`.
 - **Closed nested arguments:** unknown fields are rejected at every object depth.
   A dynamic record is open only when its action declares that exact path in
   `argumentOpenPaths` (array records use `memberships[]` notation). Aliases and open

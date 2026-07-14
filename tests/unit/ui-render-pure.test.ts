@@ -137,7 +137,7 @@ afterEach(() => {
 function controller(over: Partial<ChatController> = {}): ChatController {
   return {
     send: vi.fn(async () => ({})),
-    confirm: vi.fn(async () => ({})),
+    confirm: vi.fn(async () => ({ ok: true })),
     confirmStream: vi.fn(async () => {}),
     confirmAll: vi.fn(async () => []),
     cancel: vi.fn(async () => ({ ok: true })),

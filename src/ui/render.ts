@@ -23,7 +23,6 @@ import {
   type ChatResult,
   type ClarifyResult,
   type ConfirmHooks,
-  type ConfirmResponse,
   type HistoryResponse,
   type PolicyShape,
   type PreviewRef,
@@ -691,12 +690,12 @@ function wireBatchConfirm(
     runEventTask(async () => {
       // One-use: neither button may fire again (or cross-fire) once clicked.
       setButtons(true);
-      const responses = (await controller.confirmAll(refs)) as ConfirmResponse[];
+      const responses = await controller.confirmAll(refs);
       stopTimer();
       const list = el("div", "batch-outcomes");
       for (const outcome of batchItemOutcomes(previews.map((p) => p.preview.actionLabel), responses)) {
-        const row = el("div", `batch-outcome ${outcome.ok ? "ok" : "failed"}`);
-        row.appendChild(svgIcon(outcome.ok ? ICON_CHECK : ICON_X));
+        const row = el("div", `batch-outcome ${outcome.status === "partial" ? "partial" : outcome.ok ? "ok" : "failed"}`);
+        row.appendChild(svgIcon(outcome.status === "partial" ? ICON_ALERT : outcome.ok ? ICON_CHECK : ICON_X));
         row.appendChild(el("span", undefined, outcome.label));
         row.appendChild(el("span", "detail", outcome.detail));
         list.appendChild(row);

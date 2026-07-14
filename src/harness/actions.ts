@@ -143,8 +143,14 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         );
         input.context.operationJournal.markExecuting(operationId);
       }
+      const executionContext = operationId && input.context.operationJournal
+        ? {
+            ...input.context,
+            mutationJournal: input.context.operationJournal.scope(operationId),
+          }
+        : input.context;
       const executed = prepared && action.executeSafeWrite
-        ? await action.executeSafeWrite(input.context, prepared.operation)
+        ? await action.executeSafeWrite(executionContext, prepared)
         : undefined;
       const result: ActionResult = executed
         ? isPartialCommitResult(executed)

@@ -19,10 +19,10 @@ export interface PolicyShape {
 
 export interface ChatController {
   send(message: string): Promise<unknown>;
-  confirm(ref: PreviewRef): Promise<unknown>;
+  confirm(ref: PreviewRef): Promise<ConfirmResponse>;
   /** Streaming single confirm: a clean receipt or truthful partial arrives first. */
   confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
-  confirmAll(refs: PreviewRef[]): Promise<unknown[]>;
+  confirmAll(refs: PreviewRef[]): Promise<ConfirmResponse[]>;
   cancel(previewId: string): Promise<unknown>;
   undo(id: string): Promise<unknown>;
   savePermissions(groups: Record<string, string>): Promise<unknown>;
@@ -80,6 +80,10 @@ export interface ConfirmResponse {
   code?: string;
   message?: string;
   receipt?: { ok: boolean; action: string; message?: string };
+  /** A truthfully partial confirmed commit; never flatten to receipt success. */
+  result?: PartialResult;
+  /** Undo handle returned beside a JSON partial/receipt response. */
+  undo?: { id: string };
   resume?: { reply: { kind: string; text: string }; results: ChatResult[] };
 }
 
@@ -297,7 +301,7 @@ export async function runConfirmStreamLive(
  */
 export function settleConfirmOutcome(responses: ConfirmResponse[], hooks: ConfirmHooks): number {
   let committed = 0;
-  let resumed = false;
+  let presentedDetailedOutcome = false;
   for (const response of responses) {
     if (!response?.ok) {
       // A failed COMMIT carries its reason on `receipt.message` (the route adds no
@@ -312,13 +316,25 @@ export function settleConfirmOutcome(responses: ConfirmResponse[], hooks: Confir
       continue;
     }
     committed += 1;
+    if (response.result?.kind === "partial") {
+      presentedDetailedOutcome = true;
+      hooks.onResults([{
+        ...response.result,
+        ...(response.result.undo
+          ? { undo: response.result.undo }
+          : response.undo
+            ? { undo: response.undo }
+            : {}),
+      }]);
+      continue;
+    }
     if (response.resume) {
-      resumed = true;
+      presentedDetailedOutcome = true;
       hooks.onResults(response.resume.results ?? []);
       if (response.resume.reply?.text) hooks.onAssistant(response.resume.reply.text);
     }
   }
-  if (committed > 0 && !resumed) {
+  if (committed > 0 && !presentedDetailedOutcome) {
     hooks.onAssistant(
       committed === responses.length
         ? responses.length > 1

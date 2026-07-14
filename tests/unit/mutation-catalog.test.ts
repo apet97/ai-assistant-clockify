@@ -27,4 +27,21 @@ describe("durable external-mutation catalog coverage", () => {
     const coverage = mutationCatalogCoverage([...ACTION_CATALOG, synthetic]);
     expect(coverage.uncovered).toEqual(["clockify_unjournaled_test_write"]);
   });
+
+  it("does not mistake a prepare/execute split for durable step journaling", () => {
+    const synthetic = {
+      ...ACTION_CATALOG[0],
+      name: "clockify_metadata_only_safe_write",
+      risks: ["safe_write" as const],
+      prepareSafeWrite: async () => ({
+        operation: { name: "metadata only" },
+        mutationPlan: { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const }] },
+      }),
+      executeSafeWrite: async () => ({ ok: true as const, action: "clockify_metadata_only_safe_write" }),
+      mutationWorkflow: undefined,
+    };
+
+    expect(mutationCatalogCoverage([...ACTION_CATALOG, synthetic]).uncovered)
+      .toEqual(["clockify_metadata_only_safe_write"]);
+  });
 });

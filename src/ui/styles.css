@@ -510,6 +510,10 @@ button.chip.chip-selected {
   color: var(--ok);
 }
 
+.batch-outcome.partial svg {
+  color: var(--warn);
+}
+
 .batch-outcome.failed svg {
   color: var(--danger);
 }
