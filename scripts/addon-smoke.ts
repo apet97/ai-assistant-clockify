@@ -26,6 +26,7 @@ import { createPendingConfirmation, confirmPending } from "../src/harness/confir
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import type { ActionContext, ConfirmableOperation } from "../src/harness/action.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 function loadDotEnv(): void {
   if (!existsSync(".env")) return;
@@ -121,7 +122,10 @@ async function main(): Promise<void> {
   if (!commit.ok) throw new Error("commit failed");
 
   // 4) Verify cleanup
-  const remaining = (await ctx.clockify.listTags()).rows.filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
+  const remaining = requireCompleteRows(
+    await ctx.clockify.listTags(),
+    "verify add-on smoke tag cleanup",
+  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   console.log("4. leftover AIASSIST_SMOKE_ tags:", remaining.length);
   if (remaining.length > 0) {
     console.warn("   WARNING leftovers:", remaining.map((t) => `${t.name}(${t.id})`).join(", "));

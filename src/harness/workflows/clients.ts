@@ -9,20 +9,26 @@ import {
 import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 
-/** Resolve a currency CODE (e.g. "EUR") to its workspace currencyId, or a clarify message. */
+/** Resolve a currency code or exact id to its workspace currencyId, or clarify. */
 async function resolveCurrencyId(
   ctx: ActionContext,
-  code: string,
+  currency: string,
 ): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
   const currencies = await ctx.clockify.listCurrencies();
-  const want = code.trim().toUpperCase();
+  const raw = currency.trim();
+  const exactId = currencies.rows.find((candidate) => candidate.id === raw);
+  if (exactId) return { ok: true, id: exactId.id };
+  const want = raw.toUpperCase();
   const match = currencies.rows.find((c) => c.code.toUpperCase() === want);
-  if (match) return { ok: true, id: match.id };
   if (currencies.truncated) {
-    return { ok: false, message: `Clockify returned an incomplete currency list, so I can't verify that "${code}" is unavailable.` };
+    return {
+      ok: false,
+      message: `Clockify returned an incomplete currency list, so I can't prove that "${currency}" identifies one currency. Provide the exact currency id or retry with a complete lookup.`,
+    };
   }
+  if (match) return { ok: true, id: match.id };
   const codes = currencies.rows.map((c) => c.code).join(", ");
-  return { ok: false, message: `I don't see a "${code}" currency in this workspace. Available: ${codes || "(none configured)"}.` };
+  return { ok: false, message: `I don't see a "${currency}" currency in this workspace. Available: ${codes || "(none configured)"}.` };
 }
 
 /**
@@ -86,13 +92,13 @@ const getClient = defineAction({
 const createClient = defineAction({
   name: "clockify_clients_create",
   description:
-    'Create a client (optional billing `ccEmails` + `currency` by code, e.g. "EUR"). Safe write — executes immediately when policy allows.',
+    'Create a client (optional billing `ccEmails` + `currency` by code, e.g. "EUR", or exact currency id). Safe write — executes immediately when policy allows.',
   featureGroup: WORK,
   risks: ["safe_write"],
   schema: z.object({
     name: z.string().min(1),
     ccEmails: z.array(z.string().email()).optional(),
-    /** Currency CODE (e.g. "USD"), resolved to the workspace currencyId server-side. */
+    /** Currency code (e.g. "USD") or exact id, resolved server-side. */
     currency: z.string().min(1).optional(),
   }),
   async handler(ctx, args) {
@@ -122,7 +128,7 @@ const createClient = defineAction({
 const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   description:
-    'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR"). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
+    'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR" or exact id). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
   group: WORK,
   risks: ["high_risk_write"],
   argumentOpenPaths: ["fields"],
@@ -135,7 +141,7 @@ const updateClient = defineRiskyAction({
       archived: z.boolean().optional(),
       /** Billing CC recipients (Clockify `ccEmails`); update sticks via getThenPut. */
       ccEmails: z.array(z.string().email()).optional(),
-      /** Currency CODE (e.g. "EUR"), resolved to the workspace currencyId server-side. */
+      /** Currency code (e.g. "EUR") or exact id, resolved server-side. */
       currency: z.string().min(1).optional(),
       fields: z.record(z.string(), z.unknown()).optional(),
     })

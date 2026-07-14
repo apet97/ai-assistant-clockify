@@ -19,6 +19,7 @@ import { createStore, type Installation } from "../src/db/store.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
 import { FEATURE_GROUPS } from "../src/harness/permissions.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -263,11 +264,14 @@ async function main(): Promise<void> {
 
   // ── Sweep any AIASSIST_SMOKE_* leftovers ──────────────────────────────────
   console.log(`\n== Sweep AIASSIST_SMOKE_* ==`);
-  const tagsLeft = (await rest.listTags({})).rows.filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
+  const tagsLeft = requireCompleteRows(
+    await rest.listTags({}),
+    "find live-chat-tour tags to clean up",
+  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   for (const t of tagsLeft) await rest.deleteTag(t.id);
   const projsLeft = [
-    ...(await rest.listProjects({})).rows,
-    ...(await rest.listProjects({ archived: true })).rows,
+    ...requireCompleteRows(await rest.listProjects({}), "find active live-chat-tour projects to clean up"),
+    ...requireCompleteRows(await rest.listProjects({ archived: true }), "find archived live-chat-tour projects to clean up"),
   ].filter((p) => p.name.startsWith("AIASSIST_SMOKE_"));
   for (const p of projsLeft) await rest.deleteProject(p.id);
   console.log(`  swept ${tagsLeft.length} tag(s) + ${projsLeft.length} project(s)`);

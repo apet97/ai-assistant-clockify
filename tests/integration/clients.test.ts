@@ -73,6 +73,37 @@ describe("client actions", () => {
     expect(fake.counts.createClient ?? 0).toBe(0);
   });
 
+  it("clockify_clients_create does not establish symbolic currency uniqueness from an incomplete list", async () => {
+    const fake = createFakeWorkspace({
+      currencies: [{ id: "cur-eur", code: "EUR" }],
+      listTruncated: { listCurrencies: true },
+    });
+    const result = await executeAction({
+      actionName: "clockify_clients_create",
+      args: { name: "X", currency: "EUR" },
+      context: makeContext(fake),
+    });
+
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") expect(result.message).toMatch(/incomplete.*exact currency id|exact currency id.*incomplete/i);
+    expect(fake.counts.createClient ?? 0).toBe(0);
+  });
+
+  it("clockify_clients_create accepts an exact currency id found in an incomplete list", async () => {
+    const fake = createFakeWorkspace({
+      currencies: [{ id: "cur-eur", code: "EUR" }],
+      listTruncated: { listCurrencies: true },
+    });
+    const result = await executeAction({
+      actionName: "clockify_clients_create",
+      args: { name: "X", currency: "cur-eur" },
+      context: makeContext(fake),
+    });
+
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error(`expected a receipt, got ${result.kind}`);
+    expect(fake.state.clients.find((client) => client.name === "X")).toMatchObject({ currencyId: "cur-eur" });
+  });
+
   it("clockify_clients_update previews then updates once on commit", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({ actionName: "clockify_clients_update", args: { id: "c1", name: "Acme Inc" }, context: makeContext(fake) });

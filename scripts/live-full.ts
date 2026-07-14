@@ -20,6 +20,7 @@ import { createPendingConfirmation, confirmPending } from "../src/harness/confir
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import type { ActionContext, ConfirmableOperation } from "../src/harness/action.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 function loadDotEnv(): void {
   if (!existsSync(".env")) return;
@@ -851,9 +852,10 @@ async function runUsers(h: LiveHarness): Promise<void> {
     // recipient/target must be a REAL workspace member so the resolver produces a
     // clean preview rather than a (correct) did-you-mean clarify — resolve members
     // dynamically off the live workspace instead of hardcoded placeholders.
-    const members = ((await h.call("GET", `${wsPath}/users`, undefined, true)) as
-      | Array<{ id: string }>
-      | null) ?? [];
+    const members = requireCompleteRows(
+      await h.ctx.clockify.listUsers(),
+      "select a workspace member for the full live exerciser",
+    );
     // A real member who is NOT the admin (the deactivate self-guard refuses 'me').
     const otherMemberId = members.map((m) => m.id).find((id) => id !== h.ctx.adminUserId);
     await h.previewOnly("clockify_users_invite", { email: `aiassist_smoke_${h.sfx}@example.com` });
@@ -999,19 +1001,20 @@ async function main(): Promise<void> {
   // Live fixtures discovered read-only so risky commits use values the workspace
   // actually has (default currency, a real non-archived expense category, a
   // time-off policy id for the preview).
-  const wsList = (await call("GET", "/workspaces")) as Array<{
-    id: string;
+  const workspace = (await ctx.clockify.getWorkspace()) as {
     currencies?: Array<{ code: string; isDefault?: boolean }>;
-  }>;
-  const currency =
-    wsList.find((w) => w.id === WORKSPACE_ID)?.currencies?.find((c) => c.isDefault)?.code ?? "USD";
-  const catsResp = (await call("GET", `${ws}/expenses/categories`)) as
-    | { categories?: Array<{ id: string; archived?: boolean }> }
-    | Array<{ id: string; archived?: boolean }>;
-  const catList = Array.isArray(catsResp) ? catsResp : (catsResp.categories ?? []);
+  };
+  const currency = workspace.currencies?.find((c) => c.isDefault)?.code ?? "USD";
+  const catList = requireCompleteRows(
+    await ctx.clockify.listExpenseCategories(),
+    "select an expense category for the full live exerciser",
+  );
   const categoryId = catList.find((c) => !c.archived)?.id;
-  const policies = (await call("GET", `${ws}/time-off/policies`)) as Array<{ id: string }>;
-  const policyId = (Array.isArray(policies) ? policies : [])[0]?.id;
+  const policies = requireCompleteRows(
+    await ctx.clockify.listTimeOffPolicies(),
+    "select a time-off policy for the full live exerciser",
+  );
+  const policyId = policies[0]?.id;
   console.log(
     `  setup: currency=${currency} expenseCategory=${categoryId ? "yes" : "none"} timeOffPolicy=${policyId ? "yes" : "none"}\n`,
   );

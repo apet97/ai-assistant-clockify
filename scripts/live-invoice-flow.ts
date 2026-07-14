@@ -18,6 +18,7 @@ import { readFileSync } from "node:fs";
 import { createStore, type Installation } from "../src/db/store.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -116,7 +117,12 @@ async function main(): Promise<void> {
   const r1 = await chat(`create a client named ${clientName}`);
   console.log(`  bot(${r1.reply?.kind}): ${(r1.reply?.text ?? "").slice(0, 120)}`);
   console.log(`  plan: ${planOf(r1)}`);
-  ok("client was created", (await rest.listClients({})).rows.some((c) => c.name === clientName));
+  ok(
+    "client was created",
+    requireCompleteRows(await rest.listClients({}), "verify invoice-flow client creation").some(
+      (c) => c.name === clientName,
+    ),
+  );
 
   console.log(`\n== Turn 2: create an invoice for that client + 1 item, don't send ==`);
   const ask = `create an invoice for the client ${clientName} and just add 1 item manually description charge, qty 1, amount 100 and do not send just create the invoice`;
@@ -137,16 +143,26 @@ async function main(): Promise<void> {
   }
 
   // Verify via REST: the invoice exists for the client and carries the line item.
-  const client = (await rest.listClients({})).rows.find((c) => c.name === clientName);
-  const invoices = client ? (await rest.listInvoices()).rows.filter((i) => i.clientId === client.id) : [];
+  const client = requireCompleteRows(
+    await rest.listClients({}),
+    "resolve the invoice-flow client for verification",
+  ).find((c) => c.name === clientName);
+  const invoices = client
+    ? requireCompleteRows(await rest.listInvoices(), "verify invoice-flow invoice creation").filter(
+        (i) => i.clientId === client.id,
+      )
+    : [];
   ok("an invoice exists for the client", invoices.length > 0, `${invoices.length} invoice(s)`);
   if (invoices.length) {
-    const items = await rest.listInvoiceItems(invoices[0].id);
+    const items = requireCompleteRows(
+      await rest.listInvoiceItems(invoices[0].id),
+      "verify invoice-flow line-item creation",
+    );
     // The line item attaches only if this workspace has an invoice item type
     // configured ("NEW DEFAULT"); otherwise the invoice is created and the assistant
     // returns an actionable warning. Either is acceptable — the punt-for-id bug is gone.
-    if (items.rows.length >= 1) {
-      ok("the invoice has the line item (charge ×1)", true, `item="${items.rows[0].description ?? items.rows[0].itemType}"`);
+    if (items.length >= 1) {
+      ok("the invoice has the line item (charge ×1)", true, `item="${items[0].description ?? items[0].itemType}"`);
     } else {
       console.log(`  NOTE  no line item attached — this workspace has no invoice item type configured;`);
       console.log(`        the invoice was created and the assistant surfaces an actionable warning (expected on a fresh workspace).`);

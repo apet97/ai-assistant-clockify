@@ -6,6 +6,8 @@
  * Run (reads .env):  LIVE_CLOCKIFY=1 npx tsx scripts/live-sweep.ts
  */
 import { existsSync, readFileSync } from "node:fs";
+import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 function loadDotEnv(): void {
   if (!existsSync(".env")) return;
@@ -24,6 +26,11 @@ if (process.env.LIVE_CLOCKIFY !== "1" || !API_KEY || !WS) {
   process.exit(2);
 }
 const PFX = "AIASSIST_SMOKE_";
+const clockify = createRestWorkspaceClient({
+  baseUrl: BASE,
+  workspaceId: WS,
+  auth: { apiKey: API_KEY },
+});
 
 async function call(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(`${BASE}${path}`, {
@@ -42,36 +49,25 @@ async function main(): Promise<void> {
   const ws = `/workspaces/${WS}`;
   let removed = 0;
 
-  // invoices FIRST (a client cannot be deleted while it has invoices). Live shape:
-  // {total, invoices:[{id, number, clientName, ...}]}. Match on number or client.
-  const invResp = (await call("GET", `${ws}/invoices?page-size=200`).catch(() => null)) as
-    | { invoices?: any[] }
-    | any[]
-    | null;
-  const invoices = Array.isArray(invResp) ? invResp : (invResp?.invoices ?? []);
-  for (const inv of invoices as any[]) {
+  // invoices FIRST (a client cannot be deleted while it has invoices).
+  const invoices = requireCompleteRows(await clockify.listInvoices(), "find invoices to sweep");
+  for (const inv of invoices) {
     if (inv?.number?.startsWith(PFX) || inv?.clientName?.startsWith(PFX)) {
-      await call("DELETE", `${ws}/invoices/${inv.id}`).catch((e) => console.warn(`  invoice ${inv.id}: ${e.message}`));
+      await clockify.deleteInvoice(inv.id).catch((e) => console.warn(`  invoice ${inv.id}: ${e.message}`));
       console.log(`  removed invoice ${inv.number ?? inv.id}`); removed++;
     }
   }
-  // expenses. Live shape: {expenses:{expenses:[{id, notes, ...}], count}, ...}.
-  const expResp = (await call("GET", `${ws}/expenses?page-size=200`).catch(() => null)) as any;
-  const expenses = Array.isArray(expResp) ? expResp : (expResp?.expenses?.expenses ?? []);
-  for (const e of expenses as any[]) {
+  const expenses = requireCompleteRows(await clockify.listExpenses(), "find expenses to sweep");
+  for (const e of expenses) {
     if (typeof e?.notes === "string" && e.notes.startsWith(PFX)) {
-      await call("DELETE", `${ws}/expenses/${e.id}`).catch((err) => console.warn(`  expense ${e.id}: ${err.message}`));
+      await clockify.deleteExpense(e.id).catch((err) => console.warn(`  expense ${e.id}: ${err.message}`));
       console.log(`  removed expense ${e.notes}`); removed++;
     }
   }
-  // expense categories. Shape: {categories:[{id, name, archived}]} or a bare array.
-  // Clockify rejects deleting an active category, so archive (PATCH status) first.
-  const catResp = (await call("GET", `${ws}/expenses/categories`).catch(() => null)) as any;
-  const cats = Array.isArray(catResp) ? catResp : (catResp?.categories ?? []);
-  for (const c of cats as any[]) {
+  const cats = requireCompleteRows(await clockify.listExpenseCategories(), "find expense categories to sweep");
+  for (const c of cats) {
     if (typeof c?.name === "string" && c.name.startsWith(PFX)) {
-      await call("PATCH", `${ws}/expenses/categories/${c.id}/status`, { archived: true }).catch(() => {});
-      await call("DELETE", `${ws}/expenses/categories/${c.id}`).catch((err) => console.warn(`  category ${c.id}: ${err.message}`));
+      await clockify.deleteExpenseCategory(c.id).catch((err) => console.warn(`  category ${c.id}: ${err.message}`));
       console.log(`  removed expense category ${c.name}`); removed++;
     }
   }
@@ -79,8 +75,10 @@ async function main(): Promise<void> {
   // time entries (user-scoped to the API key's own user; match description prefix)
   const me = (await call("GET", "/user").catch(() => null)) as { id?: string } | null;
   if (me?.id) {
-    const entries = ((await call("GET", `${ws}/user/${me.id}/time-entries?page-size=500`).catch(() => null)) ??
-      []) as any[];
+    const entries = requireCompleteRows(
+      await clockify.getEntries({ userId: me.id }),
+      "find time entries to sweep",
+    );
     for (const e of entries) {
       if (typeof e?.description === "string" && e.description.startsWith(PFX)) {
         await call("PATCH", `${ws}/time-entries/invoiced`, { timeEntryIds: [e.id], invoiced: false }).catch(() => {});
@@ -89,59 +87,58 @@ async function main(): Promise<void> {
       }
     }
   }
-  // custom fields (bare array; plain DELETE)
-  const cfResp = (await call("GET", `${ws}/custom-fields?page-size=500`).catch(() => null)) as any;
-  for (const cf of (Array.isArray(cfResp) ? cfResp : (cfResp?.customFields ?? [])) as any[]) {
+  const customFields = requireCompleteRows(await clockify.listCustomFields(), "find custom fields to sweep");
+  for (const cf of customFields) {
     if (typeof cf?.name === "string" && cf.name.startsWith(PFX)) {
-      await call("DELETE", `${ws}/custom-fields/${cf.id}`).catch((e) => console.warn(`  custom field ${cf.id}: ${e.message}`));
+      await clockify.deleteCustomField(cf.id).catch((e) => console.warn(`  custom field ${cf.id}: ${e.message}`));
       console.log(`  removed custom field ${cf.name}`); removed++;
     }
   }
-  // holidays (bare array; plain DELETE)
-  const holResp = (await call("GET", `${ws}/holidays`).catch(() => null)) as any;
-  for (const hol of (Array.isArray(holResp) ? holResp : (holResp?.holidays ?? [])) as any[]) {
+  const holidays = requireCompleteRows(await clockify.listHolidays(), "find holidays to sweep");
+  for (const hol of holidays) {
     if (typeof hol?.name === "string" && hol.name.startsWith(PFX)) {
-      await call("DELETE", `${ws}/holidays/${hol.id}`).catch((e) => console.warn(`  holiday ${hol.id}: ${e.message}`));
+      await clockify.deleteHoliday(hol.id).catch((e) => console.warn(`  holiday ${hol.id}: ${e.message}`));
       console.log(`  removed holiday ${hol.name}`); removed++;
     }
   }
-  // user groups (bare array; plain DELETE)
-  const grpResp = (await call("GET", `${ws}/user-groups?page-size=500`).catch(() => null)) as any;
-  for (const g of (Array.isArray(grpResp) ? grpResp : (grpResp?.userGroups ?? [])) as any[]) {
+  const groups = requireCompleteRows(await clockify.listGroups(), "find user groups to sweep");
+  for (const g of groups) {
     if (typeof g?.name === "string" && g.name.startsWith(PFX)) {
-      await call("DELETE", `${ws}/user-groups/${g.id}`).catch((e) => console.warn(`  group ${g.id}: ${e.message}`));
+      await clockify.deleteGroup(g.id).catch((e) => console.warn(`  group ${g.id}: ${e.message}`));
       console.log(`  removed user group ${g.name}`); removed++;
     }
   }
-  // tags
-  for (const t of ((await call("GET", `${ws}/tags?page-size=500`)) ?? []) as any[]) {
+  const tags = requireCompleteRows(await clockify.listTags(), "find tags to sweep");
+  for (const t of tags) {
     if (t.name?.startsWith(PFX)) {
-      await call("DELETE", `${ws}/tags/${t.id}`).catch((e) => console.warn(`  tag ${t.id}: ${e.message}`));
+      await clockify.deleteTag(t.id).catch((e) => console.warn(`  tag ${t.id}: ${e.message}`));
       console.log(`  removed tag ${t.name}`); removed++;
     }
   }
-  // projects (archive then delete; cascades tasks)
-  for (const p of ((await call("GET", `${ws}/projects?page-size=500&archived=false`)) ?? []) as any[]) {
+  const projects = [
+    ...requireCompleteRows(await clockify.listProjects(), "find active projects to sweep"),
+    ...requireCompleteRows(await clockify.listProjects({ archived: true }), "find archived projects to sweep"),
+  ];
+  for (const p of projects) {
     if (p.name?.startsWith(PFX)) {
-      await call("PUT", `${ws}/projects/${p.id}`, { name: p.name, archived: true }).catch(() => {});
-      await call("DELETE", `${ws}/projects/${p.id}`).catch((e) => console.warn(`  project ${p.id}: ${e.message}`));
+      await clockify.deleteProject(p.id).catch((e) => console.warn(`  project ${p.id}: ${e.message}`));
       console.log(`  removed project ${p.name}`); removed++;
     }
   }
-  // clients (archive with name, then delete)
-  for (const c of ((await call("GET", `${ws}/clients?page-size=500`)) ?? []) as any[]) {
+  const clients = [
+    ...requireCompleteRows(await clockify.listClients(), "find active clients to sweep"),
+    ...requireCompleteRows(await clockify.listClients({ archived: true }), "find archived clients to sweep"),
+  ];
+  for (const c of clients) {
     if (c.name?.startsWith(PFX)) {
-      await call("PUT", `${ws}/clients/${c.id}`, { name: c.name, archived: true }).catch(() => {});
-      await call("DELETE", `${ws}/clients/${c.id}`).catch((e) => console.warn(`  client ${c.id}: ${e.message}`));
+      await clockify.deleteClient(c.id).catch((e) => console.warn(`  client ${c.id}: ${e.message}`));
       console.log(`  removed client ${c.name}`); removed++;
     }
   }
-  // webhooks (envelope: {workspaceWebhookCount, webhooks:[...]})
-  const whResp = (await call("GET", `${ws}/webhooks`).catch(() => null)) as any;
-  const hooks = Array.isArray(whResp) ? whResp : (whResp?.webhooks ?? []);
-  for (const w of hooks as any[]) {
+  const hooks = requireCompleteRows(await clockify.listWebhooks(), "find webhooks to sweep");
+  for (const w of hooks) {
     if (typeof w?.name === "string" && w.name.startsWith(PFX)) {
-      await call("DELETE", `${ws}/webhooks/${w.id}`).catch((e) => console.warn(`  webhook ${w.id}: ${e.message}`));
+      await clockify.deleteWebhook(w.id).catch((e) => console.warn(`  webhook ${w.id}: ${e.message}`));
       console.log(`  removed webhook ${w.name}`); removed++;
     }
   }

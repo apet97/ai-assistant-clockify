@@ -26,6 +26,7 @@ import {
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import type { ActionContext, ConfirmableOperation } from "../src/harness/action.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 // Load a gitignored .env (KEY=VALUE lines) so creds need not be passed inline.
 // Existing process.env always wins. The key is never echoed.
@@ -135,7 +136,10 @@ async function main(): Promise<void> {
   console.log("4. confirm + commit -> deleted:", commit.ok, commit.ok ? commit.changed?.deleted?.map((d) => d.id) : commit);
 
   // 5) Verify cleanup: no AIASSIST_SMOKE_* tags remain
-  const remaining = (await ctx.clockify.listTags()).rows.filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
+  const remaining = requireCompleteRows(
+    await ctx.clockify.listTags(),
+    "verify live smoke tag cleanup",
+  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   console.log("5. leftover AIASSIST_SMOKE_ tags:", remaining.length);
   if (remaining.length > 0) {
     console.warn("   WARNING leftovers:", remaining.map((t) => `${t.name}(${t.id})`).join(", "));

@@ -35,6 +35,7 @@ import { readFileSync } from "node:fs";
 import { createStore, type Installation } from "../src/db/store.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -162,7 +163,7 @@ async function main(): Promise<void> {
     auth: { addonToken: installToken },
   });
   const tagExists = async (name: string): Promise<{ id: string; name: string } | undefined> => {
-    const tags = (await rest.listTags({})).rows;
+    const tags = requireCompleteRows(await rest.listTags({}), "verify confirmation-flow tag existence");
     return tags.find((t) => t.name === name);
   };
 

@@ -25,6 +25,7 @@ import { readFileSync } from "node:fs";
 import { createStore, type Installation } from "../src/db/store.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -200,7 +201,7 @@ async function main(): Promise<void> {
   const tagName = `AIASSIST_SMOKE_T_${suffix}`;
   const createdTag = (await rest.createTag({ name: tagName })) as { id: string; name: string };
   const tagExists = async (): Promise<boolean> => {
-    const tags = (await rest.listTags({})).rows;
+    const tags = requireCompleteRows(await rest.listTags({}), "verify planner-quirks tag existence");
     return tags.some((t) => t.name === tagName);
   };
   ok("seeded a tag to delete", await tagExists(), createdTag.id);
@@ -224,22 +225,24 @@ async function main(): Promise<void> {
 
   // ── Final sweep: no AIASSIST_SMOKE_* leftovers in the installed workspace ───
   console.log(`\n== Sweep: remove any AIASSIST_SMOKE_* leftovers ==`);
-  const leftoverTags = (await rest.listTags({})).rows.filter((t) =>
-    t.name.startsWith("AIASSIST_SMOKE_"),
-  );
+  const leftoverTags = requireCompleteRows(
+    await rest.listTags({}),
+    "find planner-quirks tags to clean up",
+  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_"));
   for (const t of leftoverTags) await rest.deleteTag(t.id);
   const allProjects = [
-    ...(await rest.listProjects({})).rows,
-    ...(await rest.listProjects({ archived: true })).rows,
+    ...requireCompleteRows(await rest.listProjects({}), "find active planner-quirks projects to clean up"),
+    ...requireCompleteRows(await rest.listProjects({ archived: true }), "find archived planner-quirks projects to clean up"),
   ];
   const leftoverProjects = allProjects.filter((p) => p.name.startsWith("AIASSIST_SMOKE_"));
   for (const p of leftoverProjects) await rest.deleteProject(p.id);
-  const remainingTags = (await rest.listTags({})).rows.filter((t) =>
-    t.name.startsWith("AIASSIST_SMOKE_"),
-  ).length;
+  const remainingTags = requireCompleteRows(
+    await rest.listTags({}),
+    "verify planner-quirks tag cleanup",
+  ).filter((t) => t.name.startsWith("AIASSIST_SMOKE_")).length;
   const remainingProjects = [
-    ...(await rest.listProjects({})).rows,
-    ...(await rest.listProjects({ archived: true })).rows,
+    ...requireCompleteRows(await rest.listProjects({}), "verify active planner-quirks project cleanup"),
+    ...requireCompleteRows(await rest.listProjects({ archived: true }), "verify archived planner-quirks project cleanup"),
   ].filter((p) => p.name.startsWith("AIASSIST_SMOKE_")).length;
   ok("no AIASSIST_SMOKE_* tags remain", remainingTags === 0, `${leftoverTags.length} tag(s) swept`);
   console.log(

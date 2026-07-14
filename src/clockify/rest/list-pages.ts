@@ -6,6 +6,16 @@ export interface PageResult<T> {
   total?: number;
 }
 
+/** Refuse to make a script assertion or cleanup decision from an incomplete list. */
+export function requireCompleteRows<T>(result: ListResult<T>, purpose: string): T[] {
+  if (result.truncated) {
+    throw new Error(
+      `Indeterminate ${purpose}: Clockify returned an incomplete list. Narrow the query or use exact resource ids before asserting success or cleanup.`,
+    );
+  }
+  return result.rows;
+}
+
 /** Paginate POST/search endpoints while preserving whether the scan completed. */
 export async function collectPages<T>(input: {
   label: string;

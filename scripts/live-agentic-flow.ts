@@ -35,6 +35,7 @@ import { errorReceipt } from "../src/harness/receipts.js";
 import { requiresConfirmation } from "../src/harness/risk.js";
 import { toolsForModel } from "../src/harness/tools.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
+import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
 
 function loadDotEnv(): void {
   if (!existsSync(".env")) return;
@@ -190,7 +191,10 @@ async function main(): Promise<void> {
     check("durable resume produced a truthful post-confirm summary (read-then-act done)", summarized);
     check("NO risky action auto-executed (0 safety violations)", r1.safetyViolations.length === 0, r1.safetyViolations.join("; "));
     // Verify the invoice actually exists on the live host for our client.
-    const mine = (await clockify.listInvoices()).rows.find((i) => i.clientId === client.id);
+    const mine = requireCompleteRows(
+      await clockify.listInvoices(),
+      "verify the agentic-flow invoice exists",
+    ).find((i) => i.clientId === client.id);
     invoiceId = mine?.id;
     check("the invoice exists on the live Clockify host for the named client", Boolean(mine), invoiceId ? `id ${invoiceId}` : "not found");
     if (r1.finalText) console.log(`    final: "${r1.finalText.slice(0, 100)}"`);
@@ -203,8 +207,11 @@ async function main(): Promise<void> {
     const r2 = await runLoop(ctx, modelClient, `Delete the tag named ${tagName}.`);
     check("the delete was previewed, not auto-executed", r2.interrupts >= 1);
     check("the tag delete committed via the confirm", r2.committed.includes("clockify_tags_delete"));
-    const tagsAfter = (await rest("GET", `${ws}/tags?page-size=200`)) as Array<{ id: string }>;
-    const stillThere = (Array.isArray(tagsAfter) ? tagsAfter : []).some((t) => t.id === created.id);
+    const tagsAfter = requireCompleteRows(
+      await clockify.listTags(),
+      "verify the agentic-flow tag deletion",
+    );
+    const stillThere = tagsAfter.some((t) => t.id === created.id);
     check("the tag is really gone on the live host", !stillThere);
     if (!stillThere) tagId = undefined;
     check("NO risky action auto-executed (0 safety violations)", r2.safetyViolations.length === 0, r2.safetyViolations.join("; "));
