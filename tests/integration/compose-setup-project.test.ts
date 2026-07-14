@@ -5,6 +5,7 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import type { ActionContext, ConfirmableOperation } from "../../src/harness/catalog.js";
 import type { CreateProjectInput, UpdateProjectRateInput } from "../../src/clockify/ports/projects.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
+import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * clockify_setup_project — the single-approval composite: ONE preview listing
@@ -33,13 +34,13 @@ function spy(fake: FakeWorkspace): {
   const rate: UpdateProjectRateInput[] = [];
   const client: WorkspaceClient = {
     ...fake.client,
-    createProject: async (input) => {
+    createProjectAtomic: async (input) => {
       createProject.push(input);
-      return fake.client.createProject(input);
+      return fake.client.createProjectAtomic(input);
     },
-    updateProjectRate: async (input) => {
+    updateProjectRateAtomic: async (input) => {
       rate.push(input);
-      return fake.client.updateProjectRate(input);
+      return fake.client.updateProjectRateAtomic(input);
     },
   };
   return { client, createProject, rate };
@@ -87,7 +88,7 @@ describe("clockify_setup_project — single-approval composite", () => {
     expect(s.createProject[0].isPublic).toBe(false);
     expect(s.createProject[0].hourlyRate).toEqual({ amount: 5000 });
     // the member was added, then the per-member rate was set (minor units).
-    expect(fake.counts.updateProjectMemberships).toBe(1);
+    expect(fake.counts.updateProjectMembershipsAtomic).toBe(1);
     expect(s.rate).toHaveLength(1);
     expect(s.rate[0]).toMatchObject({ userId: "admin-1", rateKind: "HOURLY", amountMinor: 2500 });
     const projectId = (receipt.ok && receipt.changed?.created?.[0].id) as string;
@@ -106,12 +107,12 @@ describe("clockify_setup_project — single-approval composite", () => {
     expect(fake.counts.createProject ?? 0).toBe(0); // nothing was created
   });
 
-  it("rolls back the created project when a required step (the rate) fails — nothing left behind", async () => {
+  it("returns partial and retains the project when the rate step definitively fails", async () => {
     const fake = createFakeWorkspace({ users: [{ id: "admin-1", name: "Ada" }] });
     const client: WorkspaceClient = {
       ...fake.client,
-      updateProjectRate: async () => {
-        throw new Error("Clockify rejected the rate");
+      updateProjectRateAtomic: async () => {
+        throw new DefinitiveWriteFailure("PUT", "/project-rate", "Clockify rejected the rate", 400);
       },
     };
     const op = await previewSetup(ctxWith(fake, client), {
@@ -120,10 +121,10 @@ describe("clockify_setup_project — single-approval composite", () => {
       memberRates: [{ member: "me", amount: 25 }],
     });
     const receipt = await commitConfirmedOperation(ctxWith(fake, client), op);
-    expect(receipt.ok).toBe(false);
-    if (!receipt.ok) expect(receipt.code).toBe("setup_failed");
-    expect(fake.counts.createProject).toBe(1); // created once...
-    expect(fake.state.deleted.some((d) => d.entityType === "project")).toBe(true); // ...then rolled back
+    expect(receipt).toMatchObject({ kind: "partial", receipt: { ok: true } });
+    expect(fake.counts.createProjectAtomic).toBe(1);
+    expect(fake.state.projects.some((project) => project.name === "test1122")).toBe(true);
+    expect(fake.state.deleted).toEqual([]);
   });
 
   it("a per-member rate implies membership: 'set my member rate' adds me first, then sets the rate", async () => {
@@ -135,7 +136,7 @@ describe("clockify_setup_project — single-approval composite", () => {
     });
     const receipt = await commitConfirmedOperation(ctxWith(fake, s.client), op);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateProjectMemberships).toBe(1); // I was added
+    expect(fake.counts.updateProjectMembershipsAtomic).toBe(1); // I was added
     expect(s.rate).toHaveLength(1); // and my rate was set
   });
 

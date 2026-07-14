@@ -77,10 +77,10 @@ describe("expense actions", () => {
     expect(preview.operation.risks).toContain("billing");
     // major 125.00 -> 12500 minor, stored already-converted in the payload
     expect(preview.operation.payload).toMatchObject({ input: { amountMinor: 12500, categoryId: "c1" } });
-    expect(fake.counts.createExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpenseAtomic ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createExpense).toBe(1);
+    expect(fake.counts.createExpenseAtomic).toBe(1);
     expect(fake.state.expenses.find((e) => e.notes === "AIASSIST_SMOKE_exp")).toBeDefined();
   });
 
@@ -164,7 +164,7 @@ describe("expense actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("c1");
-    expect(fake.counts.createExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpenseAtomic ?? 0).toBe(0);
   });
 
   it("clockify_expenses_create resolves a RELATIVE date server-side (live: the model sent the literal string 'today' to the wire → Clockify 400)", async () => {
@@ -236,7 +236,7 @@ describe("expense actions", () => {
     expect(payload.values).toMatchObject({ amountMinor: 5000, notes: "Taxi to airport" });
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateExpense).toBe(1);
+    expect(fake.counts.updateExpenseAtomic).toBe(1);
     expect(fake.state.expenses[0].notes).toBe("Taxi to airport");
   });
 
@@ -278,7 +278,7 @@ describe("expense actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("p-apollo");
-    expect(fake.counts.createExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpenseAtomic ?? 0).toBe(0);
   });
 
   it("clockify_expenses_update resolves project/task names; preview shows the NAME, payload carries the id", async () => {
@@ -309,7 +309,7 @@ describe("expense actions", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.updateExpense ?? 0).toBe(0);
+    expect(fake.counts.updateExpenseAtomic ?? 0).toBe(0);
   });
 
   it("clockify_expenses_delete previews destructive+billing then deletes once", async () => {
@@ -319,7 +319,7 @@ describe("expense actions", () => {
     expect(preview.operation.risks).toEqual(expect.arrayContaining(["destructive", "billing"]));
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteExpense).toBe(1);
+    expect(fake.counts.deleteExpenseAtomic).toBe(1);
     expect(fake.state.expenses.find((e) => e.id === "x1")).toBeUndefined();
   });
 
@@ -330,7 +330,7 @@ describe("expense actions", () => {
     expect(preview.operation.risks).toContain("billing");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createExpenseCategory).toBe(1);
+    expect(fake.counts.createExpenseCategoryAtomic).toBe(1);
     expect(fake.state.expenseCategories.find((c) => c.name === "AIASSIST_SMOKE_cat")).toBeDefined();
   });
 
@@ -340,7 +340,7 @@ describe("expense actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("billing");
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.updateExpenseCategory).toBe(1);
+    expect(fake.counts.updateExpenseCategoryAtomic).toBe(1);
     expect(fake.state.expenseCategories[0].name).toBe("Travel & Lodging");
   });
 
@@ -357,7 +357,7 @@ describe("expense actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     expect(fake.state.expenseCategories[0].archived).toBe(true);
-    expect(fake.counts.setExpenseCategoryArchived).toBe(1);
+    expect(fake.counts.setExpenseCategoryArchivedAtomic).toBe(1);
   });
 
   it("categories_update UNARCHIVES an archived category by name (the archived target must resolve)", async () => {
@@ -396,7 +396,7 @@ describe("expense actions", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.deleteExpenseCategory ?? 0).toBe(0);
+    expect(fake.counts.deleteExpenseCategoryAtomic ?? 0).toBe(0);
   });
 
   it("clockify_expenses_categories_delete previews destructive+billing then deletes", async () => {
@@ -405,7 +405,7 @@ describe("expense actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toEqual(expect.arrayContaining(["destructive", "billing"]));
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.deleteExpenseCategory).toBe(1);
+    expect(fake.counts.deleteExpenseCategoryAtomic).toBe(1);
     expect(fake.state.expenseCategories.find((c) => c.id === "c1")).toBeUndefined();
   });
 });

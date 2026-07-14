@@ -37,6 +37,52 @@ describe("confirmations", () => {
     expect(created.record.nonceHash).not.toContain(created.nonce);
   });
 
+  it("integrity-binds target snapshot content and order", () => {
+    const now = new Date("2026-06-05T00:00:00.000Z");
+    const targetSnapshots = [
+      { relation: "target" as const, ref: { type: "task", id: "task-1" }, projection: { name: "Task" }, fingerprint: "target-fp" },
+      { relation: "parent" as const, ref: { type: "project", id: "project-1" }, projection: { name: "Project" }, fingerprint: "parent-fp" },
+    ];
+    const created = makePending(now, {
+      operation: {
+        operationId: "operation-1",
+        actionName: "clockify_tasks_delete",
+        featureGroup: "work_structure",
+        risks: ["destructive"],
+        payload: { id: "task-1" },
+        targetSnapshots,
+      },
+    });
+    expect(created.record.operationHash).toBe(hashOperation(created.record.operation));
+
+    const changed = structuredClone(created.record);
+    const changedOperation = changed.operation as { targetSnapshots: typeof targetSnapshots };
+    changedOperation.targetSnapshots[0]!.projection = { name: "Tampered" };
+    const confirmed = confirmPending({
+      record: changed,
+      sessionId: "sess-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      nonce: created.nonce,
+      sessionSecret: SECRET,
+      now,
+    });
+    expect(confirmed).toMatchObject({ ok: false, code: "operation_mismatch" });
+
+    const reordered = structuredClone(created.record);
+    const reorderedOperation = reordered.operation as { targetSnapshots: typeof targetSnapshots };
+    reorderedOperation.targetSnapshots.reverse();
+    const rotated = rotatePendingNonce({
+      record: reordered,
+      sessionId: "sess-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionSecret: SECRET,
+      now,
+    });
+    expect(rotated).toMatchObject({ ok: false, code: "operation_mismatch" });
+  });
+
   it("confirms with the right admin/session/nonce and marks it executing", () => {
     const now = new Date("2026-06-05T00:00:00.000Z");
     const created = makePending(now);

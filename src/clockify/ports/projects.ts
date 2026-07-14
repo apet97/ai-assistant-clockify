@@ -38,21 +38,32 @@ export interface UpdateProjectRateInput {
 export interface ProjectPort {
   listProjects(filter?: ProjectFilter): Promise<ListResult<ProjectSummary>>;
   getProject(id: string): Promise<ProjectSummary | null>;
+  /** Complete raw project document for durable fingerprint/reconciliation reads. */
+  getProjectMutationState(id: string): Promise<Record<string, unknown> | null>;
   createProject(input: CreateProjectInput): Promise<ProjectSummary>;
+  createProjectAtomic(input: CreateProjectInput): Promise<ProjectSummary>;
   /** Fetch-then-merge PUT (Clockify replaces and requires `name`). */
   updateProject(id: string, patch: Record<string, unknown>): Promise<ProjectSummary>;
+  prepareProjectUpdate(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateProjectAtomic(id: string, body: Record<string, unknown>): Promise<ProjectSummary>;
   archiveProject(id: string): Promise<ProjectSummary>;
+  archiveProjectAtomic(id: string, body: Record<string, unknown>): Promise<ProjectSummary>;
   /** Archive-then-delete (Clockify rejects deleting an active project). */
   deleteProject(id: string): Promise<void>;
+  deleteProjectAtomic(id: string): Promise<void>;
   /**
    * Spec CreateProjectFromTemplateV1 requires BOTH `name` and `templateProjectId`
    * (there is no `templateId` field; additionalProperties is not relaxed). The
    * caller resolves the template to its project id and supplies a name.
    */
   createProjectFromTemplate(input: { templateProjectId: string; name: string }): Promise<ProjectSummary>;
+  createProjectFromTemplateAtomic(input: { templateProjectId: string; name: string }): Promise<ProjectSummary>;
   updateProjectRate(input: UpdateProjectRateInput): Promise<void>;
+  updateProjectRateAtomic(input: UpdateProjectRateInput): Promise<void>;
   updateProjectEstimate(id: string, patch: Record<string, unknown>): Promise<void>;
+  updateProjectEstimateAtomic(id: string, patch: Record<string, unknown>): Promise<void>;
   updateProjectMemberships(id: string, patch: Record<string, unknown>): Promise<void>;
+  updateProjectMembershipsAtomic(id: string, patch: Record<string, unknown>): Promise<void>;
   /**
    * Read the project's current membership records (the spec's ProjectDtoV1
    * carries them on GET). The memberships PATCH REPLACES the whole set, so an

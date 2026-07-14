@@ -13,8 +13,14 @@ import type {
 export interface TimeEntryPort {
   getRunningTimeEntry(userId: string): Promise<TimeEntrySummary | null>;
   startTimeEntry(input: StartTimeEntryInput): Promise<TimeEntrySummary>;
+  /** Exactly one POST, for a durable workflow step. */
+  startTimeEntryAtomic(input: StartTimeEntryInput): Promise<TimeEntrySummary>;
   stopTimeEntry(input: { userId: string; end: string }): Promise<TimeEntrySummary | null>;
+  /** Exactly one PATCH, for a durable workflow step. */
+  stopTimeEntryAtomic(input: { userId: string; end: string }): Promise<TimeEntrySummary | null>;
   createTimeEntry(input: CreateTimeEntryInput): Promise<TimeEntrySummary>;
+  /** Exactly one POST, for a durable workflow step. */
+  createTimeEntryAtomic(input: CreateTimeEntryInput): Promise<TimeEntrySummary>;
   /**
    * Read/list coverage for the broader action catalog (paginated, user-scoped).
    * Returns `truncated: true` when the list hit the pagination backstop (more
@@ -38,6 +44,21 @@ export interface TimeEntryPort {
     tagIds?: string[];
     billable?: boolean;
   }): Promise<TimeEntrySummary>;
+  /** Read-only full-replacement body preparation. */
+  prepareTimeEntryUpdate(input: {
+    id: string;
+    description?: string;
+    projectId?: string;
+    taskId?: string;
+    tagIds?: string[];
+    billable?: boolean;
+  }): Promise<Record<string, unknown>>;
+  /** Exactly one replacement PUT. */
+  updateTimeEntryAtomic(id: string, body: Record<string, unknown>): Promise<TimeEntrySummary>;
   /** Bulk mark/unmark entries as invoiced (billing — PATCH /time-entries/invoiced). */
   markEntriesInvoiced(input: { ids: string[]; invoiced: boolean }): Promise<void>;
+  /** Exactly one invoiced-state PATCH. */
+  markEntriesInvoicedAtomic(input: { ids: string[]; invoiced: boolean }): Promise<void>;
+  /** Exactly one DELETE. */
+  deleteTimeEntryAtomic(id: string): Promise<void>;
 }

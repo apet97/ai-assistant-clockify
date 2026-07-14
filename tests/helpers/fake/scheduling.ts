@@ -6,6 +6,11 @@ export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): 
   WorkspaceClient,
   | "listAssignments"
   | "getAssignment"
+  | "prepareAssignmentUpdate"
+  | "createAssignmentAtomic"
+  | "updateAssignmentAtomic"
+  | "deleteAssignmentAtomic"
+  | "publishScheduleAtomic"
   | "createAssignment"
   | "updateAssignment"
   | "deleteAssignment"
@@ -13,6 +18,39 @@ export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): 
   | "getProjectScheduleTotals"
   | "getUserScheduleTotals"
 > {
+  const createAssignmentAtomic: WorkspaceClient["createAssignmentAtomic"] = async (input) => {
+    bump("createAssignmentAtomic");
+    bump("createAssignment");
+    const a: AssignmentSummary = {
+      id: nextId("asg"), userId: input.userId, projectId: input.projectId,
+      start: input.start, end: input.end, hoursPerDay: input.hoursPerDay,
+      ...(input.startTime !== undefined ? { startTime: input.startTime } : {}),
+      ...(input.note !== undefined ? { note: input.note } : {}), published: false,
+    };
+    state.assignments.push(a);
+    return { id: a.id, name: a.id };
+  };
+  const updateAssignmentAtomic: WorkspaceClient["updateAssignmentAtomic"] = async (id, input) => {
+    bump("updateAssignmentAtomic");
+    bump("updateAssignment");
+    const a = state.assignments.find((x) => x.id === id);
+    if (a) Object.assign(a, input);
+    return { id, name: id };
+  };
+  const deleteAssignmentAtomic: WorkspaceClient["deleteAssignmentAtomic"] = async (id, seriesUpdateOption) => {
+    bump("deleteAssignmentAtomic");
+    bump("deleteAssignment");
+    void seriesUpdateOption;
+    state.assignments = state.assignments.filter((a) => a.id !== id);
+    state.deleted.push({ entityType: "assignment", id });
+  };
+  const publishScheduleAtomic: WorkspaceClient["publishScheduleAtomic"] = async (input) => {
+    bump("publishScheduleAtomic");
+    bump("publishSchedule");
+    for (const assignment of state.assignments) {
+      if (!input.userId || assignment.userId === input.userId) assignment.published = true;
+    }
+  };
   return {
     async listAssignments(filter) {
       bump("listAssignments");
@@ -25,40 +63,36 @@ export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): 
       bump("getAssignment");
       return state.assignments.find((a) => a.id === id) ?? null;
     },
-    async createAssignment(input) {
-      bump("createAssignment");
-      const a: AssignmentSummary = {
-        id: nextId("asg"),
-        userId: input.userId,
-        projectId: input.projectId,
-        start: input.start,
-        end: input.end,
-        hoursPerDay: input.hoursPerDay,
-        note: input.note,
-        published: false,
-      };
-      state.assignments.push(a);
-      return { id: a.id, name: a.id };
-    },
-    async updateAssignment(id, patch) {
-      bump("updateAssignment");
+    async prepareAssignmentUpdate(id, patch) {
+      bump("prepareAssignmentUpdate");
       const a = state.assignments.find((x) => x.id === id);
-      if (a) {
-        if (patch.hoursPerDay !== undefined) a.hoursPerDay = patch.hoursPerDay;
-        if (patch.note !== undefined) a.note = patch.note;
-      }
-      return { id, name: id };
+      if (!a?.userId || !a.projectId || !a.start || !a.end || a.hoursPerDay === undefined) throw new Error("assignment_not_found");
+      return {
+        userId: a.userId, projectId: a.projectId, start: a.start, end: a.end,
+        hoursPerDay: patch.hoursPerDay ?? a.hoursPerDay,
+        ...(a.startTime !== undefined ? { startTime: a.startTime } : {}),
+        ...(patch.note !== undefined ? { note: patch.note } : a.note !== undefined ? { note: a.note } : {}),
+        ...(patch.seriesUpdateOption !== undefined ? { seriesUpdateOption: patch.seriesUpdateOption } : {}),
+      };
     },
-    async deleteAssignment(id, seriesUpdateOption) {
-      bump("deleteAssignment");
-      void seriesUpdateOption;
-      state.assignments = state.assignments.filter((a) => a.id !== id);
-      state.deleted.push({ entityType: "assignment", id });
+    createAssignmentAtomic,
+    updateAssignmentAtomic,
+    deleteAssignmentAtomic,
+    publishScheduleAtomic,
+    createAssignment: createAssignmentAtomic,
+    async updateAssignment(id, patch) {
+      const a = state.assignments.find((x) => x.id === id);
+      if (!a?.userId || !a.projectId || !a.start || !a.end || a.hoursPerDay === undefined) throw new Error("assignment_not_found");
+      return updateAssignmentAtomic(id, {
+        userId: a.userId, projectId: a.projectId, start: a.start, end: a.end,
+        hoursPerDay: patch.hoursPerDay ?? a.hoursPerDay,
+        ...(a.startTime !== undefined ? { startTime: a.startTime } : {}),
+        ...(patch.note !== undefined ? { note: patch.note } : a.note !== undefined ? { note: a.note } : {}),
+        ...(patch.seriesUpdateOption !== undefined ? { seriesUpdateOption: patch.seriesUpdateOption } : {}),
+      });
     },
-    async publishSchedule(input) {
-      bump("publishSchedule");
-      void input;
-    },
+    deleteAssignment: deleteAssignmentAtomic,
+    publishSchedule: publishScheduleAtomic,
     async getProjectScheduleTotals(input) {
       bump("getProjectScheduleTotals");
       void input;

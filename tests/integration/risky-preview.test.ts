@@ -50,7 +50,8 @@ describe("risky preview + confirmation", () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
     const result = await previewDelete(fake);
     expect(result.preview.riskLabels).toContain("destructive");
-    expect(fake.counts.deleteEntity ?? 0).toBe(0);
+    expect(fake.counts.archiveProjectAtomic ?? 0).toBe(0);
+    expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
   it("confirm executes the delete exactly once and cannot be replayed", async () => {
@@ -80,7 +81,8 @@ describe("risky preview + confirmation", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteEntity).toBe(1);
+    expect(fake.counts.archiveProjectAtomic).toBe(1);
+    expect(fake.counts.deleteProjectAtomic).toBe(1);
     expect(fake.state.deleted).toEqual([{ entityType: "project", id: "p1" }]);
 
     // Replaying against the now-used record is rejected.
@@ -120,7 +122,8 @@ describe("risky preview + confirmation", () => {
       now: NOW,
     });
     expect(confirm.ok).toBe(false);
-    expect(fake.counts.deleteEntity ?? 0).toBe(0);
+    expect(fake.counts.archiveProjectAtomic ?? 0).toBe(0);
+    expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
   it("an expired preview cannot be confirmed", async () => {
@@ -149,7 +152,8 @@ describe("risky preview + confirmation", () => {
     });
     expect(confirm.ok).toBe(false);
     if (!confirm.ok) expect(confirm.code).toBe("expired");
-    expect(fake.counts.deleteEntity ?? 0).toBe(0);
+    expect(fake.counts.archiveProjectAtomic ?? 0).toBe(0);
+    expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
   it("re-checks policy at confirm time: a write disabled after preview is denied", async () => {
@@ -160,7 +164,8 @@ describe("risky preview + confirmation", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake, lowered), preview.operation);
     expect(receipt.ok).toBe(false);
     if (!receipt.ok) expect(receipt.code).toBe("policy_denied");
-    expect(fake.counts.deleteEntity ?? 0).toBe(0);
+    expect(fake.counts.archiveProjectAtomic ?? 0).toBe(0);
+    expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
   it("permission update requires a button save but performs no Clockify dry-run", async () => {
@@ -216,7 +221,7 @@ describe("expanded risky actions (Phase 3)", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateEntity).toBe(1);
+    expect(fake.counts.updateProjectAtomic).toBe(1);
   });
 
   it("update_entity resolves a NAME in the id slot for its generic types (live item 091: a client rename via the GENERIC action failed at commit)", async () => {
@@ -230,7 +235,7 @@ describe("expanded risky actions (Phase 3)", () => {
     expect((preview.operation.payload as { id: string }).id).toBe("c1");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateEntity).toBe(1);
+    expect(fake.counts.updateClientAtomic).toBe(1);
   });
 
   it("update_entity clarifies on an unknown name instead of previewing a doomed commit", async () => {
@@ -263,7 +268,8 @@ describe("expanded risky actions (Phase 3)", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.deleteEntity ?? 0).toBe(0);
+    expect(fake.counts.archiveProjectAtomic ?? 0).toBe(0);
+    expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
   it("update_entity CLARIFIES at preview for entity types its adapter can't update — never preview-then-fail-at-commit (live: a confirmed time_entry update died with 'update not supported')", async () => {
@@ -299,11 +305,11 @@ describe("expanded risky actions (Phase 3)", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(fake.counts.createExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpenseAtomic ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createExpense).toBe(1);
+    expect(fake.counts.createExpenseAtomic).toBe(1);
   });
 
   // clockify_fix_entry EDITS an existing time entry (description/project/task/tags/
@@ -323,11 +329,11 @@ describe("expanded risky actions (Phase 3)", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("high_risk_write");
     expect(preview.operation.featureGroup).toBe("time_tracking");
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0); // nothing mutated on preview
+    expect(fake.counts.updateTimeEntryAtomic ?? 0).toBe(0); // nothing mutated on preview
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateTimeEntry).toBe(1);
+    expect(fake.counts.updateTimeEntryAtomic).toBe(1);
     expect(fake.state.timeEntries.find((e) => e.id === "e1")?.description).toBe("new");
   });
 
@@ -360,7 +366,7 @@ describe("expanded risky actions (Phase 3)", () => {
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.updateTimeEntryAtomic ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
@@ -396,7 +402,7 @@ describe("expanded risky actions (Phase 3)", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.updateTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("fix_entry is blocked when time_tracking is read-only (no preview, no mutation)", async () => {
@@ -410,36 +416,44 @@ describe("expanded risky actions (Phase 3)", () => {
     });
     if (result.kind !== "receipt") throw new Error("expected a policy_denied receipt");
     expect(result.receipt.ok).toBe(false);
-    expect(fake.counts.updateTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.updateTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("expenses_delete previews as destructive", async () => {
-    const fake = createFakeWorkspace();
+    const expenseId = "expense-1";
+    const fake = createFakeWorkspace({
+      expenses: [{ id: expenseId, name: "Taxi", notes: "Taxi", date: "2026-06-05", categoryId: "category-1", userId: "admin-1", total: 2_000, quantity: 1 }],
+    });
     const preview = await executeAction({
       actionName: "clockify_expenses_delete",
-      args: { id: "x1" },
+      args: { id: expenseId },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.preview.riskLabels).toContain("destructive");
-    expect(fake.counts.deleteExpense ?? 0).toBe(0);
+    expect(fake.counts.deleteExpenseAtomic ?? 0).toBe(0);
   });
 
   it("time_off_approve is an external side effect requiring confirmation", async () => {
-    const fake = createFakeWorkspace();
+    const policyId = "policy-1";
+    const requestId = "request-1";
+    const fake = createFakeWorkspace({
+      timeOffPolicies: [{ id: policyId, name: "Vacation", status: "ACTIVE", timeUnit: "DAYS" }],
+      timeOffRequests: [{ id: requestId, policyId, userId: "admin-1", status: "PENDING", start: "2026-06-10", end: "2026-06-10", days: 1, timeUnit: "DAYS" }],
+    });
     const preview = await executeAction({
       actionName: "clockify_time_off_approve",
-      args: { requestId: "r1", policyId: "pol-1" },
+      args: { requestId, policyId },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("external_side_effect");
     expect(preview.operation.featureGroup).toBe("time_off_approvals");
-    expect(fake.counts.setTimeOffRequestStatus ?? 0).toBe(0);
+    expect(fake.counts.setTimeOffRequestStatusAtomic ?? 0).toBe(0);
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.setTimeOffRequestStatus).toBe(1);
+    expect(fake.counts.setTimeOffRequestStatusAtomic).toBe(1);
   });
 
   it("scheduling_publish is an external side effect requiring confirmation", async () => {
@@ -485,7 +499,7 @@ describe("expanded risky actions (Phase 3)", () => {
     if (result.kind === "receipt" && !result.receipt.ok) {
       expect(result.receipt.code).toBe("invalid_args");
     }
-    expect(fake.counts.deleteExpense ?? 0).toBe(0);
+    expect(fake.counts.deleteExpenseAtomic ?? 0).toBe(0);
   });
 
   it("a new risky action re-checks policy at confirm time (expenses disabled after preview)", async () => {
@@ -501,6 +515,6 @@ describe("expanded risky actions (Phase 3)", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake, lowered), preview.operation);
     expect(receipt.ok).toBe(false);
     if (!receipt.ok) expect(receipt.code).toBe("policy_denied");
-    expect(fake.counts.createExpense ?? 0).toBe(0);
+    expect(fake.counts.createExpenseAtomic ?? 0).toBe(0);
   });
 });

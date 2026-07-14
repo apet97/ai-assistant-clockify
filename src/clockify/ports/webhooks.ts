@@ -8,6 +8,7 @@ import type { EntitySummary, ListResult } from "../types.js";
 export interface WebhookSummary extends EntitySummary {
   url?: string;
   webhookEvent?: string;
+  triggerSource?: string[];
   triggerSourceType?: string;
   enabled?: boolean;
 }
@@ -29,6 +30,15 @@ export interface UpdateWebhookInput {
   triggerSourceType?: string;
 }
 
+/** Full nonsecret replacement body prepared before the atomic PUT. */
+export interface PreparedWebhookUpdateInput {
+  name: string;
+  url: string;
+  webhookEvent: string;
+  triggerSource: string[];
+  triggerSourceType: string;
+}
+
 /**
  * Webhook slice of the {@link WorkspaceClient} port (goclmcp §2.12). Reads are
  * immediate; create/update/delete run from the handler. The `authToken` secret is
@@ -38,6 +48,10 @@ export interface UpdateWebhookInput {
 export interface WebhookPort {
   listWebhooks(): Promise<ListResult<WebhookSummary>>;
   getWebhook(id: string): Promise<WebhookSummary | null>;
+  prepareWebhookUpdate(id: string, patch: UpdateWebhookInput): Promise<PreparedWebhookUpdateInput>;
+  createWebhookAtomic(input: CreateWebhookInput): Promise<EntitySummary>;
+  updateWebhookAtomic(id: string, input: PreparedWebhookUpdateInput): Promise<EntitySummary>;
+  deleteWebhookAtomic(id: string): Promise<void>;
   createWebhook(input: CreateWebhookInput): Promise<EntitySummary>;
   updateWebhook(id: string, patch: UpdateWebhookInput): Promise<EntitySummary>;
   deleteWebhook(id: string): Promise<void>;

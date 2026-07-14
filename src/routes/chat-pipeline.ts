@@ -364,7 +364,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
                 actionName,
                 actionFingerprint: actionFingerprint(actionName) ?? hashOperation({ actionName }),
                 catalogHash: catalogHash(),
-                operationHash: hashOperation({ actionName, args: actionArgs }),
+                operationHash: hashOperation({ actionName, operation: actionArgs, mutationPlan }),
                 operation: actionArgs,
                 mutationPlan,
               });

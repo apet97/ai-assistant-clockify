@@ -24,6 +24,7 @@ import {
   type ClarifyResult,
   type ConfirmHooks,
   type HistoryResponse,
+  type OperationCardData,
   type PolicyShape,
   type PreviewRef,
   type PreviewResult,
@@ -477,6 +478,32 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
   });
   card.appendChild(toggle);
   card.appendChild(body);
+  return card;
+}
+
+/** Passive durable-operation card. It deliberately contains no controls. */
+export function renderOperationCard(operation: OperationCardData): HTMLElement {
+  const card = el("div", "operation-card");
+  card.setAttribute("role", "group");
+  card.setAttribute("aria-label", `Operation ${operation.status}: ${operation.actionName}`);
+  const head = el("div", "receipt-head");
+  head.appendChild(el("strong", undefined, operation.status.replaceAll("_", " ")));
+  head.appendChild(el("span", "action", operation.actionName));
+  card.appendChild(head);
+  if (operation.steps?.length) {
+    const list = el("ul", "operation-steps");
+    for (const step of operation.steps) {
+      list.appendChild(el("li", undefined, `${step.name || step.planStepId}: ${step.status.replaceAll("_", " ")}`));
+    }
+    card.appendChild(list);
+  }
+  if (operation.stepsTruncated) card.appendChild(el("p", "warning", "Additional operation steps are not shown."));
+  if (operation.reconciliation) {
+    const state = operation.reconciliation.authoritative === true
+      ? "Read-only reconciliation found authoritative evidence."
+      : "Read-only reconciliation did not establish the outcome.";
+    card.appendChild(el("p", "operation-reconciliation", operation.reconciliation.reason ? `${state} ${operation.reconciliation.reason}` : state));
+  }
   return card;
 }
 

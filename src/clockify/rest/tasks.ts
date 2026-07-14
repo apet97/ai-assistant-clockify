@@ -25,6 +25,30 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
     ...(Array.isArray(t.assigneeIds) ? { assigneeIds: t.assigneeIds } : {}),
   });
 
+  const createTaskAtomic: TaskPort["createTaskAtomic"] = async ({ projectId, name, assigneeIds }) =>
+    map(projectId, (await core.mutate("api", "POST", `${ws}/projects/${projectId}/tasks`, {
+      name,
+      ...(assigneeIds?.length ? { assigneeIds } : {}),
+    })) as TaskRow);
+  const prepareTaskUpdate: TaskPort["prepareTaskUpdate"] = async (projectId, id, patch) => ({
+    ...((await core.call("api", "GET", `${ws}/projects/${projectId}/tasks/${id}`)) as Record<string, unknown>),
+    ...patch,
+  });
+  const updateTaskAtomic: TaskPort["updateTaskAtomic"] = async (projectId, id, body) =>
+    map(projectId, (await core.mutate("api", "PUT", `${ws}/projects/${projectId}/tasks/${id}`, body)) as TaskRow);
+  const deleteTaskAtomic: TaskPort["deleteTaskAtomic"] = async (projectId, id) => {
+    await core.mutate("api", "DELETE", `${ws}/projects/${projectId}/tasks/${id}`);
+  };
+  const updateTaskRateAtomic: TaskPort["updateTaskRateAtomic"] = async (input) => {
+    const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
+    await core.mutate(
+      "api",
+      "PUT",
+      `${ws}/projects/${input.projectId}/tasks/${input.taskId}/${kind}`,
+      { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) },
+    );
+  };
+
   return {
     async listTasks(projectId, filter) {
       const params: Record<string, string> = {};
@@ -38,29 +62,23 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
       return t ? map(projectId, t) : null;
     },
     async createTask({ projectId, name, assigneeIds }) {
-      const t = await core.call("api", "POST", `${ws}/projects/${projectId}/tasks`, {
-        name,
-        ...(assigneeIds?.length ? { assigneeIds } : {}),
-      });
-      return map(projectId, t as TaskRow);
+      return createTaskAtomic({ projectId, name, assigneeIds });
     },
+    createTaskAtomic,
     async updateTask(projectId, id, patch) {
-      const t = await core.getThenPut("api", `${ws}/projects/${projectId}/tasks/${id}`, patch);
-      return map(projectId, t as TaskRow);
+      return updateTaskAtomic(projectId, id, await prepareTaskUpdate(projectId, id, patch));
     },
+    prepareTaskUpdate,
+    updateTaskAtomic,
     async deleteTask(projectId, id) {
       // Mark DONE first (full-replacement PUT preserves name), then delete.
-      await core.getThenPut("api", `${ws}/projects/${projectId}/tasks/${id}`, { status: "DONE" });
-      await core.call("api", "DELETE", `${ws}/projects/${projectId}/tasks/${id}`);
+      await updateTaskAtomic(projectId, id, await prepareTaskUpdate(projectId, id, { status: "DONE" }));
+      await deleteTaskAtomic(projectId, id);
     },
+    deleteTaskAtomic,
     async updateTaskRate(input) {
-      const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
-      await core.call(
-        "api",
-        "PUT",
-        `${ws}/projects/${input.projectId}/tasks/${input.taskId}/${kind}`,
-        { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) },
-      );
+      await updateTaskRateAtomic(input);
     },
+    updateTaskRateAtomic,
   };
 }

@@ -6,11 +6,28 @@ import {
   defineReadAction,
   defineRiskyAction,
   type ActionDefinition,
+  type CommitResult,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
 import { describePatch, resolveEntityRef, resolveUserRef } from "./resolve.js";
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { executeCompensationStep, isJournalDegradedStep } from "../mutation-workflow.js";
+import { errorReceipt } from "../receipts.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { sanitizedFingerprint } from "../safe-json.js";
+import {
+  captureStructureSnapshot,
+  defineStructureDurableSafeWriteAction,
+  dispatchWithReconciliation,
+  fetchStructureSnapshot,
+  mutationPlan,
+  reconcileDelete,
+  requireFreshSnapshots,
+  snapshot,
+} from "./structure-durable.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -21,6 +38,25 @@ import { RATE_FIELDS, buildRatePreview } from "./rate.js";
  */
 
 const PROJECT_GROUP = "work_structure" as const;
+
+async function reconcileCreatedProject(
+  ctx: Parameters<NonNullable<ActionDefinition["handler"]>>[0],
+  beforeIds: readonly string[],
+  expected: { name?: unknown },
+): Promise<Awaited<ReturnType<typeof ctx.clockify.createProjectAtomic>> | undefined> {
+  const after = await ctx.clockify.listProjects({ archived: false });
+  if (after.truncated) return undefined;
+  const before = new Set(beforeIds);
+  const candidates = after.rows.filter((row) => !before.has(row.id) && row.name === expected.name);
+  const matches: typeof candidates = [];
+  for (const candidate of candidates) {
+    const raw = await ctx.clockify.getProjectMutationState(candidate.id);
+    if (raw && Object.entries(expected).every(([key, value]) => JSON.stringify(raw[key]) === JSON.stringify(value))) {
+      matches.push(candidate);
+    }
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
 
 // ── Reads ────────────────────────────────────────────────────────────────────
 
@@ -79,12 +115,17 @@ const getProject = defineAction({
 
 // ── Safe writes ──────────────────────────────────────────────────────────────
 
-const createProject = defineAction({
+const createProject = defineStructureDurableSafeWriteAction({
   name: "clockify_projects_create",
   description:
     "Create a project. Assign a client by `clientId` or its exact `clientName` (resolved server-side — an unknown client clarifies). Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
-  featureGroup: PROJECT_GROUP,
-  risks: ["safe_write"],
+  group: PROJECT_GROUP,
+  stepName: "Create project",
+  mutationContract: durableMutationContract({
+    source: "safe",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create"],
+  }),
   schema: z.object({
     name: z.string().min(1),
     clientId: z.string().optional(),
@@ -98,22 +139,22 @@ const createProject = defineAction({
     costRate: zNumberLike(z.number().nonnegative()).optional(),
     rateUnit: z.enum(["major", "minor"]).default("major"),
   }),
-  async handler(ctx, args) {
+  async prepare(ctx, args) {
     // The client ref resolves BEFORE the write — this executes immediately, so
     // a name in either slot must verify or clarify, never reach the wire.
     let clientId: string | undefined;
     if (args.clientId?.trim() || args.clientName?.trim()) {
       const client = await resolveEntityRef(
         { id: args.clientId, name: args.clientName },
-        { noun: "client", verb: "assign the new project to", list: (f) => ctx.clockify.listClients(f) },
+        { noun: "client", verb: "assign the new project to", list: (f) => ctx.clockify.listClients(f), verifyId: true },
       );
       if (!client.ok) {
-        return clarifyResult(client.clarify);
+        return { kind: "clarify", clarify: client.clarify.clarify, options: client.clarify.options };
       }
       clientId = client.id;
     }
     const unit = args.rateUnit ?? "major";
-    const project = await ctx.clockify.createProject({
+    const body = {
       name: args.name,
       ...(clientId ? { clientId } : {}),
       ...(args.billable !== undefined ? { billable: args.billable } : {}),
@@ -121,25 +162,68 @@ const createProject = defineAction({
       ...(args.isPublic !== undefined ? { isPublic: args.isPublic } : {}),
       ...(args.hourlyRate !== undefined ? { hourlyRate: { amount: toMinor(args.hourlyRate, unit) } } : {}),
       ...(args.costRate !== undefined ? { costRate: { amount: toMinor(args.costRate, unit) } } : {}),
-    });
+    };
+    const targetSnapshots: ReturnType<typeof snapshot>[] = [];
+    if (clientId) {
+      const client = await ctx.clockify.getClient(clientId);
+      if (!client) return { kind: "clarify" as const, clarify: "The selected client no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "client", client));
+    }
     return {
-      kind: "receipt",
-      receipt: successReceipt({
+      operation: { body, targetSnapshots },
+      mutationPlan: mutationPlan([{
+        id: "create-project",
+        strategy: "create",
+        ...(targetSnapshots[0] ? { fingerprint: targetSnapshots[0].fingerprint } : {}),
+      }]),
+    };
+  },
+  async prepareDispatch(ctx, operation) {
+    const { targetSnapshots } = operation as {
+      targetSnapshots: ReturnType<typeof snapshot>[];
+    };
+    if (targetSnapshots.length) await requireFreshSnapshots(ctx, targetSnapshots);
+    const baseline = await ctx.clockify.listProjects({ archived: false });
+    if (baseline.truncated) throw new Error("create_baseline_incomplete");
+    const beforeIds = baseline.rows.map((row) => row.id);
+    return {
+      preparedDetail: { preDispatch: { strategy: "project_create_baseline", ids: beforeIds, truncated: false } },
+      state: { beforeIds },
+    };
+  },
+  async dispatch(ctx, operation, state) {
+    const { body } = operation as { body: Parameters<typeof ctx.clockify.createProjectAtomic>[0] };
+    const result = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.createProjectAtomic(body),
+      reconcile: () => reconcileCreatedProject(ctx, state.beforeIds, body),
+    });
+    const project = result.value;
+    const created = { type: "project", id: project.id, name: project.name };
+    return {
+      result: successReceipt({
         action: "clockify_projects_create",
         entity: "project",
         ids: { workspaceId: ctx.workspaceId },
-        changed: { created: [{ type: "project", id: project.id, name: project.name }] },
+        changed: { created: [created] },
       }),
+      externalId: project.id,
+      effect: { created },
+      detail: { reconciled: result.reconciled, baselineComplete: true },
     };
   },
 });
 
-const createFromTemplate = defineAction({
+const createFromTemplate = defineStructureDurableSafeWriteAction({
   name: "clockify_projects_from_template",
   description:
     "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list), plus the new project's `name` (required by the API).",
-  featureGroup: PROJECT_GROUP,
-  risks: ["safe_write"],
+  group: PROJECT_GROUP,
+  stepName: "Create project from template",
+  mutationContract: durableMutationContract({
+    source: "safe",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create"],
+  }),
   schema: z
     .object({
       templateId: z.string().min(1).optional(),
@@ -151,28 +235,59 @@ const createFromTemplate = defineAction({
     .refine((v) => v.templateId !== undefined || v.templateName !== undefined, {
       message: "Provide the template id or its exact name.",
     }),
-  async handler(ctx, args) {
+  async prepare(ctx, args) {
     // Executes immediately (safe write) — the template ref must verify or
     // clarify before the wire, like projects_create's client ref.
     const template = await resolveEntityRef(
       { id: args.templateId, name: args.templateName },
-      { noun: "project template", verb: "create the project from", list: () => ctx.clockify.listTemplates() },
+      { noun: "project template", verb: "create the project from", list: () => ctx.clockify.listTemplates(), verifyId: true },
     );
     if (!template.ok) {
-      return clarifyResult(template.clarify);
+      return { kind: "clarify", clarify: template.clarify.clarify, options: template.clarify.options };
     }
-    const project = await ctx.clockify.createProjectFromTemplate({
+    const templateProject = await ctx.clockify.getProject(template.id);
+    if (!templateProject) return { kind: "clarify" as const, clarify: "The selected project template no longer exists. Refresh and try again." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "parent", "project_template", templateProject);
+    const body = {
       templateProjectId: template.id,
       name: args.name,
-    });
+    };
     return {
-      kind: "receipt",
-      receipt: successReceipt({
+      operation: { body, targetSnapshots: [targetSnapshot] },
+      mutationPlan: mutationPlan([{ id: "create-project-from-template", strategy: "create", fingerprint: targetSnapshot.fingerprint }]),
+    };
+  },
+  async prepareDispatch(ctx, operation) {
+    const { targetSnapshots } = operation as {
+      targetSnapshots: ReturnType<typeof snapshot>[];
+    };
+    await requireFreshSnapshots(ctx, targetSnapshots);
+    const baseline = await ctx.clockify.listProjects({ archived: false });
+    if (baseline.truncated) throw new Error("create_baseline_incomplete");
+    const beforeIds = baseline.rows.map((row) => row.id);
+    return {
+      preparedDetail: { preDispatch: { strategy: "project_template_create_baseline", ids: beforeIds, truncated: false } },
+      state: { beforeIds },
+    };
+  },
+  async dispatch(ctx, operation, state) {
+    const { body } = operation as { body: Parameters<typeof ctx.clockify.createProjectFromTemplateAtomic>[0] };
+    const result = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.createProjectFromTemplateAtomic(body),
+      reconcile: () => reconcileCreatedProject(ctx, state.beforeIds, { name: body.name }),
+    });
+    const project = result.value;
+    const created = { type: "project", id: project.id, name: project.name };
+    return {
+      result: successReceipt({
         action: "clockify_projects_from_template",
         entity: "project",
         ids: { workspaceId: ctx.workspaceId },
-        changed: { created: [{ type: "project", id: project.id, name: project.name }] },
+        changed: { created: [created] },
       }),
+      externalId: project.id,
+      effect: { created },
+      detail: { reconciled: result.reconciled, baselineComplete: true },
     };
   },
 });
@@ -185,6 +300,8 @@ const updateProject = defineRiskyAction({
     "Update a project's fields (rename, reassign client, billing, color, visibility). Pass the project's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target", "parent"] }, strategies: ["update"] }),
   schema: z
     .object({
       id: z.string().min(1).optional(),
@@ -225,6 +342,7 @@ const updateProject = defineRiskyAction({
         list: (filter) => ctx.clockify.listProjects(filter),
         // Unarchiving targets an entity that is archived by definition.
         includeArchived: args.archived === false,
+        verifyId: true,
       },
     );
     if (!resolved.ok) return resolved.clarify;
@@ -250,11 +368,20 @@ const updateProject = defineRiskyAction({
     if (typeof fields.clientId === "string" && fields.clientId !== "") {
       const client = await resolveEntityRef(
         { id: fields.clientId },
-        { noun: "client", verb: "assign", list: (filter) => ctx.clockify.listClients(filter) },
+        { noun: "client", verb: "assign", list: (filter) => ctx.clockify.listClients(filter), verifyId: true },
       );
       if (!client.ok) return client.clarify;
       fields.clientId = client.id;
     }
+    const current = await ctx.clockify.getProject(resolved.id);
+    if (!current) return { clarify: "The requested project no longer exists. Refresh and try again." };
+    const targetSnapshots = [await captureStructureSnapshot(ctx, "target", "project", current)];
+    if (typeof fields.clientId === "string" && fields.clientId !== "") {
+      const parent = await ctx.clockify.getClient(fields.clientId);
+      if (!parent) return { clarify: "The selected client no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "client", parent));
+    }
+    const body = await ctx.clockify.prepareProjectUpdate(resolved.id, fields);
     return {
       actionLabel: "Update project",
       targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
@@ -264,17 +391,31 @@ const updateProject = defineRiskyAction({
       ],
       reversibility: "You can update the project again to revert most fields.",
       warnings: ["Updating a project changes live workspace data."],
-      payload: { id: resolved.id, patch: fields },
+      payload: { id: resolved.id, patch: fields, body },
+      targetSnapshots,
+      mutationPlan: mutationPlan([{ id: "update-project", strategy: "update", fingerprint: targetSnapshots[0]!.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
-    const { id, patch } = payload as { id: string; patch: Record<string, unknown> };
-    const updated = await ctx.clockify.updateProject(id, patch);
-    return successReceipt({
-      action: "clockify_projects_update",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id: updated.id, name: updated.name }] },
+  async commit(ctx, payload, operation) {
+    const { id, body } = payload as { id: string; body: Record<string, unknown> };
+    let updated: Awaited<ReturnType<typeof ctx.clockify.getProject>>;
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-project", name: "Update project",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.updateProjectAtomic(id, body),
+          reconcile: async () => {
+            const raw = await ctx.clockify.getProjectMutationState(id);
+            return raw && sanitizedFingerprint(raw) === sanitizedFingerprint(body)
+              ? raw as unknown as Awaited<ReturnType<typeof ctx.clockify.updateProjectAtomic>>
+              : undefined;
+          },
+        });
+        updated = result.value;
+        return { externalId: result.value.id, effect: { updated: { type: "project", id } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_projects_update", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id, name: updated?.name }] } }),
     });
   },
 });
@@ -285,6 +426,8 @@ const archiveProject = defineRiskyAction({
     "Archive a project (hides it from active lists). Pass the project id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] }),
   schema: z
     .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
     .refine((v) => v.id !== undefined || v.name !== undefined, {
@@ -296,26 +439,40 @@ const archiveProject = defineRiskyAction({
       verb: "archive",
       list: (filter) => ctx.clockify.listProjects(filter),
       includeArchived: true,
+      verifyId: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const name = resolved.name ?? args.name;
+    const current = await ctx.clockify.getProject(resolved.id);
+    if (!current) return { clarify: "The requested project no longer exists. Refresh and try again." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
+    const body = await ctx.clockify.prepareProjectUpdate(resolved.id, { archived: true });
     return {
       actionLabel: "Archive project",
       targets: [{ type: "project", id: resolved.id, name }],
       expectedChanges: [`Archive project ${name ?? resolved.id}`],
       reversibility: "Archiving is reversible — you can unarchive the project later.",
       warnings: ["Archiving hides the project from active workflows."],
-      payload: { id: resolved.id, name },
+      payload: { id: resolved.id, name, body },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan([{ id: "archive-project", strategy: "state-command", fingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
-    const { id } = payload as { id: string };
-    const archived = await ctx.clockify.archiveProject(id);
-    return successReceipt({
-      action: "clockify_projects_archive",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id: archived.id, name: archived.name }] },
+  async commit(ctx, payload, operation) {
+    const { id, body } = payload as { id: string; body: Record<string, unknown> };
+    let archived: Awaited<ReturnType<typeof ctx.clockify.getProject>>;
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "archive-project", name: "Archive project",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.archiveProjectAtomic(id, body),
+          reconcile: async () => { const row = await ctx.clockify.getProject(id); return row?.archived === true ? row : undefined; },
+        });
+        archived = result.value;
+        return { externalId: result.value.id, effect: { archived: { type: "project", id } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_projects_archive", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id, name: archived?.name }] } }),
     });
   },
 });
@@ -326,6 +483,8 @@ const deleteProject = defineRiskyAction({
     "Delete a project (archives first, then deletes — Clockify rejects deleting an active project). Pass the project id (preferred — list projects first to get it), or its exact name and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command", "delete", "update"] }),
   schema: z
     .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
     .refine((v) => v.id !== undefined || v.name !== undefined, {
@@ -340,28 +499,89 @@ const deleteProject = defineRiskyAction({
       list: (filter) => ctx.clockify.listProjects(filter),
       // Deleting an ARCHIVED project is valid (delete archives first anyway).
       includeArchived: true,
+      verifyId: true,
     });
     if (!resolved.ok) return resolved.clarify;
     const { id } = resolved;
     const name = resolved.name ?? args.name;
+    const current = await ctx.clockify.getProject(id);
+    if (!current) return { clarify: "The requested project no longer exists. Refresh and try again." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
+    const changedArchiveState = current.archived !== true;
+    const archiveBody = changedArchiveState ? await ctx.clockify.prepareProjectUpdate(id, { archived: true }) : undefined;
+    const restoreBody = changedArchiveState ? await ctx.clockify.prepareProjectUpdate(id, { archived: false }) : undefined;
+    const transitionedTargetFingerprint = changedArchiveState
+      ? snapshot("target", "project", current, archiveBody).fingerprint
+      : targetSnapshot.fingerprint;
+    const steps = changedArchiveState
+      ? [
+          { id: "archive-project-for-delete", strategy: "state-command" as const, fingerprint: targetSnapshot.fingerprint },
+          { id: "delete-project", strategy: "delete" as const, fingerprint: transitionedTargetFingerprint },
+          { id: "restore-project", kind: "compensation" as const, strategy: "update" as const, fingerprint: transitionedTargetFingerprint },
+        ]
+      : [{ id: "delete-project", strategy: "delete" as const, fingerprint: targetSnapshot.fingerprint }];
     return {
       actionLabel: "Delete project",
       targets: [{ type: "project", id, name }],
       expectedChanges: [`Delete project ${name ?? id} (and its tasks)`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting a project is permanent and removes its tasks."],
-      payload: { id, name },
+      payload: { id, name, originalArchived: current.archived === true, archiveBody, restoreBody, transitionedTargetFingerprint },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan(steps),
     };
   },
-  async commit(ctx, payload) {
-    const { id, name } = payload as { id: string; name?: string };
-    await ctx.clockify.deleteProject(id);
-    return successReceipt({
-      action: "clockify_projects_delete",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "project", id, name }] },
+  async commit(ctx, payload, operation): Promise<CommitResult> {
+    const { id, name, originalArchived, archiveBody, restoreBody, transitionedTargetFingerprint } = payload as { id: string; name?: string; originalArchived: boolean; archiveBody?: Record<string, unknown>; restoreBody?: Record<string, unknown>; transitionedTargetFingerprint: string };
+    let archiveStep: Awaited<ReturnType<typeof executeDurableRiskyStep>> | undefined;
+    let index = 0;
+    if (!originalArchived) {
+      archiveStep = await executeDurableRiskyStep({
+        ctx, operation, planStepId: "archive-project-for-delete", index, name: "Archive project before delete",
+        dispatch: async () => {
+          await requireFreshSnapshots(ctx, operation.targetSnapshots ?? []);
+          const result = await dispatchWithReconciliation({ dispatch: () => ctx.clockify.archiveProjectAtomic(id, archiveBody!), reconcile: async () => { const row = await ctx.clockify.getProject(id); return row?.archived === true ? row : undefined; } });
+          return { externalId: result.value.id, effect: { archived: { type: "project", id } }, detail: { reconciled: result.reconciled } };
+        },
+      });
+      index += 1;
+      if (archiveStep.status === "outcome_unknown") return errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: "Project archive outcome is unknown; delete was not dispatched.", recovery: { hint: "Refresh the project before trying again.", retryable: false } });
+      if (archiveStep.status === "definitive_failed") return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Clockify rejected the project archive; delete was not dispatched." });
+      if (isJournalDegradedStep(archiveStep)) return { kind: "partial", receipt: successReceipt({ action: operation.actionName, entity: "project", changed: { updated: [{ type: "project", id, name }] } }), message: "The project was archived, but local settlement degraded, so delete was not dispatched.", recovery: { hint: "Refresh the project and review it manually.", retryable: false } };
+    }
+    const beforeDelete = await ctx.clockify.getProject(id);
+    if (!beforeDelete || beforeDelete.archived !== true) return errorReceipt({ action: operation.actionName, code: "stale_target", message: "The project was not authoritatively archived immediately before delete. No delete was sent.", recovery: { hint: "Create a fresh preview.", retryable: true } });
+    const deleteSnapshot = await captureStructureSnapshot(ctx, "target", "project", beforeDelete);
+    if (deleteSnapshot.fingerprint !== transitionedTargetFingerprint) return errorReceipt({ action: operation.actionName, code: "stale_target", message: "The archived project changed before delete. No delete was sent.", recovery: { hint: "Create a fresh preview.", retryable: true } });
+    const deleted = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "delete-project", index, name: "Delete project",
+      dispatch: async () => {
+        await requireFreshSnapshots(ctx, [deleteSnapshot]);
+        const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.deleteProjectAtomic(id); return true as const; }, reconcile: () => reconcileDelete(() => ctx.clockify.getProject(id)) });
+        return { effect: { deleted: { type: "project", id } }, detail: { reconciled: result.reconciled } };
+      },
     });
+    if (deleted.status === "succeeded") return successReceipt({ action: operation.actionName, entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { deleted: [{ type: "project", id, name }] } });
+    if (deleted.status === "outcome_unknown") return errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: "Project delete outcome is unknown. Archive compensation was not attempted.", recovery: { hint: "Verify whether the project exists before any retry.", retryable: false } });
+    if (!archiveStep || !restoreBody) return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Clockify rejected deletion of the already-archived project." });
+    if (!ctx.mutationJournal) {
+      return { kind: "partial", receipt: successReceipt({ action: operation.actionName, entity: "project", changed: { updated: [{ type: "project", id, name }] } }), message: "Project archive succeeded and delete failed; durable compensation was unavailable, so no restore mutation was sent.", recovery: { hint: "Inspect the project archive state manually.", retryable: false } };
+    }
+    const compensation = await executeCompensationStep({
+      journal: ctx.mutationJournal, operationId: operation.operationId,
+      step: { id: "restore-project", index: index + 1, name: "Restore project archive state", kind: "compensation", compensatesStepId: archiveStep.id, targetFingerprint: transitionedTargetFingerprint },
+      dispatch: async () => {
+        const current = await ctx.clockify.getProject(id);
+        if (!current || current.archived !== true) throw new Error("project_compensation_target_unknown");
+        const currentSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
+        if (currentSnapshot.fingerprint !== transitionedTargetFingerprint) throw new DefinitiveWriteFailure("VERIFY", "stale_target", "Project changed before compensation.");
+        const result = await dispatchWithReconciliation({ dispatch: () => ctx.clockify.updateProjectAtomic(id, restoreBody), reconcile: async () => { const row = await ctx.clockify.getProject(id); return row?.archived === false ? row : undefined; } });
+        return { externalId: result.value.id, effect: { restoredArchiveState: { type: "project", id } }, detail: { reconciled: result.reconciled } };
+      },
+    });
+    const compensationStatus = compensation.status;
+    if (compensationStatus === "compensated") return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Project deletion was rejected; the archive state was restored." });
+    return { kind: "partial", receipt: successReceipt({ action: operation.actionName, entity: "project", changed: { updated: [{ type: "project", id, name }] } }), message: "Project archive succeeded and delete failed; restoring the original state did not complete definitively.", recovery: { hint: "Inspect the project archive state manually.", retryable: false } };
   },
 });
 
@@ -371,6 +591,8 @@ const rateUpdate = defineRiskyAction({
     'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, and the member by `userId`/`userName` (or "me"). The member must already be on the project. Billing action — previews and requires confirmation.',
   group: "invoices",
   risks: ["billing"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
   schema: z
     .object({
       projectId: z.string().min(1).optional(),
@@ -413,6 +635,9 @@ const rateUpdate = defineRiskyAction({
       };
     }
     const amountMinor = toMinor(args.amount, args.amountUnit);
+    const current = await ctx.clockify.getProject(project.id);
+    if (!current) return { clarify: "The requested project no longer exists. Refresh and try again." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
     return {
       ...buildRatePreview({
         targetType: "project",
@@ -429,22 +654,33 @@ const rateUpdate = defineRiskyAction({
         amountMinor,
         since: args.since,
       },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan([{ id: "update-project-rate", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
-    const operation = payload as {
+  async commit(ctx, payload, persistedOperation) {
+    const rateInput = payload as {
       projectId: string;
       userId: string;
       rateKind: "HOURLY" | "COST";
       amountMinor: number;
       since?: string;
     };
-    await ctx.clockify.updateProjectRate(operation);
-    return successReceipt({
-      action: "clockify_projects_rate_update",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id: operation.projectId }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation: persistedOperation, planStepId: "update-project-rate", name: "Update project rate",
+      verification: { snapshots: persistedOperation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.updateProjectRateAtomic(rateInput); return true as const; },
+          reconcile: async () => {
+            const row = await ctx.clockify.getProject(rateInput.projectId) as unknown as Record<string, unknown> | null;
+            const key = rateInput.rateKind === "COST" ? "costRate" : "hourlyRate";
+            return row && (row[key] as { amount?: unknown } | undefined)?.amount === rateInput.amountMinor ? true as const : undefined;
+          },
+        });
+        return { effect: { updatedRate: { projectId: rateInput.projectId, userId: rateInput.userId } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_projects_rate_update", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id: rateInput.projectId }] } }),
     });
   },
 });
@@ -455,6 +691,8 @@ const estimateUpdate = defineRiskyAction({
     "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
   argumentOpenPaths: ["fields"],
   schema: z.object({
     id: z.string().min(1),
@@ -462,7 +700,10 @@ const estimateUpdate = defineRiskyAction({
       message: "Provide at least one estimate field.",
     }),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const current = await ctx.clockify.getProject(args.id);
+    if (!current) return { clarify: "The requested project does not exist. Provide a current project id." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
     return {
       actionLabel: "Update project estimate",
       targets: [{ type: "project", id: args.id }],
@@ -470,16 +711,26 @@ const estimateUpdate = defineRiskyAction({
       reversibility: "You can update the estimate again at any time.",
       warnings: ["Changing the estimate affects progress and budget reporting."],
       payload: { id: args.id, fields: args.fields },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan([{ id: "update-project-estimate", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, fields } = payload as { id: string; fields: Record<string, unknown> };
-    await ctx.clockify.updateProjectEstimate(id, fields);
-    return successReceipt({
-      action: "clockify_projects_estimate_update",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-project-estimate", name: "Update project estimate",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.updateProjectEstimateAtomic(id, fields); return true as const; },
+          reconcile: async () => {
+            const row = await ctx.clockify.getProject(id) as unknown as Record<string, unknown> | null;
+            return row && Object.entries(fields).every(([key, value]) => JSON.stringify(row[key]) === JSON.stringify(value)) ? true as const : undefined;
+          },
+        });
+        return { effect: { updatedEstimate: { projectId: id } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_projects_estimate_update", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id }] } }),
     });
   },
 });
@@ -495,6 +746,8 @@ const membershipsUpdate = defineRiskyAction({
   // executor intentionally exempts from the Clockify feature-group gate; using it
   // here would BYPASS that gate. `high_risk_write` keeps confirmation AND the gate.
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
   argumentOpenPaths: ["memberships[]"],
   schema: z
     .object({
@@ -513,7 +766,7 @@ const membershipsUpdate = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveEntityRef(
       { id: args.id, name: args.name },
-      { noun: "project", verb: "update", list: (filter) => ctx.clockify.listProjects(filter) },
+      { noun: "project", verb: "update", list: (filter) => ctx.clockify.listProjects(filter), verifyId: true },
     );
     if (!resolved.ok) return resolved.clarify;
     let memberships = args.memberships ?? [];
@@ -536,6 +789,9 @@ const membershipsUpdate = defineRiskyAction({
     } else {
       change = `Replace membership set (${memberships.length} member(s))`;
     }
+    const currentProject = await ctx.clockify.getProject(resolved.id);
+    if (!currentProject) return { clarify: "The requested project no longer exists. Refresh and try again." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", currentProject);
     return {
       actionLabel: "Update project memberships",
       targets: [{ type: "project", id: resolved.id, name: resolved.name ?? args.name }],
@@ -543,19 +799,29 @@ const membershipsUpdate = defineRiskyAction({
       reversibility: "You can update memberships again to restore prior access.",
       warnings: ["This changes who can access and track time on the project."],
       payload: { id: resolved.id, memberships },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan([{ id: "update-project-memberships", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, memberships } = payload as {
       id: string;
       memberships: Array<Record<string, unknown>>;
     };
-    await ctx.clockify.updateProjectMemberships(id, { memberships });
-    return successReceipt({
-      action: "clockify_projects_memberships_update",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-project-memberships", name: "Update project memberships",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.updateProjectMembershipsAtomic(id, { memberships }); return true as const; },
+          reconcile: async () => {
+            const current = await ctx.clockify.getProjectMemberships(id);
+            return !current.truncated && JSON.stringify(current.rows) === JSON.stringify(memberships) ? true as const : undefined;
+          },
+        });
+        return { effect: { memberships: memberships.length, projectId: id }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_projects_memberships_update", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id }] } }),
     });
   },
 });

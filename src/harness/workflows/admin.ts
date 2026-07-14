@@ -4,6 +4,8 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type CommitResult,
+  type TargetSnapshot,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { applyPolicyPatch, FEATURE_GROUPS, permissionLevelSchema } from "../permissions.js";
@@ -11,6 +13,14 @@ import type { FeatureGroup } from "../permissions.js";
 import { describePatch, resolveEntityRef, type ArchivedFilter } from "./resolve.js";
 import { buildMetrics } from "../../metrics/metrics.js";
 import type { ListResult } from "../../clockify/types.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { executeCompensationStep } from "../mutation-workflow.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { sanitizedFingerprint } from "../safe-json.js";
+import { captureStructureSnapshot, dispatchWithReconciliation, reconcileDelete } from "./structure-durable.js";
+import { captureGroupSnapshot, dynamicMutationPlan, fetchCompositeSnapshot } from "./composite-durable.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -81,11 +91,85 @@ function genericEntityList(
   }
 }
 
+type GenericDeleteType = (typeof GENERIC_DELETE_ENTITY_TYPES)[number];
+type GenericUpdateType = "project" | "client" | "tag";
+
+async function captureGenericTarget(ctx: ActionContext, entityType: GenericDeleteType, id: string): Promise<TargetSnapshot | undefined> {
+  if (entityType === "project") {
+    const row = await ctx.clockify.getProject(id);
+    return row ? captureStructureSnapshot(ctx, "target", "project", row) : undefined;
+  }
+  if (entityType === "client") {
+    const row = await ctx.clockify.getClient(id);
+    return row ? captureStructureSnapshot(ctx, "target", "client", row) : undefined;
+  }
+  if (entityType === "tag") {
+    const row = await ctx.clockify.getTag(id);
+    return row ? captureStructureSnapshot(ctx, "target", "tag", row) : undefined;
+  }
+  if (entityType === "time_entry") {
+    const row = await ctx.clockify.getEntry(id);
+    return row ? captureStructureSnapshot(ctx, "target", "time_entry", row) : undefined;
+  }
+  if (entityType === "invoice") {
+    const row = await ctx.clockify.getInvoice(id);
+    return row ? captureTargetSnapshot("target", { type: entityType, id }, row) : undefined;
+  }
+  if (entityType === "expense") {
+    const row = await ctx.clockify.getExpense(id);
+    return row ? captureTargetSnapshot("target", { type: entityType, id, name: row.name }, row) : undefined;
+  }
+  if (entityType === "webhook") {
+    const row = await ctx.clockify.getWebhook(id);
+    return row ? captureTargetSnapshot("target", { type: entityType, id, name: row.name }, row) : undefined;
+  }
+  return captureGroupSnapshot(ctx, "target", id);
+}
+
+async function readGenericTarget(ctx: ActionContext, entityType: GenericDeleteType, id: string): Promise<unknown | null | undefined> {
+  if (entityType === "project") return ctx.clockify.getProjectMutationState(id);
+  if (entityType === "client") return ctx.clockify.getClientMutationState(id);
+  if (entityType === "tag") {
+    try { return await ctx.clockify.prepareTagUpdate(id, {}); } catch { return null; }
+  }
+  if (entityType === "time_entry") {
+    try { return await ctx.clockify.prepareTimeEntryUpdate({ id }); } catch { return null; }
+  }
+  if (entityType === "invoice") return ctx.clockify.getInvoice(id);
+  if (entityType === "expense") return ctx.clockify.getExpense(id);
+  if (entityType === "webhook") return ctx.clockify.getWebhook(id);
+  const group = await ctx.clockify.getGroup(id);
+  return group ? { id: group.id, name: group.name, userIds: [...(group.userIds ?? [])].sort() } : group;
+}
+
+async function deleteGenericAtomic(ctx: ActionContext, entityType: GenericDeleteType, id: string): Promise<void> {
+  if (entityType === "project") return ctx.clockify.deleteProjectAtomic(id);
+  if (entityType === "client") return ctx.clockify.deleteClientAtomic(id);
+  if (entityType === "tag") return ctx.clockify.deleteTagAtomic(id);
+  if (entityType === "time_entry") return ctx.clockify.deleteTimeEntryAtomic(id);
+  if (entityType === "invoice") return ctx.clockify.deleteInvoiceAtomic(id);
+  if (entityType === "expense") return ctx.clockify.deleteExpenseAtomic(id);
+  if (entityType === "webhook") return ctx.clockify.deleteWebhookAtomic(id);
+  return ctx.clockify.deleteGroupAtomic(id);
+}
+
+async function replacementState(ctx: ActionContext, entityType: GenericUpdateType, id: string): Promise<Record<string, unknown> | null> {
+  if (entityType === "project") return ctx.clockify.getProjectMutationState(id);
+  if (entityType === "client") return ctx.clockify.getClientMutationState(id);
+  try { return await ctx.clockify.prepareTagUpdate(id, {}); } catch { return null; }
+}
+
 const deleteEntity = defineRiskyAction({
   name: "clockify_delete_entity",
   description: "Delete a Clockify entity. Always previews first and requires confirmation.",
   group: "work_structure",
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["target"] },
+    strategies: ["state-command", "delete", "update"],
+  }),
   schema: z.object({
     entityType: z.enum(GENERIC_DELETE_ENTITY_TYPES),
     id: z.string().min(1),
@@ -98,31 +182,133 @@ const deleteEntity = defineRiskyAction({
     if (list) {
       const resolved = await resolveEntityRef(
         { id: args.id, name: args.name },
-        { noun: args.entityType, verb: "delete", list, includeArchived: true },
+        { noun: args.entityType, verb: "delete", list, includeArchived: true, verifyId: true },
       );
       if (!resolved.ok) return resolved.clarify;
       id = resolved.id;
       name = resolved.name ?? args.name;
     }
+    const targetSnapshot = await captureGenericTarget(ctx, args.entityType, id);
+    if (!targetSnapshot) return { clarify: `The requested ${args.entityType} no longer exists. Refresh and try again.` };
+    const raw = await readGenericTarget(ctx, args.entityType, id) as Record<string, unknown> | null | undefined;
+    const needsArchive = (args.entityType === "project" || args.entityType === "client") && raw?.archived !== true;
+    const archiveBody = needsArchive ? { ...raw, archived: true } : undefined;
+    const restoreBody = needsArchive ? { ...raw, archived: false } : undefined;
+    const transitionedFingerprint = archiveBody ? sanitizedFingerprint(archiveBody) : targetSnapshot.fingerprint;
+    const mutationPlan = needsArchive
+      ? dynamicMutationPlan([
+          { id: `archive-${args.entityType}`, strategy: "state-command", targetFingerprint: targetSnapshot.fingerprint },
+          { id: `delete-${args.entityType}`, strategy: "delete", targetFingerprint: transitionedFingerprint },
+          { id: `restore-${args.entityType}`, kind: "compensation", strategy: "update", targetFingerprint: transitionedFingerprint },
+        ])
+      : dynamicMutationPlan([{ id: `delete-${args.entityType}`, strategy: "delete", targetFingerprint: targetSnapshot.fingerprint }]);
     return {
       actionLabel: `Delete ${args.entityType}`,
       targets: [{ type: args.entityType, id, name }],
       expectedChanges: [`Delete ${args.entityType} ${name ?? id}`],
       reversibility: "This cannot be undone.",
       warnings: [`Deleting a ${args.entityType} is permanent.`],
-      payload: { entityType: args.entityType, id, name },
+      payload: { entityType: args.entityType, id, name, needsArchive, archiveBody, restoreBody, transitionedFingerprint },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan,
     };
   },
-  async commit(ctx, payload) {
-    const { entityType, id, name } = payload as { entityType: string; id: string; name?: string };
-    if (!ctx.clockify.deleteEntity) {
-      return errorReceipt({
-        action: "clockify_delete_entity",
-        code: "unsupported",
-        message: "Delete is not supported by the configured Clockify client.",
+  async commit(ctx, payload, operation): Promise<CommitResult> {
+    const { entityType, id, name, needsArchive, archiveBody, restoreBody, transitionedFingerprint } = payload as {
+      entityType: GenericDeleteType;
+      id: string;
+      name?: string;
+      needsArchive: boolean;
+      archiveBody?: Record<string, unknown>;
+      restoreBody?: Record<string, unknown>;
+      transitionedFingerprint: string;
+    };
+    let archiveStep: Awaited<ReturnType<typeof executeDurableRiskyStep>> | undefined;
+    let deleteIndex = 0;
+    if (needsArchive) {
+      archiveStep = await executeDurableRiskyStep({
+        ctx, operation, planStepId: `archive-${entityType}`, index: 0, name: `Archive ${entityType}`,
+        dispatch: async () => {
+          const verified = await verifyTargetSnapshots(
+            operation.targetSnapshots ?? [],
+            (snapshot) => fetchCompositeSnapshot(ctx, snapshot),
+          );
+          if (!verified.ok) throw new DefinitiveWriteFailure("VERIFY", id, verified.code);
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: () => entityType === "project"
+              ? ctx.clockify.archiveProjectAtomic(id, archiveBody!)
+              : ctx.clockify.updateClientAtomic(id, archiveBody!),
+            reconcile: async (): Promise<{ id: string; name: string } | undefined> => {
+              const current = await readGenericTarget(ctx, entityType, id) as Record<string, unknown> | null | undefined;
+              return current?.archived === true
+                ? { id, name: typeof current.name === "string" ? current.name : name ?? id }
+                : undefined;
+            },
+          });
+          return { externalId: id, effect: { archived: { type: entityType, id } }, detail: { reconciled: dispatched.reconciled } };
+        },
       });
+      deleteIndex = 1;
+      if (archiveStep.status === "outcome_unknown") return errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: `The ${entityType} archive outcome is unknown; delete was not sent.`, recovery: { hint: "Verify the target before retrying.", retryable: false } });
+      if (archiveStep.status !== "succeeded") return errorReceipt({ action: operation.actionName, code: "write_failed", message: `The ${entityType} could not be archived; delete was not sent.` });
     }
-    await ctx.clockify.deleteEntity({ entityType, id });
+    const current = await readGenericTarget(ctx, entityType, id);
+    if (!current || sanitizedFingerprint(current) !== transitionedFingerprint) {
+      return needsArchive
+        ? deletePartial(entityType, id, name, `The ${entityType} changed before delete, so delete was not sent.`)
+        : errorReceipt({ action: operation.actionName, code: "stale_target", message: `The ${entityType} changed before delete. No delete was sent.`, recovery: { hint: "Create a fresh preview.", retryable: true } });
+    }
+    const deleted = await executeDurableRiskyStep({
+      ctx, operation, planStepId: `delete-${entityType}`, index: deleteIndex, name: `Delete ${entityType}`,
+      dispatch: async () => {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: async () => { await deleteGenericAtomic(ctx, entityType, id); return true as const; },
+          reconcile: () => reconcileDelete(() => readGenericTarget(ctx, entityType, id)),
+        });
+        return { effect: { deleted: { type: entityType, id } }, detail: { reconciled: dispatched.reconciled } };
+      },
+    });
+    if (deleted.status !== "succeeded") {
+      if (!needsArchive || !archiveStep || !restoreBody) {
+        return deleted.status === "outcome_unknown"
+          ? errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: `The ${entityType} delete outcome is unknown.`, recovery: { hint: "Verify whether it still exists before retrying.", retryable: false } })
+          : errorReceipt({ action: operation.actionName, code: "write_failed", message: `The ${entityType} delete was rejected.` });
+      }
+      if (!ctx.mutationJournal || deleted.status === "outcome_unknown") {
+        return deletePartial(entityType, id, name, `The ${entityType} was archived, but delete did not complete definitively; no compensation was dispatched.`);
+      }
+      const compensation = await executeCompensationStep({
+        journal: ctx.mutationJournal,
+        operationId: operation.operationId,
+        step: {
+          id: `restore-${entityType}`,
+          index: 2,
+          name: `Restore ${entityType}`,
+          kind: "compensation",
+          compensatesStepId: archiveStep.id,
+          targetFingerprint: transitionedFingerprint,
+        },
+        dispatch: async () => {
+          const beforeRestore = await readGenericTarget(ctx, entityType, id);
+          if (!beforeRestore || sanitizedFingerprint(beforeRestore) !== transitionedFingerprint) {
+            throw new DefinitiveWriteFailure("VERIFY", id, "stale_target");
+          }
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: () => entityType === "project"
+              ? ctx.clockify.updateProjectAtomic(id, restoreBody)
+              : ctx.clockify.updateClientAtomic(id, restoreBody),
+            reconcile: async () => {
+              const restored = await readGenericTarget(ctx, entityType, id);
+              return restored && sanitizedFingerprint(restored) === sanitizedFingerprint(restoreBody) ? restored : undefined;
+            },
+          });
+          return { externalId: id, effect: { restored: { type: entityType, id } }, detail: { reconciled: dispatched.reconciled } };
+        },
+      });
+      return compensation.status === "compensated"
+        ? errorReceipt({ action: operation.actionName, code: "write_failed", message: `Delete was rejected and the ${entityType} archive state was restored.` })
+        : deletePartial(entityType, id, name, `Delete was rejected and restoring the ${entityType} did not complete definitively.`);
+    }
     return successReceipt({
       action: "clockify_delete_entity",
       entity: entityType,
@@ -224,6 +410,12 @@ const updateEntity = defineRiskyAction({
     "Update simple fields of a project, client, or tag (rename etc.). For every other type use its typed action instead (tasks_update, fix_entry for time entries, invoices_update, expenses_update, webhooks_update, users_role_update, groups_update). Elevated write — always previews and requires confirmation.",
   group: "work_structure",
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["target"] },
+    strategies: ["update"],
+  }),
   argumentOpenPaths: ["fields"],
   schema: z.object({
     entityType: z.enum(DELETABLE_ENTITY_TYPES),
@@ -258,40 +450,82 @@ const updateEntity = defineRiskyAction({
         verb: "update",
         list,
         includeArchived: fields.archived === false,
+        verifyId: true,
       },
     );
     if (!resolved.ok) return resolved.clarify;
+    const raw = await replacementState(ctx, args.entityType as GenericUpdateType, resolved.id);
+    if (!raw) return { clarify: `The requested ${args.entityType} no longer exists. Refresh and try again.` };
+    const targetSnapshot = captureTargetSnapshot(
+      "target",
+      { type: args.entityType, id: resolved.id, name: resolved.name },
+      raw,
+    );
+    const body = { ...raw, ...fields };
     return {
       actionLabel: `Update ${args.entityType}`,
       targets: [{ type: args.entityType, id: resolved.id, name: resolved.name ?? args.name }],
       expectedChanges: describePatch(fields),
       reversibility: "You can update the entity again to revert most fields.",
       warnings: ["Updating an entity changes live workspace data."],
-      payload: { entityType: args.entityType, id: resolved.id, fields },
+      payload: { entityType: args.entityType, id: resolved.id, fields, body },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: dynamicMutationPlan([{ id: `update-${args.entityType}`, strategy: "update", targetFingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
-    const { entityType, id, fields } = payload as {
-      entityType: string;
+  async commit(ctx, payload, operation) {
+    const { entityType, id, body } = payload as {
+      entityType: GenericUpdateType;
       id: string;
-      fields?: Record<string, unknown>;
+      body: Record<string, unknown>;
     };
-    if (!ctx.clockify.updateEntity) {
-      return errorReceipt({
+    let updated: { id: string; name?: string } | undefined;
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: `update-${entityType}`,
+      name: `Update ${entityType}`,
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchCompositeSnapshot(ctx, snapshot) },
+      dispatch: async () => {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: () => entityType === "project"
+            ? ctx.clockify.updateProjectAtomic(id, body)
+            : entityType === "client"
+              ? ctx.clockify.updateClientAtomic(id, body)
+              : ctx.clockify.updateTagAtomic(id, body),
+          reconcile: async () => {
+            const current = await replacementState(ctx, entityType, id);
+            return current && sanitizedFingerprint(current) === sanitizedFingerprint(body)
+              ? { id, name: typeof current.name === "string" ? current.name : undefined }
+              : undefined;
+          },
+        });
+        updated = dispatched.value;
+        return { externalId: id, effect: { updated: { type: entityType, id } }, detail: { reconciled: dispatched.reconciled } };
+      },
+      success: () => successReceipt({
         action: "clockify_update_entity",
-        code: "unsupported",
-        message: "Entity update is not supported by the configured Clockify client.",
-      });
-    }
-    const updated = await ctx.clockify.updateEntity({ entityType, id, fields });
-    return successReceipt({
-      action: "clockify_update_entity",
-      entity: entityType,
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: entityType, id: updated.id, name: updated.name }] },
+        entity: entityType,
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { updated: [{ type: entityType, id, name: updated?.name }] },
+      }),
     });
   },
 });
+
+function deletePartial(
+  entityType: string,
+  id: string,
+  name: string | undefined,
+  message: string,
+): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({ action: "clockify_delete_entity", entity: entityType, changed: { updated: [{ type: entityType, id, name }] } }),
+    message,
+    recovery: { hint: "Inspect the target state manually before retrying.", retryable: false },
+  };
+}
 
 const recentOutcomes = defineReadAction({
   name: "assistant_recent_outcomes",

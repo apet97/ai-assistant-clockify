@@ -7,6 +7,7 @@ import {
   type ConfirmableOperation,
 } from "../../src/harness/action.js";
 import { successReceipt } from "../../src/harness/receipts.js";
+import { durableMutationContract } from "../../src/harness/durable-mutation-contract.js";
 
 /**
  * Parity proof for the two action builders. These assert that the builders emit
@@ -195,6 +196,11 @@ describe("defineRiskyAction", () => {
       risks: ["billing"],
       schema,
       mutationWorkflow: "durable",
+      mutationContract: durableMutationContract({
+        source: "confirmed",
+        targeting: { mode: "create_no_target" },
+        strategies: ["create"],
+      }),
       async preview(_c, args, operationId) {
         seen.preview = operationId;
         return {
@@ -205,7 +211,7 @@ describe("defineRiskyAction", () => {
           payload: { id: args.id },
           mutationPlan: {
             mode: "single" as const,
-            steps: [{ id: "create-invoice", kind: "primary" as const }],
+            steps: [{ id: "create-invoice", kind: "primary" as const, reconciliationStrategy: "create" as const }],
           },
         };
       },
@@ -223,7 +229,7 @@ describe("defineRiskyAction", () => {
     if (preview.kind !== "preview") throw new Error("expected preview");
     expect(preview.operation.mutationPlan).toEqual({
       mode: "single",
-      steps: [{ id: "create-invoice", kind: "primary" }],
+      steps: [{ id: "create-invoice", kind: "primary", reconciliationStrategy: "create" }],
     });
     expect(seen.preview).toBe(preview.operation.operationId);
     expect(action.mutationWorkflow).toBe("durable");

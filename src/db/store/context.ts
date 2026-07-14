@@ -176,6 +176,62 @@ export interface OperationRun extends Omit<PrepareOperationRunInput, "id"> {
   updatedAt: string;
 }
 
+export interface SanitizedOperationRun {
+  id: string;
+  actionName: string;
+  status: OperationRunStatus;
+  plan?: {
+    mode: ExternalMutationPlan["mode"];
+    steps: ExternalMutationPlan["steps"];
+    truncated?: boolean;
+    originalStepCount?: number;
+  };
+  steps: Array<{
+    planStepId: string;
+    index: number;
+    name: string;
+    kind: OperationStepKind;
+    status: OperationStepStatus;
+    targetFingerprint?: string;
+    dispatchedAt?: string;
+    settledAt?: string;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  stepsTruncated?: boolean;
+  result?: ActionResultRef;
+  reconciliation?: { stepId?: string; authoritative?: boolean; reason?: string };
+  reconciledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StartupReconciliationOperation {
+  id: string;
+  status: "outcome_unknown";
+  sessionId: string;
+  workspaceId: string;
+  adminUserId: string;
+  actionName: string;
+  actionFingerprint: string;
+  catalogHash: string;
+  operationHash: string;
+  /** Complete, sanitized normalized intent. Candidates exceeding the bound are omitted. */
+  operation: unknown;
+  mutationPlan: ExternalMutationPlan;
+  targetSnapshots: unknown[];
+  steps: Array<{
+    id: string;
+    status: "outcome_unknown";
+    kind: "primary";
+    planStepId: string;
+    strategy: "create" | "update" | "delete" | "state-command" | "composed";
+    targetFingerprint?: string;
+    /** Complete, sanitized pre-dispatch/read evidence; never host secrets. */
+    evidence: unknown;
+  }>;
+}
+
 export type OperationStepKind = "primary" | "compensation";
 export type OperationStepStatus =
   | "prepared"

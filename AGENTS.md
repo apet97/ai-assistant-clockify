@@ -31,6 +31,10 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   re-checked at confirm time.
 - Every mutation/confirmation/undo performs a fresh role check and fails closed;
   Clockify host writes are single-flight per workspace and are never auto-retried.
+- Every Clockify external write persists normalized nonsecret operation data, an
+  exact mutation plan, authoritative target/parent snapshots where applicable,
+  and step-bound reconciliation metadata. The catalog has no legacy mutation or
+  target-verification exceptions.
 - A post-dispatch journal failure never rewrites a known Clockify success as a
   retryable or definitive failure: single safe writes return success with an
   explicit degradation warning, composed writes stop as `partial`, and known
@@ -104,9 +108,15 @@ npm run dev           # tsx src/server.ts (needs env)
   `durable-safe-write.ts` (the real step-journaled safe-write builder),
   `durable-risky-write.ts` (confirmed step adapter), billing fingerprints,
   provenance, create/update/payment reconciliation in the focused `invoice-*`
-  modules, `mutation-compatibility.ts` (explicit phase 5 migration exceptions),
+  modules, `target-snapshots.ts` (authoritative pre-dispatch drift checks),
+  `mutation-compatibility.ts` (no-exception durable catalog gate),
+  `startup-reconciliation.ts` + `startup-reconciliation-registry.ts` and focused
+  workflow registries (read-only executable reconciliation for crash-orphaned
+  dispatched steps; never resumes prepared work or compensates),
   `compose.ts` (legacy atomic multi-step/rollback),
-  `idempotency.ts` (dedup confirmed commits, including partial replay), `undo.ts`,
+  `idempotency.ts` (operation-scoped confirmed-commit dedupe, including partial
+  replay; invoice identity is the durable operation ID, not a second semantic
+  payload ID), `undo.ts`,
   `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
   `resolve.ts` (entities), `resolve-dates.ts` (calendar + `resolveDateRange`),
@@ -118,7 +128,10 @@ npm run dev           # tsx src/server.ts (needs env)
   turn/confirm/commit machinery lives in `chat-pipeline.ts` (`createChatPipeline`),
   pure result transforms + guards in `chat-results.ts`, the never-break-a-turn
   bookkeeping wrapper `best-effort.ts`, session FIFO wrapper in `async-handler.ts`,
-  NDJSON-stream setup `ndjson.ts`; shared `deps.ts`. Chat mutations require a client UUID `requestId`; retries replay the
+  NDJSON-stream setup `ndjson.ts`; shared `deps.ts`. Scoped
+  `GET /api/operation-runs/:operationId` exposes sanitized bounded operation and
+  step status; chat history restores passive operation cards from the same scoped
+  view. Chat mutations require a client UUID `requestId`; retries replay the
   durable turn from nonce-free result/preview links (only a still-pending preview
   gets a freshly rotated nonce). Terminal confirmations scrub their nonce hash,
   saved agent state, and operation payload. `server.ts` — `createApp(deps)` + `start()`; `/live` is liveness and

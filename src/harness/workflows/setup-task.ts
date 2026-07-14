@@ -1,15 +1,22 @@
 import { z } from "zod";
 import {
   defineRiskyAction,
+  type CommitResult,
   type ActionDefinition,
   type RiskyPreviewResult,
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRefs } from "./resolve.js";
 import { fromMinor, toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { executeDurableRiskyStep } from "../durable-risky-write.js";
+import { captureStructureSnapshot, dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
+import { dynamicMutationPlan, fetchCompositeSnapshot, userProjection } from "./composite-durable.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { sanitizedFingerprint } from "../safe-json.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 
 /**
  * `clockify_setup_task` — the task analog of `clockify_setup_project`. "Create a
@@ -47,6 +54,12 @@ const setupTask = defineRiskyAction({
     'Create a NEW task in an existing project AND set it up in one step — assign members (names or "me") and set the task\'s billable/cost rate — as ONE preview and ONE Confirm. Use this for "create a task in <project> and set its rate". For just creating or assigning a task with no rate, use clockify_tasks_create.',
   group: "work_structure",
   risks: ["high_risk_write", "billing"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create", "update"],
+  }),
   schema: z
     .object({
       projectId: z.string().optional(),
@@ -68,23 +81,43 @@ const setupTask = defineRiskyAction({
     // 1. Parent project (must already exist) — resolve before any write.
     const project = await resolveEntityRef(
       { id: args.projectId, name: args.projectName },
-      { noun: "project", verb: "create the task in", list: (f) => ctx.clockify.listProjects(f) },
+      { noun: "project", verb: "create the task in", list: (f) => ctx.clockify.listProjects(f), verifyId: true },
     );
     if (!project.ok) return project.clarify;
+    const currentProject = await ctx.clockify.getProject(project.id);
+    if (!currentProject) return { clarify: "The selected project no longer exists. Refresh and try again." };
+    const parentSnapshot = await captureStructureSnapshot(ctx, "parent", "project", currentProject);
 
     // 2. Assignees (id/name/"me").
     let assigneeIds: string[] = [];
     let assigneeLabels: string[] = [];
+    let usersPromise: ReturnType<typeof ctx.clockify.listUsers> | undefined;
+    const listUsers = (): ReturnType<typeof ctx.clockify.listUsers> =>
+      (usersPromise ??= ctx.clockify.listUsers());
     if (args.assignees?.length) {
       const m = await resolveUserRefs(args.assignees, {
         verb: "assign",
         adminUserId: ctx.adminUserId,
-        listUsers: () => ctx.clockify.listUsers(),
+        listUsers,
         verifyIds: true,
       });
       if (!m.ok) return m.clarify;
       assigneeIds = m.userIds;
       assigneeLabels = m.labels;
+    }
+    const parentSnapshots = [parentSnapshot];
+    if (assigneeIds.length) {
+      const users = await listUsers();
+      if (users.truncated) return { clarify: "Clockify returned an incomplete assignee list. Use exact active user IDs or retry." };
+      for (const userId of assigneeIds) {
+        const user = users.rows.find((candidate) => candidate.id === userId);
+        if (!user) return { clarify: `Assignee ${userId} could not be verified. Refresh and try again.` };
+        parentSnapshots.push(captureTargetSnapshot(
+          "parent",
+          { type: "user", id: user.id, name: user.name },
+          userProjection(user),
+        ));
+      }
     }
 
     // 3. Pre-check the rate's sub-group (invoices) — the outer gate is work_structure.
@@ -116,10 +149,19 @@ const setupTask = defineRiskyAction({
       reversibility: "Undo removes the created task (and its rate) from the project.",
       warnings: ["This creates a task, sets its assignees, and sets a billable rate."],
       payload: payload as unknown as Record<string, unknown>,
+      targetSnapshots: parentSnapshots,
+      mutationPlan: dynamicMutationPlan([
+        {
+          id: "create-task",
+          strategy: "create",
+          targetFingerprint: sanitizedFingerprint(parentSnapshots.map(({ relation, ref, fingerprint }) => ({ relation, ref, fingerprint }))),
+        },
+        ...(rate ? [{ id: "set-task-rate", strategy: "update" as const }] : []),
+      ]),
     };
     return result;
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation): Promise<CommitResult> {
     const parsed = setupTaskPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       return errorReceipt({
@@ -131,74 +173,122 @@ const setupTask = defineRiskyAction({
     }
     const p = parsed.data;
     const rate = p.rate;
-    const ids: { taskId?: string } = {};
-    const steps: CompositionStep[] = [];
-
-    steps.push({
-      label: "task",
-      required: true,
-      run: async () => {
-        const created = await ctx.clockify.createTask({
-          projectId: p.projectId,
-          name: p.name,
-          ...(p.assigneeIds.length ? { assigneeIds: p.assigneeIds } : {}),
+    const verifyParents = () => verifyTargetSnapshots(
+      operation.targetSnapshots ?? [],
+      (snapshot) => fetchCompositeSnapshot(ctx, snapshot),
+    );
+    const initialParents = await verifyParents();
+    if (!initialParents.ok) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: initialParents.code,
+        message: "The project or an assignee changed before task creation. No task was created.",
+        recovery: { hint: "Refresh the project and assignees and create a fresh preview.", retryable: true },
+      });
+    }
+    const baseline = await ctx.clockify.listTasks(p.projectId);
+    if (baseline.truncated) {
+      return errorReceipt({
+        action: "clockify_setup_task",
+        code: "target_evidence_incomplete",
+        message: "Clockify returned an incomplete task list, so no task was created.",
+        recovery: { hint: "Narrow the project task list and create a fresh preview.", retryable: true },
+      });
+    }
+    const body = {
+      projectId: p.projectId,
+      name: p.name,
+      ...(p.assigneeIds.length ? { assigneeIds: p.assigneeIds } : {}),
+    };
+    const immediateParents = await verifyParents();
+    if (!immediateParents.ok) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: immediateParents.code,
+        message: "The project or an assignee changed immediately before task creation. No task was created.",
+        recovery: { hint: "Refresh the project and assignees and create a fresh preview.", retryable: true },
+      });
+    }
+    let created: Awaited<ReturnType<typeof ctx.clockify.createTaskAtomic>> | undefined;
+    const createStep = await executeDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "create-task",
+      index: 0,
+      name: "Create task",
+      preparedDetail: { beforeIds: baseline.rows.map((row) => row.id), body },
+      dispatch: async () => {
+        const verified = await verifyParents();
+        if (!verified.ok) throw new DefinitiveWriteFailure("VERIFY", "create-task", verified.code);
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.createTaskAtomic(body),
+          reconcile: () => reconcileCreate({
+            beforeIds: baseline.rows.map((row) => row.id),
+            list: () => ctx.clockify.listTasks(p.projectId),
+            matches: (row) => row.name === p.name &&
+              JSON.stringify([...(row.assigneeIds ?? [])].sort()) === JSON.stringify([...p.assigneeIds].sort()),
+          }),
         });
-        ids.taskId = created.id;
-        // The created task rides in changed.created WITH its projectId so the
-        // post-commit one-click undo can delete it; the in-step rollback
-        // compensator uses the same typed deleteTask directly.
+        created = dispatched.value;
         return {
-          kind: "done",
-          created: [{ type: "task", id: created.id, name: created.name, projectId: p.projectId }],
-          undo: async () => {
-            await ctx.clockify.deleteTask(p.projectId, created.id);
-          },
+          externalId: created.id,
+          effect: { created: { type: "task", id: created.id, name: created.name, projectId: p.projectId } },
+          detail: { reconciled: dispatched.reconciled },
         };
       },
     });
-
+    if (createStep.status === "outcome_unknown") {
+      return errorReceipt({
+        action: "clockify_setup_task",
+        code: "commit_outcome_unknown",
+        message: "Task creation may or may not have applied. No rate mutation was sent.",
+        recovery: { hint: "Verify the task list before retrying.", retryable: false },
+      });
+    }
+    if (createStep.status !== "succeeded" || !created) {
+      return errorReceipt({ action: "clockify_setup_task", code: "setup_failed", message: `Couldn't create task "${p.name}".` });
+    }
+    const createdRef = { type: "task", id: created.id, name: created.name, projectId: p.projectId };
     if (rate) {
-      steps.push({
-        label: "rate",
-        required: true,
-        run: async () => {
-          if (!canWrite(ctx.policy, "invoices")) throw new Error("write access to invoices is disabled");
-          await ctx.clockify.updateTaskRate({
+      if (!canWrite(ctx.policy, "invoices")) {
+        return partialSetupTask(createdRef, "The task was created, but invoice write access is no longer available, so its rate was not set.");
+      }
+      const rateStep = await executeDurableRiskyStep({
+        ctx,
+        operation,
+        planStepId: "set-task-rate",
+        index: 1,
+        name: "Set task rate",
+        preparedDetail: { projectId: p.projectId, taskId: created.id, rate },
+        dispatch: async () => {
+          const current = await ctx.clockify.getTask(p.projectId, created!.id);
+          if (!current) throw new Error("created_task_not_found");
+          const input = {
             projectId: p.projectId,
-            taskId: ids.taskId as string,
-            rateKind: rate.kind === "cost" ? "COST" : "HOURLY",
+            taskId: created!.id,
+            rateKind: rate.kind === "cost" ? "COST" as const : "HOURLY" as const,
             amountMinor: rate.amountMinor,
+          };
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: async () => { await ctx.clockify.updateTaskRateAtomic(input); return true as const; },
+            reconcile: async () => {
+              const raw = await ctx.clockify.prepareTaskUpdate(p.projectId, created!.id, {});
+              const key = input.rateKind === "COST" ? "costRate" : "hourlyRate";
+              return (raw[key] as { amount?: unknown } | undefined)?.amount === input.amountMinor ? true as const : undefined;
+            },
           });
-          return { kind: "done" };
+          return { externalId: created!.id, effect: { updatedRate: input }, detail: { reconciled: dispatched.reconciled } };
         },
       });
-    }
-
-    const outcome = await runComposition(steps);
-    if (outcome.status.kind === "failed") {
-      return errorReceipt({
-        action: "clockify_setup_task",
-        code: "setup_failed",
-        message: `Couldn't finish setting up task "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}`,
-        recovery: { hint: "Adjust the request and try again.", retryable: true },
-      });
-    }
-    if (outcome.status.kind === "stopped") {
-      return errorReceipt({
-        action: "clockify_setup_task",
-        code: "setup_incomplete",
-        message: `Setting up task "${p.name}" stopped before completing.`,
-        recovery: { hint: "Try again.", retryable: true },
-      });
+      if (rateStep.status !== "succeeded") {
+        return partialSetupTask(createdRef, "The task was created, but setting its rate did not complete definitively.");
+      }
     }
     return successReceipt({
       action: "clockify_setup_task",
       entity: "task",
       ids: { workspaceId: ctx.workspaceId, projectId: p.projectId },
-      // The created task carries its projectId in changed.created, so the standard
-      // one-click undo (reverseCreation → project-scoped deleteTask) removes it.
-      changed: { created: outcome.created },
-      warnings: outcome.warnings.length ? outcome.warnings : undefined,
+      changed: { created: [createdRef] },
     });
   },
   idempotencyKey(payload) {
@@ -216,5 +306,17 @@ const setupTask = defineRiskyAction({
     });
   },
 });
+
+function partialSetupTask(
+  created: { type: string; id: string; name?: string; projectId: string },
+  message: string,
+): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({ action: "clockify_setup_task", entity: "task", changed: { created: [created] } }),
+    message,
+    recovery: { hint: "Review the created task and apply the missing rate manually if needed.", retryable: false },
+  };
+}
 
 export const SETUP_TASK_ACTIONS: ActionDefinition[] = [setupTask];

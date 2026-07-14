@@ -1,5 +1,12 @@
 import { getAction, suggestActionNames } from "./catalog.js";
-import { isAtomicLedger, isPartialCommitResult } from "./action.js";
+import {
+  clarifyResult,
+  isAtomicLedger,
+  isPartialCommitResult,
+  isPreparedSafeWrite,
+  isSafeWriteClarification,
+  mutationPlanContractError,
+} from "./action.js";
 import type {
   ActionContext,
   ActionResult,
@@ -131,6 +138,18 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     } catch (error) {
       return { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
     }
+    if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+    if (prepared !== undefined && !isPreparedSafeWrite(prepared)) {
+      return {
+        kind: "receipt",
+        receipt: errorReceipt({
+          action: action.name,
+          code: "invalid_safe_write_preparation",
+          message: "Safe-write preparation returned an invalid result.",
+          recovery: { hint: "Correct the action's prepare contract before retrying.", retryable: false },
+        }),
+      };
+    }
     const authorityError = await input.context.authorizeWrite?.(action.name);
     if (authorityError) return { kind: "receipt", receipt: authorityError };
     let operationId: string | undefined;
@@ -221,6 +240,18 @@ export async function commitConfirmedOperation(
       code: "unknown_action",
       message: `No committable action: ${operation.actionName}`,
       recovery: { hint: "This preview can no longer be executed.", retryable: false },
+    });
+  }
+
+  const planError = action.mutationWorkflow === "durable"
+    ? mutationPlanContractError(action.mutationContract, operation.mutationPlan)
+    : undefined;
+  if (planError) {
+    return errorReceipt({
+      action: operation.actionName,
+      code: "invalid_mutation_plan",
+      message: "The stored host mutation plan is incompatible with this action's durable contract.",
+      recovery: { hint: "Create a fresh preview after the action contract is corrected.", retryable: false },
     });
   }
 

@@ -6,6 +6,7 @@ import {
   renderChatsMenu,
   renderClarify,
   renderPermissionTable,
+  renderOperationCard,
   renderPreview,
   renderReceipt,
   renderWelcome,
@@ -472,7 +473,8 @@ function mount(root: HTMLElement, api: ChatApi): void {
       dropWelcome(); // the conversation already started
       for (const item of items) {
         if (item.kind === "bubble") appendMessage(item.role, item.text);
-        else renderResults(item.results);
+        else if (item.kind === "results") renderResults(item.results);
+        else messages.appendChild(renderOperationCard(item.operation));
       }
       messages.scrollTop = messages.scrollHeight;
     } catch (error) {

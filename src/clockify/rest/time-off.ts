@@ -7,7 +7,12 @@ import type {
   TimeOffPolicySummary,
   TimeOffRequestSummary,
   TimeOffBalanceSummary,
+  CreateTimeOffPolicyInput,
+  UpdateTimeOffPolicyInput,
+  PreparedTimeOffPolicyUpdateInput,
+  CreateTimeOffRequestInput,
 } from "../ports/time-off.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /** Clockify scope filter shared by policy users/userGroups. */
 function filter(ids: string[]): Record<string, unknown> {
@@ -29,7 +34,8 @@ type RequestRow = {
   userId?: string;
   status?: { statusType?: string } | string;
   note?: string;
-  timeOffPeriod?: { period?: { start?: string; end?: string } };
+  timeUnit?: string;
+  timeOffPeriod?: { period?: { start?: string; end?: string; days?: number }; isHalfDay?: boolean };
 };
 
 /** Balance row fields read by {@link mapBalance}. */
@@ -45,6 +51,17 @@ function mapPolicy(raw: Record<string, unknown>): TimeOffPolicySummary {
   const out: TimeOffPolicySummary = { id: raw.id as string, name: raw.name as string };
   if (raw.status !== undefined) out.status = raw.status as string;
   if (raw.timeUnit !== undefined) out.timeUnit = raw.timeUnit as string;
+  const approve = raw.approve as { requiresApproval?: unknown } | undefined;
+  if (typeof approve?.requiresApproval === "boolean") out.requiresApproval = approve.requiresApproval;
+  const accrual = raw.automaticAccrual as { amount?: unknown } | undefined;
+  if (typeof accrual?.amount === "number") out.daysPerYear = accrual.amount;
+  if (typeof raw.allowNegativeBalance === "boolean") out.negativeBalance = raw.allowNegativeBalance;
+  const users = raw.users as { ids?: unknown } | undefined;
+  const groups = raw.userGroups as { ids?: unknown } | undefined;
+  if (Array.isArray(raw.userIds)) out.userIds = raw.userIds as string[];
+  else if (Array.isArray(users?.ids)) out.userIds = users.ids as string[];
+  if (Array.isArray(raw.userGroupIds)) out.userGroupIds = raw.userGroupIds as string[];
+  else if (Array.isArray(groups?.ids)) out.userGroupIds = groups.ids as string[];
   return out;
 }
 
@@ -56,9 +73,14 @@ function mapRequest(raw: Record<string, unknown>): TimeOffRequestSummary {
   const status = rawStatus && typeof rawStatus === "object" ? rawStatus.statusType : rawStatus;
   if (status !== undefined) out.status = status;
   if (raw.note !== undefined) out.note = raw.note as string;
-  const period = (raw.timeOffPeriod as { period?: { start?: string; end?: string } } | undefined)?.period;
+  const timeOffPeriod = raw.timeOffPeriod as { period?: { start?: string; end?: string; days?: number }; isHalfDay?: boolean } | undefined;
+  const period = timeOffPeriod?.period;
   if (period?.start !== undefined) out.start = period.start;
   if (period?.end !== undefined) out.end = period.end;
+  if (typeof period?.days === "number") out.days = period.days;
+  if (typeof timeOffPeriod?.isHalfDay === "boolean") out.halfDay = timeOffPeriod.isHalfDay;
+  if (typeof raw.timeUnit === "string") out.timeUnit = raw.timeUnit;
+  else if (typeof period?.start === "string") out.timeUnit = period.start.includes("T") ? "HOURS" : "DAYS";
   return out;
 }
 
@@ -105,6 +127,57 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
     });
   }
 
+  const createPolicyAtomic = async (input: CreateTimeOffPolicyInput): Promise<EntitySummary> => {
+    const body: Record<string, unknown> = { name: input.name, approve: { requiresApproval: input.requiresApproval ?? false }, timeUnit: TIME_UNIT, userGroups: filter(input.userGroupIds ?? []), users: filter(input.userIds?.length ? input.userIds : [input.userId]), ...(input.daysPerYear !== undefined ? { automaticAccrual: { amount: input.daysPerYear, period: "YEAR", timeUnit: TIME_UNIT } } : {}) };
+    if (input.negativeBalance !== undefined) { body.allowNegativeBalance = input.negativeBalance; if (input.negativeBalance) body.negativeBalance = { amount: 10, amountValidForTimeUnit: true, period: "YEAR", shouldReset: false, timeUnit: TIME_UNIT }; }
+    const row = (await core.mutate("api", "POST", `${ws}/time-off/policies`, body)) as { id?: unknown; name?: string } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/time-off/policies`, "Clockify returned a successful time-off policy response without a usable id.");
+    }
+    return { id: row.id, name: row.name ?? input.name };
+  };
+  const getPolicyMutationState = async (id: string): Promise<Record<string, unknown> | null> => {
+    const raw = await core.call("api", "GET", `${ws}/time-off/policies/${id}`, undefined, true);
+    return raw && typeof raw === "object" ? structuredClone(raw as Record<string, unknown>) : null;
+  };
+  const preparePolicyUpdate = async (id: string, patch: UpdateTimeOffPolicyInput): Promise<PreparedTimeOffPolicyUpdateInput> => {
+    const existing = (await getPolicyMutationState(id)) ?? {};
+    const source = structuredClone(existing);
+    const body = structuredClone(existing);
+    const timeUnit = (existing.timeUnit as string | undefined) ?? TIME_UNIT;
+    const name = patch.name ?? existing.name as string | undefined;
+    if (!name) throw new Error("time_off_policy_name_unavailable");
+    if (patch.daysPerYear !== undefined) body.automaticAccrual = { ...((body.automaticAccrual ?? {}) as Record<string, unknown>), amount: patch.daysPerYear, period: "YEAR", timeUnit };
+    if (patch.requiresApproval !== undefined) body.approve = { ...((body.approve ?? {}) as Record<string, unknown>), requiresApproval: patch.requiresApproval };
+    const rawUsers = existing.users as { ids?: unknown } | undefined;
+    const rawGroups = existing.userGroups as { ids?: unknown } | undefined;
+    const users = Array.isArray(existing.userIds) ? existing.userIds as string[] : Array.isArray(rawUsers?.ids) ? rawUsers.ids as string[] : [];
+    const groups = Array.isArray(existing.userGroupIds) ? existing.userGroupIds as string[] : Array.isArray(rawGroups?.ids) ? rawGroups.ids as string[] : [];
+    Object.assign(body, { name, users: filter(patch.userIds?.length ? patch.userIds : users), userGroups: filter(patch.userGroupIds?.length ? patch.userGroupIds : groups) });
+    return { ...body, name, body, source } as PreparedTimeOffPolicyUpdateInput;
+  };
+  const updatePolicyAtomic = async (id: string, body: PreparedTimeOffPolicyUpdateInput): Promise<EntitySummary> => {
+    const row = (await core.mutate("api", "PUT", `${ws}/time-off/policies/${id}`, body.body)) as { id?: string; name?: string };
+    return { id: row?.id ?? id, name: row?.name ?? body.name };
+  };
+  const archivePolicyAtomic = async (id: string, archived: boolean): Promise<void> => { await core.mutate("api", "PATCH", `${ws}/time-off/policies/${id}`, { status: archived ? "ARCHIVED" : "ACTIVE" }); };
+  const createRequestAtomic = async (policyId: string, input: CreateTimeOffRequestInput): Promise<EntitySummary> => {
+    let body: Record<string, unknown>;
+    if (input.timeUnit === "HOURS") body = { timeOffPeriod: { period: { start: input.start, end: input.end } }, ...(input.note !== undefined ? { note: input.note } : {}) };
+    else { const start = toBareDate(input.start); const end = toBareDate(input.end); const days = input.days ?? inclusiveDays(start, end); body = { timeOffPeriod: { period: { start, end, ...(days !== undefined ? { days } : {}) }, isHalfDay: input.halfDay ?? false, halfDayPeriod: "NOT_DEFINED", timeOffHalfDayPeriod: "NOT_DEFINED" }, ...(input.note !== undefined ? { note: input.note } : {}) }; }
+    const row = (await core.mutate("api", "POST", `${ws}/time-off/policies/${policyId}/requests`, body)) as { id?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/time-off/policies/${policyId}/requests`, "Clockify returned a successful time-off request response without a usable id.");
+    }
+    return { id: row.id, name: row.id };
+  };
+  const deleteRequestAtomic = async (policyId: string, requestId: string): Promise<void> => { await core.mutate("api", "DELETE", `${ws}/time-off/policies/${policyId}/requests/${requestId}`); };
+  const setRequestStatusAtomic = async (policyId: string, requestId: string, statusType: "APPROVED" | "REJECTED", note?: string): Promise<EntitySummary> => {
+    const row = (await core.mutate("api", "PATCH", `${ws}/time-off/policies/${policyId}/requests/${requestId}`, { status: statusType, ...(note !== undefined ? { note } : {}) })) as { id?: string } | null;
+    return { id: row?.id ?? requestId, name: statusType };
+  };
+  const updateBalanceAtomic = async (policyId: string, input: { userIds: string[]; value: number; note?: string }): Promise<void> => { await core.mutate("api", "PATCH", `${ws}/time-off/balance/policy/${policyId}`, { userIds: input.userIds, value: input.value, ...(input.note !== undefined ? { note: input.note } : {}) }); };
+
   return {
     async listTimeOffPolicies() {
       const result = await core.paginate("api", `${ws}/time-off/policies`);
@@ -115,60 +188,19 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       return raw ? mapPolicy(raw as Record<string, unknown>) : null;
     },
     async createTimeOffPolicy(input): Promise<EntitySummary> {
-      const body: Record<string, unknown> = {
-        name: input.name,
-        approve: { requiresApproval: input.requiresApproval ?? false },
-        timeUnit: TIME_UNIT,
-        userGroups: filter(input.userGroupIds ?? []),
-        // Scope to the given users, else the admin (a policy with no scope is rejected).
-        users: filter(input.userIds?.length ? input.userIds : [input.userId]),
-        ...(input.daysPerYear !== undefined
-          ? { automaticAccrual: { amount: input.daysPerYear, period: "YEAR", timeUnit: TIME_UNIT } }
-          : {}),
-      };
-      if (input.negativeBalance !== undefined) {
-        body.allowNegativeBalance = input.negativeBalance;
-        if (input.negativeBalance) {
-          body.negativeBalance = {
-            amount: 10,
-            amountValidForTimeUnit: true,
-            period: "YEAR",
-            shouldReset: false,
-            timeUnit: TIME_UNIT,
-          };
-        }
-      }
-      const p = (await core.call("api", "POST", `${ws}/time-off/policies`, body)) as { id: string; name?: string };
-      return { id: p.id, name: p.name ?? input.name };
+      return createPolicyAtomic(input);
     },
+    createTimeOffPolicyAtomic: createPolicyAtomic,
     async updateTimeOffPolicy(id, patch): Promise<EntitySummary> {
-      // GET-then-merge-PUT: Clockify replaces on PUT, so merge into the existing policy.
-      const existing = ((await core.call("api", "GET", `${ws}/time-off/policies/${id}`)) ?? {}) as Record<string, unknown>;
-      const timeUnit = (existing.timeUnit as string | undefined) ?? TIME_UNIT;
-      if (patch.name !== undefined) existing.name = patch.name;
-      if (patch.daysPerYear !== undefined) {
-        existing.automaticAccrual = { amount: patch.daysPerYear, period: "YEAR", timeUnit };
-      }
-      if (patch.requiresApproval !== undefined) {
-        const approve = (existing.approve ?? {}) as Record<string, unknown>;
-        existing.approve = { ...approve, requiresApproval: patch.requiresApproval };
-      }
-      // The PUT requires users/userGroups as {contains,ids} FILTERS, but the GET
-      // returns them FLAT as userIds/userGroupIds — re-sending the GET doc leaves
-      // the filters null and the PUT 400s "must not be null" (live-verified). Always
-      // reconstruct BOTH from the existing flat ids, overlaying the patch when given.
-      const existingUserIds = Array.isArray(existing.userIds) ? (existing.userIds as string[]) : [];
-      const existingGroupIds = Array.isArray(existing.userGroupIds) ? (existing.userGroupIds as string[]) : [];
-      existing.users = filter(patch.userIds?.length ? patch.userIds : existingUserIds);
-      existing.userGroups = filter(patch.userGroupIds?.length ? patch.userGroupIds : existingGroupIds);
-      const result = (await core.call("api", "PUT", `${ws}/time-off/policies/${id}`, existing)) as { id?: string; name?: string };
-      return { id: result?.id ?? id, name: result?.name ?? patch.name ?? id };
+      return updatePolicyAtomic(id, await preparePolicyUpdate(id, patch));
     },
+    prepareTimeOffPolicyUpdate: preparePolicyUpdate,
+    getTimeOffPolicyMutationState: getPolicyMutationState,
+    updateTimeOffPolicyAtomic: updatePolicyAtomic,
     async archiveTimeOffPolicy(id, archived) {
-      await core.call("api", "PATCH", `${ws}/time-off/policies/${id}`, {
-        status: archived ? "ARCHIVED" : "ACTIVE",
-      });
+      await archivePolicyAtomic(id, archived);
     },
+    archiveTimeOffPolicyAtomic: archivePolicyAtomic,
     async listTimeOffRequests(filterArg) {
       const result = await searchRequests(filterArg);
       return { ...result, rows: result.rows.map(mapRequest) };
@@ -182,59 +214,25 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
       return raw ? mapRequest(raw) : null;
     },
     async createTimeOffRequest(policyId, input): Promise<EntitySummary> {
-      if (input.timeUnit === "HOURS") {
-        // HOURS policies want full ISO datetime start/end and NO `days`/half-day
-        // scaffold (live-verified 2026-06-28: the DAYS body 400s "datetime must be
-        // yyyy-MM-ddThh:mm:ssZ"; this shape returns 200 with balanceDiff in hours).
-        const body: Record<string, unknown> = {
-          timeOffPeriod: { period: { start: input.start, end: input.end } },
-          ...(input.note !== undefined ? { note: input.note } : {}),
-        };
-        const r = (await core.call("api", "POST", `${ws}/time-off/policies/${policyId}/requests`, body)) as { id: string };
-        return { id: r.id, name: r.id };
-      }
-      const start = toBareDate(input.start);
-      const end = toBareDate(input.end);
-      // `days` is REQUIRED on the wire (live: 400 without it); default the
-      // inclusive span and let Clockify apply its own working-day validation.
-      const days = input.days ?? inclusiveDays(start, end);
-      const body: Record<string, unknown> = {
-        timeOffPeriod: {
-          period: {
-            start,
-            end,
-            ...(days !== undefined ? { days } : {}),
-          },
-          isHalfDay: input.halfDay ?? false,
-          halfDayPeriod: "NOT_DEFINED",
-          timeOffHalfDayPeriod: "NOT_DEFINED",
-        },
-        ...(input.note !== undefined ? { note: input.note } : {}),
-      };
-      const r = (await core.call("api", "POST", `${ws}/time-off/policies/${policyId}/requests`, body)) as { id: string };
-      return { id: r.id, name: r.id };
+      return createRequestAtomic(policyId, input);
     },
+    createTimeOffRequestAtomic: createRequestAtomic,
     async deleteTimeOffRequest(policyId, requestId) {
-      await core.call("api", "DELETE", `${ws}/time-off/policies/${policyId}/requests/${requestId}`);
+      await deleteRequestAtomic(policyId, requestId);
     },
+    deleteTimeOffRequestAtomic: deleteRequestAtomic,
     async setTimeOffRequestStatus(policyId, requestId, statusType, note): Promise<EntitySummary> {
       // The wire field is `status` (spec + goclmcp); `statusType` only appears in responses.
-      const r = (await core.call("api", "PATCH", `${ws}/time-off/policies/${policyId}/requests/${requestId}`, {
-        status: statusType,
-        ...(note !== undefined ? { note } : {}),
-      })) as { id?: string } | null;
-      return { id: r?.id ?? requestId, name: statusType };
+      return setRequestStatusAtomic(policyId, requestId, statusType, note);
     },
+    setTimeOffRequestStatusAtomic: setRequestStatusAtomic,
     async getTimeOffBalance(userId) {
       const result = await core.paginateEnvelope("api", `${ws}/time-off/balance/user/${userId}`, "balances");
       return { ...result, rows: (result.rows as BalanceRow[]).map((r) => mapBalance(r, userId)) };
     },
     async updateTimeOffBalance(policyId, input) {
-      await core.call("api", "PATCH", `${ws}/time-off/balance/policy/${policyId}`, {
-        userIds: input.userIds,
-        value: input.value,
-        ...(input.note !== undefined ? { note: input.note } : {}),
-      });
+      await updateBalanceAtomic(policyId, input);
     },
+    updateTimeOffBalanceAtomic: updateBalanceAtomic,
   };
 }

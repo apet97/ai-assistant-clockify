@@ -150,9 +150,15 @@ bug was found against the REAL API, not by reading the code.
   `durable-risky-write.ts` (confirmed one-dispatch adapter), the focused
   `invoice-create-workflow.ts`/`invoice-update-workflow.ts`/
   `invoice-payment-workflow.ts` reconciliation modules,
-  `mutation-compatibility.ts` (named phase 5 migration exceptions),
+  `target-snapshots.ts` (authoritative pre-dispatch drift checks),
+  `mutation-compatibility.ts` (no-exception durable catalog gate),
+  `startup-reconciliation.ts` + `startup-reconciliation-registry.ts` and focused
+  workflow registries (read-only executable reconciliation for crash-orphaned
+  dispatched steps; never resumes prepared work or compensates),
   `compose.ts` (legacy atomic multi-step + rollback), `idempotency.ts`
-  (intent-hash dedupe, 10-min window, canonical partial replay),
+  (operation-scoped confirmed-commit dedupe, 10-min window, canonical partial
+  replay; invoice identity is the durable operation ID, never a second semantic
+  payload ID),
   `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
   BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
   `workflows/<area>.ts`. Name→id + date resolution is split across
@@ -175,7 +181,7 @@ bug was found against the REAL API, not by reading the code.
   chat-history switcher (`GET /chat/sessions` lists the admin's live, owned,
   non-empty sessions; `POST /chat/sessions/:id/open` re-cookies to an OWNED target
   — IDOR-guarded 404 + no cookie for a foreign admin/workspace, the target's
-  unextended expiry). the 14 route handlers stay in `api.ts`; the turn/confirm/commit
+  unextended expiry). The 17 route handlers stay in `api.ts`; the turn/confirm/commit
   machinery (`executeChatTurn`, `runResume`, `commitConfirmation`,
   `createTurnMachinery`) lives in `chat-pipeline.ts` (`createChatPipeline(deps)`),
   pure result transforms + guards in `chat-results.ts`, shared constants in
@@ -185,6 +191,9 @@ bug was found against the REAL API, not by reading the code.
   owns the full async handler promise and skips disconnected queued requests),
   `best-effort.ts` (the one never-break-a-turn bookkeeping wrapper), `ndjson.ts`
   (the one NDJSON-stream setup → `{write, signal}`, used by both streaming routes).
+  Scoped `GET /api/operation-runs/:operationId` returns only sanitized bounded
+  operation/step status; chat-history responses restore passive operation cards
+  from that same workspace+admin+session-scoped view.
   `src/ui/` vanilla TS chat (a11y; previews batched so "Confirm all" stays one
   card; header **"New chat"** + **"Chats ▾"** history dropdown — titles via
   `textContent`, full keyboard nav) — split into the fetch/NDJSON client
@@ -212,8 +221,8 @@ bug was found against the REAL API, not by reading the code.
   fails closed. Writes are journaled as prepared→executing→terminal, and transport
   failure/timeout/408/5xx/malformed success after dispatch remains
   `outcome_unknown` without automatic retry.
-- **Durable external effects:** migrated writes persist normalized nonsecret
-  intent and an exact mutation plan before dispatch. Every host effect is an
+- **Durable external effects:** every Clockify external write persists normalized
+  nonsecret intent and an exact mutation plan before dispatch. Every host effect is an
   ordered prepared→executing→terminal step. Safe writes own the single operation
   start; confirmed writes inherit the one-use claim's start and receive only a
   step journal scoped to that exact operation. Duplicate/cross-operation step
@@ -227,11 +236,18 @@ bug was found against the REAL API, not by reading the code.
   `operation_journal_degraded`; a composition stops as nonretryable `partial`;
   compensation preserves the known result. Even if the fallback marker cannot
   persist, the synthetic result stays truthful and the already-created unique
-  step identity blocks redispatch. Startup recovery is
-  read-only: it marks only dispatched orphan steps unknown and never compensates
-  automatically. `clockify_tags_create` is the step-journaled safe-write
-  reference. Unmigrated writes are enumerated by exact action name and phase in
-  `mutation-compatibility.ts`. Invoice writes are the confirmed-write reference:
+  step identity blocks redispatch. Startup recovery is read-only: store recovery
+  marks only dispatched orphan steps unknown, then the production reconciliation
+  registry executes the action/step's complete-list or exact-target read strategy
+  before traffic is accepted. Compatible authoritative evidence settles the step
+  and operation; incomplete, zero/multiple, truncated, handler-missing, or
+  fingerprint-drift evidence remains unknown. It never resumes prepared work or
+  compensates automatically. `mutation-compatibility.ts` rejects any external
+  write lacking normalized nonsecret operation data, an exact plan,
+  authoritative targeting, or step-bound complete-evidence reconciliation
+  metadata; there is no exception bridge. `clockify_tags_create` is the
+  step-journaled safe-write reference. Invoice writes are the confirmed-write
+  reference:
   they persist the exact operation plan and journal each base create,
   enrichment, item, status, payment, delete, and import mutation separately.
 - **Closed nested arguments:** unknown fields are rejected at every object depth.

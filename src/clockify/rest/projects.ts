@@ -28,6 +28,41 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     billable: p.billable,
   });
 
+  const createProjectAtomic: ProjectPort["createProjectAtomic"] = async (input) => map((await core.mutate("api", "POST", `${ws}/projects`, {
+    name: input.name,
+    ...(input.clientId ? { clientId: input.clientId } : {}),
+    ...(input.billable !== undefined ? { billable: input.billable } : {}),
+    ...(input.color ? { color: input.color } : {}),
+    ...(input.isPublic !== undefined ? { isPublic: input.isPublic } : {}),
+    ...(input.hourlyRate ? { hourlyRate: input.hourlyRate } : {}),
+    ...(input.costRate ? { costRate: input.costRate } : {}),
+  })) as ProjectRow);
+  const prepareProjectUpdate: ProjectPort["prepareProjectUpdate"] = async (id, patch) => ({
+    ...((await core.call("api", "GET", `${ws}/projects/${id}`)) as Record<string, unknown>),
+    ...patch,
+  });
+  const updateProjectAtomic: ProjectPort["updateProjectAtomic"] = async (id, body) =>
+    map((await core.mutate("api", "PUT", `${ws}/projects/${id}`, body)) as ProjectRow);
+  const archiveProjectAtomic: ProjectPort["archiveProjectAtomic"] = updateProjectAtomic;
+  const deleteProjectAtomic: ProjectPort["deleteProjectAtomic"] = async (id) => {
+    await core.mutate("api", "DELETE", `${ws}/projects/${id}`);
+  };
+  const createProjectFromTemplateAtomic: ProjectPort["createProjectFromTemplateAtomic"] = async (input) =>
+    map((await core.mutate("api", "POST", `${ws}/projects/from-template`, input)) as ProjectRow);
+  const updateProjectRateAtomic: ProjectPort["updateProjectRateAtomic"] = async (input) => {
+    const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
+    await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/users/${input.userId}/${kind}`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  };
+  const updateProjectEstimateAtomic: ProjectPort["updateProjectEstimateAtomic"] = async (id, patch) => {
+    await core.mutate("api", "PATCH", `${ws}/projects/${id}/estimate`, patch);
+  };
+  const updateProjectMembershipsAtomic: ProjectPort["updateProjectMembershipsAtomic"] = async (id, patch) => {
+    await core.mutate("api", "PATCH", `${ws}/projects/${id}/memberships`, patch);
+  };
+
   return {
     async listProjects(filter) {
       const params: Record<string, string> = { archived: String(filter?.archived ?? false) };
@@ -40,53 +75,46 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       const p = (await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true)) as ProjectRow | null;
       return p ? map(p) : null;
     },
+    async getProjectMutationState(id) {
+      return await core.call("api", "GET", `${ws}/projects/${id}`, undefined, true) as Record<string, unknown> | null;
+    },
     async createProject(input) {
-      const p = await core.call("api", "POST", `${ws}/projects`, {
-        name: input.name,
-        ...(input.clientId ? { clientId: input.clientId } : {}),
-        ...(input.billable !== undefined ? { billable: input.billable } : {}),
-        ...(input.color ? { color: input.color } : {}),
-        ...(input.isPublic !== undefined ? { isPublic: input.isPublic } : {}),
-        ...(input.hourlyRate ? { hourlyRate: input.hourlyRate } : {}),
-        ...(input.costRate ? { costRate: input.costRate } : {}),
-      });
-      return map(p as ProjectRow);
+      return createProjectAtomic(input);
     },
+    createProjectAtomic,
     async updateProject(id, patch) {
-      const p = await core.getThenPut("api", `${ws}/projects/${id}`, patch);
-      return map(p as ProjectRow);
+      return updateProjectAtomic(id, await prepareProjectUpdate(id, patch));
     },
+    prepareProjectUpdate,
+    updateProjectAtomic,
     async archiveProject(id) {
-      const p = await core.getThenPut("api", `${ws}/projects/${id}`, { archived: true });
-      return map(p as ProjectRow);
+      return archiveProjectAtomic(id, await prepareProjectUpdate(id, { archived: true }));
     },
+    archiveProjectAtomic,
     async deleteProject(id) {
-      await core.getThenPut("api", `${ws}/projects/${id}`, { archived: true }); // archive first
-      await core.call("api", "DELETE", `${ws}/projects/${id}`);
+      await archiveProjectAtomic(id, await prepareProjectUpdate(id, { archived: true }));
+      await deleteProjectAtomic(id);
     },
+    deleteProjectAtomic,
     async createProjectFromTemplate(input) {
       // CreateProjectFromTemplateV1: required [name, templateProjectId]; no `templateId` key.
-      const p = await core.call("api", "POST", `${ws}/projects/from-template`, {
-        templateProjectId: input.templateProjectId,
-        name: input.name,
-      });
-      return map(p as ProjectRow);
+      return createProjectFromTemplateAtomic(input);
     },
+    createProjectFromTemplateAtomic,
     async updateProjectRate(input) {
-      const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
-      await core.call("api", "PUT", `${ws}/projects/${input.projectId}/users/${input.userId}/${kind}`, {
-        amount: input.amountMinor,
-        ...(input.since ? { since: input.since } : {}),
-      });
+      await updateProjectRateAtomic(input);
     },
+    updateProjectRateAtomic,
     async updateProjectEstimate(id, patch) {
       // PATCH, per the goclmcp reference (the plan's "PUT" predates that check).
-      await core.call("api", "PATCH", `${ws}/projects/${id}/estimate`, patch);
+      await updateProjectEstimateAtomic(id, patch);
     },
+    updateProjectEstimateAtomic,
     async updateProjectMemberships(id, patch) {
       // PATCH, per the goclmcp reference. Replaces the membership set.
-      await core.call("api", "PATCH", `${ws}/projects/${id}/memberships`, patch);
+      await updateProjectMembershipsAtomic(id, patch);
     },
+    updateProjectMembershipsAtomic,
     async getProjectMemberships(projectId) {
       const p = (await core.call("api", "GET", `${ws}/projects/${projectId}`, undefined, true)) as
         | { memberships?: Array<Record<string, unknown>> }

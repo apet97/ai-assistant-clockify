@@ -15,10 +15,16 @@ export interface ClientFilter {
 export interface ClientPort {
   listClients(filter?: ClientFilter): Promise<ListResult<EntitySummary>>;
   getClient(id: string): Promise<EntitySummary | null>;
+  /** Complete raw client document for durable fingerprint/reconciliation reads. */
+  getClientMutationState(id: string): Promise<Record<string, unknown> | null>;
   /** `ccEmails`/`currencyId` are silently dropped by POST /clients, so the adapter applies them via a follow-up PUT. */
   createClient(input: { name: string; ccEmails?: string[]; currencyId?: string }): Promise<EntitySummary>;
+  createClientBaseAtomic(input: { name: string }): Promise<EntitySummary>;
   updateClient(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
+  prepareClientUpdate(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateClientAtomic(id: string, body: Record<string, unknown>): Promise<EntitySummary>;
   deleteClient(id: string): Promise<void>;
+  deleteClientAtomic(id: string): Promise<void>;
   /** Workspace currencies (`{id, code}`), for resolving a currency CODE → id. */
   listCurrencies(): Promise<ListResult<{ id: string; code: string }>>;
 }

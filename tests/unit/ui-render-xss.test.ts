@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { renderClarify, renderPreview, renderReceipt } from "../../src/ui/render.js";
+import { renderClarify, renderOperationCard, renderPreview, renderReceipt } from "../../src/ui/render.js";
 import type { ClarifyResult, PreviewResult, ReceiptResult } from "../../src/ui/shared.js";
 
 /**
@@ -194,5 +194,19 @@ describe("render-XSS: attacker-named entities render as inert text (r2-injection
     const tags = card.allTags();
     expect(tags).not.toContain("img");
     expect(tags).not.toContain("script");
+  });
+
+  it("renders passive operation cards with hostile action/step/reconciliation text via textContent", () => {
+    const card = renderOperationCard({
+      id: "operation-1",
+      actionName: XSS,
+      status: "outcome_unknown",
+      steps: [{ planStepId: "step-1", name: XSS, status: "outcome_unknown" }],
+      reconciliation: { authoritative: false, reason: XSS },
+    }) as unknown as StubNode;
+    expect(card.allText()).toContain(XSS);
+    expect(card.allTags()).not.toContain("script");
+    expect(card.allTags()).not.toContain("img");
+    expect(card.allTags()).not.toContain("button");
   });
 });

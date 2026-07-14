@@ -1,90 +1,5 @@
 import type { ActionDefinition } from "./action.js";
 
-export interface ExternalMutationCompatibilityException {
-  actionName: string;
-  migrateIn: "phase-4-invoice-workflows" | "phase-5-remaining-write-classes";
-}
-
-const PHASE_5_ACTIONS = [
-  "clockify_start_timer",
-  "clockify_stop_timer",
-  "clockify_log_work",
-  "clockify_fix_entry",
-  "clockify_entries_delete",
-  "clockify_entries_mark_invoiced",
-  "clockify_create_work_package",
-  "clockify_projects_create",
-  "clockify_projects_from_template",
-  "clockify_projects_update",
-  "clockify_projects_archive",
-  "clockify_projects_delete",
-  "clockify_projects_rate_update",
-  "clockify_projects_estimate_update",
-  "clockify_projects_memberships_update",
-  "clockify_tasks_create",
-  "clockify_tasks_update",
-  "clockify_tasks_delete",
-  "clockify_tasks_rate_update",
-  "clockify_clients_create",
-  "clockify_clients_update",
-  "clockify_clients_delete",
-  "clockify_tags_update",
-  "clockify_tags_delete",
-  "clockify_expenses_create",
-  "clockify_expenses_update",
-  "clockify_expenses_delete",
-  "clockify_expenses_categories_create",
-  "clockify_expenses_categories_update",
-  "clockify_expenses_categories_delete",
-  "clockify_custom_fields_create",
-  "clockify_custom_fields_update",
-  "clockify_custom_fields_delete",
-  "clockify_custom_fields_set_value_project",
-  "clockify_custom_fields_set_value_entry",
-  "clockify_time_off_policies_create",
-  "clockify_time_off_policies_update",
-  "clockify_time_off_policies_archive",
-  "clockify_time_off_requests_create",
-  "clockify_time_off_requests_delete",
-  "clockify_time_off_approve",
-  "clockify_time_off_deny",
-  "clockify_time_off_balance_update",
-  "clockify_holidays_create",
-  "clockify_holidays_update",
-  "clockify_holidays_delete",
-  "clockify_scheduling_assignments_create",
-  "clockify_scheduling_assignments_update",
-  "clockify_scheduling_assignments_delete",
-  "clockify_scheduling_publish",
-  "clockify_approvals_submit",
-  "clockify_approvals_approve",
-  "clockify_approvals_reject",
-  "clockify_approvals_withdraw",
-  "clockify_approvals_resubmit",
-  "clockify_webhooks_create",
-  "clockify_webhooks_update",
-  "clockify_webhooks_delete",
-  "clockify_users_invite",
-  "clockify_users_role_update",
-  "clockify_users_rate_update",
-  "clockify_users_deactivate",
-  "clockify_groups_create",
-  "clockify_groups_update",
-  "clockify_groups_delete",
-  "clockify_groups_add_user",
-  "clockify_groups_remove_user",
-  "clockify_delete_entity",
-  "clockify_update_entity",
-  "clockify_onboard_user",
-  "clockify_setup_project",
-  "clockify_setup_task",
-] as const;
-
-/** Temporary, reviewable bridge while phases 4-5 migrate every named action. */
-export const EXTERNAL_MUTATION_COMPATIBILITY_EXCEPTIONS: readonly ExternalMutationCompatibilityException[] = [
-  ...PHASE_5_ACTIONS.map((actionName) => ({ actionName, migrateIn: "phase-5-remaining-write-classes" as const })),
-];
-
 function isExternalWrite(action: ActionDefinition): boolean {
   return action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read");
 }
@@ -93,26 +8,59 @@ function hasDurableMutationPath(action: ActionDefinition): boolean {
   return action.mutationWorkflow === "durable";
 }
 
+function invalidContract(action: ActionDefinition): string | undefined {
+  const contract = action.mutationContract as Partial<NonNullable<ActionDefinition["mutationContract"]>> | undefined;
+  if (!contract?.operationData) return "operationData";
+  if (
+    contract.operationData.normalized !== true || contract.operationData.nonsecret !== true ||
+    !["prepared_safe_write", "confirmable_operation"].includes(contract.operationData.source ?? "")
+  ) return "operationData";
+  if (!contract.mutationPlan) return "mutationPlan";
+  if (
+    contract.mutationPlan.exact !== true ||
+    !["prepared_safe_write", "preview"].includes(contract.mutationPlan.source ?? "")
+  ) return "mutationPlan";
+  if (!contract.targeting) return "targeting";
+  if (contract.targeting.mode === "snapshots") {
+    if (!Array.isArray(contract.targeting.relations) || contract.targeting.relations.length === 0 ||
+      contract.targeting.relations.some((relation) => relation !== "target" && relation !== "parent")) return "targeting";
+  } else if (contract.targeting.mode !== "create_no_target") return "targeting";
+  if (!contract.reconciliation) return "reconciliation";
+  const reconciliationStrategies = new Set(["create", "update", "delete", "state-command", "composed"]);
+  if (!Array.isArray(contract.reconciliation.strategies) || contract.reconciliation.strategies.length === 0 ||
+    contract.reconciliation.strategies.some((strategy) => !reconciliationStrategies.has(strategy)) ||
+    (contract.reconciliation.unreconciledStepIds !== undefined &&
+      (!Array.isArray(contract.reconciliation.unreconciledStepIds) ||
+        contract.reconciliation.unreconciledStepIds.some((id) => typeof id !== "string" || id.length === 0) ||
+        new Set(contract.reconciliation.unreconciledStepIds).size !== contract.reconciliation.unreconciledStepIds.length)) ||
+    contract.reconciliation.stepBound !== true || contract.reconciliation.requiresCompleteEvidence !== true) {
+    return "reconciliation";
+  }
+  const safePath = !!action.prepareSafeWrite && !!action.executeSafeWrite;
+  const confirmedPath = typeof action.commit === "function";
+  if (safePath) {
+    if (contract.operationData.source !== "prepared_safe_write" || contract.mutationPlan.source !== "prepared_safe_write") return "source";
+  } else if (confirmedPath) {
+    if (contract.operationData.source !== "confirmable_operation" || contract.mutationPlan.source !== "preview") return "source";
+  } else {
+    return "source";
+  }
+  return undefined;
+}
+
 export function mutationCatalogCoverage(
   actions: ReadonlyArray<ActionDefinition>,
-  exceptions = EXTERNAL_MUTATION_COMPATIBILITY_EXCEPTIONS,
-): { uncovered: string[]; invalidExceptions: string[] } {
-  const byName = new Map(actions.map((action) => [action.name, action]));
-  const exceptionNames = new Set<string>();
-  const invalidExceptions: string[] = [];
-  for (const exception of exceptions) {
-    const action = byName.get(exception.actionName);
-    if (exceptionNames.has(exception.actionName)) invalidExceptions.push(`duplicate:${exception.actionName}`);
-    else if (!action) invalidExceptions.push(`missing:${exception.actionName}`);
-    else if (!isExternalWrite(action)) invalidExceptions.push(`not_external:${exception.actionName}`);
-    else if (hasDurableMutationPath(action)) invalidExceptions.push(`already_migrated:${exception.actionName}`);
-    exceptionNames.add(exception.actionName);
-  }
+): { uncovered: string[]; invalidContracts: string[] } {
+  const invalidContracts = actions.flatMap((action) => {
+    if (!isExternalWrite(action)) return [];
+    const invalid = invalidContract(action);
+    return invalid ? [`${action.name}:${invalid}`] : [];
+  }).sort();
   return {
     uncovered: actions
-      .filter((action) => isExternalWrite(action) && !hasDurableMutationPath(action) && !exceptionNames.has(action.name))
+      .filter((action) => isExternalWrite(action) && !hasDurableMutationPath(action))
       .map((action) => action.name)
       .sort(),
-    invalidExceptions: invalidExceptions.sort(),
+    invalidContracts,
   };
 }

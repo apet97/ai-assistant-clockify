@@ -78,7 +78,7 @@ describe("tag actions", () => {
     expect(fake.counts.updateTag ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateTag).toBe(1);
+    expect(fake.counts.updateTagAtomic).toBe(1);
   });
 
   it("clockify_tags_update RENAMES by currentName — resolves it to the id server-side (the planner habitually listed instead because update used to require an id)", async () => {
@@ -114,7 +114,7 @@ describe("tag actions", () => {
     expect(preview.operation.risks).toContain("destructive");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 
@@ -126,7 +126,7 @@ describe("tag actions", () => {
     expect((preview.operation.payload as { id: string }).id).toBe("t1");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 

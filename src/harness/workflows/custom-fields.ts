@@ -1,7 +1,13 @@
 import { z } from "zod";
-import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionDefinition } from "../action.js";
-import { listReceipt, successReceipt } from "../receipts.js";
+import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type TargetSnapshot } from "../action.js";
+import { errorReceipt, listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { isJournalDegradedStep, withJournalDegradedWarning } from "../mutation-workflow.js";
+import { captureTargetSnapshot } from "../target-snapshots.js";
+import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
+import type { CustomFieldSummary, CreateCustomFieldInput, PreparedCustomFieldUpdateInput } from "../../clockify/ports/custom-fields.js";
 
 /**
  * Typed custom-field workflows (goclmcp §2.8). Reads (list/get) execute
@@ -14,6 +20,24 @@ import { describePatch, resolveEntityRef } from "./resolve.js";
  */
 
 const CF = "custom_fields" as const;
+const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
+const targetContract = (relations: ["target" | "parent", ...Array<"target" | "parent">], strategy: "update" | "delete") =>
+  durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations }, strategies: [strategy] });
+
+async function fetchCustomFieldSnapshot(ctx: ActionContext, id: string) {
+  const field = await ctx.clockify.getCustomField(id);
+  return field ? captureTargetSnapshot("target", { type: "custom_field", id: field.id, name: field.name }, field) : undefined;
+}
+
+function fetchSnapshot(ctx: ActionContext, snapshot: TargetSnapshot) {
+  if (snapshot.ref.type === "custom_field") {
+    return ctx.clockify.getCustomField(snapshot.ref.id).then((row) => row ? { ref: { type: "custom_field", id: row.id, name: row.name }, projection: row, truncated: false } : undefined);
+  }
+  if (snapshot.ref.type === "project") {
+    return ctx.clockify.getProject(snapshot.ref.id).then((row) => row ? { ref: { type: "project", id: row.id, name: row.name }, projection: row, truncated: false } : undefined);
+  }
+  return ctx.clockify.getEntryCustomFieldMutationState(snapshot.ref.id).then((row) => row ? { ref: { type: "time_entry", id: snapshot.ref.id }, projection: row, truncated: false } : undefined);
+}
 
 const fieldTypeSchema = z.enum([
   "TXT",
@@ -28,6 +52,13 @@ const fieldTypeSchema = z.enum([
 const valueSchema = z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]);
 
 const isDropdown = (t: string): boolean => t === "DROPDOWN_SINGLE" || t === "DROPDOWN_MULTIPLE";
+
+function sameField(row: CustomFieldSummary, expected: CreateCustomFieldInput | PreparedCustomFieldUpdateInput): boolean {
+  if (row.name !== expected.name || row.type !== expected.type) return false;
+  return (row.status ?? "VISIBLE") === (expected.status ?? "VISIBLE") &&
+    (row.required ?? false) === (expected.required ?? false) &&
+    JSON.stringify(row.allowedValues ?? []) === JSON.stringify(expected.allowedValues ?? []);
+}
 
 const listCustomFields = defineReadAction({
   name: "clockify_custom_fields_list",
@@ -84,6 +115,8 @@ const createCustomField = defineRiskyAction({
     "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). NOTE: Clockify blocks custom-field CREATION for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice; an admin can add the field in Clockify's workspace settings. Elevated write — previews and requires confirmation. Dropdowns require allowedValues.",
   group: CF,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: createContract,
   // `fieldType` is OPTIONAL in the schema so an add-on session refuses up front
   // (the platform restriction below) without first being forced to ask the user
   // which type — the dev/api_key path still clarifies for the type after that.
@@ -129,6 +162,8 @@ const createCustomField = defineRiskyAction({
       ...(args.required !== undefined ? { required: args.required } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
     };
+    const baseline = await ctx.clockify.listCustomFields();
+    if (baseline.truncated) return { clarify: "Clockify returned an incomplete custom-field baseline. Retry after it can be read completely." };
     return {
       actionLabel: "Create custom field",
       targets: [],
@@ -136,16 +171,59 @@ const createCustomField = defineRiskyAction({
       reversibility: "You can update or delete the custom field afterward.",
       warnings: ["This adds a custom field to the workspace."],
       payload: { input },
+      mutationPlan: { mode: "single", steps: [{ id: "create-custom-field", kind: "primary", reconciliationStrategy: "create" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { input } = payload as { input: Parameters<typeof ctx.clockify.createCustomField>[0] };
-    const field = await ctx.clockify.createCustomField(input);
-    return successReceipt({
-      action: "clockify_custom_fields_create",
-      entity: "custom_field",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "custom_field", id: field.id, name: field.name }] },
+  async commit(ctx, payload, operation) {
+    const { input } = payload as { input: CreateCustomFieldInput };
+    let baselineIds: string[];
+    try {
+      const baseline = await ctx.clockify.listCustomFields();
+      if (baseline.truncated) {
+        return errorReceipt({
+          action: operation.actionName,
+          code: "create_baseline_unavailable",
+          message: "Clockify returned an incomplete custom-field list immediately before dispatch. No field was created.",
+          recovery: { hint: "Refresh and preview the field again when the complete list is available.", retryable: true },
+        });
+      }
+      baselineIds = baseline.rows.map((row) => row.id);
+    } catch {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "create_baseline_unavailable",
+        message: "The custom-field list could not be read immediately before dispatch. No field was created.",
+        recovery: { hint: "Refresh and preview the field again after Clockify reads recover.", retryable: true },
+      });
+    }
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "create-custom-field", index: 0, name: "Create custom field",
+      preparedDetail: { preDispatch: { strategy: "custom_field_create_baseline", ids: baselineIds, truncated: false } },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.createCustomFieldAtomic(input),
+          reconcile: () => reconcileCreate({ beforeIds: baselineIds, list: () => ctx.clockify.listCustomFields(), matches: (row) => sameField(row, input) }),
+        });
+        const field = result.value;
+        return { externalId: field.id, effect: { created: { type: "custom_field", id: field.id, name: field.name } }, detail: { reconciled: result.reconciled } };
+      },
+    });
+    if (step.status === "succeeded") {
+      const receipt = successReceipt({
+        action: "clockify_custom_fields_create", entity: "custom_field", ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [{ type: "custom_field", id: step.externalId ?? "unknown", name: input.name }] },
+      });
+      return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;
+    }
+    return errorReceipt({
+      action: operation.actionName,
+      code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+      message: step.status === "outcome_unknown"
+        ? "Clockify did not provide a definitive response, so the custom field may or may not have been created."
+        : "Clockify definitively rejected custom-field creation.",
+      recovery: step.status === "outcome_unknown"
+        ? { hint: "Verify the exact custom field in Clockify before deciding whether to try again.", retryable: false }
+        : { hint: "Correct the custom-field details and preview again.", retryable: true },
     });
   },
 });
@@ -156,6 +234,8 @@ const updateCustomField = defineRiskyAction({
     "Update a custom field (name/type/allowedValues/required/status). Elevated write — previews and requires confirmation.",
   group: CF,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["target"], "update"),
   schema: z
     .object({
       id: z.string().min(1),
@@ -174,7 +254,9 @@ const updateCustomField = defineRiskyAction({
         v.status !== undefined,
       { message: "Provide at least one field to change." },
     ),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const target = await fetchCustomFieldSnapshot(ctx, args.id);
+    if (!target) return { clarify: `Custom field ${args.id} could not be verified.` };
     const patch = {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.fieldType !== undefined ? { type: args.fieldType } : {}),
@@ -182,26 +264,37 @@ const updateCustomField = defineRiskyAction({
       ...(args.required !== undefined ? { required: args.required } : {}),
       ...(args.status !== undefined ? { status: args.status } : {}),
     };
+    let updateBody: Awaited<ReturnType<typeof ctx.clockify.prepareCustomFieldUpdate>>;
+    try { updateBody = await ctx.clockify.prepareCustomFieldUpdate(args.id, patch); }
+    catch { return { clarify: "The current custom field could not be prepared safely. Refresh it and preview again." }; }
     return {
       actionLabel: "Update custom field",
       targets: [{ type: "custom_field", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
       expectedChanges: describePatch(patch),
       reversibility: "You can update the custom field again to revert most fields.",
       warnings: ["This changes a workspace custom field."],
-      payload: { id: args.id, patch },
+      payload: { id: args.id, patch, updateBody },
+      targetSnapshots: [target],
+      mutationPlan: { mode: "single", steps: [{ id: "update-custom-field", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { id, patch } = payload as {
+  async commit(ctx, payload, operation) {
+    const { id, updateBody } = payload as {
       id: string;
-      patch: Parameters<typeof ctx.clockify.updateCustomField>[1];
+      updateBody: Awaited<ReturnType<typeof ctx.clockify.prepareCustomFieldUpdate>>;
     };
-    const updated = await ctx.clockify.updateCustomField(id, patch);
-    return successReceipt({
-      action: "clockify_custom_fields_update",
-      entity: "custom_field",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "custom_field", id: updated.id, name: updated.name }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-custom-field", name: "Update custom field",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchSnapshot(ctx, snapshot) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.updateCustomFieldAtomic(id, updateBody),
+          reconcile: async () => { const row = await ctx.clockify.getCustomField(id); return row && sameField(row, updateBody) ? row : undefined; },
+        });
+        const updated = result.value;
+        return { externalId: updated.id, effect: { updated: { type: "custom_field", id: updated.id, name: updated.name } }, detail: { reconciled: result.reconciled } };
+      },
+      success: (step) => successReceipt({ action: "clockify_custom_fields_update", entity: "custom_field", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "custom_field", id: step.externalId ?? id, name: updateBody.name }] } }),
     });
   },
 });
@@ -211,25 +304,33 @@ const deleteCustomField = defineRiskyAction({
   description: "Delete a custom field. Destructive — previews and requires confirmation.",
   group: CF,
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["target"], "delete"),
   schema: z.object({ id: z.string().min(1), name: z.string().optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const target = await fetchCustomFieldSnapshot(ctx, args.id);
+    if (!target) return { clarify: `Custom field ${args.id} could not be verified.` };
     return {
       actionLabel: "Delete custom field",
-      targets: [{ type: "custom_field", id: args.id, name: args.name }],
+      targets: [{ type: "custom_field", id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) }],
       expectedChanges: [`Delete custom field ${args.name ?? args.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting a custom field removes its values from all entities."],
-      payload: { id: args.id, name: args.name },
+      payload: { id: args.id, ...(args.name !== undefined ? { name: args.name } : {}) },
+      targetSnapshots: [target],
+      mutationPlan: { mode: "single", steps: [{ id: "delete-custom-field", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "delete" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, name } = payload as { id: string; name?: string };
-    await ctx.clockify.deleteCustomField(id);
-    return successReceipt({
-      action: "clockify_custom_fields_delete",
-      entity: "custom_field",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "custom_field", id, name }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "delete-custom-field", name: "Delete custom field",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchSnapshot(ctx, snapshot) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.deleteCustomFieldAtomic(id); return true as const; }, reconcile: () => reconcileDelete(() => ctx.clockify.getCustomField(id)) });
+        return { effect: { deleted: { type: "custom_field", id, name } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_custom_fields_delete", entity: "custom_field", ids: { workspaceId: ctx.workspaceId }, changed: { deleted: [{ type: "custom_field", id, name }] } }),
     });
   },
 });
@@ -240,8 +341,15 @@ const setValueProject = defineRiskyAction({
     "Set a custom field value on a project. Elevated write — previews and requires confirmation.",
   group: CF,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["target", "parent"], "update"),
   schema: z.object({ projectId: z.string().min(1), fieldId: z.string().min(1), value: valueSchema }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const project = await ctx.clockify.getProject(args.projectId);
+    const field = await ctx.clockify.getCustomField(args.fieldId);
+    if (!project || !field) return { clarify: "The project or custom field could not be verified." };
+    const target = captureTargetSnapshot("target", { type: "project", id: project.id, name: project.name }, project);
+    const parent = captureTargetSnapshot("parent", { type: "custom_field", id: field.id, name: field.name }, field);
     return {
       actionLabel: "Set project custom field value",
       targets: [{ type: "project", id: args.projectId }],
@@ -249,16 +357,17 @@ const setValueProject = defineRiskyAction({
       reversibility: "You can set a new value at any time.",
       warnings: ["This changes a project's custom field value."],
       payload: { projectId: args.projectId, fieldId: args.fieldId, value: args.value },
+      targetSnapshots: [target, parent],
+      mutationPlan: { mode: "single", steps: [{ id: "set-project-custom-field", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { projectId, fieldId, value } = payload as { projectId: string; fieldId: string; value: unknown };
-    await ctx.clockify.setProjectCustomFieldValue(projectId, fieldId, value);
-    return successReceipt({
-      action: "clockify_custom_fields_set_value_project",
-      entity: "project",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "project", id: projectId }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "set-project-custom-field", name: "Set project custom field",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchSnapshot(ctx, snapshot) },
+      dispatch: async () => { await ctx.clockify.setProjectCustomFieldValueAtomic(projectId, fieldId, value); return { effect: { updated: { type: "project", id: projectId } } }; },
+      success: () => successReceipt({ action: "clockify_custom_fields_set_value_project", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id: projectId }] } }),
     });
   },
 });
@@ -269,25 +378,35 @@ const setValueEntry = defineRiskyAction({
     "Set a custom field value on a time entry. Elevated write — previews and requires confirmation.",
   group: CF,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["target", "parent"], "update"),
   schema: z.object({ entryId: z.string().min(1), fieldId: z.string().min(1), value: valueSchema }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    let prepared: Awaited<ReturnType<typeof ctx.clockify.prepareEntryCustomFieldValue>>;
+    try { prepared = await ctx.clockify.prepareEntryCustomFieldValue(args.entryId, args.fieldId, args.value); }
+    catch { return { clarify: "The current time entry could not be prepared safely. Refresh it and preview again." }; }
+    const field = await ctx.clockify.getCustomField(args.fieldId);
+    if (!field) return { clarify: "The custom field could not be verified." };
+    const target = captureTargetSnapshot("target", { type: "time_entry", id: args.entryId }, prepared.source);
+    const parent = captureTargetSnapshot("parent", { type: "custom_field", id: field.id, name: field.name }, field);
     return {
       actionLabel: "Set time-entry custom field value",
       targets: [{ type: "time_entry", id: args.entryId }],
       expectedChanges: [`Set custom field ${args.fieldId} on time entry ${args.entryId}`],
       reversibility: "You can set a new value at any time.",
       warnings: ["This changes a time entry's custom field value."],
-      payload: { entryId: args.entryId, fieldId: args.fieldId, value: args.value },
+      payload: { entryId: args.entryId, fieldId: args.fieldId, value: args.value, prepared },
+      targetSnapshots: [target, parent],
+      mutationPlan: { mode: "single", steps: [{ id: "set-entry-custom-field", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { entryId, fieldId, value } = payload as { entryId: string; fieldId: string; value: unknown };
-    await ctx.clockify.setEntryCustomFieldValue(entryId, fieldId, value);
-    return successReceipt({
-      action: "clockify_custom_fields_set_value_entry",
-      entity: "time_entry",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "time_entry", id: entryId }] },
+  async commit(ctx, payload, operation) {
+    const { entryId, fieldId, prepared } = payload as { entryId: string; fieldId: string; prepared: Awaited<ReturnType<typeof ctx.clockify.prepareEntryCustomFieldValue>> };
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "set-entry-custom-field", name: "Set entry custom field",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchSnapshot(ctx, snapshot) },
+      dispatch: async () => { await ctx.clockify.setEntryCustomFieldValueAtomic(entryId, prepared); return { effect: { updated: { type: "time_entry", id: entryId, fieldId } } }; },
+      success: () => successReceipt({ action: "clockify_custom_fields_set_value_entry", entity: "time_entry", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "time_entry", id: entryId }] } }),
     });
   },
 });

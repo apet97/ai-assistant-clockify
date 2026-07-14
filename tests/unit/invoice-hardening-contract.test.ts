@@ -60,8 +60,8 @@ describe("invoice durable operation contracts", () => {
       mode: "curated",
       steps: [
         { id: "create-invoice", kind: "primary" },
-        { id: "enrich-invoice", kind: "primary" },
-        { id: "add-invoice-item-0", kind: "primary" },
+        { id: "enrich-invoice", kind: "primary", reconciliationStrategy: "update" },
+        { id: "add-invoice-item-0", kind: "primary", reconciliationStrategy: "update" },
       ],
     });
     expect(result.operation.payload).toMatchObject({

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeCustomFieldRest } from "../../src/clockify/rest/custom-fields.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -16,6 +17,12 @@ const rest = (fetchImpl: typeof fetch) =>
   );
 
 describe("custom field rest", () => {
+  it("classifies a malformed successful custom-field create without an id as ambiguous", async () => {
+    const f = vi.fn(async () => jsonResponse({ name: "Priority" }));
+    await expect(rest(f as unknown as typeof fetch).createCustomFieldAtomic({ name: "Priority", type: "TXT" }))
+      .rejects.toBeInstanceOf(AmbiguousWriteOutcome);
+  });
+
   it("listCustomFields paginates the bare array and maps type/status/required/allowedValues", async () => {
     const f = vi.fn(async () =>
       jsonResponse([{ id: "cf1", name: "Priority", type: "DROPDOWN_SINGLE", status: "VISIBLE", required: true, allowedValues: ["Hi", "Lo"] }]),
@@ -147,5 +154,26 @@ describe("custom field rest", () => {
     await rest(f as unknown as typeof fetch).setEntryCustomFieldValue("e1", "cf1", "updated");
     const body = JSON.parse((f as any).mock.calls[1][1].body);
     expect(body.customFieldValues).toEqual([{ customFieldId: "cf1", value: "updated" }]);
+  });
+
+  it("prepares an entry replacement body and lossless source projection from the same GET", async () => {
+    const source = {
+      id: "e1",
+      description: "work",
+      projectId: "p1",
+      taskId: "t1",
+      tagIds: ["tag1"],
+      billable: true,
+      approvalRequestId: "approval-1",
+      timeInterval: { start: "2026-07-14T10:00:00Z", end: "2026-07-14T11:00:00Z" },
+      customFieldValues: [{ customFieldId: "cf0", value: "keep", extra: "lossless" }],
+    };
+    const f = vi.fn(async () => jsonResponse(source));
+    const prepared = await rest(f as unknown as typeof fetch).prepareEntryCustomFieldValue("e1", "cf1", "new");
+    expect(prepared.source).toEqual(source);
+    expect(prepared.body.customFieldValues).toEqual([
+      { customFieldId: "cf0", value: "keep", extra: "lossless" },
+      { customFieldId: "cf1", value: "new" },
+    ]);
   });
 });

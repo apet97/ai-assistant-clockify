@@ -1,7 +1,8 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
-import type { CustomFieldPort, CustomFieldSummary } from "../ports/custom-fields.js";
+import type { CustomFieldPort, CustomFieldSummary, CreateCustomFieldInput, UpdateCustomFieldInput, PreparedCustomFieldUpdateInput, PreparedEntryCustomFieldValueInput } from "../ports/custom-fields.js";
 import { assertCompleteAbsence } from "./list-pages.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /** Custom-field row fields read by {@link mapField} + the update GET-scan. */
 type FieldRow = {
@@ -62,6 +63,65 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
     return raw ?? null;
   }
 
+  const createAtomic = async (input: CreateCustomFieldInput): Promise<EntitySummary> => {
+    const body = { name: input.name, type: input.type, status: input.status ?? "VISIBLE", ...(input.allowedValues !== undefined ? { allowedValues: input.allowedValues } : {}), ...(input.required !== undefined ? { required: input.required } : {}) };
+    const field = (await core.mutate("api", "POST", `${ws}/custom-fields`, body)) as { id?: unknown; name?: string } | null;
+    if (typeof field?.id !== "string" || field.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/custom-fields`, "Clockify returned a successful custom-field response without a usable id.");
+    }
+    return { id: field.id, name: field.name ?? input.name };
+  };
+  const prepareUpdate = async (id: string, patch: UpdateCustomFieldInput): Promise<PreparedCustomFieldUpdateInput> => {
+    const existing = ((await findRaw(id)) ?? {}) as Record<string, unknown>;
+    const type = patch.type ?? (existing.type as PreparedCustomFieldUpdateInput["type"] | undefined);
+    if (!type) throw new Error("custom field update requires a type and the existing type could not be resolved");
+    return {
+      type,
+      ...((patch.name ?? existing.name as string | undefined) !== undefined ? { name: patch.name ?? existing.name as string } : {}),
+      ...((patch.status ?? existing.status as string | undefined) !== undefined ? { status: patch.status ?? existing.status as string } : {}),
+      ...((patch.required ?? existing.required as boolean | undefined) !== undefined ? { required: patch.required ?? existing.required as boolean } : {}),
+      ...((patch.allowedValues ?? existing.allowedValues as string[] | undefined) !== undefined ? { allowedValues: patch.allowedValues ?? existing.allowedValues as string[] } : {}),
+    };
+  };
+  const updateAtomic = async (id: string, body: PreparedCustomFieldUpdateInput): Promise<EntitySummary> => {
+    const updated = (await core.mutate("api", "PUT", `${ws}/custom-fields/${id}`, body)) as { id?: string; name?: string };
+    return { id: updated?.id ?? id, name: updated?.name ?? body.name ?? id };
+  };
+  const deleteAtomic = async (id: string): Promise<void> => { await core.mutate("api", "DELETE", `${ws}/custom-fields/${id}`); };
+  const setProjectAtomic = async (projectId: string, fieldId: string, value: unknown): Promise<void> => { await core.mutate("api", "PATCH", `${ws}/projects/${projectId}/custom-fields/${fieldId}`, { defaultValue: value }); };
+  const getEntryMutationState = async (entryId: string): Promise<Record<string, unknown> | null> => {
+    const entry = await core.call("api", "GET", `${ws}/time-entries/${entryId}`);
+    return entry && typeof entry === "object" ? structuredClone(entry as Record<string, unknown>) : null;
+  };
+  const prepareEntryValue = async (entryId: string, fieldId: string, value: unknown): Promise<PreparedEntryCustomFieldValueInput> => {
+    const entry = ((await getEntryMutationState(entryId)) ?? {}) as EntryDoc;
+    const existing: EntryCustomFieldValue[] = Array.isArray(entry.customFieldValues) ? entry.customFieldValues : [];
+    let found = false;
+    const merged = existing.map((field) => {
+      const id = field.customFieldId ?? field.customFieldDefinitionId ?? field.id;
+      if (id !== fieldId) return field;
+      found = true;
+      return { ...field, value };
+    });
+    if (!found) merged.push({ customFieldId: fieldId, value });
+    const start = entry.timeInterval?.start;
+    if (!start) throw new Error(`Cannot set custom field on time entry ${entryId}: could not resolve its start time`);
+    return {
+      source: structuredClone(entry as Record<string, unknown>),
+      body: {
+        start,
+        ...(entry.timeInterval?.end !== undefined ? { end: entry.timeInterval.end } : {}),
+        ...(entry.description !== undefined ? { description: entry.description } : {}),
+        ...(entry.projectId !== undefined ? { projectId: entry.projectId } : {}),
+        ...(entry.taskId !== undefined ? { taskId: entry.taskId } : {}),
+        ...(entry.tagIds !== undefined ? { tagIds: entry.tagIds } : {}),
+        ...(entry.billable !== undefined ? { billable: entry.billable } : {}),
+        customFieldValues: merged,
+      },
+    };
+  };
+  const setEntryAtomic = async (entryId: string, prepared: PreparedEntryCustomFieldValueInput): Promise<void> => { await core.mutate("api", "PUT", `${ws}/time-entries/${entryId}`, prepared.body); };
+
   return {
     async listCustomFields() {
       const result = await core.paginate("api", `${ws}/custom-fields`);
@@ -72,78 +132,33 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
       return raw ? mapField(raw) : null;
     },
     async createCustomField(input): Promise<EntitySummary> {
-      const body: Record<string, unknown> = {
-        name: input.name,
-        type: input.type,
-        status: input.status ?? "VISIBLE",
-        ...(input.allowedValues !== undefined ? { allowedValues: input.allowedValues } : {}),
-        ...(input.required !== undefined ? { required: input.required } : {}),
-      };
-      const cf = (await core.call("api", "POST", `${ws}/custom-fields`, body)) as { id: string; name?: string };
-      return { id: cf.id, name: cf.name ?? input.name };
+      return createAtomic(input);
     },
+    createCustomFieldAtomic: createAtomic,
     async updateCustomField(id, patch): Promise<EntitySummary> {
       // Clockify requires `type` on update, so source type (and the other fields
       // not being changed) from the existing field — read from the LIST because the
       // single-field GET 405s.
-      const existing = ((await findRaw(id)) ?? {}) as Record<string, unknown>;
-      const type = patch.type ?? (existing.type as string | undefined);
-      if (!type) {
-        throw new Error("custom field update requires a type and the existing type could not be resolved");
-      }
-      const body: Record<string, unknown> = { type };
-      const name = patch.name ?? (existing.name as string | undefined);
-      if (name !== undefined) body.name = name;
-      const status = patch.status ?? (existing.status as string | undefined);
-      if (status !== undefined) body.status = status;
-      const required = patch.required ?? (existing.required as boolean | undefined);
-      if (required !== undefined) body.required = required;
-      const allowedValues = patch.allowedValues ?? (existing.allowedValues as string[] | undefined);
-      if (allowedValues !== undefined) body.allowedValues = allowedValues;
-      const updated = (await core.call("api", "PUT", `${ws}/custom-fields/${id}`, body)) as { id?: string; name?: string };
-      return { id: updated?.id ?? id, name: updated?.name ?? name ?? id };
+      return updateAtomic(id, await prepareUpdate(id, patch));
     },
+    prepareCustomFieldUpdate: prepareUpdate,
+    updateCustomFieldAtomic: updateAtomic,
     async deleteCustomField(id) {
-      await core.call("api", "DELETE", `${ws}/custom-fields/${id}`);
+      await deleteAtomic(id);
     },
+    deleteCustomFieldAtomic: deleteAtomic,
     async setProjectCustomFieldValue(projectId, fieldId, value) {
-      await core.call("api", "PATCH", `${ws}/projects/${projectId}/custom-fields/${fieldId}`, {
-        defaultValue: value,
-      });
+      await setProjectAtomic(projectId, fieldId, value);
     },
+    setProjectCustomFieldValueAtomic: setProjectAtomic,
     async setEntryCustomFieldValue(entryId, fieldId, value) {
       // The entry custom-field value lives in the entry's `customFieldValues`; GET
       // the entry, merge (replace-or-append), then PUT the full entry (Clockify's
       // PUT replaces and requires `start`, so flatten timeInterval to the top level).
-      const entry = ((await core.call("api", "GET", `${ws}/time-entries/${entryId}`)) ?? {}) as EntryDoc;
-      const existing: EntryCustomFieldValue[] = Array.isArray(entry.customFieldValues) ? entry.customFieldValues : [];
-      let found = false;
-      const merged = existing.map((cf) => {
-        const id = cf.customFieldId ?? cf.customFieldDefinitionId ?? cf.id;
-        if (id === fieldId) {
-          found = true;
-          return { ...cf, value };
-        }
-        return cf;
-      });
-      if (!found) merged.push({ customFieldId: fieldId, value });
-      const start = entry.timeInterval?.start;
-      if (!start) {
-        // The PUT replaces the entry and requires `start`; fail clearly rather than
-        // letting Clockify reject a body with a dropped (undefined) start.
-        throw new Error(`Cannot set custom field on time entry ${entryId}: could not resolve its start time`);
-      }
-      const body: Record<string, unknown> = {
-        start,
-        end: entry.timeInterval?.end ?? undefined,
-        description: entry.description,
-        projectId: entry.projectId,
-        taskId: entry.taskId,
-        tagIds: entry.tagIds,
-        billable: entry.billable,
-        customFieldValues: merged,
-      };
-      await core.call("api", "PUT", `${ws}/time-entries/${entryId}`, body);
+      await setEntryAtomic(entryId, await prepareEntryValue(entryId, fieldId, value));
     },
+    prepareEntryCustomFieldValue: prepareEntryValue,
+    getEntryCustomFieldMutationState: getEntryMutationState,
+    setEntryCustomFieldValueAtomic: setEntryAtomic,
   };
 }

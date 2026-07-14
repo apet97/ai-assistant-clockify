@@ -7,6 +7,7 @@ export interface HolidaySummary extends EntitySummary {
   /** Assigned user / user-group ids (the real holiday GET returns these). */
   userIds?: string[];
   userGroupIds?: string[];
+  everyoneIncludingNew?: boolean;
 }
 
 export interface CreateHolidayInput {
@@ -27,6 +28,10 @@ export interface UpdateHolidayInput {
   userIds?: string[];
   userGroupIds?: string[];
 }
+export interface PreparedHolidayUpdateInput extends CreateHolidayInput {
+  everyoneIncludingNew?: boolean;
+  source: HolidaySummary;
+}
 
 /**
  * Holiday slice of the {@link WorkspaceClient} port (goclmcp §2.9 — holidays).
@@ -41,6 +46,12 @@ export interface HolidayPort {
   getHoliday(id: string): Promise<HolidaySummary | null>;
   listHolidaysInPeriod(input: { assignedTo: string; start: string; end: string }): Promise<ListResult<HolidaySummary>>;
   createHoliday(input: CreateHolidayInput): Promise<EntitySummary>;
+  createHolidayAtomic(input: CreateHolidayInput): Promise<EntitySummary>;
   updateHoliday(id: string, patch: UpdateHolidayInput): Promise<EntitySummary>;
+  prepareHolidayUpdate(id: string, patch: UpdateHolidayInput): Promise<PreparedHolidayUpdateInput>;
+  /** Complete controlled holiday projection for replacement verification. */
+  getHolidayMutationState(id: string): Promise<HolidaySummary | null>;
+  updateHolidayAtomic(id: string, input: PreparedHolidayUpdateInput): Promise<EntitySummary>;
   deleteHoliday(id: string): Promise<void>;
+  deleteHolidayAtomic(id: string): Promise<void>;
 }

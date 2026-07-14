@@ -28,6 +28,9 @@ describe("create_work_package + startTimer (wire shape)", () => {
       if (method === "POST" && url.endsWith("/projects")) {
         return jsonResponse({ id: "p-new", name: "Apollo" });
       }
+      if (method === "GET" && url.includes("/user/admin-1/time-entries?in-progress=true")) {
+        return jsonResponse([]);
+      }
       if (method === "POST" && url.endsWith("/time-entries")) {
         const body = JSON.parse(String(init.body)) as Record<string, unknown>;
         timerBodies.push(body);

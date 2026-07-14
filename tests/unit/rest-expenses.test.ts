@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeExpenseRest } from "../../src/clockify/rest/expenses.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -16,6 +17,14 @@ const rest = (fetchImpl: typeof fetch) =>
   );
 
 describe("expense rest", () => {
+  it.each([
+    ["expense", (api: ReturnType<typeof rest>) => api.createExpenseAtomic({ userId: "u1", amountMinor: 100, date: "2026-07-14", categoryId: "c1" })],
+    ["expense category", (api: ReturnType<typeof rest>) => api.createExpenseCategoryAtomic({ name: "Travel" })],
+  ] as const)("classifies malformed successful %s creates without an id as ambiguous", async (_label, invoke) => {
+    const f = vi.fn(async () => jsonResponse({ name: "missing id" }));
+    await expect(invoke(rest(f as unknown as typeof fetch))).rejects.toBeInstanceOf(AmbiguousWriteOutcome);
+  });
+
   it("listExpenses unwraps the double-nested {expenses:{expenses:[…]}} envelope (notes→name)", async () => {
     const f = vi.fn(async () =>
       jsonResponse({

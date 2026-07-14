@@ -1,13 +1,15 @@
 import type { RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
-import type { UserPort, UserSummary, GroupSummary, CalendarContext } from "../ports/users.js";
+import type { UserPort, UserSummary, GroupSummary, CalendarContext, UserRoleAssignment } from "../ports/users.js";
 import { assertCompleteAbsence } from "./list-pages.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /** A workspace role entry as read by {@link makeUserRest} `getWorkspaceMemberRole`. */
 type RoleEntry = {
   role?: string;
   name?: string;
-  entity?: { type?: string };
+  entityId?: string;
+  entity?: { id?: string; type?: string };
   sourceType?: string;
 };
 
@@ -25,6 +27,8 @@ type UserRow = {
   weekStart?: number | string;
   startOfWeek?: number | string;
   settings?: Record<string, unknown>;
+  hourlyRate?: { amount?: number; since?: string };
+  costRate?: { amount?: number; since?: string };
 };
 
 /** Group row fields read by {@link mapGroup}. */
@@ -91,6 +95,86 @@ function calendarFrom(value: unknown): Partial<CalendarContext> {
 export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
   const ws = `/workspaces/${workspaceId}`;
 
+  async function rawUser(userId: string): Promise<{ row?: UserRow; truncated: boolean }> {
+    const result = await core.paginate("api", `${ws}/users`);
+    return { row: (result.rows as UserRow[]).find((user) => user.id === userId), truncated: result.truncated };
+  }
+
+  function roleAssignments(raw: UserRow): UserRoleAssignment[] {
+    const rows = (Array.isArray(raw.roles) ? raw.roles : []).flatMap((entry) => {
+      const role = entry.role ?? entry.name;
+      const entityId = entry.entityId ?? entry.entity?.id;
+      if (!role || !entityId) return [];
+      return [{ role, entityId, ...(entry.sourceType !== undefined ? { sourceType: entry.sourceType } : {}) }];
+    });
+    if (typeof raw.role === "string" && raw.role.length > 0 && !rows.some((row) => row.entityId === workspaceId)) {
+      rows.push({ role: raw.role, entityId: workspaceId });
+    }
+    return rows;
+  }
+
+  async function inviteUserAtomic(email: string, sendEmail: boolean): Promise<EntitySummary> {
+    const qs = new URLSearchParams({ "send-email": String(sendEmail) });
+    const row = (await core.mutate("api", "POST", `${ws}/users?${qs.toString()}`, { email })) as { id?: unknown; name?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/users`, "Clockify accepted the invitation without a usable user id.");
+    }
+    return { id: row.id, name: typeof row.name === "string" ? row.name : email };
+  }
+
+  async function updateUserRoleAtomic(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary> {
+    await core.mutate("api", "POST", `${ws}/users/${userId}/roles`, {
+      entityId,
+      role,
+      ...(sourceType ? { sourceType } : {}),
+    });
+    return { id: userId, name: role };
+  }
+
+  async function updateWorkspaceMemberRateAtomic(input: Parameters<UserPort["updateWorkspaceMemberRateAtomic"]>[0]): Promise<void> {
+    const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
+    await core.mutate("api", "PUT", `${ws}/users/${input.userId}/${kind}`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  }
+
+  async function deactivateUserAtomic(userId: string): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "PUT", `${ws}/users/${userId}`, { status: "INACTIVE" })) as { id?: unknown } | null;
+    if (row?.id !== undefined && typeof row.id !== "string") {
+      throw new AmbiguousWriteOutcome("PUT", `${ws}/users/${userId}`, "Clockify returned a malformed user id.");
+    }
+    return { id: typeof row?.id === "string" && row.id.length > 0 ? row.id : userId, name: "INACTIVE" };
+  }
+
+  async function createGroupAtomic(name: string): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "POST", `${ws}/user-groups`, { name })) as { id?: unknown; name?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/user-groups`, "Clockify accepted the group create without a usable id.");
+    }
+    return { id: row.id, name: typeof row.name === "string" ? row.name : name };
+  }
+
+  async function updateGroupAtomic(id: string, name: string): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "PUT", `${ws}/user-groups/${id}`, { name })) as { id?: unknown; name?: unknown } | null;
+    if (row?.id !== undefined && typeof row.id !== "string") {
+      throw new AmbiguousWriteOutcome("PUT", `${ws}/user-groups/${id}`, "Clockify returned a malformed group id.");
+    }
+    return { id: typeof row?.id === "string" && row.id.length > 0 ? row.id : id, name: typeof row?.name === "string" ? row.name : name };
+  }
+
+  async function deleteGroupAtomic(id: string): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/user-groups/${id}`);
+  }
+
+  async function addUserToGroupAtomic(groupId: string, userId: string): Promise<void> {
+    await core.mutate("api", "POST", `${ws}/user-groups/${groupId}/users`, { userId });
+  }
+
+  async function removeUserFromGroupAtomic(groupId: string, userId: string): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/user-groups/${groupId}/users/${userId}`);
+  }
+
   return {
     async listUsers() {
       // Paginate: the bare GET returns only the server default page-size (50), which
@@ -122,6 +206,25 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       const roleValue = picked?.role ?? picked?.name;
       return typeof roleValue === "string" && roleValue.length > 0 ? roleValue : undefined;
     },
+    async listUserRoleAssignments(userId) {
+      const found = await rawUser(userId);
+      if (!found.row) return { rows: [], truncated: found.truncated };
+      return { rows: roleAssignments(found.row), truncated: false };
+    },
+    async getWorkspaceMemberRate(userId, rateKind) {
+      const found = await rawUser(userId);
+      if (!found.row) {
+        assertCompleteAbsence(found.truncated, "workspace-member", userId);
+        return null;
+      }
+      const rate = rateKind === "COST" ? found.row.costRate : found.row.hourlyRate;
+      return {
+        userId,
+        rateKind,
+        amountMinor: typeof rate?.amount === "number" ? rate.amount : null,
+        ...(typeof rate?.since === "string" ? { since: rate.since } : {}),
+      };
+    },
     async getCalendarContext(userId) {
       const [members, workspace] = await Promise.all([
         core.paginate("api", `${ws}/users`),
@@ -141,37 +244,14 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       }
       return { timeZone, weekStartsOn };
     },
-    async inviteUser(email, sendEmail): Promise<EntitySummary> {
-      const qs = new URLSearchParams({ "send-email": String(sendEmail) });
-      const u = (await core.call("api", "POST", `${ws}/users?${qs.toString()}`, { email })) as { id?: string; name?: string };
-      return { id: u?.id ?? email, name: u?.name ?? email };
-    },
-    async updateUserRole(userId, role, entityId, sourceType): Promise<EntitySummary> {
-      // POST /users/{recipient}/roles {entityId, role, sourceType?}. entityId is the
-      // SCOPE: workspaceId (ADMIN), projectId (PROJECT_MANAGER), or a group id with
-      // sourceType=USER_GROUP (TEAM_MANAGER of a group). Live-verified 2026-06-12.
-      await core.call("api", "POST", `${ws}/users/${userId}/roles`, {
-        entityId,
-        role,
-        ...(sourceType ? { sourceType } : {}),
-      });
-      return { id: userId, name: role };
-    },
-    async updateWorkspaceMemberRate(input) {
-      // PUT /workspaces/{ws}/users/{userId}/{hourly-rate|cost-rate} {amount, since?}.
-      // This is the Team-section default rate for the member (distinct from the
-      // per-project member rate). Live-verified 2026-06-12 (200, returns the
-      // workspace doc). `amount` is integer minor units.
-      const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
-      await core.call("api", "PUT", `${ws}/users/${input.userId}/${kind}`, {
-        amount: input.amountMinor,
-        ...(input.since ? { since: input.since } : {}),
-      });
-    },
-    async deactivateUser(userId): Promise<EntitySummary> {
-      const u = (await core.call("api", "PUT", `${ws}/users/${userId}`, { status: "INACTIVE" })) as { id?: string } | null;
-      return { id: u?.id ?? userId, name: "INACTIVE" };
-    },
+    inviteUserAtomic,
+    updateUserRoleAtomic,
+    updateWorkspaceMemberRateAtomic,
+    deactivateUserAtomic,
+    inviteUser: inviteUserAtomic,
+    updateUserRole: updateUserRoleAtomic,
+    updateWorkspaceMemberRate: updateWorkspaceMemberRateAtomic,
+    deactivateUser: deactivateUserAtomic,
     async listGroups() {
       const result = await core.paginate("api", `${ws}/user-groups`);
       return { ...result, rows: (result.rows as GroupRow[]).map(mapGroup) };
@@ -184,22 +264,15 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       if (!raw) assertCompleteAbsence(result.truncated, "user-group", id);
       return raw ? mapGroup(raw) : null;
     },
-    async createGroup(name): Promise<EntitySummary> {
-      const g = (await core.call("api", "POST", `${ws}/user-groups`, { name })) as { id: string; name?: string };
-      return { id: g.id, name: g.name ?? name };
-    },
-    async updateGroup(id, name): Promise<EntitySummary> {
-      const g = (await core.call("api", "PUT", `${ws}/user-groups/${id}`, { name })) as { id?: string; name?: string };
-      return { id: g?.id ?? id, name: g?.name ?? name };
-    },
-    async deleteGroup(id) {
-      await core.call("api", "DELETE", `${ws}/user-groups/${id}`);
-    },
-    async addUserToGroup(groupId, userId) {
-      await core.call("api", "POST", `${ws}/user-groups/${groupId}/users`, { userId });
-    },
-    async removeUserFromGroup(groupId, userId) {
-      await core.call("api", "DELETE", `${ws}/user-groups/${groupId}/users/${userId}`);
-    },
+    createGroupAtomic,
+    updateGroupAtomic,
+    deleteGroupAtomic,
+    addUserToGroupAtomic,
+    removeUserFromGroupAtomic,
+    createGroup: createGroupAtomic,
+    updateGroup: updateGroupAtomic,
+    deleteGroup: deleteGroupAtomic,
+    addUserToGroup: addUserToGroupAtomic,
+    removeUserFromGroup: removeUserFromGroupAtomic,
   };
 }

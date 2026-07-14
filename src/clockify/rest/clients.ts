@@ -16,6 +16,18 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
   // the first fetch (PERF-02). Scoped per instance — no process-global staleness.
   let currenciesCache: Array<{ id: string; code: string }> | undefined;
 
+  const createClientBaseAtomic: ClientPort["createClientBaseAtomic"] = async ({ name }) =>
+    map(await core.mutate("api", "POST", `${ws}/clients`, { name }));
+  const prepareClientUpdate: ClientPort["prepareClientUpdate"] = async (id, patch) => ({
+    ...((await core.call("api", "GET", `${ws}/clients/${id}`)) as Record<string, unknown>),
+    ...patch,
+  });
+  const updateClientAtomic: ClientPort["updateClientAtomic"] = async (id, body) =>
+    map(await core.mutate("api", "PUT", `${ws}/clients/${id}`, body));
+  const deleteClientAtomic: ClientPort["deleteClientAtomic"] = async (id) => {
+    await core.mutate("api", "DELETE", `${ws}/clients/${id}`);
+  };
+
   return {
     async listClients(filter) {
       const params: Record<string, string> = {};
@@ -28,8 +40,11 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
       const c = await core.call("api", "GET", `${ws}/clients/${id}`, undefined, true);
       return c ? map(c) : null;
     },
+    async getClientMutationState(id) {
+      return await core.call("api", "GET", `${ws}/clients/${id}`, undefined, true) as Record<string, unknown> | null;
+    },
     async createClient({ name, ccEmails, currencyId }) {
-      const created = (await core.call("api", "POST", `${ws}/clients`, { name })) as { id: string };
+      const created = await createClientBaseAtomic({ name });
       // POST /clients SILENTLY DROPS ccEmails/currencyId (live-probed: only name+email
       // stick) — apply them via the verified GET-then-PUT path, same class as the
       // invoice note/subject silent-drop. A name-only create stays a single POST.
@@ -37,18 +52,21 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
       if (ccEmails !== undefined) extra.ccEmails = ccEmails;
       if (currencyId !== undefined) extra.currencyId = currencyId;
       if (Object.keys(extra).length > 0) {
-        return map(await core.getThenPut("api", `${ws}/clients/${created.id}`, extra));
+        return updateClientAtomic(created.id, await prepareClientUpdate(created.id, extra));
       }
-      return map(created);
+      return created;
     },
+    createClientBaseAtomic,
     async updateClient(id, patch) {
-      const c = await core.getThenPut("api", `${ws}/clients/${id}`, patch);
-      return map(c);
+      return updateClientAtomic(id, await prepareClientUpdate(id, patch));
     },
+    prepareClientUpdate,
+    updateClientAtomic,
     async deleteClient(id) {
-      await core.getThenPut("api", `${ws}/clients/${id}`, { archived: true }); // archive first
-      await core.call("api", "DELETE", `${ws}/clients/${id}`);
+      await updateClientAtomic(id, await prepareClientUpdate(id, { archived: true }));
+      await deleteClientAtomic(id);
     },
+    deleteClientAtomic,
     async listCurrencies() {
       // Currencies live on the workspace doc (`GET /workspaces/{id}` → `currencies[]`),
       // not a standalone list endpoint (live-verified). Workspace-scoped GET is allowed.

@@ -196,7 +196,7 @@ describe("confirm-resume is charged against the chat rate budget (r2-new-ops-lay
     // The commit ALWAYS lands — the receipt is returned and the write happened.
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     // …but the paid resume loop was skipped (budget exhausted): no new model call.
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
     // No resumed reply rode along.
@@ -229,7 +229,7 @@ describe("confirm-resume is charged against the chat rate budget (r2-new-ops-lay
     expect(events[0].type).toBe("receipt");
     expect((events[0] as { receipt: { ok: boolean } }).receipt.ok).toBe(true);
     expect(events[events.length - 1].type).toBe("done");
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     // No resume model call was made (over budget).
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
   });
@@ -257,7 +257,7 @@ describe("confirm-resume is charged against the chat rate budget (r2-new-ops-lay
 
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     // The resume DID run (one more model call) and the truthful summary came back.
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat + 1);
     expect(confirm.body.resume.reply.text).toBe("The urgent tag is gone.");

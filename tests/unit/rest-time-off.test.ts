@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeTimeOffRest } from "../../src/clockify/rest/time-off.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -15,6 +16,14 @@ const rest = (fetchImpl: typeof fetch) =>
   );
 
 describe("time-off rest", () => {
+  it.each([
+    ["policy", (api: ReturnType<typeof rest>) => api.createTimeOffPolicyAtomic({ name: "PTO", userId: "u1" })],
+    ["request", (api: ReturnType<typeof rest>) => api.createTimeOffRequestAtomic("pol1", { start: "2026-07-14", end: "2026-07-14" })],
+  ] as const)("classifies malformed successful time-off %s creates without an id as ambiguous", async (_label, invoke) => {
+    const f = vi.fn(async () => jsonResponse({ name: "missing id" }));
+    await expect(invoke(rest(f as unknown as typeof fetch))).rejects.toBeInstanceOf(AmbiguousWriteOutcome);
+  });
+
   it("listTimeOffPolicies GETs and maps id/name/status/timeUnit", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "pol1", name: "PTO", status: "ACTIVE", timeUnit: "DAYS" }]));
     expect(await rest(f as unknown as typeof fetch).listTimeOffPolicies()).toEqual({
@@ -102,6 +111,25 @@ describe("time-off rest", () => {
     const body = JSON.parse((f as any).mock.calls[1][1].body);
     expect(body.users).toEqual({ contains: "CONTAINS", ids: ["u1"], status: "ACTIVE" });
     expect(body.userGroups).toEqual({ contains: "CONTAINS", ids: ["g0"], status: "ACTIVE" });
+  });
+
+  it("prepares a policy replacement body with the lossless raw source from the same GET", async () => {
+    const source = {
+      id: "pol1", name: "PTO", timeUnit: "DAYS", color: "#123456",
+      approve: { requiresApproval: true, approverIds: ["u2"] },
+      automaticAccrual: { amount: 20, period: "YEAR", timeUnit: "DAYS", carryOver: true },
+      users: { contains: "CONTAINS", ids: ["u1"], status: "ACTIVE" },
+      userGroups: { contains: "CONTAINS", ids: ["g1"], status: "ACTIVE" },
+      futurePlatformField: { preserve: true },
+    };
+    const f = vi.fn(async () => jsonResponse(source));
+    const prepared = await rest(f as unknown as typeof fetch).prepareTimeOffPolicyUpdate("pol1", { name: "Renamed" });
+    expect(prepared.source).toEqual(source);
+    expect(prepared.body).toMatchObject({
+      id: "pol1", name: "Renamed", color: "#123456",
+      approve: { requiresApproval: true, approverIds: ["u2"] },
+      futurePlatformField: { preserve: true },
+    });
   });
 
   it("archiveTimeOffPolicy PATCHes status ARCHIVED / ACTIVE", async () => {

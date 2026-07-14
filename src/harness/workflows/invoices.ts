@@ -9,6 +9,7 @@ import {
   type ActionDefinition,
   type ActionResult,
   type RiskyClarifyResult,
+  type TargetSnapshot,
 } from "../action.js";
 import { errorReceipt, listReceipt, successReceipt, type SuccessReceipt } from "../receipts.js";
 import type { ListResult } from "../../clockify/types.js";
@@ -29,7 +30,11 @@ import {
 } from "../invoice-payment-workflow.js";
 import { paymentBaseline } from "../invoice-reconciliation.js";
 import { billingFingerprint } from "../billing-fingerprint.js";
-import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { dispatchWithReconciliation } from "./structure-durable.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -43,6 +48,59 @@ import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
  */
 
 const INV = "invoices" as const;
+const invoiceCreateContract = durableMutationContract({
+  source: "confirmed",
+  targeting: { mode: "create_no_target" },
+  strategies: ["create", "update"],
+  unreconciledStepIds: ["create-invoice"],
+});
+const invoiceTargetContract = (strategy: "update" | "delete" | "state-command" | "composed") => durableMutationContract({
+  source: "confirmed",
+  targeting: { mode: "snapshots", relations: ["target"] },
+  strategies: [strategy],
+});
+const invoiceSnapshotContract = (
+  relations: ["target" | "parent", ...Array<"target" | "parent">],
+  strategy: "create" | "update" | "delete" | "state-command" | "composed",
+) => durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations }, strategies: [strategy] });
+
+async function captureInvoiceSnapshot(ctx: ActionContext, id: string, relation: "target" | "parent" = "target"): Promise<TargetSnapshot | undefined> {
+  const invoice = await ctx.clockify.getInvoice(id);
+  return invoice ? captureTargetSnapshot(relation, { type: "invoice", id: invoice.id, name: invoice.number }, invoice) : undefined;
+}
+
+async function fetchInvoiceMutationSnapshot(ctx: ActionContext, snapshot: TargetSnapshot) {
+  if (snapshot.ref.type === "invoice") {
+    const invoice = await ctx.clockify.getInvoice(snapshot.ref.id);
+    return invoice ? { ref: { type: "invoice", id: invoice.id, ...(invoice.number ? { name: invoice.number } : {}) }, projection: invoice, truncated: false } : undefined;
+  }
+  if (snapshot.ref.type === "invoice_items") {
+    const items = await ctx.clockify.listRawInvoiceItems(snapshot.ref.id);
+    return { ref: snapshot.ref, projection: items.rows, truncated: items.truncated };
+  }
+  if (snapshot.ref.type === "client") {
+    const client = await ctx.clockify.getClient(snapshot.ref.id);
+    return client ? { ref: { type: "client", id: client.id, name: client.name }, projection: client, truncated: false } : undefined;
+  }
+  if (snapshot.ref.type === "project") {
+    const project = await ctx.clockify.getProject(snapshot.ref.id);
+    return project ? { ref: { type: "project", id: project.id, name: project.name }, projection: project, truncated: false } : undefined;
+  }
+  const invoiceId = snapshot.ref.type === "invoice_payment"
+    ? snapshot.ref.id.slice(0, snapshot.ref.id.indexOf(":"))
+    : snapshot.ref.id;
+  const payments = await ctx.clockify.listInvoicePayments(invoiceId!);
+  if (snapshot.ref.type === "invoice_payment") {
+    const paymentId = snapshot.ref.id.slice(invoiceId!.length + 1);
+    const matches = payments.rows.filter((payment) => payment.id === paymentId);
+    return matches.length === 1 ? { ref: snapshot.ref, projection: matches[0], truncated: payments.truncated } : undefined;
+  }
+  return { ref: snapshot.ref, projection: payments.rows, truncated: payments.truncated };
+}
+
+async function verifyInvoiceMutationSnapshots(ctx: ActionContext, snapshots: readonly TargetSnapshot[]) {
+  return verifyTargetSnapshots(snapshots, (snapshot) => fetchInvoiceMutationSnapshot(ctx, snapshot));
+}
 
 /** Live invoice statuses (DRAFT is rejected by Clockify; use UNSENT for draft-like). */
 const invoiceStatusSchema = z.enum(["UNSENT", "SENT", "PAID", "PARTIALLY_PAID", "VOID", "OVERDUE"]);
@@ -64,6 +122,29 @@ function invoiceUpdatedReceipt(ctx: ActionContext, action: string, invoiceId: st
     entity: "invoice",
     ids: { workspaceId: ctx.workspaceId, invoiceId },
     changed: { updated: [{ type: "invoice", id: invoiceId }] },
+  });
+}
+
+function rawAddedItemMatches(row: Record<string, unknown>, item: Parameters<ActionContext["clockify"]["addInvoiceItemAtomic"]>[1]): boolean {
+  if (row.itemType !== item.itemType || row.description !== item.description || row.quantity !== item.quantity) return false;
+  if ((row.applyTaxes ?? "NONE") !== (item.applyTaxes ?? "NONE")) return false;
+  if (item.unitPriceMinor !== undefined) {
+    const raw = row.unitPrice;
+    if (raw !== item.unitPriceMinor && raw !== item.unitPriceMinor * 100) return false;
+  }
+  return true;
+}
+
+function invoiceStepFailure(action: string, status: string) {
+  return errorReceipt({
+    action,
+    code: status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+    message: status === "outcome_unknown"
+      ? "Clockify did not provide a definitive response and the exact invoice post-state could not be established."
+      : "Clockify definitively rejected the invoice change.",
+    recovery: status === "outcome_unknown"
+      ? { hint: "Inspect the exact invoice state before deciding whether to retry.", retryable: false }
+      : { hint: "Correct the request and preview it again.", retryable: true },
   });
 }
 
@@ -286,6 +367,7 @@ const createInvoice = defineRiskyAction({
   group: INV,
   risks: ["billing"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceCreateContract,
   schema: z
     .object({
       clientId: z.string().min(1).optional(),
@@ -447,13 +529,20 @@ const createInvoice = defineRiskyAction({
       mutationPlan: {
         mode: "curated",
         steps: [
-          { id: "create-invoice", kind: "primary" as const },
+          {
+            id: "create-invoice",
+            kind: "primary" as const,
+            ...(Object.keys(enrichment).length === 0 && items.length === 0
+              ? { reconciliationStrategy: "create" as const }
+              : {}),
+          },
           ...(Object.keys(enrichment).length
-            ? [{ id: "enrich-invoice", kind: "primary" as const }]
+            ? [{ id: "enrich-invoice", kind: "primary" as const, reconciliationStrategy: "update" as const }]
             : []),
           ...items.map((_item, index) => ({
             id: `add-invoice-item-${index}`,
             kind: "primary" as const,
+            reconciliationStrategy: "update" as const,
           })),
         ],
       },
@@ -477,6 +566,11 @@ const updateInvoice = defineRiskyAction({
   group: INV,
   risks: ["billing"],
   mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["target", "parent"] },
+    strategies: ["update", "state-command"],
+  }),
   schema: z
     .object({
       id: z.string().min(1),
@@ -511,6 +605,8 @@ const updateInvoice = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveInvoiceRef(ctx, { id: args.id }, "update");
     if (!resolved.ok) return resolved.clarify;
+    const target = await captureInvoiceSnapshot(ctx, resolved.id);
+    if (!target) return { clarify: `Invoice ${resolved.number ?? resolved.id} could not be verified.` };
 
     // Resolve identity + dates server-side BEFORE they reach the billing PUT —
     // the same invariant the create path enforces. A relative/garbled date
@@ -530,6 +626,7 @@ const updateInvoice = defineRiskyAction({
       };
     }
     let clientId: string | undefined;
+    let clientSnapshot: TargetSnapshot | undefined;
     if (args.clientId !== undefined) {
       const client = await resolveEntityRef(
         { id: args.clientId },
@@ -538,10 +635,14 @@ const updateInvoice = defineRiskyAction({
           verb: "invoice",
           list: (f) => ctx.clockify.listClients(f),
           notFoundHint: "Or should I create the client first?",
+          verifyId: true,
         },
       );
       if (!client.ok) return client.clarify;
       clientId = client.id;
+      const clientRow = await ctx.clockify.getClient(client.id);
+      if (!clientRow) return { clarify: "The replacement invoice client could not be verified." };
+      clientSnapshot = captureTargetSnapshot("parent", { type: "client", id: clientRow.id, name: clientRow.name }, clientRow);
     }
 
     const patch: Record<string, unknown> = {
@@ -566,6 +667,16 @@ const updateInvoice = defineRiskyAction({
         return { clarify: "I couldn't read the current invoice fields safely. Refresh the invoice and preview the update again." };
       }
     }
+    const currentProjection = structuredClone(target.projection as Record<string, unknown>);
+    const expectedAfterFields: Record<string, unknown> = { ...currentProjection };
+    for (const key of ["number", "issuedDate", "currency", "dueDate", "note", "subject", "clientId"] as const) {
+      if (Object.hasOwn(patch, key)) expectedAfterFields[key] = patch[key];
+    }
+    if (typeof patch.taxPercent === "number") expectedAfterFields.tax = patch.taxPercent * 100;
+    if (typeof patch.tax2Percent === "number") expectedAfterFields.tax2 = patch.tax2Percent * 100;
+    if (typeof patch.discountPercent === "number") expectedAfterFields.discount = patch.discountPercent * 100;
+    const expectedAfterStatus = { ...expectedAfterFields, ...(args.status !== undefined ? { status: args.status } : {}) };
+    const statusTarget = captureTargetSnapshot("target", target.ref, expectedAfterFields);
     return {
       actionLabel: "Update invoice",
       targets: [{ type: "invoice", id: resolved.id, name: resolved.number }],
@@ -577,13 +688,16 @@ const updateInvoice = defineRiskyAction({
         patch,
         ...(updateBody ? { updateBody } : {}),
         ...(args.status !== undefined ? { status: args.status } : {}),
+        expectedAfterFields,
+        expectedAfterStatus,
       },
+      targetSnapshots: [target, ...(clientSnapshot ? [clientSnapshot] : [])],
       mutationPlan: {
         mode: "curated",
         steps: [
-          ...(updateBody ? [{ id: "update-invoice-fields", kind: "primary" as const }] : []),
+          ...(updateBody ? [{ id: "update-invoice-fields", kind: "primary" as const, targetFingerprint: target.fingerprint, reconciliationStrategy: "update" as const }] : []),
           ...(args.status !== undefined
-            ? [{ id: "update-invoice-status", kind: "primary" as const }]
+            ? [{ id: "update-invoice-status", kind: "primary" as const, targetFingerprint: statusTarget.fingerprint, reconciliationStrategy: "state-command" as const }]
             : []),
         ],
       },
@@ -601,6 +715,7 @@ const deleteInvoice = defineRiskyAction({
   group: INV,
   risks: ["destructive", "billing"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceTargetContract("delete"),
   schema: z
     .object({ id: z.string().min(1).optional(), number: z.string().min(1).optional() })
     .refine((v) => v.id !== undefined || v.number !== undefined, {
@@ -609,7 +724,10 @@ const deleteInvoice = defineRiskyAction({
   async preview(ctx, args) {
     const resolved = await resolveInvoiceRef(ctx, args, "delete");
     if (!resolved.ok) return resolved.clarify;
+    const detail = await ctx.clockify.getInvoice(resolved.id);
+    if (!detail) return { clarify: `Invoice ${resolved.number ?? resolved.id} could not be verified.` };
     const number = resolved.number ?? args.number;
+    const targetSnapshot = captureTargetSnapshot("target", { type: "invoice", id: resolved.id, name: number }, detail);
     return {
       actionLabel: "Delete invoice",
       targets: [{ type: "invoice", id: resolved.id, name: number }],
@@ -617,11 +735,13 @@ const deleteInvoice = defineRiskyAction({
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an invoice permanently removes a billing document."],
       payload: { id: resolved.id, number },
-      mutationPlan: { mode: "single", steps: [{ id: "delete-invoice", kind: "primary" }] },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: { mode: "single", steps: [{ id: "delete-invoice", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "delete" }] },
     };
   },
   async commit(ctx, payload, operation) {
     const { id, number } = payload as { id: string; number?: string };
+    const snapshots = operation.targetSnapshots as TargetSnapshot[] | undefined;
     return commitSingleDurableRiskyStep({
       ctx,
       operation,
@@ -630,6 +750,15 @@ const deleteInvoice = defineRiskyAction({
       dispatch: async () => {
         await ctx.clockify.deleteInvoiceAtomic(id);
         return { effect: { deleted: { type: "invoice", id, name: number } } };
+      },
+      verification: {
+        snapshots: snapshots ?? [],
+        fetchSnapshot: async (snapshot: TargetSnapshot) => {
+          const current = await ctx.clockify.getInvoice(snapshot.ref.id);
+          return current
+            ? { ref: { type: "invoice", id: current.id, ...(current.number ? { name: current.number } : {}) }, projection: current, truncated: false }
+            : undefined;
+        },
       },
       success: () => successReceipt({
         action: "clockify_invoices_delete",
@@ -648,6 +777,7 @@ const addInvoiceItem = defineRiskyAction({
   group: INV,
   risks: ["billing"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceSnapshotContract(["parent"], "update"),
   schema: z.object({
     invoiceId: z.string().min(1),
     itemType: z.string().min(1).optional(),
@@ -661,6 +791,8 @@ const addInvoiceItem = defineRiskyAction({
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "add an item to");
     if (!invoice.ok) return invoice.clarify;
+    const parent = await captureInvoiceSnapshot(ctx, invoice.id, "parent");
+    if (!parent) return { clarify: `Invoice ${invoice.number ?? invoice.id} could not be verified.` };
     // Resolve the item type against the workspace's actual configured types
     // (discovered from existing line items) — never a blind "NEW DEFAULT".
     // Reuse the invoice list resolveInvoiceRef just fetched (only the list path
@@ -711,7 +843,8 @@ const addInvoiceItem = defineRiskyAction({
       reversibility: "You can delete the line item afterward.",
       warnings: ["This changes a live billing document."],
       payload: { invoiceId: invoice.id, item },
-      mutationPlan: { mode: "single", steps: [{ id: "add-invoice-item", kind: "primary" }] },
+      targetSnapshots: [parent],
+      mutationPlan: { mode: "single", steps: [{ id: "add-invoice-item", kind: "primary", targetFingerprint: parent.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
   async commit(ctx, payload, operation) {
@@ -719,17 +852,33 @@ const addInvoiceItem = defineRiskyAction({
       invoiceId: string;
       item: Parameters<typeof ctx.clockify.addInvoiceItem>[1];
     };
-    return commitSingleDurableRiskyStep({
-      ctx,
-      operation,
-      planStepId: "add-invoice-item",
-      name: "Add invoice item",
+    const baseline = await ctx.clockify.listRawInvoiceItems(typed.invoiceId);
+    if (baseline.truncated) return errorReceipt({ action: operation.actionName, code: "item_baseline_unavailable", message: "Clockify returned an incomplete invoice-item baseline. No item was added." });
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
+    const snapshots = operation.targetSnapshots ?? [];
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "add-invoice-item", index: 0, name: "Add invoice item",
+      preparedDetail: { preDispatch: { strategy: "invoice_item_add_raw_baseline", rows: baseline.rows, truncated: false }, targetSnapshots: snapshots },
       dispatch: async () => {
-        await ctx.clockify.addInvoiceItemAtomic(typed.invoiceId, typed.item);
-        return { effect: { addedItem: { invoiceId: typed.invoiceId } } };
+        const verified = await verifyInvoiceMutationSnapshots(ctx, snapshots);
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "add-invoice-item", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.addInvoiceItemAtomic(typed.invoiceId, typed.item); return true as const; },
+          reconcile: async () => {
+            const after = await ctx.clockify.listRawInvoiceItems(typed.invoiceId);
+            if (after.truncated || after.rows.length !== baseline.rows.length + 1) return undefined;
+            if (billingFingerprint(after.rows.slice(0, baseline.rows.length)) !== billingFingerprint(baseline.rows)) return undefined;
+            return rawAddedItemMatches(after.rows[after.rows.length - 1]!, typed.item) ? true as const : undefined;
+          },
+        });
+        return { effect: { addedItem: { invoiceId: typed.invoiceId } }, detail: { reconciled: result.reconciled } };
       },
-      success: () => invoiceUpdatedReceipt(ctx, "clockify_invoices_items_add", typed.invoiceId),
     });
+    if (verificationFailure) return errorReceipt({ action: operation.actionName, code: verificationFailure, message: "The invoice changed before the item add. No item was sent." });
+    return step.status === "succeeded" ? invoiceUpdatedReceipt(ctx, "clockify_invoices_items_add", typed.invoiceId) : invoiceStepFailure(operation.actionName, step.status);
   },
 });
 
@@ -740,10 +889,13 @@ const deleteInvoiceItem = defineRiskyAction({
   group: INV,
   risks: ["destructive", "billing"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceSnapshotContract(["target", "parent"], "delete"),
   schema: z.object({ invoiceId: z.string().min(1), index: z.number().int().nonnegative() }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete an item from");
     if (!invoice.ok) return invoice.clarify;
+    const parent = await captureInvoiceSnapshot(ctx, invoice.id, "parent");
+    if (!parent) return { clarify: `Invoice ${invoice.number ?? invoice.id} could not be verified.` };
     const items = await ctx.clockify.listRawInvoiceItems(invoice.id);
     const selectedItem = items.rows[args.index];
     if (!selectedItem) {
@@ -758,6 +910,7 @@ const deleteInvoiceItem = defineRiskyAction({
     }
     const rawItems = structuredClone(items.rows);
     const rawItemsFingerprint = billingFingerprint(rawItems);
+    const target = captureTargetSnapshot("target", { type: "invoice_items", id: invoice.id }, rawItems);
     const itemSnapshot = structuredClone(selectedItem);
     const itemDescription = typeof itemSnapshot.description === "string"
       ? itemSnapshot.description
@@ -771,38 +924,43 @@ const deleteInvoiceItem = defineRiskyAction({
       reversibility: "This cannot be undone; re-add the line to restore it.",
       warnings: ["This changes a live billing document."],
       payload: { invoiceId: invoice.id, index: args.index, itemSnapshot, rawItems, rawItemsFingerprint },
+      targetSnapshots: [target, parent],
       mutationPlan: {
         mode: "single",
-        steps: [{ id: "delete-invoice-item", kind: "primary", targetFingerprint: rawItemsFingerprint }],
+        steps: [{ id: "delete-invoice-item", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "delete" }],
       },
     };
   },
   async commit(ctx, payload, operation) {
-    const { invoiceId, index, rawItemsFingerprint } = payload as {
+    const { invoiceId, index, rawItems } = payload as {
       invoiceId: string;
       index: number;
-      rawItemsFingerprint: string;
+      rawItems: Record<string, unknown>[];
     };
-    const current = await ctx.clockify.listRawInvoiceItems(invoiceId);
-    if (current.truncated || billingFingerprint(current.rows) !== rawItemsFingerprint) {
-      return errorReceipt({
-        action: "clockify_invoices_items_delete",
-        code: "stale_target",
-        message: "The invoice line items changed after preview. Refresh and review a new preview before deleting.",
-        recovery: { hint: "Preview the invoice-item deletion again." },
-      });
-    }
-    return commitSingleDurableRiskyStep({
-      ctx,
-      operation,
-      planStepId: "delete-invoice-item",
-      name: "Delete invoice item",
+    const expectedRemaining = rawItems.filter((_row, rowIndex) => rowIndex !== index);
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
+    const snapshots = operation.targetSnapshots ?? [];
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "delete-invoice-item", index: 0, name: "Delete invoice item",
+      preparedDetail: { targetSnapshots: snapshots, expectedRemaining },
       dispatch: async () => {
-        await ctx.clockify.deleteInvoiceItemAtomic(invoiceId, index);
-        return { effect: { deletedItemIndex: index, invoiceId } };
+        const verified = await verifyInvoiceMutationSnapshots(ctx, snapshots);
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "delete-invoice-item", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.deleteInvoiceItemAtomic(invoiceId, index); return true as const; },
+          reconcile: async () => {
+            const after = await ctx.clockify.listRawInvoiceItems(invoiceId);
+            return !after.truncated && billingFingerprint(after.rows) === billingFingerprint(expectedRemaining) ? true as const : undefined;
+          },
+        });
+        return { effect: { deletedItemIndex: index, invoiceId }, detail: { reconciled: result.reconciled } };
       },
-      success: () => invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId),
     });
+    if (verificationFailure) return errorReceipt({ action: operation.actionName, code: verificationFailure, message: "The invoice items changed before deletion. No delete was sent." });
+    return step.status === "succeeded" ? invoiceUpdatedReceipt(ctx, "clockify_invoices_items_delete", invoiceId) : invoiceStepFailure(operation.actionName, step.status);
   },
 });
 
@@ -813,6 +971,7 @@ const createInvoicePayment = defineRiskyAction({
   group: INV,
   risks: ["payment"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceSnapshotContract(["parent"], "create"),
   schema: z.object({
     invoiceId: z.string().min(1),
     amount: zNumberLike(z.number().positive()),
@@ -824,6 +983,8 @@ const createInvoicePayment = defineRiskyAction({
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "record a payment against");
     if (!invoice.ok) return invoice.clarify;
+    const parent = await captureInvoiceSnapshot(ctx, invoice.id, "parent");
+    if (!parent) return { clarify: `Invoice ${invoice.number ?? invoice.id} could not be verified.` };
     const paymentDate = resolveRelativeDay(nowDate(ctx), { date: args.paymentDate }, ctx.timeZone)
       ?? resolveInstant(nowDate(ctx), args.paymentDate, "start", ctx.timeZone);
     if (paymentDate === undefined) {
@@ -836,6 +997,7 @@ const createInvoicePayment = defineRiskyAction({
       ...(args.note !== undefined ? { note: args.note } : {}),
     };
     const payments = await ctx.clockify.listInvoicePayments(invoice.id);
+    if (payments.truncated) return { clarify: "Clockify returned an incomplete payment list, so I can't establish a safe pre-dispatch baseline." };
     return {
       actionLabel: "Record invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
@@ -848,7 +1010,8 @@ const createInvoicePayment = defineRiskyAction({
       reversibility: "You can delete the payment afterward.",
       warnings: ["This records money received against a live invoice."],
       payload: { invoiceId: invoice.id, payment, paymentBaseline: paymentBaseline(payments) },
-      mutationPlan: { mode: "single", steps: [{ id: "record-payment", kind: "primary" }] },
+      targetSnapshots: [parent],
+      mutationPlan: { mode: "single", steps: [{ id: "record-payment", kind: "primary", targetFingerprint: parent.fingerprint, reconciliationStrategy: "create" }] },
     };
   },
   async commit(ctx, payload, operation) {
@@ -867,10 +1030,13 @@ const deleteInvoicePayment = defineRiskyAction({
   group: INV,
   risks: ["destructive", "payment"],
   mutationWorkflow: "durable",
+  mutationContract: invoiceSnapshotContract(["target", "parent"], "delete"),
   schema: z.object({ invoiceId: z.string().min(1), paymentId: z.string().min(1) }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "delete a payment from");
     if (!invoice.ok) return invoice.clarify;
+    const parent = await captureInvoiceSnapshot(ctx, invoice.id, "parent");
+    if (!parent) return { clarify: `Invoice ${invoice.number ?? invoice.id} could not be verified.` };
     const payments = await ctx.clockify.listInvoicePayments(invoice.id);
     if (payments.truncated) {
       return { clarify: "Clockify returned an incomplete payment list, so I can't authorize deletion. Refresh the invoice and preview again." };
@@ -880,6 +1046,7 @@ const deleteInvoicePayment = defineRiskyAction({
       return { clarify: `Payment ${args.paymentId} could not be verified uniquely on this invoice.` };
     }
     const paymentSnapshot = structuredClone(matches[0]!);
+    const target = captureTargetSnapshot("target", { type: "invoice_payment", id: `${invoice.id}:${args.paymentId}` }, paymentSnapshot);
     return {
       actionLabel: "Delete invoice payment",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
@@ -892,45 +1059,46 @@ const deleteInvoicePayment = defineRiskyAction({
         paymentSnapshot,
         paymentListTruncated: false,
       },
+      targetSnapshots: [target, parent],
       mutationPlan: {
         mode: "single",
-        steps: [{ id: "delete-invoice-payment", kind: "primary", targetFingerprint: billingFingerprint(paymentSnapshot) }],
+        steps: [{ id: "delete-invoice-payment", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "delete" }],
       },
     };
   },
   async commit(ctx, payload, operation) {
-    const { invoiceId, paymentId, paymentSnapshot } = payload as {
+    const { invoiceId, paymentId } = payload as {
       invoiceId: string;
       paymentId: string;
-      paymentSnapshot: Record<string, unknown>;
     };
-    const current = await ctx.clockify.listInvoicePayments(invoiceId);
-    const matches = current.rows.filter((payment) => payment.id === paymentId);
-    if (current.truncated || matches.length !== 1 ||
-      billingFingerprint(matches[0]) !== billingFingerprint(paymentSnapshot)) {
-      return errorReceipt({
-        action: operation.actionName,
-        code: "stale_target",
-        message: "The payment changed or could not be verified completely after preview. No deletion was sent.",
-        recovery: { hint: "Refresh the invoice and preview payment deletion again." },
-      });
-    }
-    return commitSingleDurableRiskyStep({
-      ctx,
-      operation,
-      planStepId: "delete-invoice-payment",
-      name: "Delete invoice payment",
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
+    const snapshots = operation.targetSnapshots ?? [];
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "delete-invoice-payment", index: 0, name: "Delete invoice payment",
+      preparedDetail: { targetSnapshots: snapshots, expectedAbsentPaymentId: paymentId },
       dispatch: async () => {
-        await ctx.clockify.deleteInvoicePaymentAtomic(invoiceId, paymentId);
-        return { effect: { deleted: { type: "payment", id: paymentId } } };
+        const verified = await verifyInvoiceMutationSnapshots(ctx, snapshots);
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "delete-invoice-payment", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.deleteInvoicePaymentAtomic(invoiceId, paymentId); return true as const; },
+          reconcile: async () => {
+            const after = await ctx.clockify.listInvoicePayments(invoiceId);
+            return !after.truncated && !after.rows.some((payment) => payment.id === paymentId) ? true as const : undefined;
+          },
+        });
+        return { effect: { deleted: { type: "payment", id: paymentId } }, detail: { reconciled: result.reconciled } };
       },
-      success: () => successReceipt({
+    });
+    if (verificationFailure) return errorReceipt({ action: operation.actionName, code: verificationFailure, message: "The invoice payment changed before deletion. No delete was sent." });
+    return step.status === "succeeded" ? successReceipt({
         action: "clockify_invoices_payments_delete",
         entity: "invoice",
         ids: { workspaceId: ctx.workspaceId, invoiceId },
         changed: { deleted: [{ type: "payment", id: paymentId }] },
-      }),
-    });
+      }) : invoiceStepFailure(operation.actionName, step.status);
   },
 });
 
@@ -941,6 +1109,12 @@ const importInvoiceTime = defineRiskyAction({
   group: INV,
   risks: ["billing"],
   mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["update"],
+    unreconciledStepIds: ["import-invoice-time"],
+  }),
   schema: z.object({
     invoiceId: z.string().min(1),
     from: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
@@ -950,6 +1124,8 @@ const importInvoiceTime = defineRiskyAction({
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "import time into");
     if (!invoice.ok) return invoice.clarify;
+    const parent = await captureInvoiceSnapshot(ctx, invoice.id, "parent");
+    if (!parent) return { clarify: `Invoice ${invoice.number ?? invoice.id} could not be verified.` };
     // A billing wire must never see "today"/"this_month" raw — Clockify 400s
     // "[to] can't be null". from→start-of-day, to→end-of-day (Clockify wants `to`
     // strictly after `from`); unparseable ⇒ clarify, never send.
@@ -969,6 +1145,14 @@ const importInvoiceTime = defineRiskyAction({
       to,
       ...(args.projectIds !== undefined ? { projectIds: args.projectIds } : {}),
     };
+    const projectSnapshots: TargetSnapshot[] = [];
+    for (const projectId of [...new Set(args.projectIds ?? [])]) {
+      const project = await ctx.clockify.getProject(projectId);
+      if (!project || project.id !== projectId) {
+        return { clarify: `Project ${projectId} could not be verified for invoice import.` };
+      }
+      projectSnapshots.push(captureTargetSnapshot("parent", { type: "project", id: project.id, name: project.name }, project));
+    }
     return {
       actionLabel: "Import time into invoice",
       targets: [{ type: "invoice", id: invoice.id, name: invoice.number }],
@@ -976,7 +1160,8 @@ const importInvoiceTime = defineRiskyAction({
       reversibility: "Delete the imported line items to revert.",
       warnings: ["This adds billable time as invoice line items."],
       payload: { invoiceId: invoice.id, range },
-      mutationPlan: { mode: "single", steps: [{ id: "import-invoice-time", kind: "primary" }] },
+      targetSnapshots: [parent, ...projectSnapshots],
+      mutationPlan: { mode: "single", steps: [{ id: "import-invoice-time", kind: "primary", targetFingerprint: parent.fingerprint }] },
     };
   },
   async commit(ctx, payload, operation) {
@@ -989,6 +1174,7 @@ const importInvoiceTime = defineRiskyAction({
       operation,
       planStepId: "import-invoice-time",
       name: "Import invoice time",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchInvoiceMutationSnapshot(ctx, snapshot) },
       dispatch: async () => {
         await ctx.clockify.importInvoiceTimeAtomic(typed.invoiceId, typed.range);
         return { effect: { importedTime: { invoiceId: typed.invoiceId } } };

@@ -3,6 +3,9 @@ import type { EntitySummary, ListResult } from "../types.js";
 export interface TimeOffPolicySummary extends EntitySummary {
   status?: string;
   timeUnit?: string;
+  requiresApproval?: boolean;
+  daysPerYear?: number;
+  negativeBalance?: boolean;
   /** The users / user groups the policy applies to (from the policy doc). */
   userIds?: string[];
   userGroupIds?: string[];
@@ -16,6 +19,9 @@ export interface TimeOffRequestSummary {
   note?: string;
   start?: string;
   end?: string;
+  days?: number;
+  halfDay?: boolean;
+  timeUnit?: string;
 }
 
 export interface TimeOffBalanceSummary {
@@ -46,6 +52,11 @@ export interface UpdateTimeOffPolicyInput {
   userIds?: string[];
   userGroupIds?: string[];
 }
+export interface PreparedTimeOffPolicyUpdateInput extends UpdateTimeOffPolicyInput {
+  name: string;
+  body: Record<string, unknown>;
+  source: Record<string, unknown>;
+}
 
 export interface CreateTimeOffRequestInput {
   start: string;
@@ -72,13 +83,27 @@ export interface TimeOffPort {
   listTimeOffPolicies(): Promise<ListResult<TimeOffPolicySummary>>;
   getTimeOffPolicy(id: string): Promise<TimeOffPolicySummary | null>;
   createTimeOffPolicy(input: CreateTimeOffPolicyInput): Promise<EntitySummary>;
+  createTimeOffPolicyAtomic(input: CreateTimeOffPolicyInput): Promise<EntitySummary>;
   updateTimeOffPolicy(id: string, patch: UpdateTimeOffPolicyInput): Promise<EntitySummary>;
+  prepareTimeOffPolicyUpdate(id: string, patch: UpdateTimeOffPolicyInput): Promise<PreparedTimeOffPolicyUpdateInput>;
+  /** Exact raw policy document used to verify a full replacement immediately before dispatch. */
+  getTimeOffPolicyMutationState(id: string): Promise<Record<string, unknown> | null>;
+  updateTimeOffPolicyAtomic(id: string, body: PreparedTimeOffPolicyUpdateInput): Promise<EntitySummary>;
   archiveTimeOffPolicy(id: string, archived: boolean): Promise<void>;
+  archiveTimeOffPolicyAtomic(id: string, archived: boolean): Promise<void>;
   listTimeOffRequests(filter?: { status?: string; userId?: string }): Promise<ListResult<TimeOffRequestSummary>>;
   getTimeOffRequest(id: string): Promise<TimeOffRequestSummary | null>;
   createTimeOffRequest(policyId: string, input: CreateTimeOffRequestInput): Promise<EntitySummary>;
+  createTimeOffRequestAtomic(policyId: string, input: CreateTimeOffRequestInput): Promise<EntitySummary>;
   deleteTimeOffRequest(policyId: string, requestId: string): Promise<void>;
+  deleteTimeOffRequestAtomic(policyId: string, requestId: string): Promise<void>;
   setTimeOffRequestStatus(
+    policyId: string,
+    requestId: string,
+    statusType: "APPROVED" | "REJECTED",
+    note?: string,
+  ): Promise<EntitySummary>;
+  setTimeOffRequestStatusAtomic(
     policyId: string,
     requestId: string,
     statusType: "APPROVED" | "REJECTED",
@@ -89,4 +114,5 @@ export interface TimeOffPort {
     policyId: string,
     input: { userIds: string[]; value: number; note?: string },
   ): Promise<void>;
+  updateTimeOffBalanceAtomic(policyId: string, input: { userIds: string[]; value: number; note?: string }): Promise<void>;
 }

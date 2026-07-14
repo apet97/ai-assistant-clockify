@@ -22,7 +22,7 @@ import type { HolidaySummary } from "../../../src/clockify/ports/holidays.js";
 import type { AssignmentSummary } from "../../../src/clockify/ports/scheduling.js";
 import type { ApprovalSummary } from "../../../src/clockify/ports/approvals.js";
 import type { WebhookSummary } from "../../../src/clockify/ports/webhooks.js";
-import type { UserSummary, GroupSummary, CalendarContext } from "../../../src/clockify/ports/users.js";
+import type { UserSummary, GroupSummary, CalendarContext, UserRoleAssignment, WorkspaceMemberRateSnapshot } from "../../../src/clockify/ports/users.js";
 import type { ListResult } from "../../../src/clockify/types.js";
 
 export type FakeListFamily =
@@ -90,6 +90,8 @@ export interface FakeWorkspaceSeed {
   users?: UserSummary[];
   /** Per-user workspace role for the opt-in admin re-check (authz-surface-01). */
   memberRoles?: Record<string, string>;
+  userRoleAssignments?: Record<string, UserRoleAssignment[]>;
+  workspaceMemberRates?: Record<string, Partial<Record<"HOURLY" | "COST", Omit<WorkspaceMemberRateSnapshot, "userId" | "rateKind">>>>;
   calendarContext?: CalendarContext;
   groups?: GroupSummary[];
   webhooks?: WebhookSummary[];
@@ -132,6 +134,8 @@ export interface FakeState {
   expenseCategories: ExpenseCategorySummary[];
   users: UserSummary[];
   memberRoles: Record<string, string>;
+  userRoleAssignments: Record<string, UserRoleAssignment[]>;
+  workspaceMemberRates: Record<string, Partial<Record<"HOURLY" | "COST", Omit<WorkspaceMemberRateSnapshot, "userId" | "rateKind">>>>;
   calendarContext: CalendarContext;
   groups: GroupSummary[];
   webhooks: WebhookSummary[];
@@ -190,6 +194,8 @@ export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
     expenseCategories: [...(seed.expenseCategories ?? [])],
     users: [...(seed.users ?? [])],
     memberRoles: { ...(seed.memberRoles ?? {}) },
+    userRoleAssignments: Object.fromEntries(Object.entries(seed.userRoleAssignments ?? {}).map(([id, rows]) => [id, rows.map((row) => ({ ...row }))])),
+    workspaceMemberRates: Object.fromEntries(Object.entries(seed.workspaceMemberRates ?? {}).map(([id, rates]) => [id, { ...rates }])),
     calendarContext: seed.calendarContext ?? { timeZone: "UTC", weekStartsOn: 1 },
     groups: [...(seed.groups ?? [])],
     webhooks: [...(seed.webhooks ?? [])],

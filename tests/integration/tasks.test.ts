@@ -79,7 +79,7 @@ describe("task actions", () => {
       // projectId rides on the created ref so the task is one-click undoable.
       expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "task", projectId: "p1" });
     } else throw new Error("expected receipt");
-    expect(fake.counts.createTask).toBe(1);
+    expect(fake.counts.createTaskAtomic).toBe(1);
   });
 
   const seedWithUsers = () => ({
@@ -100,7 +100,7 @@ describe("task actions", () => {
     if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected an ok receipt");
     const created = fake.state.tasks.find((t) => t.name === "AIASSIST_SMOKE_task") as { assigneeIds?: string[] } | undefined;
     expect(created?.assigneeIds).toEqual(["u1", "u2"]);
-    expect(fake.counts.createTask).toBe(1);
+    expect(fake.counts.createTaskAtomic).toBe(1);
   });
 
   it("clockify_tasks_create resolves assignee NAMES (and 'me') to ids inline", async () => {
@@ -123,7 +123,7 @@ describe("task actions", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.createTask ?? 0).toBe(0);
+    expect(fake.counts.createTaskAtomic ?? 0).toBe(0);
   });
 
   it("clockify_tasks_update resolves assignee NAMES to ids at preview time", async () => {
@@ -160,7 +160,7 @@ describe("task actions", () => {
     expect(fake.counts.updateTask ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateTask).toBe(1);
+    expect(fake.counts.updateTaskAtomic).toBe(1);
   });
 
   it("clockify_tasks_delete previews destructive then deletes once on commit", async () => {
@@ -174,7 +174,7 @@ describe("task actions", () => {
     expect(preview.operation.risks).toContain("destructive");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteTask).toBe(1);
+    expect(fake.counts.deleteTaskAtomic).toBe(1);
     expect(fake.state.tasks.find((t) => t.id === "t1")).toBeUndefined();
   });
 
@@ -196,7 +196,7 @@ describe("task actions", () => {
     expect(change).not.toContain("4200");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateTaskRate).toBe(1);
+    expect(fake.counts.updateTaskRateAtomic).toBe(1);
   });
 
   it("clockify_tasks_rate_update preview shows the REAL task name for a 24-hex id, not the model's unverified one", async () => {
@@ -291,7 +291,7 @@ describe("task actions — name→id resolution at preview time (live-loop FIX 1
     expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1" });
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteTask).toBe(1);
+    expect(fake.counts.deleteTaskAtomic).toBe(1);
   });
 
   it("clockify_tasks_delete resolves the project by name even when the project is ARCHIVED (live item 305)", async () => {

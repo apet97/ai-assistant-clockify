@@ -6,7 +6,13 @@ import {
   type ActionDefinition,
   type ActionResult,
   type CommitResult,
+  type DurableMutationContract,
   type PreparedSafeWrite,
+  type SafeWritePreparationResult,
+  clarifyResult,
+  isPreparedSafeWrite,
+  isSafeWriteClarification,
+  mutationPlanContractError,
 } from "./action.js";
 import type { FeatureGroup } from "./permissions.js";
 import {
@@ -36,13 +42,25 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
   stepName: string;
   argumentAliases?: readonly string[];
   argumentOpenPaths?: readonly string[];
-  prepare(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite> | PreparedSafeWrite;
+  mutationContract: DurableMutationContract;
+  prepare(
+    ctx: ActionContext,
+    args: z.infer<S>,
+  ): Promise<SafeWritePreparationResult> | SafeWritePreparationResult;
   dispatch(ctx: ActionContext, operation: unknown): Promise<DurableSafeWriteDispatch>;
 }): ActionDefinition {
   const executePrepared = async (
     ctx: ActionContext,
     prepared: PreparedSafeWrite,
   ): Promise<CommitResult> => {
+    if (mutationPlanContractError(def.mutationContract, prepared.mutationPlan)) {
+      return errorReceipt({
+        action: def.name,
+        code: "invalid_mutation_plan",
+        message: "This safe write's durable host plan is incompatible with its action contract.",
+        recovery: { hint: "Correct the action contract before retrying.", retryable: false },
+      });
+    }
     const primary = prepared.mutationPlan.steps.filter((step) => step.kind === "primary");
     if (primary.length !== 1 || prepared.mutationPlan.mode !== "single") {
       return errorReceipt({
@@ -110,10 +128,32 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     mutationWorkflow: "durable",
-    prepareSafeWrite: async (ctx, args) => def.prepare(ctx, args),
+    mutationContract: def.mutationContract,
+    prepareSafeWrite: async (ctx, args) => {
+      const prepared = await def.prepare(ctx, args);
+      if (isSafeWriteClarification(prepared)) return prepared;
+      if (!isPreparedSafeWrite(prepared)) throw new Error("invalid_safe_write_preparation");
+      if (mutationPlanContractError(def.mutationContract, prepared.mutationPlan)) {
+        throw new Error("invalid_mutation_plan_contract");
+      }
+      return prepared;
+    },
     executeSafeWrite: (ctx, prepared) => executePrepared(ctx, prepared),
     async handler(ctx, args): Promise<ActionResult> {
-      const result = await executePrepared(ctx, await def.prepare(ctx, args));
+      const prepared = await def.prepare(ctx, args);
+      if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+      if (!isPreparedSafeWrite(prepared)) {
+        return {
+          kind: "receipt",
+          receipt: errorReceipt({
+            action: def.name,
+            code: "invalid_safe_write_preparation",
+            message: "Safe-write preparation returned an invalid result.",
+            recovery: { hint: "Correct the action's prepare contract before retrying.", retryable: false },
+          }),
+        };
+      }
+      const result = await executePrepared(ctx, prepared);
       return isPartialCommitResult(result)
         ? result
         : { kind: "receipt", receipt: result };

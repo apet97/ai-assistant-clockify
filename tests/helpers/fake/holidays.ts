@@ -8,8 +8,13 @@ export function makeFakeHolidays({ state, seed, bump, nextId }: FakeContext): Pi
   | "getHoliday"
   | "listHolidaysInPeriod"
   | "createHoliday"
+  | "createHolidayAtomic"
   | "updateHoliday"
+  | "prepareHolidayUpdate"
+  | "getHolidayMutationState"
+  | "updateHolidayAtomic"
   | "deleteHoliday"
+  | "deleteHolidayAtomic"
 > {
   return {
     async listHolidays() {
@@ -39,6 +44,12 @@ export function makeFakeHolidays({ state, seed, bump, nextId }: FakeContext): Pi
       state.holidays.push(holiday);
       return { id: holiday.id, name: holiday.name };
     },
+    async createHolidayAtomic(input) {
+      bump("createHolidayAtomic");
+      const holiday: HolidaySummary = { id: nextId("hol"), name: input.name, startDate: input.startDate, endDate: input.endDate ?? input.startDate, ...(input.occursAnnually !== undefined ? { occursAnnually: input.occursAnnually } : {}), ...(input.userIds?.length ? { userIds: input.userIds } : {}), ...(input.userGroupIds?.length ? { userGroupIds: input.userGroupIds } : {}) };
+      state.holidays.push(holiday);
+      return holiday;
+    },
     async updateHoliday(id, patch) {
       bump("updateHoliday");
       const index = state.holidays.findIndex((h) => h.id === id);
@@ -56,9 +67,33 @@ export function makeFakeHolidays({ state, seed, bump, nextId }: FakeContext): Pi
       else state.holidays.push(updated);
       return { id, name: updated.name };
     },
+    async prepareHolidayUpdate(id, patch) {
+      bump("prepareHolidayUpdate");
+      const holiday = state.holidays.find((row) => row.id === id);
+      if (!holiday?.startDate) throw new Error("holiday_not_found");
+      return { ...holiday, ...patch, name: patch.name ?? holiday.name, startDate: patch.startDate ?? holiday.startDate, endDate: patch.endDate ?? holiday.endDate ?? holiday.startDate, source: structuredClone(holiday) };
+    },
+    async getHolidayMutationState(id) {
+      bump("getHolidayMutationState");
+      const holiday = state.holidays.find((row) => row.id === id);
+      return holiday ? structuredClone(holiday) : null;
+    },
+    async updateHolidayAtomic(id, input) {
+      bump("updateHolidayAtomic");
+      const index = state.holidays.findIndex((row) => row.id === id);
+      if (index < 0) throw new Error("holiday_not_found");
+      const { source: _source, ...body } = input;
+      state.holidays[index] = { ...state.holidays[index]!, ...body, id };
+      return { id, name: state.holidays[index]!.name };
+    },
     async deleteHoliday(id) {
       bump("deleteHoliday");
       state.holidays = state.holidays.filter((h) => h.id !== id);
+      state.deleted.push({ entityType: "holiday", id });
+    },
+    async deleteHolidayAtomic(id) {
+      bump("deleteHolidayAtomic");
+      state.holidays = state.holidays.filter((holiday) => holiday.id !== id);
       state.deleted.push({ entityType: "holiday", id });
     },
   };

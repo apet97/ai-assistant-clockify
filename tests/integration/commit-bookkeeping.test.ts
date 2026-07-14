@@ -17,6 +17,7 @@ import {
 } from "../../src/harness/mutation-workflow.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
+import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * Post-host bookkeeping must preserve the truthful receipt. Canonical
@@ -109,6 +110,15 @@ const CREATE_MULTI_STEP_INVOICE: ToolCompletion = {
       note: "Route proof",
       items: [{ itemType: "TIME", description: "Consulting", quantity: 2, amount: 25 }],
     },
+  }],
+};
+
+const DELETE_PROJECT_WITH_COMPENSATION: ToolCompletion = {
+  text: "Preparing the project deletion.",
+  toolCalls: [{
+    id: "delete-project",
+    name: "clockify_projects_delete",
+    arguments: { id: "aaaaaaaaaaaaaaaaaaaaaaaa" },
   }],
 };
 
@@ -227,25 +237,77 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     });
   });
 
+  it("runs declared compensation before the confirmation route settles the definitive failure", async () => {
+    const projectId = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    const fake = createFakeWorkspace({ projects: [{ id: projectId, name: "Route project", archived: false }] });
+    let store: Store | undefined;
+    let operationId: string | undefined;
+    let deleteDispatches = 0;
+    let restoreDispatches = 0;
+    let operationStatusAtRestore: string | undefined;
+    let stepsAtRestore: Array<[string, string]> = [];
+    fake.client.deleteProjectAtomic = async (id) => {
+      deleteDispatches += 1;
+      throw new DefinitiveWriteFailure("DELETE", `/projects/${id}`, "rejected", 409);
+    };
+    fake.client.updateProjectAtomic = async (id, body) => {
+      restoreDispatches += 1;
+      operationStatusAtRestore = store!.getOperationRun(operationId!)?.status;
+      stepsAtRestore = store!.listOperationSteps(operationId!).map((step) => [step.planStepId, step.status]);
+      const current = fake.state.projects.find((project) => project.id === id)!;
+      const restored = { ...current, ...body, id };
+      fake.state.projects = fake.state.projects.map((project) => project.id === id ? restored : project);
+      return restored;
+    };
+    const testApp = await makeApp([DELETE_PROJECT_WITH_COMPENSATION], fake);
+    const { app, cookie } = testApp;
+    store = testApp.store;
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({
+        message: "Delete the route project",
+        requestId: "f38b7c5d-d8da-42b3-a747-33dc0fc34afc",
+      });
+    expect(chat.status).toBe(200);
+    const preview = previewsOf(chat.body.results as ResultItem[])[0]!;
+    operationId = store.getPendingConfirmation(preview.previewId!)!.operationId;
+
+    const confirm = await request(app)
+      .post(`/api/confirmations/${preview.previewId}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+
+    expect(confirm.status).toBe(400);
+    expect(deleteDispatches).toBe(1);
+    expect(restoreDispatches).toBe(1);
+    expect(operationStatusAtRestore).toBe("executing");
+    expect(stepsAtRestore).toEqual([
+      ["archive-project-for-delete", "compensating"],
+      ["delete-project", "definitive_failed"],
+      ["restore-project", "executing"],
+    ]);
+    expect(confirm.body.receipt).toMatchObject({
+      ok: false,
+      action: "clockify_projects_delete",
+      code: "write_failed",
+    });
+    expect(fake.state.projects[0]).toMatchObject({ id: projectId, archived: false });
+    expect(store.listOperationSteps(operationId).map((step) => [step.planStepId, step.status])).toEqual([
+      ["archive-project-for-delete", "compensated"],
+      ["delete-project", "definitive_failed"],
+      ["restore-project", "compensated"],
+    ]);
+    expect(store.getOperationRun(operationId)).toMatchObject({
+      status: "definitive_failed",
+      actionResultId: expect.any(String),
+    });
+  });
+
   it("gives the one-use confirmation winner a scoped journal and dispatches one durable planned step", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const action = getAction("clockify_tags_delete")!;
-    const originalHandler = action.handler;
-    vi.spyOn(action, "handler").mockImplementation(async (ctx, args) => {
-      const result = await originalHandler(ctx, args);
-      return result.kind === "preview"
-        ? {
-            ...result,
-            operation: {
-              ...result.operation,
-              mutationPlan: {
-                mode: "single" as const,
-                steps: [{ id: "delete-tag", kind: "primary" as const }],
-              },
-            },
-          }
-        : result;
-    });
     let operationIdAtDispatch: string | undefined;
     const observed: string[] = [];
     type ExpectedScopedJournal = MutationStepJournal & {
@@ -254,6 +316,11 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
       listOperationSteps(): ReturnType<Store["listOperationSteps"]>;
     };
     vi.spyOn(action, "commit").mockImplementation(async (ctx, operation) => {
+      const plannedStep = operation.mutationPlan?.steps[0];
+      if (plannedStep?.id !== "delete-tag" || plannedStep.kind !== "primary" ||
+        plannedStep.reconciliationStrategy !== "delete" || !plannedStep.targetFingerprint) {
+        throw new Error("unexpected_delete_tag_plan");
+      }
       const journal = (ctx as ActionContext & { mutationJournal?: ExpectedScopedJournal }).mutationJournal;
       if (!journal) throw new Error("missing_scoped_mutation_journal");
       expect(journal.operationId).toBe(operation.operationId);
@@ -266,11 +333,12 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
           index: 0,
           name: "Delete tag",
           kind: "primary",
+          targetFingerprint: plannedStep.targetFingerprint,
           dispatch: async () => {
             operationIdAtDispatch = operation.operationId;
             observed.push(`operation:${journal.getOperationStatus()}`);
             observed.push(`step:${journal.listOperationSteps()[0]?.status ?? "missing"}`);
-            await ctx.clockify.deleteTag(operation.payload.id as string);
+            await ctx.clockify.deleteTagAtomic(operation.payload.id as string);
             return { externalId: operation.payload.id as string, effect: { deleted: operation.payload.id } };
           },
         }],
@@ -316,7 +384,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     expect(replay.status).toBe(400);
     expect(operationIdAtDispatch).toBe(pending!.operationId);
     expect(observed).toEqual(["operation:executing", "step:executing"]);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(store.getOperationRun(pending!.operationId)).toMatchObject({ status: "succeeded" });
     expect(store.listOperationSteps(pending!.operationId)).toMatchObject([
       {
@@ -342,7 +410,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     expect(chat.status).toBe(200);
     const preview = previewsOf(chat.body.results as ResultItem[])[0];
     expect(preview).toBeDefined();
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
 
     const confirm = await request(app)
       .post(`/api/confirmations/${preview.previewId}/confirm`)
@@ -355,7 +423,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
     expect(confirm.body.receipt.ok).toBe(true);
     expect(confirm.body.receipt.action).toBe("clockify_tags_delete");
     // The commit happened exactly once on the underlying host.
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 
@@ -383,7 +451,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
 
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(settlementAttempts).toBe(2);
     expect(store.getPendingConfirmation(preview.previewId!)).toMatchObject({
       status: "succeeded",
@@ -419,7 +487,7 @@ describe("post-commit bookkeeping is best-effort (a DB hiccup can't drop a commi
       receipt: { ok: true, action: "clockify_tags_delete" },
     });
     expect(settlementAttempts).toBe(2);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     const degraded = store.getPendingConfirmation(preview.previewId!);
     expect(degraded).toMatchObject({
       status: "executing",

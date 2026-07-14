@@ -11,6 +11,8 @@ function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPoli
 }
 const seed = () => ({
   customFields: [{ id: "cf1", name: "Priority", type: "TXT", status: "VISIBLE" }],
+  projects: [{ id: "p1", name: "Project" }],
+  entries: [{ id: "e1", start: "2026-06-06T08:00:00Z", description: "Entry" }],
 });
 
 describe("custom field actions", () => {
@@ -44,7 +46,7 @@ describe("custom field actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message).toContain("does not allow add-ons");
-    expect(fake.counts.createCustomField ?? 0).toBe(0);
+    expect(fake.counts.createCustomFieldAtomic ?? 0).toBe(0);
   });
 
   it("the create description NAMES the add-on restriction so 'why can't you create custom fields?' answers truthfully (live item 186)", async () => {
@@ -62,7 +64,7 @@ describe("custom field actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message).toContain("does not allow add-ons");
-    expect(fake.counts.createCustomField ?? 0).toBe(0);
+    expect(fake.counts.createCustomFieldAtomic ?? 0).toBe(0);
   });
 
   it("clockify_custom_fields_create clarifies for the type on the api_key/dev path when fieldType is omitted (preserves dev UX)", async () => {
@@ -75,7 +77,7 @@ describe("custom field actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message.toLowerCase()).toContain("type");
-    expect(fake.counts.createCustomField ?? 0).toBe(0);
+    expect(fake.counts.createCustomFieldAtomic ?? 0).toBe(0);
   });
 
   it("clockify_custom_fields_create previews high_risk_write then creates once", async () => {
@@ -87,10 +89,10 @@ describe("custom field actions", () => {
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("high_risk_write");
-    expect(fake.counts.createCustomField ?? 0).toBe(0);
+    expect(fake.counts.createCustomFieldAtomic ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createCustomField).toBe(1);
+    expect(fake.counts.createCustomFieldAtomic).toBe(1);
     expect(fake.state.customFields.find((c) => c.name === "Severity")).toBeDefined();
   });
 
@@ -128,7 +130,7 @@ describe("custom field actions", () => {
     expect(preview.operation.risks).toContain("high_risk_write");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateCustomField).toBe(1);
+    expect(fake.counts.updateCustomFieldAtomic).toBe(1);
     expect(fake.state.customFields[0].name).toBe("Priority Level");
   });
 
@@ -139,7 +141,7 @@ describe("custom field actions", () => {
     expect(preview.operation.risks).toContain("destructive");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteCustomField).toBe(1);
+    expect(fake.counts.deleteCustomFieldAtomic).toBe(1);
     expect(fake.state.customFields.find((c) => c.id === "cf1")).toBeUndefined();
   });
 
@@ -155,7 +157,7 @@ describe("custom field actions", () => {
     expect(preview.operation.featureGroup).toBe("custom_fields");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.setProjectCustomFieldValue).toBe(1);
+    expect(fake.counts.setProjectCustomFieldValueAtomic).toBe(1);
   });
 
   it("clockify_custom_fields_set_value_entry previews high_risk_write then sets once", async () => {
@@ -169,6 +171,6 @@ describe("custom field actions", () => {
     expect(preview.operation.risks).toContain("high_risk_write");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.setEntryCustomFieldValue).toBe(1);
+    expect(fake.counts.setEntryCustomFieldValueAtomic).toBe(1);
   });
 });

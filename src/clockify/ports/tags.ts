@@ -16,5 +16,8 @@ export interface TagPort {
   getTag(id: string): Promise<EntitySummary | null>;
   createTag(input: { name: string }): Promise<EntitySummary>;
   updateTag(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
+  prepareTagUpdate(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
+  updateTagAtomic(id: string, body: Record<string, unknown>): Promise<EntitySummary>;
   deleteTag(id: string): Promise<void>;
+  deleteTagAtomic(id: string): Promise<void>;
 }

@@ -11,7 +11,66 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
   | "getEntry"
   | "markEntriesInvoiced"
   | "updateTimeEntry"
+  | "startTimeEntryAtomic"
+  | "stopTimeEntryAtomic"
+  | "createTimeEntryAtomic"
+  | "prepareTimeEntryUpdate"
+  | "updateTimeEntryAtomic"
+  | "markEntriesInvoicedAtomic"
+  | "deleteTimeEntryAtomic"
 > {
+  const startAtomic: WorkspaceClient["startTimeEntryAtomic"] = async (input) => {
+    bump("startTimeEntryAtomic");
+    const entry: TimeEntrySummary = {
+      id: nextId("entry"),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.tagIds !== undefined ? { tagIds: input.tagIds } : {}),
+      ...(input.billable !== undefined ? { billable: input.billable } : {}),
+      start: input.start,
+    };
+    state.running = entry;
+    state.timeEntries.push(entry);
+    return entry;
+  };
+  const stopAtomic: WorkspaceClient["stopTimeEntryAtomic"] = async ({ end }) => {
+    bump("stopTimeEntryAtomic");
+    if (!state.running) return null;
+    const stopped = { ...state.running, end };
+    const index = state.timeEntries.findIndex((entry) => entry.id === stopped.id);
+    if (index >= 0) state.timeEntries[index] = stopped;
+    state.running = null;
+    return stopped;
+  };
+  const createAtomic: WorkspaceClient["createTimeEntryAtomic"] = async (input) => {
+    bump("createTimeEntryAtomic");
+    const entry: TimeEntrySummary = {
+      id: nextId("entry"),
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.tagIds !== undefined ? { tagIds: input.tagIds } : {}),
+      ...(input.billable !== undefined ? { billable: input.billable } : {}),
+      start: input.start, end: input.end ?? null,
+    };
+    state.timeEntries.push(entry);
+    return entry;
+  };
+  const prepareUpdate: WorkspaceClient["prepareTimeEntryUpdate"] = async ({ id, ...patch }) => {
+    bump("prepareTimeEntryUpdate");
+    const current = state.timeEntries.find((entry) => entry.id === id);
+    if (!current) throw new Error("entry_not_found");
+    return { ...current, ...Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined)) };
+  };
+  const updateAtomic: WorkspaceClient["updateTimeEntryAtomic"] = async (id, body) => {
+    bump("updateTimeEntryAtomic");
+    const index = state.timeEntries.findIndex((entry) => entry.id === id);
+    const updated = { ...(index >= 0 ? state.timeEntries[index] : { id, start: "" }), ...body, id } as TimeEntrySummary;
+    if (index >= 0) state.timeEntries[index] = updated;
+    else state.timeEntries.push(updated);
+    return updated;
+  };
   return {
     async getRunningTimeEntry() {
       bump("getRunningTimeEntry");
@@ -19,41 +78,19 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
     },
     async startTimeEntry(input) {
       bump("startTimeEntry");
-      const entry: TimeEntrySummary = {
-        id: nextId("entry"),
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-        start: input.start,
-      };
-      state.running = entry;
-      state.timeEntries.push(entry);
-      return entry;
+      return startAtomic(input);
     },
+    startTimeEntryAtomic: startAtomic,
     async stopTimeEntry({ end }) {
       bump("stopTimeEntry");
-      if (!state.running) return null;
-      const stopped: TimeEntrySummary = { ...state.running, end };
-      state.running = null;
-      return stopped;
+      return stopAtomic({ userId: "", end });
     },
+    stopTimeEntryAtomic: stopAtomic,
     async createTimeEntry(input) {
       bump("createTimeEntry");
-      const entry: TimeEntrySummary = {
-        id: nextId("entry"),
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-        start: input.start,
-        end: input.end ?? null,
-      };
-      state.timeEntries.push(entry);
-      return entry;
+      return createAtomic(input);
     },
+    createTimeEntryAtomic: createAtomic,
     async getEntries({ start, end, projectId, taskId }) {
       bump("getEntries");
       // ISO-8601 UTC strings sort lexicographically, so range filtering works.
@@ -74,6 +111,10 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
       bump("markEntriesInvoiced");
       void input;
     },
+    async markEntriesInvoicedAtomic(input) {
+      bump("markEntriesInvoicedAtomic");
+      void input;
+    },
     async updateTimeEntry({ id, description, projectId, taskId, tagIds, billable }) {
       bump("updateTimeEntry");
       const index = state.timeEntries.findIndex((e) => e.id === id);
@@ -90,6 +131,14 @@ export function makeFakeTimeEntries({ state, seed, bump, nextId }: FakeContext):
       if (index >= 0) state.timeEntries[index] = updated;
       else state.timeEntries.push(updated);
       return updated;
+    },
+    prepareTimeEntryUpdate: prepareUpdate,
+    updateTimeEntryAtomic: updateAtomic,
+    async deleteTimeEntryAtomic(id) {
+      bump("deleteTimeEntryAtomic");
+      state.timeEntries = state.timeEntries.filter((entry) => entry.id !== id);
+      if (state.running?.id === id) state.running = null;
+      state.deleted.push({ entityType: "time_entry", id });
     },
   };
 }

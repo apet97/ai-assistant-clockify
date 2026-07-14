@@ -115,6 +115,7 @@ export function actionFingerprint(name: string): string | undefined {
         argumentAliases: action.argumentAliases ?? [],
         argumentOpenPaths: action.argumentOpenPaths ?? [],
         mutationWorkflow: action.mutationWorkflow,
+        mutationContract: action.mutationContract,
         preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
       })
     : undefined;
@@ -131,6 +132,7 @@ export function catalogHash(): string {
       argumentAliases: action.argumentAliases ?? [],
       argumentOpenPaths: action.argumentOpenPaths ?? [],
       mutationWorkflow: action.mutationWorkflow,
+      mutationContract: action.mutationContract,
       preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
     })),
   );

@@ -180,7 +180,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
       (r) => r.kind === "preview",
     );
     expect(previews).toHaveLength(1);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
     // Truthful reply, never the model's "Deleting the tag now." narration.
     expect(res.body.reply.text).toContain("Nothing has been changed yet");
     // The loop must not have been re-planned past the interrupt.
@@ -192,7 +192,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
       .send({ nonce: previews[0].nonce });
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(fake.state.tags.find((t) => t.id === "t1")).toBeUndefined();
   });
 
@@ -246,7 +246,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(res.status).toBe(200);
     const kinds = (res.body.results as Array<{ kind: string }>).map((r) => r.kind);
     expect(kinds).toEqual(["receipt", "preview"]);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
   it("returns a clarify result when an action needs disambiguation", async () => {
@@ -262,7 +262,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(res.body.reply.kind).toBe("clarify");
     const clarifies = (res.body.results as Array<{ kind: string }>).filter((r) => r.kind === "clarify");
     expect(clarifies).toHaveLength(1);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
   // fix-clarify-double-render: a clarify message must be delivered EXACTLY ONCE
@@ -311,7 +311,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     const replyText = String(res.body.reply?.text ?? "").trim();
     // When a turn ends in a clarify, reply.text must not echo the clarify message.
     expect(replyText).not.toBe(clarifyMessage);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
   it("stops a legacy single-turn plan after the first clarification", async () => {
@@ -388,7 +388,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(replyText).toBe("");
     const channels = [replyText, ...clarifies.map((c) => (c.message ?? "").trim())];
     expect(channels.filter((t) => t === clarifyMessage)).toHaveLength(1);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
   it("surfaces a calm model_unavailable error when the model fails mid-loop", async () => {
@@ -511,7 +511,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     const chained = events.find((e) => e.type === "result" && (e.result as ResultItem).kind === "preview");
     expect(chained).toBeDefined();
     expect((chained!.result as ResultItem).previewId).toBeTruthy();
-    expect(fake.counts.deleteTag).toBe(1); // only the confirmed one; the chained is still pending
+    expect(fake.counts.deleteTagAtomic).toBe(1); // only the confirmed one; the chained is still pending
   });
 
   it("a model EXCEPTION mid-resume never loses the committed receipt: the stream still opens with it and closes cleanly", async () => {
@@ -546,7 +546,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     // …and the stream closes cleanly (a swallowed model failure loses only the
     // follow-up narration — never the commit).
     expect(events[events.length - 1].type).toBe("done");
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect(modelCalls).toBe(2);
   });
 
@@ -570,7 +570,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     expect(events.some((e) => e.type === "reply")).toBe(false);
     expect(events[events.length - 1].type).toBe("done");
     expect(model.completeWithTools).toHaveBeenCalledTimes(1); // only the chat turn, no resume
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
   });
 
   it("a policy lowered after the preview denies a streaming confirm cleanly as JSON (nonce not burned)", async () => {
@@ -595,7 +595,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
     expect(denied.status).toBe(400);
     expect(denied.headers["content-type"]).toContain("application/json");
     expect(denied.body.code).toBe("policy_denied");
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
 
     // Same nonce works after restore (it was never burned).
     store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
@@ -604,7 +604,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
       .set("Cookie", cookie)
       .send({ nonce: preview.nonce });
     expect(parseEvents(ok.text)[0].type).toBe("receipt");
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
   });
 });
 
@@ -627,7 +627,7 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(kinds).toEqual(["status", "result:receipt", "status", "result:preview", "reply", "done"]);
     const reply = events.find((e) => e.type === "reply") as { text: string };
     expect(reply.text).toContain("Nothing has been changed yet");
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
   // finding new-4-failed-tool-call-receipt-silently-hidden: when the agentic loop
@@ -851,7 +851,7 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     await new Promise((r) => setTimeout(r, 20)); // let the loop settle past the abort guard
 
     // The confirmed delete committed (its receipt is streamed BEFORE the resume model call blocks)…
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     // …then the resume made exactly ONE model call (the one that triggered the disconnect),
     // and the read it then proposed never executed — the abort guard sits before runAction.
     expect((disconnectingModel.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(2);
@@ -907,7 +907,7 @@ describe("post-turn truthfulness guard (F10: a plain answer with no tool calls m
 
     expect(res.status).toBe(200);
     expect(res.body.results).toEqual([]);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
     expect(fake.counts.createTag ?? 0).toBe(0);
     const replyText = String(res.body.reply?.text ?? "");
     expect(replyText).not.toMatch(/deleted|created/i);
@@ -937,7 +937,7 @@ describe("post-turn truthfulness guard (F10: a plain answer with no tool calls m
     expect(res.status).toBe(200);
     // A read DID run (its receipt is in results), but NOTHING mutated.
     expect((res.body.results as ResultItem[]).some((r) => r.kind === "receipt")).toBe(true);
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
     expect(fake.state.tags.find((t) => t.id === "t1")?.name).toBe("urgent"); // still there
     // The fabricated "Done! I deleted" must NOT reach the admin.
     const replyText = String(res.body.reply?.text ?? "");
@@ -1059,7 +1059,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
       .send({ nonce: preview.nonce });
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
-    expect(fake.counts.deleteTag).toBe(1); // the mutation really happened
+    expect(fake.counts.deleteTagAtomic).toBe(1); // the mutation really happened
     // The resumed reply is the model's truthful completion — never "nothing ran".
     expect(confirm.body.resume.reply.text).toBe("Done! I've deleted the urgent tag.");
     expect(String(confirm.body.resume.reply.text)).not.toMatch(/nothing ran/i);
@@ -1089,7 +1089,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     const second = previewsOf(confirm1.body.resume.results as ResultItem[]);
     expect(second).toHaveLength(1);
     expect(confirm1.body.resume.reply.text).toContain("Nothing has been changed yet");
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
 
     const confirm2 = await request(app)
       .post(`/api/confirmations/${second[0].previewId}/confirm`)
@@ -1097,7 +1097,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
       .send({ nonce: second[0].nonce });
     expect(confirm2.status).toBe(200);
     expect(confirm2.body.resume.reply.text).toBe("Both tags are deleted.");
-    expect(fake.counts.deleteTag).toBe(2);
+    expect(fake.counts.deleteTagAtomic).toBe(2);
     expect(fake.state.tags).toHaveLength(0);
   });
 
@@ -1125,7 +1125,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
       .send({ nonce: previews[0].nonce });
     expect(denied.status).toBe(400);
     expect(denied.body.code).toBe("policy_denied");
-    expect(fake.counts.deleteTag ?? 0).toBe(0);
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
     // No resume happened on the denial.
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterChat);
 
@@ -1137,7 +1137,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
       .send({ nonce: previews[0].nonce });
     expect(confirm.status).toBe(200);
     expect(confirm.body.resume.reply.text).toBe("The urgent tag is gone.");
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
   });
 
   it("rejects a replayed confirm after a resumed commit (one-use nonce holds; no second resume)", async () => {
@@ -1165,7 +1165,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
       .set("Cookie", cookie)
       .send({ nonce: previews[0].nonce });
     expect(replay.status).toBe(400);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
     expect((model.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length).toBe(callsAfterResume);
   });
 
@@ -1189,7 +1189,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(confirm.body.receipt.ok).toBe(true);
     expect(confirm.body.resume).toBeUndefined();
     expect(model.completeWithTools).toHaveBeenCalledTimes(1);
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
   });
 
   it("never persists a secret in the suspended transcript (agent_state_json tripwire)", async () => {
@@ -1236,7 +1236,7 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     expect(confirm.status).toBe(200);
     expect(confirm.body.receipt.ok).toBe(true);
     expect(confirm.body.resume).toBeUndefined();
-    expect(fake.counts.deleteTag).toBe(1);
+    expect(fake.counts.deleteTagAtomic).toBe(1);
   });
 });
 
@@ -1257,7 +1257,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(model.calls.length).toBe(callsAfterPreview); // the model never saw "yes"
     expect(yes.body.results).toEqual([]); // no new previews, no receipts
     expect(String(yes.body.reply?.text ?? "")).toMatch(/confirm button/i);
-    expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0); // and nothing executed
   });
 
   // finding new-5-typed-consent-guard-has-a-narrow: consent-adjacent phrases
@@ -1319,7 +1319,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(model.calls.length).toBe(callsAfterPreview); // the model never saw the consent phrase
     expect(consent.body.results).toEqual([]); // no SECOND preview, no receipts
     expect(String(consent.body.reply?.text ?? "")).toMatch(/confirm button/i);
-    expect(fake.counts.deleteTag ?? 0).toBe(0); // and nothing executed
+    expect(fake.counts.deleteTagAtomic ?? 0).toBe(0); // and nothing executed
   });
 
   // BOUNDARY: an affirmation that ALSO carries a NEW instruction must NOT be
@@ -1383,7 +1383,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
       .send({ message: "log 2 hours on Acme today" });
     expect(first.status).toBe(200);
     expect((first.body.results as ResultItem[]).filter((r) => r.kind === "receipt")).toHaveLength(1);
-    expect(fake.counts.createTimeEntry).toBe(1);
+    expect(fake.counts.createTimeEntryAtomic).toBe(1);
     const callsAfterFirst = model.calls.length;
 
     const yes = await request(app)
@@ -1394,7 +1394,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     // The model never saw the affirmative, so it could not plan a duplicate.
     expect(model.calls.length).toBe(callsAfterFirst);
     // And nothing new was logged — still exactly one entry.
-    expect(fake.counts.createTimeEntry).toBe(1);
+    expect(fake.counts.createTimeEntryAtomic).toBe(1);
     expect(yes.body.results).toEqual([]);
     expect(yes.body.reply.kind).toBe("answer");
   });

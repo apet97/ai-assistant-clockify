@@ -9,6 +9,7 @@ import {
 } from "../clockify/write-outcome.js";
 import type { CommitResult } from "./action.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "./receipts.js";
+import { boundedCompleteSanitizedJson, exactNonsecretJson } from "./safe-json.js";
 
 export interface MutationDispatchResult {
   externalId?: string;
@@ -116,13 +117,16 @@ export async function executeStep(input: {
   if (input.journal.getOperationStatus() !== "executing") {
     throw new Error("operation_not_executing");
   }
+  const preparedDetail = input.step.preparedDetail === undefined
+    ? undefined
+    : exactNonsecretJson(input.step.preparedDetail, 55_000);
   const stepId = input.journal.prepareOperationStep({
     planStepId: input.step.id,
     index: input.step.index,
     name: input.step.name,
     kind: "primary",
     ...(input.step.targetFingerprint ? { targetFingerprint: input.step.targetFingerprint } : {}),
-    ...(input.step.preparedDetail === undefined ? {} : { preparedDetail: input.step.preparedDetail }),
+    ...(preparedDetail === undefined ? {} : { preparedDetail }),
   });
   if (!input.journal.markOperationStepExecuting(stepId)) {
     throw new Error("operation_step_not_prepared");
@@ -143,9 +147,12 @@ export async function executeStep(input: {
   }
   outcome = {
     ...outcome,
-    ...(input.step.preparedDetail === undefined
+    ...(preparedDetail === undefined
       ? {}
-      : { detail: combinePreparedDetail(input.step.preparedDetail, outcome.detail) }),
+      : { detail: combinePreparedDetail(
+          preparedDetail,
+          outcome.detail === undefined ? undefined : boundedCompleteSanitizedJson(outcome.detail, 8_000),
+        ) }),
   };
 
   try {
@@ -161,10 +168,16 @@ export async function executeStep(input: {
         ...(outcome.externalId === undefined ? {} : { externalId: outcome.externalId }),
         detail,
       });
+      const degraded = input.journal.listOperationSteps().find((step) => step.id === stepId);
+      if (degraded) return degraded;
     } catch (fallbackError) {
       logDegradedSettlement("primary", fallbackError);
     }
-    return runtimeStep({ base: executing, status, outcome, detail });
+    const { dispatchDetail: _dispatchDetail, ...degradation } = detail;
+    const runtimeDetail = preparedDetail && typeof preparedDetail === "object" && !Array.isArray(preparedDetail)
+      ? { ...(preparedDetail as Record<string, unknown>), ...degradation }
+      : { ...(preparedDetail === undefined ? {} : { preDispatch: preparedDetail }), ...degradation };
+    return runtimeStep({ base: executing, status, outcome, detail: runtimeDetail });
   }
 
   const settled = input.journal.listOperationSteps().find((step) => step.id === stepId);

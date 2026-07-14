@@ -33,6 +33,16 @@ export interface UpdateCustomFieldInput {
   status?: string;
 }
 
+export interface PreparedCustomFieldUpdateInput extends UpdateCustomFieldInput {
+  type: CustomFieldType;
+}
+
+export interface PreparedEntryCustomFieldValueInput {
+  body: Record<string, unknown>;
+  /** Complete source document used for both the replacement body and target fingerprint. */
+  source: Record<string, unknown>;
+}
+
 /**
  * Custom-field slice of the {@link WorkspaceClient} port (goclmcp §2.8). Reads
  * are immediate; create/update/delete + set-value are risky (commit-only).
@@ -45,8 +55,17 @@ export interface CustomFieldPort {
   listCustomFields(): Promise<ListResult<CustomFieldSummary>>;
   getCustomField(id: string): Promise<CustomFieldSummary | null>;
   createCustomField(input: CreateCustomFieldInput): Promise<EntitySummary>;
+  createCustomFieldAtomic(input: CreateCustomFieldInput): Promise<EntitySummary>;
   updateCustomField(id: string, patch: UpdateCustomFieldInput): Promise<EntitySummary>;
+  prepareCustomFieldUpdate(id: string, patch: UpdateCustomFieldInput): Promise<PreparedCustomFieldUpdateInput>;
+  updateCustomFieldAtomic(id: string, body: PreparedCustomFieldUpdateInput): Promise<EntitySummary>;
   deleteCustomField(id: string): Promise<void>;
+  deleteCustomFieldAtomic(id: string): Promise<void>;
   setProjectCustomFieldValue(projectId: string, fieldId: string, value: unknown): Promise<void>;
+  setProjectCustomFieldValueAtomic(projectId: string, fieldId: string, value: unknown): Promise<void>;
   setEntryCustomFieldValue(entryId: string, fieldId: string, value: unknown): Promise<void>;
+  prepareEntryCustomFieldValue(entryId: string, fieldId: string, value: unknown): Promise<PreparedEntryCustomFieldValueInput>;
+  /** Exact raw entry document used to verify a full replacement immediately before dispatch. */
+  getEntryCustomFieldMutationState(entryId: string): Promise<Record<string, unknown> | null>;
+  setEntryCustomFieldValueAtomic(entryId: string, prepared: PreparedEntryCustomFieldValueInput): Promise<void>;
 }

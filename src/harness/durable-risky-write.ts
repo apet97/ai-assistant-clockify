@@ -3,6 +3,7 @@ import type {
   CommitResult,
   ConfirmableOperation,
   ExternalMutationPlan,
+  TargetSnapshot,
 } from "./action.js";
 import type { JournaledMutationStep } from "./mutation-contract.js";
 import {
@@ -15,6 +16,9 @@ import {
   DefinitiveWriteFailure,
 } from "../clockify/write-outcome.js";
 import { errorReceipt, type SuccessReceipt } from "./receipts.js";
+import type { EntityRef } from "./receipts.js";
+import { executeVerifiedMutationStep } from "./verified-mutation-step.js";
+import { verifyTargetSnapshots } from "./target-snapshots.js";
 
 function syntheticStep(input: {
   operationId: string;
@@ -111,11 +115,53 @@ export async function commitSingleDurableRiskyStep(input: {
   name: string;
   dispatch: () => Promise<MutationDispatchResult>;
   success: (step: JournaledMutationStep) => SuccessReceipt;
+  verification?: {
+    snapshots: readonly TargetSnapshot[];
+    fetchSnapshot(snapshot: TargetSnapshot): Promise<{ ref: EntityRef; projection?: unknown; truncated?: boolean } | undefined>;
+  };
 }): Promise<CommitResult> {
-  const step = await executeDurableRiskyStep({
-    ...input,
-    index: 0,
-  });
+  let verificationFailure: "stale_target" | "stale_parent" | undefined;
+  if (input.verification?.snapshots.length === 0) verificationFailure = "stale_target";
+  if (input.verification && !input.ctx.mutationJournal && !verificationFailure) {
+    const verified = await verifyTargetSnapshots(
+      input.verification.snapshots,
+      (snapshot) => input.verification!.fetchSnapshot(snapshot),
+    );
+    if (!verified.ok) verificationFailure = verified.code;
+  }
+  const planStep = plannedPrimary(input.operation, input.planStepId, 0);
+  const step = verificationFailure
+    ? undefined
+    : input.verification && input.ctx.mutationJournal
+    ? (await executeVerifiedMutationStep({
+        journal: input.ctx.mutationJournal,
+        operationId: input.operation.operationId,
+        step: {
+          id: input.planStepId,
+          index: 0,
+          name: input.name,
+          kind: "primary",
+          ...(planStep.targetFingerprint ? { targetFingerprint: planStep.targetFingerprint } : {}),
+        },
+        snapshots: input.verification.snapshots,
+        fetchSnapshot: (snapshot) => input.verification!.fetchSnapshot(snapshot),
+        dispatch: () => input.dispatch(),
+      }).then((result) => {
+        if (!result.verification.ok) verificationFailure = result.verification.code;
+        return result.step;
+      }))
+    : await executeDurableRiskyStep({ ...input, index: 0 });
+  if (verificationFailure) {
+    return errorReceipt({
+      action: input.operation.actionName,
+      code: verificationFailure,
+      message: verificationFailure === "stale_parent"
+        ? "The target parent changed or could not be verified. No Clockify mutation was sent."
+        : "The target changed or could not be verified. No Clockify mutation was sent.",
+      recovery: { hint: "Refresh the target and create a fresh preview.", retryable: true },
+    });
+  }
+  if (!step) throw new Error("verified_step_missing");
   if (step.status === "succeeded") {
     const receipt = input.success(step);
     return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;

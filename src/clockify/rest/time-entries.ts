@@ -35,6 +35,59 @@ function mapEntry(e: ClockifyTimeEntry): TimeEntrySummary {
 export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntryPort {
   const ws = `/workspaces/${workspaceId}`;
 
+  const startTimeEntryAtomic: TimeEntryPort["startTimeEntryAtomic"] = async (input) => {
+    const e = (await core.mutate("api", "POST", `${ws}/time-entries`, {
+      start: input.start,
+      description: input.description,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      tagIds: input.tagIds,
+      billable: input.billable,
+    })) as ClockifyTimeEntry;
+    return mapEntry(e);
+  };
+  const stopTimeEntryAtomic: TimeEntryPort["stopTimeEntryAtomic"] = async ({ userId, end }) => {
+    try {
+      const e = (await core.mutate("api", "PATCH", `${ws}/user/${userId}/time-entries`, { end })) as ClockifyTimeEntry | null;
+      return e ? mapEntry(e) : null;
+    } catch (error) {
+      if (error instanceof Error && "status" in error && error.status === 404) return null;
+      throw error;
+    }
+  };
+  const createTimeEntryAtomic: TimeEntryPort["createTimeEntryAtomic"] = async (input) => {
+    const e = (await core.mutate("api", "POST", `${ws}/time-entries`, {
+      start: input.start,
+      end: input.end,
+      description: input.description,
+      projectId: input.projectId,
+      taskId: input.taskId,
+      tagIds: input.tagIds,
+      billable: input.billable,
+    })) as ClockifyTimeEntry;
+    return mapEntry(e);
+  };
+  const prepareTimeEntryUpdate: TimeEntryPort["prepareTimeEntryUpdate"] = async ({ id, description, projectId, taskId, tagIds, billable }) => {
+    const current = (await core.call("api", "GET", `${ws}/time-entries/${id}`)) as ClockifyTimeEntry;
+    return {
+      start: current.timeInterval?.start,
+      end: current.timeInterval?.end ?? undefined,
+      description: description ?? current.description,
+      projectId: projectId ?? current.projectId,
+      taskId: taskId ?? current.taskId,
+      tagIds: tagIds ?? current.tagIds,
+      billable: billable ?? current.billable,
+    };
+  };
+  const updateTimeEntryAtomic: TimeEntryPort["updateTimeEntryAtomic"] = async (id, body) =>
+    mapEntry((await core.mutate("api", "PUT", `${ws}/time-entries/${id}`, body)) as ClockifyTimeEntry);
+  const markEntriesInvoicedAtomic: TimeEntryPort["markEntriesInvoicedAtomic"] = async ({ ids, invoiced }) => {
+    await core.mutate("api", "PATCH", `${ws}/time-entries/invoiced`, { timeEntryIds: ids, invoiced });
+  };
+  const deleteTimeEntryAtomic: TimeEntryPort["deleteTimeEntryAtomic"] = async (id) => {
+    await core.mutate("api", "DELETE", `${ws}/time-entries/${id}`);
+  };
+
   return {
     async getRunningTimeEntry(userId) {
       const rows = (await core.call(
@@ -45,38 +98,17 @@ export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntr
       return rows.length ? mapEntry(rows[0]) : null;
     },
     async startTimeEntry(input) {
-      const e = (await core.call("api", "POST", `${ws}/time-entries`, {
-        start: input.start,
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-      })) as ClockifyTimeEntry;
-      return mapEntry(e);
+      return startTimeEntryAtomic(input);
     },
+    startTimeEntryAtomic,
     async stopTimeEntry({ userId, end }) {
-      const e = (await core.call(
-        "api",
-        "PATCH",
-        `${ws}/user/${userId}/time-entries`,
-        { end },
-        true,
-      )) as ClockifyTimeEntry | null;
-      return e ? mapEntry(e) : null;
+      return stopTimeEntryAtomic({ userId, end });
     },
+    stopTimeEntryAtomic,
     async createTimeEntry(input) {
-      const e = (await core.call("api", "POST", `${ws}/time-entries`, {
-        start: input.start,
-        end: input.end,
-        description: input.description,
-        projectId: input.projectId,
-        taskId: input.taskId,
-        tagIds: input.tagIds,
-        billable: input.billable,
-      })) as ClockifyTimeEntry;
-      return mapEntry(e);
+      return createTimeEntryAtomic(input);
     },
+    createTimeEntryAtomic,
     async getEntries({ userId, start, end, projectId, taskId }) {
       const params: Record<string, string> = {};
       if (start) params.start = start;
@@ -104,24 +136,15 @@ export function makeTimeEntryRest(core: RestCore, workspaceId: string): TimeEntr
       // Clockify's PUT /time-entries/{id} REPLACES the entry and REQUIRES `start`;
       // a sparse body 400s. GET the current entry, flatten timeInterval to the
       // top-level shape PUT expects, merge the caller's fields, then PUT.
-      const current = (await core.call("api", "GET", `${ws}/time-entries/${id}`)) as ClockifyTimeEntry;
-      const body: Record<string, unknown> = {
-        start: current.timeInterval?.start,
-        end: current.timeInterval?.end ?? undefined,
-        description: description ?? current.description,
-        projectId: projectId ?? current.projectId,
-        taskId: taskId ?? current.taskId,
-        tagIds: tagIds ?? current.tagIds,
-        billable: billable ?? current.billable,
-      };
-      const e = (await core.call("api", "PUT", `${ws}/time-entries/${id}`, body)) as ClockifyTimeEntry;
-      return mapEntry(e);
+      const body = await prepareTimeEntryUpdate({ id, description, projectId, taskId, tagIds, billable });
+      return updateTimeEntryAtomic(id, body);
     },
+    prepareTimeEntryUpdate,
+    updateTimeEntryAtomic,
     async markEntriesInvoiced({ ids, invoiced }) {
-      await core.call("api", "PATCH", `${ws}/time-entries/invoiced`, {
-        timeEntryIds: ids,
-        invoiced,
-      });
+      await markEntriesInvoicedAtomic({ ids, invoiced });
     },
+    markEntriesInvoicedAtomic,
+    deleteTimeEntryAtomic,
   };
 }

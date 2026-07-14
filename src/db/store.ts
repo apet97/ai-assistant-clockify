@@ -24,6 +24,8 @@ import type {
   OperationRunStatus,
   PrepareOperationRunInput,
   OperationStep,
+  SanitizedOperationRun,
+  StartupReconciliationOperation,
   PrepareOperationStepInput,
   PrepareCompensationStepInput,
   ArtifactRecord,
@@ -91,6 +93,8 @@ export type {
   OperationRunStatus,
   PrepareOperationRunInput,
   OperationStep,
+  SanitizedOperationRun,
+  StartupReconciliationOperation,
   PrepareOperationStepInput,
   PrepareCompensationStepInput,
   ArtifactRecord,
@@ -199,7 +203,11 @@ export interface Store {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  getScopedOperationRun(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined;
+  listScopedOperationRuns(workspaceId: string, adminUserId: string, sessionId: string, limit?: number): SanitizedOperationRun[];
+  listStartupReconciliationCandidates(): StartupReconciliationOperation[];
   recordOperationReconciliation(id: string, stepId: string, result: unknown, authoritative: boolean): void;
+  settleStartupReconciliation(id: string, stepId: string, result: unknown): ActionResultRef;
   prepareOperationStep(input: PrepareOperationStepInput): string;
   markOperationStepExecuting(id: string, operationId?: string): boolean;
   settleOperationStep(

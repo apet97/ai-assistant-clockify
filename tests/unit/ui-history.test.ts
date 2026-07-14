@@ -117,6 +117,31 @@ describe("historyRestoreItems", () => {
     });
     expect(items).toEqual([]);
   });
+
+  it("restores bounded passive operation cards and normalizes malformed status fields", () => {
+    const items = historyRestoreItems({
+      operationRuns: [{
+        id: "operation-1",
+        actionName: "clockify_test",
+        status: "invented" as never,
+        steps: Array.from({ length: 60 }, (_, index) => ({
+          planStepId: `step-${index}`,
+          name: `Step ${index}`,
+          status: index === 0 ? "succeeded" : "invented",
+        })),
+        reconciliation: { authoritative: false, reason: "x".repeat(400) },
+      }],
+    });
+    expect(items).toHaveLength(1);
+    const item = items[0];
+    if (item?.kind !== "operation") throw new Error("expected operation card");
+    expect(item.operation.status).toBe("unknown");
+    expect(item.operation.steps).toHaveLength(50);
+    expect(item.operation.steps?.[0]?.status).toBe("succeeded");
+    expect(item.operation.steps?.[1]?.status).toBe("unknown");
+    expect(item.operation.stepsTruncated).toBe(true);
+    expect(item.operation.reconciliation?.reason).toHaveLength(256);
+  });
 });
 
 /**

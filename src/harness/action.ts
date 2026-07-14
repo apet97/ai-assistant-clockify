@@ -1,7 +1,7 @@
 import type { z } from "zod";
 import type { AdminPolicy, FeatureGroup } from "./permissions.js";
 import type { RiskLabel } from "./risk.js";
-import type { EntityRef, ErrorReceipt, RecoveryHint, SuccessReceipt } from "./receipts.js";
+import { errorReceipt, type EntityRef, type ErrorReceipt, type RecoveryHint, type SuccessReceipt } from "./receipts.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
 import { randomUUID } from "node:crypto";
@@ -145,6 +145,70 @@ export interface PreviewCard {
   warnings: string[];
 }
 
+/** A verified, bounded projection captured at preview time. Array order is the
+ * authoritative target/parent verification order used immediately pre-dispatch. */
+export interface TargetSnapshot {
+  relation: "target" | "parent";
+  ref: EntityRef;
+  projection: unknown;
+  fingerprint: string;
+}
+
+export type ReconciliationStrategyId = "create" | "update" | "delete" | "state-command" | "composed";
+
+/** Machine-checked declaration for a migrated external write. */
+export interface DurableMutationContract {
+  operationData: {
+    source: "prepared_safe_write" | "confirmable_operation";
+    normalized: true;
+    nonsecret: true;
+  };
+  mutationPlan: {
+    source: "prepared_safe_write" | "preview";
+    exact: true;
+  };
+  targeting:
+    | { mode: "create_no_target" }
+    | { mode: "snapshots"; relations: ["target" | "parent", ...Array<"target" | "parent">] }
+    | { mode: "deferred"; exception: "phase-5-domain-target-verification" };
+  reconciliation: {
+    strategies: [ReconciliationStrategyId, ...ReconciliationStrategyId[]];
+    /** Explicit steps whose ambiguous outcome is intentionally never reconciled
+     * (for example a composite create's base POST). */
+    unreconciledStepIds?: readonly string[];
+    stepBound: true;
+    requiresCompleteEvidence: true;
+  };
+}
+
+/** Validate that an exact persisted plan is fully covered by the action's
+ * declared reconciliation contract. Durable writes fail before persistence or
+ * dispatch when a step is missing a strategy or invents an undeclared one. */
+export function mutationPlanContractError(
+  contract: DurableMutationContract | undefined,
+  plan: ExternalMutationPlan | undefined,
+): string | undefined {
+  if (!contract) return "missing_mutation_contract";
+  if (!plan || !["single", "curated", "batch"].includes(plan.mode) ||
+    !Array.isArray(plan.steps) || plan.steps.length === 0) return "missing_mutation_plan";
+  if (plan.mode === "single" && plan.steps.length !== 1) return "invalid_single_mutation_plan";
+  const allowed = new Set<string>(contract.reconciliation.strategies);
+  const intentionallyUnreconciled = new Set(contract.reconciliation.unreconciledStepIds ?? []);
+  const ids = new Set<string>();
+  for (const step of plan.steps) {
+    if (!step || typeof step.id !== "string" || step.id.length === 0 || ids.has(step.id) ||
+      (step.targetFingerprint !== undefined && typeof step.targetFingerprint !== "string") ||
+      (step.kind !== "primary" && step.kind !== "compensation")) return "invalid_mutation_plan_step";
+    ids.add(step.id);
+    if (!step.reconciliationStrategy) {
+      if (intentionallyUnreconciled.has(step.id)) continue;
+      return `missing_reconciliation_strategy:${step.id}`;
+    }
+    if (!allowed.has(step.reconciliationStrategy)) return `undeclared_reconciliation_strategy:${step.id}`;
+  }
+  return undefined;
+}
+
 /** The exact payload executed after button confirmation. Never reconstructed from chat. */
 export interface ConfirmableOperation {
   operationId: string;
@@ -153,6 +217,7 @@ export interface ConfirmableOperation {
   risks: RiskLabel[];
   payload: Record<string, unknown>;
   mutationPlan?: ExternalMutationPlan;
+  targetSnapshots?: TargetSnapshot[];
 }
 
 /** A migrated confirmation whose exact host dispatch plan is durable. */
@@ -203,11 +268,12 @@ export interface ActionDefinition {
   resolveFeatureGroup?(args: unknown): FeatureGroup;
   handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
   /** New safe-write path: normalize nonsecret wire intent without mutation. */
-  prepareSafeWrite?(ctx: ActionContext, args: unknown): Promise<PreparedSafeWrite>;
+  prepareSafeWrite?(ctx: ActionContext, args: unknown): Promise<SafeWritePreparationResult>;
   /** Dispatch exactly the prepared safe-write intent. */
   executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   /** Marks a confirmed action whose external effects use mutation-workflow steps. */
   mutationWorkflow?: "durable";
+  mutationContract?: DurableMutationContract;
   /** Executes the stored operation after confirmation (risky actions only). */
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   /** Opt into idempotent commits: return the operation's SEMANTIC identity (e.g.
@@ -240,9 +306,10 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
-  prepareSafeWrite?(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite>;
+  prepareSafeWrite?(ctx: ActionContext, args: z.infer<S>): Promise<SafeWritePreparationResult>;
   executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   mutationWorkflow?: "durable";
+  mutationContract?: DurableMutationContract;
   commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }): ActionDefinition {
@@ -263,12 +330,57 @@ export interface RiskyPreviewResult {
   payload: Record<string, unknown>;
   /** Exact durable host-step order persisted with the confirmation. */
   mutationPlan?: ExternalMutationPlan;
+  /** Ordered target/parent evidence captured from authoritative reads. */
+  targetSnapshots?: TargetSnapshot[];
 }
 
 export interface PreparedSafeWrite {
   /** Normalized, nonsecret wire intent. */
   operation: unknown;
   mutationPlan: ExternalMutationPlan;
+}
+
+/** A grounded prepare-time stop for an immediate write. The explicit `kind`
+ * discriminator prevents normalized operation data from being mistaken for a
+ * clarification merely because it happens to contain a `clarify` property. */
+export interface SafeWriteClarification {
+  kind: "clarify";
+  clarify: string;
+  options?: ClarifyOption[];
+}
+
+/** Read-only preparation either produces durable wire intent or asks the admin
+ * to choose among grounded options. Plain `PreparedSafeWrite` remains accepted
+ * so existing builders do not need a mechanical discriminator migration. */
+export type SafeWritePreparationResult = PreparedSafeWrite | SafeWriteClarification;
+
+export function isSafeWriteClarification(value: unknown): value is SafeWriteClarification {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== "clarify" || typeof candidate.clarify !== "string" || candidate.clarify.trim() === "") {
+    return false;
+  }
+  if (candidate.options === undefined) return true;
+  return Array.isArray(candidate.options) && candidate.options.every((option) => {
+    if (!option || typeof option !== "object" || Array.isArray(option)) return false;
+    const item = option as Record<string, unknown>;
+    return typeof item.id === "string" && item.id.length > 0 &&
+      typeof item.label === "string" && item.label.length > 0;
+  });
+}
+
+/** Runtime boundary for provider/workflow code. A malformed pseudo-prepared
+ * value never reaches authorization, persistence, or dispatch. Exact plan
+ * compatibility remains the action contract validator's responsibility. */
+export function isPreparedSafeWrite(value: unknown): value is PreparedSafeWrite {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (Object.hasOwn(candidate, "kind") || !Object.hasOwn(candidate, "operation")) return false;
+  const plan = candidate.mutationPlan;
+  return !!plan && typeof plan === "object" && !Array.isArray(plan) &&
+    ["single", "curated", "batch"].includes((plan as { mode?: unknown }).mode as string) &&
+    Array.isArray((plan as { steps?: unknown }).steps) &&
+    (plan as { steps: unknown[] }).steps.length > 0;
 }
 
 /** The alternative a preview callback returns to stop and ask for clarification. */
@@ -303,6 +415,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
   argumentAliases?: readonly string[];
   argumentOpenPaths?: readonly string[];
   mutationWorkflow?: "durable";
+  mutationContract?: DurableMutationContract;
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   idempotencyKey?(
     payload: Record<string, unknown>,
@@ -328,6 +441,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     ...(def.mutationWorkflow ? { mutationWorkflow: def.mutationWorkflow } : {}),
+    ...(def.mutationContract ? { mutationContract: def.mutationContract } : {}),
     ...(def.resolveFeatureGroup
       ? { resolveFeatureGroup: (args: z.infer<S>) => def.resolveFeatureGroup!(args) }
       : {}),
@@ -350,6 +464,20 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
       if ("clarify" in r) {
         return { kind: "clarify", message: r.clarify, options: r.options };
       }
+      const planError = def.mutationWorkflow === "durable"
+        ? mutationPlanContractError(def.mutationContract, r.mutationPlan)
+        : undefined;
+      if (planError) {
+        return {
+          kind: "receipt",
+          receipt: errorReceipt({
+            action: def.name,
+            code: "invalid_mutation_plan",
+            message: "The prepared host mutation plan is incompatible with this action's durable contract.",
+            recovery: { hint: "Create a fresh preview after the action contract is corrected.", retryable: false },
+          }),
+        };
+      }
       return {
         kind: "preview",
         preview: {
@@ -368,6 +496,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
           risks: def.risks,
           payload: r.payload,
           ...(r.mutationPlan ? { mutationPlan: r.mutationPlan } : {}),
+          targetSnapshots: r.targetSnapshots ?? [],
         },
       };
     },
@@ -389,7 +518,10 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
   schema: S;
   argumentAliases?: readonly string[];
   argumentOpenPaths?: readonly string[];
-  prepare(ctx: ActionContext, args: z.infer<S>): Promise<PreparedSafeWrite> | PreparedSafeWrite;
+  prepare(
+    ctx: ActionContext,
+    args: z.infer<S>,
+  ): Promise<SafeWritePreparationResult> | SafeWritePreparationResult;
   execute(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
 }): ActionDefinition {
   return defineAction({
@@ -404,6 +536,18 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     executeSafeWrite: (ctx, prepared) => def.execute(ctx, prepared.operation),
     async handler(ctx, args): Promise<ActionResult> {
       const prepared = await def.prepare(ctx, args);
+      if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+      if (!isPreparedSafeWrite(prepared)) {
+        return {
+          kind: "receipt",
+          receipt: errorReceipt({
+            action: def.name,
+            code: "invalid_safe_write_preparation",
+            message: "Safe-write preparation returned an invalid result.",
+            recovery: { hint: "Correct the action's prepare contract before retrying.", retryable: false },
+          }),
+        };
+      }
       const result = await def.execute(ctx, prepared.operation);
       return isPartialCommitResult(result)
         ? result

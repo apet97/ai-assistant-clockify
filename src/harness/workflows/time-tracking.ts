@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
+import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import {
@@ -12,6 +15,7 @@ import {
   zonedDayTimeInstant,
 } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS, nowDate, nowIso } from "../../durations.js";
+import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileCreate, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 
 /**
  * Time-tracking read + write workflows (SPEC "Safe Writes"): status, start timer,
@@ -85,12 +89,17 @@ const status = defineAction({
   },
 });
 
-const startTimer = defineAction({
+const startTimer = defineDurableSafeWriteAction({
   name: "clockify_start_timer",
   description:
     "Start a new timer for the admin on an EXISTING project. Call this DIRECTLY when asked to start a timer — do NOT check the current status first, and when no project is mentioned just start it with no project (all args are optional). Pass the project by name with `projectName` (resolved to its id; an unknown name CLARIFIES, it is never created) — use clockify_create_work_package with startTimer:true only when the admin explicitly asks to CREATE a new project.",
-  featureGroup: "time_tracking",
-  risks: ["safe_write"],
+  group: "time_tracking",
+  stepName: "Start timer",
+  mutationContract: durableMutationContract({
+    source: "safe",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create"],
+  }),
   schema: z.object({
     description: z.string().optional(),
     projectId: z.string().optional(),
@@ -102,7 +111,7 @@ const startTimer = defineAction({
     tagNames: zStringList(z.array(z.string())).optional(),
     billable: z.boolean().optional(),
   }),
-  async handler(ctx, args) {
+  async prepare(ctx, args) {
     // Resolve project/task by NAME (in either slot) at execution time. An
     // unknown name CLARIFIES (offering grounded options) — it is NEVER silently
     // created; creating a project is the job of clockify_create_work_package.
@@ -113,60 +122,117 @@ const startTimer = defineAction({
       projectNotFoundHint: "Or should I create it first?",
     });
     if (!refs.ok) {
-      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
+      return { kind: "clarify", clarify: refs.clarify.clarify, options: refs.clarify.options };
     }
     const tags = await resolveEntryTags(ctx, args);
-    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
-
-    const entry = await ctx.clockify.startTimeEntry({
+    if (!tags.ok) return { kind: "clarify", clarify: tags.message, options: tags.options };
+    const targetSnapshots: ReturnType<typeof snapshot>[] = [];
+    if (refs.projectId) {
+      const project = await ctx.clockify.getProject(refs.projectId);
+      if (!project) return { kind: "clarify" as const, clarify: "The selected project no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "project", project));
+    }
+    if (refs.taskId && refs.projectId) {
+      const task = await ctx.clockify.getTask(refs.projectId, refs.taskId);
+      if (!task) return { kind: "clarify" as const, clarify: "The selected task no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "task", task, { projectId: refs.projectId }));
+    }
+    const body = {
       userId: ctx.adminUserId,
-      description: args.description,
-      projectId: refs.projectId,
-      taskId: refs.taskId,
-      tagIds: tags.tagIds,
-      billable: args.billable,
+      ...(args.description !== undefined ? { description: args.description } : {}),
+      ...(refs.projectId !== undefined ? { projectId: refs.projectId } : {}),
+      ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
+      ...(tags.tagIds !== undefined ? { tagIds: tags.tagIds } : {}),
+      ...(args.billable !== undefined ? { billable: args.billable } : {}),
       start: nowIso(ctx),
-    });
+    };
     return {
-      kind: "receipt",
-      receipt: successReceipt({
+      operation: { body, targetSnapshots },
+      mutationPlan: mutationPlan([{ id: "start-timer", strategy: "create", fingerprint: targetSnapshots.map((item) => item.fingerprint).join(":") || undefined }]),
+    };
+  },
+  async dispatch(ctx, operation) {
+    const { body, targetSnapshots } = operation as {
+      body: Parameters<typeof ctx.clockify.startTimeEntryAtomic>[0];
+      targetSnapshots: ReturnType<typeof snapshot>[];
+    };
+    if (targetSnapshots.length) await requireFreshSnapshots(ctx, targetSnapshots);
+    const result = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.startTimeEntryAtomic(body),
+      reconcile: async () => {
+        const row = await ctx.clockify.getRunningTimeEntry(body.userId);
+        if (!row) return undefined;
+        const matches = row.start === body.start && row.description === body.description && row.projectId === body.projectId &&
+          row.taskId === body.taskId && JSON.stringify(row.tagIds ?? []) === JSON.stringify(body.tagIds ?? []) &&
+          row.billable === body.billable;
+        return matches ? row : undefined;
+      },
+    });
+    const entry = result.value;
+    const created = { type: "time_entry", id: entry.id, name: entry.description };
+    return {
+      result: successReceipt({
         action: "clockify_start_timer",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
-        changed: { created: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+        changed: { created: [created] },
       }),
+      externalId: entry.id,
+      effect: { created },
+      detail: { reconciled: result.reconciled },
     };
   },
 });
 
-const stopTimer = defineAction({
+const stopTimer = defineDurableSafeWriteAction({
   name: "clockify_stop_timer",
   description: "Stop the admin's currently running timer.",
-  featureGroup: "time_tracking",
-  risks: ["safe_write"],
+  group: "time_tracking",
+  stepName: "Stop timer",
+  mutationContract: durableMutationContract({
+    source: "safe",
+    targeting: { mode: "snapshots", relations: ["target"] },
+    strategies: ["state-command"],
+  }),
   schema: z.object({}).strip(),
-  async handler(ctx) {
-    const entry = await ctx.clockify.stopTimeEntry({
-      userId: ctx.adminUserId,
-      end: nowIso(ctx),
+  async prepare(ctx) {
+    const running = await ctx.clockify.getRunningTimeEntry(ctx.adminUserId);
+    const targetSnapshots = running ? [await captureStructureSnapshot(ctx, "target", "time_entry", running)] : [];
+    return {
+      operation: { userId: ctx.adminUserId, end: nowIso(ctx), targetSnapshots },
+      mutationPlan: mutationPlan([{ id: "stop-timer", strategy: "state-command", fingerprint: targetSnapshots[0]?.fingerprint }]),
+    };
+  },
+  async dispatch(ctx, operation) {
+    const prepared = operation as { userId: string; end: string; targetSnapshots: ReturnType<typeof snapshot>[] };
+    if (prepared.targetSnapshots.length) await requireFreshSnapshots(ctx, prepared.targetSnapshots);
+    const result = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.stopTimeEntryAtomic({ userId: prepared.userId, end: prepared.end }),
+      reconcile: async () => {
+        if (!prepared.targetSnapshots[0]) return undefined;
+        const current = await ctx.clockify.getEntry(prepared.targetSnapshots[0].ref.id);
+        return current?.end ? current : undefined;
+      },
     });
+    const entry = result.value;
     if (!entry) {
       return {
-        kind: "receipt",
-        receipt: successReceipt({
+        result: successReceipt({
           action: "clockify_stop_timer",
           warnings: [{ message: "No running timer to stop." }],
         }),
       };
     }
     return {
-      kind: "receipt",
-      receipt: successReceipt({
+      result: successReceipt({
         action: "clockify_stop_timer",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
         changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
       }),
+      externalId: entry.id,
+      effect: { stopped: { type: "time_entry", id: entry.id } },
+      detail: { reconciled: result.reconciled },
     };
   },
 });
@@ -263,12 +329,13 @@ function resolveLogTimes(
   return { kind: "ok", start, end };
 }
 
-const logWork = defineAction({
+const logWork = defineStructureDurableSafeWriteAction({
   name: "clockify_log_work",
   description:
     "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — never invent one. Use exactly one shape: `start+end`, `start+durationHours|durationMinutes`, or `date|dayOffset + durationHours|durationMinutes`. Explicit datetimes require Z or a numeric offset. Duration is capped at 168 hours.",
-  featureGroup: "time_tracking",
-  risks: ["safe_write"],
+  group: "time_tracking",
+  stepName: "Log time entry",
+  mutationContract: durableMutationContract({ source: "safe", targeting: { mode: "snapshots", relations: ["parent"] }, strategies: ["create"] }),
   schema: z.object({
     /** Optional — omitted entries are honest blanks; never ask for or invent one. */
     description: z.string().optional(),
@@ -299,10 +366,10 @@ const logWork = defineAction({
       });
     }
   }),
-  async handler(ctx, args) {
+  async prepare(ctx, args) {
     const times = resolveLogTimes(ctx, args);
     if (times.kind === "clarify") {
-      return { kind: "clarify", message: times.message };
+      return { kind: "clarify", clarify: times.message };
     }
 
     // A name in EITHER slot resolves; unknown/ambiguous clarifies with grounded
@@ -314,28 +381,72 @@ const logWork = defineAction({
       projectNotFoundHint: "Or should I create it first?",
     });
     if (!refs.ok) {
-      return { kind: "clarify", message: refs.clarify.clarify, options: refs.clarify.options };
+      return { kind: "clarify", clarify: refs.clarify.clarify, options: refs.clarify.options };
     }
     const tags = await resolveEntryTags(ctx, args);
-    if (!tags.ok) return { kind: "clarify", message: tags.message, options: tags.options };
-
-    const entry = await ctx.clockify.createTimeEntry({
-      description: args.description,
-      projectId: refs.projectId,
-      taskId: refs.taskId,
-      tagIds: tags.tagIds,
-      billable: args.billable,
+    if (!tags.ok) return { kind: "clarify", clarify: tags.message, options: tags.options };
+    const targetSnapshots: ReturnType<typeof snapshot>[] = [];
+    if (refs.projectId) {
+      const project = await ctx.clockify.getProject(refs.projectId);
+      if (!project) return { kind: "clarify" as const, clarify: "The selected project no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "project", project));
+    }
+    if (refs.taskId && refs.projectId) {
+      const task = await ctx.clockify.getTask(refs.projectId, refs.taskId);
+      if (!task) return { kind: "clarify" as const, clarify: "The selected task no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "task", task, { projectId: refs.projectId }));
+    }
+    const body = {
+      ...(args.description !== undefined ? { description: args.description } : {}),
+      ...(refs.projectId !== undefined ? { projectId: refs.projectId } : {}),
+      ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
+      ...(tags.tagIds !== undefined ? { tagIds: tags.tagIds } : {}),
+      ...(args.billable !== undefined ? { billable: args.billable } : {}),
       start: times.start,
-      end: times.end,
-    });
+      ...(times.end !== undefined ? { end: times.end } : {}),
+    };
     return {
-      kind: "receipt",
-      receipt: successReceipt({
+      operation: { body, targetSnapshots },
+      mutationPlan: mutationPlan([{ id: "log-time-entry", strategy: "create", fingerprint: targetSnapshots.map((item) => item.fingerprint).join(":") || undefined }]),
+    };
+  },
+  async prepareDispatch(ctx, operation) {
+    const { body, targetSnapshots } = operation as {
+      body: Parameters<typeof ctx.clockify.createTimeEntryAtomic>[0];
+      targetSnapshots: ReturnType<typeof snapshot>[];
+    };
+    if (targetSnapshots.length) await requireFreshSnapshots(ctx, targetSnapshots);
+    const baseline = await ctx.clockify.getEntries({ userId: ctx.adminUserId, start: body.start, end: new Date(Date.parse(body.start) + 1).toISOString() });
+    if (baseline.truncated) throw new Error("create_baseline_incomplete");
+    const beforeIds = baseline.rows.map((row) => row.id);
+    return {
+      preparedDetail: { preDispatch: { strategy: "time_entry_create_baseline", ids: beforeIds, truncated: false } },
+      state: { beforeIds },
+    };
+  },
+  async dispatch(ctx, operation, state) {
+    const { body } = operation as { body: Parameters<typeof ctx.clockify.createTimeEntryAtomic>[0] };
+    const result = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.createTimeEntryAtomic(body),
+      reconcile: async () => reconcileCreate({
+        beforeIds: state.beforeIds,
+        list: () => ctx.clockify.getEntries({ userId: ctx.adminUserId, start: body.start, end: new Date(Date.parse(body.start) + 1).toISOString() }),
+        matches: (row) => row.start === body.start && row.end === (body.end ?? null) && row.description === body.description &&
+          row.projectId === body.projectId && row.taskId === body.taskId && JSON.stringify(row.tagIds ?? []) === JSON.stringify(body.tagIds ?? []) && row.billable === body.billable,
+      }),
+    });
+    const entry = result.value;
+    const created = { type: "time_entry", id: entry.id, name: entry.description };
+    return {
+      result: successReceipt({
         action: "clockify_log_work",
         entity: "time_entry",
         ids: { workspaceId: ctx.workspaceId },
-        changed: { created: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+        changed: { created: [created] },
       }),
+      externalId: entry.id,
+      effect: { created },
+      detail: { reconciled: result.reconciled, baselineComplete: true },
     };
   },
 });
@@ -436,6 +547,12 @@ const fixEntry = defineRiskyAction({
     "Update fields of an existing time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Pass the project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — resolved server-side, clarifies on an unknown one. Elevated write — editing an existing entry previews and requires confirmation.",
   group: "time_tracking",
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["target", "parent"] },
+    strategies: ["update"],
+  }),
   schema: z
     .object({
       id: z.string().min(1),
@@ -462,6 +579,8 @@ const fixEntry = defineRiskyAction({
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
+    const current = await ctx.clockify.getEntry(args.id);
+    if (!current) return { clarify: "The requested time entry does not exist. Provide a current entry id." };
     // Resolve identity at PREVIEW time: a name in either project/task slot becomes
     // a verified id, and a mistaken identity clarifies here — it never reaches the
     // wire (and never gets stored in the confirmable payload).
@@ -482,23 +601,38 @@ const fixEntry = defineRiskyAction({
     if (tags.tagIds !== undefined) expectedChanges.push(`Tags → ${tags.tagIds.length} tag(s)`);
     if (args.billable !== undefined) expectedChanges.push(`Billable → ${args.billable ? "billable" : "non-billable"}`);
 
+    const targetSnapshots = [await captureStructureSnapshot(ctx, "target", "time_entry", current)];
+    if (refs.projectId) {
+      const parent = await ctx.clockify.getProject(refs.projectId);
+      if (!parent) return { clarify: "The selected project no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "project", parent));
+    }
+    if (refs.taskId && refs.projectId) {
+      const parent = await ctx.clockify.getTask(refs.projectId, refs.taskId);
+      if (!parent) return { clarify: "The selected task no longer exists. Refresh and try again." };
+      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "task", parent, { projectId: refs.projectId }));
+    }
+    const normalized = {
+      id: args.id,
+      description: args.description,
+      projectId: refs.projectId,
+      taskId: refs.taskId,
+      tagIds: tags.tagIds,
+      billable: args.billable,
+    };
+    const body = await ctx.clockify.prepareTimeEntryUpdate(normalized);
     return {
       actionLabel: "Update time entry",
       targets: [{ type: "time_entry", id: args.id }],
       expectedChanges,
       reversibility: "Editing replaces these fields on the existing entry; there is no automatic undo — re-edit to change them back.",
       warnings: ["Updating a time entry changes live workspace data and can affect billing and reports."],
-      payload: {
-        id: args.id,
-        description: args.description,
-        projectId: refs.projectId,
-        taskId: refs.taskId,
-        tagIds: tags.tagIds,
-        billable: args.billable,
-      },
+      payload: { ...normalized, body },
+      targetSnapshots,
+      mutationPlan: mutationPlan([{ id: "update-time-entry", strategy: "update", fingerprint: targetSnapshots[0]!.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const p = payload as {
       id: string;
       description?: string;
@@ -506,20 +640,34 @@ const fixEntry = defineRiskyAction({
       taskId?: string;
       tagIds?: string[];
       billable?: boolean;
+      body: Record<string, unknown>;
     };
-    const entry = await ctx.clockify.updateTimeEntry({
-      id: p.id,
-      description: p.description,
-      projectId: p.projectId,
-      taskId: p.taskId,
-      tagIds: p.tagIds,
-      billable: p.billable,
-    });
-    return successReceipt({
-      action: "clockify_fix_entry",
-      entity: "time_entry",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "time_entry", id: entry.id, name: entry.description }] },
+    let entry: Awaited<ReturnType<typeof ctx.clockify.getEntry>>;
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "update-time-entry",
+      name: "Update time entry",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.updateTimeEntryAtomic(p.id, p.body),
+          reconcile: async () => {
+            const row = await ctx.clockify.getEntry(p.id);
+            if (!row) return undefined;
+            const expected = { description: p.description, projectId: p.projectId, taskId: p.taskId, tagIds: p.tagIds, billable: p.billable };
+            return Object.entries(expected).every(([key, value]) => value === undefined || JSON.stringify((row as unknown as Record<string, unknown>)[key]) === JSON.stringify(value)) ? row : undefined;
+          },
+        });
+        entry = result.value;
+        return { externalId: result.value.id, effect: { updated: { type: "time_entry", id: p.id } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({
+        action: "clockify_fix_entry",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { updated: [{ type: "time_entry", id: p.id, name: entry?.description }] },
+      }),
     });
   },
 });

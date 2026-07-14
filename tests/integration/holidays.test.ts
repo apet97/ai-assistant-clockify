@@ -91,7 +91,7 @@ describe("holiday actions", () => {
     });
     if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "holiday" });
     else throw new Error("expected receipt");
-    expect(fake.counts.createHoliday).toBe(1);
+    expect(fake.counts.createHolidayAtomic).toBe(1);
     expect(fake.state.holidays.find((h) => h.name === "AIASSIST_SMOKE_hol")).toBeDefined();
 
     // no assignment -> invalid_args, no write
@@ -144,7 +144,7 @@ describe("holiday actions", () => {
       context: makeContext(fake),
     });
     expect(bad.kind).toBe("clarify");
-    expect(fake.counts.createHoliday).toBe(1); // the non-date never reached the wire
+    expect(fake.counts.createHolidayAtomic).toBe(1); // the non-date never reached the wire
   });
 
   it("holidays_update resolves group NAMES to ids at PREVIEW time (no commit yet)", async () => {
@@ -180,7 +180,7 @@ describe("holiday actions", () => {
     expect(preview.operation.risks).toContain("destructive");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteHoliday).toBe(1);
+    expect(fake.counts.deleteHolidayAtomic).toBe(1);
     expect(fake.state.holidays.find((h) => h.id === "h1")).toBeUndefined();
   });
 });

@@ -35,6 +35,34 @@ describe("user & group rest", () => {
     expect(JSON.parse(init.body)).toEqual({ entityId: "team1", role: "TEAM_MANAGER" });
   });
 
+  it("reads exact scoped role assignments and Team-section rates for mutation snapshots", async () => {
+    const f = vi.fn(async () => jsonResponse([{
+      id: "u1",
+      name: "Ann",
+      roles: [
+        { role: "TEAM_MANAGER", entityId: "g1", sourceType: "USER_GROUP" },
+        { role: "PROJECT_MANAGER", entity: { id: "p1", type: "PROJECT" } },
+      ],
+      hourlyRate: { amount: 7500, since: "2026-01-01" },
+      costRate: { amount: 3000 },
+    }]));
+    const client = rest(f as unknown as typeof fetch);
+
+    expect(await client.listUserRoleAssignments("u1")).toEqual({
+      rows: [
+        { role: "TEAM_MANAGER", entityId: "g1", sourceType: "USER_GROUP" },
+        { role: "PROJECT_MANAGER", entityId: "p1" },
+      ],
+      truncated: false,
+    });
+    expect(await client.getWorkspaceMemberRate("u1", "HOURLY")).toEqual({
+      userId: "u1",
+      rateKind: "HOURLY",
+      amountMinor: 7500,
+      since: "2026-01-01",
+    });
+  });
+
   it("updateWorkspaceMemberRate PUTs amount (minor units) to /users/{id}/{hourly-rate|cost-rate}", async () => {
     const h = vi.fn(async () => jsonResponse({}));
     await rest(h as unknown as typeof fetch).updateWorkspaceMemberRate({ userId: "u1", rateKind: "HOURLY", amountMinor: 7500 });

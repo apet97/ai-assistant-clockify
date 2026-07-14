@@ -2,6 +2,7 @@ import type { RestCore } from "./core.js";
 import type { EntitySummary, ListResult } from "../types.js";
 import type { ApprovalPort, ApprovalSummary } from "../ports/approvals.js";
 import { assertCompleteAbsence } from "./list-pages.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /**
  * Approval request as read from `GET /approval-requests`. Either flat or wrapped
@@ -58,6 +59,34 @@ export function makeApprovalRest(core: RestCore, workspaceId: string): ApprovalP
     return { ...result, rows: result.rows as ApprovalRow[] };
   }
 
+  async function submitApprovalAtomic(input: { period: string; periodStart: string }): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "POST", `${ws}/approval-requests`, input)) as { id?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/approval-requests`, "Clockify accepted the approval submission without a usable id.");
+    }
+    return { id: row.id, name: row.id };
+  }
+
+  async function setApprovalStateAtomic(id: string, state: string, note?: string): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "PATCH", `${ws}/approval-requests/${id}`, {
+      state,
+      ...(note !== undefined ? { note } : {}),
+    })) as { id?: unknown } | null;
+    if (row?.id !== undefined && typeof row.id !== "string") {
+      throw new AmbiguousWriteOutcome("PATCH", `${ws}/approval-requests/${id}`, "Clockify returned a malformed approval id.");
+    }
+    return { id: typeof row?.id === "string" && row.id.length > 0 ? row.id : id, name: state };
+  }
+
+  async function resubmitApprovalAtomic(input: { period: string; periodStart: string }): Promise<EntitySummary> {
+    const path = `${ws}/approval-requests/resubmit-entries-for-approval`;
+    const row = (await core.mutate("api", "POST", path, input)) as { id?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", path, "Clockify accepted the approval resubmission without a usable id.");
+    }
+    return { id: row.id, name: row.id };
+  }
+
   return {
     async listApprovals(filter) {
       const result = await listRaw(filter?.status);
@@ -70,26 +99,11 @@ export function makeApprovalRest(core: RestCore, workspaceId: string): ApprovalP
       if (!approval) assertCompleteAbsence(result.truncated, "approval", id);
       return approval ?? null;
     },
-    async submitApproval(input): Promise<EntitySummary> {
-      const a = (await core.call("api", "POST", `${ws}/approval-requests`, {
-        period: input.period,
-        periodStart: input.periodStart,
-      })) as { id?: string };
-      return { id: a?.id ?? "approval", name: a?.id ?? "approval" };
-    },
-    async setApprovalState(id, state, note): Promise<EntitySummary> {
-      const r = (await core.call("api", "PATCH", `${ws}/approval-requests/${id}`, {
-        state,
-        ...(note !== undefined ? { note } : {}),
-      })) as { id?: string } | null;
-      return { id: r?.id ?? id, name: state };
-    },
-    async resubmitApproval(input): Promise<EntitySummary> {
-      const r = (await core.call("api", "POST", `${ws}/approval-requests/resubmit-entries-for-approval`, {
-        period: input.period,
-        periodStart: input.periodStart,
-      })) as { id?: string } | null;
-      return { id: r?.id ?? "approval", name: r?.id ?? "resubmitted" };
-    },
+    submitApprovalAtomic,
+    setApprovalStateAtomic,
+    resubmitApprovalAtomic,
+    submitApproval: submitApprovalAtomic,
+    setApprovalState: setApprovalStateAtomic,
+    resubmitApproval: resubmitApprovalAtomic,
   };
 }

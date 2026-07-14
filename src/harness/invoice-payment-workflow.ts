@@ -11,6 +11,8 @@ import {
 import { executeDurableRiskyStep } from "./durable-risky-write.js";
 import { isJournalDegradedStep, withJournalDegradedWarning } from "./mutation-workflow.js";
 import { errorReceipt, successReceipt, type SuccessReceipt } from "./receipts.js";
+import { verifyTargetSnapshots } from "./target-snapshots.js";
+import { DefinitiveWriteFailure } from "../clockify/write-outcome.js";
 
 export interface InvoicePaymentCreatePayload extends Record<string, unknown> {
   invoiceId: string;
@@ -104,6 +106,7 @@ export async function commitInvoicePaymentCreate(input: {
       recovery: { hint: "Refresh and preview the payment again after Clockify reads recover.", retryable: true },
     });
   }
+  let verificationFailure: "stale_target" | "stale_parent" | undefined;
   const step = await executeDurableRiskyStep({
     ctx: input.ctx,
     operation: input.operation,
@@ -116,12 +119,30 @@ export async function commitInvoicePaymentCreate(input: {
         ids: baseline.ids,
         truncated: false,
       },
+      targetSnapshots: input.operation.targetSnapshots ?? [],
     },
     dispatch: async () => {
+      const verified = await verifyTargetSnapshots(input.operation.targetSnapshots ?? [], async (snapshot) => {
+        const invoice = await input.ctx.clockify.getInvoice(snapshot.ref.id);
+        return invoice ? { ref: { type: "invoice", id: invoice.id, ...(invoice.number ? { name: invoice.number } : {}) }, projection: invoice, truncated: false } : undefined;
+      });
+      if (!verified.ok) {
+        verificationFailure = verified.code;
+        throw new DefinitiveWriteFailure("VERIFY", "record-payment", verified.code);
+      }
       await input.ctx.clockify.createInvoicePaymentAtomic(input.payload.invoiceId, input.payload.payment);
       return { effect: { updated: { type: "invoice", id: input.payload.invoiceId } } };
     },
   });
+
+  if (verificationFailure) {
+    return errorReceipt({
+      action: input.operation.actionName,
+      code: verificationFailure,
+      message: "The invoice changed before the payment could be posted. No payment was sent.",
+      recovery: { hint: "Refresh the invoice and preview the payment again.", retryable: true },
+    });
+  }
 
   if (step.status === "definitive_failed") {
     return errorReceipt({

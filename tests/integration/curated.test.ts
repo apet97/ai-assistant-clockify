@@ -87,7 +87,7 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     expect(warnings).toMatch(/without an invitation email/i);
   });
 
-  it("fetches the group list ONCE per commit, not once per group (no N+1)", async () => {
+  it("re-fetches complete group evidence for every pre-dispatch verification", async () => {
     const fake = createFakeWorkspace({
       groups: [
         { id: "g1", name: "Engineering" },
@@ -104,9 +104,9 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     const receipt = await commitConfirmedOperation(ctx(fake), preview.operation as ConfirmableOperation);
     expect(receipt.ok).toBe(true);
     expect(fake.counts.addUserToGroup).toBe(3);
-    // The group list is identical across the per-group steps within one commit —
-    // resolve it once, not once per group.
-    expect(fake.counts.listGroups).toBe(1);
+    // Preview resolves once; every host step then performs fresh authoritative
+    // evidence reads immediately before dispatch and reconciliation.
+    expect(fake.counts.listGroups).toBeGreaterThanOrEqual(1 + 2 * 3);
   });
 
   it("a missing group is shown as skipped at PREVIEW — the user is still invited (best-effort group adds)", async () => {

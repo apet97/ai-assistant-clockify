@@ -21,6 +21,9 @@ export interface ApprovalSummary {
 export interface ApprovalPort {
   listApprovals(filter?: { status?: string }): Promise<ListResult<ApprovalSummary>>;
   getApproval(id: string): Promise<ApprovalSummary | null>;
+  submitApprovalAtomic(input: { period: string; periodStart: string }): Promise<EntitySummary>;
+  setApprovalStateAtomic(id: string, state: string, note?: string): Promise<EntitySummary>;
+  resubmitApprovalAtomic(input: { period: string; periodStart: string }): Promise<EntitySummary>;
   submitApproval(input: { period: string; periodStart: string }): Promise<EntitySummary>;
   setApprovalState(id: string, state: string, note?: string): Promise<EntitySummary>;
   resubmitApproval(input: { period: string; periodStart: string }): Promise<EntitySummary>;

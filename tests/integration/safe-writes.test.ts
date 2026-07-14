@@ -43,7 +43,7 @@ describe("safe writes", () => {
     } else {
       throw new Error("expected a success receipt");
     }
-    expect(fake.counts.startTimeEntry).toBe(1);
+    expect(fake.counts.startTimeEntryAtomic).toBe(1);
   });
 
   it("start_timer resolves a project NAME to its id and starts the timer on it", async () => {
@@ -55,7 +55,7 @@ describe("safe writes", () => {
     });
     expect(result.kind).toBe("receipt");
     if (result.kind === "receipt" && result.receipt.ok) {
-      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.counts.startTimeEntryAtomic).toBe(1);
       expect(fake.state.running?.projectId).toBe("p-acme");
     } else {
       throw new Error("expected a success receipt");
@@ -77,7 +77,7 @@ describe("safe writes", () => {
       expect(result.message).toMatch(/Acme Crp/);
     }
     expect(fake.counts.createProject ?? 0).toBe(0); // never creates the mistyped project
-    expect(fake.counts.startTimeEntry ?? 0).toBe(0); // and never starts a timer on an unverified project
+    expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0); // and never starts a timer on an unverified project
   });
 
   it("start_timer resolves a project NAME placed in the projectId SLOT (the planner habit)", async () => {
@@ -180,7 +180,7 @@ describe("safe writes", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("t-deep");
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("stop_timer with no running timer is a truthful no-op: success WITH the warning, nothing changed", async () => {
@@ -228,7 +228,7 @@ describe("safe writes", () => {
       expect(projectRef).toBeDefined();
       expect(created.some((e) => e.type === "time_entry")).toBe(true);
       // The timer must carry the just-created project's id (resolved server-side).
-      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.counts.startTimeEntryAtomic).toBe(1);
       expect(fake.state.running?.projectId).toBe(projectRef?.id);
     } else {
       throw new Error("expected a success receipt");
@@ -246,8 +246,8 @@ describe("safe writes", () => {
     if (result.kind === "receipt" && result.receipt.ok) {
       const projectRef = (result.receipt.changed?.created ?? []).find((e) => e.type === "project");
       expect(projectRef).toBeDefined();
-      expect(fake.counts.createProject).toBe(1);
-      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.counts.createProjectAtomic).toBe(1);
+      expect(fake.counts.startTimeEntryAtomic).toBe(1);
       expect(fake.state.running?.projectId).toBe(projectRef?.id);
     } else {
       throw new Error("expected a success receipt");
@@ -280,7 +280,7 @@ describe("safe writes", () => {
     expect(result.kind).toBe("receipt");
     if (result.kind === "receipt" && result.receipt.ok) {
       const projectRef = (result.receipt.changed?.created ?? []).find((e) => e.type === "project");
-      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.counts.startTimeEntryAtomic).toBe(1);
       expect(fake.state.running?.projectId).toBe(projectRef?.id);
     } else {
       throw new Error("expected a success receipt");
@@ -295,8 +295,8 @@ describe("safe writes", () => {
       context: makeContext(fake),
     });
     if (result.kind === "receipt" && result.receipt.ok) {
-      expect(fake.counts.createProject ?? 0).toBe(0); // reused, not created
-      expect(fake.counts.startTimeEntry).toBe(1);
+      expect(fake.counts.createProjectAtomic ?? 0).toBe(0); // reused, not created
+      expect(fake.counts.startTimeEntryAtomic).toBe(1);
       expect(fake.state.running?.projectId).toBe("p-acme");
     } else {
       throw new Error("expected a success receipt");
@@ -311,7 +311,7 @@ describe("safe writes", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.startTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("create_work_package with startTimer skips the timer (with a warning) when time_tracking is read-only", async () => {
@@ -324,8 +324,8 @@ describe("safe writes", () => {
       context: makeContext(fake, policy),
     });
     if (result.kind === "receipt" && result.receipt.ok) {
-      expect(fake.counts.createProject).toBe(1); // project still created (work_structure allowed)
-      expect(fake.counts.startTimeEntry ?? 0).toBe(0); // timer skipped
+      expect(fake.counts.createProjectAtomic).toBe(1); // project still created (work_structure allowed)
+      expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0); // timer skipped
       expect((result.receipt.warnings ?? []).some((w) => /timer/i.test(w.message))).toBe(true);
     } else {
       throw new Error("expected a success receipt");
@@ -346,7 +346,7 @@ describe("safe writes", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.length).toBe(2);
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("a write is blocked when the feature group is read-only", async () => {
@@ -363,7 +363,7 @@ describe("safe writes", () => {
       expect(result.receipt.ok).toBe(false);
       if (!result.receipt.ok) expect(result.receipt.code).toBe("policy_denied");
     }
-    expect(fake.counts.startTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("status resolves the running entry's projectId to a human-readable projectName", async () => {

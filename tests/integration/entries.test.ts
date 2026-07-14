@@ -226,7 +226,7 @@ describe("time-entry actions — risky writes", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteEntity).toBe(1);
+    expect(fake.counts.deleteTimeEntryAtomic).toBe(1);
     expect(fake.state.deleted).toContainEqual({ entityType: "time_entry", id: "e1" });
   });
 
@@ -244,7 +244,7 @@ describe("time-entry actions — risky writes", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.markEntriesInvoiced).toBe(1);
+    expect(fake.counts.markEntriesInvoicedAtomic).toBe(1);
   });
 
   it("clockify_entries_mark_invoiced is policy-gated by invoices (re-checked at commit)", async () => {

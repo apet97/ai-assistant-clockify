@@ -6,7 +6,11 @@ import type {
   ExpensePort,
   ExpenseSummary,
   ExpenseCategorySummary,
+  CreateExpenseInput,
+  UpdateExpenseInput,
+  PreparedExpenseUpdateInput,
 } from "../ports/expenses.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 // Expenses are MAJOR units on the wire (unlike invoices, which are minor). The
 // action layer stores canonical MINOR units in the payload, so the REST module
@@ -36,6 +40,7 @@ function existingAmount(existing: Record<string, unknown>): string | undefined {
 function mapExpense(raw: Record<string, unknown>): ExpenseSummary {
   const name = (raw.notes as string | undefined) ?? (raw.id as string);
   const out: ExpenseSummary = { id: raw.id as string, name };
+  if (raw.userId !== undefined) out.userId = raw.userId as string;
   if (raw.notes !== undefined) out.notes = raw.notes as string;
   if (raw.date !== undefined) out.date = raw.date as string;
   if (raw.categoryId !== undefined) out.categoryId = raw.categoryId as string;
@@ -72,6 +77,69 @@ function mapCategory(raw: Record<string, unknown>): ExpenseCategorySummary {
 export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePort {
   const ws = `/workspaces/${workspaceId}`;
 
+  const createExpenseAtomic = async (input: CreateExpenseInput): Promise<EntitySummary> => {
+    const fields: Record<string, string> = {
+      userId: input.userId,
+      amount: fromMinor(input.amountMinor),
+      date: toClockifyDate(input.date),
+      categoryId: input.categoryId,
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      ...(input.billable !== undefined ? { billable: String(input.billable) } : {}),
+      ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+    };
+    const form = new FormData();
+    for (const [key, value] of Object.entries(fields)) form.append(key, value);
+    const created = (await core.mutate("api", "POST", `${ws}/expenses`, form)) as { id?: unknown; notes?: string } | null;
+    if (typeof created?.id !== "string" || created.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/expenses`, "Clockify returned a successful expense response without a usable id.");
+    }
+    return { id: created.id, name: created.notes ?? input.notes ?? created.id };
+  };
+
+  const prepareExpenseUpdate = async (id: string, input: UpdateExpenseInput): Promise<PreparedExpenseUpdateInput> => {
+    const existing = ((await core.call("api", "GET", `${ws}/expenses/${id}`)) ?? {}) as Record<string, unknown>;
+    return {
+      changeFields: [...input.changeFields],
+      ...(((existing.userId as string | undefined) ?? input.userId) ? { userId: (existing.userId as string | undefined) ?? input.userId } : {}),
+      ...((input.amountMinor !== undefined ? fromMinor(input.amountMinor) : existingAmount(existing)) !== undefined
+        ? { amount: input.amountMinor !== undefined ? fromMinor(input.amountMinor) : existingAmount(existing) } : {}),
+      ...(numFrom(existing.quantity) !== undefined ? { quantity: numFrom(existing.quantity) } : {}),
+      ...((input.date !== undefined ? toClockifyDate(input.date) : existing.date as string | undefined) ? { date: input.date !== undefined ? toClockifyDate(input.date) : existing.date as string } : {}),
+      ...((input.categoryId ?? existing.categoryId as string | undefined) ? { categoryId: input.categoryId ?? existing.categoryId as string } : {}),
+      ...((input.notes !== undefined ? input.notes : existing.notes as string | undefined) !== undefined ? { notes: input.notes !== undefined ? input.notes : existing.notes as string } : {}),
+      ...((input.billable !== undefined ? input.billable : existing.billable as boolean | undefined) !== undefined ? { billable: input.billable !== undefined ? input.billable : existing.billable as boolean } : {}),
+      ...((input.projectId ?? existing.projectId as string | undefined) ? { projectId: input.projectId ?? existing.projectId as string } : {}),
+      ...((input.taskId ?? existing.taskId as string | undefined) ? { taskId: input.taskId ?? existing.taskId as string } : {}),
+    };
+  };
+
+  const updateExpenseAtomic = async (id: string, input: PreparedExpenseUpdateInput): Promise<EntitySummary> => {
+    const form = new FormData();
+    for (const token of input.changeFields) form.append("changeFields", token);
+    for (const key of ["userId", "amount", "quantity", "date", "categoryId", "notes", "billable", "projectId", "taskId"] as const) {
+      const value = input[key];
+      if (value !== undefined) form.append(key, String(value));
+    }
+    const updated = (await core.mutate("api", "PUT", `${ws}/expenses/${id}`, form)) as { id?: string; notes?: string };
+    return { id: updated?.id ?? id, name: updated?.notes ?? input.notes ?? id };
+  };
+
+  const deleteExpenseAtomic = async (id: string): Promise<void> => { await core.mutate("api", "DELETE", `${ws}/expenses/${id}`); };
+  const createCategoryAtomic = async ({ name }: { name: string }): Promise<EntitySummary> => {
+    const c = (await core.mutate("api", "POST", `${ws}/expenses/categories`, { name })) as { id?: unknown; name?: string } | null;
+    if (typeof c?.id !== "string" || c.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/expenses/categories`, "Clockify returned a successful expense-category response without a usable id.");
+    }
+    return { id: c.id, name: c.name ?? name };
+  };
+  const updateCategoryAtomic = async (id: string, patch: { name?: string }): Promise<EntitySummary> => {
+    const c = (await core.mutate("api", "PUT", `${ws}/expenses/categories/${id}`, patch)) as { id?: string; name?: string };
+    return { id: c?.id ?? id, name: c?.name ?? patch.name ?? id };
+  };
+  const setCategoryArchivedAtomic = async (id: string, archived: boolean): Promise<void> => { await core.mutate("api", "PATCH", `${ws}/expenses/categories/${id}/status`, { archived }); };
+  const deleteCategoryAtomic = async (id: string): Promise<void> => { await core.mutate("api", "DELETE", `${ws}/expenses/categories/${id}`); };
+
   return {
     async listExpenses(filter) {
       // The list is DOUBLE-nested (`{expenses:{expenses:[…],count}}`); paginate
@@ -89,71 +157,18 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       return raw ? mapExpense(raw as Record<string, unknown>) : null;
     },
     async createExpense(input): Promise<EntitySummary> {
-      // multipart/form-data — Clockify requires userId; amount is MAJOR on the wire.
-      const fields: Record<string, string> = {
-        userId: input.userId,
-        amount: fromMinor(input.amountMinor),
-        date: toClockifyDate(input.date),
-        categoryId: input.categoryId,
-        ...(input.notes !== undefined ? { notes: input.notes } : {}),
-        ...(input.billable !== undefined ? { billable: String(input.billable) } : {}),
-        ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
-        ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
-      };
-      const created = (await core.postForm("api", `${ws}/expenses`, fields)) as {
-        id: string;
-        notes?: string;
-      };
-      return { id: created.id, name: created.notes ?? input.notes ?? created.id };
+      return createExpenseAtomic(input);
     },
+    createExpenseAtomic,
     async updateExpense(id, input): Promise<EntitySummary> {
-      // The multipart PUT REPLACES the expense, so the base fields (userId, date,
-      // categoryId, amount) must always be present — even when only notes change.
-      // Source each from the caller's value when provided, else from the existing
-      // expense. An UNCHANGED amount is echoed back exactly as Clockify returned
-      // it (no unit conversion → no 100x risk); a changed amount goes minor→major.
-      const existing = ((await core.call("api", "GET", `${ws}/expenses/${id}`)) ?? {}) as Record<string, unknown>;
-      const form = new FormData();
-      for (const token of input.changeFields) form.append("changeFields", token);
-
-      const userId = (existing.userId as string | undefined) ?? input.userId;
-      if (userId) form.append("userId", userId);
-
-      const amount =
-        input.amountMinor !== undefined ? fromMinor(input.amountMinor) : existingAmount(existing);
-      if (amount !== undefined) form.append("amount", amount);
-
-      // Re-send quantity so a per-unit amount keeps the same total on the replace.
-      const quantity = numFrom(existing.quantity);
-      if (quantity !== undefined) form.append("quantity", String(quantity));
-
-      const date = input.date !== undefined ? toClockifyDate(input.date) : (existing.date as string | undefined);
-      if (date) form.append("date", date);
-
-      const categoryId = input.categoryId ?? (existing.categoryId as string | undefined);
-      if (categoryId) form.append("categoryId", categoryId);
-
-      const notes = input.notes !== undefined ? input.notes : (existing.notes as string | undefined);
-      if (notes !== undefined) form.append("notes", notes);
-
-      const billable = input.billable !== undefined ? input.billable : (existing.billable as boolean | undefined);
-      if (typeof billable === "boolean") form.append("billable", String(billable));
-
-      const projectId = input.projectId ?? (existing.projectId as string | undefined);
-      if (projectId) form.append("projectId", projectId);
-
-      const taskId = input.taskId ?? (existing.taskId as string | undefined);
-      if (taskId) form.append("taskId", taskId);
-
-      const updated = (await core.call("api", "PUT", `${ws}/expenses/${id}`, form)) as {
-        id?: string;
-        notes?: string;
-      };
-      return { id: updated?.id ?? id, name: updated?.notes ?? input.notes ?? id };
+      return updateExpenseAtomic(id, await prepareExpenseUpdate(id, input));
     },
+    prepareExpenseUpdate,
+    updateExpenseAtomic,
     async deleteExpense(id) {
-      await core.call("api", "DELETE", `${ws}/expenses/${id}`);
+      await deleteExpenseAtomic(id);
     },
+    deleteExpenseAtomic,
     async listExpenseCategories(filter) {
       // The spec's archived param DEFAULTS to false (active-only) — name
       // resolution for deletes must be able to ask for the archived set.
@@ -163,29 +178,23 @@ export function makeExpenseRest(core: RestCore, workspaceId: string): ExpensePor
       return { ...result, rows: (result.rows as CategoryRow[]).map(mapCategory) };
     },
     async createExpenseCategory({ name }): Promise<EntitySummary> {
-      const c = (await core.call("api", "POST", `${ws}/expenses/categories`, { name })) as {
-        id: string;
-        name?: string;
-      };
-      return { id: c.id, name: c.name ?? name };
+      return createCategoryAtomic({ name });
     },
+    createExpenseCategoryAtomic: createCategoryAtomic,
     async updateExpenseCategory(id, patch): Promise<EntitySummary> {
-      const body: Record<string, unknown> = {};
-      if (patch.name !== undefined) body.name = patch.name;
-      const c = (await core.call("api", "PUT", `${ws}/expenses/categories/${id}`, body)) as {
-        id?: string;
-        name?: string;
-      };
-      return { id: c?.id ?? id, name: c?.name ?? patch.name ?? id };
+      return updateCategoryAtomic(id, patch);
     },
+    updateExpenseCategoryAtomic: updateCategoryAtomic,
     async setExpenseCategoryArchived(id, archived) {
-      await core.call("api", "PATCH", `${ws}/expenses/categories/${id}/status`, { archived });
+      await setCategoryArchivedAtomic(id, archived);
     },
+    setExpenseCategoryArchivedAtomic: setCategoryArchivedAtomic,
     async deleteExpenseCategory(id) {
       // Clockify rejects deleting an active category ("Category must be archived to
       // be deleted"); archive via PATCH /status, then delete.
-      await core.call("api", "PATCH", `${ws}/expenses/categories/${id}/status`, { archived: true });
-      await core.call("api", "DELETE", `${ws}/expenses/categories/${id}`);
+      await setCategoryArchivedAtomic(id, true);
+      await deleteCategoryAtomic(id);
     },
+    deleteExpenseCategoryAtomic: deleteCategoryAtomic,
   };
 }

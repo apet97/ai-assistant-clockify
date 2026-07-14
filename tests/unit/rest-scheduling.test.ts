@@ -59,7 +59,7 @@ describe("scheduling rest", () => {
     // (the updated occurrence(s)) — the id comes from its first element.
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
-        ? jsonResponse([{ id: "a1", userId: "u1", projectId: "p1", period: { start: "2026-06-01", end: "2026-06-05" }, hoursPerDay: 8 }])
+        ? jsonResponse([{ id: "a1", userId: "u1", projectId: "p1", period: { start: "2026-06-01", end: "2026-06-05" }, hoursPerDay: 8, startTime: "09:30" }])
         : jsonResponse([{ id: "a1-updated", userId: "u1" }]),
     );
     const updated = await rest(f as unknown as typeof fetch).updateAssignment("a1", { hoursPerDay: 6, seriesUpdateOption: "ALL" });
@@ -73,6 +73,7 @@ describe("scheduling rest", () => {
     expect(body.start).toBe("2026-06-01"); // top-level start/end reconstructed from period
     expect(body.end).toBe("2026-06-05");
     expect(body.hoursPerDay).toBe(6); // changed
+    expect(body.startTime).toBe("09:30"); // lossless full replacement
     expect(body.seriesUpdateOption).toBe("ALL");
   });
 

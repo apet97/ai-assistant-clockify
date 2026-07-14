@@ -1,13 +1,27 @@
-import type { ActionContext, CommitResult, ConfirmableOperation } from "./action.js";
+import type { ActionContext, CommitResult, ConfirmableOperation, TargetSnapshot } from "./action.js";
 import { executeDurableRiskyStep } from "./durable-risky-write.js";
 import { isJournalDegradedStep, withJournalDegradedWarning } from "./mutation-workflow.js";
 import { errorReceipt, successReceipt, type SuccessReceipt } from "./receipts.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "./target-snapshots.js";
+import { DefinitiveWriteFailure } from "../clockify/write-outcome.js";
+import { dispatchWithReconciliation, reconcileExactUpdate } from "./workflows/structure-durable.js";
 
 export interface InvoiceUpdatePayload extends Record<string, unknown> {
   id: string;
   patch: Record<string, unknown>;
   updateBody?: Record<string, unknown>;
   status?: string;
+  expectedAfterFields?: Record<string, unknown>;
+  expectedAfterStatus?: Record<string, unknown>;
+}
+
+async function fetchSnapshot(ctx: ActionContext, snapshot: TargetSnapshot) {
+  if (snapshot.ref.type === "client") {
+    const client = await ctx.clockify.getClient(snapshot.ref.id);
+    return client ? { ref: { type: "client", id: client.id, name: client.name }, projection: client, truncated: false } : undefined;
+  }
+  const invoice = await ctx.clockify.getInvoice(snapshot.ref.id);
+  return invoice ? { ref: { type: "invoice", id: invoice.id, ...(invoice.number ? { name: invoice.number } : {}) }, projection: invoice, truncated: false } : undefined;
 }
 
 function updateReceipt(ctx: ActionContext, id: string, name?: string): SuccessReceipt {
@@ -66,20 +80,41 @@ export async function commitInvoiceUpdate(input: {
   let index = 0;
   let completed = 0;
   let name: string | undefined;
+  const originalTarget = input.operation.targetSnapshots?.find((snapshot) => snapshot.ref.type === "invoice");
+  if (!originalTarget) return errorReceipt({ action: input.operation.actionName, code: "stale_target", message: "The invoice target is missing. Create a fresh preview." });
   if (input.payload.updateBody) {
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
     const fields = await executeDurableRiskyStep({
       ctx: input.ctx,
       operation: input.operation,
       planStepId: "update-invoice-fields",
       index,
       name: "Update invoice fields",
+      preparedDetail: { targetSnapshots: input.operation.targetSnapshots ?? [] },
       dispatch: async () => {
-        const entity = await input.ctx.clockify.updateInvoiceFields(input.payload.id, input.payload.updateBody!);
+        const verified = await verifyTargetSnapshots(input.operation.targetSnapshots ?? [], (snapshot) => fetchSnapshot(input.ctx, snapshot));
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "update-invoice-fields", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: () => input.ctx.clockify.updateInvoiceFields(input.payload.id, input.payload.updateBody!),
+          reconcile: async () => {
+            const row = await reconcileExactUpdate(
+              () => input.ctx.clockify.getInvoice(input.payload.id),
+              input.payload.expectedAfterFields,
+              (invoice) => invoice,
+            );
+            return row ? { id: row.id, name: row.number ?? row.id } : undefined;
+          },
+        });
+        const entity = result.value;
         name = entity.name;
-        return { externalId: entity.id, effect: { updated: { type: "invoice", id: entity.id } } };
+        return { externalId: entity.id, effect: { updated: { type: "invoice", id: entity.id } }, detail: { reconciled: result.reconciled } };
       },
     });
     index += 1;
+    if (verificationFailure) return errorReceipt({ action: input.operation.actionName, code: verificationFailure, message: "The invoice or replacement client changed before the field update.", recovery: { hint: "Refresh the invoice and preview again." } });
     if (fields.status === "outcome_unknown") return unknown(input.operation, input.payload.id);
     if (fields.status === "definitive_failed") {
       return errorReceipt({
@@ -98,18 +133,43 @@ export async function commitInvoiceUpdate(input: {
     }
   }
   if (input.payload.status) {
+    const expectedBeforeStatus = input.payload.expectedAfterFields ?? originalTarget.projection as Record<string, unknown>;
+    const statusTarget = captureTargetSnapshot("target", originalTarget.ref, expectedBeforeStatus);
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
     const status = await executeDurableRiskyStep({
       ctx: input.ctx,
       operation: input.operation,
       planStepId: "update-invoice-status",
       index,
       name: "Update invoice status",
+      preparedDetail: { targetSnapshots: [statusTarget] },
       dispatch: async () => {
-        const entity = await input.ctx.clockify.updateInvoiceStatus(input.payload.id, input.payload.status!);
+        const verified = await verifyTargetSnapshots([statusTarget], (snapshot) => fetchSnapshot(input.ctx, snapshot));
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "update-invoice-status", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: () => input.ctx.clockify.updateInvoiceStatus(input.payload.id, input.payload.status!),
+          reconcile: async () => {
+            const row = await reconcileExactUpdate(
+              () => input.ctx.clockify.getInvoice(input.payload.id),
+              input.payload.expectedAfterStatus,
+              (invoice) => invoice,
+            );
+            return row ? { id: row.id, name: row.number ?? row.id } : undefined;
+          },
+        });
+        const entity = result.value;
         name ??= entity.name;
-        return { externalId: entity.id, effect: { status: input.payload.status } };
+        return { externalId: entity.id, effect: { status: input.payload.status }, detail: { reconciled: result.reconciled } };
       },
     });
+    if (verificationFailure) {
+      return completed > 0
+        ? partial(input.ctx, input.payload.id, "the invoice changed before the status update")
+        : errorReceipt({ action: input.operation.actionName, code: verificationFailure, message: "The invoice changed before the status update.", recovery: { hint: "Refresh the invoice and preview again." } });
+    }
     if (status.status === "outcome_unknown") return unknown(input.operation, input.payload.id);
     if (status.status === "definitive_failed") {
       return completed > 0

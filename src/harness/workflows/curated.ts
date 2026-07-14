@@ -3,12 +3,18 @@ import { zStringList } from "../arg-shapes.js";
 import {
   defineAction,
   defineRiskyAction,
+  type CommitResult,
   type ActionDefinition,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
 import { DAY_MS, nowDate } from "../../durations.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { executeDurableRiskyStep } from "../durable-risky-write.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
+import { dynamicMutationPlan, fetchCompositeSnapshot, groupProjection } from "./composite-durable.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -83,13 +89,22 @@ const onboardUser = defineRiskyAction({
     'Onboard a teammate: invite them by email AND add them to one or more groups (by name) in one step. Use this for "invite ada@acme.com and add her to Engineering". Sends a real invitation email — previews and requires confirmation.',
   group: "users_groups",
   risks: ["external_side_effect"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create", "update"],
+  }),
   schema: z.object({
     email: z.string().min(1),
     groups: zStringList().optional(),
     sendEmail: z.boolean().optional(),
   }),
   async preview(ctx, args) {
-    const requested = args.groups ?? [];
+    const requested = [...new Map((args.groups ?? []).map((value) => [
+      value.normalize("NFKC").trim().toLocaleLowerCase("en-US"),
+      value,
+    ])).values()];
     // Resolve group names at PREVIEW (one listGroups, like the per-area resolvers)
     // so the card matches exactly what the commit will do. A best-effort group-add
     // must never be PROMISED for a group that doesn't exist: resolvable groups go
@@ -105,12 +120,30 @@ const onboardUser = defineRiskyAction({
       };
     }
     const resolvedGroups: Array<{ id: string; name: string }> = [];
+    const resolvedGroupIds = new Set<string>();
     const skipped: Array<{ name: string; reason: string }> = [];
     for (const name of requested) {
-      const match = matchByName(groupList.rows, name);
-      if (match.kind === "one") resolvedGroups.push({ id: match.entity.id, name: match.entity.name });
+      const direct = groupList.rows.find((candidate) => candidate.id === name);
+      const match = direct ? { kind: "one" as const, entity: direct } : matchByName(groupList.rows, name);
+      if (match.kind === "one") {
+        if (!resolvedGroupIds.has(match.entity.id)) {
+          resolvedGroupIds.add(match.entity.id);
+          resolvedGroups.push({ id: match.entity.id, name: match.entity.name });
+        }
+      }
       else skipped.push({ name, reason: match.kind === "many" ? "ambiguous" : "not found" });
     }
+    const userBaseline = await ctx.clockify.listUsers();
+    if (userBaseline.truncated) {
+      return { clarify: "Clockify returned an incomplete user list, so I can't safely invite or reconcile this address." };
+    }
+    if (userBaseline.rows.some((row) => row.email?.toLocaleLowerCase("en-US") === args.email.toLocaleLowerCase("en-US"))) {
+      return { clarify: `${args.email} is already present in this workspace.` };
+    }
+    const targetSnapshots = resolvedGroups.map((group) => {
+      const row = groupList.rows.find((candidate) => candidate.id === group.id)!;
+      return captureTargetSnapshot("parent", { type: "group", id: group.id, name: group.name }, groupProjection(row));
+    });
     return {
       actionLabel: "Onboard user",
       targets: [],
@@ -128,54 +161,134 @@ const onboardUser = defineRiskyAction({
           ? [`${skipped.length} group${skipped.length > 1 ? "s" : ""} couldn't be resolved and will be skipped: ${skipped.map((s) => `"${s.name}"`).join(", ")}.`]
           : []),
       ],
-      payload: { email: args.email, groups: resolvedGroups, sendEmail: args.sendEmail ?? true },
+      payload: {
+        email: args.email,
+        groups: resolvedGroups,
+        sendEmail: args.sendEmail ?? true,
+        baselineUserIds: userBaseline.rows.map((row) => row.id).sort(),
+      },
+      targetSnapshots,
+      mutationPlan: dynamicMutationPlan([
+        { id: "invite-user", strategy: "create" },
+        ...resolvedGroups.map((group, index) => ({
+          id: `add-user-to-group-${index}`,
+          strategy: "update" as const,
+          targetFingerprint: targetSnapshots[index]!.fingerprint,
+        })),
+      ]),
     };
   },
-  async commit(ctx, payload) {
-    const p = payload as { email: string; groups: Array<{ id: string; name: string }>; sendEmail: boolean };
-    const ids: { userId?: string } = {};
-    const steps: CompositionStep[] = [
-      {
-        label: "invite",
-        required: true,
-        run: async () => {
-          const user = await ctx.clockify.inviteUser(p.email, p.sendEmail);
-          ids.userId = user.id;
-          return { kind: "done", created: [{ type: "user", id: user.id, name: user.name }] };
-        },
-      },
-    ];
-    // Group names were resolved + shown at preview time; the payload carries only
-    // verified group ids, so commit just adds to them (best-effort: a group failure
-    // must not undo the required invite).
-    for (const group of p.groups) {
-      steps.push({
-        label: `group:${group.name}`,
-        required: false,
-        run: async () => {
-          await ctx.clockify.addUserToGroup(group.id, ids.userId as string);
-          return { kind: "done" };
-        },
-      });
-    }
-
-    const outcome = await runComposition(steps);
-    if (outcome.status.kind === "failed") {
+  async commit(ctx, payload, operation): Promise<CommitResult> {
+    const p = payload as {
+      email: string;
+      groups: Array<{ id: string; name: string }>;
+      sendEmail: boolean;
+      baselineUserIds: string[];
+    };
+    const immediate = await ctx.clockify.listUsers();
+    if (immediate.truncated || JSON.stringify(immediate.rows.map((row) => row.id).sort()) !== JSON.stringify(p.baselineUserIds)) {
       return errorReceipt({
         action: "clockify_onboard_user",
-        code: "onboard_failed",
-        message: `Couldn't invite ${p.email}: ${outcome.status.message}. ${leftBehindNote(outcome.status.rollbackWarnings)}`,
-        recovery: { hint: "Try again.", retryable: true },
+        code: "stale_target",
+        message: "The workspace user list changed after preview. No invitation was sent.",
+        recovery: { hint: "Create a fresh preview.", retryable: true },
       });
+    }
+    let invited: Awaited<ReturnType<typeof ctx.clockify.inviteUserAtomic>> | undefined;
+    const invite = await executeDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "invite-user",
+      index: 0,
+      name: "Invite user",
+      preparedDetail: { email: p.email, sendEmail: p.sendEmail, baselineUserIds: p.baselineUserIds },
+      dispatch: async () => {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.inviteUserAtomic(p.email, p.sendEmail),
+          reconcile: () => reconcileCreate({
+            beforeIds: p.baselineUserIds,
+            list: () => ctx.clockify.listUsers(),
+            matches: (row) => row.email?.toLocaleLowerCase("en-US") === p.email.toLocaleLowerCase("en-US"),
+          }),
+        });
+        invited = dispatched.value;
+        return {
+          externalId: invited.id,
+          effect: { created: { type: "user", id: invited.id, name: invited.name } },
+          detail: { reconciled: dispatched.reconciled },
+        };
+      },
+    });
+    if (invite.status === "outcome_unknown") {
+      return errorReceipt({
+        action: "clockify_onboard_user",
+        code: "commit_outcome_unknown",
+        message: "The invitation may or may not have applied. No group membership was changed.",
+        recovery: { hint: "Verify the user list before retrying.", retryable: false },
+      });
+    }
+    if (invite.status !== "succeeded" || !invited) {
+      return errorReceipt({ action: "clockify_onboard_user", code: "onboard_failed", message: `Couldn't invite ${p.email}.` });
+    }
+    const created = { type: "user", id: invited.id, name: invited.name };
+    for (let index = 0; index < p.groups.length; index += 1) {
+      const group = p.groups[index]!;
+      const snapshot = operation.targetSnapshots?.[index];
+      if (!snapshot) return onboardPartial(created, index, p.groups.length, "The saved group evidence is incomplete.");
+      const groupEvidence = await ctx.clockify.listGroups();
+      if (groupEvidence.truncated) return onboardPartial(created, index, p.groups.length, "Clockify returned incomplete group evidence.");
+      const current = groupEvidence.rows.find((row) => row.id === group.id);
+      if (!current) return onboardPartial(created, index, p.groups.length, `Group "${group.name}" no longer exists.`);
+      const expectedUserIds = [...new Set([...(current.userIds ?? []), invited.id])].sort();
+      const membership = await executeDurableRiskyStep({
+        ctx,
+        operation,
+        planStepId: `add-user-to-group-${index}`,
+        index: index + 1,
+        name: `Add user to ${group.name}`,
+        preparedDetail: { groupId: group.id, userId: invited.id, expectedUserIds },
+        dispatch: async () => {
+          const verified = await verifyTargetSnapshots([snapshot], (stored) => fetchCompositeSnapshot(ctx, stored));
+          if (!verified.ok) throw new DefinitiveWriteFailure("VERIFY", group.id, verified.code);
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: async () => { await ctx.clockify.addUserToGroupAtomic(group.id, invited!.id); return true as const; },
+            reconcile: async () => {
+              const listed = await ctx.clockify.listGroups();
+              if (listed.truncated) return undefined;
+              const row = listed.rows.find((candidate) => candidate.id === group.id);
+              return row && JSON.stringify([...(row.userIds ?? [])].sort()) === JSON.stringify(expectedUserIds)
+                ? true as const
+                : undefined;
+            },
+          });
+          return { externalId: invited!.id, effect: { groupId: group.id, userId: invited!.id }, detail: { reconciled: dispatched.reconciled } };
+        },
+      });
+      if (membership.status !== "succeeded") {
+        return onboardPartial(created, index, p.groups.length, `Adding the user to "${group.name}" did not complete definitively.`);
+      }
     }
     return successReceipt({
       action: "clockify_onboard_user",
       entity: "user",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { created: outcome.created },
-      warnings: outcome.warnings.length ? outcome.warnings : undefined,
+      changed: { created: [created] },
     });
   },
 });
+
+function onboardPartial(
+  created: { type: string; id: string; name?: string },
+  completedGroups: number,
+  totalGroups: number,
+  reason: string,
+): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({ action: "clockify_onboard_user", entity: "user", changed: { created: [created] } }),
+    message: `The user was invited, but only ${completedGroups} of ${totalGroups} group additions completed. ${reason}`,
+    recovery: { hint: "Review group membership manually before continuing.", retryable: false },
+  };
+}
 
 export const CURATED_ACTIONS: ActionDefinition[] = [periodReport, onboardUser];

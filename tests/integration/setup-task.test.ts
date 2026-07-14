@@ -7,6 +7,7 @@ import type { ActionContext, ConfirmableOperation, IdempotencyLedger } from "../
 import type { UpdateTaskRateInput } from "../../src/clockify/ports/tasks.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
+import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * clockify_setup_task — the task analog of setup_project: create a task in an
@@ -33,9 +34,9 @@ function rateSpy(fake: FakeWorkspace): { client: WorkspaceClient; rate: UpdateTa
   const rate: UpdateTaskRateInput[] = [];
   const client: WorkspaceClient = {
     ...fake.client,
-    updateTaskRate: async (input) => {
+    updateTaskRateAtomic: async (input) => {
       rate.push(input);
-      await fake.client.updateTaskRate(input);
+      await fake.client.updateTaskRateAtomic(input);
     },
   };
   return { client, rate };
@@ -107,16 +108,18 @@ describe("clockify_setup_task — single-approval task composite", () => {
     expect(fake.state.tasks.some((t) => t.name === "Login")).toBe(false);
   });
 
-  it("rolls back the created task when the rate step fails — nothing left behind", async () => {
+  it("returns partial and retains the created task when the rate step definitively fails", async () => {
     const fake = createFakeWorkspace(SEED);
-    const client: WorkspaceClient = { ...fake.client, updateTaskRate: async () => { throw new Error("Clockify rejected the rate"); } };
+    const client: WorkspaceClient = {
+      ...fake.client,
+      updateTaskRateAtomic: async () => { throw new DefinitiveWriteFailure("PUT", "/task-rate", "Clockify rejected the rate", 400); },
+    };
     const op = await previewSetup(ctxWith(fake, client));
     const receipt = await commitConfirmedOperation(ctxWith(fake, client), op);
-    expect(receipt.ok).toBe(false);
-    if (!receipt.ok) expect(receipt.code).toBe("setup_failed");
-    expect(fake.counts.createTask).toBe(1);
-    expect(fake.state.deleted.some((d) => d.entityType === "task")).toBe(true); // rolled back via deleteTask
-    expect(fake.state.tasks.some((t) => t.name === "Login")).toBe(false);
+    expect(receipt).toMatchObject({ kind: "partial", receipt: { ok: true } });
+    expect(fake.counts.createTaskAtomic).toBe(1);
+    expect(fake.state.deleted).toEqual([]);
+    expect(fake.state.tasks.some((t) => t.name === "Login")).toBe(true);
   });
 
   it("resolves the project by name; an unknown project clarifies and writes nothing", async () => {
@@ -155,6 +158,6 @@ describe("clockify_setup_task — single-approval task composite", () => {
     const second = await commitConfirmedOperation(ctx, op);
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
-    expect(fake.counts.createTask).toBe(1);
+    expect(fake.counts.createTaskAtomic).toBe(1);
   });
 });

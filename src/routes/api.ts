@@ -252,7 +252,30 @@ export function apiRouter(deps: AppDeps): Router {
         preview: record.preview,
       });
     }
-    res.json({ ok: true, messages, pendingPreviews });
+    const operationRuns = deps.store.listScopedOperationRuns(
+      claims.workspaceId,
+      claims.adminUserId,
+      claims.sessionId,
+    ).map((operation) => ({
+      id: operation.id,
+      actionName: operation.actionName,
+      status: operation.status,
+      steps: operation.steps.map((step) => ({
+        planStepId: step.planStepId,
+        name: step.name,
+        status: step.status,
+      })),
+      ...(operation.stepsTruncated ? { stepsTruncated: true } : {}),
+      ...(operation.reconciliation ? { reconciliation: operation.reconciliation } : {}),
+      createdAt: operation.createdAt,
+      updatedAt: operation.updatedAt,
+    }));
+    res.json({
+      ok: true,
+      messages,
+      pendingPreviews,
+      ...(operationRuns.length > 0 ? { operationRuns } : {}),
+    });
   }));
 
   // List this admin's live, non-empty conversations (the chat-history switcher).
@@ -429,6 +452,21 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(404).json({ ok: false, code: "not_found", message: "Operation not found." });
     }
     return res.json({ ok: true, requestId: run.requestId, status: run.status, response: run.response });
+  }));
+
+  router.get("/operation-runs/:operationId", asyncHandler(async (req, res) => {
+    const claims = await requireSession(req, res);
+    if (!claims) return;
+    const operation = deps.store.getScopedOperationRun(
+      req.params.operationId,
+      claims.workspaceId,
+      claims.adminUserId,
+      claims.sessionId,
+    );
+    if (!operation) {
+      return res.status(404).json({ ok: false, code: "not_found", message: "Operation not found." });
+    }
+    return res.json({ ok: true, operation });
   }));
 
   router.get("/artifacts/:id", asyncHandler(async (req, res) => {

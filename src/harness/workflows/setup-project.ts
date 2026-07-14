@@ -3,14 +3,22 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type CommitResult,
   type RiskyPreviewResult,
+  type TargetSnapshot,
 } from "../action.js";
 import { canWrite } from "../permissions.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
-import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js";
 import { fromMinor, toMinor } from "../money.js";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { executeDurableRiskyStep } from "../durable-risky-write.js";
+import { sanitizedFingerprint } from "../safe-json.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
+import { dynamicMutationPlan, fetchCompositeSnapshot, userProjection } from "./composite-durable.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 
 /**
  * `clockify_setup_project` — the single-approval composite. A request like
@@ -61,6 +69,12 @@ const setupProject = defineRiskyAction({
     'Create a NEW project AND set it up in one step — optionally make it private, add members (names or "me"), set the project\'s default billable/cost rate, and set per-member rates — as ONE preview and ONE Confirm. Use this for "create a project and add me / make it private / set the rate". For just creating a bare project with nothing else, use clockify_projects_create.',
   group: "work_structure",
   risks: ["high_risk_write", "billing"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["parent"] },
+    strategies: ["create", "update"],
+  }),
   schema: z.object({
     name: z.string().min(1),
     isPublic: z.boolean().optional(),
@@ -101,6 +115,7 @@ const setupProject = defineRiskyAction({
           verb: "assign the new project to",
           list: (f) => ctx.clockify.listClients(f),
           notFoundHint: "Or should I create the client first?",
+          verifyId: true,
         },
       );
       if (!client.ok) return client.clarify;
@@ -187,6 +202,32 @@ const setupProject = defineRiskyAction({
       memberRates: resolvedRates.map((r) => ({ userId: r.userId, amountMinor: r.amountMinor, kind: r.kind })),
     };
 
+    const targetSnapshots: TargetSnapshot[] = [];
+    if (clientId) {
+      const client = await ctx.clockify.getClient(clientId);
+      if (!client) return { clarify: "The selected client no longer exists. Refresh and try again." };
+      const state = await ctx.clockify.getClientMutationState(clientId);
+      if (!state) return { clarify: "The selected client could not be verified. Refresh and try again." };
+      targetSnapshots.push(captureTargetSnapshot("parent", { type: "client", id: client.id, name: client.name }, state));
+    }
+    if (orderedUserIds.length) {
+      const users = await listUsers();
+      if (users.truncated) return { clarify: "Clockify returned an incomplete user list. Narrow the request or use exact user IDs." };
+      for (const userId of orderedUserIds) {
+        const user = users.rows.find((candidate) => candidate.id === userId);
+        if (!user) return { clarify: `User ${userId} could not be verified. Refresh and try again.` };
+        targetSnapshots.push(captureTargetSnapshot("parent", { type: "user", id: user.id, name: user.name }, userProjection(user)));
+      }
+    }
+    const planFingerprint = targetSnapshots.length
+      ? sanitizedFingerprint(targetSnapshots.map(({ relation, ref, fingerprint }) => ({ relation, ref, fingerprint })))
+      : undefined;
+    const planSteps: Parameters<typeof dynamicMutationPlan>[0] = [
+      { id: "create-project", strategy: "create", ...(planFingerprint ? { targetFingerprint: planFingerprint } : {}) },
+    ];
+    if (orderedUserIds.length) planSteps.push({ id: "add-project-members", strategy: "update", ...(planFingerprint ? { targetFingerprint: planFingerprint } : {}) });
+    resolvedRates.forEach((_rate, index) => planSteps.push({ id: `set-project-rate-${index}`, strategy: "update", ...(planFingerprint ? { targetFingerprint: planFingerprint } : {}) }));
+
     const result: RiskyPreviewResult = {
       actionLabel: "Set up project",
       targets: [],
@@ -194,10 +235,12 @@ const setupProject = defineRiskyAction({
       reversibility: "Undo removes the new project entirely (with its members and rates); you can also delete it later.",
       warnings: ["This creates a project, changes who can access it, and sets billable rates."],
       payload: payload as unknown as Record<string, unknown>,
+      targetSnapshots,
+      mutationPlan: dynamicMutationPlan(planSteps),
     };
     return result;
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation): Promise<CommitResult> {
     const parsed = setupPayloadSchema.safeParse(payload);
     if (!parsed.success) {
       return errorReceipt({
@@ -208,101 +251,133 @@ const setupProject = defineRiskyAction({
       });
     }
     const p = parsed.data;
-    const del = ctx.clockify.deleteEntity?.bind(ctx.clockify);
-    const undoFor = (entityType: string, id: string): (() => Promise<void>) | undefined =>
-      del ? () => del({ entityType, id }) : undefined;
-    const ids: { projectId?: string } = {};
-    const steps: CompositionStep[] = [];
-
-    // Step 1 — create the project (visibility + DEFAULT rate live in the create body).
-    steps.push({
-      label: "project",
-      required: true,
-      run: async () => {
-        const created = await ctx.clockify.createProject({
-          name: p.name,
-          ...(p.clientId ? { clientId: p.clientId } : {}),
-          ...(p.isPublic !== undefined ? { isPublic: p.isPublic } : {}),
-          ...(p.projectRate
-            ? { [p.projectRate.kind === "cost" ? "costRate" : "hourlyRate"]: { amount: p.projectRate.amountMinor } }
-            : {}),
+    if ((operation.targetSnapshots?.length ?? 0) > 0) {
+      const verified = await verifyTargetSnapshots(
+        operation.targetSnapshots ?? [],
+        (snapshot) => fetchCompositeSnapshot(ctx, snapshot),
+      );
+      if (!verified.ok) {
+        return errorReceipt({
+          action: operation.actionName,
+          code: verified.code,
+          message: "A selected client or member changed before dispatch. No project was created.",
+          recovery: { hint: "Refresh the request and create a new preview.", retryable: true },
         });
-        ids.projectId = created.id;
-        return {
-          kind: "done",
-          created: [{ type: "project", id: created.id, name: created.name }],
-          undo: undoFor("project", created.id),
-        };
+      }
+    }
+    const body = {
+      name: p.name,
+      ...(p.clientId ? { clientId: p.clientId } : {}),
+      ...(p.isPublic !== undefined ? { isPublic: p.isPublic } : {}),
+      ...(p.projectRate
+        ? { [p.projectRate.kind === "cost" ? "costRate" : "hourlyRate"]: { amount: p.projectRate.amountMinor } }
+        : {}),
+    };
+    const before = await ctx.clockify.listProjects({ archived: false });
+    if (before.truncated) {
+      return errorReceipt({ action: operation.actionName, code: "list_truncated", message: "Clockify returned an incomplete project baseline. No project was created." });
+    }
+    let created: { id: string; name: string } | undefined;
+    const createStep = await executeDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "create-project",
+      index: 0,
+      name: "Create project",
+      preparedDetail: { beforeIds: before.rows.map((row) => row.id), body },
+      dispatch: async () => {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.createProjectAtomic(body),
+          reconcile: async () => {
+            const candidate = await reconcileCreate({
+              beforeIds: before.rows.map((row) => row.id),
+              list: () => ctx.clockify.listProjects({ archived: false }),
+              matches: (row) => row.name === p.name,
+            });
+            if (!candidate) return undefined;
+            const state = await ctx.clockify.getProjectMutationState(candidate.id);
+            return state && projectMatchesCreateBody(state, body) ? candidate : undefined;
+          },
+        });
+        created = dispatched.value;
+        return { externalId: dispatched.value.id, effect: { created: { type: "project", id: dispatched.value.id, name: dispatched.value.name } }, detail: { reconciled: dispatched.reconciled } };
       },
     });
+    if (createStep.status === "outcome_unknown") {
+      return errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: "The project create outcome is unknown; no setup steps were sent.", recovery: { hint: "Inspect Clockify for the exact project before retrying.", retryable: false } });
+    }
+    if (createStep.status !== "succeeded" || !created) {
+      return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Clockify rejected the project create; no setup steps were sent." });
+    }
 
-    // Step 2 — add members (the PATCH replaces, so MERGE into the current set).
+    let planIndex = 1;
     if (p.addUserIds.length) {
-      steps.push({
-        label: "members",
-        required: true,
-        run: async () => {
-          if (!canWrite(ctx.policy, "users_groups")) throw new Error("write access to users_groups is disabled");
-          const projectId = ids.projectId as string;
-          const current = await ctx.clockify.getProjectMemberships(projectId);
-          if (current.truncated) {
-            throw new Error("Clockify returned an incomplete membership list; refusing a replacement that could drop members");
-          }
-          const have = new Set(current.rows.map((m) => String(m.userId)));
-          const additions = p.addUserIds.filter((u) => !have.has(u));
-          const memberships = [...current.rows, ...additions.map((userId) => ({ userId }))];
-          await ctx.clockify.updateProjectMemberships(projectId, { memberships });
-          return { kind: "done" };
-        },
-      });
-    }
-
-    // Step 3..N — per-member rates (the member is on the project from step 2).
-    for (const r of p.memberRates) {
-      steps.push({
-        label: `rate:${r.userId}`,
-        required: true,
-        run: async () => {
-          if (!canWrite(ctx.policy, "invoices")) throw new Error("write access to invoices is disabled");
-          await ctx.clockify.updateProjectRate({
-            projectId: ids.projectId as string,
-            userId: r.userId,
-            rateKind: r.kind === "cost" ? "COST" : "HOURLY",
-            amountMinor: r.amountMinor,
+      if (!canWrite(ctx.policy, "users_groups")) return setupProjectPartial(created, "The project was created, but member write access is no longer available.");
+      const memberships = await ctx.clockify.getProjectMemberships(created.id);
+      if (memberships.truncated) return setupProjectPartial(created, "The project was created, but its membership baseline was incomplete; no membership write was sent.");
+      const have = new Set(memberships.rows.map((row) => String(row.userId)));
+      const expectedRows = [...memberships.rows, ...p.addUserIds.filter((id) => !have.has(id)).map((userId) => ({ userId }))];
+      const expectedFingerprint = membershipFingerprint(expectedRows);
+      const memberStep = await executeDurableRiskyStep({
+        ctx, operation, planStepId: "add-project-members", index: planIndex++, name: "Add project members",
+        preparedDetail: { projectId: created.id, memberships: expectedRows },
+        dispatch: async () => {
+          const parents = await verifyTargetSnapshots(
+            operation.targetSnapshots ?? [],
+            (snapshot) => fetchCompositeSnapshot(ctx, snapshot),
+          );
+          if (!parents.ok) throw new DefinitiveWriteFailure("VERIFY", "add-project-members", parents.code);
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: async () => { await ctx.clockify.updateProjectMembershipsAtomic(created!.id, { memberships: expectedRows }); return true as const; },
+            reconcile: async () => {
+              const current = await ctx.clockify.getProjectMemberships(created!.id);
+              return !current.truncated && membershipFingerprint(current.rows) === expectedFingerprint ? true as const : undefined;
+            },
           });
-          return { kind: "done" };
+          return { externalId: created!.id, effect: { membersUpdated: p.addUserIds }, detail: { reconciled: dispatched.reconciled } };
         },
       });
+      if (memberStep.status !== "succeeded") return setupProjectPartial(created, memberStep.status === "outcome_unknown" ? "The project was created, but the membership update outcome is unknown; rate steps were not sent." : "The project was created, but Clockify rejected the membership update; rate steps were not sent.");
     }
 
-    const outcome = await runComposition(steps);
-    if (outcome.status.kind === "failed") {
-      const rolled = outcome.status.rolledBack.length
-        ? ` Rolled back: ${outcome.status.rolledBack.map((e) => `${e.type} ${e.name ?? e.id}`).join(", ")}.`
-        : "";
-      return errorReceipt({
-        action: "clockify_setup_project",
-        code: "setup_failed",
-        message: `Couldn't finish setting up "${p.name}": the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}${rolled}`,
-        recovery: { hint: "Adjust the request and try again.", retryable: true },
+    for (let rateIndex = 0; rateIndex < p.memberRates.length; rateIndex += 1) {
+      const rate = p.memberRates[rateIndex]!;
+      if (!canWrite(ctx.policy, "invoices")) return setupProjectPartial(created, "The project was created, but rate write access is no longer available.");
+      const current = await ctx.clockify.getProjectMemberships(created.id);
+      if (current.truncated) return setupProjectPartial(created, "The project was created, but the member-rate baseline was incomplete; no rate write was sent.");
+      const member = current.rows.find((row) => String(row.userId) === rate.userId);
+      if (!member) return setupProjectPartial(created, `The project was created, but member ${rate.userId} could not be verified; no rate write was sent.`);
+      const key = rate.kind === "cost" ? "costRate" : "hourlyRate";
+      const expectedMember = { ...member, [key]: { amount: rate.amountMinor } };
+      const rateStep = await executeDurableRiskyStep({
+        ctx, operation, planStepId: `set-project-rate-${rateIndex}`, index: planIndex++, name: `Set ${rate.kind} member rate`,
+        preparedDetail: { projectId: created.id, userId: rate.userId, amountMinor: rate.amountMinor, kind: rate.kind, expectedMember },
+        dispatch: async () => {
+          const parents = await verifyTargetSnapshots(
+            operation.targetSnapshots ?? [],
+            (snapshot) => fetchCompositeSnapshot(ctx, snapshot),
+          );
+          if (!parents.ok) throw new DefinitiveWriteFailure("VERIFY", `set-project-rate-${rateIndex}`, parents.code);
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: async () => { await ctx.clockify.updateProjectRateAtomic({ projectId: created!.id, userId: rate.userId, rateKind: rate.kind === "cost" ? "COST" : "HOURLY", amountMinor: rate.amountMinor }); return true as const; },
+            reconcile: async () => {
+              const after = await ctx.clockify.getProjectMemberships(created!.id);
+              if (after.truncated) return undefined;
+              const row = after.rows.find((candidate) => String(candidate.userId) === rate.userId);
+              return row && sanitizedFingerprint(row) === sanitizedFingerprint(expectedMember) ? true as const : undefined;
+            },
+          });
+          return { externalId: created!.id, effect: { rateUpdated: { userId: rate.userId, kind: rate.kind, amountMinor: rate.amountMinor } }, detail: { reconciled: dispatched.reconciled } };
+        },
       });
+      if (rateStep.status !== "succeeded") return setupProjectPartial(created, rateStep.status === "outcome_unknown" ? "The project and earlier setup changes remain, but a member-rate outcome is unknown; later rates were not sent." : "The project and earlier setup changes remain, but Clockify rejected a member rate; later rates were not sent.");
     }
-    if (outcome.status.kind === "stopped") {
-      // No step returns `stop`, so this is unreachable; fail closed rather than
-      // report a half-built setup as success.
-      return errorReceipt({
-        action: "clockify_setup_project",
-        code: "setup_incomplete",
-        message: `Setting up "${p.name}" stopped before completing.`,
-        recovery: { hint: "Try again.", retryable: true },
-      });
-    }
+
     return successReceipt({
       action: "clockify_setup_project",
       entity: "project",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { created: outcome.created },
-      warnings: outcome.warnings.length ? outcome.warnings : undefined,
+      changed: { created: [{ type: "project", id: created.id, name: created.name }] },
     });
   },
   idempotencyKey(payload) {
@@ -324,5 +399,36 @@ const setupProject = defineRiskyAction({
     });
   },
 });
+
+function projectMatchesCreateBody(current: Record<string, unknown>, body: Record<string, unknown>): boolean {
+  for (const [key, expected] of Object.entries(body)) {
+    if (sanitizedFingerprint(current[key]) !== sanitizedFingerprint(expected)) return false;
+  }
+  return true;
+}
+
+function membershipFingerprint(rows: readonly Record<string, unknown>[]): string {
+  return sanitizedFingerprint(
+    rows
+      .map((row) => ({ ...row, userId: String(row.userId) }))
+      .sort((a, b) => String(a.userId).localeCompare(String(b.userId))),
+  );
+}
+
+function setupProjectPartial(
+  created: { id: string; name: string },
+  message: string,
+): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({
+      action: "clockify_setup_project",
+      entity: "project",
+      changed: { created: [{ type: "project", id: created.id, name: created.name }] },
+    }),
+    message,
+    recovery: { hint: "Inspect the retained project before previewing only the unfinished changes.", retryable: false },
+  };
+}
 
 export const SETUP_PROJECT_ACTIONS: ActionDefinition[] = [setupProject];

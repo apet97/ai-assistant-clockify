@@ -393,11 +393,24 @@ export interface HistoryResponse {
   ok?: boolean;
   messages?: HistoryMessage[];
   pendingPreviews?: PreviewResult[];
+  operationRuns?: OperationCardData[];
+}
+
+export interface OperationCardData {
+  id: string;
+  actionName: string;
+  status: "prepared" | "executing" | "succeeded" | "partial" | "definitive_failed" | "outcome_unknown" | "unknown";
+  steps?: Array<{ planStepId: string; name: string; status: string }>;
+  stepsTruncated?: boolean;
+  reconciliation?: { authoritative?: boolean; reason?: string };
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type RestoreItem =
   | { kind: "bubble"; role: "user" | "assistant"; text: string }
-  | { kind: "results"; results: ChatResult[] };
+  | { kind: "results"; results: ChatResult[] }
+  | { kind: "operation"; operation: OperationCardData };
 
 /**
  * Flatten a history response into renderable restore items: a bubble per
@@ -437,6 +450,43 @@ export function historyRestoreItems(history: HistoryResponse | null | undefined)
         return r;
       });
     if (results.length > 0) items.push({ kind: "results", results });
+  }
+  for (const operation of safe.operationRuns ?? []) {
+    if (operation && typeof operation.id === "string" && typeof operation.actionName === "string") {
+      const operationStatuses = new Set(["prepared", "executing", "succeeded", "partial", "definitive_failed", "outcome_unknown"]);
+      const stepStatuses = new Set([
+        "prepared", "executing", "succeeded", "definitive_failed", "outcome_unknown",
+        "compensating", "compensated", "compensation_failed", "skipped",
+      ]);
+      items.push({
+        kind: "operation",
+        operation: {
+          id: operation.id.slice(0, 256),
+          actionName: operation.actionName.slice(0, 256),
+          status: operationStatuses.has(operation.status) ? operation.status : "unknown",
+          steps: (Array.isArray(operation.steps) ? operation.steps : []).slice(0, 50).map((step) => ({
+            planStepId: typeof step?.planStepId === "string" ? step.planStepId.slice(0, 256) : "unknown",
+            name: typeof step?.name === "string" ? step.name.slice(0, 256) : "unknown",
+            status: typeof step?.status === "string" && stepStatuses.has(step.status) ? step.status : "unknown",
+          })),
+          ...(operation.stepsTruncated || (operation.steps?.length ?? 0) > 50 ? { stepsTruncated: true } : {}),
+          ...(operation.reconciliation
+            ? {
+                reconciliation: {
+                  ...(typeof operation.reconciliation.authoritative === "boolean"
+                    ? { authoritative: operation.reconciliation.authoritative }
+                    : {}),
+                  ...(typeof operation.reconciliation.reason === "string"
+                    ? { reason: operation.reconciliation.reason.slice(0, 256) }
+                    : {}),
+                },
+              }
+            : {}),
+          ...(typeof operation.createdAt === "string" ? { createdAt: operation.createdAt } : {}),
+          ...(typeof operation.updatedAt === "string" ? { updatedAt: operation.updatedAt } : {}),
+        },
+      });
+    }
   }
   for (const pending of safe.pendingPreviews ?? []) {
     items.push({ kind: "results", results: [pending] });

@@ -1,10 +1,17 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
-import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type CommitResult, type ConfirmableOperation, type TargetSnapshot } from "../action.js";
 import { nowDate } from "../../durations.js";
-import { listReceipt, successReceipt } from "../receipts.js";
+import { errorReceipt, listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveProjectTaskRefs, resolveRelativeDay } from "./resolve.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { isJournalDegradedStep, withJournalDegradedWarning, type MutationDispatchResult } from "../mutation-workflow.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
+import type { ExpenseCategorySummary, ExpenseSummary, PreparedExpenseUpdateInput } from "../../clockify/ports/expenses.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
@@ -28,6 +35,155 @@ const DATE_CLARIFY = (raw: string) =>
  */
 
 const EXP = "expenses" as const;
+const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
+const expenseCreateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent"] }, strategies: ["create"] });
+const targetContract = (strategies: ["update" | "delete" | "state-command" | "composed", ...Array<"update" | "delete" | "state-command" | "composed">]) =>
+  durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies });
+
+async function expenseTarget(ctx: ActionContext, id: string): Promise<TargetSnapshot | undefined> {
+  const expense = await ctx.clockify.getExpense(id);
+  return expense ? captureTargetSnapshot("target", { type: "expense", id: expense.id, name: expense.name }, expense) : undefined;
+}
+
+async function categoryById(ctx: ActionContext, id: string) {
+  const complete = await listAllCategories(ctx);
+  if (!complete) return undefined;
+  const matches = complete.filter((row) => row.id === id);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+async function listAllCategories(ctx: ActionContext): Promise<ExpenseCategorySummary[] | undefined> {
+  const [active, archived] = await Promise.all([
+    ctx.clockify.listExpenseCategories({ archived: false }),
+    ctx.clockify.listExpenseCategories({ archived: true }),
+  ]);
+  if (active.truncated || archived.truncated) return undefined;
+  return [...new Map([...active.rows, ...archived.rows].map((row) => [row.id, row])).values()];
+}
+
+async function categoryTarget(ctx: ActionContext, id: string): Promise<TargetSnapshot | undefined> {
+  const category = await categoryById(ctx, id);
+  return category ? captureTargetSnapshot("target", { type: "expense_category", id: category.id, name: category.name }, category) : undefined;
+}
+
+function staleExpenseFetch(ctx: ActionContext, snapshot: TargetSnapshot) {
+  return ctx.clockify.getExpense(snapshot.ref.id).then((row) => row
+    ? { ref: { type: "expense", id: row.id, name: row.name }, projection: row, truncated: false }
+    : undefined);
+}
+
+function staleCategoryFetch(ctx: ActionContext, snapshot: TargetSnapshot) {
+  return categoryById(ctx, snapshot.ref.id).then((row) => row
+    ? { ref: { type: "expense_category", id: row.id, name: row.name }, projection: row, truncated: false }
+    : undefined);
+}
+
+async function expenseParentSnapshots(ctx: ActionContext, input: {
+  categoryId?: string;
+  userId?: string;
+  projectId?: string;
+  taskId?: string;
+}): Promise<TargetSnapshot[] | undefined> {
+  if (!input.categoryId || !input.userId) return undefined;
+  const category = await categoryById(ctx, input.categoryId);
+  const users = await ctx.clockify.listUsers();
+  if (!category || users.truncated) return undefined;
+  const ownerMatches = users.rows.filter((row) => row.id === input.userId);
+  let ownerProjection: { id: string; name?: string; role?: string } | undefined = ownerMatches.length === 1 ? ownerMatches[0] : undefined;
+  if (!ownerProjection && input.userId === ctx.adminUserId) {
+    const role = await ctx.clockify.getWorkspaceMemberRole(input.userId);
+    if (role) ownerProjection = { id: input.userId, role };
+  }
+  if (!ownerProjection) return undefined;
+  const snapshots: TargetSnapshot[] = [
+    captureTargetSnapshot("parent", { type: "expense_category", id: category.id, name: category.name }, category),
+    captureTargetSnapshot("parent", { type: "user", id: ownerProjection.id, ...(ownerProjection.name ? { name: ownerProjection.name } : {}) }, ownerProjection),
+  ];
+  if (input.projectId) {
+    const project = await ctx.clockify.getProject(input.projectId);
+    if (!project) return undefined;
+    snapshots.push(captureTargetSnapshot("parent", { type: "project", id: project.id, name: project.name }, project));
+    if (input.taskId) {
+      const task = await ctx.clockify.getTask(input.projectId, input.taskId);
+      if (!task) return undefined;
+      snapshots.push(captureTargetSnapshot("parent", { type: "task", id: task.id, name: task.name, projectId: input.projectId }, task));
+    }
+  } else if (input.taskId) {
+    return undefined;
+  }
+  return snapshots;
+}
+
+async function fetchExpenseSnapshot(ctx: ActionContext, snapshot: TargetSnapshot) {
+  if (snapshot.ref.type === "expense") return staleExpenseFetch(ctx, snapshot);
+  if (snapshot.ref.type === "expense_category") return staleCategoryFetch(ctx, snapshot);
+  if (snapshot.ref.type === "user") {
+    const users = await ctx.clockify.listUsers();
+    if (users.truncated) return { ref: snapshot.ref, truncated: true };
+    const matches = users.rows.filter((row) => row.id === snapshot.ref.id);
+    const row = matches.length === 1 ? matches[0] : undefined;
+    if (row) return { ref: { type: "user", id: row.id, name: row.name }, projection: row, truncated: false };
+    const projection = snapshot.projection as { role?: unknown };
+    if (typeof projection.role === "string" && snapshot.ref.id === ctx.adminUserId) {
+      const role = await ctx.clockify.getWorkspaceMemberRole(snapshot.ref.id);
+      return role ? { ref: { type: "user", id: snapshot.ref.id }, projection: { id: snapshot.ref.id, role }, truncated: false } : undefined;
+    }
+    return undefined;
+  }
+  if (snapshot.ref.type === "project") {
+    const row = await ctx.clockify.getProject(snapshot.ref.id);
+    return row ? { ref: { type: "project", id: row.id, name: row.name }, projection: row, truncated: false } : undefined;
+  }
+  if (snapshot.ref.type === "task" && snapshot.ref.projectId) {
+    const row = await ctx.clockify.getTask(snapshot.ref.projectId, snapshot.ref.id);
+    return row ? { ref: { type: "task", id: row.id, name: row.name, projectId: snapshot.ref.projectId }, projection: row, truncated: false } : undefined;
+  }
+  return undefined;
+}
+
+async function executeVerifiedCategoryStep(input: {
+  ctx: ActionContext;
+  operation: ConfirmableOperation;
+  planStepId: string;
+  index: number;
+  name: string;
+  snapshot: TargetSnapshot;
+  dispatch(): Promise<MutationDispatchResult>;
+}) {
+  let verificationFailure: "stale_target" | "stale_parent" | undefined;
+  const step = await executeDurableRiskyStep({
+    ctx: input.ctx,
+    operation: input.operation,
+    planStepId: input.planStepId,
+    index: input.index,
+    name: input.name,
+    preparedDetail: { targetSnapshots: [input.snapshot] },
+    dispatch: async () => {
+      const verified = await verifyTargetSnapshots([input.snapshot], (snapshot) => staleCategoryFetch(input.ctx, snapshot));
+      if (!verified.ok) {
+        verificationFailure = verified.code;
+        throw new DefinitiveWriteFailure("VERIFY", input.planStepId, verified.code);
+      }
+      return input.dispatch();
+    },
+  });
+  return { step, verificationFailure };
+}
+
+function expectedCategorySnapshot(snapshot: TargetSnapshot, patch: { name?: string; archived?: boolean }): TargetSnapshot {
+  const projection = { ...(snapshot.projection as Record<string, unknown>), ...patch };
+  const currentName = typeof projection.name === "string" ? projection.name : snapshot.ref.name;
+  return captureTargetSnapshot("target", { ...snapshot.ref, ...(currentName ? { name: currentName } : {}) }, projection);
+}
+
+function partialReceipt(ctx: ActionContext, action: string, id: string, message: string): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({ action, entity: "expense_category", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "expense_category", id }] } }),
+    message,
+    recovery: { hint: "Refresh the category and preview only the remaining change.", retryable: false },
+  };
+}
 
 /** Fields stored in the create payload (`userId` = the resolved expense owner). */
 interface StoredExpense {
@@ -39,6 +195,21 @@ interface StoredExpense {
   billable?: boolean;
   projectId?: string;
   taskId?: string;
+}
+
+function sameExpense(row: ExpenseSummary, input: StoredExpense | PreparedExpenseUpdateInput | Record<string, unknown>): boolean {
+  const expected = input as StoredExpense & { amount?: string; quantity?: number };
+  const expectedTotal = expected.amount !== undefined
+    ? Number(expected.amount) * 100 * (expected.quantity ?? 1)
+    : expected.amountMinor;
+  if (expectedTotal !== undefined && row.total !== expectedTotal) return false;
+  if (expected.date !== undefined && row.date?.slice(0, 10) !== expected.date.slice(0, 10)) return false;
+  if (expected.categoryId !== undefined && row.categoryId !== expected.categoryId) return false;
+  if (expected.userId !== undefined && row.userId !== expected.userId) return false;
+  for (const key of ["notes", "billable", "projectId", "taskId"] as const) {
+    if (Object.hasOwn(expected, key) && row[key] !== expected[key]) return false;
+  }
+  return true;
 }
 
 const listExpenses = defineAction({
@@ -118,6 +289,8 @@ const createExpense = defineRiskyAction({
     "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Link a project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — also resolved server-side. Defaults to YOUR expense; to log it for another user pass their `userId` or exact `userName` (or 'me' for yourself). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
+  mutationWorkflow: "durable",
+  mutationContract: expenseCreateContract,
   schema: z
     .object({
       amount: zNumberLike(z.number().positive()),
@@ -192,6 +365,10 @@ const createExpense = defineRiskyAction({
       ...(refs.projectId !== undefined ? { projectId: refs.projectId } : {}),
       ...(refs.taskId !== undefined ? { taskId: refs.taskId } : {}),
     };
+    const parentSnapshots = await expenseParentSnapshots(ctx, input);
+    if (!parentSnapshots) return { clarify: "The expense category, owner, project, or task could not be verified completely." };
+    const baseline = await ctx.clockify.listExpenses();
+    if (baseline.truncated) return { clarify: "Clockify returned an incomplete expense baseline. Narrow the workspace data before creating this expense." };
     const onProject = refs.projectId
       ? ` on project "${refs.projectName ?? refs.projectId}"${refs.taskId ? ` (task "${refs.taskName ?? refs.taskId}")` : ""}`
       : "";
@@ -204,18 +381,74 @@ const createExpense = defineRiskyAction({
       reversibility: "You can edit or delete the expense afterward.",
       warnings: ["This creates an expense record."],
       payload: { input },
+      targetSnapshots: parentSnapshots,
+      mutationPlan: { mode: "single", steps: [{ id: "create-expense", kind: "primary", targetFingerprint: parentSnapshots[0]!.fingerprint, reconciliationStrategy: "create" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { input } = payload as { input: StoredExpense };
+    let baselineIds: string[];
+    try {
+      const baseline = await ctx.clockify.listExpenses();
+      if (baseline.truncated) {
+        return errorReceipt({
+          action: operation.actionName,
+          code: "create_baseline_unavailable",
+          message: "Clockify returned an incomplete expense list immediately before dispatch. No expense was created.",
+          recovery: { hint: "Refresh and preview the expense again when the complete list is available.", retryable: true },
+        });
+      }
+      baselineIds = baseline.rows.map((row) => row.id);
+    } catch {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "create_baseline_unavailable",
+        message: "The expense list could not be read immediately before dispatch. No expense was created.",
+        recovery: { hint: "Refresh and preview the expense again after Clockify reads recover.", retryable: true },
+      });
+    }
     // The owner was resolved at preview (defaults to the admin); the model never
     // sets it directly on the wire.
-    const expense = await ctx.clockify.createExpense(input);
-    return successReceipt({
-      action: "clockify_expenses_create",
-      entity: "expense",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "expense", id: expense.id, name: expense.name }] },
+    let verificationFailure: "stale_target" | "stale_parent" | undefined;
+    const snapshots = operation.targetSnapshots ?? [];
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "create-expense", index: 0, name: "Create expense",
+      preparedDetail: { preDispatch: { strategy: "expense_create_baseline", ids: baselineIds, truncated: false } },
+      dispatch: async () => {
+        const verified = await verifyTargetSnapshots(snapshots, (snapshot) => fetchExpenseSnapshot(ctx, snapshot));
+        if (!verified.ok) {
+          verificationFailure = verified.code;
+          throw new DefinitiveWriteFailure("VERIFY", "create-expense", verified.code);
+        }
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.createExpenseAtomic(input),
+          reconcile: () => reconcileCreate({ beforeIds: baselineIds, list: () => ctx.clockify.listExpenses(), matches: (row) => sameExpense(row, input) }),
+        });
+        const expense = result.value;
+        return { externalId: expense.id, effect: { created: { type: "expense", id: expense.id, name: expense.name } }, detail: { reconciled: result.reconciled } };
+      },
+    });
+    if (verificationFailure) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: verificationFailure,
+        message: "An expense parent changed or could not be verified. No Clockify mutation was sent.",
+        recovery: { hint: "Refresh the expense parents and create a fresh preview.", retryable: true },
+      });
+    }
+    if (step.status === "succeeded") {
+      const receipt = successReceipt({ action: "clockify_expenses_create", entity: "expense", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "expense", id: step.externalId ?? "unknown", name: input.notes }] } });
+      return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;
+    }
+    return errorReceipt({
+      action: operation.actionName,
+      code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+      message: step.status === "outcome_unknown"
+        ? "Clockify did not provide a definitive response, so the expense may or may not have been created."
+        : "Clockify definitively rejected expense creation.",
+      recovery: step.status === "outcome_unknown"
+        ? { hint: "Verify the exact expense in Clockify before deciding whether to try again.", retryable: false }
+        : { hint: "Correct the expense details and preview again.", retryable: true },
     });
   },
 });
@@ -226,6 +459,8 @@ const updateExpense = defineRiskyAction({
     "Update an expense. Category/project/task accept an id or the exact name (`categoryName`/`projectName`/`taskName`) — resolved server-side. Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target", "parent"] }, strategies: ["update"] }),
   schema: z
     .object({
       id: z.string().min(1),
@@ -259,6 +494,8 @@ const updateExpense = defineRiskyAction({
       { message: "Provide at least one field to change." },
     ),
   async preview(ctx, args) {
+    const target = await expenseTarget(ctx, args.id);
+    if (!target) return { clarify: `Expense ${args.id} could not be verified.` };
     const date = args.date !== undefined ? resolveDate(ctx, args.date) : undefined;
     if (args.date !== undefined && date === undefined) return { clarify: DATE_CLARIFY(args.date) };
     // Resolve symbolic refs (a name in either slot) to verified ids — an
@@ -300,31 +537,42 @@ const updateExpense = defineRiskyAction({
     if (refs.taskId !== undefined) display.push(["TASK", refs.taskName ?? refs.taskId]);
     const changeFields = display.map(([token]) => token);
     const changeValues: Record<string, unknown> = Object.fromEntries(display);
+    let updateBody: Awaited<ReturnType<typeof ctx.clockify.prepareExpenseUpdate>>;
+    try {
+      updateBody = await ctx.clockify.prepareExpenseUpdate(args.id, { changeFields, ...values, userId: ctx.adminUserId });
+    } catch {
+      return { clarify: "The current expense could not be prepared safely. Refresh it and preview again." };
+    }
+    const parentSnapshots = await expenseParentSnapshots(ctx, updateBody);
+    if (!parentSnapshots) return { clarify: "The expense category, owner, project, or task could not be verified completely." };
     return {
       actionLabel: "Update expense",
       targets: [{ type: "expense", id: args.id }],
       expectedChanges: describePatch(changeValues),
       reversibility: "You can update the expense again to revert most fields.",
       warnings: ["Updating an expense changes an expense record."],
-      payload: { id: args.id, changeFields, values },
+      payload: { id: args.id, changeFields, values, updateBody },
+      targetSnapshots: [target, ...parentSnapshots],
+      mutationPlan: { mode: "single", steps: [{ id: "update-expense", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { id, changeFields, values } = payload as {
+  async commit(ctx, payload, operation) {
+    const { id, updateBody } = payload as {
       id: string;
-      changeFields: string[];
-      values: Record<string, unknown>;
+      updateBody: Awaited<ReturnType<typeof ctx.clockify.prepareExpenseUpdate>>;
     };
-    const updated = await ctx.clockify.updateExpense(id, {
-      changeFields,
-      ...values,
-      userId: ctx.adminUserId, // fallback owner if the existing expense lacks one
-    });
-    return successReceipt({
-      action: "clockify_expenses_update",
-      entity: "expense",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "expense", id: updated.id, name: updated.name }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-expense", name: "Update expense",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => fetchExpenseSnapshot(ctx, snapshot) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.updateExpenseAtomic(id, updateBody),
+          reconcile: async () => { const row = await ctx.clockify.getExpense(id); return row && sameExpense(row, updateBody) ? row : undefined; },
+        });
+        const updated = result.value;
+        return { externalId: updated.id, effect: { updated: { type: "expense", id: updated.id, name: updated.name } }, detail: { reconciled: result.reconciled } };
+      },
+      success: (step) => successReceipt({ action: "clockify_expenses_update", entity: "expense", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "expense", id: step.externalId ?? id }] } }),
     });
   },
 });
@@ -334,25 +582,33 @@ const deleteExpense = defineRiskyAction({
   description: "Delete an expense. Destructive billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["destructive", "billing"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["delete"]),
   schema: z.object({ id: z.string().min(1), notes: z.string().optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const target = await expenseTarget(ctx, args.id);
+    if (!target) return { clarify: `Expense ${args.id} could not be verified.` };
     return {
       actionLabel: "Delete expense",
-      targets: [{ type: "expense", id: args.id, name: args.notes }],
+      targets: [{ type: "expense", id: args.id, ...(args.notes !== undefined ? { name: args.notes } : {}) }],
       expectedChanges: [`Delete expense ${args.notes ?? args.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an expense is permanent."],
-      payload: { id: args.id, notes: args.notes },
+      payload: { id: args.id, ...(args.notes !== undefined ? { notes: args.notes } : {}) },
+      targetSnapshots: [target],
+      mutationPlan: { mode: "single", steps: [{ id: "delete-expense", kind: "primary", targetFingerprint: target.fingerprint, reconciliationStrategy: "delete" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, notes } = payload as { id: string; notes?: string };
-    await ctx.clockify.deleteExpense(id);
-    return successReceipt({
-      action: "clockify_expenses_delete",
-      entity: "expense",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "expense", id, name: notes }] },
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "delete-expense", name: "Delete expense",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (snapshot) => staleExpenseFetch(ctx, snapshot) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.deleteExpenseAtomic(id); return true as const; }, reconcile: () => reconcileDelete(() => ctx.clockify.getExpense(id)) });
+        return { effect: { deleted: { type: "expense", id, name: notes } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_expenses_delete", entity: "expense", ids: { workspaceId: ctx.workspaceId }, changed: { deleted: [{ type: "expense", id, name: notes }] } }),
     });
   },
 });
@@ -362,8 +618,12 @@ const createExpenseCategory = defineRiskyAction({
   description: "Create an expense category. Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
+  mutationWorkflow: "durable",
+  mutationContract: createContract,
   schema: z.object({ name: z.string().min(1) }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const baseline = await listAllCategories(ctx);
+    if (!baseline) return { clarify: "Clockify returned an incomplete expense-category baseline. Retry after it can be read completely." };
     return {
       actionLabel: "Create expense category",
       targets: [],
@@ -371,16 +631,53 @@ const createExpenseCategory = defineRiskyAction({
       reversibility: "You can rename or delete the category afterward.",
       warnings: ["This adds an expense category to the workspace."],
       payload: { name: args.name },
+      mutationPlan: { mode: "single", steps: [{ id: "create-expense-category", kind: "primary", reconciliationStrategy: "create" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { name } = payload as { name: string };
-    const category = await ctx.clockify.createExpenseCategory({ name });
-    return successReceipt({
-      action: "clockify_expenses_categories_create",
-      entity: "expense_category",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { created: [{ type: "expense_category", id: category.id, name: category.name }] },
+    let baselineIds: string[];
+    try {
+      const baseline = await listAllCategories(ctx);
+      if (!baseline) throw new Error("incomplete_category_baseline");
+      baselineIds = baseline.map((row) => row.id);
+    } catch {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "create_baseline_unavailable",
+        message: "The complete expense-category list could not be read immediately before dispatch. No category was created.",
+        recovery: { hint: "Refresh and preview the category again after Clockify reads recover.", retryable: true },
+      });
+    }
+    const step = await executeDurableRiskyStep({
+      ctx, operation, planStepId: "create-expense-category", index: 0, name: "Create expense category",
+      preparedDetail: { preDispatch: { strategy: "expense_category_create_baseline", ids: baselineIds, truncated: false } },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.createExpenseCategoryAtomic({ name }),
+          reconcile: async () => {
+            const rows = await listAllCategories(ctx);
+            if (!rows) return undefined;
+            return reconcileCreate({ beforeIds: baselineIds, list: async () => ({ rows, truncated: false }), matches: (row) => row.name === name });
+          },
+        });
+        const category = result.value;
+        return { externalId: category.id, effect: { created: { type: "expense_category", id: category.id, name: category.name } }, detail: { reconciled: result.reconciled } };
+      },
+    });
+    if (step.status === "succeeded") {
+      const receipt = successReceipt({ action: "clockify_expenses_categories_create", entity: "expense_category", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "expense_category", id: step.externalId ?? "unknown", name }] } });
+      return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;
+    }
+    return errorReceipt({
+      action: operation.actionName,
+      code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+      message: step.status === "outcome_unknown"
+        ? "Clockify did not provide a definitive response, so the category may or may not have been created."
+        : "Clockify definitively rejected expense-category creation.",
+      recovery: step.status === "outcome_unknown"
+        ? { hint: "Verify the exact category in Clockify before deciding whether to try again.", retryable: false }
+        : { hint: "Correct the category details and preview again.", retryable: true },
     });
   },
 });
@@ -391,6 +688,8 @@ const updateExpenseCategory = defineRiskyAction({
     "Rename and/or archive/unarchive an expense category. Pass the category `id` or its exact `currentName` (the harness resolves it); `name` sets a new name, `archived` archives (true) or restores (false). Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["update", "state-command"]),
   schema: z
     .object({
       id: z.string().min(1).optional(),
@@ -419,6 +718,8 @@ const updateExpenseCategory = defineRiskyAction({
       },
     );
     if (!resolved.ok) return resolved.clarify;
+    const target = await categoryTarget(ctx, resolved.id);
+    if (!target) return { clarify: `Expense category ${resolved.id} could not be verified completely.` };
     const changes = [
       ...(args.name !== undefined ? [`Rename expense category to "${args.name}"`] : []),
       ...(args.archived !== undefined
@@ -431,19 +732,52 @@ const updateExpenseCategory = defineRiskyAction({
       expectedChanges: changes,
       reversibility: "You can update the category again to revert.",
       warnings: ["This changes a workspace expense category."],
-      payload: { id: resolved.id, name: args.name, archived: args.archived },
+      payload: {
+        id: resolved.id,
+        ...(args.name !== undefined ? { name: args.name } : {}),
+        ...(args.archived !== undefined ? { archived: args.archived } : {}),
+      },
+      targetSnapshots: [target],
+      mutationPlan: {
+        mode: args.name !== undefined && args.archived !== undefined ? "curated" : "single",
+        steps: [
+          ...(args.name !== undefined ? [{ id: "rename-expense-category", kind: "primary" as const, targetFingerprint: target.fingerprint, reconciliationStrategy: "update" as const }] : []),
+          ...(args.archived !== undefined ? [{ id: "set-expense-category-status", kind: "primary" as const, reconciliationStrategy: "state-command" as const }] : []),
+        ],
+      },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, name, archived } = payload as { id: string; name?: string; archived?: boolean };
-    let summary: { id: string; name?: string } = { id };
-    if (name !== undefined) summary = await ctx.clockify.updateExpenseCategory(id, { name });
-    if (archived !== undefined) await ctx.clockify.setExpenseCategoryArchived(id, archived);
+    const initial = operation.targetSnapshots?.[0];
+    if (!initial) return errorReceipt({ action: operation.actionName, code: "stale_target", message: "The category target is missing. Create a fresh preview." });
+    let completed = 0;
+    if (name !== undefined) {
+      const executed = await executeVerifiedCategoryStep({ ctx, operation, planStepId: "rename-expense-category", index: 0, name: "Rename expense category", snapshot: initial, dispatch: async () => {
+        const result = await dispatchWithReconciliation({ dispatch: () => ctx.clockify.updateExpenseCategoryAtomic(id, { name }), reconcile: async () => { const row = await categoryById(ctx, id); return row?.name === name ? row : undefined; } });
+        return { externalId: result.value.id, effect: { renamed: { id, name } }, detail: { reconciled: result.reconciled } };
+      } });
+      if (executed.verificationFailure) return errorReceipt({ action: operation.actionName, code: executed.verificationFailure, message: "The category changed before the rename step.", recovery: { hint: "Preview the category update again." } });
+      const step = executed.step;
+      if (step.status === "outcome_unknown") return errorReceipt({ action: operation.actionName, code: "commit_outcome_unknown", message: "The category rename may or may not have applied.", recovery: { hint: "Verify the category in Clockify before retrying.", retryable: false } });
+      if (step.status === "definitive_failed") return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Clockify rejected the category rename." });
+      completed += 1;
+    }
+    if (archived !== undefined) {
+      const expected = expectedCategorySnapshot(initial, { ...(name !== undefined ? { name } : {}) });
+      const executed = await executeVerifiedCategoryStep({ ctx, operation, planStepId: "set-expense-category-status", index: completed, name: "Set expense category status", snapshot: expected, dispatch: async () => {
+        const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.setExpenseCategoryArchivedAtomic(id, archived); return true as const; }, reconcile: async () => (await categoryById(ctx, id))?.archived === archived ? true as const : undefined });
+        return { effect: { archived }, detail: { reconciled: result.reconciled } };
+      } });
+      if (executed.verificationFailure) return completed ? partialReceipt(ctx, operation.actionName, id, "The category was renamed, but changed again before the status step.") : errorReceipt({ action: operation.actionName, code: executed.verificationFailure, message: "The category changed before dispatch." });
+      const step = executed.step;
+      if (step.status !== "succeeded") return completed ? partialReceipt(ctx, operation.actionName, id, "The category rename applied, but the status change did not complete.") : errorReceipt({ action: operation.actionName, code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed", message: "The category status change did not complete.", recovery: { hint: "Refresh the category before retrying.", retryable: step.status !== "outcome_unknown" } });
+    }
     return successReceipt({
       action: "clockify_expenses_categories_update",
       entity: "expense_category",
       ids: { workspaceId: ctx.workspaceId },
-      changed: { updated: [{ type: "expense_category", id: summary.id, name: summary.name ?? name }] },
+      changed: { updated: [{ type: "expense_category", id, name }] },
     });
   },
 });
@@ -454,6 +788,8 @@ const deleteExpenseCategory = defineRiskyAction({
     "Delete an expense category. Pass the category id, or its exact `name` and the harness resolves it. Destructive billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["destructive", "billing"],
+  mutationWorkflow: "durable",
+  mutationContract: targetContract(["state-command", "delete"]),
   schema: z
     .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
     .refine((v) => v.id !== undefined || v.name !== undefined, {
@@ -470,19 +806,49 @@ const deleteExpenseCategory = defineRiskyAction({
       includeArchived: true,
     });
     if (!resolved.ok) return resolved.clarify;
+    const target = await categoryTarget(ctx, resolved.id);
+    if (!target) return { clarify: `Expense category ${resolved.id} could not be verified completely.` };
+    const current = target.projection as { archived?: boolean };
     const name = resolved.name ?? args.name;
     return {
       actionLabel: "Delete expense category",
-      targets: [{ type: "expense_category", id: resolved.id, name }],
+      targets: [{ type: "expense_category", id: resolved.id, ...(name !== undefined ? { name } : {}) }],
       expectedChanges: [`Delete expense category ${name ?? resolved.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an expense category is permanent."],
-      payload: { id: resolved.id, name },
+      targetSnapshots: [target],
+      mutationPlan: {
+        mode: current.archived ? "single" : "curated",
+        steps: [
+          ...(!current.archived ? [{ id: "archive-expense-category", kind: "primary" as const, targetFingerprint: target.fingerprint, reconciliationStrategy: "state-command" as const }] : []),
+          { id: "delete-expense-category", kind: "primary" as const, reconciliationStrategy: "delete" as const },
+        ],
+      },
+      payload: { id: resolved.id, ...(name !== undefined ? { name } : {}), wasArchived: current.archived === true },
     };
   },
-  async commit(ctx, payload) {
-    const { id, name } = payload as { id: string; name?: string };
-    await ctx.clockify.deleteExpenseCategory(id);
+  async commit(ctx, payload, operation) {
+    const { id, name, wasArchived } = payload as { id: string; name?: string; wasArchived: boolean };
+    const initial = operation.targetSnapshots?.[0];
+    if (!initial) return errorReceipt({ action: operation.actionName, code: "stale_target", message: "The category target is missing. Create a fresh preview." });
+    let index = 0;
+    if (!wasArchived) {
+      const executed = await executeVerifiedCategoryStep({ ctx, operation, planStepId: "archive-expense-category", index: index++, name: "Archive expense category", snapshot: initial, dispatch: async () => {
+        const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.setExpenseCategoryArchivedAtomic(id, true); return true as const; }, reconcile: async () => (await categoryById(ctx, id))?.archived === true ? true as const : undefined });
+        return { effect: { archived: true }, detail: { reconciled: result.reconciled } };
+      } });
+      if (executed.verificationFailure) return errorReceipt({ action: operation.actionName, code: executed.verificationFailure, message: "The category changed before the archive step." });
+      const archive = executed.step;
+      if (archive.status !== "succeeded") return errorReceipt({ action: operation.actionName, code: archive.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed", message: "The category archive did not complete.", recovery: { hint: "Refresh the category before retrying.", retryable: archive.status !== "outcome_unknown" } });
+    }
+    const expected = wasArchived ? initial : expectedCategorySnapshot(initial, { archived: true });
+    const executedDelete = await executeVerifiedCategoryStep({ ctx, operation, planStepId: "delete-expense-category", index, name: "Delete expense category", snapshot: expected, dispatch: async () => {
+      const result = await dispatchWithReconciliation({ dispatch: async () => { await ctx.clockify.deleteExpenseCategoryAtomic(id); return true as const; }, reconcile: async () => { const rows = await listAllCategories(ctx); return rows && !rows.some((row) => row.id === id) ? true as const : undefined; } });
+      return { effect: { deleted: { type: "expense_category", id } }, detail: { reconciled: result.reconciled } };
+    } });
+    if (executedDelete.verificationFailure) return !wasArchived ? partialReceipt(ctx, operation.actionName, id, "The category was archived, but could not be verified before deletion.") : errorReceipt({ action: operation.actionName, code: executedDelete.verificationFailure, message: "The archived category could not be verified." });
+    const del = executedDelete.step;
+    if (del.status !== "succeeded") return !wasArchived ? partialReceipt(ctx, operation.actionName, id, "The category was archived, but deletion did not complete.") : errorReceipt({ action: operation.actionName, code: del.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed", message: "The category deletion did not complete.", recovery: { hint: "Verify whether the category still exists before retrying.", retryable: del.status !== "outcome_unknown" } });
     return successReceipt({
       action: "clockify_expenses_categories_delete",
       entity: "expense_category",

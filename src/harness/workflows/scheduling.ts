@@ -7,10 +7,19 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type TargetSnapshot,
 } from "../action.js";
+import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { listReceipt, successReceipt } from "../receipts.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import { sanitizeCompleteJson, sanitizedFingerprint } from "../safe-json.js";
 import { describePatch, resolveDateRange, resolveEntityRef, resolveUserFilter, resolveUserRef } from "./resolve.js";
+import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { nowDate } from "../../durations.js";
+import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import type { AssignmentSummary, CreateAssignmentInput } from "../../clockify/ports/scheduling.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -22,6 +31,53 @@ import { nowDate } from "../../durations.js";
 
 const SCHED = "scheduling" as const;
 const seriesOption = z.enum(["ONLY_THIS", "ALL", "THIS_AND_FOLLOWING"]);
+
+const schedulingTargetContract = (strategy: "update" | "delete" | "state-command") => durableMutationContract({
+  source: "confirmed",
+  targeting: { mode: "snapshots", relations: ["target"] },
+  strategies: [strategy],
+});
+
+function assignmentProjection(assignment: Awaited<ReturnType<ActionContext["clockify"]["getAssignment"]>>) {
+  if (!assignment) return undefined;
+  return {
+    id: assignment.id,
+    userId: assignment.userId,
+    projectId: assignment.projectId,
+    start: assignment.start,
+    end: assignment.end,
+    hoursPerDay: assignment.hoursPerDay,
+    startTime: assignment.startTime,
+    note: assignment.note,
+    published: assignment.published,
+  };
+}
+
+function assignmentCreateProjection(input: CreateAssignmentInput) {
+  return {
+    userId: input.userId,
+    projectId: input.projectId,
+    start: input.start,
+    end: input.end,
+    hoursPerDay: input.hoursPerDay,
+    ...(input.startTime !== undefined ? { startTime: input.startTime } : {}),
+    ...(input.note !== undefined ? { note: input.note } : {}),
+    published: false,
+  };
+}
+
+function createdAssignmentProjection(assignment: AssignmentSummary) {
+  return {
+    userId: assignment.userId,
+    projectId: assignment.projectId,
+    start: assignment.start,
+    end: assignment.end,
+    hoursPerDay: assignment.hoursPerDay,
+    ...(assignment.startTime !== undefined ? { startTime: assignment.startTime } : {}),
+    ...(assignment.note !== undefined ? { note: assignment.note } : {}),
+    published: assignment.published ?? false,
+  };
+}
 
 /**
  * Every scheduling start/end is a `yyyy-MM-ddThh:mm:ssZ` instant on the wire
@@ -91,12 +147,17 @@ const getAssignment = defineReadAction({
   },
 });
 
-const createAssignment = defineAction({
+const createAssignment = defineDurableSafeWriteAction({
   name: "clockify_scheduling_assignments_create",
   description:
     "Create a scheduling assignment (draft) for ONE user (Clockify scheduling is per-user — there is no group assignment). Pass `userId` and `projectId` as ids or exact names (or 'me' for the user) — resolved server-side, clarifies on an unknown one. `start`/`end` accept YYYY-MM-DD or a relative day (today/next monday…). Safe write — executes immediately when policy allows.",
-  featureGroup: SCHED,
-  risks: ["safe_write"],
+  group: SCHED,
+  stepName: "Create scheduling assignment",
+  mutationContract: durableMutationContract({
+    source: "safe",
+    targeting: { mode: "snapshots", relations: ["parent", "parent"] },
+    strategies: ["create"],
+  }),
   schema: z.object({
     userId: z.string().min(1),
     projectId: z.string().min(1),
@@ -105,21 +166,148 @@ const createAssignment = defineAction({
     hoursPerDay: zNumberLike(z.number().min(0.5).max(24)),
     note: z.string().optional(),
   }),
-  async handler(ctx, args) {
+  async prepare(ctx, args) {
     const window = resolveSchedulingWindow(ctx, args);
-    if (!window.ok) return { kind: "clarify", message: window.message };
+    if (!window.ok) return { kind: "clarify" as const, clarify: window.message };
     const user = await resolveUserRef({ id: args.userId }, { verb: "schedule", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() });
-    if (!user.ok) return clarifyResult(user.clarify);
-    const project = await resolveEntityRef({ id: args.projectId }, { noun: "project", verb: "schedule on", list: (f) => ctx.clockify.listProjects(f) });
-    if (!project.ok) return clarifyResult(project.clarify);
-    const assignment = await ctx.clockify.createAssignment({
+    if (!user.ok) {
+      return {
+        kind: "clarify" as const,
+        clarify: user.clarify.clarify,
+        ...(user.clarify.options ? { options: user.clarify.options } : {}),
+      };
+    }
+    const project = await resolveEntityRef(
+      { id: args.projectId },
+      { noun: "project", verb: "schedule on", list: (f) => ctx.clockify.listProjects(f), verifyId: true },
+    );
+    if (!project.ok) {
+      return {
+        kind: "clarify" as const,
+        clarify: project.clarify.clarify,
+        ...(project.clarify.options ? { options: project.clarify.options } : {}),
+      };
+    }
+
+    const users = await ctx.clockify.listUsers();
+    if (users.truncated) {
+      return { kind: "clarify" as const, clarify: "Clockify returned an incomplete user list. Retry after the assignment's user can be verified completely." };
+    }
+    const userRow = users.rows.find((candidate) => candidate.id === user.userId);
+    if (!userRow) {
+      return { kind: "clarify" as const, clarify: `I couldn't verify workspace user ${user.userId}. Give me a current user id or exact name.` };
+    }
+    const projectRow = await ctx.clockify.getProject(project.id);
+    if (!projectRow) {
+      return { kind: "clarify" as const, clarify: `I couldn't verify project ${project.id}. Give me a current project id or exact name.` };
+    }
+
+    const input: CreateAssignmentInput = {
       ...args,
       userId: user.userId,
       projectId: project.id,
       start: window.start as string,
       end: window.end as string,
+    };
+    const filter = {
+      userId: input.userId,
+      projectId: input.projectId,
+      start: input.start,
+      end: input.end,
+    };
+    const baseline = await ctx.clockify.listAssignments(filter);
+    if (baseline.truncated) {
+      return { kind: "clarify" as const, clarify: "Clockify returned an incomplete scheduling baseline. Retry after the assignment range can be read completely." };
+    }
+    const baselineIds = baseline.rows.map((row) => row.id).sort();
+    const targetSnapshots = [
+      captureTargetSnapshot("parent", { type: "user", id: userRow.id, name: userRow.name }, userRow),
+      captureTargetSnapshot("parent", { type: "project", id: projectRow.id, name: projectRow.name }, projectRow),
+    ];
+    const finalFingerprint = sanitizedFingerprint(assignmentCreateProjection(input));
+    return {
+      operation: {
+        input,
+        filter,
+        baselineIds,
+        baselineFingerprint: sanitizedFingerprint(baselineIds),
+        finalFingerprint,
+        targetSnapshots,
+      },
+      mutationPlan: {
+        mode: "single" as const,
+        steps: [{
+          id: "create-assignment",
+          kind: "primary" as const,
+          targetFingerprint: sanitizedFingerprint({ parents: targetSnapshots.map((snapshot) => snapshot.fingerprint), finalFingerprint }),
+          reconciliationStrategy: "create" as const,
+        }],
+      },
+    };
+  },
+  async dispatch(ctx, operation) {
+    const prepared = operation as {
+      input: CreateAssignmentInput;
+      filter: { userId: string; projectId: string; start: string; end: string };
+      baselineIds: string[];
+      baselineFingerprint: string;
+      finalFingerprint: string;
+      targetSnapshots: TargetSnapshot[];
+    };
+    const verified = await verifyTargetSnapshots(prepared.targetSnapshots, async (snapshot) => {
+      if (snapshot.ref.type === "user") {
+        const users = await ctx.clockify.listUsers();
+        const row = users.rows.find((candidate) => candidate.id === snapshot.ref.id);
+        return row
+          ? { ref: { type: "user", id: row.id, name: row.name }, projection: row, truncated: users.truncated }
+          : undefined;
+      }
+      if (snapshot.ref.type === "project") {
+        const row = await ctx.clockify.getProject(snapshot.ref.id);
+        return row
+          ? { ref: { type: "project", id: row.id, name: row.name }, projection: row, truncated: false }
+          : undefined;
+      }
+      return undefined;
     });
-    return { kind: "receipt", receipt: successReceipt({ action: "clockify_scheduling_assignments_create", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "assignment", id: assignment.id }] } }) };
+    if (!verified.ok) {
+      throw new DefinitiveWriteFailure("VERIFY", verified.code, verified.message);
+    }
+
+    const currentBaseline = await ctx.clockify.listAssignments(prepared.filter);
+    const currentIds = currentBaseline.rows.map((row) => row.id).sort();
+    if (currentBaseline.truncated || sanitizedFingerprint(currentIds) !== prepared.baselineFingerprint) {
+      throw new DefinitiveWriteFailure(
+        "VERIFY",
+        "stale_parent",
+        "The scheduling range changed after preparation. Create a fresh request before adding the assignment.",
+      );
+    }
+
+    const dispatch = await dispatchWithReconciliation({
+      dispatch: () => ctx.clockify.createAssignmentAtomic(prepared.input),
+      reconcile: async () => {
+        const row = await reconcileCreate({
+          beforeIds: prepared.baselineIds,
+          list: () => ctx.clockify.listAssignments(prepared.filter),
+          matches: (candidate) => sanitizedFingerprint(createdAssignmentProjection(candidate)) === prepared.finalFingerprint,
+        });
+        return row ? { id: row.id, name: row.id } : undefined;
+      },
+    });
+    const assignment = dispatch.value;
+    const created = { type: "assignment", id: assignment.id };
+    return {
+      result: successReceipt({
+        action: "clockify_scheduling_assignments_create",
+        entity: "assignment",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [created] },
+      }),
+      externalId: assignment.id,
+      effect: { created },
+      detail: { reconciled: dispatch.reconciled },
+    };
   },
 });
 
@@ -128,10 +316,22 @@ const updateAssignment = defineRiskyAction({
   description: "Update a scheduling assignment. Elevated write — previews and requires confirmation.",
   group: SCHED,
   risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: schedulingTargetContract("update"),
   schema: z
     .object({ id: z.string().min(1), hoursPerDay: zNumberLike(z.number().min(0.5).max(24)).optional(), note: z.string().optional(), seriesUpdateOption: seriesOption.optional() })
     .refine((v) => v.hoursPerDay !== undefined || v.note !== undefined, { message: "Provide hoursPerDay or note to change." }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const current = await ctx.clockify.getAssignment(args.id);
+    if (!current) return { clarify: `I couldn't verify scheduling assignment ${args.id}. Give me a current assignment id.` };
+    const projection = assignmentProjection(current)!;
+    const targetSnapshot = captureTargetSnapshot("target", { type: "assignment", id: current.id }, projection);
+    let body: Awaited<ReturnType<typeof ctx.clockify.prepareAssignmentUpdate>>;
+    try {
+      body = await ctx.clockify.prepareAssignmentUpdate(current.id, args);
+    } catch {
+      return { clarify: `I couldn't prepare a complete replacement for assignment ${args.id}. Refresh it and try again.` };
+    }
     const patch = {
       ...(args.hoursPerDay !== undefined ? { hoursPerDay: args.hoursPerDay } : {}),
       ...(args.note !== undefined ? { note: args.note } : {}),
@@ -143,13 +343,56 @@ const updateAssignment = defineRiskyAction({
       expectedChanges: describePatch(patch),
       reversibility: "You can update the assignment again.",
       warnings: ["This changes a user's scheduled work."],
-      payload: { id: args.id, patch },
+      payload: {
+        id: current.id,
+        patch,
+        body,
+        expectedProjection: sanitizeCompleteJson({
+          id: current.id,
+          userId: body.userId,
+          projectId: body.projectId,
+          start: body.start,
+          end: body.end,
+          hoursPerDay: body.hoursPerDay,
+          startTime: body.startTime,
+          note: body.note,
+          published: current.published,
+        }),
+      },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: { mode: "single", steps: [{ id: "update-assignment", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "update" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { id, patch } = payload as { id: string; patch: Parameters<typeof ctx.clockify.updateAssignment>[1] };
-    const updated = await ctx.clockify.updateAssignment(id, patch);
-    return successReceipt({ action: "clockify_scheduling_assignments_update", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "assignment", id: updated.id }] } });
+  async commit(ctx, payload, operation) {
+    const { id, body, expectedProjection } = payload as {
+      id: string;
+      body: Parameters<typeof ctx.clockify.updateAssignmentAtomic>[1];
+      expectedProjection: unknown;
+    };
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "update-assignment", name: "Update scheduling assignment",
+      verification: {
+        snapshots: operation.targetSnapshots ?? [],
+        async fetchSnapshot() {
+          const current = await ctx.clockify.getAssignment(id);
+          return current ? { ref: { type: "assignment", id }, projection: assignmentProjection(current) } : undefined;
+        },
+      },
+      async dispatch() {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: () => ctx.clockify.updateAssignmentAtomic(id, body),
+          reconcile: async () => {
+            const current = await ctx.clockify.getAssignment(id);
+            return current && sanitizedFingerprint(assignmentProjection(current)) === sanitizedFingerprint(expectedProjection)
+              ? { id: current.id, name: current.id }
+              : undefined;
+          },
+        });
+        const updated = dispatched.value;
+        return { externalId: updated.id, effect: { updated: { type: "assignment", id: updated.id } }, detail: { reconciled: dispatched.reconciled } };
+      },
+      success: (step) => successReceipt({ action: "clockify_scheduling_assignments_update", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "assignment", id: step.externalId ?? id }] } }),
+    });
   },
 });
 
@@ -158,21 +401,47 @@ const deleteAssignment = defineRiskyAction({
   description: "Delete a scheduling assignment. Destructive — previews and requires confirmation.",
   group: SCHED,
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: schedulingTargetContract("delete"),
   schema: z.object({ id: z.string().min(1), seriesUpdateOption: seriesOption.optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const current = await ctx.clockify.getAssignment(args.id);
+    if (!current) return { clarify: `I couldn't verify scheduling assignment ${args.id}. Give me a current assignment id.` };
+    const targetSnapshot = captureTargetSnapshot("target", { type: "assignment", id: current.id }, assignmentProjection(current));
     return {
       actionLabel: "Delete scheduling assignment",
       targets: [{ type: "assignment", id: args.id }],
       expectedChanges: [`Delete scheduling assignment ${args.id}`],
       reversibility: "This cannot be undone.",
       warnings: ["Deleting an assignment removes scheduled work."],
-      payload: { id: args.id, seriesUpdateOption: args.seriesUpdateOption },
+      payload: { id: current.id, ...(args.seriesUpdateOption !== undefined ? { seriesUpdateOption: args.seriesUpdateOption } : {}) },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: { mode: "single", steps: [{ id: "delete-assignment", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "delete" }] },
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, seriesUpdateOption } = payload as { id: string; seriesUpdateOption?: string };
-    await ctx.clockify.deleteAssignment(id, seriesUpdateOption);
-    return successReceipt({ action: "clockify_scheduling_assignments_delete", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { deleted: [{ type: "assignment", id }] } });
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "delete-assignment", name: "Delete scheduling assignment",
+      verification: {
+        snapshots: operation.targetSnapshots ?? [],
+        async fetchSnapshot() {
+          const current = await ctx.clockify.getAssignment(id);
+          return current ? { ref: { type: "assignment", id }, projection: assignmentProjection(current) } : undefined;
+        },
+      },
+      async dispatch() {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.deleteAssignmentAtomic(id, seriesUpdateOption); return true; },
+          reconcile: async () => {
+            const current = await ctx.clockify.listAssignments();
+            return !current.truncated && !current.rows.some((row) => row.id === id) ? true : undefined;
+          },
+        });
+        return { externalId: id, effect: { deleted: { type: "assignment", id } }, detail: { reconciled: dispatched.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_scheduling_assignments_delete", entity: "assignment", ids: { workspaceId: ctx.workspaceId }, changed: { deleted: [{ type: "assignment", id }] } }),
+    });
   },
 });
 
@@ -182,6 +451,8 @@ const publish = defineRiskyAction({
     "Publish draft scheduling assignments in a date range. Publishes ALL drafts overlapping the range unless you pass `userId` (or a user's exact name / 'me') to scope it to one person. External side effect (notifies assignees) — previews and requires confirmation.",
   group: SCHED,
   risks: ["external_side_effect"],
+  mutationWorkflow: "durable",
+  mutationContract: schedulingTargetContract("state-command"),
   schema: z.object({
     start: z.string().min(1),
     end: z.string().min(1),
@@ -207,6 +478,18 @@ const publish = defineRiskyAction({
       scopedLabel = user.label;
     }
     const notify = args.notifyUsers ? " (notify users)" : "";
+    const rangeEvidence = await ctx.clockify.listAssignments({ start, end, ...(scopedId ? { userId: scopedId } : {}) });
+    if (rangeEvidence.truncated) return { clarify: "Clockify returned an incomplete schedule range. Narrow the range before publishing." };
+    const rangeProjection = {
+      start, end, notifyUsers: args.notifyUsers ?? false, userId: scopedId,
+      assignments: [...rangeEvidence.rows].sort((a, b) => a.id.localeCompare(b.id)).map(assignmentProjection),
+    };
+    const rangeId = sanitizedFingerprint({ start, end, userId: scopedId });
+    const targetSnapshot = captureTargetSnapshot("target", { type: "schedule-range", id: rangeId }, rangeProjection);
+    const expectedProjection = sanitizeCompleteJson({
+      ...rangeProjection,
+      assignments: rangeProjection.assignments.map((assignment) => ({ ...assignment, published: true })),
+    });
     return {
       actionLabel: "Publish schedule",
       targets: [],
@@ -221,13 +504,46 @@ const publish = defineRiskyAction({
           ? `This publishes every draft assignment for ${scopedLabel} overlapping the range and may email them.`
           : "This publishes EVERY draft assignment overlapping the range — not just recently-created ones — and may email affected users.",
       ],
-      payload: { start, end, notifyUsers: args.notifyUsers, ...(scopedId ? { userId: scopedId } : {}) },
+      payload: { start, end, expectedProjection, ...(args.notifyUsers !== undefined ? { notifyUsers: args.notifyUsers } : {}), ...(scopedId ? { userId: scopedId } : {}) },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: { mode: "single", steps: [{ id: "publish-schedule", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "state-command" }] },
     };
   },
-  async commit(ctx, payload) {
-    const { start, end, notifyUsers, userId } = payload as { start: string; end: string; notifyUsers?: boolean; userId?: string };
-    await ctx.clockify.publishSchedule({ start, end, notifyUsers, userId });
-    return successReceipt({ action: "clockify_scheduling_publish", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { published: true, start, end, ...(userId ? { userId } : {}) } });
+  async commit(ctx, payload, operation) {
+    const { start, end, notifyUsers, userId, expectedProjection } = payload as { start: string; end: string; notifyUsers?: boolean; userId?: string; expectedProjection: unknown };
+    return commitSingleDurableRiskyStep({
+      ctx, operation, planStepId: "publish-schedule", name: "Publish schedule",
+      verification: {
+        snapshots: operation.targetSnapshots ?? [],
+        async fetchSnapshot(snapshot: TargetSnapshot) {
+          const evidence = await ctx.clockify.listAssignments({ start, end, ...(userId ? { userId } : {}) });
+          return {
+            ref: snapshot.ref,
+            truncated: evidence.truncated,
+            projection: {
+              start, end, notifyUsers: notifyUsers ?? false, userId,
+              assignments: [...evidence.rows].sort((a, b) => a.id.localeCompare(b.id)).map(assignmentProjection),
+            },
+          };
+        },
+      },
+      async dispatch() {
+        const dispatched = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.publishScheduleAtomic({ start, end, notifyUsers, userId }); return true; },
+          reconcile: async () => {
+            const evidence = await ctx.clockify.listAssignments({ start, end, ...(userId ? { userId } : {}) });
+            if (evidence.truncated) return undefined;
+            const projection = {
+              start, end, notifyUsers: notifyUsers ?? false, userId,
+              assignments: [...evidence.rows].sort((a, b) => a.id.localeCompare(b.id)).map(assignmentProjection),
+            };
+            return sanitizedFingerprint(projection) === sanitizedFingerprint(expectedProjection) ? true : undefined;
+          },
+        });
+        return { effect: { published: true, start, end, userId }, detail: { reconciled: dispatched.reconciled } };
+      },
+      success: () => successReceipt({ action: "clockify_scheduling_publish", entity: "schedule", ids: { workspaceId: ctx.workspaceId }, data: { published: true, start, end, ...(userId ? { userId } : {}) } }),
+    });
   },
 });
 
@@ -308,3 +624,11 @@ export const SCHEDULING_ACTIONS: ActionDefinition[] = [
   projectTotals,
   userTotals,
 ];
+
+/** Read-only startup dispatcher metadata; it grants no mutation capability. */
+export const SCHEDULING_STARTUP_RECONCILIATION = Object.freeze({
+  clockify_scheduling_assignments_create: { "create-assignment": "create" },
+  clockify_scheduling_assignments_update: { "update-assignment": "update" },
+  clockify_scheduling_assignments_delete: { "delete-assignment": "delete" },
+  clockify_scheduling_publish: { "publish-schedule": "state-command" },
+} as const);

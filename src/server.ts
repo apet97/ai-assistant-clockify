@@ -18,6 +18,7 @@ import { apiRouter } from "./routes/api.js";
 import { componentRouter } from "./routes/component.js";
 import { lifecycleRouter } from "./routes/lifecycle.js";
 import type { AppDeps } from "./routes/deps.js";
+import { runProductionStartupReconciliation } from "./harness/startup-reconciliation-registry.js";
 
 /**
  * Compose the Express app from injected dependencies (server-as-a-function, so
@@ -210,7 +211,7 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string, exit
   };
 }
 
-export function start(): void {
+export async function start(): Promise<void> {
   const config = loadConfig();
   const store = createStore(config.databasePath, {
     encryptionKey: config.dataEncryptionKey,
@@ -229,6 +230,22 @@ export function start(): void {
     requestGovernors.set(workspaceId, created);
     return created;
   };
+  // Store construction has already marked dispatched orphans unknown. Complete
+  // the read-only reconciliation pass before any listener can accept mutation
+  // traffic. The pass can neither resume a prepared step nor compensate.
+  try {
+    await runProductionStartupReconciliation({
+      store,
+      clockifyForWorkspace: (installation) => liveClockifyForWorkspace(
+        installation,
+        config.commitTimeoutMs,
+        requestGovernorFor(installation.workspaceId),
+      ),
+    });
+  } catch (error) {
+    store.close();
+    throw error;
+  }
   const app = createApp({
     config,
     store,
@@ -301,5 +318,8 @@ export function start(): void {
 
 // Run only when executed directly (not when imported by tests).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  start();
+  void start().catch((error: unknown) => {
+    console.error("startup failed:", error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
 }

@@ -265,7 +265,8 @@ describe("routes", () => {
     const preview = chat.body.results.find((r: { kind: string }) => r.kind === "preview");
     expect(preview?.previewId).toBeTruthy();
 
-    const before = fake.counts.deleteEntity ?? 0;
+    const archiveBefore = fake.counts.archiveProjectAtomic ?? 0;
+    const deleteBefore = fake.counts.deleteProjectAtomic ?? 0;
     const [a, b] = await Promise.all([
       request(app)
         .post(`/api/confirmations/${preview.previewId}/confirm`)
@@ -281,7 +282,8 @@ describe("routes", () => {
     // exactly one succeeds (200); the other is rejected (not pending / already used)
     expect(statuses[0]).toBe(200);
     expect(statuses[1]).toBeGreaterThanOrEqual(400);
-    expect((fake.counts.deleteEntity ?? 0) - before).toBe(1);
+    expect((fake.counts.archiveProjectAtomic ?? 0) - archiveBefore).toBe(1);
+    expect((fake.counts.deleteProjectAtomic ?? 0) - deleteBefore).toBe(1);
   });
 
   it("a confirm denied by lowered policy does not consume the preview", async () => {
@@ -298,14 +300,16 @@ describe("routes", () => {
     lowered.groups.work_structure = "off";
     store.upsertAdminPolicy("ws-1", "admin-1", lowered);
 
-    const before = fake.counts.deleteEntity ?? 0;
+    const archiveBefore = fake.counts.archiveProjectAtomic ?? 0;
+    const deleteBefore = fake.counts.deleteProjectAtomic ?? 0;
     const denied = await request(app)
       .post(`/api/confirmations/${preview.previewId}/confirm`)
       .set("Cookie", cookie)
       .send({ nonce: preview.nonce });
     expect(denied.status).toBe(400);
     expect(denied.body.code).toBe("policy_denied");
-    expect((fake.counts.deleteEntity ?? 0) - before).toBe(0);
+    expect((fake.counts.archiveProjectAtomic ?? 0) - archiveBefore).toBe(0);
+    expect((fake.counts.deleteProjectAtomic ?? 0) - deleteBefore).toBe(0);
 
     // Re-enable and confirm the SAME preview — it was never consumed.
     store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
@@ -315,6 +319,7 @@ describe("routes", () => {
       .send({ nonce: preview.nonce });
     expect(ok.status).toBe(200);
     expect(ok.body.ok).toBe(true);
-    expect((fake.counts.deleteEntity ?? 0) - before).toBe(1);
+    expect((fake.counts.archiveProjectAtomic ?? 0) - archiveBefore).toBe(1);
+    expect((fake.counts.deleteProjectAtomic ?? 0) - deleteBefore).toBe(1);
   });
 });

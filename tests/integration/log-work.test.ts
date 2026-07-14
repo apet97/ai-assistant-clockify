@@ -47,7 +47,7 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
     const entry = lastEntry(fake);
     expect(entry.start).toBe("2026-06-04T09:00:00.000Z");
     expect(entry.end).toBe("2026-06-04T11:00:00.000Z");
-    expect(fake.counts.createTimeEntry).toBe(1);
+    expect(fake.counts.createTimeEntryAtomic).toBe(1);
   });
 
   // live-dogfood-04: "log work to Apollo from 5pm to 9am today" produced an
@@ -62,7 +62,7 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("resolves a relative day word ('yesterday') against ctx.now — the model needn't know the date", async () => {
@@ -125,7 +125,7 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
       context: makeContext(fake),
     });
     expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "invalid_args" } });
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("requires one exact completed-work shape and rejects offset-less instants", async () => {
@@ -152,7 +152,7 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
     if (conflicting.kind === "receipt" && !conflicting.receipt.ok) {
       expect(conflicting.receipt.code).toBe("invalid_args");
     }
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 
   it("caps completed-work duration at 168 hours", async () => {
@@ -165,6 +165,6 @@ describe("clockify_log_work time resolution (no explicit start)", () => {
 
     expect(result.kind).toBe("receipt");
     if (result.kind === "receipt" && !result.receipt.ok) expect(result.receipt.code).toBe("invalid_args");
-    expect(fake.counts.createTimeEntry ?? 0).toBe(0);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
   });
 });

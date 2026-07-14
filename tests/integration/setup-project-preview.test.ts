@@ -124,7 +124,7 @@ describe("clockify_setup_project — risk, policy, confirmation, idempotency", (
     const second = await commitConfirmedOperation(ctx, op);
     expect(first.ok).toBe(true);
     expect(second.ok).toBe(true);
-    expect(fake.counts.createProject).toBe(1); // the replay did not create a second project
+    expect(fake.counts.createProjectAtomic).toBe(1); // the replay did not create a second project
   });
 
   it("resolves members + every per-member rate from ONE listUsers fetch (no N+1)", async () => {

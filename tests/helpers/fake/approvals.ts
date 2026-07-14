@@ -6,10 +6,35 @@ export function makeFakeApprovals({ state, seed, bump, nextId }: FakeContext): P
   WorkspaceClient,
   | "listApprovals"
   | "getApproval"
+  | "submitApprovalAtomic"
+  | "setApprovalStateAtomic"
+  | "resubmitApprovalAtomic"
   | "submitApproval"
   | "setApprovalState"
   | "resubmitApproval"
 > {
+  const submitApprovalAtomic: WorkspaceClient["submitApprovalAtomic"] = async (input) => {
+    bump("submitApprovalAtomic");
+    bump("submitApproval");
+    const a: ApprovalSummary = { id: nextId("ap"), state: "PENDING", periodStart: input.periodStart };
+    state.approvals.push(a);
+    return { id: a.id, name: a.id };
+  };
+  const setApprovalStateAtomic: WorkspaceClient["setApprovalStateAtomic"] = async (id, st, note) => {
+    bump("setApprovalStateAtomic");
+    bump("setApprovalState");
+    void note;
+    const a = state.approvals.find((x) => x.id === id);
+    if (a) a.state = st;
+    return { id, name: st };
+  };
+  const resubmitApprovalAtomic: WorkspaceClient["resubmitApprovalAtomic"] = async (input) => {
+    bump("resubmitApprovalAtomic");
+    bump("resubmitApproval");
+    const a = state.approvals.find((x) => x.periodStart === input.periodStart);
+    if (a) a.state = "PENDING";
+    return { id: a?.id ?? "approval", name: "resubmitted" };
+  };
   return {
     async listApprovals(filter) {
       bump("listApprovals");
@@ -20,24 +45,11 @@ export function makeFakeApprovals({ state, seed, bump, nextId }: FakeContext): P
       bump("getApproval");
       return state.approvals.find((a) => a.id === id) ?? null;
     },
-    async submitApproval(input) {
-      bump("submitApproval");
-      const a: ApprovalSummary = { id: nextId("ap"), state: "PENDING", periodStart: input.periodStart };
-      state.approvals.push(a);
-      return { id: a.id, name: a.id };
-    },
-    async setApprovalState(id, st, note) {
-      bump("setApprovalState");
-      void note;
-      const a = state.approvals.find((x) => x.id === id);
-      if (a) a.state = st;
-      return { id, name: st };
-    },
-    async resubmitApproval(input) {
-      bump("resubmitApproval");
-      const a = state.approvals.find((x) => x.periodStart === input.periodStart);
-      if (a) a.state = "PENDING";
-      return { id: a?.id ?? "approval", name: "resubmitted" };
-    },
+    submitApprovalAtomic,
+    setApprovalStateAtomic,
+    resubmitApprovalAtomic,
+    submitApproval: submitApprovalAtomic,
+    setApprovalState: setApprovalStateAtomic,
+    resubmitApproval: resubmitApprovalAtomic,
   };
 }

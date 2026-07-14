@@ -37,10 +37,10 @@ describe("time-off actions", () => {
     const preview = await executeAction({ actionName: "clockify_time_off_policies_create", args: { name: "AIASSIST_SMOKE_pol", daysPerYear: 20 }, context: makeContext(fake) });
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("high_risk_write");
-    expect(fake.counts.createTimeOffPolicy ?? 0).toBe(0);
+    expect(fake.counts.createTimeOffPolicyAtomic ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createTimeOffPolicy).toBe(1);
+    expect(fake.counts.createTimeOffPolicyAtomic).toBe(1);
   });
 
   it("policies_create scopes to a user GROUP + user BY NAME (resolves), clarifies on an unknown group", async () => {
@@ -114,7 +114,7 @@ describe("time-off actions", () => {
     expect(preview.preview.expectedChanges.join(" ")).toContain("3 day");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.createTimeOffRequest).toBe(1);
+    expect(fake.counts.createTimeOffRequestAtomic).toBe(1);
   });
 
   it("approve / deny preview external_side_effect then set the request status", async () => {
@@ -137,7 +137,7 @@ describe("time-off actions", () => {
     if (preview.kind !== "preview") throw new Error("expected a preview");
     expect(preview.operation.risks).toContain("destructive");
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.deleteTimeOffRequest).toBe(1);
+    expect(fake.counts.deleteTimeOffRequestAtomic).toBe(1);
     expect(fake.state.timeOffRequests.find((r) => r.id === "r1")).toBeUndefined();
   });
 
@@ -222,7 +222,7 @@ describe("time-off actions", () => {
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+    expect(fake.counts.createTimeOffRequestAtomic ?? 0).toBe(0);
   });
 
   it("requests_create: explicit start/end still wins over the week anchor", async () => {
@@ -256,7 +256,7 @@ describe("time-off actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("pol1");
-    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+    expect(fake.counts.createTimeOffRequestAtomic ?? 0).toBe(0);
   });
 
   it("requests_create supports an HOURS policy: builds an ISO-datetime hour window (no `days`)", async () => {
@@ -279,7 +279,7 @@ describe("time-off actions", () => {
     expect(fake.counts.getTimeOffPolicy ?? 0).toBe(0);
     expect(fake.counts.listTimeOffPolicies).toBe(1);
     await commitConfirmedOperation(makeContext(fake), preview.operation);
-    expect(fake.counts.createTimeOffRequest).toBe(1);
+    expect(fake.counts.createTimeOffRequestAtomic).toBe(1);
   });
 
   it("builds HOURS policy windows from 09:00 in the verified local zone", async () => {
@@ -309,7 +309,7 @@ describe("time-off actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message.toLowerCase()).toContain("hour");
-    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+    expect(fake.counts.createTimeOffRequestAtomic ?? 0).toBe(0);
   });
 
   it("requests_list resolves a user NAME filter (or 'me') and clarifies on an unknown one", async () => {
@@ -358,7 +358,7 @@ describe("time-off actions", () => {
     expect(preview.operation.risks).toContain("high_risk_write");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateTimeOffBalance).toBe(1);
+    expect(fake.counts.updateTimeOffBalanceAtomic).toBe(1);
   });
 
   it("balance_update resolves policy + user NAMES at preview, clarifies on an unknown user", async () => {
@@ -370,7 +370,7 @@ describe("time-off actions", () => {
 
     const bad = await executeAction({ actionName: "clockify_time_off_balance_update", args: { policyId: "PTO", userIds: ["Ghost"], value: 3 }, context: makeContext(fake) });
     expect(bad.kind).toBe("clarify");
-    expect(fake.counts.updateTimeOffBalance ?? 0).toBe(0);
+    expect(fake.counts.updateTimeOffBalanceAtomic ?? 0).toBe(0);
   });
 });
 
@@ -398,7 +398,7 @@ describe("time-off date normalization (live-loop FIX 2: the literal 'next Monday
       context: makeContext(fake),
     });
     expect(result.kind).toBe("clarify");
-    expect(fake.counts.createTimeOffRequest ?? 0).toBe(0);
+    expect(fake.counts.createTimeOffRequestAtomic ?? 0).toBe(0);
   });
 });
 

@@ -5,6 +5,8 @@ export interface ExternalMutationPlan {
     id: string;
     kind: "primary" | "compensation";
     targetFingerprint?: string;
+    /** Exact read-only startup strategy bound to this persisted plan step. */
+    reconciliationStrategy?: "create" | "update" | "delete" | "state-command" | "composed";
   }>;
 }
 

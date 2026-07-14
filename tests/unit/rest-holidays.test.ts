@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeHolidayRest } from "../../src/clockify/rest/holidays.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -15,6 +16,12 @@ const rest = (fetchImpl: typeof fetch) =>
   );
 
 describe("holiday rest", () => {
+  it("classifies a malformed successful holiday create without an id as ambiguous", async () => {
+    const f = vi.fn(async () => jsonResponse({ name: "Company Day" }));
+    await expect(rest(f as unknown as typeof fetch).createHolidayAtomic({ name: "Company Day", startDate: "2026-07-14", userIds: ["u1"] }))
+      .rejects.toBeInstanceOf(AmbiguousWriteOutcome);
+  });
+
   it("listHolidays GETs the bare array and flattens datePeriod", async () => {
     const f = vi.fn(async () =>
       jsonResponse([{ id: "h1", name: "Xmas", datePeriod: { startDate: "2026-12-25", endDate: "2026-12-25" }, occursAnnually: true }]),
@@ -96,6 +103,16 @@ describe("holiday rest", () => {
     const body = JSON.parse((f as any).mock.calls[1][1].body);
     expect(body.everyoneIncludingNew).toBe(true); // valid assignment preserved
     expect(body.users).toBeUndefined();
+  });
+
+  it("prepares a holiday replacement and lossless everyone projection from the same list read", async () => {
+    const raw = { id: "h1", name: "Old", datePeriod: { startDate: "2026-12-25", endDate: "2026-12-25" }, occursAnnually: true, everyoneIncludingNew: true };
+    const f = vi.fn(async () => jsonResponse([raw]));
+    const prepared = await rest(f as unknown as typeof fetch).prepareHolidayUpdate("h1", { name: "Renamed" });
+    expect(prepared.source).toEqual({
+      id: "h1", name: "Old", startDate: "2026-12-25", endDate: "2026-12-25", occursAnnually: true, everyoneIncludingNew: true,
+    });
+    expect(prepared.everyoneIncludingNew).toBe(true);
   });
 
   it("updateHoliday throws clearly when the existing holiday has no resolvable assignment", async () => {

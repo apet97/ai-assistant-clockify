@@ -45,7 +45,7 @@ describe("client actions", () => {
     const result = await executeAction({ actionName: "clockify_clients_create", args: { name: "AIASSIST_SMOKE_c" }, context: makeContext(fake) });
     if (result.kind === "receipt" && result.receipt.ok) expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "client" });
     else throw new Error("expected receipt");
-    expect(fake.counts.createClient).toBe(1);
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
   });
 
   it("clockify_clients_create threads ccEmails and resolves currency by code (case-insensitive)", async () => {
@@ -70,7 +70,7 @@ describe("client actions", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message).toContain("USD");
-    expect(fake.counts.createClient ?? 0).toBe(0);
+    expect(fake.counts.createClientBaseAtomic ?? 0).toBe(0);
   });
 
   it("clockify_clients_create does not establish symbolic currency uniqueness from an incomplete list", async () => {
@@ -86,7 +86,7 @@ describe("client actions", () => {
 
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.message).toMatch(/incomplete.*exact currency id|exact currency id.*incomplete/i);
-    expect(fake.counts.createClient ?? 0).toBe(0);
+    expect(fake.counts.createClientBaseAtomic ?? 0).toBe(0);
   });
 
   it("clockify_clients_create accepts an exact currency id found in an incomplete list", async () => {
@@ -112,7 +112,7 @@ describe("client actions", () => {
     expect(fake.counts.updateClient ?? 0).toBe(0);
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateClient).toBe(1);
+    expect(fake.counts.updateClientAtomic).toBe(1);
   });
 
   it("clockify_clients_update renames by currentName — the resolved id is pinned into the operation", async () => {
@@ -236,7 +236,7 @@ describe("client actions", () => {
     expect(preview.operation.risks).toContain("destructive");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteClient).toBe(1);
+    expect(fake.counts.deleteClientAtomic).toBe(1);
     expect(fake.state.clients.find((c) => c.id === "c1")).toBeUndefined();
   });
 });

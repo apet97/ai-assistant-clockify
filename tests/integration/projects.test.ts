@@ -74,7 +74,7 @@ describe("project actions — safe writes", () => {
     if (result.kind === "receipt" && result.receipt.ok) {
       expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "project" });
     }
-    expect(fake.counts.createProject).toBe(1);
+    expect(fake.counts.createProjectAtomic).toBe(1);
     expect(fake.state.projects.find((p) => p.name === "AIASSIST_SMOKE_p")?.clientId).toBe("c1");
   });
 
@@ -107,7 +107,7 @@ describe("project actions — safe writes", () => {
     });
     expect(result.kind).toBe("clarify");
     if (result.kind === "clarify") expect(result.options?.map((o) => o.id)).toContain("c-acme");
-    expect(fake.counts.createProject ?? 0).toBe(0);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
   });
 
   it("clockify_projects_create is denied when work_structure is read-only", async () => {
@@ -124,7 +124,7 @@ describe("project actions — safe writes", () => {
     } else {
       throw new Error("expected a policy_denied receipt");
     }
-    expect(fake.counts.createProject ?? 0).toBe(0);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
   });
 
   it("clockify_projects_from_template creates a project from a template", async () => {
@@ -138,7 +138,7 @@ describe("project actions — safe writes", () => {
     if (result.kind === "receipt" && result.receipt.ok) {
       expect(result.receipt.changed?.created?.[0]).toMatchObject({ type: "project" });
     }
-    expect(fake.counts.createProjectFromTemplate).toBe(1);
+    expect(fake.counts.createProjectFromTemplateAtomic).toBe(1);
   });
 
   it("clockify_projects_from_template resolves the template by NAME (either slot) and clarifies on unknown", async () => {
@@ -156,7 +156,7 @@ describe("project actions — safe writes", () => {
       context: makeContext(fake),
     });
     if (bySlot.kind !== "receipt" || !bySlot.receipt.ok) throw new Error(`expected a success receipt, got ${bySlot.kind}`);
-    expect(fake.counts.createProjectFromTemplate).toBe(2);
+    expect(fake.counts.createProjectFromTemplateAtomic).toBe(2);
 
     const unknown = await executeAction({
       actionName: "clockify_projects_from_template",
@@ -164,7 +164,7 @@ describe("project actions — safe writes", () => {
       context: makeContext(fake),
     });
     expect(unknown.kind).toBe("clarify");
-    expect(fake.counts.createProjectFromTemplate).toBe(2);
+    expect(fake.counts.createProjectFromTemplateAtomic).toBe(2);
   });
 });
 
@@ -183,7 +183,7 @@ describe("project actions — risky writes (preview → commit)", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateProject).toBe(1);
+    expect(fake.counts.updateProjectAtomic).toBe(1);
   });
 
   it("clockify_projects_archive previews then archives once on commit", async () => {
@@ -199,7 +199,7 @@ describe("project actions — risky writes (preview → commit)", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.archiveProject).toBe(1);
+    expect(fake.counts.archiveProjectAtomic).toBe(1);
   });
 
   it("clockify_projects_delete previews then archives-then-deletes once on commit", async () => {
@@ -215,7 +215,7 @@ describe("project actions — risky writes (preview → commit)", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteProject).toBe(1);
+    expect(fake.counts.deleteProjectAtomic).toBe(1);
     expect(fake.state.projects.find((p) => p.id === "p1")).toBeUndefined();
     expect(receipt.ok && receipt.changed?.deleted?.[0]).toMatchObject({ type: "project", id: "p1" });
   });
@@ -231,7 +231,7 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect((preview.operation.payload as { id: string }).id).toBe("p1");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.deleteProject).toBe(1);
+    expect(fake.counts.deleteProjectAtomic).toBe(1);
   });
 
   it("clockify_projects_delete resolves an ARCHIVED project by name — deleting an archived project is valid (live item 305)", async () => {
@@ -307,7 +307,7 @@ describe("project actions — risky writes (preview → commit)", () => {
 
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateProjectRate).toBe(1);
+    expect(fake.counts.updateProjectRateAtomic).toBe(1);
   });
 
   it("clockify_projects_rate_update resolves 'me' to the admin and previews the amount in major units", async () => {
@@ -393,7 +393,7 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(preview.operation.risks).toContain("high_risk_write");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateProjectEstimate).toBe(1);
+    expect(fake.counts.updateProjectEstimateAtomic).toBe(1);
   });
 
   it("clockify_projects_memberships_update is an elevated write gated by users_groups", async () => {
@@ -411,7 +411,7 @@ describe("project actions — risky writes (preview → commit)", () => {
     expect(preview.operation.featureGroup).toBe("users_groups");
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.updateProjectMemberships).toBe(1);
+    expect(fake.counts.updateProjectMembershipsAtomic).toBe(1);
   });
 
   it("memberships_update ADDS the requesting admin via addUserIds:['me'] — merged into the CURRENT set, never replacing it (live item 058: 'add me' asked 'which user are you?')", async () => {
@@ -589,7 +589,7 @@ describe("project actions — name→id resolution at preview time (live-loop FI
     expect(preview.operation.payload).toMatchObject({ id: "p2" });
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
-    expect(fake.counts.archiveProject).toBe(1);
+    expect(fake.counts.archiveProjectAtomic).toBe(1);
   });
 
   it("clockify_projects_get carries the billable flag so 'is X billable?' is answerable (live item 069)", async () => {

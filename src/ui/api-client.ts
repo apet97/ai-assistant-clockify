@@ -25,6 +25,8 @@ export interface ChatApi {
   listSessions(): Promise<unknown>;
   /** Switch the session cookie to an owned conversation; then restoreHistory replays it. */
   switchSession(id: string): Promise<unknown>;
+  /** Passive, scoped durable-operation status; never a control endpoint. */
+  getOperation?(id: string): Promise<unknown>;
   sendMessage(message: string): Promise<unknown>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -194,6 +196,7 @@ export function createFetchApi(): ChatApi {
     listSessions: () => json("/api/chat/sessions"),
     switchSession: (id) =>
       mutation(`/api/chat/sessions/${encodeURIComponent(id)}/open`, { method: "POST", body: JSON.stringify({}) }),
+    getOperation: (id) => json(`/api/operation-runs/${encodeURIComponent(id)}`),
     sendMessage: (message) => {
       const requestId = newRequestId();
       const send = () => mutation("/api/chat/messages", { method: "POST", body: JSON.stringify({ message, requestId }) });

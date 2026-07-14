@@ -13,6 +13,7 @@ export interface ExpenseFilter {
  * field on read; both are informational.
  */
 export interface ExpenseSummary extends EntitySummary {
+  userId?: string;
   notes?: string;
   date?: string;
   categoryId?: string;
@@ -23,6 +24,19 @@ export interface ExpenseSummary extends EntitySummary {
   /** Monetary total in MINOR units (cents), as Clockify returns it. */
   total?: number;
   quantity?: number;
+}
+
+export interface PreparedExpenseUpdateInput {
+  changeFields: string[];
+  userId?: string;
+  amount?: string;
+  quantity?: number;
+  date?: string;
+  categoryId?: string;
+  notes?: string;
+  billable?: boolean;
+  projectId?: string;
+  taskId?: string;
 }
 
 export interface ExpenseCategorySummary extends EntitySummary {
@@ -69,12 +83,20 @@ export interface ExpensePort {
   listExpenses(filter?: ExpenseFilter): Promise<ListResult<ExpenseSummary>>;
   getExpense(id: string): Promise<ExpenseSummary | null>;
   createExpense(input: CreateExpenseInput): Promise<EntitySummary>;
+  createExpenseAtomic(input: CreateExpenseInput): Promise<EntitySummary>;
   updateExpense(id: string, input: UpdateExpenseInput): Promise<EntitySummary>;
+  prepareExpenseUpdate(id: string, input: UpdateExpenseInput): Promise<PreparedExpenseUpdateInput>;
+  updateExpenseAtomic(id: string, input: PreparedExpenseUpdateInput): Promise<EntitySummary>;
   deleteExpense(id: string): Promise<void>;
+  deleteExpenseAtomic(id: string): Promise<void>;
   listExpenseCategories(filter?: { archived?: boolean }): Promise<ListResult<ExpenseCategorySummary>>;
   createExpenseCategory(input: { name: string }): Promise<EntitySummary>;
+  createExpenseCategoryAtomic(input: { name: string }): Promise<EntitySummary>;
   updateExpenseCategory(id: string, patch: { name?: string }): Promise<EntitySummary>;
+  updateExpenseCategoryAtomic(id: string, patch: { name?: string }): Promise<EntitySummary>;
   /** PATCH /expenses/categories/{id}/status — the spec's archive/unarchive route. */
   setExpenseCategoryArchived(id: string, archived: boolean): Promise<void>;
+  setExpenseCategoryArchivedAtomic(id: string, archived: boolean): Promise<void>;
   deleteExpenseCategory(id: string): Promise<void>;
+  deleteExpenseCategoryAtomic(id: string): Promise<void>;
 }

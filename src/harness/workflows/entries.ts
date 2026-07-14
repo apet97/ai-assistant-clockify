@@ -6,9 +6,12 @@ import {
   defineReadAction,
   type ActionDefinition,
 } from "../action.js";
-import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
+import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
 import { nowDate } from "../../durations.js";
+import { durableMutationContract } from "../durable-mutation-contract.js";
+import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
+import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete } from "./structure-durable.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -112,8 +115,13 @@ const deleteEntry = defineRiskyAction({
   description: "Delete a time entry. Previews first and requires confirmation.",
   group: "time_tracking",
   risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["delete"] }),
   schema: z.object({ id: z.string().min(1), description: z.string().optional() }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const current = await ctx.clockify.getEntry(args.id);
+    if (!current) return { clarify: "The requested time entry does not exist. Provide a current entry id." };
+    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "time_entry", current);
     return {
       actionLabel: "Delete time entry",
       targets: [{ type: "time_entry", id: args.id, name: args.description }],
@@ -121,23 +129,31 @@ const deleteEntry = defineRiskyAction({
       reversibility: "This cannot be undone.",
       warnings: ["Deleting a time entry is permanent."],
       payload: { id: args.id, description: args.description },
+      targetSnapshots: [targetSnapshot],
+      mutationPlan: mutationPlan([{ id: "delete-time-entry", strategy: "delete", fingerprint: targetSnapshot.fingerprint }]),
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { id, description } = payload as { id: string; description?: string };
-    if (!ctx.clockify.deleteEntity) {
-      return errorReceipt({
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "delete-time-entry",
+      name: "Delete time entry",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.deleteTimeEntryAtomic(id); return true as const; },
+          reconcile: () => reconcileDelete(() => ctx.clockify.getEntry(id)),
+        });
+        return { effect: { deleted: { type: "time_entry", id } }, detail: { reconciled: result.reconciled } };
+      },
+      success: () => successReceipt({
         action: "clockify_entries_delete",
-        code: "unsupported",
-        message: "Delete is not supported by the configured Clockify client.",
-      });
-    }
-    await ctx.clockify.deleteEntity({ entityType: "time_entry", id });
-    return successReceipt({
-      action: "clockify_entries_delete",
-      entity: "time_entry",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: { deleted: [{ type: "time_entry", id, name: description }] },
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { deleted: [{ type: "time_entry", id, name: description }] },
+      }),
     });
   },
 });
@@ -148,11 +164,16 @@ const markInvoiced = defineRiskyAction({
     "Mark (or unmark) a set of time entries as invoiced. Bulk billing change — previews first and requires confirmation.",
   group: "invoices",
   risks: ["bulk", "billing"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] }),
   schema: z.object({
     ids: z.array(z.string().min(1)).min(1),
     invoiced: z.boolean(),
   }),
-  async preview(_ctx, args) {
+  async preview(ctx, args) {
+    const rows = await Promise.all(args.ids.map((id) => ctx.clockify.getEntry(id)));
+    if (rows.some((row) => !row)) return { clarify: "At least one time entry no longer exists. Refresh the entry ids and try again." };
+    const targetSnapshots = await Promise.all(rows.map((row) => captureStructureSnapshot(ctx, "target", "time_entry", row!)));
     return {
       actionLabel: `${args.invoiced ? "Mark" : "Unmark"} ${args.ids.length} entr${args.ids.length === 1 ? "y" : "ies"} invoiced`,
       targets: args.ids.map((id) => ({ type: "time_entry", id })),
@@ -162,18 +183,34 @@ const markInvoiced = defineRiskyAction({
       reversibility: "You can re-run this action to flip the invoiced flag back.",
       warnings: ["This changes the billing/invoiced state of multiple entries at once."],
       payload: { ids: args.ids, invoiced: args.invoiced },
+      targetSnapshots,
+      mutationPlan: mutationPlan([{ id: "mark-entries-invoiced", strategy: "state-command", fingerprint: targetSnapshots.map((item) => item.fingerprint).join(":") }]),
     };
   },
-  async commit(ctx, payload) {
+  async commit(ctx, payload, operation) {
     const { ids, invoiced } = payload as { ids: string[]; invoiced: boolean };
-    await ctx.clockify.markEntriesInvoiced({ ids, invoiced });
-    return successReceipt({
-      action: "clockify_entries_mark_invoiced",
-      entity: "time_entry",
-      ids: { workspaceId: ctx.workspaceId },
-      changed: {
-        updated: ids.map((id) => ({ type: "time_entry", id })),
+    return commitSingleDurableRiskyStep({
+      ctx,
+      operation,
+      planStepId: "mark-entries-invoiced",
+      name: "Change invoiced state",
+      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+      dispatch: async () => {
+        const result = await dispatchWithReconciliation({
+          dispatch: async () => { await ctx.clockify.markEntriesInvoicedAtomic({ ids, invoiced }); return true as const; },
+          reconcile: async () => {
+            const rows = await Promise.all(ids.map((id) => ctx.clockify.getEntry(id)));
+            return rows.every((row) => row && (row as unknown as { invoiced?: unknown }).invoiced === invoiced) ? true as const : undefined;
+          },
+        });
+        return { effect: { updated: ids.map((id) => ({ type: "time_entry", id })), invoiced }, detail: { reconciled: result.reconciled } };
       },
+      success: () => successReceipt({
+        action: "clockify_entries_mark_invoiced",
+        entity: "time_entry",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { updated: ids.map((id) => ({ type: "time_entry", id })) },
+      }),
     });
   },
 });

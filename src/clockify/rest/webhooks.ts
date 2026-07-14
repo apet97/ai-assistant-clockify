@@ -1,7 +1,8 @@
 import { PAGE_SIZE, type RestCore } from "./core.js";
 import type { EntitySummary } from "../types.js";
-import type { WebhookPort, WebhookSummary } from "../ports/webhooks.js";
+import type { CreateWebhookInput, PreparedWebhookUpdateInput, UpdateWebhookInput, WebhookPort, WebhookSummary } from "../ports/webhooks.js";
 import { collectPages } from "./list-pages.js";
+import { AmbiguousWriteOutcome } from "../write-outcome.js";
 
 /**
  * Known Clockify webhook event types (mirrors goclmcp §2.12). The workspace
@@ -24,15 +25,13 @@ const WEBHOOK_EVENTS: readonly string[] = [
   "USERS_INVITED_TO_WORKSPACE", "USER_GROUP_CREATED", "USER_GROUP_UPDATED", "USER_GROUP_DELETED",
 ];
 
-/** Editable webhook fields carried through a GET-then-merge update (never authToken). */
-const WEBHOOK_FIELDS = ["name", "url", "webhookEvent", "triggerSourceType", "triggerSource"] as const;
-
 /** Raw webhook fields read by {@link mapWebhook} (the `authToken` secret is never read). */
 type WebhookRow = {
   id: string;
   name?: string;
   url?: string;
   webhookEvent?: string;
+  triggerSource?: string[];
   triggerSourceType?: string;
   enabled?: boolean;
 };
@@ -42,6 +41,7 @@ function mapWebhook(raw: WebhookRow): WebhookSummary {
   const out: WebhookSummary = { id: raw.id, name: raw.name ?? raw.id };
   if (raw.url !== undefined) out.url = raw.url;
   if (raw.webhookEvent !== undefined) out.webhookEvent = raw.webhookEvent;
+  if (Array.isArray(raw.triggerSource)) out.triggerSource = [...raw.triggerSource];
   if (raw.triggerSourceType !== undefined) out.triggerSourceType = raw.triggerSourceType;
   if (typeof raw.enabled === "boolean") out.enabled = raw.enabled;
   return out; // authToken intentionally omitted
@@ -55,6 +55,48 @@ function mapWebhook(raw: WebhookRow): WebhookSummary {
  */
 export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPort {
   const ws = `/workspaces/${workspaceId}`;
+
+  async function prepareWebhookUpdate(id: string, patch: UpdateWebhookInput): Promise<PreparedWebhookUpdateInput> {
+    const existing = (await core.call("api", "GET", `${ws}/webhooks/${id}`)) as WebhookRow | null;
+    if (!existing) throw new Error(`Webhook ${id} no longer exists.`);
+    const name = patch.name ?? existing.name;
+    const url = patch.url ?? existing.url;
+    const webhookEvent = patch.webhookEvent ?? existing.webhookEvent;
+    const triggerSourceType = patch.triggerSourceType ?? existing.triggerSourceType ?? "WORKSPACE_ID";
+    const triggerSource = patch.triggerSource ?? existing.triggerSource ?? [workspaceId];
+    if (!name || !url || !webhookEvent) throw new Error(`Webhook ${id} is missing fields required for a complete replacement.`);
+    return { name, url, webhookEvent, triggerSourceType, triggerSource: [...triggerSource] };
+  }
+
+  async function createWebhookAtomic(input: CreateWebhookInput): Promise<EntitySummary> {
+    const body = {
+      name: input.name,
+      url: input.url,
+      webhookEvent: input.webhookEvent,
+      triggerSourceType: input.triggerSourceType ?? "WORKSPACE_ID",
+      triggerSource: input.triggerSource ?? [workspaceId],
+    };
+    const row = (await core.mutate("api", "POST", `${ws}/webhooks`, body)) as { id?: unknown; name?: unknown } | null;
+    if (typeof row?.id !== "string" || row.id.length === 0) {
+      throw new AmbiguousWriteOutcome("POST", `${ws}/webhooks`, "Clockify accepted the webhook create without a usable id.");
+    }
+    return { id: row.id, name: typeof row.name === "string" ? row.name : input.name };
+  }
+
+  async function updateWebhookAtomic(id: string, input: PreparedWebhookUpdateInput): Promise<EntitySummary> {
+    const row = (await core.mutate("api", "PUT", `${ws}/webhooks/${id}`, input)) as { id?: unknown; name?: unknown } | null;
+    if (row?.id !== undefined && typeof row.id !== "string") {
+      throw new AmbiguousWriteOutcome("PUT", `${ws}/webhooks/${id}`, "Clockify returned a malformed webhook id.");
+    }
+    return {
+      id: typeof row?.id === "string" && row.id.length > 0 ? row.id : id,
+      name: typeof row?.name === "string" ? row.name : input.name,
+    };
+  }
+
+  async function deleteWebhookAtomic(id: string): Promise<void> {
+    await core.mutate("api", "DELETE", `${ws}/webhooks/${id}`);
+  }
 
   return {
     async listWebhooks() {
@@ -70,36 +112,13 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
       const raw = (await core.call("api", "GET", `${ws}/webhooks/${id}`, undefined, true)) as WebhookRow | null;
       return raw ? mapWebhook(raw) : null;
     },
-    async createWebhook(input): Promise<EntitySummary> {
-      const body: Record<string, unknown> = {
-        name: input.name,
-        url: input.url,
-        webhookEvent: input.webhookEvent,
-        triggerSourceType: input.triggerSourceType ?? "WORKSPACE_ID",
-        triggerSource: input.triggerSource ?? [workspaceId],
-      };
-      const w = (await core.call("api", "POST", `${ws}/webhooks`, body)) as { id: string; name?: string };
-      return { id: w.id, name: w.name ?? input.name };
-    },
-    async updateWebhook(id, patch): Promise<EntitySummary> {
-      // GET-then-merge-PUT (Clockify replaces on PUT). Carry only the editable
-      // fields from the existing webhook — never the authToken it returns.
-      const existing = ((await core.call("api", "GET", `${ws}/webhooks/${id}`)) ?? {}) as Record<string, unknown>;
-      const body: Record<string, unknown> = {};
-      for (const key of WEBHOOK_FIELDS) {
-        if (existing[key] !== undefined) body[key] = existing[key];
-      }
-      if (patch.name !== undefined) body.name = patch.name;
-      if (patch.url !== undefined) body.url = patch.url;
-      if (patch.webhookEvent !== undefined) body.webhookEvent = patch.webhookEvent;
-      if (patch.triggerSourceType !== undefined) body.triggerSourceType = patch.triggerSourceType;
-      if (patch.triggerSource !== undefined) body.triggerSource = patch.triggerSource;
-      const w = (await core.call("api", "PUT", `${ws}/webhooks/${id}`, body)) as { id?: string; name?: string };
-      return { id: w?.id ?? id, name: w?.name ?? patch.name ?? id };
-    },
-    async deleteWebhook(id) {
-      await core.call("api", "DELETE", `${ws}/webhooks/${id}`);
-    },
+    prepareWebhookUpdate,
+    createWebhookAtomic,
+    updateWebhookAtomic,
+    deleteWebhookAtomic,
+    createWebhook: createWebhookAtomic,
+    async updateWebhook(id, patch) { return updateWebhookAtomic(id, await prepareWebhookUpdate(id, patch)); },
+    deleteWebhook: deleteWebhookAtomic,
     async listWebhookEvents() {
       return { rows: [...WEBHOOK_EVENTS], truncated: false };
     },
