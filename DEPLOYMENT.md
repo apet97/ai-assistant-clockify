@@ -218,7 +218,14 @@ candidate and evidence commit supplied independently, then bind the reviewed Mar
 media to the same pair. Both outputs stay external; a failure is a release stop:
 
 ```bash
-export RELEASE_EVIDENCE_COMMIT_SHA="$(git rev-parse HEAD)"
+RELEASE_EVIDENCE_COMMIT_SHA="$(git rev-parse HEAD)"
+export RELEASE_EVIDENCE_COMMIT_SHA
+export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH=evidence/performance/deepseek-capability-probe.raw.json
+export DEEPSEEK_BASELINE_RAW_PATH=evidence/performance/deepseek-baseline.raw.json
+export DEEPSEEK_CANDIDATE_RAW_PATH=evidence/performance/deepseek-candidate.raw.json
+export DEEPSEEK_FOCUSED_READ_RAW_PATH=evidence/performance/deepseek-focused-read.raw.json
+export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH=evidence/performance/deepseek-focused-risky-preview.raw.json
+export DEEPSEEK_BINDING_PATH=evidence/performance/deepseek-release-binding.json
 export DEEPSEEK_EXPECTED_CANDIDATE_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
 export DEEPSEEK_EVIDENCE_COMMIT_SHA="$RELEASE_EVIDENCE_COMMIT_SHA"
 export DEEPSEEK_VALIDATION_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-validation.post-commit.json"
