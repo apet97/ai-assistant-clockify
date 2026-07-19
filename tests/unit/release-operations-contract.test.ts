@@ -85,4 +85,22 @@ describe("release operations contract", () => {
       );
     }
   });
+
+  it("uses Railway file APIs and direct argv commands without a remote shell", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      expect(runbook).toContain("Railway CLI 5.27.0");
+      expect(runbook).toContain("railway service files");
+      expect(runbook).toContain('download "${REMOTE_BACKUP}${suffix}" "$partial_path"');
+      expect(runbook).toContain('delete "${REMOTE_BACKUP}${suffix}" --yes');
+      expect(runbook).not.toContain("sh -lc");
+      expect(runbook).not.toContain("| /usr/bin/base64 -D");
+    }
+  });
+
+  it("keeps restore-verifier stdout machine-readable while rebuilding the exact artifact", () => {
+    const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
+    expect(pkg.scripts["db:verify-restore"]).toContain("npm run build 1>&2");
+    expect(pkg.scripts["db:verify-restore"]).toContain("tsx scripts/verify-restored-db.ts");
+  });
 });

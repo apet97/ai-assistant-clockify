@@ -19,6 +19,7 @@
  * Run (creds come from the env file, never echoed):
  *   npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3
  *   npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3 --single-turn
+ * `--only=<exact case id>` selects only that case; otherwise it matches ID fragments.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -44,6 +45,7 @@ import {
 import { mean } from "../src/eval/consistency.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
 import { AGENTIC_CASES, type AgenticCase, type AgenticOutcome } from "./eval/agentic-cases.js";
+import { selectEvalCases } from "./eval/case-filter.js";
 import { selectEvalModelClient } from "./eval/model-client.js";
 import { runOrderedCohorts } from "./eval/ordered-cohorts.js";
 import { persistAndResume } from "./eval/persist-resume.js";
@@ -468,7 +470,7 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const cases = flags.only ? AGENTIC_CASES.filter((c) => c.id.includes(flags.only!)) : AGENTIC_CASES;
+  const cases = selectEvalCases(AGENTIC_CASES, flags.only);
   if (cases.length === 0) {
     console.error(`No cases match --only=${flags.only}.`);
     process.exit(2);

@@ -202,7 +202,7 @@ source-candidate versus evidence-only-descendant relationship, and the SHA-256 o
 complete `dist/server` tree. A dirty/non-evidence checkout or stale/tampered artifact is
 not valid release or recovery evidence.
 
-Railway 4.37 CLI equivalent: `railway variable set -s ai-assistant -e production
+Railway CLI 5.27.0 equivalent: `railway variable set -s ai-assistant -e production
 "BASE_URL=https://…" "DATABASE_PATH=/data/ai-assistant.sqlite"
 "SESSION_SECRET=…"` (etc.). Do not place this secret-bearing command in shell history;
 prefer the protected Variables tab or `railway variable set --stdin` one secret at a time.
@@ -257,7 +257,7 @@ embedded chat loads and a read action returns a receipt.
 - Sidebar chat loads; a read ("list my projects") returns a receipt; a risky write
   shows a preview + Confirm button.
 
-For a release-candidate upload, Railway CLI 4.37.x must receive identity variables from
+For a release-candidate upload, Railway CLI 5.27.0 must receive identity variables from
 the same clean commit before `railway up`. This service is not Git-linked, so a successful
 deployment alone does not prove what source was uploaded:
 
@@ -281,7 +281,7 @@ RELEASE_SOURCE_BINDING_SHA256="$(npx tsx scripts/release-source-binding.ts --wri
 export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
 
-railway --version                         # required release tool: 4.37.x
+railway --version                         # required release tool: 5.27.0
 railway variable set -s ai-assistant -e production --skip-deploys \
   "RELEASE_SHA=$RELEASE_SHA" "RELEASE_BUILD_HASH=$RELEASE_BUILD_HASH" \
   "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256"
@@ -487,7 +487,7 @@ deletion tombstone before the workspace can accept work again.
 
 Back up the live SQLite database with its online backup API; never copy the live
 `.sqlite`, `-wal`, and `-shm` files independently. The following release drill is pinned
-to Railway CLI 4.37.x and keeps the production service online while SQLite creates a
+to Railway CLI 5.27.0 and keeps the production service online while SQLite creates a
 transactionally consistent snapshot.
 
 First mount an encrypted APFS/FileVault volume at the explicit local path
@@ -496,7 +496,7 @@ folder. Verify encryption before creating any local file:
 
 ```bash
 set -euo pipefail
-railway --version                         # required release tool: 4.37.x
+railway --version                         # required release tool: 5.27.0
 : "${RELEASE_SHA:?exact release SHA is required}"
 : "${RELEASE_BUILD_HASH:?exact release build hash is required}"
 printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}([0-9a-f]{24})?$'
@@ -524,27 +524,29 @@ v7 production build emits format-1 metadata; the frozen candidate binds that sid
 the already-captured boundary after transport:
 
 ```bash
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  umask 077
+RAILWAY_PROJECT=fb1fa3c6-cc28-40d8-b985-2a7ee7051304
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
   mkdir -p /data/backups
-  npm run --silent db:backup -- /data/ai-assistant.sqlite "$1"
-' sh "$REMOTE_BACKUP"
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  npm run --silent db:backup -- /data/ai-assistant.sqlite "$REMOTE_BACKUP"
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  chmod 600 "$REMOTE_BACKUP" "$REMOTE_BACKUP.sha256" "$REMOTE_BACKUP.json"
 ```
 
-Transfer exactly the database and its two sidecars as a base64-wrapped tar stream. The
-binary and sidecar contents go directly to the encrypted directory; they are never
-printed to the terminal or shell history:
+Transfer exactly the database and its two sidecars with Railway's file API. No remote
+shell parses the command and no binary or environment value is printed to the terminal
+or shell history:
 
 ```bash
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  cd /data/backups
-  test -f "$1" && test -f "$1.sha256" && test -f "$1.json"
-  tar -cf - -- "$1" "$1.sha256" "$1.json" | base64
-' sh "$REMOTE_NAME" | /usr/bin/base64 -D | tar -xf - -C "$LOCAL_DIR"
-
 LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
+for suffix in "" ".sha256" ".json"; do
+  target_path="${LOCAL_BACKUP}${suffix}"
+  partial_path="${target_path}.partial"
+  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+    download "${REMOTE_BACKUP}${suffix}" "$partial_path" --json >/dev/null
+  chmod 600 "$partial_path"
+  mv "$partial_path" "$target_path"
+done
 chmod 600 "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json"
 (cd "$LOCAL_DIR" && shasum -a 256 -c "$REMOTE_NAME.sha256")
 
@@ -663,11 +665,11 @@ case "$RESTORED_PATH" in "$LOCAL_DIR"/isolated/*) ;; *) exit 64 ;; esac
 rm -f -- "$RESTORED_PATH" "$RESTORED_PATH-wal" "$RESTORED_PATH-shm"
 rmdir "$ISOLATED_DIR"
 
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  case "$1" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
-  rm -f -- "$1" "$1.sha256" "$1.json"
-' sh "$REMOTE_BACKUP"
+case "$REMOTE_BACKUP" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
+for suffix in "" ".sha256" ".json"; do
+  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+    delete "${REMOTE_BACKUP}${suffix}" --yes --json >/dev/null
+done
 ```
 
 Keep daily backups for 30 days and one monthly backup for the applicable

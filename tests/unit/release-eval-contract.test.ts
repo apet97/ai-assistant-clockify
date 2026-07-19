@@ -26,4 +26,11 @@ describe("DeepSeek release evaluator contract", () => {
       "mixedTier",
     ]) expect(evaluator).toContain(field);
   });
+
+  it("routes --only through exact-first case selection", () => {
+    const evaluator = read("scripts/eval-agentic.ts");
+    expect(evaluator).toContain('import { selectEvalCases } from "./eval/case-filter.js"');
+    expect(evaluator).toContain("selectEvalCases(AGENTIC_CASES, flags.only)");
+    expect(evaluator).not.toContain("c.id.includes(flags.only");
+  });
 });

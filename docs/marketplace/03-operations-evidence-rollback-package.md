@@ -74,6 +74,8 @@ cloud-sync folder. Keep the production app online for the SQLite online backup:
 
 ```bash
 set -euo pipefail
+railway --version                         # required release tool: Railway CLI 5.27.0
+RAILWAY_PROJECT=fb1fa3c6-cc28-40d8-b985-2a7ee7051304
 : "${RELEASE_SHA:?exact release SHA is required}"
 : "${RELEASE_BUILD_HASH:?exact release build hash is required}"
 export RELEASE_SHA RELEASE_BUILD_HASH
@@ -90,27 +92,28 @@ mkdir -p "$LOCAL_DIR"
 BACKUP_BOUNDARY_FILE="$LOCAL_DIR/pre-backup-boundary.txt"
 npm run --silent db:capture-backup-boundary -- "$BACKUP_BOUNDARY_FILE"
 
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  umask 077
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
   mkdir -p /data/backups
-  npm run --silent db:backup -- /data/ai-assistant.sqlite "$1"
-' sh "$REMOTE_BACKUP"
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  npm run --silent db:backup -- /data/ai-assistant.sqlite "$REMOTE_BACKUP"
+railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  chmod 600 "$REMOTE_BACKUP" "$REMOTE_BACKUP.sha256" "$REMOTE_BACKUP.json"
 ```
 
-Transfer the database and both evidence sidecars without printing their contents. The
-base64 wrapper makes the Railway command stream safe for a binary SQLite file; the local
-pipeline writes only inside the verified encrypted volume:
+Transfer the database and both evidence sidecars through Railway's file API without a
+remote shell or printing their contents. Each partial file is written only inside the
+verified encrypted volume and renamed after a successful download:
 
 ```bash
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  cd /data/backups
-  test -f "$1" && test -f "$1.sha256" && test -f "$1.json"
-  tar -cf - -- "$1" "$1.sha256" "$1.json" | base64
-' sh "$REMOTE_NAME" | /usr/bin/base64 -D | tar -xf - -C "$LOCAL_DIR"
-
 LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
+for suffix in "" ".sha256" ".json"; do
+  target_path="${LOCAL_BACKUP}${suffix}"
+  partial_path="${target_path}.partial"
+  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+    download "${REMOTE_BACKUP}${suffix}" "$partial_path" --json >/dev/null
+  chmod 600 "$partial_path"
+  mv "$partial_path" "$target_path"
+done
 chmod 600 "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json"
 (cd "$LOCAL_DIR" && shasum -a 256 -c "$REMOTE_NAME.sha256")
 
@@ -221,18 +224,18 @@ case "$RESTORED_PATH" in "$LOCAL_DIR"/isolated/*) ;; *) exit 64 ;; esac
 rm -f -- "$RESTORED_PATH" "$RESTORED_PATH-wal" "$RESTORED_PATH-shm"
 rmdir "$ISOLATED_DIR"
 
-railway ssh -s ai-assistant -e production sh -lc '
-  set -eu
-  case "$1" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
-  rm -f -- "$1" "$1.sha256" "$1.json"
-' sh "$REMOTE_BACKUP"
+case "$REMOTE_BACKUP" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
+for suffix in "" ".sha256" ".json"; do
+  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+    delete "${REMOTE_BACKUP}${suffix}" --yes --json >/dev/null
+done
 ```
 
 The drill never changes production `DATABASE_PATH` and never mutates Clockify. For an
 actual restore, drain the service, restore to a new path, run the same verification, and
 switch paths only after reconciliation clears newer dispatched host effects.
 
-## Exact Railway 4.37 release identity and deploy
+## Exact Railway CLI 5.27.0 release identity and deploy
 
 Only after the encrypted-backup stop gate above passes, bind Railway's public `/version`
 response to the exact archive uploaded by `railway up`; neither a deployment timestamp nor
@@ -261,7 +264,7 @@ RELEASE_SOURCE_BINDING_SHA256="$(npx tsx scripts/release-source-binding.ts --wri
 export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
 
-railway --version                         # required release tool: 4.37.x
+railway --version                         # required release tool: Railway CLI 5.27.0
 railway variable set -s ai-assistant -e production --skip-deploys \
   "RELEASE_SHA=$RELEASE_SHA" "RELEASE_BUILD_HASH=$RELEASE_BUILD_HASH" \
   "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256"

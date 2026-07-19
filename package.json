@@ -49,7 +49,7 @@
     "db:capture-backup-boundary": "tsx scripts/capture-backup-boundary.ts",
     "db:bind-legacy-backup-metadata": "tsx scripts/bind-legacy-backup-metadata.ts",
     "db:restore": "tsx scripts/restore-db.ts",
-    "db:verify-restore": "npm run build && tsx scripts/verify-restored-db.ts"
+    "db:verify-restore": "npm run build 1>&2 && tsx scripts/verify-restored-db.ts"
   },
   "dependencies": {
     "@apet97/clockify-addon-sdk": "file:vendor/apet97-clockify-addon-sdk-1.0.0.tgz",

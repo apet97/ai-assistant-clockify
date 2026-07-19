@@ -664,5 +664,8 @@ LIVE_CLOCKIFY=1 LIVE_SCOPE_FRESH_INSTALL=1 npm run probe:scopes                 
 LIVE_CLOCKIFY=1 npx tsx scripts/host-auth-spike.ts                                         # API/reports/AUDIT add-on-token clearance
 ```
 
+For `eval-agentic`, `--only=<exact case id>` selects exactly one case. A non-exact
+value keeps the ad-hoc substring behavior for selecting several related case IDs.
+
 Always finish a live run with the sweep at 0 leftovers. Never commit or paste live
 credentials.
