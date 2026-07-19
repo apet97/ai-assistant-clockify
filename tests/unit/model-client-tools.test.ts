@@ -140,9 +140,29 @@ describe("createModelClient.completeWithTools", () => {
   });
 
   it.each([
+    ["null top-level body", null],
     ["missing choices", {}],
     ["empty choices", { choices: [] }],
     ["missing assistant message", { choices: [{}] }],
+    ["null choice", { choices: [null] }],
+    ["numeric choice", { choices: [42] }],
+    ["string choice", { choices: ["invalid"] }],
+    ["array choice", { choices: [[]] }],
+    ["null message", { choices: [{ message: null }] }],
+    ["string message", { choices: [{ message: "invalid" }] }],
+    ["array message", { choices: [{ message: [] }] }],
+    ["object tool_calls", { choices: [{ message: { tool_calls: {} } }] }],
+    ["string tool_calls", { choices: [{ message: { tool_calls: "invalid" } }] }],
+    ["numeric content", { choices: [{ finish_reason: "stop", message: { content: 42, tool_calls: [] } }] }],
+    ["object content", { choices: [{ finish_reason: "stop", message: { content: {}, tool_calls: [] } }] }],
+    ["numeric reasoning content", {
+      choices: [{ finish_reason: "stop", message: { content: "", reasoning_content: 42, tool_calls: [] } }],
+    }],
+    ["array reasoning content", {
+      choices: [{ finish_reason: "stop", message: { content: "", reasoning_content: [], tool_calls: [] } }],
+    }],
+    ["numeric finish reason", { choices: [{ finish_reason: 42, message: { content: "", tool_calls: [] } }] }],
+    ["object finish reason", { choices: [{ finish_reason: {}, message: { content: "", tool_calls: [] } }] }],
     ["multiple choices", {
       choices: [
         { finish_reason: "stop", message: { content: "first", tool_calls: [] } },
@@ -355,6 +375,32 @@ describe("createModelClient thought signatures (Gemini 3.x continuation contract
     };
     const result = await client(payload).completeWithTools!([{ role: "user", content: "x" }], tools);
     expect(result.toolCalls[0].thoughtSignature).toBe("SIG_ABC");
+  });
+
+  it.each([
+    ["object", { forged: true }],
+    ["number", 42],
+    ["array", ["forged"]],
+    ["boolean", true],
+  ])("rejects a non-string %s thought signature", async (_label, thoughtSignature) => {
+    const payload = {
+      choices: [{
+        finish_reason: "tool_calls",
+        message: {
+          content: null,
+          tool_calls: [{
+            id: "c1",
+            function: { name: "clockify_status", arguments: "{}" },
+            extra_content: { google: { thought_signature: thoughtSignature } },
+          }],
+        },
+      }],
+    };
+    const error = await client(payload)
+      .completeWithTools!([{ role: "user", content: "x" }], tools)
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ProviderProtocolError);
+    expect(error).toMatchObject({ reason: "malformed_tool" });
   });
 
   it("echoes the signature back on continuation tool_calls (Gemini 400s without it) and omits it when absent", async () => {

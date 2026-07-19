@@ -204,6 +204,10 @@ interface ChatCompletionResponse {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 /** The cached-prompt-token count from either provider shape, or undefined if neither reported it. */
 function parseCachedPromptTokens(usage: NonNullable<ChatCompletionResponse["usage"]>): number | undefined {
   if (typeof usage.prompt_cache_hit_tokens === "number") return usage.prompt_cache_hit_tokens;
@@ -268,8 +272,16 @@ function parseToolCalls(
     // Most OpenAI-compatible providers return an id; synthesize a transcript-unique
     // one if not, so the loop can always correlate a tool result back to its call.
     const id = typeof call.id === "string" && call.id ? call.id : `call_${nextSyntheticSeq()}`;
-    const thoughtSignature = call.extra_content?.google?.thought_signature;
-    calls.push({ id, name, arguments: args, ...(thoughtSignature ? { thoughtSignature } : {}) });
+    const thoughtSignature: unknown = call.extra_content?.google?.thought_signature;
+    if (thoughtSignature !== undefined && thoughtSignature !== null && typeof thoughtSignature !== "string") {
+      throw new ProviderProtocolError("malformed_tool");
+    }
+    calls.push({
+      id,
+      name,
+      arguments: args,
+      ...(typeof thoughtSignature === "string" && thoughtSignature.length > 0 ? { thoughtSignature } : {}),
+    });
   });
   return calls;
 }
@@ -468,18 +480,37 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         })),
         tool_choice: "auto",
       }, signal, options?.retryTransient !== false);
-      if (!Array.isArray(data.choices) || data.choices.length !== 1) {
+      if (!isRecord(data) || !Array.isArray(data.choices) || data.choices.length !== 1) {
         throw new ProviderProtocolError("malformed_completion");
       }
-      const choice = data.choices[0]!;
-      const message = choice.message;
+      const typedData = data as ChatCompletionResponse;
+      const rawChoice: unknown = data.choices[0];
+      if (!isRecord(rawChoice) || !isRecord(rawChoice.message)) {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      const rawMessage = rawChoice.message;
+      if (rawMessage.tool_calls !== undefined && rawMessage.tool_calls !== null &&
+        !Array.isArray(rawMessage.tool_calls)) {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      if (rawMessage.content !== undefined && rawMessage.content !== null &&
+        typeof rawMessage.content !== "string") {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      if (rawMessage.reasoning_content !== undefined && rawMessage.reasoning_content !== null &&
+        typeof rawMessage.reasoning_content !== "string") {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      if (rawChoice.finish_reason !== undefined && rawChoice.finish_reason !== null &&
+        typeof rawChoice.finish_reason !== "string") {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      const choice = rawChoice as NonNullable<ChatCompletionResponse["choices"]>[number];
+      const message = rawMessage as NonNullable<typeof choice.message>;
       const finishReason = choice.finish_reason;
-      if (!message || typeof message !== "object" || Array.isArray(message)) {
-        throw new ProviderProtocolError("malformed_completion");
-      }
-      const usage = parseUsage(data.usage);
+      const usage = parseUsage(typedData.usage);
       return {
-        text: message?.content ?? "",
+        text: message.content ?? "",
         toolCalls: parseToolCalls(message?.tool_calls ?? [], offeredToolNames, nextSyntheticSeq),
         finishReason: typeof finishReason === "string" ? finishReason : "missing",
         ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
