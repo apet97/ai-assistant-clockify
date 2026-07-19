@@ -19,7 +19,7 @@ test("read receipt and immediate safe write with undo stay truthful", async ({ p
   await expect(page.getByRole("textbox", { name: "Message" })).toBeFocused();
 });
 
-test("a long mixed journey keeps the header and complete composer in-frame", async ({ page }) => {
+test("a long mixed journey keeps the header and complete composer in-frame", async ({ page, browserName }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openAssistant(page);
 
@@ -30,9 +30,13 @@ test("a long mixed journey keeps the header and complete composer in-frame", asy
   await expect(safeReceipt).toBeVisible();
   await send(page, "risky-confirm");
   const preview = page.getByRole("group", { name: "Change awaiting confirmation" });
-  await preview.getByRole("button", { name: "Confirm" }).click();
+  const confirm = preview.getByRole("button", { name: "Confirm" });
+  await tabTo(page, confirm, browserName, 80, true);
+  await page.keyboard.press("Enter");
   await expect(page.getByRole("group", { name: "Done: clockify_update_project" })).toBeVisible();
-  await safeReceipt.getByRole("button", { name: "Undo clockify_start_timer" }).click();
+  const undo = safeReceipt.getByRole("button", { name: "Undo clockify_start_timer" });
+  await tabTo(page, undo, browserName, 80, true);
+  await page.keyboard.press("Enter");
   await expect(safeReceipt.getByText("Undone")).toBeVisible();
 
   const frame = await page.evaluate(() => {
