@@ -90,6 +90,26 @@ declaration, authority bypass, visibility flip, duplicate write, or typed-confir
 fails the release artifact.
 
 ```bash
+set -euo pipefail
+: "${RELEASE_SHA:?exact clean source-candidate SHA is required}"
+: "${RECOVERY_EVIDENCE_DIR:?absolute off-worktree evidence directory is required}"
+test "$RELEASE_SHA" = "$(git rev-parse HEAD)"
+test -z "$(git status --porcelain --untracked-files=all)"
+CHECKOUT_ROOT="$(pwd -P)"
+mkdir -p "$RECOVERY_EVIDENCE_DIR"
+RECOVERY_EVIDENCE_DIR="$(cd "$RECOVERY_EVIDENCE_DIR" && pwd -P)"
+export RECOVERY_EVIDENCE_DIR
+case "$RECOVERY_EVIDENCE_DIR" in
+  "$CHECKOUT_ROOT"|"$CHECKOUT_ROOT"/*) echo "RECOVERY_EVIDENCE_DIR must be outside the checkout" >&2; exit 1 ;;
+esac
+RAILWAY_TARGET=(
+  --project fb1fa3c6-cc28-40d8-b985-2a7ee7051304
+  --service 2656670e-39a5-40f3-af5c-56dfc637552f
+  --environment 45300bdc-788b-4f63-8749-5a8f7e46b774
+  --no-local
+)
+export RELEASE_SOURCE_CANDIDATE_SHA="$RELEASE_SHA"
+export RELEASE_EVIDENCE_COMMIT_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
 export EVAL_RELEASE_CANDIDATE_SHA="$RELEASE_SHA"
 export LLM_MODE=tool LLM_AGENTIC=1 LLM_TOOL_SELECT=1
 export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-capability-probe.raw.json"
@@ -98,16 +118,17 @@ export DEEPSEEK_CANDIDATE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-candidate.ra
 export DEEPSEEK_FOCUSED_READ_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-read.raw.json"
 export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-risky-preview.raw.json"
 export DEEPSEEK_BINDING_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-binding.json"
-railway run -s ai-assistant -e production -- \
+export DEEPSEEK_VALIDATION_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-validation.json"
+railway run "${RAILWAY_TARGET[@]}" -- \
   npx tsx scripts/eval/probe-deepseek-settings.ts \
   --out="$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH"
-railway run -s ai-assistant -e production -- \
+railway run "${RAILWAY_TARGET[@]}" -- \
   env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
   npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
   --out="$DEEPSEEK_BASELINE_RAW_PATH"
 
 set +e
-railway run -s ai-assistant -e production -- \
+railway run "${RAILWAY_TARGET[@]}" -- \
   env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
   npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
   --out="$DEEPSEEK_CANDIDATE_RAW_PATH"
@@ -119,11 +140,11 @@ SELECTED_DEEPSEEK_SETTING="$(npx tsx scripts/evidence/deepseek-release-evidence.
 
 case "$SELECTED_DEEPSEEK_SETTING" in
   production-default)
-    railway run -s ai-assistant -e production -- \
+    railway run "${RAILWAY_TARGET[@]}" -- \
       env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
       npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
       --tool-select --concurrency=4 --out="$DEEPSEEK_FOCUSED_READ_RAW_PATH"
-    railway run -s ai-assistant -e production -- \
+    railway run "${RAILWAY_TARGET[@]}" -- \
       env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
       npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
       --preview-only --tool-select --concurrency=4 \
@@ -131,11 +152,11 @@ case "$SELECTED_DEEPSEEK_SETTING" in
     ;;
   thinking-disabled)
     test "$DEEPSEEK_CANDIDATE_EXIT_STATUS" = 0
-    railway run -s ai-assistant -e production -- \
+    railway run "${RAILWAY_TARGET[@]}" -- \
       env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
       npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
       --tool-select --concurrency=4 --out="$DEEPSEEK_FOCUSED_READ_RAW_PATH"
-    railway run -s ai-assistant -e production -- \
+    railway run "${RAILWAY_TARGET[@]}" -- \
       env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
       npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
       --preview-only --tool-select --concurrency=4 \
@@ -144,12 +165,73 @@ case "$SELECTED_DEEPSEEK_SETTING" in
   *) exit 1 ;;
 esac
 npm run --silent bind:deepseek-evidence
+export DEEPSEEK_EXPECTED_CANDIDATE_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
+export DEEPSEEK_EVIDENCE_COMMIT_SHA="$RELEASE_EVIDENCE_COMMIT_SHA"
+npm run --silent check:deepseek-evidence -- --benchmark-only
 ```
 
 The lower-effort evaluator intentionally exits `1` when it records a complete
 functional miss. That status is acceptable only when the strict raw-telemetry
 selector validates the artifact and selects an eligible setting; missing,
 malformed, unsafe, stale, cross-source, or cross-endpoint evidence still fails.
+
+Only after that formal check succeeds, import the six validated external JSON inputs into
+their six canonical tracked paths. Stage exactly those paths, require no other tracked or
+untracked change, and create an evidence-only descendant of the tested source candidate:
+
+```bash
+install -m 0644 "$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH" \
+  evidence/performance/deepseek-capability-probe.raw.json
+install -m 0644 "$DEEPSEEK_BASELINE_RAW_PATH" \
+  evidence/performance/deepseek-baseline.raw.json
+install -m 0644 "$DEEPSEEK_CANDIDATE_RAW_PATH" \
+  evidence/performance/deepseek-candidate.raw.json
+install -m 0644 "$DEEPSEEK_FOCUSED_READ_RAW_PATH" \
+  evidence/performance/deepseek-focused-read.raw.json
+install -m 0644 "$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH" \
+  evidence/performance/deepseek-focused-risky-preview.raw.json
+install -m 0644 "$DEEPSEEK_BINDING_PATH" \
+  evidence/performance/deepseek-release-binding.json
+
+git add -- \
+  evidence/performance/deepseek-capability-probe.raw.json \
+  evidence/performance/deepseek-baseline.raw.json \
+  evidence/performance/deepseek-candidate.raw.json \
+  evidence/performance/deepseek-focused-read.raw.json \
+  evidence/performance/deepseek-focused-risky-preview.raw.json \
+  evidence/performance/deepseek-release-binding.json
+EXPECTED_DEEPSEEK_PATHS="$(printf '%s\n' \
+  evidence/performance/deepseek-capability-probe.raw.json \
+  evidence/performance/deepseek-baseline.raw.json \
+  evidence/performance/deepseek-candidate.raw.json \
+  evidence/performance/deepseek-focused-read.raw.json \
+  evidence/performance/deepseek-focused-risky-preview.raw.json \
+  evidence/performance/deepseek-release-binding.json | LC_ALL=C sort)"
+test "$(git diff --cached --name-only | LC_ALL=C sort)" = "$EXPECTED_DEEPSEEK_PATHS"
+test -z "$(git diff --name-only)"
+test -z "$(git ls-files --others --exclude-standard)"
+git commit -m "chore: bind DeepSeek release evidence"
+```
+
+From the resulting clean evidence commit, rerun the canonical validator with the source
+candidate and evidence commit supplied independently, then bind the reviewed Marketplace
+media to the same pair. Both outputs stay external; a failure is a release stop:
+
+```bash
+export RELEASE_EVIDENCE_COMMIT_SHA="$(git rev-parse HEAD)"
+export DEEPSEEK_EXPECTED_CANDIDATE_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
+export DEEPSEEK_EVIDENCE_COMMIT_SHA="$RELEASE_EVIDENCE_COMMIT_SHA"
+export DEEPSEEK_VALIDATION_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-validation.post-commit.json"
+npm run --silent check:deepseek-evidence -- --benchmark-only
+
+export MARKETPLACE_MEDIA_SOURCE_CANDIDATE_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
+export MARKETPLACE_MEDIA_EVIDENCE_COMMIT_SHA="$RELEASE_EVIDENCE_COMMIT_SHA"
+export MARKETPLACE_MEDIA_BINDING_PATH="$RECOVERY_EVIDENCE_DIR/marketplace-media-release-binding.json"
+npm run --silent evidence:marketplace-media-binding
+test -s "$DEEPSEEK_VALIDATION_PATH"
+test -s "$MARKETPLACE_MEDIA_BINDING_PATH"
+test -z "$(git status --porcelain --untracked-files=all)"
+```
 
 Immediately before production upload, bind the still-present encrypted backup, checksum
 sidecar, metadata sidecar, measured restore proof, and exact locally built runtime artifact
