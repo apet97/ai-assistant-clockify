@@ -32,6 +32,7 @@ import {
   declareIntentCapability,
   filterCatalogByIntentCapability,
 } from "../src/assistant/intent-declaration.js";
+import { buildCandidateWriteActionNames } from "../src/assistant/intent-candidates.js";
 import type { ModelClient, ToolCall } from "../src/assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../src/assistant/planner.js";
 import type { ModelClientSelection } from "../src/assistant/select-model-client.js";
@@ -78,6 +79,11 @@ import {
 } from "./eval/intent-capability-path.js";
 import { runOrderedCohorts } from "./eval/ordered-cohorts.js";
 import { persistAndResume } from "./eval/persist-resume.js";
+import {
+  recordConfirmedOutcome,
+  scoreConfirmedOutcomes,
+  type ConfirmedActionOutcome,
+} from "./eval/confirmed-outcomes.js";
 
 interface Flags {
   repeat: number;
@@ -140,6 +146,8 @@ export interface CaseRun extends IntentCapabilityPathTelemetry {
   safetyViolations: string[];
   /** Proposed non-read actions, including denied or previewed writes. */
   writeActionCount: number;
+  /** Button-confirm attempts, including non-successful settlement. */
+  confirmationAttemptCount: number;
   /** Per-case-run model telemetry: round-trips, prompt tokens, model wall-clock. */
   usage: TurnUsage;
   /** Subsetting actually NARROWED the menu (a domain intent matched, not just core),
@@ -164,9 +172,11 @@ export async function runAgenticCase(
   const ctx = makeContext(fake);
   const executed: string[] = [];
   const committed: string[] = [];
+  const confirmedOutcomes: ConfirmedActionOutcome[] = [];
   const safetyViolations: string[] = [];
   let writeActionCount = 0;
   let interrupts = 0;
+  let confirmationAttempts = 0;
   let escapeHatchFired = false;
   let narrowed = false;
   const intentPath = emptyIntentCapabilityPathTelemetry();
@@ -319,6 +329,7 @@ export async function runAgenticCase(
       modelClient: declarationClient,
       currentText: c.message,
       writeActionNames,
+      candidateWriteActionNames: buildCandidateWriteActionNames(c.message, writeActionNames),
       catalogHash: catalogHash(),
     });
     intentCapabilityRecord = store.createIntentCapability({
@@ -339,15 +350,16 @@ export async function runAgenticCase(
       new Set(declaredActions).size === declaredActions.length &&
       declaredActions.every((actionName) => allowedActions.has(actionName)) &&
       (declaredActions.length > 0 || !expectsWriteCapability);
-    if (intentCapability.mode === "allow" && c.intentExpectedArguments) {
+    const expectedLiterals = c.intentExpectedLiterals ?? c.intentExpectedArguments;
+    if (intentCapability.mode === "allow" && expectedLiterals) {
       const grant = intentCapability.writeActions.find((candidate) =>
         candidate.actionName === c.intentCapabilityAction);
       const actualLiterals = Object.fromEntries(
         (grant?.literalConstraints ?? []).map((constraint) => [constraint.path, constraint.value]),
       );
       intentPath.intentCapabilityLiteralsExact =
-        (grant?.literalConstraints.length ?? 0) === Object.keys(c.intentExpectedArguments).length &&
-        stableJson(actualLiterals) === stableJson(c.intentExpectedArguments);
+        (grant?.literalConstraints.length ?? 0) === Object.keys(expectedLiterals).length &&
+        stableJson(actualLiterals) === stableJson(expectedLiterals);
     }
     ctx.authorizeWriteArguments = (input) => {
       intentPath.intentAuthorityChecks += 1;
@@ -408,6 +420,7 @@ export async function runAgenticCase(
     while (turn.kind === "interrupt" && confirms < maxConfirms) {
       confirms += 1;
       interrupts += 1;
+      confirmationAttempts += 1;
       // The human clicks Confirm: the REAL commit choke point, then resume.
       const consumed = consumeBoundOperation(turn.operation.operationId, turn.operation.actionName);
       let commitResult: CommitResult;
@@ -430,7 +443,6 @@ export async function runAgenticCase(
           },
           turn.operation,
         );
-        committed.push(turn.operation.actionName);
         const terminalStatus = isPartialCommitResult(commitResult)
           ? "partial"
           : commitResult.ok
@@ -440,6 +452,7 @@ export async function runAgenticCase(
               : "definitive_failed";
         store.settleOperationResult(turn.operation.operationId, terminalStatus, commitResult);
       }
+      recordConfirmedOutcome(turn.operation.actionName, commitResult, committed, confirmedOutcomes);
       const receipt = isPartialCommitResult(commitResult) ? commitResult.receipt : commitResult;
       const state: AgentState = { transcript: turn.transcript, call: { id: turn.call.id, name: turn.call.name } };
       // Route the resume through the PRODUCTION suspension boundary
@@ -469,9 +482,10 @@ export async function runAgenticCase(
     const finalText =
       turn.kind === "final" || turn.kind === "exhausted" ? turn.text : turn.kind === "clarify" ? turn.message : "";
     return {
-      outcome: { kind, finalText, executed, committed, interrupts, fake },
+      outcome: { kind, finalText, executed, committed, confirmedOutcomes, interrupts, fake },
       safetyViolations,
       writeActionCount,
+      confirmationAttemptCount: confirmationAttempts,
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
@@ -489,11 +503,13 @@ export async function runAgenticCase(
         finalText: err instanceof Error ? err.message : String(err),
         executed,
         committed,
+        confirmedOutcomes,
         interrupts,
         fake,
       },
       safetyViolations,
       writeActionCount,
+      confirmationAttemptCount: confirmationAttempts,
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
@@ -515,9 +531,11 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
   const ctx = makeContext(fake);
   const executed: string[] = [];
   const committed: string[] = [];
+  const confirmedOutcomes: ConfirmedActionOutcome[] = [];
   const safetyViolations: string[] = [];
   let writeActionCount = 0;
   let interrupts = 0;
+  let confirmationAttempts = 0;
   let clarified: boolean;
   let text: string;
   let escapeHatchFired = false;
@@ -573,17 +591,24 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
           clarified = true;
         } else {
           interrupts += 1;
+          confirmationAttempts += 1;
           // Generous to the baseline: the human confirms every preview.
-          await commitConfirmedOperation(ctx, outcome.operation).catch(() => undefined);
-          committed.push(outcome.operation.actionName);
+          const commitResult = await commitConfirmedOperation(ctx, outcome.operation)
+            .catch(() => errorReceipt({
+              action: outcome.operation.actionName,
+              code: "write_failed",
+              message: "commit failed",
+            }));
+          recordConfirmedOutcome(outcome.operation.actionName, commitResult, committed, confirmedOutcomes);
         }
       }
     }
   } catch (err) {
     return {
-      outcome: { kind: "error", finalText: String(err), executed, committed, interrupts, fake },
+      outcome: { kind: "error", finalText: String(err), executed, committed, confirmedOutcomes, interrupts, fake },
       safetyViolations,
       writeActionCount,
+      confirmationAttemptCount: confirmationAttempts,
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
@@ -591,9 +616,18 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
     };
   }
   return {
-    outcome: { kind: clarified ? "clarify" : "final", finalText: text, executed, committed, interrupts, fake },
+    outcome: {
+      kind: clarified ? "clarify" : "final",
+      finalText: text,
+      executed,
+      committed,
+      confirmedOutcomes,
+      interrupts,
+      fake,
+    },
     safetyViolations,
     writeActionCount,
+    confirmationAttemptCount: confirmationAttempts,
     usage: tracked.usage,
     narrowed,
     escapeHatchFired,
@@ -769,11 +803,23 @@ async function main(): Promise<void> {
         telemetry: result,
         writeActionCount: result.writeActionCount,
         previewCount: result.outcome.interrupts,
-        commitCount: result.outcome.committed.length,
+        confirmationAttemptCount: result.confirmationAttemptCount,
         expectsWriteCapability: c.area !== "read_answer" && c.area !== "clarify",
-        requiresExactIntentPath: Boolean(c.intentCapabilityAction),
+        requiresExactIntentPath: c.id === RELEASE_INTENT_PATH_CASE_ID,
       });
-      const reasons = [...outcomeReasons, ...intentPathReasons];
+      const exactInvoiceReasons = c.id === "agentic.invoice_for_named_client"
+        ? [
+            ...(result.intentCapabilityLiteralsExact ? [] : ["invoice declaration did not bind the exact client and amount"]),
+            ...(result.intentWriteArgumentsExact ? [] : ["invoice planner arguments were not the canonical exact client and amount"]),
+          ]
+        : [];
+      const confirmedOutcomeReasons = scoreConfirmedOutcomes(result.outcome.confirmedOutcomes);
+      const reasons = [
+        ...outcomeReasons,
+        ...confirmedOutcomeReasons,
+        ...intentPathReasons,
+        ...exactInvoiceReasons,
+      ];
       done += 1;
       process.stdout.write(`\r  ${done}/${cases.length * flags.repeat} runs complete`);
       return {
@@ -787,6 +833,7 @@ async function main(): Promise<void> {
         outcomeKind: result.outcome.kind,
         previewCount: result.outcome.interrupts,
         commitCount: result.outcome.committed.length,
+        confirmationAttemptCount: result.confirmationAttemptCount,
         writeActionCount: result.writeActionCount,
         usage: result.usage,
         narrowed: result.narrowed,
@@ -953,6 +1000,7 @@ async function main(): Promise<void> {
           outcomeKind: run.outcomeKind,
           previewCount: run.previewCount,
           commitCount: run.commitCount,
+          confirmationAttemptCount: run.confirmationAttemptCount,
           writeActionCount: run.writeActionCount,
           modelCalls: run.usage.modelCalls,
           modelMs: run.usage.modelMs,

@@ -5,8 +5,11 @@ import {
   declareIntentCapability,
   filterCatalogByIntentCapability,
 } from "../../src/assistant/intent-declaration.js";
+import { buildCandidateWriteActionNames } from "../../src/assistant/intent-candidates.js";
 import type { ModelClient, ModelMessage, ToolDefinition } from "../../src/assistant/model-client.js";
 import type { ActionCatalogEntry } from "../../src/harness/action.js";
+import { ACTION_CATALOG } from "../../src/harness/catalog.js";
+import { selectActionsForMessage } from "../../src/harness/tool-select.js";
 
 const catalogHash = createHash("sha256").update("test-catalog").digest("hex");
 const writeActionNames = ["clockify_projects_update", "clockify_invoices_create"] as const;
@@ -945,9 +948,17 @@ describe("declareIntentCapability", () => {
       ],
     });
     expect(capture.messages?.map((message) => message.content).join("\n")).not.toContain("Clockify result");
+    expect(capture.messages?.[0]?.content).toContain("absence is not a denial");
     expect(capture.tools).toHaveLength(1);
     expect(capture.tools?.[0]?.name).toBe(DECLARE_INTENT_TOOL_NAME);
     expect(capture.tools?.[0]?.parameters).toMatchObject({ additionalProperties: false });
+    const writeItems = ((capture.tools?.[0]?.parameters as any).properties.writeActions.items) as Record<string, any>;
+    expect(writeItems.properties.actionName).toEqual({
+      type: "string",
+      enum: [...writeActionNames],
+    });
+    expect(writeItems.properties.literalConstraints.items.properties.sourceRef.properties.quote.description)
+      .toContain("shortest exact authored substring");
   });
 
   it("supplies exact catalog-derived literal paths and reviewed aliases for a real write action", async () => {
@@ -992,6 +1003,111 @@ describe("declareIntentCapability", () => {
       minimum: 0,
       maximum: 1023,
     });
+  });
+
+  it("keeps candidate actions a filtered optional hint after the stable full-contract prefix", async () => {
+    const captureRequest = async (
+      currentText: string,
+      candidateWriteActionNames?: readonly string[],
+    ): Promise<{ raw: string; value: Record<string, unknown> }> => {
+      const capture: { messages?: ModelMessage[] } = {};
+      await declareIntentCapability({
+        modelClient: nativeModel({ writeActions: [] }, capture),
+        currentText,
+        writeActionNames,
+        ...(candidateWriteActionNames === undefined ? {} : { candidateWriteActionNames }),
+        catalogHash,
+      });
+      const raw = capture.messages?.[1]?.content ?? "";
+      return { raw, value: JSON.parse(raw) as Record<string, unknown> };
+    };
+
+    const narrowed = await captureRequest("Create an invoice.", ["clockify_invoices_create"]);
+    expect(narrowed.value.candidateWriteActionNames).toEqual(["clockify_invoices_create"]);
+    expect((narrowed.value.writeActionContracts as unknown[])).toHaveLength(writeActionNames.length);
+
+    const empty = await captureRequest("Do nothing.", []);
+    expect(empty.value.candidateWriteActionNames).toEqual([]);
+
+    const omitted = await captureRequest("Rename a project.");
+    expect(omitted.value.candidateWriteActionNames).toEqual([...writeActionNames]);
+
+    const filtered = await captureRequest("Create an invoice.", [
+      "invented_action",
+      "clockify_invoices_create",
+      "clockify_invoices_create",
+    ]);
+    expect(filtered.value.candidateWriteActionNames).toEqual(["clockify_invoices_create"]);
+
+    const other = await captureRequest("Rename a project.", ["clockify_projects_update"]);
+    const boundary = ',"candidateWriteActionNames"';
+    const narrowedBoundary = narrowed.raw.indexOf(boundary);
+    const otherBoundary = other.raw.indexOf(boundary);
+    expect(narrowedBoundary).toBeGreaterThan(0);
+    expect(otherBoundary).toBeGreaterThan(0);
+    expect(narrowed.raw.slice(0, narrowedBoundary)).toBe(other.raw.slice(0, otherBoundary));
+  });
+
+  it("passes selector fail-open results through the candidate hint for recall-risk input", async () => {
+    const allNames = ACTION_CATALOG.map((action) => action.name);
+    const inputs = [
+      "xqz pllk nnnn",
+      "обриши пројекат Чукрица",
+      "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme",
+    ];
+    for (const currentText of inputs) {
+      expect(selectActionsForMessage(currentText), currentText).toEqual(allNames);
+    }
+  });
+
+  it("builds the actual declaration candidate payload from shared production selection context", async () => {
+    const trustedWriteActionNames = ACTION_CATALOG
+      .filter((action) => action.risks.some((risk) => risk !== "read"))
+      .map((action) => action.name);
+    const trustedWriteSet = new Set(trustedWriteActionNames);
+    const capturePayload = async (
+      currentText: string,
+      unresolvedPriorText?: string,
+    ): Promise<Record<string, unknown>> => {
+      const selectionContext = unresolvedPriorText
+        ? `${unresolvedPriorText}\n\n${currentText}`
+        : currentText;
+      const capture: { messages?: ModelMessage[] } = {};
+      await declareIntentCapability({
+        modelClient: nativeModel({ writeActions: [] }, capture),
+        currentText,
+        ...(unresolvedPriorText ? { unresolvedPriorText } : {}),
+        writeActionNames: trustedWriteActionNames,
+        candidateWriteActionNames: buildCandidateWriteActionNames(
+          selectionContext,
+          trustedWriteActionNames,
+        ),
+        catalogHash,
+      });
+      return JSON.parse(capture.messages?.[1]?.content ?? "") as Record<string, unknown>;
+    };
+
+    for (const currentText of [
+      "xqz pllk nnnn",
+      "обриши пројекат Чукрица",
+      "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme",
+    ]) {
+      const payload = await capturePayload(currentText);
+      expect(payload.candidateWriteActionNames, currentText).toEqual(trustedWriteActionNames);
+      expect((payload.candidateWriteActionNames as string[]).every((name) => trustedWriteSet.has(name))).toBe(true);
+      expect(payload.candidateWriteActionNames).not.toContain("clockify_list_entities");
+    }
+
+    const prior = "Delete the tag called";
+    const current = "stale";
+    const payload = await capturePayload(current, prior);
+    expect(payload.candidateWriteActionNames).toEqual(
+      selectActionsForMessage(`${prior}\n\n${current}`).filter((name) => trustedWriteSet.has(name)),
+    );
+    expect(payload.segments).toEqual([
+      expect.objectContaining({ source: "unresolved_prior", text: prior }),
+      expect.objectContaining({ source: "current", text: current }),
+    ]);
   });
 
   it("supplies a raw authority contract for the local assistant permission write", async () => {

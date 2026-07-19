@@ -8,6 +8,7 @@ import {
   type AgenticOutcome,
 } from "../../scripts/eval/agentic-cases.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { scoreConfirmedOutcomes } from "../../scripts/eval/confirmed-outcomes.js";
 
 /**
  * Pins for the multi-step (agentic) eval corpus: every case must have a valid
@@ -44,7 +45,11 @@ describe("AGENTIC_CASES corpus", () => {
 
   it("includes the headline acceptance case (invoice for qwen) requiring an interrupt", () => {
     const headline = AGENTIC_CASES.find((c) => c.id === "agentic.invoice_for_named_client");
-    expect(headline).toBeDefined();
+    expect(headline).toMatchObject({
+      intentCapabilityAction: "clockify_invoices_create",
+      intentExpectedArguments: { clientName: "qwen", items: [{ amount: 1000 }] },
+      intentExpectedLiterals: { clientName: "qwen", "items[].amount": 1000 },
+    });
     expect(headline!.message.toLowerCase()).toContain("qwen");
   });
 
@@ -98,6 +103,94 @@ describe("AGENTIC_CASES new-case checks accept a correct outcome", () => {
     return c;
   };
 
+  it("invoice_for_named_client: only an exact successful confirmed receipt can pass", () => {
+    const c = caseById("agentic.invoice_for_named_client");
+    const fake = createFakeWorkspace(c.seed);
+    fake.state.invoices.push({ id: "inv1", clientId: "cl1" } as never);
+    const base: AgenticOutcome = {
+      kind: "final",
+      finalText: "Invoice created.",
+      executed: [],
+      committed: ["clockify_invoices_create"],
+      confirmedOutcomes: [{ action: "clockify_invoices_create", status: "succeeded" }],
+      interrupts: 1,
+      fake,
+    };
+    expect(c.check(base)).toEqual([]);
+    for (const status of ["definitive_failed", "partial", "outcome_unknown"] as const) {
+      expect(c.check({
+        ...base,
+        committed: [],
+        confirmedOutcomes: [{ action: "clockify_invoices_create", status }],
+      }), status).not.toEqual([]);
+    }
+  });
+
+  it("rename_tag: only an exact successful specific or generic confirmed receipt can pass", () => {
+    const c = caseById("agentic.rename_tag");
+    const fake = createFakeWorkspace(c.seed);
+    fake.state.tags = [{ id: "t1", name: "critical" }, { id: "t2", name: "stale" }];
+    const base: AgenticOutcome = {
+      kind: "final",
+      finalText: "Tag renamed.",
+      executed: [],
+      committed: ["clockify_tags_update"],
+      confirmedOutcomes: [{ action: "clockify_tags_update", status: "succeeded" }],
+      interrupts: 1,
+      fake,
+    };
+    expect(c.check(base)).toEqual([]);
+    expect(c.check({
+      ...base,
+      committed: ["clockify_update_entity"],
+      confirmedOutcomes: [{ action: "clockify_update_entity", status: "succeeded" }],
+    })).toEqual([]);
+    for (const status of ["definitive_failed", "partial", "outcome_unknown"] as const) {
+      expect(c.check({
+        ...base,
+        committed: [],
+        confirmedOutcomes: [{ action: "clockify_tags_update", status }],
+      }), status).not.toEqual([]);
+    }
+  });
+
+  it("delete_tag_by_name: only an exact successful specific or generic confirmed receipt can pass", () => {
+    const c = caseById("agentic.delete_tag_by_name");
+    const fake = createFakeWorkspace(c.seed);
+    fake.state.tags = [{ id: "t1", name: "urgent" }];
+    const base: AgenticOutcome = {
+      kind: "final",
+      finalText: "Tag deleted.",
+      executed: [],
+      committed: ["clockify_tags_delete"],
+      confirmedOutcomes: [{ action: "clockify_tags_delete", status: "succeeded" }],
+      interrupts: 1,
+      fake,
+    };
+    expect(c.check(base)).toEqual([]);
+    expect(c.check({
+      ...base,
+      committed: ["clockify_delete_entity"],
+      confirmedOutcomes: [{ action: "clockify_delete_entity", status: "succeeded" }],
+    })).toEqual([]);
+    const mixed = {
+      ...base,
+      confirmedOutcomes: [
+        { action: "clockify_tags_delete", status: "succeeded" },
+        { action: "clockify_delete_entity", status: "partial" },
+      ],
+    } satisfies AgenticOutcome;
+    expect(c.check(mixed)).toEqual([]);
+    expect(scoreConfirmedOutcomes(mixed.confirmedOutcomes)).not.toEqual([]);
+    for (const status of ["definitive_failed", "partial", "outcome_unknown"] as const) {
+      expect(c.check({
+        ...base,
+        committed: [],
+        confirmedOutcomes: [{ action: "clockify_tags_delete", status }],
+      }), status).not.toEqual([]);
+    }
+  });
+
   it("count_projects_and_clients: both counts in a final answer pass; a missing count fails", () => {
     const c = caseById("agentic.count_projects_and_clients");
     const base: AgenticOutcome = {
@@ -137,10 +230,15 @@ describe("AGENTIC_CASES new-case checks accept a correct outcome", () => {
       finalText: "The two pending timesheets were approved from the button-bound preview.",
       executed: [],
       committed: ["clockify_approvals_approve_pending"],
+      confirmedOutcomes: [{ action: "clockify_approvals_approve_pending", status: "succeeded" }],
       interrupts: 1,
       fake,
     };
     expect(c.check(base)).toEqual([]);
+    expect(c.check({
+      ...base,
+      confirmedOutcomes: [{ action: "clockify_approvals_approve_pending", status: "partial" }],
+    })).not.toEqual([]);
     const partial = createFakeWorkspace(c.seed);
     partial.state.approvals[0]!.state = "APPROVED";
     partial.counts.setApprovalStateAtomic = 1;
@@ -157,10 +255,21 @@ describe("AGENTIC_CASES new-case checks accept a correct outcome", () => {
       finalText: "Both renames are done.",
       executed: [],
       committed: ["clockify_clients_update", "clockify_tags_update"],
+      confirmedOutcomes: [
+        { action: "clockify_clients_update", status: "succeeded" },
+        { action: "clockify_tags_update", status: "succeeded" },
+      ],
       interrupts: 2,
       fake,
     };
     expect(c.check(base)).toEqual([]);
+    expect(c.check({
+      ...base,
+      confirmedOutcomes: [
+        { action: "clockify_clients_update", status: "succeeded" },
+        { action: "clockify_tags_update", status: "definitive_failed" },
+      ],
+    })).not.toEqual([]);
     expect(c.check({ ...base, committed: ["clockify_clients_update"] })).not.toEqual([]); // only one confirmed
     const stale = createFakeWorkspace(c.seed);
     stale.state.clients = [{ id: "cl1", name: "Globex" }]; // rename never applied

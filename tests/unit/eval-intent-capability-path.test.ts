@@ -44,7 +44,7 @@ describe("intent-capability release-eval telemetry", () => {
       telemetry: passing,
       writeActionCount: 1,
       previewCount: 0,
-      commitCount: 0,
+      confirmationAttemptCount: 0,
       expectsWriteCapability: true,
       requiresExactIntentPath: true,
     })).toEqual([]);
@@ -58,7 +58,7 @@ describe("intent-capability release-eval telemetry", () => {
       },
       writeActionCount: 1,
       previewCount: 0,
-      commitCount: 0,
+      confirmationAttemptCount: 0,
       expectsWriteCapability: true,
       requiresExactIntentPath: true,
     })).toEqual([

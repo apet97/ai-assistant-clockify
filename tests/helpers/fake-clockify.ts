@@ -48,13 +48,17 @@ export interface FakeWorkspace {
 const nestedFakeMutation = new AsyncLocalStorage<boolean>();
 
 export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace {
-  const state = createFakeState(seed);
+  // One independent object graph backs both mutable state and every factory's
+  // failure/list control reads. No factory can mutate the caller's seed or a
+  // later cohort through a shared nested object.
+  const isolatedSeed = structuredClone(seed);
+  const state = createFakeState(isolatedSeed);
   const counts: Record<string, number> = {};
   const bump = (method: string): void => {
     counts[method] = (counts[method] ?? 0) + 1;
   };
   const nextId = makeNextId();
-  const ctx: FakeContext = { state, seed, bump, nextId };
+  const ctx: FakeContext = { state, seed: isolatedSeed, bump, nextId };
 
   const rawClient: WorkspaceClient = {
     // Per-area factories spread into the single port — same structure as

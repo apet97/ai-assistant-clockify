@@ -68,13 +68,13 @@ export function scoreIntentCapabilityPath(input: {
   telemetry: IntentCapabilityPathTelemetry;
   writeActionCount: number;
   previewCount: number;
-  commitCount: number;
+  confirmationAttemptCount: number;
   expectsWriteCapability: boolean;
   requiresExactIntentPath: boolean;
 }): string[] {
   const { telemetry: result } = input;
   const expectedCapabilityConsumeCount =
-    input.writeActionCount - input.previewCount + input.commitCount;
+    input.writeActionCount - input.previewCount + input.confirmationAttemptCount;
   return [
     ...(result.intentDeclarationCalls === 1 ? [] : ["intent declaration did not run exactly once"]),
     ...(result.intentDeclarationContract === "quote_refs_v1"

@@ -172,45 +172,44 @@ export function fakeListResult<T>(
   return { rows, truncated: seed.listTruncated?.[family] ?? false };
 }
 
-let idSeq = 0;
 export function makeNextId(): (prefix: string) => string {
+  let idSeq = 0;
   return (prefix: string): string => {
     idSeq += 1;
     return `${prefix}-${idSeq}`;
   };
 }
 
-/** Build the initial mutable state from a seed (preserves prior cloning semantics). */
+/** Build mutable state from an already isolated workspace seed. */
 export function createFakeState(seed: FakeWorkspaceSeed): FakeState {
+  const source = seed;
   return {
-    tags: [...(seed.tags ?? [])],
-    clients: [...(seed.clients ?? [])],
-    currencies: [...(seed.currencies ?? [])],
-    projects: [...(seed.projects ?? [])],
-    tasks: [...(seed.tasks ?? [])],
-    timeEntries: [...(seed.entries ?? [])],
-    running: seed.running ?? null,
-    expenses: [...(seed.expenses ?? [])],
-    expenseCategories: [...(seed.expenseCategories ?? [])],
-    users: [...(seed.users ?? [])],
-    memberRoles: { ...(seed.memberRoles ?? {}) },
-    userRoleAssignments: Object.fromEntries(Object.entries(seed.userRoleAssignments ?? {}).map(([id, rows]) => [id, rows.map((row) => ({ ...row }))])),
-    workspaceMemberRates: Object.fromEntries(Object.entries(seed.workspaceMemberRates ?? {}).map(([id, rates]) => [id, { ...rates }])),
-    calendarContext: seed.calendarContext ?? { timeZone: "UTC", weekStartsOn: 1 },
-    groups: [...(seed.groups ?? [])],
-    webhooks: [...(seed.webhooks ?? [])],
-    invoices: (seed.invoices ?? []).map((inv) => ({ ...inv, items: [...(inv.items ?? [])] })),
+    tags: source.tags ?? [],
+    clients: source.clients ?? [],
+    currencies: source.currencies ?? [],
+    projects: source.projects ?? [],
+    tasks: source.tasks ?? [],
+    timeEntries: source.entries ?? [],
+    running: source.running ?? null,
+    expenses: source.expenses ?? [],
+    expenseCategories: source.expenseCategories ?? [],
+    users: source.users ?? [],
+    memberRoles: source.memberRoles ?? {},
+    userRoleAssignments: source.userRoleAssignments ?? {},
+    workspaceMemberRates: source.workspaceMemberRates ?? {},
+    calendarContext: source.calendarContext ?? { timeZone: "UTC", weekStartsOn: 1 },
+    groups: source.groups ?? [],
+    webhooks: source.webhooks ?? [],
+    invoices: source.invoices ?? [],
     invoicePayments: {},
-    customFields: [...(seed.customFields ?? [])],
-    timeOffPolicies: [...(seed.timeOffPolicies ?? [])],
-    timeOffRequests: [...(seed.timeOffRequests ?? [])],
-    timeOffBalances: [...(seed.timeOffBalances ?? [])],
-    holidays: [...(seed.holidays ?? [])],
-    assignments: [...(seed.assignments ?? [])],
-    approvals: [...(seed.approvals ?? [])],
-    projectMemberships: Object.fromEntries(
-      Object.entries(seed.projectMemberships ?? {}).map(([id, rows]) => [id, [...rows]]),
-    ),
+    customFields: source.customFields ?? [],
+    timeOffPolicies: source.timeOffPolicies ?? [],
+    timeOffRequests: source.timeOffRequests ?? [],
+    timeOffBalances: source.timeOffBalances ?? [],
+    holidays: source.holidays ?? [],
+    assignments: source.assignments ?? [],
+    approvals: source.approvals ?? [],
+    projectMemberships: source.projectMemberships ?? {},
     deleted: [],
   };
 }

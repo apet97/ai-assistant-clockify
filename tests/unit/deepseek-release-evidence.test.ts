@@ -60,6 +60,7 @@ function rawEval(sha: string, thinkingMode: null | "disabled", modelMs: number):
       outcomeKind: "final",
       previewCount: 0,
       commitCount: 0,
+      confirmationAttemptCount: 0,
       writeActionCount,
       modelCalls: 2,
       modelMs,
@@ -151,6 +152,7 @@ function focusedRaw(
   modelMs: number,
   options: {
     commitCount?: number;
+    confirmationAttemptCount?: number;
     previewCount?: number;
     writeActionCount?: number;
     thinkingMode?: null | "disabled";
@@ -161,6 +163,7 @@ function focusedRaw(
   const area = preview ? "single_risky" : "read_answer";
   const previewCount = options.previewCount ?? (preview ? 1 : 0);
   const commitCount = options.commitCount ?? 0;
+  const confirmationAttemptCount = options.confirmationAttemptCount ?? commitCount;
   const writeActionCount = options.writeActionCount ?? (preview ? 1 : 0);
   const runTelemetry = Array.from({ length: 20 }, () => ({
     cohortIndex: 1,
@@ -172,6 +175,7 @@ function focusedRaw(
     outcomeKind: preview ? "interrupted" : "final",
     previewCount,
     commitCount,
+    confirmationAttemptCount,
     writeActionCount,
     modelCalls: 1,
     modelMs,
@@ -192,7 +196,7 @@ function focusedRaw(
     intentAuthorityChecks: preview ? 1 : 0,
     intentAuthorityDenials: 0,
     intentCapabilityBindCount: writeActionCount,
-    intentCapabilityConsumeCount: writeActionCount - previewCount + commitCount,
+    intentCapabilityConsumeCount: writeActionCount - previewCount + confirmationAttemptCount,
     intentCapabilityConsumeDenials: 0,
   }));
   return JSON.stringify({
@@ -368,6 +372,7 @@ describe("DeepSeek release evidence", () => {
     expect(evaluator).toContain("outcomeKind: run.outcomeKind");
     expect(evaluator).toContain("previewCount: run.previewCount");
     expect(evaluator).toContain("commitCount: run.commitCount");
+    expect(evaluator).toContain("confirmationAttemptCount: run.confirmationAttemptCount");
     expect(evaluator).toContain("writeActionCount: run.writeActionCount");
     expect(evaluator).toContain("cohortIndex: run.cohortIndex");
     expect(evaluator).toContain("caseIndex: run.caseIndex");
@@ -578,6 +583,54 @@ describe("DeepSeek release evidence", () => {
     missingPreview.focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000, { previewCount: 0 });
     missingPreview.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(missingPreview.focusedRiskyPreviewRawJson);
     expect(() => validateDeepSeekReleaseEvidence(missingPreview as never)).toThrow(/focused risky preview.*exactly one preview/i);
+  });
+
+  it("rejects impossible or passing-mismatched success counts while retaining failed-run diagnostics", async () => {
+    const { buildDeepSeekBinding, validateDeepSeekReleaseEvidence } = await validator();
+    const impossible = fixture();
+    impossible.focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000, {
+      commitCount: 1,
+      confirmationAttemptCount: 0,
+    });
+    impossible.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(impossible.focusedRiskyPreviewRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(impossible as never)).toThrow(/commit.*confirmation attempt/i);
+
+    const consumedByAttempt = fixture();
+    const raw = JSON.parse(consumedByAttempt.candidateRawJson) as Record<string, unknown>;
+    const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+    const run = telemetry[0]!;
+    run.writeActionCount = 1;
+    run.previewCount = 1;
+    run.commitCount = 0;
+    run.confirmationAttemptCount = 1;
+    run.intentAuthorityChecks = 1;
+    run.intentCapabilityBindCount = 1;
+    run.intentCapabilityConsumeCount = 1;
+    consumedByAttempt.candidateRawJson = JSON.stringify(raw);
+    consumedByAttempt.binding.candidate.rawAggregateSha256 = sha256(consumedByAttempt.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(consumedByAttempt as never)).toThrow(/passing.*commit.*confirmation/i);
+
+    const failedDiagnostic = fallbackFixture();
+    const failedRaw = JSON.parse(failedDiagnostic.candidateRawJson) as Record<string, unknown>;
+    const failedRun = (failedRaw.runTelemetry as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.pass === false);
+    if (!failedRun) throw new Error("missing failed diagnostic run");
+    failedRun.writeActionCount = 1;
+    failedRun.previewCount = 1;
+    failedRun.commitCount = 0;
+    failedRun.confirmationAttemptCount = 1;
+    failedRun.intentAuthorityChecks = 1;
+    failedRun.intentCapabilityBindCount = 1;
+    failedRun.intentCapabilityConsumeCount = 1;
+    failedDiagnostic.candidateRawJson = JSON.stringify(failedRaw);
+    const binding = buildDeepSeekBinding(
+      failedDiagnostic.baselineRawJson,
+      failedDiagnostic.candidateRawJson,
+      failedDiagnostic.focusedReadRawJson,
+      failedDiagnostic.focusedRiskyPreviewRawJson,
+      failedDiagnostic.capabilityProbeRawJson,
+    ) as Record<string, unknown>;
+    expect(binding).toHaveProperty("modelConfiguration.thinkingMode", null);
   });
 
   it("rejects a non-perfect selected corpus, missing cache telemetry, dirty source, or tampered raw aggregate", async () => {

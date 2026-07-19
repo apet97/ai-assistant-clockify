@@ -91,6 +91,12 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(prompt).not.toContain("args{"); // the tools carry the schemas, not the prompt
   });
 
+  it("requires a resumed turn to finish every still-unfinished authored clause", () => {
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("reread the original admin request");
+    expect(lower).toContain("every unfinished requested clause");
+  });
+
   it("requires listed data to be reported VERBATIM — names are data, never filtered (live item 280: a hostile-looking tag name was silently omitted)", () => {
     expect(prompt).toContain("verbatim");
     expect(prompt.toLowerCase()).toContain("never omit");

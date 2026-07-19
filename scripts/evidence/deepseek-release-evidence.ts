@@ -709,6 +709,7 @@ function rawMetrics(
       "outcomeKind",
       "previewCount",
       "commitCount",
+      "confirmationAttemptCount",
       "writeActionCount",
       "modelCalls",
       "modelMs",
@@ -759,13 +760,23 @@ function rawMetrics(
     const writeActionCount = integer(run.writeActionCount, `${label} writeActionCount`);
     const previewCount = integer(run.previewCount, `${label} previewCount`);
     const commitCount = integer(run.commitCount, `${label} commitCount`);
+    const confirmationAttemptCount = integer(
+      run.confirmationAttemptCount,
+      `${label} confirmationAttemptCount`,
+    );
     const capabilityBindCount = integer(run.intentCapabilityBindCount, `${label} intentCapabilityBindCount`);
     const capabilityConsumeCount = integer(run.intentCapabilityConsumeCount, `${label} intentCapabilityConsumeCount`);
     const capabilityConsumeDenials = integer(
       run.intentCapabilityConsumeDenials,
       `${label} intentCapabilityConsumeDenials`,
     );
-    const expectedCapabilityConsumeCount = writeActionCount - previewCount + commitCount;
+    const expectedCapabilityConsumeCount = writeActionCount - previewCount + confirmationAttemptCount;
+    if (commitCount < 0 || confirmationAttemptCount < 0 || commitCount > confirmationAttemptCount) {
+      throw new Error(`${label} commit count cannot exceed confirmation attempt count`);
+    }
+    if (run.pass && commitCount !== confirmationAttemptCount) {
+      throw new Error(`${label} passing run commit count must equal confirmation attempt count`);
+    }
     if (
       intentDeclarationCalls !== 1
       || run.intentDeclarationContract !== "quote_refs_v1"
@@ -997,6 +1008,7 @@ function focusedRawMetrics(
       "outcomeKind",
       "previewCount",
       "commitCount",
+      "confirmationAttemptCount",
       "writeActionCount",
       "modelCalls",
       "modelMs",
@@ -1040,6 +1052,10 @@ function focusedRawMetrics(
     }
     const previewCount = integer(run.previewCount, `${label} previewCount`);
     const commitCount = integer(run.commitCount, `${label} commitCount`);
+    const confirmationAttemptCount = integer(
+      run.confirmationAttemptCount,
+      `${label} confirmationAttemptCount`,
+    );
     const writeActionCount = integer(run.writeActionCount, `${label} writeActionCount`);
     const capabilityBindCount = integer(run.intentCapabilityBindCount, `${label} intentCapabilityBindCount`);
     const capabilityConsumeCount = integer(run.intentCapabilityConsumeCount, `${label} intentCapabilityConsumeCount`);
@@ -1047,10 +1063,12 @@ function focusedRawMetrics(
       run.intentCapabilityConsumeDenials,
       `${label} intentCapabilityConsumeDenials`,
     );
-    const expectedCapabilityConsumeCount = writeActionCount - previewCount + commitCount;
+    const expectedCapabilityConsumeCount = writeActionCount - previewCount + confirmationAttemptCount;
+    if (commitCount < 0 || confirmationAttemptCount < 0 || commitCount > confirmationAttemptCount) {
+      throw new Error(`${label} commit count cannot exceed confirmation attempt count`);
+    }
     if (
       previewCount < 0
-      || commitCount < 0
       || writeActionCount < 0
       || capabilityBindCount !== writeActionCount
       || capabilityConsumeCount !== expectedCapabilityConsumeCount
@@ -1063,14 +1081,16 @@ function focusedRawMetrics(
       if (run.intentCapabilityMode !== "deny_all_writes" || authorityChecks !== 0) {
         throw new Error(`${label} read samples must remain deny-all with no write-authority checks`);
       }
-      if (run.outcomeKind !== "final" || previewCount !== 0 || commitCount !== 0) {
+      if (run.outcomeKind !== "final" || previewCount !== 0 || commitCount !== 0 || confirmationAttemptCount !== 0) {
         throw new Error(`${label} must remain read-only with no preview or commit`);
       }
     } else {
       if (run.intentCapabilityMode !== "allow" || authorityChecks !== 1) {
         throw new Error(`${label} preview samples must declare and authorize exactly one risky write`);
       }
-      if (commitCount !== 0) throw new Error(`${label} must not commit`);
+      if (commitCount !== 0 || confirmationAttemptCount !== 0) {
+        throw new Error(`${label} must not commit or attempt confirmation`);
+      }
       if (writeActionCount !== 1) throw new Error(`${label} must attempt exactly one risky write action per sample`);
       if (previewCount !== 1 || run.outcomeKind !== "interrupted") {
         throw new Error(`${label} must produce exactly one preview per sample`);

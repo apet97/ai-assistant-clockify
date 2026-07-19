@@ -104,6 +104,9 @@ interface DeclarationRequest {
     semanticLiteralAliases: readonly SemanticLiteralAlias[];
     authoredIntent?: AuthoredIntentMetadata;
   }>;
+  /** Deterministic recall hint only. Validation still accepts solely the full
+   * trusted writeActionNames allowlist and exact authored evidence. */
+  candidateWriteActionNames?: string[];
   segments: AuthoredSegment[];
 }
 
@@ -115,6 +118,8 @@ export interface DeclareIntentCapabilityInput {
   unresolvedPriorText?: string;
   /** Exact names of model-visible write actions. Reads are never declared. */
   writeActionNames: readonly string[];
+  /** Small deterministic candidate subset; never an authority boundary. */
+  candidateWriteActionNames?: readonly string[];
   /** Stable hash of the action/authority catalog the declaration is bound to. */
   catalogHash: string;
   /** Cooperative provider cancellation; never passed into action execution. */
@@ -134,7 +139,8 @@ function literalJsonSchema(depth: number): Record<string, unknown> {
   };
 }
 
-const declarationTool: ToolDefinition = {
+function declarationTool(writeActionNames: readonly string[]): ToolDefinition {
+  return {
   name: DECLARE_INTENT_TOOL_NAME,
   description: "Declare only write actions and literal constraints explicitly authored by the admin.",
   parameters: {
@@ -150,7 +156,7 @@ const declarationTool: ToolDefinition = {
           additionalProperties: false,
           required: ["actionName", "sourceRefs", "literalConstraints", "maxExecutions"],
           properties: {
-            actionName: { type: "string", minLength: 1 },
+            actionName: { type: "string", enum: [...writeActionNames] },
             sourceRefs: {
               type: "array",
               minItems: 1,
@@ -182,7 +188,12 @@ const declarationTool: ToolDefinition = {
                     required: ["segment", "quote", "occurrence"],
                     properties: {
                       segment: { type: "string", enum: ["unresolved_prior", "current"] },
-                      quote: { type: "string", minLength: 1, maxLength: MAX_AUTHORED_TEXT_BYTES },
+                      quote: {
+                        type: "string",
+                        minLength: 1,
+                        maxLength: MAX_AUTHORED_TEXT_BYTES,
+                        description: "Copy the shortest exact authored substring that encodes this literal value; quote the value itself, not the whole command.",
+                      },
                       occurrence: { type: "integer", minimum: 0, maximum: MAX_SOURCE_QUOTE_OCCURRENCE },
                     },
                   },
@@ -195,7 +206,8 @@ const declarationTool: ToolDefinition = {
       },
     },
   },
-};
+  };
+}
 
 const declarationSystemMessage: ModelMessage = {
   role: "system",
@@ -204,8 +216,10 @@ const declarationSystemMessage: ModelMessage = {
     "Declare only write actions explicitly requested in the authored segments.",
     "For every sourceRefs/sourceRef item, copy an exact unmodified quote, its segment name, and its zero-based occurrence in that segment; never calculate byte offsets.",
     "Literal constraints must cite the exact authored literal and occurrence; do not infer IDs, dates, amounts, or values.",
+    "A literal constraint sourceRef.quote must be the shortest exact authored substring that encodes its value (for value qwen quote qwen, not the whole sentence).",
     "Use only paths in the exact action's writeActionContracts entry. A semantic scalar mapping is valid only when that same action/path/value lists the exact authored phrase.",
-    "For safe writes, sourceRefs must overlap an authored command matching that action's authoredIntent; when one of its literal cue patterns occurs, bind the listed literal path rather than omitting it.",
+    "Check candidateWriteActionNames first as a recall hint, but declare an action only when the authored segments explicitly request it; the full writeActionNames list remains the only name allowlist.",
+    "When an action contract includes authoredIntent, sourceRefs must overlap its authored command and every matching literal cue must bind the listed path. authoredIntent is present only for extra safe-write grounding; for a contract without authoredIntent, its absence is not a denial—declare it when the authored segment explicitly commands that action and bind every exact authored literal path.",
     "Use only action names from writeActionNames. Set maxExecutions to 1. Return no prose.",
   ].join(" "),
 };
@@ -228,6 +242,9 @@ function buildRequest(input: DeclareIntentCapabilityInput): DeclarationRequest |
   const writeActionNames = [...input.writeActionNames];
   if (new Set(writeActionNames).size !== writeActionNames.length ||
     writeActionNames.some((name) => name.length === 0)) return undefined;
+  const allowedNames = new Set(writeActionNames);
+  const candidateWriteActionNames = [...(input.candidateWriteActionNames ?? writeActionNames)]
+    .filter((name, index, values) => allowedNames.has(name) && values.indexOf(name) === index);
 
   const segments: AuthoredSegment[] = [];
   let nextStartByte = 0;
@@ -257,6 +274,7 @@ function buildRequest(input: DeclareIntentCapabilityInput): DeclarationRequest |
     catalogHash: input.catalogHash,
     writeActionNames,
     writeActionContracts,
+    candidateWriteActionNames,
     segments,
   };
 }
@@ -810,7 +828,7 @@ export async function declareIntentCapability(
     if (typeof input.modelClient.completeWithTools === "function") {
       const completion = await input.modelClient.completeWithTools(
         messages,
-        [declarationTool],
+        [declarationTool(request.writeActionNames)],
         input.signal,
       );
       if (completion.toolCalls.length !== 1 ||

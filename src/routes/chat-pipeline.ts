@@ -58,6 +58,7 @@ import {
   declareIntentCapability,
   filterCatalogByIntentCapability,
 } from "../assistant/intent-declaration.js";
+import { buildCandidateWriteActionNames } from "../assistant/intent-candidates.js";
 import {
   ProviderProtocolError,
   type ModelMessage,
@@ -1612,6 +1613,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       const writeActionNames = catalogForModel()
         .filter((entry) => entry.risks.some((risk) => risk !== "read"))
         .map((entry) => entry.name);
+      const candidateWriteActionNames = buildCandidateWriteActionNames(selectionContext, writeActionNames);
       let declaredCapability;
       try {
         declaredCapability = await declareIntentCapability({
@@ -1619,6 +1621,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           currentText: message,
           ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
           writeActionNames,
+          candidateWriteActionNames,
           catalogHash: catalogHash(),
           signal: turnSignal,
         });
