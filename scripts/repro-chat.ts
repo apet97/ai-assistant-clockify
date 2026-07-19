@@ -29,6 +29,7 @@ import type { AppConfig } from "../src/config.js";
 import { selectModelClient, type ModelClientSelection } from "../src/assistant/select-model-client.js";
 import type { ModelClient } from "../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
+import { requireSessionCookie } from "../tests/helpers/session.js";
 import { createChatRequestBody } from "./lib/live-evidence.js";
 
 const ADDON_KEY = "ai-assistant";
@@ -118,8 +119,10 @@ async function main(): Promise<void> {
     addonId: "addon-1",
   });
   const sessionRes = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = sessionRes.headers["set-cookie"];
-  const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  if (sessionRes.status !== 200) {
+    throw new Error(`component session bootstrap failed with status ${String(sessionRes.status)}`);
+  }
+  const cookie = requireSessionCookie(sessionRes.headers);
 
   console.log(`# repro-chat — model=${selection.llmModel ?? selection.llmProvider} addon=${!!convo.addon} steps=${convo.steps.length}\n`);
 
@@ -140,6 +143,12 @@ async function main(): Promise<void> {
 
     const message = step as string;
     const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send(createChatRequestBody(message));
+    const responseBody = res.body as { ok?: boolean; code?: string; reply?: unknown; results?: unknown };
+    if (res.status !== 200 || responseBody.ok !== true) {
+      throw new Error(
+        `chat turn ${String(turnNo)} failed with status ${String(res.status)} code=${responseBody.code ?? "unknown"}`,
+      );
+    }
     const reply = (res.body?.reply ?? {}) as { kind?: string; text?: string };
     const results = (res.body?.results ?? []) as TurnResult[];
 

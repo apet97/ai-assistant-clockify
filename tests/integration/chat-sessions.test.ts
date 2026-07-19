@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -10,6 +9,7 @@ import { makeTestConfig } from "../helpers/config.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
+import { mintAdminCookie, requireSessionCookie } from "../helpers/session.js";
 
 /**
  * GET /api/chat/sessions (the chat-history switcher list): a session-gated,
@@ -45,15 +45,7 @@ async function makeApp(
     modelClient: scriptedToolModel(script),
     clockifyForWorkspace: () => fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  const cookie = mintAdminCookie(store, config.sessionSecret);
   return { app, cookie, store };
 }
 
@@ -78,8 +70,8 @@ describe("GET /api/chat/sessions (chat-history list)", () => {
 
     // Start a second conversation: /chat/new re-cookies to a FRESH session.
     const fresh = await request(app).post("/api/chat/new").set("Cookie", cookie).send({});
-    const sc2 = fresh.headers["set-cookie"];
-    const cookie2 = Array.isArray(sc2) ? sc2[0].split(";")[0] : "";
+    expect(fresh.status).toBe(200);
+    const cookie2 = requireSessionCookie(fresh.headers);
     await request(app).post("/api/chat/messages").set("Cookie", cookie2).send({ message: "second conversation" });
 
     const res = await request(app).get("/api/chat/sessions").set("Cookie", cookie2);
@@ -192,8 +184,8 @@ describe("POST /api/chat/sessions/:id/open (chat-history switch)", () => {
 
     // Start a second conversation (re-cookies to a fresh session).
     const fresh = await request(app).post("/api/chat/new").set("Cookie", cookie).send({});
-    const sc2 = fresh.headers["set-cookie"];
-    const cookie2 = Array.isArray(sc2) ? sc2[0].split(";")[0] : "";
+    expect(fresh.status).toBe(200);
+    const cookie2 = requireSessionCookie(fresh.headers);
     await request(app).post("/api/chat/messages").set("Cookie", cookie2).send({ message: "second conversation" });
 
     // From the second session, switch BACK to the first (owned) session.
@@ -203,9 +195,7 @@ describe("POST /api/chat/sessions/:id/open (chat-history switch)", () => {
       .send({});
     expect(open.status).toBe(200);
     expect(open.body).toEqual({ ok: true });
-    const openSetCookie = open.headers["set-cookie"];
-    expect(Array.isArray(openSetCookie)).toBe(true);
-    const switchedCookie = Array.isArray(openSetCookie) ? openSetCookie[0].split(";")[0] : "";
+    const switchedCookie = requireSessionCookie(open.headers);
 
     // The re-cookie now binds the first session: /chat/history replays IT.
     const history = await request(app).get("/api/chat/history").set("Cookie", switchedCookie);

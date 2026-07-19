@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -12,6 +11,7 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 import { testKeys } from "../helpers/test-keys.js";
 import { verifySessionCookie } from "../../src/auth/sessions.js";
+import { mintAdminCookie, requireSessionCookie } from "../helpers/session.js";
 
 /**
  * POST /api/chat/new starts a fresh conversation: it mints a NEW session (new
@@ -47,15 +47,7 @@ async function makeApp(
     modelClient: scriptedToolModel(script),
     clockifyForWorkspace: () => fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return { app, cookie: Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "" };
+  return { app, cookie: mintAdminCookie(store, config.sessionSecret) };
 }
 
 describe("POST /api/chat/new", () => {
@@ -82,9 +74,7 @@ describe("POST /api/chat/new", () => {
     const res = await request(app).post("/api/chat/new").set("Cookie", cookie);
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
-    const setCookie = res.headers["set-cookie"];
-    const newCookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
-    expect(newCookie).not.toBe("");
+    const newCookie = requireSessionCookie(res.headers);
     expect(newCookie).not.toBe(cookie); // a genuinely different session
 
     // The new session is a clean slate.
@@ -125,8 +115,7 @@ describe("POST /api/chat/new", () => {
     const { app, cookie } = await makeApp([], createFakeWorkspace(), { sessionTtlMs: 60 * 60 * 1000 });
     const res = await request(app).post("/api/chat/new").set("Cookie", cookie);
     expect(res.status).toBe(200);
-    const setCookie = res.headers["set-cookie"];
-    const newCookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    const newCookie = requireSessionCookie(res.headers);
     const claims = verifySessionCookie(decodeURIComponent(newCookie.split("=").slice(1).join("=")), "test-session-secret");
     expect(claims).toBeTruthy();
     const ttlMs = new Date(claims!.expiresAt).getTime() - Date.now();

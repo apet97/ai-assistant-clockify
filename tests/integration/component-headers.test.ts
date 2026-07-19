@@ -9,6 +9,7 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { Express } from "express";
+import { requireSessionSetCookie } from "../helpers/session.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -90,8 +91,7 @@ describe("component HTML security headers (injection/clickjacking backstop)", ()
     });
     const res = await request(app).get("/component/assistant").query({ auth_token: token });
     expect(res.status).toBe(200);
-    const setCookie = res.headers["set-cookie"];
-    const cookie = Array.isArray(setCookie) ? setCookie[0] : String(setCookie);
+    const cookie = requireSessionSetCookie(res.headers);
     expect(cookie).toContain("Max-Age=7200");
     expect(cookie).not.toContain("Max-Age=28800");
   });

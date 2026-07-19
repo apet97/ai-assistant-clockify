@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -15,6 +14,7 @@ import { verifySessionCookie } from "../../src/auth/sessions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * Phase 2b: the agentic loop wired into the chat route behind LLM_AGENTIC.
@@ -93,15 +93,12 @@ async function makeApp(
     modelClient: opts.modelClient ?? model,
     clockifyForWorkspace: () => fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  // This suite exercises authenticated chat behavior, not component session
+  // minting. Keep setup deterministic under the full four-worker gate: an HTTP
+  // component round-trip can lose its capturable Set-Cookie when Supertest's
+  // ephemeral servers are contended, silently turning the next request into a
+  // 401. Component issuance and live-role gating have their own focused tests.
+  const cookie = mintAdminCookie(store, config.sessionSecret);
   return { app, model, cookie, store };
 }
 
@@ -1239,6 +1236,10 @@ describe("durable resume after the button-confirm (Phase 3)", () => {
     );
 
     const chat = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "delete the urgent tag" });
+    expect(chat.status).toBe(200);
+    expect(chat.headers["content-type"]).toContain("application/json");
+    expect(chat.body.ok).toBe(true);
+    expect(Array.isArray(chat.body.results)).toBe(true);
     const previews = previewsOf(chat.body.results as ResultItem[]);
     expect(previews).toHaveLength(1);
 

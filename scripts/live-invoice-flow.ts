@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     userToken = (await exRes.text()).trim().replace(/^"|"$/g, "");
   }
   const compRes = await fetch(`${BASE_URL}/component/assistant?auth_token=${encodeURIComponent(userToken)}`, { redirect: "manual" });
-  const cookieMatch = (compRes.headers.get("set-cookie") ?? "").match(/ai_assistant_session=[^;]+/);
+  const cookieMatch = compRes.headers.get("set-cookie")?.match(/ai_assistant_session=[^;]+/);
   if (!ok("session cookie established", compRes.status === 200 && !!cookieMatch, `status ${compRes.status}`)) {
     store.close();
     process.exit(1);

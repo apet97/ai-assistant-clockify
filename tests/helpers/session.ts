@@ -17,9 +17,9 @@ import type { Store } from "../../src/db/store.js";
  * an empty cookie, so the next authenticated request 401'd — surfacing as a flaky
  * "expected 401 to be 200" in whichever test was running.
  *
- * This mints the EXACT cookie the component route issues — a real `chat_sessions`
- * row via `store.createSession` plus the same signed value via the production
- * `signSessionCookie` + `buildSessionCookie` — with no HTTP, so it cannot flake.
+ * This mints the same authenticated cookie shape as the component route — a real
+ * `chat_sessions` row plus the production `signSessionCookie` and
+ * `buildSessionCookie` primitives — with no HTTP, so it cannot flake.
  * The component route's own admin/installation gating stays covered by the
  * component tests; here the cookie is pure setup.
  */
@@ -44,4 +44,27 @@ export function mintAdminCookie(
   // Reduce the full Set-Cookie string to the `name=value` pair the tests pass to
   // `.set("Cookie", …)` — exactly what `setCookie[0].split(";")[0]` produced.
   return buildSessionCookie(value, false).split(";")[0];
+}
+
+/** Extract a session cookie from a response that is itself under test. Unlike the
+ * old ternary helpers, absence is an immediate setup/contract failure and can
+ * never be converted into an empty Cookie header followed by a misleading 401. */
+export function requireSessionSetCookie(
+  headers: Record<string, string | string[] | undefined>,
+): string {
+  const value = headers["set-cookie"];
+  const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : [];
+  const session = values.find((candidate) => candidate.trim().startsWith("ai_assistant_session="));
+  const pair = session?.trim().split(";")[0];
+  const cookieValue = pair?.slice("ai_assistant_session=".length).trim();
+  if (!session || !cookieValue) {
+    throw new Error("expected non-empty ai_assistant_session Set-Cookie header");
+  }
+  return session.trim();
+}
+
+export function requireSessionCookie(
+  headers: Record<string, string | string[] | undefined>,
+): string {
+  return requireSessionSetCookie(headers).split(";")[0];
 }

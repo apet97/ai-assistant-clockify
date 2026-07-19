@@ -4,7 +4,6 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import { createApp } from "../../src/server.js";
@@ -13,6 +12,7 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 import { testKeys } from "../helpers/test-keys.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 const ADDON_KEY = "ai-assistant";
 const REQUEST_ID = "99fe86fb-a0a4-4ddd-8b84-b8001cce27a7";
@@ -56,15 +56,7 @@ async function startTurn(input: {
     modelClient: scriptedToolModel(input.script),
     clockifyForWorkspace: () => input.fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const component = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = component.headers["set-cookie"];
-  const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  const cookie = mintAdminCookie(store, "test-session-secret");
   const turn = await request(app)
     .post("/api/chat/messages")
     .set("Cookie", cookie)

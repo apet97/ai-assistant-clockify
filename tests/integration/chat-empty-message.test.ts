@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -9,6 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * A whitespace-only chat message ("   ") is no input at all. The route must
@@ -36,16 +36,8 @@ const modelClient: ModelClient = {
   },
 };
 
-async function adminCookie(): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+function adminCookie(): string {
+  return mintAdminCookie(store, "test-session-secret");
 }
 
 beforeAll(async () => {

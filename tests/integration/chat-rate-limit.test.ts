@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -9,6 +8,7 @@ import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * Per-session chat rate limit: each chat turn drives a paid model loop, so the
@@ -24,7 +24,7 @@ afterEach(() => {
   stores = [];
 });
 
-async function makeApp(nowRef: { value: Date }): Promise<{ app: Express; mintCookie: () => Promise<string> }> {
+async function makeApp(nowRef: { value: Date }): Promise<{ app: Express; mintCookie: () => string }> {
   const keys = await testKeys();
   const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
@@ -51,17 +51,7 @@ async function makeApp(nowRef: { value: Date }): Promise<{ app: Express; mintCoo
     clockifyForWorkspace: () => fake.client,
     now: () => nowRef.value,
   });
-  const mintCookie = async (): Promise<string> => {
-    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-      workspaceId: "ws-1",
-      user: "admin-1",
-      workspaceRole: "ADMIN",
-      addonId: "addon-1",
-    });
-    const res = await request(app).get("/component/assistant").query({ auth_token: token });
-    const setCookie = res.headers["set-cookie"];
-    return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
-  };
+  const mintCookie = (): string => mintAdminCookie(store, config.sessionSecret);
   return { app, mintCookie };
 }
 

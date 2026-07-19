@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -10,6 +9,7 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * A safe write whose Clockify call throws (e.g. the API returns 401) must come
@@ -45,16 +45,8 @@ function throwingClient(): WorkspaceClient {
   };
 }
 
-async function adminCookie(): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+function adminCookie(): string {
+  return mintAdminCookie(store, "test-session-secret");
 }
 
 beforeAll(async () => {
@@ -137,15 +129,7 @@ describe("chat route resilience", () => {
       modelClient,
       clockifyForWorkspace: throwingClient,
     });
-    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-      workspaceId: "ws-1",
-      user: "admin-1",
-      workspaceRole: "ADMIN",
-      addonId: "addon-1",
-    });
-    const compRes = await request(flakyApp).get("/component/assistant").query({ auth_token: token });
-    const sc = compRes.headers["set-cookie"];
-    const cookie = Array.isArray(sc) ? sc[0].split(";")[0] : "";
+    const cookie = mintAdminCookie(flaky, config.sessionSecret);
 
     // Before the fix this hangs (supertest times out) and the process crashes.
     const res = await request(flakyApp).post("/api/chat/messages").set("Cookie", cookie).send({ message: "hi" });

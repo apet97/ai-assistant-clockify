@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -18,6 +17,7 @@ import {
 import type { ActionContext } from "../../src/harness/action.js";
 import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
 import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * Post-host bookkeeping must preserve the truthful receipt. Canonical
@@ -68,15 +68,7 @@ async function makeApp(
     modelClient: scriptedToolModel(script),
     clockifyForWorkspace: () => fake.client,
   });
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+  const cookie = mintAdminCookie(store, config.sessionSecret);
   return { app, cookie, store };
 }
 

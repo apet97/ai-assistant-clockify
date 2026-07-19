@@ -92,7 +92,7 @@ async function main(): Promise<void> {
   }
 
   const compRes = await fetch(`${BASE_URL}/component/assistant?auth_token=${encodeURIComponent(userToken)}`, { redirect: "manual" });
-  const cookieMatch = (compRes.headers.get("set-cookie") ?? "").match(/ai_assistant_session=[^;]+/);
+  const cookieMatch = compRes.headers.get("set-cookie")?.match(/ai_assistant_session=[^;]+/);
   if (!cookieMatch) {
     console.error(`no session cookie (component status ${compRes.status})`);
     store.close();

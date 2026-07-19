@@ -1,6 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import type { Express } from "express";
 import { createApp } from "../../src/server.js";
@@ -12,6 +11,7 @@ import type { ModelClient, ToolDefinition } from "../../src/assistant/model-clie
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { ACTION_CATALOG } from "../../src/harness/catalog.js";
 import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-model.js";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * Wiring proof for LLM_TOOL_SELECT (Phase 1): the chat turn shows the model the
@@ -58,16 +58,8 @@ function build(llmToolSelect: boolean): { app: Express; captured: string[][]; st
   return { app, captured, store };
 }
 
-async function cookieFor(app: Express): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const sc = res.headers["set-cookie"];
-  return Array.isArray(sc) ? sc[0].split(";")[0] : "";
+function cookieFor(store: Store): string {
+  return mintAdminCookie(store, "test-session-secret");
 }
 
 beforeAll(async () => {
@@ -77,7 +69,7 @@ beforeAll(async () => {
 describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
   it("OFF: the model sees the full catalog, exactly once", async () => {
     const b = build(false);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const res = await request(b.app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
@@ -90,7 +82,7 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
 
   it("ON: the model sees a relevant SUBSET, then the escape hatch retries with the full catalog", async () => {
     const b = build(true);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const res = await request(b.app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
@@ -109,7 +101,7 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
 
   it("ON + smalltalk: fails open to the full catalog and does NOT retry", async () => {
     const b = build(true);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const res = await request(b.app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
@@ -176,7 +168,7 @@ async function drivePreviewThenConfirm(
 describe("tool subsetting on RESUME (STEP 6)", () => {
   it("ON: the resume re-sends only the relevant subset, not the full catalog", async () => {
     const b = buildResume(true);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const { confirmStatus, confirmOk } = await drivePreviewThenConfirm(b.app, cookie);
     expect(confirmStatus).toBe(200);
     expect(confirmOk).toBe(true);
@@ -196,7 +188,7 @@ describe("tool subsetting on RESUME (STEP 6)", () => {
 
   it("OFF: the resume sees the full catalog (byte-identical to before)", async () => {
     const b = buildResume(false);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const { confirmStatus } = await drivePreviewThenConfirm(b.app, cookie);
     expect(confirmStatus).toBe(200);
     expect(b.model.calls).toHaveLength(2);
@@ -211,7 +203,7 @@ describe("tool subsetting on RESUME (STEP 6)", () => {
   // widen to the FULL catalog for such sprawling requests so nothing is hidden.
   it("ON + a >3-area request: the resume widens to the FULL catalog (no dropped-group tool hidden)", async () => {
     const b = buildResume(true);
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     // Four distinct feature groups: users_groups + expenses + scheduling + invoices.
     const fourArea = "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme";
     const { confirmStatus, confirmOk } = await drivePreviewThenConfirm(b.app, cookie, fourArea);
@@ -255,7 +247,7 @@ function buildClarificationResume(): { app: Express; model: ScriptedToolModel; s
 describe("tool subsetting preserves unresolved clarification context", () => {
   it("persists the admin-authored context and reuses it on the next turn and resume", async () => {
     const b = buildClarificationResume();
-    const cookie = await cookieFor(b.app);
+    const cookie = cookieFor(b.store);
     const first = await request(b.app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)

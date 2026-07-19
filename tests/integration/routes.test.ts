@@ -10,6 +10,7 @@ import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { Express } from "express";
+import { mintAdminCookie, requireSessionCookie, requireSessionSetCookie } from "../helpers/session.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -97,17 +98,8 @@ const modelClient: ModelClient = {
   },
 };
 
-async function adminCookie(role = "ADMIN"): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: role,
-    backendUrl: "https://api.clockify.me",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+function adminCookie(): string {
+  return mintAdminCookie(store, "test-session-secret");
 }
 
 beforeAll(async () => {
@@ -220,11 +212,11 @@ describe("routes", () => {
     });
     const res = await request(app).get("/component/assistant").query({ auth_token: token });
     expect(res.status).toBe(200);
-    const setCookie = res.headers["set-cookie"];
-    expect(Array.isArray(setCookie) && setCookie[0]).toContain("ai_assistant_session=");
-    expect(Array.isArray(setCookie) && setCookie[0]).toContain("HttpOnly");
+    const setCookie = requireSessionSetCookie(res.headers);
+    expect(setCookie).toContain("ai_assistant_session=");
+    expect(setCookie).toContain("HttpOnly");
     // Cross-site iframe: cookie must be SameSite=None over HTTPS or the chat 401s.
-    expect(Array.isArray(setCookie) && setCookie[0]).toContain("SameSite=None");
+    expect(setCookie).toContain("SameSite=None");
   });
 
   it("propagates verified Clockify theme/language into sanitized UI preferences and public links", async () => {
@@ -236,8 +228,8 @@ describe("routes", () => {
       theme: "DARK",
     });
     const component = await request(app).get("/component/assistant").query({ auth_token: token });
-    const setCookie = component.headers["set-cookie"];
-    const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    expect(component.status).toBe(200);
+    const cookie = requireSessionCookie(component.headers);
     const me = await request(app).get("/api/me").set("Cookie", cookie);
 
     expect(me.status).toBe(200);

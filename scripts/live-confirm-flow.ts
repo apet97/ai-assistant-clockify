@@ -147,8 +147,8 @@ async function main(): Promise<void> {
   const compRes = await fetch(`${BASE_URL}/component/assistant?auth_token=${encodeURIComponent(userToken)}`, {
     redirect: "manual",
   });
-  const setCookie = compRes.headers.get("set-cookie") ?? "";
-  const cookieMatch = setCookie.match(/ai_assistant_session=[^;]+/);
+  const setCookie = compRes.headers.get("set-cookie");
+  const cookieMatch = setCookie?.match(/ai_assistant_session=[^;]+/);
   if (!ok("component route issues a session cookie", compRes.status === 200 && !!cookieMatch, `status ${compRes.status}`)) {
     store.close();
     process.exit(1);

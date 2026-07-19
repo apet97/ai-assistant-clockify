@@ -10,6 +10,7 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
+import { mintAdminCookie, requireSessionCookie } from "../helpers/session.js";
 
 /**
  * Session restore (GET /api/chat/history): an iframe reload must replay the
@@ -58,10 +59,10 @@ async function makeApp(
     let pending = request(app).get("/component/assistant").query({ auth_token: token });
     if (priorCookie) pending = pending.set("Cookie", priorCookie);
     const res = await pending;
-    const setCookie = res.headers["set-cookie"];
-    return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    if (res.status !== 200) throw new Error(`expected component reload 200, received ${String(res.status)}`);
+    return requireSessionCookie(res.headers);
   };
-  return { app, cookie: await loadComponent(), loadComponent };
+  return { app, cookie: mintAdminCookie(store, config.sessionSecret), loadComponent };
 }
 
 describe("GET /api/chat/history (session restore)", () => {
@@ -243,15 +244,7 @@ describe("GET /api/chat/history (session restore)", () => {
       modelClient: flakyModel,
       clockifyForWorkspace: () => createFakeWorkspace().client,
     });
-    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-      workspaceId: "ws-1",
-      user: "admin-1",
-      workspaceRole: "ADMIN",
-      addonId: "addon-1",
-    });
-    const compRes = await request(app).get("/component/assistant").query({ auth_token: token });
-    const sc = compRes.headers["set-cookie"];
-    const cookie = Array.isArray(sc) ? sc[0].split(";")[0] : "";
+    const cookie = mintAdminCookie(store, config.sessionSecret);
 
     const turn = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list my projects" });
     expect(turn.status).toBe(502); // the live failure surfaced to the admin

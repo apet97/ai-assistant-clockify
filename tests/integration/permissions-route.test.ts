@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
-import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -10,6 +9,7 @@ import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { Express } from "express";
+import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * test-gaps-07: the admin's mechanism for RESTRICTING the assistant —
@@ -44,17 +44,8 @@ const modelClient: ModelClient = {
   },
 };
 
-async function adminCookie(): Promise<string> {
-  const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
-    workspaceId: "ws-1",
-    user: "admin-1",
-    workspaceRole: "ADMIN",
-    backendUrl: "https://api.clockify.me",
-    addonId: "addon-1",
-  });
-  const res = await request(app).get("/component/assistant").query({ auth_token: token });
-  const setCookie = res.headers["set-cookie"];
-  return Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+function adminCookie(): string {
+  return mintAdminCookie(store, "test-session-secret");
 }
 
 beforeAll(async () => {
