@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "kind": "deepseek-release-binding",
   "capabilityProbe": {
-    "testedSha": "086c25af344d0d1be2640a579f33119ebfd84410",
-    "rawAggregateSha256": "3390a88b9e5ec31305148bec8feef9e423e600c749068a023737732142dfbf9d",
+    "testedSha": "2bb0a76a5f40d881a4db97a7fc1788c9cdcb6bf4",
+    "rawAggregateSha256": "3f118d810602ae174995cc8731208799d28d3912c725f9d1a65ba302813a3a56",
     "endpointSha256": "548c8dadbba3d19dad29eda388fd7d70f46354eca72ba6012e414b559b68996d",
     "distinctPassingSettings": [
       "production-default",
@@ -11,25 +11,25 @@
     ]
   },
   "baseline": {
-    "testedSha": "086c25af344d0d1be2640a579f33119ebfd84410",
-    "rawAggregateSha256": "ac4f713bf7fc5ded91969ff1323ea260a52660d4f6a349f6fb9848a5e6f6cdc4",
+    "testedSha": "2bb0a76a5f40d881a4db97a7fc1788c9cdcb6bf4",
+    "rawAggregateSha256": "99fcde3766d583296db7fca24329265d67abf22e76d95b2359bd9f1d58e9b631",
     "thinkingMode": null
   },
   "candidate": {
-    "testedSha": "086c25af344d0d1be2640a579f33119ebfd84410",
-    "rawAggregateSha256": "5cd3c97fc687fadf5c82e668148f61d4a6ed6e5f39ef351e79f4daa084d321cb",
+    "testedSha": "2bb0a76a5f40d881a4db97a7fc1788c9cdcb6bf4",
+    "rawAggregateSha256": "003930928003418971a824e7eb01baca87164b2025219ebd71b33fda7272d797",
     "thinkingMode": "disabled"
   },
   "focusedRead": {
-    "testedSha": "086c25af344d0d1be2640a579f33119ebfd84410",
-    "rawAggregateSha256": "198e4259c677039e9b627f540227f796edb49a7bc6101fe1c494f20d41c03d46",
-    "thinkingMode": null,
+    "testedSha": "2bb0a76a5f40d881a4db97a7fc1788c9cdcb6bf4",
+    "rawAggregateSha256": "cb5dc712a57e2577fdb2d57a6ae6d432ddee334196eecc0226d775f3e41ea34b",
+    "thinkingMode": "disabled",
     "caseId": "agentic.count_projects"
   },
   "focusedRiskyPreview": {
-    "testedSha": "086c25af344d0d1be2640a579f33119ebfd84410",
-    "rawAggregateSha256": "aa435b702c22ec190d29682157934d65a61bf53bb40ce23c9da916146d7adacc",
-    "thinkingMode": null,
+    "testedSha": "2bb0a76a5f40d881a4db97a7fc1788c9cdcb6bf4",
+    "rawAggregateSha256": "b5bc581417479da61fbd6bcf95bd71bbe83474b8c63b635db466a3226f40eb2e",
+    "thinkingMode": "disabled",
     "caseId": "agentic.delete_tag_by_name"
   },
   "modelConfiguration": {
@@ -40,7 +40,7 @@
     "agentic": true,
     "toolSelect": true,
     "reasoningEffort": null,
-    "thinkingMode": null
+    "thinkingMode": "disabled"
   },
   "thresholds": {
     "consecutivePasses": 5,
