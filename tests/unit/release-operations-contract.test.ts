@@ -60,6 +60,119 @@ describe("release operations contract", () => {
     expect(deployTransaction).not.toMatch(/railway (?:up|variable)[^\n]*--no-local/u);
   });
 
+  it("binds every live launcher and Railway instance guard to the exact production origin", () => {
+    const exactOrigin = "https://ai-assistant-production-c2e6.up.railway.app";
+    for (const path of [
+      "DEPLOYMENT.md",
+      "scripts/performance/PRIVATE_PRODUCTION.md",
+      "docs/marketplace/03-operations-evidence-rollback-package.md",
+    ]) expect(read(path)).toContain(exactOrigin);
+    const deployment = read("DEPLOYMENT.md");
+    const statusGuard = deployment.slice(
+      deployment.indexOf("RAILWAY_STATUS_JSON="),
+      deployment.indexOf("unset RAILWAY_STATUS_JSON"),
+    );
+    expect(statusGuard).toContain("ai-assistant-production-c2e6.up.railway.app");
+    expect(statusGuard).toContain("instance?.node?.domains?.serviceDomains");
+    expect(statusGuard).toContain("instance?.node?.domains?.customDomains");
+  });
+
+  it("documents three standalone scope outputs and a detached exact-source live worktree", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      for (const name of [
+        "SCOPE_PROBE_EVIDENCE_PATH",
+        "DEPLOYED_MANIFEST_EVIDENCE_PATH",
+        "ATTESTATION_VERIFICATION_EVIDENCE_PATH",
+      ]) expect(runbook).toContain(`export ${name}=`);
+      expect(runbook).toContain('git worktree add --detach "$SOURCE_WORKTREE" "$RELEASE_SHA"');
+      expect(runbook).toContain('test "$(git -C "$SOURCE_WORKTREE" rev-parse HEAD)" = "$RELEASE_SHA"');
+      expect(runbook).toContain("trap 'cleanup_live_source_worktree $?' EXIT");
+      expect(runbook).toContain("NODE22_BIN_DIR=");
+      expect(runbook).toContain("Set the bin directory of an installed Node 22 distribution");
+      expect(runbook).toContain('test "$(command -v npm)" = "$NODE22_BIN_DIR/npm"');
+      expect(runbook).toContain('test "$(command -v npx)" = "$NODE22_BIN_DIR/npx"');
+      expect(runbook).toContain("process.versions.node.split");
+      expect(runbook).toContain("npm ci");
+      expect(runbook).toContain('test -z "$(git status --porcelain --untracked-files=all)"');
+      expect(runbook).toContain("scripts/capture-addon-token.ts");
+      expect(runbook).toContain('test "$(stat -f \'%Lp\' .env)" = 600');
+      expect(runbook).toContain("LIVE_SCOPE_FRESH_INSTALL=1 npm run --silent probe:scopes");
+      expect(runbook).toContain("npx tsx scripts/host-auth-spike.ts");
+      expect(runbook).toContain("npm run --silent probe:member-denial");
+      expect(runbook).toContain("npm run perf:private-production:secure");
+      const removeEnv = runbook.indexOf('test ! -e "$SOURCE_WORKTREE/.env"');
+      const removeWorktree = runbook.indexOf('git worktree remove --force "$SOURCE_WORKTREE"');
+      const install = runbook.indexOf("npm ci", runbook.indexOf("### Detached exact-source live worktree"));
+      const capture = runbook.indexOf("scripts/capture-addon-token.ts", install);
+      expect(install).toBeGreaterThanOrEqual(0);
+      expect(capture).toBeGreaterThan(install);
+      expect(removeEnv).toBeGreaterThanOrEqual(0);
+      expect(removeWorktree).toBeGreaterThan(removeEnv);
+      expect(runbook).toContain("set +e");
+      expect(runbook).toContain('test ! -e "$SOURCE_WORKTREE_PARENT"');
+      expect(runbook).toContain("ignored `node_modules` created by `npm ci`");
+    }
+  });
+
+  it("documents a fail-closed thinking-disabled bootstrap that invalidates prior operations evidence", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      const bootstrap = runbook.slice(
+        runbook.indexOf("### Conditional thinking-disabled bootstrap"),
+        runbook.indexOf("### Release-candidate checked transaction"),
+      );
+      expect(bootstrap).toContain('modelConfiguration.thinkingMode` is `"disabled"`');
+      expect(bootstrap).toMatch(/protected Railway\s+Variables UI/u);
+      expect(bootstrap).toContain("one current-source bootstrap deployment");
+      expect(bootstrap).toContain("/version.modelConfiguration.thinkingMode");
+      expect(bootstrap).toContain("token-backed read");
+      expect(bootstrap).toMatch(/invalidate every earlier\s+operational evidence artifact/u);
+      expect(bootstrap).toMatch(/entirely fresh backup, restore drill, and\s+predeploy gate/u);
+      expect(bootstrap).toMatch(/default\/unset path keeps\s+`LLM_THINKING_MODE` absent/u);
+      expect(bootstrap).not.toContain("railway variable set");
+    }
+  });
+
+  it("provides a separate postdeploy current-key-only second rotation restore", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      const second = runbook.slice(
+        runbook.indexOf("### Postdeploy current-key-only second backup and restore"),
+        runbook.indexOf("### Release-only scope and AUDIT-host probes"),
+      );
+      expect(second).toContain("POSTDEPLOY_LOCAL_BACKUP");
+      expect(second).toContain("POSTDEPLOY_RESTORED_PATH");
+      expect(second).toContain("POSTDEPLOY_RESTORE_EVIDENCE");
+      expect(second).toContain(".partial");
+      expect(second).toContain("shasum -a 256 -c");
+      expect(second).toContain("mkdir -m 700 \"$POSTDEPLOY_LOCAL_DIR\"");
+      expect(second).toContain("POSTDEPLOY_REAL_DIR=");
+      expect(second).toContain("CHECKOUT_REAL=");
+      expect(second).toContain("unset DATA_ENCRYPTION_KEY_PREVIOUS");
+      expect(second).toContain("DATA_ENCRYPTION_KEY (current production key)");
+      expect(second).not.toContain("DATA_ENCRYPTION_KEY_PREVIOUS (old production key)");
+      expect(second).toContain("checks.tokenBackedRead.status");
+      expect(second).toContain("checks.applicationReadiness.status");
+      expect(second).toContain("recovery.rtoMs");
+      expect(second).toContain("recovery.rpoMs");
+    }
+  });
+
+  it("imports the current-key proof and cleans exact postdeploy working and remote files", () => {
+    const runbook = read("docs/marketplace/03-operations-evidence-rollback-package.md");
+    expect(runbook).toContain('--restore "$POSTDEPLOY_RESTORE_EVIDENCE"');
+    expect(runbook).not.toContain('--restore "$RESTORE_EVIDENCE"');
+    expect(runbook).toContain('rm -f -- "$POSTDEPLOY_RESTORED_PATH"');
+    expect(runbook).toContain('test ! -e "$POSTDEPLOY_RESTORED_PATH-wal"');
+    expect(runbook).toContain("/data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.sha256");
+    expect(runbook).toContain("test ! -e /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.sha256");
+    expect(runbook).toContain("Retain only the mode-0600 encrypted local backup");
+    expect(runbook.match(/LIVE_SCOPE_FRESH_INSTALL=1 npm run --silent probe:scopes/gu)).toHaveLength(1);
+    expect(runbook.match(/npx tsx scripts\/host-auth-spike\.ts/gu)).toHaveLength(1);
+    expect(runbook.match(/npm run --silent probe:member-denial/gu)).toHaveLength(1);
+  });
+
   it("documents the one executable import into every canonical workflow evidence filename", () => {
     const runbook = read("docs/marketplace/03-operations-evidence-rollback-package.md");
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };

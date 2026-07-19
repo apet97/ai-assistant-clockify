@@ -14,7 +14,7 @@
  * LIVE_ADDON_BASE_URL=https://deployed.example npm run probe:scopes
  */
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRestCore, type ClockifyHost } from "../src/clockify/rest/core.js";
 import {
   resolveClockifyApiBase,
@@ -35,6 +35,11 @@ import {
   verifyDeployedReleaseBinding,
   type SecretFreeProbeResult,
 } from "./lib/live-evidence.js";
+import { privateProductionRailwayOrigin } from "./lib/private-production-origin.js";
+import {
+  requireScopeProbeArtifactPaths,
+  writeScopeProbeArtifacts,
+} from "./lib/scope-probe-artifacts.js";
 
 function loadDotEnv(): void {
   if (!existsSync(".env")) return;
@@ -43,18 +48,8 @@ function loadDotEnv(): void {
     if (match && process.env[match[1]] === undefined) process.env[match[1]] = match[2];
   }
 }
-loadDotEnv();
-
 if (process.env.LIVE_CLOCKIFY !== "1" || process.env.LIVE_SCOPE_FRESH_INSTALL !== "1") {
   console.error("Refusing to run: set LIVE_CLOCKIFY=1 and LIVE_SCOPE_FRESH_INSTALL=1.");
-  process.exit(2);
-}
-
-const workspaceId = process.env.LIVE_WORKSPACE_ID;
-const addonToken = process.env.LIVE_ADDON_TOKEN;
-const apiUrl = process.env.LIVE_API_URL ?? process.env.LIVE_BACKEND_URL;
-if (!workspaceId || !addonToken || !apiUrl) {
-  console.error("Missing LIVE_WORKSPACE_ID, LIVE_ADDON_TOKEN, or LIVE_API_URL.");
   process.exit(2);
 }
 
@@ -68,6 +63,7 @@ function decodeClaims(token: string): Record<string, unknown> {
 }
 
 const releaseSha = process.env.LIVE_RELEASE_SHA;
+const checkoutRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" }).trim();
 const checkedOutSha = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 if (!releaseSha || !/^[0-9a-f]{40}$/.test(releaseSha) || releaseSha !== checkedOutSha) {
   throw new Error("scope_probe_release_sha_mismatch");
@@ -75,24 +71,23 @@ if (!releaseSha || !/^[0-9a-f]{40}$/.test(releaseSha) || releaseSha !== checkedO
 if (execFileSync("git", ["status", "--porcelain"], { encoding: "utf8" }).trim()) {
   throw new Error("scope_probe_requires_clean_checkout");
 }
-const addonBaseUrl = process.env.LIVE_ADDON_BASE_URL ?? process.env.BASE_URL;
-if (!addonBaseUrl) {
+const artifactPaths = requireScopeProbeArtifactPaths(process.env, checkoutRoot);
+const rawAddonBaseUrl = process.env.LIVE_ADDON_BASE_URL ?? process.env.BASE_URL;
+if (!rawAddonBaseUrl) {
   throw new Error("scope_probe_deployed_base_url_required");
 }
-let deployedBaseUrl: URL;
-try {
-  deployedBaseUrl = new URL(addonBaseUrl.endsWith("/") ? addonBaseUrl : `${addonBaseUrl}/`);
-} catch {
+const deployedBaseUrl = privateProductionRailwayOrigin(rawAddonBaseUrl);
+if (!deployedBaseUrl) {
   throw new Error("scope_probe_deployed_base_url_invalid");
 }
-if (
-  deployedBaseUrl.protocol !== "https:"
-  || deployedBaseUrl.username
-  || deployedBaseUrl.password
-  || deployedBaseUrl.search
-  || deployedBaseUrl.hash
-) {
-  throw new Error("scope_probe_deployed_base_url_invalid");
+const addonBaseUrl = deployedBaseUrl.origin;
+loadDotEnv();
+const workspaceId = process.env.LIVE_WORKSPACE_ID;
+const addonToken = process.env.LIVE_ADDON_TOKEN;
+const apiUrl = process.env.LIVE_API_URL ?? process.env.LIVE_BACKEND_URL;
+if (!workspaceId || !addonToken || !apiUrl) {
+  console.error("Missing LIVE_WORKSPACE_ID, LIVE_ADDON_TOKEN, or LIVE_API_URL.");
+  process.exit(2);
 }
 
 async function fetchDeployedJson(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -313,11 +308,13 @@ const evidence = {
   results,
   auditHost,
 };
-const evidencePath = process.env.SCOPE_PROBE_EVIDENCE_PATH;
-if (evidencePath) writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
-
 if (failures.length > 0) {
   console.error(`Fresh-install aggregate scope/AUDIT probe failed for: ${failures.map(({ key }) => key).join(", ")}`);
   process.exit(1);
 }
+writeScopeProbeArtifacts(artifactPaths, {
+  scopeEvidence: evidence,
+  deployedManifest,
+  remoteVerification,
+});
 console.log(`Fresh-install exact endpoint-per-scope/AUDIT probe passed: ${results.length}/${results.length} retained scopes plus AUDIT host.`);

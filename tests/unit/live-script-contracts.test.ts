@@ -61,6 +61,30 @@ describe("production HTTP smoke script contracts", () => {
     expect(source).not.toContain("freshInstallAttested: true");
   });
 
+  it("preflights exact production origin and all standalone outputs before token or network use", () => {
+    const source = script("live-scope-probe.ts");
+    const artifacts = readFileSync(resolve("scripts/lib/scope-probe-artifacts.ts"), "utf8");
+    const outputPreflight = source.indexOf("requireScopeProbeArtifactPaths(process.env, checkoutRoot)");
+    const originPreflight = source.indexOf("privateProductionRailwayOrigin(rawAddonBaseUrl)");
+    const dotenvRead = source.indexOf("loadDotEnv();");
+    const tokenRead = source.indexOf("const addonToken = process.env.LIVE_ADDON_TOKEN");
+    const deployedFetch = source.indexOf("const [deployedManifest, deployedVersion]");
+    const failureGate = source.indexOf("if (failures.length > 0)");
+    const artifactWrite = source.indexOf("writeScopeProbeArtifacts(artifactPaths");
+    expect(outputPreflight).toBeGreaterThanOrEqual(0);
+    expect(originPreflight).toBeGreaterThan(outputPreflight);
+    expect(dotenvRead).toBeGreaterThan(originPreflight);
+    expect(tokenRead).toBeGreaterThan(dotenvRead);
+    expect(deployedFetch).toBeGreaterThan(tokenRead);
+    expect(artifactWrite).toBeGreaterThan(failureGate);
+    for (const name of [
+      "SCOPE_PROBE_EVIDENCE_PATH",
+      "DEPLOYED_MANIFEST_EVIDENCE_PATH",
+      "ATTESTATION_VERIFICATION_EVIDENCE_PATH",
+    ]) expect(artifacts).toContain(name);
+    expect(source).not.toContain("writeFileSync(evidencePath");
+  });
+
   it("records AUDIT-host evidence only when a release-bound add-on token clears every host", () => {
     const source = script("host-auth-spike.ts");
     expect(source).toContain("HOST_AUTH_EVIDENCE_PATH");

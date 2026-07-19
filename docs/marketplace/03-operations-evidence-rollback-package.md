@@ -115,6 +115,7 @@ for suffix in "" ".sha256" ".json"; do
   test -f "$partial_path"
   chmod 600 "$partial_path"
   mv "$partial_path" "$target_path"
+  test "$(stat -f '%Lp' "$target_path")" = 600
 done
 ```
 
@@ -281,6 +282,19 @@ switch paths only after reconciliation clears newer dispatched host effects.
 
 ## Exact Railway CLI 5.27.0 release identity and deploy
 
+### Conditional thinking-disabled bootstrap
+
+If the final binding's `modelConfiguration.thinkingMode` is `"disabled"` but the current
+production service has no `LLM_THINKING_MODE`, set it once in the protected Railway
+Variables UI and accept exactly one current-source bootstrap deployment. Do not use a CLI
+variable mutation or begin the checked transaction. Require
+`/version.modelConfiguration.thinkingMode` to equal `disabled`, `/health` 200, and a real
+token-backed read. Then invalidate every earlier operational evidence artifact and take
+an entirely fresh backup, restore drill, and predeploy gate. The default/unset path keeps
+`LLM_THINKING_MODE` absent and does not bootstrap.
+
+### Release-candidate checked transaction
+
 Only after the encrypted-backup stop gate above passes, bind Railway's public `/version`
 response to the exact archive uploaded by `railway up`; neither a deployment timestamp nor
 a successful health check is source identity:
@@ -364,18 +378,225 @@ bind, restore, and token-backed verification with the new `DATA_ENCRYPTION_KEY` 
 the previous variable be removed and its single resulting Railway deployment accepted.
 Recheck exact `/version`, `/health`, and a token-backed read before remote cleanup.
 
-## Scope and AUDIT evidence binding
+### Postdeploy current-key-only second backup and restore
 
-Both probes require `LIVE_RELEASE_SHA` equal to the checked-out final SHA and write only
-secret-free JSON to the explicit evidence paths:
+After the deployed startup has re-encrypted installations and the live health plus
+token-backed read pass, take a completely separate online backup. Use a new
+`POSTDEPLOY_DRILL_ID`, new local directory, new metadata, new restored path, and new
+evidence path; none may alias the predeploy drill. Before opening Railway Files, prepare
+the distinct local destination in the evidence checkout:
 
 ```bash
+set -euo pipefail
+POSTDEPLOY_DRILL_ID="${POSTDEPLOY_DRILL_ID:?Set the distinct postdeploy drill id}"
+POSTDEPLOY_LOCAL_DIR="$RECOVERY_VOLUME/ai-assistant/$RELEASE_SHA/postdeploy-$POSTDEPLOY_DRILL_ID"
+POSTDEPLOY_LOCAL_BACKUP="$POSTDEPLOY_LOCAL_DIR/ai-assistant-postdeploy-$POSTDEPLOY_DRILL_ID.sqlite"
+POSTDEPLOY_RELEASE_METADATA="$POSTDEPLOY_LOCAL_BACKUP.json"
+POSTDEPLOY_ISOLATED_DIR="$POSTDEPLOY_LOCAL_DIR/isolated-current-key"
+POSTDEPLOY_RESTORED_PATH="$POSTDEPLOY_ISOLATED_DIR/restored-current-key.sqlite"
+POSTDEPLOY_RESTORE_EVIDENCE="$POSTDEPLOY_LOCAL_DIR/restore-current-key.json"
+test ! -e "$POSTDEPLOY_LOCAL_DIR"
+mkdir -m 700 "$POSTDEPLOY_LOCAL_DIR"
+test "$(stat -f '%Lp' "$POSTDEPLOY_LOCAL_DIR")" = 700
+test "$(stat -f '%u' "$POSTDEPLOY_LOCAL_DIR")" = "$(id -u)"
+POSTDEPLOY_REAL_DIR="$(cd "$POSTDEPLOY_LOCAL_DIR" && pwd -P)"
+CHECKOUT_REAL="$(cd "$(git rev-parse --show-toplevel)" && pwd -P)"
+case "$POSTDEPLOY_REAL_DIR/" in "$CHECKOUT_REAL/"*) exit 1 ;; esac
+```
+
+In the exact production Railway Console, substitute the new id and create the exact
+remote files:
+
+```bash
+set -euo pipefail
+npm run db:backup -- /data/ai-assistant.sqlite \
+  /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite
+chmod 600 /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.json
+```
+
+In authenticated Railway Files, Save As the database and its `.sha256` and `.json`
+sidecars directly as `$POSTDEPLOY_LOCAL_BACKUP.partial`,
+`$POSTDEPLOY_LOCAL_BACKUP.sha256.partial`, and
+`$POSTDEPLOY_LOCAL_BACKUP.json.partial`. Finalize and verify that transfer exactly once:
+
+```bash
+set -euo pipefail
+for suffix in "" ".sha256" ".json"; do
+  partial_path="${POSTDEPLOY_LOCAL_BACKUP}${suffix}.partial"
+  target_path="${POSTDEPLOY_LOCAL_BACKUP}${suffix}"
+  test -f "$partial_path"
+  test ! -e "$target_path"
+  chmod 600 "$partial_path"
+  mv "$partial_path" "$target_path"
+  test "$(stat -f '%Lp' "$target_path")" = 600
+done
+(cd "$POSTDEPLOY_LOCAL_DIR" && shasum -a 256 -c "$(basename "$POSTDEPLOY_LOCAL_BACKUP").sha256")
+```
+
+Then run this current-key-only restore block; it never executes or sources the earlier
+two-key prompt block:
+
+```bash
+set -euo pipefail
+test -f "$POSTDEPLOY_LOCAL_BACKUP"
+test -f "$POSTDEPLOY_LOCAL_BACKUP.sha256"
+test -f "$POSTDEPLOY_RELEASE_METADATA"
+mkdir -m 700 "$POSTDEPLOY_ISOLATED_DIR"
+
+unset DATA_ENCRYPTION_KEY_PREVIOUS
+if [ -z "${DATA_ENCRYPTION_KEY:-}" ]; then
+  printf 'DATA_ENCRYPTION_KEY (current production key): ' >&2
+  IFS= read -r -s DATA_ENCRYPTION_KEY
+  printf '\n' >&2
+fi
+export DATA_ENCRYPTION_KEY
+test -z "${DATA_ENCRYPTION_KEY_PREVIOUS+x}"
+
+POSTDEPLOY_RESTORE_INCIDENT_AT="$(node -p 'new Date().toISOString()')"
+POSTDEPLOY_RESTORE_DRILL_STARTED_AT="$POSTDEPLOY_RESTORE_INCIDENT_AT"
+RESTORE_INCIDENT_AT="$POSTDEPLOY_RESTORE_INCIDENT_AT" \
+RESTORE_DRILL_STARTED_AT="$POSTDEPLOY_RESTORE_DRILL_STARTED_AT" \
+RESTORE_DATABASE=YES npm run --silent db:restore -- \
+  "$POSTDEPLOY_LOCAL_BACKUP" "$POSTDEPLOY_RESTORED_PATH"
+RESTORE_INCIDENT_AT="$POSTDEPLOY_RESTORE_INCIDENT_AT" \
+RESTORE_DRILL_STARTED_AT="$POSTDEPLOY_RESTORE_DRILL_STARTED_AT" \
+npm run --silent db:verify-restore -- \
+  "$POSTDEPLOY_RESTORED_PATH" "$POSTDEPLOY_LOCAL_BACKUP.sha256" \
+  "$POSTDEPLOY_RELEASE_METADATA" >"$POSTDEPLOY_RESTORE_EVIDENCE"
+node -e '
+  const evidence = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const started = Date.parse(evidence.recovery?.drillStartedAt);
+  const ready = Date.parse(evidence.recovery?.readinessConfirmedAt);
+  const incident = Date.parse(evidence.recovery?.incidentAt);
+  const dataAsOf = Date.parse(evidence.recovery?.dataAsOf);
+  if (evidence.conclusion !== "passed" ||
+      evidence.checks.tokenBackedRead.status !== "passed" ||
+      evidence.checks.applicationReadiness.status !== "passed" ||
+      evidence.checks.applicationReadiness.endpoint !== "GET /health" ||
+      evidence.checks.applicationReadiness.httpStatus !== 200 ||
+      evidence.recovery.rtoMs !== ready - started ||
+      evidence.recovery.rpoMs !== incident - dataAsOf) process.exit(1);
+' "$POSTDEPLOY_RESTORE_EVIDENCE"
+chmod 600 "$POSTDEPLOY_RESTORE_EVIDENCE"
+shasum -a 256 "$POSTDEPLOY_RESTORE_EVIDENCE"
+unset DATA_ENCRYPTION_KEY
+```
+
+Retain `POSTDEPLOY_RESTORED_PATH` until the detached live-probe flow below has captured
+the installation credential from that restored database. Only this second proof permits
+removing the previous production key.
+
+### Detached exact-source live worktree
+
+After the DeepSeek evidence commit, the evidence checkout is no longer the deployed source
+candidate. Keep every live script's exact `HEAD == LIVE_RELEASE_SHA` guard: create a clean
+detached worktree at `RELEASE_SHA`, run all live scope/AUDIT/member/performance commands
+there, and return to the evidence checkout only for import and validation. Start this
+immediately after the fresh install so the scope attestation stays within its 15-minute
+window:
+
+```bash
+set -euo pipefail
+EVIDENCE_CHECKOUT="$(git rev-parse --show-toplevel)"
+SOURCE_WORKTREE_PARENT="$(mktemp -d /tmp/ai-assistant-live-source.XXXXXX)"
+SOURCE_WORKTREE="$SOURCE_WORKTREE_PARENT/source"
+git worktree add --detach "$SOURCE_WORKTREE" "$RELEASE_SHA"
+test "$(git -C "$SOURCE_WORKTREE" rev-parse HEAD)" = "$RELEASE_SHA"
+test -z "$(git -C "$SOURCE_WORKTREE" status --porcelain --untracked-files=all)"
+cleanup_live_source_worktree() {
+  exit_status="${1:-$?}"
+  trap - EXIT
+  set +e
+  cleanup_failed=0
+  unset LIVE_ADDON_TOKEN LIVE_BACKEND_URL DATA_ENCRYPTION_KEY DATA_ENCRYPTION_KEY_PREVIOUS
+  rm -f -- "$SOURCE_WORKTREE/.env" || cleanup_failed=1
+  test ! -e "$SOURCE_WORKTREE/.env" || cleanup_failed=1
+  cd "$EVIDENCE_CHECKOUT" || cleanup_failed=1
+  git worktree remove --force "$SOURCE_WORKTREE" || cleanup_failed=1
+  test ! -e "$SOURCE_WORKTREE" || cleanup_failed=1
+  rmdir "$SOURCE_WORKTREE_PARENT" || cleanup_failed=1
+  test ! -e "$SOURCE_WORKTREE_PARENT" || cleanup_failed=1
+  set -e
+  if [ "$exit_status" -eq 0 ] && [ "$cleanup_failed" -ne 0 ]; then return 1; fi
+  return "$exit_status"
+}
+trap 'cleanup_live_source_worktree $?' EXIT
+cd "$SOURCE_WORKTREE"
+
+NODE22_BIN_DIR="${NODE22_BIN_DIR:?Set the bin directory of an installed Node 22 distribution}"
+NODE22_BIN_DIR="$(cd "$NODE22_BIN_DIR" && pwd -P)"
+export PATH="$NODE22_BIN_DIR:$PATH"
+test "$(command -v node)" = "$NODE22_BIN_DIR/node"
+test "$(command -v npm)" = "$NODE22_BIN_DIR/npm"
+test "$(command -v npx)" = "$NODE22_BIN_DIR/npx"
+test "$(node -p 'process.versions.node.split(".")[0]')" = 22
+npm ci
+test -z "$(git status --porcelain --untracked-files=all)"
+
+unset DATA_ENCRYPTION_KEY_PREVIOUS
+if [ -z "${DATA_ENCRYPTION_KEY:-}" ]; then
+  printf 'DATA_ENCRYPTION_KEY (current production key): ' >&2
+  IFS= read -r -s DATA_ENCRYPTION_KEY
+  printf '\n' >&2
+fi
+DATABASE_PATH="$POSTDEPLOY_RESTORED_PATH" \
+DATA_ENCRYPTION_KEY="$DATA_ENCRYPTION_KEY" \
+LIVE_WORKSPACE_ID="${LIVE_WORKSPACE_ID:?Set the sacrificial production workspace id}" \
+  npx tsx scripts/capture-addon-token.ts
+test "$(stat -f '%Lp' .env)" = 600
+while IFS='=' read -r name value; do
+  case "$name" in
+    LIVE_ADDON_TOKEN|LIVE_BACKEND_URL) export "$name=$value" ;;
+  esac
+done <.env
+: "${LIVE_ADDON_TOKEN:?capture did not provide LIVE_ADDON_TOKEN}"
+: "${LIVE_BACKEND_URL:?capture did not provide LIVE_BACKEND_URL}"
+: "${LIVE_WORKSPACE_ID:?Set the sacrificial production workspace id}"
+: "${POSTDEPLOY_RESTORED_PATH:?Postdeploy restored database is required}"
+: "${POSTDEPLOY_LOCAL_DIR:?Postdeploy evidence directory is required}"
+
 export LIVE_RELEASE_SHA="$RELEASE_SHA"
-export SCOPE_PROBE_EVIDENCE_PATH="$LOCAL_DIR/scope-probe.json"
-export HOST_AUTH_EVIDENCE_PATH="$LOCAL_DIR/host-auth.json"
+export LIVE_RELEASE_BUILD_HASH="$(git archive "$RELEASE_SHA" | shasum -a 256 | awk '{print $1}')"
+export LIVE_ADDON_BASE_URL="https://ai-assistant-production-c2e6.up.railway.app"
+LIVE_EVIDENCE_DIR="$POSTDEPLOY_LOCAL_DIR/live-source-probes"
+test ! -e "$LIVE_EVIDENCE_DIR"
+mkdir -m 700 "$LIVE_EVIDENCE_DIR"
+export SCOPE_PROBE_EVIDENCE_PATH="$LIVE_EVIDENCE_DIR/scope-probe.json"
+export DEPLOYED_MANIFEST_EVIDENCE_PATH="$LIVE_EVIDENCE_DIR/deployed-manifest.json"
+export ATTESTATION_VERIFICATION_EVIDENCE_PATH="$LIVE_EVIDENCE_DIR/attestation-verification.json"
+export HOST_AUTH_EVIDENCE_PATH="$LIVE_EVIDENCE_DIR/host-auth.json"
+export MEMBER_DENIAL_EVIDENCE_PATH="$LIVE_EVIDENCE_DIR/member-denial.json"
+export PERF_EVIDENCE_DIR="$LIVE_EVIDENCE_DIR/performance"
+
 LIVE_CLOCKIFY=1 LIVE_SCOPE_FRESH_INSTALL=1 npm run --silent probe:scopes
 LIVE_CLOCKIFY=1 npx tsx scripts/host-auth-spike.ts
+LIVE_CLOCKIFY=1 LIVE_MEMBER_DENIAL=1 LIVE_SACRIFICIAL_WORKSPACE=1 \
+  npm run --silent probe:member-denial
+LIVE_CLOCKIFY=1 LIVE_PERFORMANCE=1 LIVE_SACRIFICIAL_WORKSPACE=1 \
+  npm run perf:private-production:secure
+
+export DEPLOYED_MANIFEST_EVIDENCE="$DEPLOYED_MANIFEST_EVIDENCE_PATH"
+export ATTESTATION_VERIFICATION_EVIDENCE="$ATTESTATION_VERIFICATION_EVIDENCE_PATH"
+cleanup_live_source_worktree 0
 ```
+
+Set `NODE22_BIN_DIR` to a real Node 22 distribution before the block (for example,
+`/opt/homebrew/opt/node@22/bin`, an active nvm version's `bin`, or a mise installation's
+`bin`). Never copy, print, or pass the token on argv. The capture script creates only the ignored,
+mode-0600 `.env` in the detached source worktree; its removal is proven before that
+worktree is removed. The ignored `node_modules` created by `npm ci` remains inside the
+exact worktree and is removed with it by the cleanup trap, including when installation or
+a later probe fails. Import and validate the standalone artifacts only from the evidence
+checkout.
+
+### Release-only scope and AUDIT-host probes
+
+Both probes run exactly once inside the detached exact-source block above and write only
+secret-free JSON to its explicit evidence paths. Do not rerun them from this evidence
+checkout: its evidence-only commit is not `LIVE_RELEASE_SHA`, so the exact-HEAD guard must
+fail.
 
 Use a production `LIVE_ADDON_TOKEN` for both. The scope probe accepts no local
 install-event assertion. It authenticates to the deployed attestation route with the
@@ -423,17 +644,10 @@ During the same window, prove denial using a real active member selected from th
 role-bearing Clockify workspace list. The probe uses the production installation token to
 mint a short-lived member token in memory and calls the deployed component; it accepts
 only 403, the fixed admin-only page, and no session cookie. Before any network request or
-token exchange, it requires the root public Railway production origin
-`https://<service>.up.railway.app` with no custom port, path, query, fragment, or user info:
-
-```bash
-export LIVE_RELEASE_SHA="$RELEASE_SHA"
-export LIVE_ADDON_BASE_URL="$BASE_URL"
-export LIVE_BACKEND_URL="${LIVE_BACKEND_URL:?Clockify backend URL from the installation context}"
-export MEMBER_DENIAL_EVIDENCE_PATH="$LOCAL_DIR/member-denial.json"
-LIVE_CLOCKIFY=1 LIVE_MEMBER_DENIAL=1 LIVE_SACRIFICIAL_WORKSPACE=1 \
-  npm run --silent probe:member-denial
-```
+token exchange, the probe already run inside the detached exact-source block requires the
+root public Railway production origin
+`https://ai-assistant-production-c2e6.up.railway.app` with no custom port, path, query,
+fragment, or user info. Do not rerun it from the evidence checkout.
 
 The browser automation must write one off-worktree JSON result with exactly these
 top-level fields: `schemaVersion: 1`,
@@ -499,11 +713,12 @@ glob), and run the single schema-validating import:
 : "${BROWSER_ACCEPTANCE_EVIDENCE:?Set the exact browser acceptance JSON path}"
 : "${SANITIZED_BROWSER_TRACE:?Set the exact sanitized browser trace JSON path}"
 : "${MEMBER_DENIAL_EVIDENCE:?Set the exact member-denial JSON path}"
+: "${POSTDEPLOY_RESTORE_EVIDENCE:?Set the current-key-only postdeploy restore JSON path}"
 
 npm run --silent import:release-evidence -- \
   --source-candidate "$RELEASE_SHA" \
   --private-production "$PRIVATE_PRODUCTION_EVIDENCE" \
-  --restore "$RESTORE_EVIDENCE" \
+  --restore "$POSTDEPLOY_RESTORE_EVIDENCE" \
   --scope "$SCOPE_PROBE_EVIDENCE_PATH" \
   --browser "$BROWSER_ACCEPTANCE_EVIDENCE" \
   --browser-trace "$SANITIZED_BROWSER_TRACE" \
@@ -512,6 +727,36 @@ npm run --silent import:release-evidence -- \
   --deployed-manifest "$DEPLOYED_MANIFEST_EVIDENCE" \
   --attestation-verification "$ATTESTATION_VERIFICATION_EVIDENCE"
 ```
+
+Only after that import succeeds, remove the working restored database and prove its
+SQLite side files are absent:
+
+```bash
+set -euo pipefail
+rm -f -- "$POSTDEPLOY_RESTORED_PATH" \
+  "$POSTDEPLOY_RESTORED_PATH-wal" "$POSTDEPLOY_RESTORED_PATH-shm"
+test ! -e "$POSTDEPLOY_RESTORED_PATH"
+test ! -e "$POSTDEPLOY_RESTORED_PATH-wal"
+test ! -e "$POSTDEPLOY_RESTORED_PATH-shm"
+rmdir "$POSTDEPLOY_ISOLATED_DIR"
+```
+
+Then, in the exact production Railway Console, substitute the same drill id and remove
+only the three temporary remote files; verify each exact path is absent in Files:
+
+```bash
+set -euo pipefail
+rm -f /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.json
+test ! -e /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite
+test ! -e /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.sha256
+test ! -e /data/backups/ai-assistant-postdeploy-<POSTDEPLOY_DRILL_ID>.sqlite.json
+```
+
+Retain only the mode-0600 encrypted local backup, checksum, metadata, and measured
+`POSTDEPLOY_RESTORE_EVIDENCE` in the controlled recovery volume. The import validates and
+checks the current-key-only proof into canonical `production-restore.json`.
 
 The command validates all schemas and thresholds, the exact release/build/server/source
 binding, manifest and fresh-install envelope, complete scope/AUDIT result, backup RTO/RPO,

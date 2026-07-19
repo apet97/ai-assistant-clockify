@@ -66,8 +66,12 @@ describe("marketplace submission package", () => {
 
     const tsx = resolve("node_modules/.bin/tsx");
     const script = resolve("scripts/validate-release-base-url.ts");
-    expect(execFileSync(tsx, [script, "https://assistant.example"], { encoding: "utf8" }).trim())
-      .toBe("https://assistant.example");
+    expect(execFileSync(tsx, [script, "https://ai-assistant-production-c2e6.up.railway.app/"], { encoding: "utf8" }).trim())
+      .toBe("https://ai-assistant-production-c2e6.up.railway.app");
+    expect(() => execFileSync(tsx, [script, "https://attacker-production.up.railway.app"], { stdio: "pipe" }))
+      .toThrow();
+    expect(() => execFileSync(tsx, [script, "https://ai-assistant-production-c2e6.up.railway.app:443"], { stdio: "pipe" }))
+      .toThrow();
     expect(() => execFileSync(tsx, [script, "http://assistant.example"], { stdio: "pipe" }))
       .toThrow();
   });

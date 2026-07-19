@@ -11,7 +11,8 @@ workspace member endpoint, exchanges a short-lived user credential in memory,
 and constructs the authenticated component address in memory. That address is
 passed only in the performance child's environment: never argv, logs, a file,
 the clipboard, evidence, or chat. Before any exchange, it accepts only a root HTTPS
-`*.up.railway.app` origin and performs a redirect-blocked, credential-free `/version`
+`https://ai-assistant-production-c2e6.up.railway.app` origin and performs a
+redirect-blocked, credential-free `/version`
 preflight bound to the exact checked-out SHA and archive hash. From a clean checkout
 of the deployed commit:
 
@@ -23,7 +24,7 @@ export LIVE_SACRIFICIAL_WORKSPACE=1
 export LIVE_RELEASE_SHA="$(git rev-parse HEAD)"
 export LIVE_RELEASE_BUILD_HASH="$(git archive HEAD | shasum -a 256 | awk '{print $1}')"
 export LIVE_WORKSPACE_ID="REPLACE_WITH_SACRIFICIAL_WORKSPACE_ID"
-export LIVE_ADDON_BASE_URL="https://REPLACE_WITH_PRIVATE_RAILWAY_HOST"
+export LIVE_ADDON_BASE_URL="https://ai-assistant-production-c2e6.up.railway.app"
 export LIVE_BACKEND_URL="https://api.clockify.me/api"
 export PERF_EVIDENCE_DIR="$(mktemp -d /tmp/ai-assistant-private-perf.XXXXXX)"
 printf 'Paste the production installation token (input is hidden): '

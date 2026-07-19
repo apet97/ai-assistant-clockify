@@ -1,11 +1,9 @@
+import { privateProductionRailwayOrigin } from "./lib/private-production-origin.js";
+
 function validateReleaseBaseUrl(raw: string | undefined): string {
   if (!raw) throw new Error("BASE_URL is required.");
-  const parsed = new URL(raw);
-  if (parsed.protocol !== "https:") throw new Error("BASE_URL must use HTTPS.");
-  if (parsed.username || parsed.password) throw new Error("BASE_URL must not contain credentials.");
-  if (parsed.pathname !== "/" || parsed.search || parsed.hash) {
-    throw new Error("BASE_URL must be an origin without a path, query, or fragment.");
-  }
+  const parsed = privateProductionRailwayOrigin(raw);
+  if (!parsed) throw new Error("BASE_URL must be the exact private production Railway origin.");
   return parsed.origin;
 }
 

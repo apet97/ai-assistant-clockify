@@ -1,4 +1,5 @@
-const RAILWAY_PUBLIC_HOST_SUFFIX = ".up.railway.app";
+export const PRIVATE_PRODUCTION_HOST = "ai-assistant-production-c2e6.up.railway.app";
+export const PRIVATE_PRODUCTION_ORIGIN = `https://${PRIVATE_PRODUCTION_HOST}`;
 
 /**
  * Accept only the root public Railway origin used by the private production
@@ -7,6 +8,7 @@ const RAILWAY_PUBLIC_HOST_SUFFIX = ".up.railway.app";
  * exchanged Clockify user credential.
  */
 export function privateProductionRailwayOrigin(raw: string): URL | undefined {
+  if (raw !== PRIVATE_PRODUCTION_ORIGIN && raw !== `${PRIVATE_PRODUCTION_ORIGIN}/`) return undefined;
   let url: URL;
   try {
     url = new URL(raw.endsWith("/") ? raw : `${raw}/`);
@@ -21,8 +23,7 @@ export function privateProductionRailwayOrigin(raw: string): URL | undefined {
     || url.pathname !== "/"
     || url.search !== ""
     || url.hash !== ""
-    || !url.hostname.endsWith(RAILWAY_PUBLIC_HOST_SUFFIX)
-    || url.hostname.length <= RAILWAY_PUBLIC_HOST_SUFFIX.length
+    || url.hostname !== PRIVATE_PRODUCTION_HOST
   ) return undefined;
   return url;
 }

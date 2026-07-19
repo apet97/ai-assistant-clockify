@@ -9,6 +9,7 @@ import {
 const SHA = "a".repeat(40);
 const BUILD = "b".repeat(64);
 const SERVER_ARTIFACT = "c".repeat(64);
+const PRODUCTION_ORIGIN = "https://ai-assistant-production-c2e6.up.railway.app";
 
 type FakeResponse = {
   status: number;
@@ -82,7 +83,7 @@ describe("secure private-production performance launcher", () => {
     };
 
     await expect(runSecurePrivateProduction({
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: workspaceIdentifier,
       addonCredential,
@@ -95,7 +96,7 @@ describe("secure private-production performance launcher", () => {
     })).resolves.toBe(0);
 
     expect(requests).toHaveLength(3);
-    expect(requests[0]?.url).toBe("https://assistant-production.up.railway.app/version");
+    expect(requests[0]?.url).toBe(`${PRODUCTION_ORIGIN}/version`);
     expect(requests[0]?.init).toMatchObject({ method: "GET", redirect: "error" });
     expect(requests[0]?.init?.headers).not.toHaveProperty("X-Addon-Token");
     expect(requests[1]?.init?.headers).toMatchObject({ "X-Addon-Token": addonCredential });
@@ -121,7 +122,7 @@ describe("secure private-production performance launcher", () => {
       return 0;
     };
     const base = {
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: "workspace-secret-id",
       addonCredential: "installation-secret-credential",
@@ -151,11 +152,13 @@ describe("secure private-production performance launcher", () => {
 
   it.each([
     "https://assistant.example.test",
-    "https://assistant-production.up.railway.app:8443",
-    "https://assistant-production.up.railway.app/preview",
-    "https://assistant-production.up.railway.app?target=preview",
-    "https://assistant-production.up.railway.app#preview",
-    "https://operator@assistant-production.up.railway.app",
+    "https://attacker-production.up.railway.app",
+    `${PRODUCTION_ORIGIN}:443`,
+    `${PRODUCTION_ORIGIN}:8443`,
+    `${PRODUCTION_ORIGIN}/preview`,
+    `${PRODUCTION_ORIGIN}?target=preview`,
+    `${PRODUCTION_ORIGIN}#preview`,
+    "https://operator@ai-assistant-production-c2e6.up.railway.app",
   ])("rejects an untrusted or non-root production origin before any request or child launch: %s", async (addonBaseUrl) => {
     let requests = 0;
     let launches = 0;
@@ -185,7 +188,7 @@ describe("secure private-production performance launcher", () => {
     const requests: Array<{ url: string; init?: RequestInit }> = [];
     let launches = 0;
     await expect(runSecurePrivateProduction({
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: "workspace-secret-id",
       addonCredential,
@@ -203,7 +206,7 @@ describe("secure private-production performance launcher", () => {
     })).rejects.toThrow(/^private_production_secure_launch_failed$/u);
 
     expect(requests).toHaveLength(1);
-    expect(requests[0]?.url).toBe("https://assistant-production.up.railway.app/version");
+    expect(requests[0]?.url).toBe(`${PRODUCTION_ORIGIN}/version`);
     expect(requests[0]?.init).toMatchObject({ method: "GET", redirect: "error" });
     expect(JSON.stringify(requests[0]?.init?.headers)).not.toContain(addonCredential);
     expect(launches).toBe(0);

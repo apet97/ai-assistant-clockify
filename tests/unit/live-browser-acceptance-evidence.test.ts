@@ -21,6 +21,7 @@ const SHA = {
   sourceBinding: "d".repeat(64),
   capture: "e".repeat(64),
 };
+const PRODUCTION_ORIGIN = "https://ai-assistant-production-c2e6.up.railway.app";
 
 const source = {
   commitSha: SHA.candidate,
@@ -319,7 +320,7 @@ describe("production member-denial probe", () => {
     };
 
     const evidence = await runMemberDenialProbe({
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: workspaceIdentifier,
       addonCredential,
@@ -350,7 +351,7 @@ describe("production member-denial probe", () => {
       ? response(200, deployedVersion())
       : response(200, []);
     await expect(runMemberDenialProbe({
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: "workspace",
       addonCredential: "credential",
@@ -366,7 +367,7 @@ describe("production member-denial probe", () => {
       response(403, "admins and owners only", { "set-cookie": "ai_assistant_session=forbidden" }),
     ];
     await expect(runMemberDenialProbe({
-      addonBaseUrl: "https://assistant-production.up.railway.app",
+      addonBaseUrl: PRODUCTION_ORIGIN,
       backendUrl: "https://developer.clockify.me/api",
       workspaceId: "workspace",
       addonCredential: "credential",
@@ -378,11 +379,13 @@ describe("production member-denial probe", () => {
 
   it.each([
     "https://assistant.example.test",
-    "https://assistant-production.up.railway.app:8443",
-    "https://assistant-production.up.railway.app/preview",
-    "https://assistant-production.up.railway.app?target=preview",
-    "https://assistant-production.up.railway.app#preview",
-    "https://operator@assistant-production.up.railway.app",
+    "https://attacker-production.up.railway.app",
+    `${PRODUCTION_ORIGIN}:443`,
+    `${PRODUCTION_ORIGIN}:8443`,
+    `${PRODUCTION_ORIGIN}/preview`,
+    `${PRODUCTION_ORIGIN}?target=preview`,
+    `${PRODUCTION_ORIGIN}#preview`,
+    "https://operator@ai-assistant-production-c2e6.up.railway.app",
   ])("rejects an untrusted or non-root production origin before any request: %s", async (addonBaseUrl) => {
     let requests = 0;
     await expect(runMemberDenialProbe({
