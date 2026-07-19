@@ -176,8 +176,8 @@ read-only startup reconciliation. After shutdown the verifier independently requ
 critical tables/columns, integrity, and an available writer lock. Before spawn,
 `npm run build` in this exact Git checkout writes a
 deterministic manifest that binds
-the complete `dist/server` tree hash to the exact Git source-candidate SHA and its
-`git archive` SHA-256. The verifier independently recomputes the archive and artifact
+the complete generated `dist/server` + `dist/ui` tree hash to the exact Git source-candidate SHA and its
+`git archive` SHA-256. The verifier independently recomputes the archive and runtime-artifact
 hashes and requires either the exact candidate checkout or a clean descendant whose
 entire diff is allowlisted immutable evidence. Arbitrary `RELEASE_SHA`/
 `RELEASE_BUILD_HASH` strings, dirty source, non-evidence descendants, stale manifests,
@@ -332,9 +332,9 @@ node -e '
 The pre-upload binding is computed independently from the candidate's Git blob IDs,
 executable modes, paths, and archive. The Git-less Railway prebuild recomputes the
 canonical uploaded source tree before compilation and refuses any missing, added, or
-changed source byte. It records the complete `dist/server` tree hash; production startup
-rehashes that tree before database/provider initialization. Record the deployment id,
-full SHA, archive hash, source-binding hash, server-artifact hash, and secret-free
+changed source byte. It records the complete generated `dist/server` + `dist/ui` tree hash; production startup
+rehashes those trees before database/provider initialization. Record the deployment id,
+full SHA, archive hash, source-binding hash, runtime-artifact hash, and secret-free
 `/version`. Abort live testing when any value is null or differs.
 
 After health and a real token-backed read, repeat the online backup, encrypted transfer,
@@ -368,7 +368,7 @@ outgoing token. A separate hashed-workspace issuer-time/state/generation lineage
 never-before-seen older tokens for 24 hours + 2 minutes + 1 second after the latest accepted event,
 preventing restoration after erasure/restart while a strictly newer token remains installable. The probe
 also fetches deployed `/version` and `/manifest` and fails unless the release SHA,
-build hash, server artifact, source binding, and canonical manifest match the exact
+build hash, runtime artifact (server plus served UI), source binding, and canonical manifest match the exact
 clean checkout before any Clockify request. The all-scopes token proves aggregate
 reachability, not per-scope necessity, and the evidence says so explicitly. A separate
 valid read-only POST must clear the AUDIT host. Supply secrets outside the command line

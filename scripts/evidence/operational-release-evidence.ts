@@ -208,7 +208,7 @@ export function validateRestoreEvidence(
   expectEqual(readiness.releaseSha, deployed.releaseSha, "restore release SHA");
   expectEqual(readiness.releaseBuildHash, deployed.buildHash, "restore build hash");
   if (readiness.serverArtifactSha256 !== deployed.serverArtifactSha256) {
-    throw new Error("restore server artifact mismatch");
+    throw new Error("restore runtime artifact mismatch");
   }
   const shutdown = object(readiness.shutdownVerification, "restore shutdown verification");
   expectEqual(shutdown.childExitCode, 0, "restore child exit");
@@ -254,7 +254,7 @@ function validateScopeEvidence(input: {
   expectEqual(evidence.conclusion, "passed", "scope evidence conclusion");
   expectEqual(evidence.releaseSha, input.deployed.releaseSha, "scope release SHA");
   expectEqual(evidence.releaseBuildHash, input.deployed.buildHash, "scope build hash");
-  expectEqual(evidence.serverArtifactSha256, input.deployed.serverArtifactSha256, "scope server artifact");
+  expectEqual(evidence.serverArtifactSha256, input.deployed.serverArtifactSha256, "scope runtime artifact");
   expectEqual(evidence.sourceRelationship, input.deployed.sourceRelationship, "scope source relationship");
   expectEqual(evidence.sourceBindingSha256, input.deployed.sourceBindingSha256, "scope source binding");
   expectEqual(evidence.manifestSha256, input.deployed.manifestSha256, "scope manifest");
@@ -283,7 +283,7 @@ function validateScopeEvidence(input: {
   }
   expectEqual(freshInstall.releaseSha, input.deployed.releaseSha, "fresh installation release SHA");
   expectEqual(freshInstall.releaseBuildHash, input.deployed.buildHash, "fresh installation build hash");
-  expectEqual(freshInstall.serverArtifactSha256, input.deployed.serverArtifactSha256, "fresh installation server artifact");
+  expectEqual(freshInstall.serverArtifactSha256, input.deployed.serverArtifactSha256, "fresh installation runtime artifact");
   expectEqual(freshInstall.sourceRelationship, input.deployed.sourceRelationship, "fresh installation source relationship");
   expectEqual(freshInstall.sourceBindingSha256, input.deployed.sourceBindingSha256, "fresh installation source binding");
   expectEqual(freshInstall.manifestSha256, input.deployed.manifestSha256, "fresh installation manifest");
@@ -310,7 +310,7 @@ function validateScopeEvidence(input: {
     ["installationGeneration", "generation"],
     ["releaseSha", "release SHA"],
     ["releaseBuildHash", "build hash"],
-    ["serverArtifactSha256", "server artifact"],
+    ["serverArtifactSha256", "runtime artifact"],
     ["sourceRelationship", "source relationship"],
     ["sourceBindingSha256", "source binding"],
     ["manifestSha256", "manifest"],
@@ -331,7 +331,7 @@ function validateScopeEvidence(input: {
   expectEqual(remote.attestationSha256, attestationSha256, "remote installation attestation hash");
   expectEqual(remote.releaseSha, input.deployed.releaseSha, "remote installation release SHA");
   expectEqual(remote.releaseBuildHash, input.deployed.buildHash, "remote installation build hash");
-  expectEqual(remote.serverArtifactSha256, input.deployed.serverArtifactSha256, "remote installation server artifact");
+  expectEqual(remote.serverArtifactSha256, input.deployed.serverArtifactSha256, "remote installation runtime artifact");
   expectEqual(remote.sourceRelationship, input.deployed.sourceRelationship, "remote installation source relationship");
   expectEqual(remote.sourceBindingSha256, input.deployed.sourceBindingSha256, "remote installation source binding");
   expectEqual(remote.manifestSha256, input.deployed.manifestSha256, "remote installation manifest");
@@ -372,7 +372,7 @@ export function validateOperationalReleaseEvidence(
   expectEqual(version.version, "1.0.0", "deployed version");
   expectEqual(version.releaseSha, sourceCandidateSha, "deployed release SHA");
   const releaseBuildHash = hash(version.buildHash, "deployed build hash");
-  const serverArtifactSha256 = hash(version.serverArtifactSha256, "deployed server artifact");
+  const serverArtifactSha256 = hash(version.serverArtifactSha256, "deployed runtime artifact");
   const relationship = version.sourceRelationship;
   if (relationship !== "exact_head" && relationship !== "evidence_descendant" && relationship !== "source_bound_builder") {
     throw new Error("deployed source relationship is not independently source-bound");

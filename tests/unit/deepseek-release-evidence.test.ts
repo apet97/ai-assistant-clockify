@@ -754,11 +754,11 @@ describe("DeepSeek release evidence", () => {
 
     const missingServerArtifact = fixture();
     missingServerArtifact.deployedVersion.serverArtifactSha256 = undefined as never;
-    expect(() => validateDeepSeekReleaseEvidence(missingServerArtifact as never)).toThrow(/server artifact/i);
+    expect(() => validateDeepSeekReleaseEvidence(missingServerArtifact as never)).toThrow(/runtime artifact/i);
 
     const malformedServerArtifact = fixture();
     malformedServerArtifact.deployedVersion.serverArtifactSha256 = "A".repeat(64);
-    expect(() => validateDeepSeekReleaseEvidence(malformedServerArtifact as never)).toThrow(/server artifact/i);
+    expect(() => validateDeepSeekReleaseEvidence(malformedServerArtifact as never)).toThrow(/runtime artifact/i);
   });
 
   it("accepts only a hash-bound transported builder deployment", async () => {

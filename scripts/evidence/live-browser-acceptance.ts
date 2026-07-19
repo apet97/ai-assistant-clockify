@@ -167,7 +167,7 @@ function source(value: unknown, label: string): LiveEvidenceSource {
   return {
     commitSha: fullCommit(row.commitSha, `${label} commit`),
     releaseBuildHash: sha256(row.releaseBuildHash, `${label} build`),
-    serverArtifactSha256: sha256(row.serverArtifactSha256, `${label} server artifact`),
+    serverArtifactSha256: sha256(row.serverArtifactSha256, `${label} runtime artifact`),
     sourceRelationship: relationship,
     sourceBindingSha256: binding,
   };
@@ -224,7 +224,7 @@ function sourceFromDeployedVersion(value: unknown, expectedCandidateSha: string)
   return {
     commitSha: fullCommit(deployed.releaseSha, "deployed candidate SHA"),
     releaseBuildHash: sha256(deployed.buildHash, "deployed build hash"),
-    serverArtifactSha256: sha256(deployed.serverArtifactSha256, "deployed server artifact"),
+    serverArtifactSha256: sha256(deployed.serverArtifactSha256, "deployed runtime artifact"),
     sourceRelationship: relationship,
     sourceBindingSha256: binding,
   };

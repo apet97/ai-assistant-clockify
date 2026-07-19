@@ -1444,7 +1444,7 @@ function verifyDeployedVersion(
     throw new Error("deployed release build hash is missing or invalid");
   }
   if (typeof deployed.serverArtifactSha256 !== "string" || !SHA256_PATTERN.test(deployed.serverArtifactSha256)) {
-    throw new Error("deployed server artifact hash is missing or invalid");
+    throw new Error("deployed runtime artifact hash is missing or invalid");
   }
   if (
     deployed.sourceRelationship !== "exact_head"

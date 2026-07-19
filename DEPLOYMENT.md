@@ -143,7 +143,8 @@ selector validates the artifact and chooses `production-default`; missing,
 malformed, unsafe, stale, cross-source, or cross-endpoint evidence still fails.
 
 Immediately before production upload, bind the still-present encrypted backup, checksum
-sidecar, metadata sidecar, measured restore proof, and exact locally built server artifact
+sidecar, metadata sidecar, measured restore proof, and exact locally built runtime artifact
+(the executable server plus the served UI)
 to the candidate. The command calls `diskutil`, rejects symlinks and paths outside
 `RECOVERY_VOLUME`, rehashes the database, and revalidates the complete restore schema.
 At execution it captures a fresh UTC gate clock, rejects future-dated or misordered
@@ -222,14 +223,14 @@ not set it.
 records Git-verified candidate/archive provenance. A Git-less Railway builder requires
 all three release-binding variables, verifies the canonical uploaded source tree against
 the independently generated Git binding, and records `source_bound_builder` provenance
-plus the complete built-server hash; production startup rejects a missing/mismatched
+plus the complete generated server-and-served-UI hash; production startup rejects a missing/mismatched
 manifest or changed bytes before opening the database. `/version` serves only that
 verified manifest identity, never the environment strings directly. Restore readiness
 does not promote the transported builder proof to Git restore evidence and does not trust the two release
 environment values by themselves: before starting the
 one-off built server it revalidates the Git commit/archive relationship, the permitted
 source-candidate versus evidence-only-descendant relationship, and the SHA-256 of the
-complete `dist/server` tree. A dirty/non-evidence checkout or stale/tampered artifact is
+complete generated `dist/server` + `dist/ui` trees. A dirty/non-evidence checkout or stale/tampered artifact is
 not valid release or recovery evidence.
 
 Railway CLI 5.27.0 equivalent: `railway variable set -s ai-assistant -e production
@@ -363,7 +364,8 @@ install after the exact candidate is deployed. Token `iat` and a replacement tok
 are never accepted as installation proof. The verified `/lifecycle/installed`
 callback atomically stores a token fingerprint plus a secret-free attestation bound
 to the installation generation, canonical manifest, release SHA/build hash, exact
-server artifact, and source binding. A token replacement invalidates that proof and
+runtime artifact (the compatibility-named `serverArtifactSha256` binds both the
+executable server and served UI), and source binding. A token replacement invalidates that proof and
 cannot mint another; uninstall deletes it immediately. Before any Clockify scope
 request, the probe fetches deployed `/version` and `/manifest`, authenticates to the
 attestation GET with the current `X-Addon-Token`, and asks the deployed public verify

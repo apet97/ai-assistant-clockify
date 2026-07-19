@@ -135,7 +135,7 @@ function validateSource(value: unknown, expectedCandidateSha: string): {
     throw new Error("private-production source candidate SHA mismatch");
   }
   const releaseBuildHash = sha256(source.releaseBuildHash, "private-production release build hash");
-  const serverArtifactSha256 = sha256(source.serverArtifactSha256, "private-production server artifact");
+  const serverArtifactSha256 = sha256(source.serverArtifactSha256, "private-production runtime artifact");
   const relationship = source.sourceRelationship;
   if (
     relationship !== "exact_head"
@@ -352,7 +352,7 @@ export function validatePrivateProductionReleaseEvidence(
     source.releaseBuildHash,
   );
   if (deployed.serverArtifactSha256 !== source.serverArtifactSha256) {
-    throw new Error("deployed server artifact mismatch");
+    throw new Error("deployed runtime artifact mismatch");
   }
   if (deployed.sourceRelationship !== source.sourceRelationship) {
     throw new Error("deployed source relationship mismatch");

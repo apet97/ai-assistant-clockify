@@ -238,7 +238,7 @@ export function validateDeployedRelease(
     typeof metadata.serverArtifactSha256 !== "string"
     || !/^[0-9a-f]{64}$/i.test(metadata.serverArtifactSha256)
   ) {
-    throw new Error("deployed server artifact binding is missing or invalid");
+    throw new Error("deployed runtime artifact binding is missing or invalid");
   }
   if (
     metadata.sourceRelationship !== "exact_head"

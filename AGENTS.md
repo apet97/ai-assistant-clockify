@@ -110,7 +110,7 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
 ```bash
 npm install
 npm run type-check    # tsc --noEmit
-npm test              # build exact server artifact, then Vitest (no unmocked network)
+npm test              # build exact server + served UI artifact, then Vitest (no unmocked network)
 npm run build         # -> dist/server, dist/ui
 npm run lint          # typed eslint across src + scripts
 npm run verify        # both type-checks + lint + cycles + dup + test + build

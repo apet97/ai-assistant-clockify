@@ -16,8 +16,14 @@ const SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const MANIFEST_PATH = "dist/release-artifact-manifest.json";
 const SERVER_ARTIFACT_PATH = "dist/server";
+const UI_ARTIFACT_PATH = "dist/ui";
 export const RELEASE_SOURCE_BINDING_PATH = ".release/source-candidate-binding.json";
 const MAX_GIT_OUTPUT_BYTES = 128 * 1024 * 1024;
+const NIXPACKS_GENERATED_SOURCE_PATHS = new Set([
+  ".nixpacks/Dockerfile",
+  ".nixpacks/build.sh",
+]);
+const NIXPACKS_NIXPKGS_PATH = /^\.nixpacks\/nixpkgs-[a-f0-9]{40}\.nix$/u;
 
 export type SourceCandidateRelationship =
   | "exact_head"
@@ -206,18 +212,27 @@ function filesystemSourceTree(
 ): { digest: string; fileCount: number } {
   const root = resolve(sourceRoot);
   const records: SourceTreeRecord[] = [];
-  const excluded = (path: string): boolean => (
+  const excludedTree = (path: string): boolean => (
     path === ".git" || path.startsWith(".git/")
     || path === "node_modules" || path.startsWith("node_modules/")
     || path === "dist" || path.startsWith("dist/")
-    || path === RELEASE_SOURCE_BINDING_PATH
+  );
+  const generatedFile = (path: string): boolean => (
+    path === RELEASE_SOURCE_BINDING_PATH
+    // Railway materializes these Nixpacks control files after upload and before
+    // `npm run build`. Ignore only ordinary files at the observed exact
+    // builder-owned paths; same-name directories/symlinks and every other path
+    // under `.nixpacks/` remain binding violations.
+    || NIXPACKS_GENERATED_SOURCE_PATHS.has(path)
+    || NIXPACKS_NIXPKGS_PATH.test(path)
   );
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const absolute = resolve(directory, entry.name);
       const path = relative(root, absolute).split(sep).join("/");
-      if (excluded(path)) continue;
+      if (excludedTree(path)) continue;
       const info = lstatSync(absolute);
+      if (info.isFile() && generatedFile(path)) continue;
       if (info.isDirectory()) {
         visit(absolute);
         continue;
@@ -328,7 +343,6 @@ export function verifyReleaseSourceBinding(input: {
 }
 
 function serverArtifactSha256(repositoryRoot: string): string {
-  const artifactRoot = resolve(repositoryRoot, SERVER_ARTIFACT_PATH);
   const records: Array<{ path: string; bytes: number; sha256: string }> = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -346,28 +360,40 @@ function serverArtifactSha256(repositoryRoot: string): string {
       }
       const bytes = readFileSync(absolute);
       records.push({
-        path: relative(artifactRoot, absolute).split(sep).join("/"),
+        path: relative(repositoryRoot, absolute).split(sep).join("/"),
         bytes: bytes.byteLength,
         sha256: createHash("sha256").update(bytes).digest("hex"),
       });
     }
   };
   try {
-    const rootInfo = lstatSync(artifactRoot);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
-      throw new ReleaseArtifactIdentityError("server_artifact_invalid");
+    for (const artifactPath of [SERVER_ARTIFACT_PATH, UI_ARTIFACT_PATH]) {
+      const artifactRoot = resolve(repositoryRoot, artifactPath);
+      const rootInfo = lstatSync(artifactRoot);
+      if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+        throw new ReleaseArtifactIdentityError("server_artifact_invalid");
+      }
+      visit(artifactRoot);
     }
-    visit(artifactRoot);
   } catch (error) {
     if (error instanceof ReleaseArtifactIdentityError) throw error;
     throw new ReleaseArtifactIdentityError("server_artifact_invalid");
   }
   records.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  if (records.length === 0 || !records.some((record) => record.path === "server.js")) {
+  const requiredRuntimeFiles = new Set([
+    "dist/server/server.js",
+    "dist/ui/index.html",
+    "dist/ui/index.css",
+    "dist/ui/main.js",
+  ]);
+  for (const record of records) requiredRuntimeFiles.delete(record.path);
+  if (requiredRuntimeFiles.size > 0) {
     throw new ReleaseArtifactIdentityError("server_artifact_invalid");
   }
   return createHash("sha256")
-    .update("ai-assistant-dist-server-v1\n")
+    // Keep the public `serverArtifactSha256` field for compatibility, but bind
+    // every generated application byte under dist/server and dist/ui.
+    .update("ai-assistant-runtime-artifacts-v1\n")
     .update(JSON.stringify(records))
     .digest("hex");
 }
@@ -480,7 +506,7 @@ export function writeSourceBoundBuilderReleaseArtifactManifest(input: {
  * Independently re-check the manifest against Git and the bytes that will be
  * spawned. Supplying two well-formed environment strings is therefore
  * insufficient: they must identify a real source candidate, its exact archive,
- * a permitted clean checkout, and this exact complete `dist/server` tree.
+ * a permitted clean checkout, and the complete `dist/server` + `dist/ui` trees.
  */
 export function verifyBuiltReleaseArtifact(input: {
   repositoryRoot: string;

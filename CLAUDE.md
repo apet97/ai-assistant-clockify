@@ -269,9 +269,10 @@ bug was found against the REAL API, not by reading the code.
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 - `src/public-documents.ts` renders script-free public Privacy, Support, and
   Security pages. `src/release-artifact.ts` verifies the post-build manifest and
-  complete `dist/server` hash before production opens its database; `/version`
-  returns only that verified full source-candidate SHA/archive hash and server
-  artifact hash, never raw environment claims. `/api/me` exposes only
+  complete generated `dist/server` + `dist/ui` hash before production opens its
+  database; `/version` returns only that verified full source-candidate
+  SHA/archive hash and compatibility-named runtime artifact hash, never raw
+  environment claims. `/api/me` exposes only
   sanitized UI preferences and public document/contact links.
 
 ## Safety & planner invariants (all pinned by tests — do not regress)
@@ -587,7 +588,7 @@ bug was found against the REAL API, not by reading the code.
 ```bash
 npm install
 npm run type-check     # tsc --noEmit
-npm test               # build exact server artifact, then Vitest; no unmocked network
+npm test               # build exact server + served UI artifact, then Vitest; no unmocked network
 npm run build          # tsc + vite -> dist/server, dist/ui
 npm run lint           # typed eslint across src + operational scripts; zero warnings
 npm run verify         # both type-checks + lint + cycles + dup + test + build

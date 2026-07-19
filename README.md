@@ -141,7 +141,7 @@ cp .env.example .env     # then fill in real values
 
 ```bash
 npm run type-check       # tsc --noEmit
-npm test                 # build exact server artifact, then Vitest; no unmocked network
+npm test                 # build exact server + served UI artifact, then Vitest; no unmocked network
 npm run build            # -> dist/server, dist/ui
 npm run lint             # eslint src (typed async-safety rules)
 npm run verify           # type-check + lint + cycles + test + build (the gate)

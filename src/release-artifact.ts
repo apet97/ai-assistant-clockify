@@ -6,6 +6,7 @@ const SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 export const RELEASE_ARTIFACT_MANIFEST_PATH = "dist/release-artifact-manifest.json";
 export const RELEASE_SERVER_ARTIFACT_PATH = "dist/server";
+const RELEASE_UI_ARTIFACT_PATH = "dist/ui";
 
 export type ReleaseSourceRelationship =
   | "exact_head"
@@ -41,7 +42,6 @@ export class RuntimeReleaseArtifactError extends Error {
 }
 
 export function computeServerArtifactSha256(repositoryRoot: string): string {
-  const artifactRoot = resolve(repositoryRoot, RELEASE_SERVER_ARTIFACT_PATH);
   const records: Array<{ path: string; bytes: number; sha256: string }> = [];
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -55,28 +55,40 @@ export function computeServerArtifactSha256(repositoryRoot: string): string {
       if (!info.isFile()) throw new RuntimeReleaseArtifactError("server_artifact_invalid");
       const bytes = readFileSync(absolute);
       records.push({
-        path: relative(artifactRoot, absolute).split(sep).join("/"),
+        path: relative(repositoryRoot, absolute).split(sep).join("/"),
         bytes: bytes.byteLength,
         sha256: createHash("sha256").update(bytes).digest("hex"),
       });
     }
   };
   try {
-    const rootInfo = lstatSync(artifactRoot);
-    if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
-      throw new RuntimeReleaseArtifactError("server_artifact_invalid");
+    for (const artifactPath of [RELEASE_SERVER_ARTIFACT_PATH, RELEASE_UI_ARTIFACT_PATH]) {
+      const artifactRoot = resolve(repositoryRoot, artifactPath);
+      const rootInfo = lstatSync(artifactRoot);
+      if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) {
+        throw new RuntimeReleaseArtifactError("server_artifact_invalid");
+      }
+      visit(artifactRoot);
     }
-    visit(artifactRoot);
   } catch (error) {
     if (error instanceof RuntimeReleaseArtifactError) throw error;
     throw new RuntimeReleaseArtifactError("server_artifact_invalid");
   }
   records.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  if (records.length === 0 || !records.some((record) => record.path === "server.js")) {
+  const requiredRuntimeFiles = new Set([
+    "dist/server/server.js",
+    "dist/ui/index.html",
+    "dist/ui/index.css",
+    "dist/ui/main.js",
+  ]);
+  for (const record of records) requiredRuntimeFiles.delete(record.path);
+  if (requiredRuntimeFiles.size > 0) {
     throw new RuntimeReleaseArtifactError("server_artifact_invalid");
   }
   return createHash("sha256")
-    .update("ai-assistant-dist-server-v1\n")
+    // `serverArtifactSha256` is a legacy public field name. The digest binds
+    // the executable server and all static UI bytes served to Clockify.
+    .update("ai-assistant-runtime-artifacts-v1\n")
     .update(JSON.stringify(records))
     .digest("hex");
 }
