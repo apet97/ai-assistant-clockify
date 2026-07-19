@@ -139,7 +139,7 @@ npm run --silent bind:deepseek-evidence
 
 The lower-effort evaluator intentionally exits `1` when it records a complete
 functional miss. That status is acceptable only when the strict raw-telemetry
-selector validates the artifact and chooses `production-default`; missing,
+selector validates the artifact and selects an eligible setting; missing,
 malformed, unsafe, stale, cross-source, or cross-endpoint evidence still fails.
 
 Immediately before production upload, bind the still-present encrypted backup, checksum
@@ -213,7 +213,7 @@ not set it.
 | `LLM_BASE_URL` | the approved DeepSeek OpenAI-compatible endpoint |
 | `LLM_API_KEY` | the rotated production DeepSeek key from admin package 1 |
 | `LLM_MODEL` | the exact DeepSeek release model recorded in the evidence record |
-| `LLM_THINKING_MODE` | **Unset** for the 1.0.0 production-default selection; `disabled` remains a comparison-only value until a fresh corpus qualifies it |
+| `LLM_THINKING_MODE` | Set to `disabled` exactly when the final-source `deepseek-release-binding.json` reports `modelConfiguration.thinkingMode: "disabled"`; otherwise keep it absent (never blank) |
 | `PUBLIC_CONTACT_URL` | Admin package 2's monitored HTTPS form or `mailto:` destination for the public Privacy, Support, and Security pages |
 | `RELEASE_SHA` | Full, lowercase SHA of the clean commit uploaded by `railway up` |
 | `RELEASE_BUILD_HASH` | `git archive "$RELEASE_SHA" | shasum -a 256` for the binding's tested candidate |
@@ -244,8 +244,11 @@ the model sees only the message-relevant actions; no-match/non-ASCII/>3-area req
 fail open to the full catalog). Do not change these on the 1.0.0 candidate without
 rerunning the configured DeepSeek safety and performance gates. `LLM_TOOL_SELECT=0`
 is an operational fallback to the full catalog, not a provider migration.
-For 1.0.0, remove rather than blank `LLM_THINKING_MODE`; an empty string is not
-a valid configured mode, and `/version` must report `thinkingMode: null`.
+For 1.0.0, the deployed `LLM_THINKING_MODE` and
+`/version.modelConfiguration.thinkingMode` must exactly match the fresh
+final-source binding: both are `disabled` when selected; otherwise the variable
+is absent and `/version` reports `null`. An empty string is never a valid
+configured mode.
 
 Other optional knobs include `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 120000 — **must be < 290000** so the two setup-composite semantic-dedupe claims
@@ -298,6 +301,19 @@ deployment alone does not prove what source was uploaded:
 set -euo pipefail
 test -z "$(git status --porcelain --untracked-files=all)"
 DEEPSEEK_BINDING_PATH="${DEEPSEEK_BINDING_PATH:-evidence/performance/deepseek-release-binding.json}"
+EXPECTED_MODEL_CONFIGURATION="$(node -e '
+  const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const value = binding.modelConfiguration;
+  const keys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
+  if (!value || Object.keys(value).length !== keys.length || keys.some((key) => !(key in value)) ||
+      (value.thinkingMode !== null && value.thinkingMode !== "disabled")) process.exit(1);
+  process.stdout.write(JSON.stringify(value));
+' "$DEEPSEEK_BINDING_PATH")"
+SELECTED_THINKING_MODE="$(node -e '
+  const value = JSON.parse(process.argv[1]).thinkingMode;
+  process.stdout.write(value === "disabled" ? "disabled" : "unset");
+' "$EXPECTED_MODEL_CONFIGURATION")"
+export EXPECTED_MODEL_CONFIGURATION
 RELEASE_SHA="$(node -e '
   const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(binding.candidate.testedSha);
@@ -315,9 +331,36 @@ export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
 
 railway --version                         # required release tool: 5.27.0
+RAILWAY_MODEL_VARIABLE_ARGS=()
+case "$SELECTED_THINKING_MODE" in
+  disabled)
+    RAILWAY_MODEL_VARIABLE_ARGS=("LLM_THINKING_MODE=disabled")
+    ;;
+  unset)
+    # This pipeline consumes raw Railway JSON in-memory and emits only key
+    # presence; never print, save, or log the JSON because it contains secrets.
+    THINKING_VARIABLE_PRESENT="$(railway variable list \
+      -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304 -s ai-assistant -e production --json | \
+      node -e '
+        let raw = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", (chunk) => { raw += chunk; });
+        process.stdin.on("end", () => {
+          const values = JSON.parse(raw);
+          process.stdout.write(Object.hasOwn(values, "LLM_THINKING_MODE") ? "1" : "0");
+        });
+      ')"
+    if [ "$THINKING_VARIABLE_PRESENT" != "0" ]; then
+      echo "STOP: stage removal of LLM_THINKING_MODE in the protected Railway Variables UI, then rerun." >&2
+      exit 1
+    fi
+    ;;
+  *) exit 1 ;;
+esac
 railway variable set -s ai-assistant -e production --skip-deploys \
   "RELEASE_SHA=$RELEASE_SHA" "RELEASE_BUILD_HASH=$RELEASE_BUILD_HASH" \
-  "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256"
+  "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256" \
+  "${RAILWAY_MODEL_VARIABLE_ARGS[@]}"
 # Re-run the stop gate in this same shell immediately before transport.
 # STOP: do not run Railway upload when this command fails.
 npm run --silent gate:predeploy-backup
@@ -334,11 +377,16 @@ identity:
 VERSION_JSON="$(curl --fail --silent --show-error "$BASE_URL/version")"
 node -e '
   const value = JSON.parse(process.argv[1]);
+  const expectedModel = JSON.parse(process.env.EXPECTED_MODEL_CONFIGURATION);
+  const modelKeys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
+  const actualModel = value.modelConfiguration;
   if (value.version !== "1.0.0" || value.releaseSha !== process.env.RELEASE_SHA ||
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
-      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256) process.exit(1);
+      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256 ||
+      !actualModel || Object.keys(actualModel).length !== modelKeys.length ||
+      modelKeys.some((key) => actualModel[key] !== expectedModel[key])) process.exit(1);
 ' "$VERSION_JSON"
 curl --fail --silent --show-error "$BASE_URL/live" >/dev/null
 curl --fail --silent --show-error "$BASE_URL/health" >/dev/null
