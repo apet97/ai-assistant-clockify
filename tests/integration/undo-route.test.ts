@@ -48,12 +48,12 @@ function adminCookie(): string {
   return adminCookieFor(store);
 }
 
-function sessionAndCookie(targetStore: Store): { sessionId: string; cookie: string } {
-  const session = targetStore.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+function sessionAndCookie(targetStore: Store, adminUserId = "admin-1"): { sessionId: string; cookie: string } {
+  const session = targetStore.createSession({ workspaceId: "ws-1", adminUserId });
   const value = signSessionCookie({
     sessionId: session.id,
     workspaceId: "ws-1",
-    adminUserId: "admin-1",
+    adminUserId,
     workspaceRole: "ADMIN",
     expiresAt: session.expiresAt,
   }, "test-session-secret");
@@ -303,13 +303,14 @@ describe("undo route", () => {
   // Ownership arm: an undo handle is bound to the creating admin. A SECOND admin with a
   // valid session in the SAME workspace must NOT be able to undo admin-1's creation —
   // undo performs destructive deletes, so a cross-admin attempt 404s with no deletion and
-  // does NOT consume the record (admin-1 can still undo it afterward). Uses its own
-  // store/fake so the shared-suite tag's idempotency window can't suppress the fresh undo
-  // handle this assertion depends on.
+  // does NOT consume the record (admin-1 can still undo it afterward). Uses an isolated
+  // store/fake and seeds the record directly so this test does not inherit planner/create latency
+  // already covered by "attaches an undo handle" above. That keeps the security boundary
+  // deterministic under full-suite load and makes record consumption directly observable.
   it("404s a cross-admin undo without deleting or consuming the record", async () => {
     const isoStore = createStore(":memory:", { encryptionKey: "test-key" });
     isoStore.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
-    const isoFake = createFakeWorkspace();
+    const isoFake = createFakeWorkspace({ tags: [{ id: "tag-owned", name: "Deep Work" }] });
     const isoApp = createApp({
       config: makeTestConfig({
         clockifyAddonPublicKeyPem: keys.pem,
@@ -321,15 +322,15 @@ describe("undo route", () => {
       clockifyForWorkspace: () => isoFake.client,
     });
 
-    // admin-1 creates a tag -> gets an undo handle bound to admin-1.
-    const adminOne = adminCookieFor(isoStore, "admin-1");
-    const chat = await request(isoApp).post("/api/chat/messages").set("Cookie", adminOne).send({ message: "create a tag" });
-    expect(chat.status).toBe(200);
-    const receiptResult = (chat.body.results as Array<{ kind: string; undo?: { id: string } }>).find(
-      (r) => r.kind === "receipt",
-    );
-    const undoId = receiptResult?.undo?.id;
-    expect(typeof undoId).toBe("string");
+    const { cookie: adminOne, sessionId } = sessionAndCookie(isoStore, "admin-1");
+    const undoId = isoStore.recordUndoable({
+      sessionId,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      installationGeneration: isoStore.getInstallation("ws-1")!.generation,
+      reversal: [{ type: "tag", id: "tag-owned", name: "Deep Work" }],
+    });
     expect(isoFake.state.deleted.length).toBe(0);
 
     // admin-2 (valid session, same workspace, ADMIN) tries to undo admin-1's record.
@@ -339,6 +340,7 @@ describe("undo route", () => {
     expect(foreign.body.code).toBe("not_found");
     // No deletion happened, and the record was NOT consumed by the foreign attempt.
     expect(isoFake.state.deleted.length).toBe(0);
+    expect(isoStore.getUndoRecord(undoId)).toMatchObject({ status: "available" });
 
     // The owning admin can still undo the SAME record — it was never burned.
     const owned = await request(isoApp).post(`/api/undo/${undoId}`).set("Cookie", adminOne).send({});
