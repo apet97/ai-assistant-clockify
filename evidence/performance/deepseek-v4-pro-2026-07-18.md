@@ -87,6 +87,10 @@ export EVAL_RELEASE_CANDIDATE_SHA="$(git rev-parse HEAD)"
 export DEEPSEEK_RAW_DIR="$(mktemp -d /tmp/ai-assistant-deepseek.XXXXXX)"
 
 railway run --service ai-assistant --environment production \
+  npx tsx scripts/eval/probe-deepseek-settings.ts \
+  --out="$DEEPSEEK_RAW_DIR/capability-probe.raw.json"
+
+railway run --service ai-assistant --environment production \
   npx tsx scripts/eval-agentic.ts --repeat=5 --concurrency=4 --tool-select \
   --out="$DEEPSEEK_RAW_DIR/baseline.raw.json"
 
@@ -107,12 +111,14 @@ EVAL_DEEPSEEK_THINKING_MODE=disabled railway run \
   --concurrency=4 --tool-select --preview-only \
   --out="$DEEPSEEK_RAW_DIR/focused-risky-preview.raw.json"
 
+export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="$DEEPSEEK_RAW_DIR/capability-probe.raw.json"
 export DEEPSEEK_BASELINE_RAW_PATH="$DEEPSEEK_RAW_DIR/baseline.raw.json"
 export DEEPSEEK_CANDIDATE_RAW_PATH="$DEEPSEEK_RAW_DIR/candidate.raw.json"
 export DEEPSEEK_FOCUSED_READ_RAW_PATH="$DEEPSEEK_RAW_DIR/focused-read.raw.json"
 export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="$DEEPSEEK_RAW_DIR/focused-risky-preview.raw.json"
 export DEEPSEEK_BINDING_PATH="evidence/performance/deepseek-release-binding.json"
 npm run bind:deepseek-evidence
+cp "$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH" evidence/performance/deepseek-capability-probe.raw.json
 cp "$DEEPSEEK_BASELINE_RAW_PATH" evidence/performance/deepseek-baseline.raw.json
 cp "$DEEPSEEK_CANDIDATE_RAW_PATH" evidence/performance/deepseek-candidate.raw.json
 cp "$DEEPSEEK_FOCUSED_READ_RAW_PATH" evidence/performance/deepseek-focused-read.raw.json

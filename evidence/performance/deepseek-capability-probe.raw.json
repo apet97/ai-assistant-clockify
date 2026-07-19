@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "kind": "deepseek-capability-probe",
+  "startedAt": "2026-07-19T04:21:57.501Z",
+  "completedAt": "2026-07-19T04:22:04.371Z",
+  "source": {
+    "gitCommitSha": "bcb3053f3e8d5ec240b688e5f8dcd62f2977b8a9",
+    "workingTreeClean": true
+  },
+  "runtimeConfiguration": {
+    "provider": "http",
+    "model": "deepseek-v4-pro",
+    "endpointSha256": "548c8dadbba3d19dad29eda388fd7d70f46354eca72ba6012e414b559b68996d",
+    "mode": "tool",
+    "agentic": true,
+    "toolSelect": true,
+    "reasoningEffort": null,
+    "thinkingMode": null,
+    "concurrency": 1,
+    "nodeVersion": "v22.23.1",
+    "timeoutMs": 120000,
+    "seed": null,
+    "mixedTier": false
+  },
+  "settings": [
+    {
+      "setting": "production-default",
+      "classification": "distinct-passing",
+      "accepted": true,
+      "httpStatus": 200
+    },
+    {
+      "setting": "reasoning-high",
+      "classification": "compatibility-alias",
+      "accepted": true,
+      "httpStatus": 200
+    },
+    {
+      "setting": "reasoning-medium",
+      "classification": "compatibility-alias",
+      "accepted": true,
+      "httpStatus": 200
+    },
+    {
+      "setting": "reasoning-low",
+      "classification": "compatibility-alias",
+      "accepted": true,
+      "httpStatus": 200
+    },
+    {
+      "setting": "reasoning-none",
+      "classification": "unsupported",
+      "accepted": false,
+      "httpStatus": 400
+    },
+    {
+      "setting": "thinking-disabled",
+      "classification": "distinct-passing",
+      "accepted": true,
+      "httpStatus": 200
+    }
+  ],
+  "distinctPassingSettings": [
+    "production-default",
+    "thinking-disabled"
+  ]
+}
