@@ -5,11 +5,19 @@ export type IntentDeclarationContract =
   | "invalid_or_legacy"
   | "not_evaluated";
 
+export type IntentDeclarationProvenance =
+  | "provider_tool"
+  | "provider_json"
+  | "local_empty_zero_tool"
+  | "invalid"
+  | "not_evaluated";
+
 /** Secret-free counters and booleans proving that one eval run crossed the
  * production declaration, raw-authority, durable binding, and consumption path. */
 export interface IntentCapabilityPathTelemetry {
   intentDeclarationCalls: number;
   intentDeclarationContract: IntentDeclarationContract;
+  intentDeclarationProvenance: IntentDeclarationProvenance;
   intentCapabilityMode: IntentCapabilityV1["mode"] | "not_evaluated";
   intentCapabilityActionBound: boolean;
   intentCapabilityLiteralsExact: boolean;
@@ -51,6 +59,7 @@ export function emptyIntentCapabilityPathTelemetry(): IntentCapabilityPathTeleme
   return {
     intentDeclarationCalls: 0,
     intentDeclarationContract: "not_evaluated",
+    intentDeclarationProvenance: "not_evaluated",
     intentCapabilityMode: "not_evaluated",
     intentCapabilityActionBound: false,
     intentCapabilityLiteralsExact: false,
@@ -70,6 +79,7 @@ export function scoreIntentCapabilityPath(input: {
   previewCount: number;
   confirmationAttemptCount: number;
   expectsWriteCapability: boolean;
+  allowsLocalEmptyDeclaration: boolean;
   requiresExactIntentPath: boolean;
 }): string[] {
   const { telemetry: result } = input;
@@ -80,6 +90,10 @@ export function scoreIntentCapabilityPath(input: {
     ...(result.intentDeclarationContract === "quote_refs_v1"
       ? []
       : ["intent declaration did not use the quote-reference contract"]),
+    ...(result.intentDeclarationProvenance === "provider_tool" ||
+      (input.allowsLocalEmptyDeclaration && result.intentDeclarationProvenance === "local_empty_zero_tool")
+      ? []
+      : ["intent declaration provenance is not permitted for this case"]),
     ...(result.intentCapabilityActionBound ? [] : ["intent capability exposed an action outside the configured request"]),
     ...(input.expectsWriteCapability && result.intentCapabilityMode !== "allow"
       ? ["intent capability did not allow the configured write"]
@@ -119,6 +133,7 @@ export function serializeIntentCapabilityPath(
   return {
     intentDeclarationCalls: telemetry.intentDeclarationCalls,
     intentDeclarationContract: telemetry.intentDeclarationContract,
+    intentDeclarationProvenance: telemetry.intentDeclarationProvenance,
     intentCapabilityMode: telemetry.intentCapabilityMode,
     intentCapabilityActionBound: telemetry.intentCapabilityActionBound,
     intentCapabilityLiteralsExact: telemetry.intentCapabilityLiteralsExact,

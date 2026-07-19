@@ -21,6 +21,12 @@ import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.j
 
 export const DECLARE_INTENT_TOOL_NAME = "declare_intent_capability";
 
+export type IntentDeclarationProvenance =
+  | "provider_tool"
+  | "provider_json"
+  | "local_empty_zero_tool"
+  | "invalid";
+
 const MAX_AUTHORED_TEXT_BYTES = 64 * 1024;
 const MAX_DECLARED_WRITES = 64;
 const MAX_SOURCE_QUOTE_OCCURRENCE = 1023;
@@ -131,6 +137,19 @@ export interface DeclareIntentCapabilityInput {
   catalogHash: string;
   /** Cooperative provider cancellation; never passed into action execution. */
   signal?: AbortSignal;
+  /** Secret-free evidence of how the declaration DTO was obtained. */
+  onProvenance?: (provenance: IntentDeclarationProvenance) => void;
+}
+
+function reportProvenance(
+  input: DeclareIntentCapabilityInput,
+  provenance: IntentDeclarationProvenance,
+): void {
+  try {
+    input.onProvenance?.(provenance);
+  } catch {
+    // Evidence hooks must never change the safety outcome.
+  }
 }
 
 function literalJsonSchema(depth: number): Record<string, unknown> {
@@ -853,34 +872,68 @@ export async function declareIntentCapability(
 ): Promise<IntentCapabilityV1> {
   const request = buildRequest(input);
   const denied = denyCapability(input, "declaration_invalid");
-  if (!request) return denied;
+  if (!request) {
+    reportProvenance(input, "invalid");
+    return denied;
+  }
   const messages: ModelMessage[] = [
     declarationSystemMessage,
     { role: "user", content: JSON.stringify(request) },
   ];
 
   let raw: unknown;
+  let provenance: IntentDeclarationProvenance;
   try {
     if (typeof input.modelClient.completeWithTools === "function") {
       const completion = await input.modelClient.completeWithTools(
         messages,
         [declarationTool(request.writeActionNames)],
         input.signal,
+        { retryTransient: false },
       );
-      if (completion.toolCalls.length !== 1 ||
-        completion.toolCalls[0]?.name !== DECLARE_INTENT_TOOL_NAME) return denied;
-      raw = completion.toolCalls[0].arguments;
+      if (completion.finishReason !== undefined &&
+        completion.finishReason !== "stop" && completion.finishReason !== "tool_calls") {
+        reportProvenance(input, "invalid");
+        return denied;
+      }
+      if (completion.toolCalls.length === 0) {
+        // DeepSeek supports only automatic tool choice, so a completion may contain
+        // no declaration call. Normalize only that exact zero-call shape to the
+        // narrowest possible capability: no writes. This does not classify the
+        // authored input as read-only, and provider text never supplies an action,
+        // span, literal, or execution count.
+        raw = { writeActions: [] };
+        provenance = "local_empty_zero_tool";
+      } else if (completion.toolCalls.length === 1 &&
+        completion.toolCalls[0]?.name === DECLARE_INTENT_TOOL_NAME) {
+        raw = completion.toolCalls[0].arguments;
+        provenance = "provider_tool";
+      } else {
+        reportProvenance(input, "invalid");
+        return denied;
+      }
     } else {
-      const completion = await input.modelClient.complete(messages, undefined, input.signal);
+      const completion = await input.modelClient.complete(
+        messages,
+        undefined,
+        input.signal,
+        { retryTransient: false },
+      );
       raw = parseJsonDeclaration(completion);
+      provenance = "provider_json";
     }
   } catch (error) {
     if (input.signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error;
+    reportProvenance(input, "invalid");
     return denyCapability(input, "provider_unavailable");
   }
 
   const writeActions = validateDeclaration(raw, request);
-  if (!writeActions) return denied;
+  if (!writeActions) {
+    reportProvenance(input, "invalid");
+    return denied;
+  }
+  reportProvenance(input, provenance);
   if (writeActions.length === 0) return denyCapability(input, "no_write_intent");
   try {
     return buildAllowIntentCapabilityV1({

@@ -307,15 +307,16 @@ export async function runAgenticCase(
     // prevent.
     intentPath.intentDeclarationCalls += 1;
     intentPath.intentDeclarationContract = "invalid_or_legacy";
+    intentPath.intentDeclarationProvenance = "invalid";
     const writeActionNames = catalogForModel()
       .filter((entry) => entry.risks.some((risk) => risk !== "read"))
       .map((entry) => entry.name);
     const declarationClient: ModelClient = {
-      complete: (messages, onUsage, signal) => tracked.client.complete(messages, onUsage, signal),
+      complete: (messages, onUsage, signal, options) => tracked.client.complete(messages, onUsage, signal, options),
       ...(tracked.client.completeWithTools
         ? {
-            completeWithTools: async (messages, tools, signal) => {
-              const completion = await tracked.client.completeWithTools!(messages, tools, signal);
+            completeWithTools: async (messages, tools, signal, options) => {
+              const completion = await tracked.client.completeWithTools!(messages, tools, signal, options);
               const declaration = completion.toolCalls.length === 1
                 ? completion.toolCalls[0]?.arguments
                 : undefined;
@@ -331,6 +332,12 @@ export async function runAgenticCase(
       writeActionNames,
       candidateWriteActionNames: buildCandidateWriteActionNames(c.message, writeActionNames),
       catalogHash: catalogHash(),
+      onProvenance: (provenance) => {
+        intentPath.intentDeclarationProvenance = provenance;
+        if (provenance === "local_empty_zero_tool") {
+          intentPath.intentDeclarationContract = "quote_refs_v1";
+        }
+      },
     });
     intentCapabilityRecord = store.createIntentCapability({
       workspaceId,
@@ -746,10 +753,10 @@ async function main(): Promise<void> {
       const impl = selectEvalModelClient({ ...selection, llmModel: implModel });
       console.log(`mixed-tier routing: plan=${planModel} impl=${implModel}`);
       modelClient = {
-        complete: (messages) => plan.complete(messages),
-        completeWithTools: (messages, tools) => {
+        complete: (messages, onUsage, signal, options) => plan.complete(messages, onUsage, signal, options),
+        completeWithTools: (messages, tools, signal, options) => {
           const continuation = messages.some((m) => m.role === "tool");
-          return (continuation ? impl : plan).completeWithTools!(messages, tools);
+          return (continuation ? impl : plan).completeWithTools!(messages, tools, signal, options);
         },
       };
     }
@@ -805,6 +812,7 @@ async function main(): Promise<void> {
         previewCount: result.outcome.interrupts,
         confirmationAttemptCount: result.confirmationAttemptCount,
         expectsWriteCapability: c.area !== "read_answer" && c.area !== "clarify",
+        allowsLocalEmptyDeclaration: c.area === "read_answer",
         requiresExactIntentPath: c.id === RELEASE_INTENT_PATH_CASE_ID,
       });
       const exactInvoiceReasons = c.id === "agentic.invoice_for_named_client"

@@ -67,18 +67,18 @@ export function trackUsage(client: ModelClient, now: () => Date): { client: Mode
   const wrapped: ModelClient = {
     // The inner sink fires only when the provider reported usage, so JSON-mode
     // turns now feed telemetry too (caller-supplied sinks are also honored).
-    complete: (messages: ModelMessage[], onUsage, signal) =>
+    complete: (messages: ModelMessage[], onUsage, signal, options) =>
       timed(() =>
         client.complete(messages, (reported) => {
           accumulate(reported);
           onUsage?.(reported);
-        }, signal),
+        }, signal, options),
       ),
   };
   if (typeof client.completeWithTools === "function") {
-    wrapped.completeWithTools = (messages: ModelMessage[], tools: ToolDefinition[], signal) =>
+    wrapped.completeWithTools = (messages: ModelMessage[], tools: ToolDefinition[], signal, options) =>
       timed(async () => {
-        const completion = await client.completeWithTools!(messages, tools, signal);
+        const completion = await client.completeWithTools!(messages, tools, signal, options);
         if (completion.usage) accumulate(completion.usage);
         return completion;
       });

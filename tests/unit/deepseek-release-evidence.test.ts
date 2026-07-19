@@ -73,6 +73,7 @@ function rawEval(sha: string, thinkingMode: null | "disabled", modelMs: number):
       escapeHatchFired: false,
       intentDeclarationCalls: 1,
       intentDeclarationContract: "quote_refs_v1",
+      intentDeclarationProvenance: "provider_tool",
       intentCapabilityMode: expectsWriteCapability ? "allow" : "deny_all_writes",
       intentCapabilityActionBound: true,
       intentCapabilityLiteralsExact: intentPath,
@@ -188,6 +189,7 @@ function focusedRaw(
     escapeHatchFired: false,
     intentDeclarationCalls: 1,
     intentDeclarationContract: "quote_refs_v1",
+    intentDeclarationProvenance: "provider_tool",
     intentCapabilityMode: preview ? "allow" : "deny_all_writes",
     intentCapabilityActionBound: true,
     intentCapabilityLiteralsExact: false,
@@ -549,6 +551,36 @@ describe("DeepSeek release evidence", () => {
     slow.binding.focusedRead.rawAggregateSha256 = sha256(slow.focusedReadRawJson);
 
     expect(() => validateDeepSeekReleaseEvidence(slow as never)).toThrow(/focused read.*p95/i);
+  });
+
+  it("accepts local empty provenance only on zero-write read samples", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+    const localRead = fixture();
+    const candidate = JSON.parse(localRead.candidateRawJson) as Record<string, unknown>;
+    const candidateRuns = candidate.runTelemetry as Array<Record<string, unknown>>;
+    const readRun = candidateRuns.find((run) => run.area === "read_answer");
+    if (!readRun) throw new Error("missing read fixture");
+    readRun.intentDeclarationProvenance = "local_empty_zero_tool";
+    localRead.candidateRawJson = JSON.stringify(candidate);
+    localRead.binding.candidate.rawAggregateSha256 = sha256(localRead.candidateRawJson);
+
+    const focused = JSON.parse(localRead.focusedReadRawJson) as Record<string, unknown>;
+    for (const run of focused.runTelemetry as Array<Record<string, unknown>>) {
+      run.intentDeclarationProvenance = "local_empty_zero_tool";
+    }
+    localRead.focusedReadRawJson = JSON.stringify(focused);
+    localRead.binding.focusedRead.rawAggregateSha256 = sha256(localRead.focusedReadRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(localRead as never)).not.toThrow();
+
+    const forgedWrite = fixture();
+    const writeRaw = JSON.parse(forgedWrite.candidateRawJson) as Record<string, unknown>;
+    const writeRun = (writeRaw.runTelemetry as Array<Record<string, unknown>>)
+      .find((run) => run.area !== "read_answer" && run.area !== "clarify");
+    if (!writeRun) throw new Error("missing write fixture");
+    writeRun.intentDeclarationProvenance = "local_empty_zero_tool";
+    forgedWrite.candidateRawJson = JSON.stringify(writeRaw);
+    forgedWrite.binding.candidate.rawAggregateSha256 = sha256(forgedWrite.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(forgedWrite as never)).toThrow(/intent|declaration/i);
   });
 
   it("rejects a nominally read-only focused run that attempts any write action", async () => {

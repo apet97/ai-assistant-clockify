@@ -132,10 +132,30 @@ describe("createModelClient.completeWithTools", () => {
   });
 
   it("returns text with no tool calls when the model answers", async () => {
-    const payload = { choices: [{ message: { content: "It is sunny.", tool_calls: [] } }] };
+    const payload = { choices: [{ finish_reason: "stop", message: { content: "It is sunny.", tool_calls: [] } }] };
     const result = await client(payload).completeWithTools!([{ role: "user", content: "weather?" }], tools);
     expect(result.toolCalls).toEqual([]);
     expect(result.text).toBe("It is sunny.");
+    expect(result.finishReason).toBe("stop");
+  });
+
+  it.each([
+    ["missing choices", {}],
+    ["empty choices", { choices: [] }],
+    ["missing assistant message", { choices: [{}] }],
+  ])("rejects a malformed 2xx %s instead of presenting it as a zero-tool answer", async (_label, payload) => {
+    const error = await client(payload)
+      .completeWithTools!([{ role: "user", content: "weather?" }], tools)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderProtocolError);
+    expect(error).toMatchObject({ reason: "malformed_completion" });
+  });
+
+  it("marks a missing finish reason so declaration cannot credit it as a complete zero-tool answer", async () => {
+    const result = await client({ choices: [{ message: {} }] })
+      .completeWithTools!([{ role: "user", content: "weather?" }], tools);
+    expect(result).toMatchObject({ toolCalls: [], finishReason: "missing" });
   });
 
   it.each([
@@ -572,6 +592,19 @@ describe("createModelClient retry + provider error detail", () => {
     expect(text).toBe("ok");
     expect(seq.calls()).toBe(2);
     expect(sleeps).toHaveLength(1);
+  });
+
+  it("does not retry a retryable tool completion when the caller disables transient retries", async () => {
+    const sleeps: number[] = [];
+    const seq = sequencedFetch([{ status: 503, body: "overloaded" }, { status: 200 }]);
+    await expect(retryClient(seq.impl, sleeps).completeWithTools!(
+      [{ role: "user", content: "declare" }],
+      tools,
+      undefined,
+      { retryTransient: false },
+    )).rejects.toThrow(/provider_http_error status=503/u);
+    expect(seq.calls()).toBe(1);
+    expect(sleeps).toHaveLength(0);
   });
 
   it("retries once on 5xx then throws only stable status/request metadata", async () => {

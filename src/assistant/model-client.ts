@@ -84,13 +84,20 @@ export type UsageSink = (usage: TokenUsage) => void;
 export interface ToolCompletion {
   text: string;
   toolCalls: ToolCall[];
+  /** Provider termination reason when supplied (for truncation/protocol checks). */
+  finishReason?: string;
   /** Thinking-mode reasoning to thread back on continuation (see ModelMessage). */
   reasoningContent?: string;
   /** Present only when the provider reported token counts (absence ≠ zero). */
   usage?: TokenUsage;
 }
 
-export type ProviderProtocolErrorReason = "unoffered_tool" | "malformed_tool";
+export interface ModelRequestOptions {
+  /** Defaults to true. Declaration disables this to preserve one provider pass. */
+  retryTransient?: boolean;
+}
+
+export type ProviderProtocolErrorReason = "unoffered_tool" | "malformed_tool" | "malformed_completion";
 
 /** A provider returned a native-tool response outside the exact request contract. */
 export class ProviderProtocolError extends Error {
@@ -109,7 +116,12 @@ export interface ModelClient {
    * reported token counts — the bare-string return can't carry them, but cost
    * telemetry still needs them (see {@link UsageSink}).
    */
-  complete(messages: ModelMessage[], onUsage?: UsageSink, signal?: AbortSignal): Promise<string>;
+  complete(
+    messages: ModelMessage[],
+    onUsage?: UsageSink,
+    signal?: AbortSignal,
+    options?: ModelRequestOptions,
+  ): Promise<string>;
   /**
    * Optional native tool-calling. When present, the planner prefers it: the model
    * calls typed tools whose args the provider validates against the JSON schema,
@@ -118,7 +130,12 @@ export interface ModelClient {
    * every proposed action against its Zod schema + risk/policy gate — provider
    * validation is a convenience, not the trust boundary.
    */
-  completeWithTools?(messages: ModelMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ToolCompletion>;
+  completeWithTools?(
+    messages: ModelMessage[],
+    tools: ToolDefinition[],
+    signal?: AbortSignal,
+    options?: ModelRequestOptions,
+  ): Promise<ToolCompletion>;
 }
 
 export interface ModelClientConfig {
@@ -174,6 +191,7 @@ interface RawToolCall {
 
 interface ChatCompletionResponse {
   choices?: Array<{
+    finish_reason?: string | null;
     message?: { content?: string | null; reasoning_content?: string | null; tool_calls?: RawToolCall[] };
   }>;
   usage?: {
@@ -346,7 +364,11 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
    * error is reduced to a stable category/status/provider request id. Provider
    * bodies can echo prompts or tool results and must never enter production logs.
    */
-  async function postChat(body: Record<string, unknown>, signal?: AbortSignal): Promise<ChatCompletionResponse> {
+  async function postChat(
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+    retryTransient = true,
+  ): Promise<ChatCompletionResponse> {
     for (let attempt = 0; ; attempt += 1) {
       if (signal?.aborted) throw callerAborted();
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
@@ -401,7 +423,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
 
       await response.body?.cancel().catch(() => undefined);
       if (signal?.aborted) throw callerAborted();
-      const willRetry = attempt === 0 && retryable(response.status);
+      const willRetry = retryTransient && attempt === 0 && retryable(response.status);
       console.warn(
         `provider_http_error status=${response.status} request_id=${providerRequestId(response)}${willRetry ? " retry=1" : ""}`,
       );
@@ -414,17 +436,27 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
   }
 
   return {
-    async complete(messages: ModelMessage[], onUsage?: UsageSink, signal?: AbortSignal): Promise<string> {
+    async complete(
+      messages: ModelMessage[],
+      onUsage?: UsageSink,
+      signal?: AbortSignal,
+      options?: ModelRequestOptions,
+    ): Promise<string> {
       const data = await postChat({
         messages: messages.map(toWireMessage),
         response_format: { type: "json_object" },
-      }, signal);
+      }, signal, options?.retryTransient !== false);
       const usage = parseUsage(data.usage);
       if (usage) onUsage?.(usage);
       return data.choices?.[0]?.message?.content ?? "";
     },
 
-    async completeWithTools(messages: ModelMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ToolCompletion> {
+    async completeWithTools(
+      messages: ModelMessage[],
+      tools: ToolDefinition[],
+      signal?: AbortSignal,
+      options?: ModelRequestOptions,
+    ): Promise<ToolCompletion> {
       // Snapshot the exact names bound into this request before awaiting the
       // provider. Response validation must not consult a later/mutated catalog.
       const offeredToolNames = new Set(tools.map((tool) => tool.name));
@@ -435,12 +467,17 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           function: { name: tool.name, description: tool.description, parameters: tool.parameters },
         })),
         tool_choice: "auto",
-      }, signal);
+      }, signal, options?.retryTransient !== false);
       const message = data.choices?.[0]?.message;
+      const finishReason = data.choices?.[0]?.finish_reason;
+      if (!message || typeof message !== "object" || Array.isArray(message)) {
+        throw new ProviderProtocolError("malformed_completion");
+      }
       const usage = parseUsage(data.usage);
       return {
         text: message?.content ?? "",
         toolCalls: parseToolCalls(message?.tool_calls ?? [], offeredToolNames, nextSyntheticSeq),
+        finishReason: typeof finishReason === "string" ? finishReason : "missing",
         ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
         ...(usage ? { usage } : {}),
       };

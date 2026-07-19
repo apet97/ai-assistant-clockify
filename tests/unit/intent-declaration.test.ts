@@ -42,14 +42,14 @@ function byteSpanAt(
 
 function nativeModel(
   args: Record<string, unknown>,
-  capture?: { messages?: ModelMessage[]; tools?: ToolDefinition[]; signal?: AbortSignal },
+  capture?: { messages?: ModelMessage[]; tools?: ToolDefinition[]; signal?: AbortSignal; retryTransient?: boolean },
 ): ModelClient {
   return {
     complete: vi.fn(async () => {
       throw new Error("JSON fallback must not run for a native client");
     }),
-    completeWithTools: vi.fn(async (messages, tools, signal) => {
-      if (capture) Object.assign(capture, { messages, tools, signal });
+    completeWithTools: vi.fn(async (messages, tools, signal, options) => {
+      if (capture) Object.assign(capture, { messages, tools, signal, retryTransient: options?.retryTransient });
       return {
         text: "",
         toolCalls: [{ id: "declare-1", name: DECLARE_INTENT_TOOL_NAME, arguments: args }],
@@ -911,7 +911,12 @@ describe("declareIntentCapability", () => {
   });
 
   it("sends only current and unresolved prior admin-authored segments plus the allowlist/hash", async () => {
-    const capture: { messages?: ModelMessage[]; tools?: ToolDefinition[] } = {};
+    const capture: {
+      messages?: ModelMessage[];
+      tools?: ToolDefinition[];
+      signal?: AbortSignal;
+      retryTransient?: boolean;
+    } = {};
     const unresolvedPriorText = "Which project? Atlas or Vega?";
     const currentText = "Atlas, and rename it to Žetva.";
     const canonicalText = `${unresolvedPriorText}\n${currentText}`;
@@ -953,6 +958,7 @@ describe("declareIntentCapability", () => {
     expect(capture.messages?.map((message) => message.content).join("\n")).not.toContain("Clockify result");
     expect(capture.messages?.[0]?.content).toContain("absence is not a denial");
     expect(capture.tools).toHaveLength(1);
+    expect(capture.retryTransient).toBe(false);
     expect(capture.tools?.[0]?.name).toBe(DECLARE_INTENT_TOOL_NAME);
     expect(capture.tools?.[0]?.parameters).toMatchObject({ additionalProperties: false });
     const writeItems = ((capture.tools?.[0]?.parameters as any).properties.writeActions.items) as Record<string, any>;
@@ -1145,25 +1151,33 @@ describe("declareIntentCapability", () => {
   it("uses one strict JSON fallback call with the same validation and no repair", async () => {
     const currentText = "Create invoice for 125.50.";
     const span = byteSpan(currentText, "125.50");
-    const complete = vi.fn(async () => JSON.stringify({
+    const provenance = vi.fn();
+    let observedOptions: unknown;
+    const complete = vi.fn(async (...args: unknown[]) => {
+      observedOptions = args[3];
+      return JSON.stringify({
       writeActions: [{
         actionName: "clockify_invoices_create",
         sourceSpans: [byteSpan(currentText, "Create invoice"), span],
         literalConstraints: [{ path: "taxPercent", value: 125.5, sourceSpan: span }],
         maxExecutions: 1,
       }],
-    }));
+      });
+    });
 
     const capability = await declareIntentCapability({
       modelClient: { complete },
       currentText,
       writeActionNames,
       catalogHash,
+      onProvenance: provenance,
     });
 
     expect(capability.mode).toBe("allow");
     expect(capability.writeActions[0]?.literalConstraints[0]?.value).toBe(125.5);
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(observedOptions).toEqual({ retryTransient: false });
+    expect(provenance).toHaveBeenCalledWith("provider_json");
   });
 
   it("canonicalizes an exact numeric-string declaration only for a trusted numeric path", async () => {
@@ -1584,10 +1598,108 @@ describe("declareIntentCapability", () => {
     expect(capability.mode).toBe("deny_all_writes");
   });
 
-  it("denies zero/multiple/wrong native declaration calls without falling back or retrying", async () => {
+  it("normalizes an exact zero-tool native completion to a local empty declaration", async () => {
+    const provenance = vi.fn();
+    const complete = vi.fn(async () => "must not run");
+    const completeWithTools = vi.fn(async () => ({
+      text: "There is no write action to declare.",
+      toolCalls: [],
+    }));
+
+    const capability = await declareIntentCapability({
+      modelClient: { complete, completeWithTools },
+      currentText: "How many projects are there?",
+      writeActionNames,
+      catalogHash,
+      onProvenance: provenance,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "no_write_intent" });
+    expect(provenance).toHaveBeenCalledOnce();
+    expect(provenance).toHaveBeenCalledWith("local_empty_zero_tool");
+    expect(completeWithTools).toHaveBeenCalledTimes(1);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["explicit safe write", "Create project Atlas", undefined, "No tool needed."],
+    ["risky write", "Delete project Acme", undefined, '{"writeActions":[{"actionName":"clockify_delete_entity"}]}'],
+    ["approve all", "Approve all pending timesheets", undefined, "I can approve everything directly."],
+    ["mixed prior/current write", "Yes, do it", "Create project Atlas", "The prior request authorizes this."],
+  ])("never infers grants from zero-tool text or authored context: %s", async (
+    _label,
+    currentText,
+    unresolvedPriorText,
+    providerText,
+  ) => {
+    const completeWithTools = vi.fn(async () => ({ text: providerText, toolCalls: [], finishReason: "stop" }));
+    const capability = await declareIntentCapability({
+      modelClient: { complete: vi.fn(async () => "must not run"), completeWithTools },
+      currentText,
+      ...(unresolvedPriorText ? { unresolvedPriorText } : {}),
+      writeActionNames,
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({
+      mode: "deny_all_writes",
+      reason: "no_write_intent",
+      writeActions: [],
+    });
+    expect(completeWithTools).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not normalize a truncated zero-tool completion", async () => {
+    const provenance = vi.fn();
+    const capability = await declareIntentCapability({
+      modelClient: {
+        complete: vi.fn(async () => "must not run"),
+        completeWithTools: vi.fn(async () => ({
+          text: '{"writeActions":[]}',
+          toolCalls: [],
+          finishReason: "length",
+        })),
+      },
+      currentText: "Create a project named Atlas",
+      writeActionNames,
+      catalogHash,
+      onProvenance: provenance,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+    expect(provenance).toHaveBeenCalledWith("invalid");
+  });
+
+  it("rejects a truncated one-tool declaration before validating its partial arguments", async () => {
+    const currentText = "Rename to Atlas and archive the project";
+    const atlas = byteSpan(currentText, "Atlas");
+    const provenance = vi.fn();
+    const capability = await declareIntentCapability({
+      modelClient: {
+        complete: vi.fn(async () => "must not run"),
+        completeWithTools: vi.fn(async () => ({
+          text: "",
+          finishReason: "length",
+          toolCalls: [{
+            id: "partial-1",
+            name: DECLARE_INTENT_TOOL_NAME,
+            arguments: declaration("clockify_projects_update", atlas),
+          }],
+        })),
+      },
+      currentText,
+      writeActionNames,
+      catalogHash,
+      onProvenance: provenance,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+    expect(provenance).toHaveBeenCalledWith("invalid");
+  });
+
+  it("denies multiple/wrong native declaration calls without falling back or retrying", async () => {
     const complete = vi.fn(async () => "must not run");
     const outputs = [
-      { text: "", toolCalls: [] },
       {
         text: "",
         toolCalls: [
@@ -1599,14 +1711,17 @@ describe("declareIntentCapability", () => {
     ];
 
     for (const output of outputs) {
+      const provenance = vi.fn();
       const completeWithTools = vi.fn(async () => output);
       const capability = await declareIntentCapability({
         modelClient: { complete, completeWithTools },
         currentText: "Rename to Atlas",
         writeActionNames,
         catalogHash,
+        onProvenance: provenance,
       });
-      expect(capability.mode).toBe("deny_all_writes");
+      expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+      expect(provenance).toHaveBeenCalledWith("invalid");
       expect(completeWithTools).toHaveBeenCalledTimes(1);
     }
     expect(complete).not.toHaveBeenCalled();

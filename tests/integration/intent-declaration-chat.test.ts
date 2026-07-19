@@ -565,6 +565,52 @@ describe("chat intent declaration integration", () => {
     expect(fake.state.projects.some((project) => project.name === "Atlas")).toBe(false);
   });
 
+  it("keeps a zero-tool declaration deny-all even when later planner prose claims a write succeeded", async () => {
+    const authoredSource = "Create project Atlas";
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (_messages, tools) => {
+        if (tools.length === 1 && tools[0]?.name === "declare_intent_capability") {
+          return {
+            text: '{"writeActions":[{"actionName":"clockify_projects_create"}]}',
+            toolCalls: [],
+            finishReason: "stop",
+          };
+        }
+        mainCalls += 1;
+        return mainCalls === 1
+          ? {
+              text: "Project created successfully.",
+              toolCalls: [{
+                id: "create-1",
+                name: "clockify_projects_create",
+                arguments: { name: "Atlas" },
+              }],
+            }
+          : { text: "Project created successfully.", toolCalls: [] };
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, { llmMode: "tool", llmAgentic: true });
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: false, code: "intent_capability_denied" }),
+      }),
+    ]));
+    expect(response.body.reply?.text).not.toContain("created successfully");
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+    expect(fake.state.projects.some((project) => project.name === "Atlas")).toBe(false);
+  });
+
   it("binds approve-all to the server-resolved pending set; typed YES never executes it", async () => {
     const authoredSource = "approve all pending timesheets";
     const model = jsonModel({

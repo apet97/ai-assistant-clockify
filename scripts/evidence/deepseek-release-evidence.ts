@@ -722,6 +722,7 @@ function rawMetrics(
       "escapeHatchFired",
       "intentDeclarationCalls",
       "intentDeclarationContract",
+      "intentDeclarationProvenance",
       "intentCapabilityMode",
       "intentCapabilityActionBound",
       "intentCapabilityLiteralsExact",
@@ -770,7 +771,12 @@ function rawMetrics(
       run.intentCapabilityConsumeDenials,
       `${label} intentCapabilityConsumeDenials`,
     );
+    const intentHostMutationCount = integer(run.intentHostMutationCount, `${label} intentHostMutationCount`);
     const expectedCapabilityConsumeCount = writeActionCount - previewCount + confirmationAttemptCount;
+    const expectedWriteCapability = expectedCase.area !== "read_answer" && expectedCase.area !== "clarify";
+    const localEmptyAllowed = expectedCase.area === "read_answer" &&
+      run.intentDeclarationProvenance === "local_empty_zero_tool";
+    const declarationProvenanceValid = run.intentDeclarationProvenance === "provider_tool" || localEmptyAllowed;
     if (commitCount < 0 || confirmationAttemptCount < 0 || commitCount > confirmationAttemptCount) {
       throw new Error(`${label} commit count cannot exceed confirmation attempt count`);
     }
@@ -780,6 +786,7 @@ function rawMetrics(
     if (
       intentDeclarationCalls !== 1
       || run.intentDeclarationContract !== "quote_refs_v1"
+      || !declarationProvenanceValid
       || run.intentCapabilityActionBound !== true
       || intentAuthorityChecks !== writeActionCount
       || intentAuthorityDenials !== 0
@@ -789,7 +796,20 @@ function rawMetrics(
     ) {
       throw new Error(`${label} does not route every configured write through production intent authority and durable capability consumption`);
     }
-    const expectedWriteCapability = expectedCase.area !== "read_answer" && expectedCase.area !== "clarify";
+    if (localEmptyAllowed && (
+      run.intentCapabilityMode !== "deny_all_writes"
+      || writeActionCount !== 0
+      || previewCount !== 0
+      || commitCount !== 0
+      || confirmationAttemptCount !== 0
+      || intentAuthorityChecks !== 0
+      || capabilityBindCount !== 0
+      || capabilityConsumeCount !== 0
+      || capabilityConsumeDenials !== 0
+      || intentHostMutationCount !== 0
+    )) {
+      throw new Error(`${label} local empty declaration must remain a zero-write deny-all path`);
+    }
     if ((expectedWriteCapability && run.intentCapabilityMode !== "allow") ||
       (expectedCase.area === "read_answer" && run.intentCapabilityMode !== "deny_all_writes")) {
       throw new Error(`${label} intent capability mode does not match the configured case`);
@@ -802,7 +822,7 @@ function rawMetrics(
         || run.intentCapabilityActionBound !== true
         || run.intentCapabilityLiteralsExact !== true
         || run.intentWriteArgumentsExact !== true
-        || integer(run.intentHostMutationCount, `${label} intentHostMutationCount`) !== 1
+        || intentHostMutationCount !== 1
         || intentAuthorityChecks !== 1
         || intentAuthorityDenials !== 0
         || writeActionCount !== 1
@@ -1021,6 +1041,7 @@ function focusedRawMetrics(
       "escapeHatchFired",
       "intentDeclarationCalls",
       "intentDeclarationContract",
+      "intentDeclarationProvenance",
       "intentCapabilityMode",
       "intentCapabilityActionBound",
       "intentCapabilityLiteralsExact",
@@ -1035,9 +1056,12 @@ function focusedRawMetrics(
     const declarationCalls = integer(run.intentDeclarationCalls, `${label} intentDeclarationCalls`);
     const authorityChecks = integer(run.intentAuthorityChecks, `${label} intentAuthorityChecks`);
     const authorityDenials = integer(run.intentAuthorityDenials, `${label} intentAuthorityDenials`);
+    const declarationProvenanceValid = run.intentDeclarationProvenance === "provider_tool" ||
+      (kind === "read" && run.intentDeclarationProvenance === "local_empty_zero_tool");
     if (
       declarationCalls !== 1
       || run.intentDeclarationContract !== "quote_refs_v1"
+      || !declarationProvenanceValid
       || run.intentCapabilityActionBound !== true
       || authorityDenials !== 0
       || integer(run.intentHostMutationCount, `${label} intentHostMutationCount`) !== 0
