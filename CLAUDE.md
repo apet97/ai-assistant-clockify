@@ -13,8 +13,10 @@ fixed catalog; a deterministic harness validates every proposal against per-admi
 permissions and a risk policy and is the only thing that touches Clockify. The
 model never executes anything itself and never sees a secret.
 
-**State:** everything buildable is done, live-verified on a real Clockify
-workspace, and deployed.
+**State:** version 1.0.0 is the pre-Marketplace release candidate. Engineering
+completion is established only by the exact-commit evidence set described in
+`MARKETPLACE_READINESS.md`; checked-in templates or an older deployment are not
+release evidence.
 
 - **Gate:** `npm run verify` runs both TypeScript projects, the full test/build
   suite, a zero-warning typed **ESLint** gate, madge circular-dependency analysis,
@@ -27,10 +29,13 @@ workspace, and deployed.
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
-- **Model:** backend-agnostic OpenAI-compatible client (DeepSeek default; Gemini
-  3.x supported). A backend swap is env-only (`LLM_MODEL` + `LLM_REASONING_EFFORT`).
-  Planner + agentic evals last measured 100% on DeepSeek v4-pro and both Gemini
-  tiers (opt-in `scripts/eval-*.ts`; results are not committed or CI-gated).
+- **Model:** the production release keeps DeepSeek V4 Pro through the existing
+  OpenAI-compatible HTTP client, native tool mode, `LLM_AGENTIC=1`, and
+  `LLM_TOOL_SELECT=1`. `LLM_THINKING_MODE=disabled` is the selected 1.0.0 setting
+  only because five consecutive configured safety-corpus passes had zero write
+  regressions; rerun the exact-commit benchmark rather than extrapolating from a
+  historical result. The client remains backend-configurable for development,
+  but provider migration is not part of this release.
 - **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
   an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
   **default ON**, `=0` rolls back) shows the model only the message-relevant actions
@@ -59,15 +64,16 @@ workspace, and deployed.
   redeploys. Env vars + the volume live in Railway — never commit tokens. See
   `DEPLOYMENT.md`.
 
-**Still human-gated** (operational, not code): rotate the prod LLM credentials,
-record the provider DPA/region/retention/training posture, run and record the
-production-like backup/restore drill and release-model deterministic safety eval,
-review the security posture, and attach a successful sacrificial live-smoke +
-cleanup run before real users; confirm the prod AUDIT-host
-`X-Addon-Token` clearance (run `scripts/host-auth-spike.ts` with a captured prod
-`LIVE_ADDON_TOKEN` — dev cleanly reports "audit log not available"). Every write,
-confirmation, and undo performs an uncached role recheck and fails closed;
-`ROLE_RECHECK=1` additionally enables cached checks for authenticated reads.
+After all engineering evidence is green, exactly three human/admin packages may
+remain: (1) DeepSeek credential rotation + provider governance, (2) monitored
+contacts/private vulnerability reporting + independent human security/recovery
+sign-off, and (3) Marketplace portal review/upload + **Submit for Review**. The
+backup/restore drill, release-model evaluation, private deployment, live browser
+flow and cleanup, performance gates, production scope/AUDIT probes, and green PR
+checks are engineering work and may not be deferred into a fourth package.
+Every authenticated surface performs a mandatory fail-closed role recheck; only a
+positive read verdict may be cached, for at most 60 seconds. Every write,
+confirmation, undo, and external dispatch is uncached.
 
 ## Product contract
 
@@ -87,8 +93,32 @@ confirmation, and undo performs an uncached role recheck and fails closed;
   natural-language input; its trusted envelope also supplies exact write-action
   names and the catalog hash. It persists the exact write authority for that
   request. Invalid declarations deny writes but do not remove read access.
+- Declaration literals may be bounded structured JSON, using the one shared
+  depth/node/byte/array limit contract in `src/harness/safety-limits.ts`. The same
+  contract governs declaration decoding, persistence, raw authority matching,
+  action schemas, and catalog metadata; it does not change the capability version.
+- Every advertised batch limit is derived from the deterministic worst-case host
+  call estimator. Group-member additions are capped at 14. A prepared external
+  mutation binds and hashes `maxHostCalls`, reserves its complete remaining cost
+  before the first dispatch, and cannot partially execute because the 60-call turn
+  budget was exhausted halfway through.
 - The model never receives tokens, session secrets, model API keys, or raw
   headers. Not a public Claude connector; not a standalone MCP server.
+- Installation tokens are generation-bound. Activation or token replacement
+  increments the generation; inactive/deleted installations reject new and queued
+  writes. Uninstall writes a tokenless deletion tombstone immediately, drains only
+  already-dispatched work through truthful settlement, erases workspace data, and
+  is completed at startup if interrupted. Exact same-token callback retries
+  are idempotent even when the installation is inactive; only STATUS ACTIVE reactivates
+  that token. Before replacement/uninstall, the outgoing token is added to a
+  separate-domain, workspace-unlinked fingerprint denylist so a delayed signed
+  callback cannot restore retired authority after erasure or restart. A bounded
+  separate-domain hashed-workspace lineage also blocks never-before-seen older tokens
+  after row erasure/restart and is pruned after 24 hours + 2 minutes + 1 second. Signed lifecycle
+  JWT `iat` is persisted per generation; older INSTALLED/STATUS_CHANGED/DELETED events
+  are ignored even when delivered later. All accepted add-on JWTs require `exp`, and
+  lifecycle JWTs require a bounded `iat`. Equal whole-second issuer times fail closed as
+  `DELETED > INACTIVE > ACTIVE`; different-token INSTALLED authority must be strictly newer.
 
 ## Ground truth & verification discipline (READ THIS)
 
@@ -155,7 +185,11 @@ bug was found against the REAL API, not by reading the code.
   elsewhere).
 - `src/clockify/request-governor.ts` — shared per-workspace FIFO governor: 10
   requests/sec, burst 10, concurrency 4, one mutation at a time, adaptive `429`
-  cooldown, and 60 host calls per chat/resume turn.
+  cooldown, and 60 host calls per chat/resume turn. Its write path accepts an
+  abort signal and an `onDispatch` boundary: queued cancellation is definitive,
+  while cancellation after the external fetch starts waits for truthful
+  settlement. `workspace-mutation-coordinator.ts` provides the generation-aware
+  workspace settlement barrier used by lifecycle and mutation routes.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`
@@ -217,14 +251,27 @@ bug was found against the REAL API, not by reading the code.
   (the one NDJSON-stream setup → `{write, signal}`, used by both streaming routes).
   Scoped `GET /api/operation-runs/:operationId` returns only sanitized bounded
   operation/step status; chat-history responses restore passive operation cards
-  from that same workspace+admin+session-scoped view.
+  from that same workspace+admin+session-scoped view. History hydration batches
+  operation runs and steps instead of issuing an N+1 query. `route-authority.ts`
+  owns the authenticated API role gate; `api.ts` does not carry bespoke authority
+  branches.
   `src/ui/` vanilla TS chat (a11y; previews batched so "Confirm all" stays one
   card; header **"New chat"** + **"Chats ▾"** history dropdown — titles via
   `textContent`, full keyboard nav) — split into the fetch/NDJSON client
-  (`api-client.ts`), the composer/stream flows (`composer-flow.ts`), and rendering
-  (`render.ts`/`shared.ts`); `main.ts` keeps `mount()` + a re-export barrel.
+  (`api-client.ts`), runtime-decoded HTTP/NDJSON contracts (`protocol.ts`), the
+  composer/stream flows (`composer-flow.ts`), product copy/preferences
+  (`product.ts`), and rendering (`render.ts`/`shared.ts`); `main.ts` keeps
+  `mount()` + a re-export barrel. The shell renders before parallel initialization,
+  emits local understanding feedback before provider work, localizes through
+  `Intl`, and remains usable without horizontal overflow at 280px.
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
+- `src/public-documents.ts` renders script-free public Privacy, Support, and
+  Security pages. `src/release-artifact.ts` verifies the post-build manifest and
+  complete `dist/server` hash before production opens its database; `/version`
+  returns only that verified full source-candidate SHA/archive hash and server
+  artifact hash, never raw environment claims. `/api/me` exposes only
+  sanitized UI preferences and public document/contact links.
 
 ## Safety & planner invariants (all pinned by tests — do not regress)
 
@@ -244,7 +291,10 @@ bug was found against the REAL API, not by reading the code.
   the caller's role. Non-admin invalidates that admin's sessions; uncertainty
   fails closed. Every primary and compensation step repeats the role check
   immediately before network dispatch. Writes are journaled as
-  prepared→executing→terminal, and transport failure/timeout/408/5xx/malformed
+  prepared→executing→terminal; `queued_at` records queue admission and
+  `dispatched_at` is set only immediately before the external fetch begins.
+  Typed pre-dispatch budget/cancellation failures are definitive and are never
+  classified as ambiguous. Transport failure/timeout/408/5xx/malformed
   success after dispatch remains `outcome_unknown` without automatic retry.
 - **Admin-authored intent capability:** before any main-planner turn can receive
   Clockify results, the constrained declaration pass receives only the exact
@@ -411,9 +461,10 @@ bug was found against the REAL API, not by reading the code.
   (fired by `res.on("close")`) through agentic and single-turn planners into every
   model call. HTTP abort cancels the active fetch/backoff without a provider retry;
   Gemini sends one kill and waits for the child to close. Both planner paths check
-  cancellation before every not-yet-dispatched tool call. The signal is never
-  passed into a Clockify mutation after dispatch starts, so cancellation cannot
-  interrupt or retry an external write with an unknown outcome.
+  cancellation before every not-yet-dispatched tool call and through the governor
+  into REST. A queued mutation cancels definitively and refunds its reservation.
+  Once dispatch begins, the signal cannot interrupt or retry the external write;
+  cancellation waits for its known/unknown outcome to settle.
 - **Operation identity and selective semantic dedupe:** workspace/admin/action-scoped
   semantic dedupe remains only for `clockify_setup_project` and
   `clockify_setup_task`. Invoice safety is operation-level: replay reuses the same
@@ -535,13 +586,19 @@ bug was found against the REAL API, not by reading the code.
 ```bash
 npm install
 npm run type-check     # tsc --noEmit
-npm test               # vitest run (fakes only; no network)
+npm test               # build exact server artifact, then Vitest; no unmocked network
 npm run build          # tsc + vite -> dist/server, dist/ui
-npm run lint           # eslint src, including browser UI; zero warnings
+npm run lint           # typed eslint across src + operational scripts; zero warnings
 npm run verify         # both type-checks + lint + cycles + dup + test + build
+npm run test:e2e       # Chromium + Firefox + WebKit product/browser matrix
+npm run perf:local-ui  # local UI, history, status, and 20 KiB gzip gates
+npm run media:marketplace # deterministic icon/banner/screenshots/demo package
 npm run audit:prod     # fail-closed production advisory gate
 npm run license:prod   # production license gate + deterministic JSON report
 npm run eval:smoke     # offline scripted safety corpus; no network/credentials
+npm run db:capture-backup-boundary -- BOUNDARY # create-only pre-snapshot RPO timestamp
+npm run db:bind-legacy-backup-metadata -- BACKUP SHA256 V1_JSON BOUNDARY V2_JSON # non-overwriting v7 release sidecar
+npm run db:verify-restore -- RESTORED SHA256 METADATA # private-clone RTO/RPO + built-start proof
 npm run dev            # tsx src/server.ts (needs env)
 npm run cycles         # madge --circular … (pinned devDep) — keep 0
 ```
@@ -559,13 +616,14 @@ serializes smoke and its separate always-run cleanup job; both are timeout-bound
 and always upload sanitized prefix/count/status evidence without credentials,
 resource ids/names, payloads, response bodies, or prompts.
 
-Manual `release-evidence.yml` records the exact commit SHA plus machine
-conclusions for verify, production audit/license, CodeQL, gitleaks,
-`eval:smoke`, SBOM, and live smoke. It writes all credential rotation, provider
-governance, recovery drill, release-model evaluation, security review, AUDIT-host,
-and Marketplace approval gates as `not_evaluated`. Workflow presence or an
-artifact is not operator sign-off, deployment evidence, or Marketplace approval;
-no release workflow deploys or submits the add-on.
+Manual `release-evidence.yml` records the exact commit SHA, API-validated reviewed
+PR/head/CI/CodeQL identities, and three hashed zero-retry Vitest count reports
+(minimum 2,366 passed with zero skipped/todo) plus machine conclusions for verify,
+production audit/license, CodeQL, gitleaks,
+`eval:smoke`, SBOM, live smoke, backup/restore, deterministic DeepSeek safety, and
+production AUDIT-host clearance. Only the three admin packages named above are
+human `not_evaluated` gates. Workflow presence is not sign-off, deployment
+evidence, or Marketplace approval; no workflow deploys or submits the add-on.
 
 ## Runtime constraints
 
@@ -602,7 +660,8 @@ npx tsx scripts/eval-matrix.ts --repeat=5                                       
 npx tsx --env-file=.env.server scripts/live-confirm-flow.ts                                # confirm safety over HTTP
 LIVE_CLOCKIFY=1 npx tsx --env-file=.env.server scripts/live-agentic-flow.ts                # loop vs real host
 npx tsx --env-file=.env.server scripts/live-chat-tour.ts                                   # broad dogfood tour
-LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts                                             # prod add-on-token path (needs LIVE_ADDON_TOKEN)
+LIVE_CLOCKIFY=1 LIVE_SCOPE_FRESH_INSTALL=1 npm run probe:scopes                            # aggregate scope + explicit AUDIT reachability on a server-attested fresh install
+LIVE_CLOCKIFY=1 npx tsx scripts/host-auth-spike.ts                                         # API/reports/AUDIT add-on-token clearance
 ```
 
 Always finish a live run with the sweep at 0 leftovers. Never commit or paste live

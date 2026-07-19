@@ -18,6 +18,7 @@ import { executeDurableRiskyStep } from "./durable-risky-write.js";
 import { isJournalDegradedStep, withJournalDegradedWarning } from "./mutation-workflow.js";
 import { errorReceipt, successReceipt, type SuccessReceipt } from "./receipts.js";
 import type { JournaledMutationStep } from "./mutation-contract.js";
+import { INVOICE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "./safety-limits.js";
 
 export interface InvoiceCreatePayload extends InvoiceCreateIntent, Record<string, unknown> {
   provenance: InvoiceCreateProvenance;
@@ -155,6 +156,17 @@ async function reconcileBaseCreate(input: {
     const candidateIds = after.rows
       .map((row) => row.id)
       .filter((id): id is string => typeof id === "string" && !baseline.has(id));
+    evidence.candidateCount = candidateIds.length;
+    if (candidateIds.length > INVOICE_CREATE_RECONCILIATION_CANDIDATE_MAX) {
+      evidence.reason = "candidate_scan_limit";
+      tryRecordReconciliation({
+        ctx: input.ctx,
+        stepId: input.unknownStep.id,
+        evidence,
+        authoritative: false,
+      });
+      return undefined;
+    }
     const matches: InvoiceDetail[] = [];
     for (const id of candidateIds) {
       const detail = await input.ctx.clockify.getInvoice(id);
@@ -162,7 +174,6 @@ async function reconcileBaseCreate(input: {
         matches.push(detail);
       }
     }
-    evidence.candidateCount = candidateIds.length;
     evidence.matchCount = matches.length;
     if (matches.length !== 1) {
       evidence.reason = "non_unique";

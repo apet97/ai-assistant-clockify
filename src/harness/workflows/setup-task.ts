@@ -17,6 +17,7 @@ import { dynamicMutationPlan, fetchCompositeSnapshot, userProjection } from "./c
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { sanitizedFingerprint } from "../safe-json.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { SETUP_TASK_ASSIGNEE_BATCH_MAX } from "../safety-limits.js";
 
 /**
  * `clockify_setup_task` — the task analog of `clockify_setup_project`. "Create a
@@ -66,7 +67,7 @@ const setupTask = defineRiskyAction({
       projectName: z.string().optional(),
       name: z.string().min(1),
       /** Assignees (names or "me") to set on the new task. */
-      assignees: zStringList(z.array(z.string().min(1))).optional(),
+      assignees: zStringList(z.array(z.string().min(1)).max(SETUP_TASK_ASSIGNEE_BATCH_MAX)).optional(),
       /** The task's billable/cost rate amount (task-wide). */
       rate: zNumberLike(z.number().nonnegative()).optional(),
       rateKind: rateKindEnum.default("hourly"),
@@ -210,6 +211,7 @@ const setupTask = defineRiskyAction({
       });
     }
     let created: Awaited<ReturnType<typeof ctx.clockify.createTaskAtomic>> | undefined;
+    let createReconciled = false;
     const createStep = await executeDurableRiskyStep({
       ctx,
       operation,
@@ -229,6 +231,7 @@ const setupTask = defineRiskyAction({
               JSON.stringify([...(row.assigneeIds ?? [])].sort()) === JSON.stringify([...p.assigneeIds].sort()),
           }),
         });
+        createReconciled = dispatched.reconciled;
         created = dispatched.value;
         return {
           externalId: created.id,
@@ -249,6 +252,9 @@ const setupTask = defineRiskyAction({
       return errorReceipt({ action: "clockify_setup_task", code: "setup_failed", message: `Couldn't create task "${p.name}".` });
     }
     const createdRef = { type: "task", id: created.id, name: created.name, projectId: p.projectId };
+    if (createReconciled && rate) {
+      return partialSetupTask(createdRef, "The task create was proven successful after an ambiguous response, so no rate mutation was sent.");
+    }
     if (rate) {
       if (!canWrite(ctx.policy, "invoices")) {
         return partialSetupTask(createdRef, "The task was created, but invoice write access is no longer available, so its rate was not set.");

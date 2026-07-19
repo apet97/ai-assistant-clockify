@@ -9,9 +9,9 @@ const baseEnv = {
   CLOCKIFY_ADDON_KEY: "ai-assistant",
   SESSION_SECRET: "session-secret-with-32-chars-of-entropy",
   DATABASE_PATH: ":memory:",
-  LLM_BASE_URL: "https://llm.example.com",
+  LLM_BASE_URL: "https://api.deepseek.com",
   LLM_API_KEY: "llm-key",
-  LLM_MODEL: "cheap-model",
+  LLM_MODEL: "deepseek-v4-pro",
 };
 
 describe("loadConfig", () => {
@@ -29,9 +29,67 @@ describe("loadConfig", () => {
     expect(cfg.baseUrl).toBe("https://example.com/addon");
     expect(cfg.clockifyAddonKey).toBe("ai-assistant");
     expect(cfg.clockifyAddonPublicKeyPem).toBe("public-key");
-    expect(cfg.llmBaseUrl).toBe("https://llm.example.com");
+    expect(cfg.llmBaseUrl).toBe("https://api.deepseek.com");
     expect(cfg.llmApiKey).toBe("llm-key");
-    expect(cfg.llmModel).toBe("cheap-model");
+    expect(cfg.llmModel).toBe("deepseek-v4-pro");
+  });
+
+  it("binds production HTTP model traffic to the approved DeepSeek endpoint and model", () => {
+    const production = {
+      ...baseEnv,
+      NODE_ENV: "production",
+      DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef",
+    };
+    expect(loadConfig(production)).toMatchObject({
+      llmProvider: "http",
+      llmBaseUrl: "https://api.deepseek.com",
+      llmModel: "deepseek-v4-pro",
+    });
+    expect(loadConfig({ ...production, LLM_BASE_URL: "https://api.deepseek.com/v1/" }).llmBaseUrl)
+      .toBe("https://api.deepseek.com/v1/");
+    for (const untrusted of [
+      "http://api.deepseek.com",
+      "https://deepseek.example.com",
+      "https://api.deepseek.com.evil.example",
+      "https://user:pass@api.deepseek.com",
+      "https://api.deepseek.com/v2",
+      "https://api.deepseek.com/v1?redirect=1",
+      "https://api.deepseek.com/v1#fragment",
+    ] as const) {
+      expect(() => loadConfig({ ...production, LLM_BASE_URL: untrusted })).toThrow(/DeepSeek/u);
+    }
+    expect(() => loadConfig({ ...production, LLM_MODEL: "another-model" })).toThrow(/DeepSeek/u);
+    expect(() => loadConfig({ ...production, LLM_PROVIDER: "gemini-cli" })).toThrow(/DeepSeek/u);
+  });
+
+  it("accepts only HTTPS or mailto public contact destinations", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig({ ...base, PUBLIC_CONTACT_URL: "mailto:support@example.com" }).publicContactUrl)
+      .toBe("mailto:support@example.com");
+    expect(loadConfig({ ...base, PUBLIC_CONTACT_URL: "https://support.example.com/form" }).publicContactUrl)
+      .toBe("https://support.example.com/form");
+    expect(() => loadConfig({ ...base, PUBLIC_CONTACT_URL: "javascript:alert(1)" })).toThrow(/PUBLIC_CONTACT_URL/);
+    expect(() => loadConfig({ ...base, PUBLIC_CONTACT_URL: "/relative" })).toThrow(/PUBLIC_CONTACT_URL/);
+  });
+
+  it("validates immutable release identity metadata", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    const releaseSha = "a".repeat(40);
+    const buildHash = "b".repeat(64);
+    const sourceBindingSha256 = "c".repeat(64);
+    expect(loadConfig({
+      ...base,
+      RELEASE_SHA: releaseSha,
+      RELEASE_BUILD_HASH: buildHash,
+      RELEASE_SOURCE_BINDING_SHA256: sourceBindingSha256,
+    })).toMatchObject({
+      releaseSha,
+      releaseBuildHash: buildHash,
+      releaseSourceBindingSha256: sourceBindingSha256,
+    });
+    expect(() => loadConfig({ ...base, RELEASE_SHA: "main" })).toThrow();
+    expect(() => loadConfig({ ...base, RELEASE_BUILD_HASH: "short" })).toThrow();
+    expect(() => loadConfig({ ...base, RELEASE_SOURCE_BINDING_SHA256: sourceBindingSha256 })).toThrow();
   });
 
   it("defaults llmMode to tool and honors LLM_MODE=json", () => {
@@ -69,6 +127,14 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, LLM_TIMEOUT_MS: "not-a-number" })).toThrow();
   });
 
+  it("validates the optional provider thinking-mode toggle and omits it by default", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).llmThinkingMode).toBeUndefined();
+    expect(loadConfig({ ...base, LLM_THINKING_MODE: "disabled" }).llmThinkingMode).toBe("disabled");
+    expect(loadConfig({ ...base, LLM_THINKING_MODE: "enabled" }).llmThinkingMode).toBe("enabled");
+    expect(() => loadConfig({ ...base, LLM_THINKING_MODE: "none" })).toThrow();
+  });
+
   it("parses COMMIT_TIMEOUT_MS, leaves it undefined when absent (adapter default applies), and bounds it below CLAIM_TTL_MS", () => {
     const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
     // Unset → undefined so the REST adapter's COMMIT_TIMEOUT_MS default applies.
@@ -90,6 +156,25 @@ describe("loadConfig", () => {
     expect(loadConfig({ ...base, RETENTION_DAYS: "120" }).retentionDays).toBe(120);
     // Below the floor: the 30-day metrics default must never silently truncate.
     expect(() => loadConfig({ ...base, RETENTION_DAYS: "10" })).toThrow();
+  });
+
+  it("parses the authenticated API rate-limit overrides and rejects invalid bounds", () => {
+    const base = { ...baseEnv, DATA_ENCRYPTION_KEY: "0123456789abcdef0123456789abcdef" };
+    expect(loadConfig(base).apiRateLimitMax).toBeUndefined();
+    expect(loadConfig(base).apiRateLimitWindowMs).toBeUndefined();
+    expect(loadConfig({
+      ...base,
+      API_RATE_LIMIT_MAX: "750",
+      API_RATE_LIMIT_WINDOW_MS: "120000",
+    })).toMatchObject({
+      apiRateLimitMax: 750,
+      apiRateLimitWindowMs: 120_000,
+    });
+    expect(() => loadConfig({ ...base, API_RATE_LIMIT_MAX: "0" })).toThrow();
+    expect(() => loadConfig({ ...base, API_RATE_LIMIT_MAX: "10001" })).toThrow();
+    expect(() => loadConfig({ ...base, API_RATE_LIMIT_WINDOW_MS: "999" })).toThrow();
+    expect(() => loadConfig({ ...base, API_RATE_LIMIT_WINDOW_MS: "3600001" })).toThrow();
+    expect(() => loadConfig({ ...base, API_RATE_LIMIT_WINDOW_MS: "not-a-number" })).toThrow();
   });
 
   it("rejects production without data encryption key", () => {
@@ -157,6 +242,14 @@ describe("loadConfig", () => {
     expect(cfg.llmProvider).toBe("http");
     const { LLM_API_KEY: _k, ...withoutKey } = baseEnv;
     expect(() => loadConfig({ NODE_ENV: "test", ...withoutKey })).toThrow();
+  });
+
+  it("rejects a positive role-cache window longer than 60 seconds", () => {
+    expect(() => loadConfig({
+      NODE_ENV: "test",
+      ...baseEnv,
+      ROLE_RECHECK_TTL_MS: "60001",
+    })).toThrow();
   });
 
   it("allows the gemini-cli provider without an LLM base url or api key", () => {

@@ -41,4 +41,19 @@ describe("selectModelClient", () => {
     );
     expect(geminiFactory).toHaveBeenCalledWith({ model: "gemini-x", timeoutMs: 45_000 });
   });
+
+  it("threads the optional thinking mode into the HTTP client", () => {
+    const httpFactory = vi.fn(() => ({ complete: async () => "" }));
+    selectModelClient(
+      {
+        llmProvider: "http",
+        llmBaseUrl: "https://example.test/v1",
+        llmApiKey: "fake-key",
+        llmModel: "test-model",
+        llmThinkingMode: "disabled",
+      },
+      { createHttp: httpFactory },
+    );
+    expect(httpFactory).toHaveBeenCalledWith(expect.objectContaining({ thinkingMode: "disabled" }));
+  });
 });

@@ -19,6 +19,7 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateTimeOffPolicyInput, CreateTimeOffRequestInput, TimeOffPolicySummary, TimeOffRequestSummary } from "../../clockify/ports/time-off.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { TIME_OFF_BALANCE_USER_BATCH_MAX } from "../safety-limits.js";
 
 /** Step a YYYY-MM-DD day forward by n calendar days. */
 function addCalendarDays(day: string, n: number): string {
@@ -803,7 +804,7 @@ const updateBalance = defineRiskyAction({
   mutationContract: timeOffSnapshotContract(["target", "parent"], "state-command"),
   schema: z.object({
     policyId: z.string().min(1),
-    userIds: zStringList(z.array(z.string().min(1)).min(1)),
+    userIds: zStringList(z.array(z.string().min(1)).min(1).max(TIME_OFF_BALANCE_USER_BATCH_MAX)),
     value: zNumberLike(z.number()),
     note: z.string().optional(),
   }),

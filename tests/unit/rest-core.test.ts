@@ -274,6 +274,20 @@ describe("rest core host routing + auth", () => {
     expect(url).toContain("page=1");
   });
 
+  it("paginate fails closed when a 200 response is not a JSON array", async () => {
+    const fetchImpl = vi.fn(async () => res({ projects: [] }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(core.paginate("api", "/workspaces/ws-1/projects")).rejects.toThrow(
+      /invalid list response.*expected a JSON array/i,
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("paginate stops at the MAX_PAGES backstop (50) and reports truncated=true", async () => {
     // Every page returns a FULL page (200 rows) so the short-page break never
     // fires — the only thing that can stop the loop is the MAX_PAGES ceiling.
@@ -348,6 +362,20 @@ describe("rest core host routing + auth", () => {
     await expect(
       envelope.paginateEnvelope("api", "/workspaces/ws-1/expenses", "expenses.expenses"),
     ).resolves.toEqual({ rows: [{ id: "e1" }], truncated: false });
+  });
+
+  it("envelope pagination fails closed when a 200 response is missing the declared array", async () => {
+    const fetchImpl = vi.fn(async () => res({ expenses: {} }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "k" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(
+      core.paginateEnvelope("api", "/workspaces/ws-1/expenses", "expenses.expenses"),
+    ).rejects.toThrow(/invalid list response.*expenses\.expenses.*JSON array/i);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("envelope pagination reports truncated=true at the same MAX_PAGES backstop", async () => {
@@ -485,6 +513,26 @@ describe("rest core host routing + auth", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
     await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toThrow(/503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies POST 429 as one definitive rejection and never retries the write", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ message: "slow down" }), {
+      status: 429,
+      headers: { "content-type": "application/json", "retry-after": "2" },
+    }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toMatchObject({
+      outcome: "definitive_failure",
+      method: "POST",
+      path: "/workspaces/ws-1/tags",
+      status: 429,
+    });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 

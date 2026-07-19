@@ -31,7 +31,12 @@ export async function verifyAddonToken(
 ): Promise<ClockifyAddonClaims | undefined> {
   if (!token) return undefined;
   try {
-    return await parser.parseClaims(token);
+    const claims = await parser.parseClaims(token);
+    // jose validates expiry when present; require the claim as well so an
+    // otherwise valid indefinitely replayable token is never accepted on any
+    // component or lifecycle surface.
+    if (typeof claims.exp !== "number" || !Number.isFinite(claims.exp)) return undefined;
+    return claims;
   } catch {
     return undefined;
   }

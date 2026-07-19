@@ -4,6 +4,8 @@ import type { AppConfig } from "../config.js";
 import type { Installation, Store } from "../db/store.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ModelClient } from "../assistant/model-client.js";
+import type { WorkspaceMutationCoordinator } from "../clockify/workspace-mutation-coordinator.js";
+import type { RuntimeReleaseArtifactIdentity } from "../release-artifact.js";
 import { signSessionCookie, verifySessionCookie, type SessionClaims } from "../auth/sessions.js";
 
 /**
@@ -18,9 +20,17 @@ export interface AppDeps {
   parser: ClockifySignatureParser;
   modelClient: ModelClient;
   /** Build a workspace-scoped Clockify client for an installation. */
-  clockifyForWorkspace: (installation: Installation) => WorkspaceClient;
+  clockifyForWorkspace: (
+    installation: Installation,
+    options?: { signal?: AbortSignal },
+  ) => WorkspaceClient;
+  /** Shared lifecycle/write settlement barrier. createApp supplies one when omitted. */
+  mutationCoordinator?: WorkspaceMutationCoordinator;
   now?: () => Date;
   readiness?: { isReady(): boolean };
+  /** Verified once before production startup. Public version metadata is read
+   * from this proof, never echoed directly from environment configuration. */
+  releaseArtifactIdentity?: RuntimeReleaseArtifactIdentity;
   /** Tests written before persisted intent capabilities may opt out. Ignored
    * outside NODE_ENV=test; production has no capability-enforcement toggle. */
   enforceIntentCapabilitiesInTests?: true;

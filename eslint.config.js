@@ -7,9 +7,12 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
-    files: ["src/**/*.ts"],
+    files: ["src/**/*.ts", "scripts/**/*.ts"],
     languageOptions: {
-      parserOptions: { project: "./tsconfig.json", tsconfigRootDir: import.meta.dirname },
+      parserOptions: {
+        project: ["./tsconfig.json", "./tsconfig.scripts.json"],
+        tsconfigRootDir: import.meta.dirname,
+      },
     },
     rules: {
       // The async-safety core — these stay ERROR (the reason this gate exists):

@@ -1,4 +1,5 @@
 import type { WriteAuthorityMetadata } from "./action.js";
+import { parseIntentLiteralValue } from "./intent-capability.js";
 import type {
   IntentCapabilityV1,
   IntentLiteralConstraintV1,
@@ -44,8 +45,12 @@ function stableJson(value: unknown): string | undefined {
 }
 
 function equalLiteral(actual: unknown, expected: IntentLiteralValue): boolean {
-  const actualJson = stableJson(actual);
-  return actualJson !== undefined && actualJson === stableJson(expected);
+  try {
+    const actualJson = stableJson(parseIntentLiteralValue(actual));
+    return actualJson !== undefined && actualJson === stableJson(parseIntentLiteralValue(expected));
+  } catch {
+    return false;
+  }
 }
 
 function rawLeaves(value: unknown, concretePath = "", schemaPath = ""): RawLeaf[] {
@@ -118,8 +123,16 @@ function normalizedPath(path: string): string {
 
 function pathIsLiteralControlled(path: string, authority: WriteAuthorityMetadata): boolean {
   const normalized = normalizedPath(path);
-  return authority.literalControlledPaths.some((allowed) =>
-    allowed === normalized || allowed.startsWith(`${normalized}.`) || allowed.startsWith(`${normalized}[]`));
+  return authority.literalControlledPaths.some((allowed) => {
+    if (allowed.endsWith(".*")) {
+      const openPath = allowed.slice(0, -2);
+      return normalized === openPath || normalized.startsWith(`${openPath}.`);
+    }
+    // A constraint may bind a whole closed object/array exactly, so a known
+    // descendant proves its parent is controlled. The inverse is intentionally
+    // false unless the path carries the reviewed `.*` marker above.
+    return allowed === normalized || allowed.startsWith(`${normalized}.`) || allowed.startsWith(`${normalized}[]`);
+  });
 }
 
 function constraintMatchesRaw(
@@ -136,25 +149,16 @@ function constraintMatchesRaw(
   return values.length === 1 && equalLiteral(values[0], constraint.value);
 }
 
-function pathPatternRegex(path: string): RegExp | undefined {
-  const parts = parsePath(path);
-  if (!parts) return undefined;
-  let source = "^";
-  for (const part of parts) {
-    if (part.kind === "key") {
-      if (source !== "^") source += "\\.";
-      source += part.value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    } else {
-      source += part.value === undefined ? "\\[\\d+\\]" : `\\[${part.value}\\]`;
-    }
-  }
-  return new RegExp(`${source}$`);
-}
-
 function constraintCoversLeaf(constraintPath: string, leafPath: string): boolean {
-  const matcher = pathPatternRegex(constraintPath);
-  if (matcher?.test(leafPath)) return true;
-  return leafPath.startsWith(`${constraintPath}.`) || leafPath.startsWith(`${constraintPath}[`);
+  const constraint = parsePath(constraintPath);
+  const leaf = parsePath(leafPath);
+  if (!constraint || !leaf || constraint.length > leaf.length) return false;
+  return constraint.every((part, index) => {
+    const candidate = leaf[index];
+    if (!candidate || candidate.kind !== part.kind) return false;
+    if (part.kind === "key") return candidate.kind === "key" && candidate.value === part.value;
+    return candidate.kind === "index" && (part.value === undefined || candidate.value === part.value);
+  });
 }
 
 function cardinality(input: AuthorizeIntentWriteArgumentsInput): number | undefined {
@@ -199,7 +203,9 @@ export function authorizeIntentWriteArguments(
       "The admin-authored request did not authorize this write action.");
   }
   const count = cardinality(input);
-  if (count !== undefined && count > input.authority.cardinality.maxExecutions) {
+  const maxArgumentItems = input.authority.cardinality.maxArgumentItems ??
+    input.authority.cardinality.maxExecutions;
+  if (count !== undefined && count > maxArgumentItems) {
     return denied(input.actionName, "intent_capability_cardinality_exceeded",
       "The raw argument batch exceeds this action's declared safety limit.");
   }

@@ -48,6 +48,34 @@ function declaration(actionName: string, sourceSpan: { startByte: number; endByt
 }
 
 describe("declareIntentCapability", () => {
+  it("grounds one structured JSON constraint from an exact authored span", async () => {
+    const currentText = 'Create an invoice with items [{"description":"Audit","quantity":2}]';
+    const span = byteSpan(currentText, '[{"description":"Audit","quantity":2}]');
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoice_create",
+          sourceSpans: [span],
+          literalConstraints: [{
+            path: "items",
+            value: [{ description: "Audit", quantity: 2 }],
+            sourceSpan: span,
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames,
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({
+      version: 1,
+      mode: "allow",
+      writeActions: [{ literalConstraints: [{ value: [{ description: "Audit", quantity: 2 }] }] }],
+    });
+  });
+
   it("accepts one native declaration and produces an immutable allow capability", async () => {
     const currentText = "Rename the project to Atlas.";
     const span = byteSpan(currentText, "Atlas");

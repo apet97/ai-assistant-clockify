@@ -7,6 +7,7 @@ import type { ActionContext, ConfirmableOperation, IdempotencyLedger } from "../
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { INVOICE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../../src/harness/safety-limits.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 
@@ -411,6 +412,40 @@ describe("durable invoice creation", () => {
       result: { reason: "non_unique", matchCount: 2 },
     });
     expect(fake.counts.updateInvoiceFields ?? 0).toBe(0);
+    store.close();
+  });
+
+  it("stops an ambiguous base reconciliation before an unbounded candidate detail scan", async () => {
+    const fake = createFakeWorkspace(seed() as any);
+    fake.client.createInvoiceBase = async (base) => {
+      for (let index = 0; index <= INVOICE_CREATE_RECONCILIATION_CANDIDATE_MAX; index += 1) {
+        fake.state.invoices.push({
+          id: `concurrent-${index}`,
+          number: `${base.number}-${index}`,
+          clientId: base.clientId,
+          currency: base.currency,
+          issuedDate: base.issuedDate,
+          dueDate: base.dueDate,
+          status: "UNSENT",
+          items: [],
+        });
+      }
+      throw new AmbiguousWriteOutcome("POST", "/invoices", "proxy returned 502", 502);
+    };
+    const operation = await previewBaseOnly(fake);
+    const { store, context } = durableContext(fake, operation);
+
+    const result = await commitConfirmedOperation(context, operation);
+
+    expect(result).toMatchObject({ ok: false, code: "commit_outcome_unknown" });
+    expect(store.getOperationRun(operation.operationId)?.reconciliation).toMatchObject({
+      authoritative: false,
+      result: {
+        reason: "candidate_scan_limit",
+        candidateCount: INVOICE_CREATE_RECONCILIATION_CANDIDATE_MAX + 1,
+      },
+    });
+    expect(fake.counts.getInvoice ?? 0).toBe(0);
     store.close();
   });
 

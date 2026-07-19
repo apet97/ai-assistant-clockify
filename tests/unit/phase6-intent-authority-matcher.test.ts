@@ -7,8 +7,10 @@ import {
   type Utf8SourceSpan,
 } from "../../src/harness/intent-capability.js";
 import { authorizeIntentWriteArguments } from "../../src/harness/intent-authority.js";
+import { INTENT_LITERAL_LIMITS } from "../../src/harness/safety-limits.js";
 
 const authority: WriteAuthorityMetadata = {
+  literalConstraintLimits: INTENT_LITERAL_LIMITS,
   literalControlledPaths: ["name", "amount", "members[]"],
   serverDerivedIdPaths: ["clientId"],
   permittedServerDefaultPaths: ["currencyId"],
@@ -89,6 +91,66 @@ describe("raw intent authority matcher", () => {
     });
     expect(authorize(allow({}), { name: "Acme", amount: 125.5 })).toMatchObject({
       code: "intent_capability_argument_undeclared",
+    });
+  });
+
+  it("accepts an exact structured literal under a reviewed open-record path", () => {
+    const source = 'Set project estimate to {"estimate":100,"active":true}';
+    const text = '{"estimate":100,"active":true}';
+    const capability = allow({
+      source,
+      constraints: [{
+        path: "fields",
+        value: { estimate: 100, active: true },
+        text,
+      }],
+    });
+    const openRecordAuthority: WriteAuthorityMetadata = {
+      ...authority,
+      literalControlledPaths: ["fields.*"],
+      cardinality: { mode: "single", maxExecutions: 1 },
+    };
+    const check = (rawArgs: unknown) => authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_clients_create",
+      rawArgs,
+      authority: openRecordAuthority,
+      catalogHash: "catalog-current",
+    });
+
+    expect(check({ fields: { estimate: 100, active: true } })).toBeUndefined();
+    expect(check({ fields: { estimate: 101, active: true } })).toMatchObject({
+      code: "intent_capability_argument_mismatch",
+    });
+  });
+
+  it("accepts an exact structured array at an advertised open-array path", () => {
+    const source = 'Set memberships to [{"userId":"u1","membershipStatus":"ACTIVE"}]';
+    const text = '[{"userId":"u1","membershipStatus":"ACTIVE"}]';
+    const capability = allow({
+      source,
+      constraints: [{
+        path: "memberships[]",
+        value: [{ userId: "u1", membershipStatus: "ACTIVE" }],
+        text,
+      }],
+    });
+    const openArrayAuthority: WriteAuthorityMetadata = {
+      ...authority,
+      literalControlledPaths: ["memberships[]", "memberships[].*"],
+      cardinality: { mode: "argument", maxExecutions: 14, argumentPath: "memberships[]" },
+    };
+    const check = (rawArgs: unknown) => authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_clients_create",
+      rawArgs,
+      authority: openArrayAuthority,
+      catalogHash: "catalog-current",
+    });
+
+    expect(check({ memberships: [{ userId: "u1", membershipStatus: "ACTIVE" }] })).toBeUndefined();
+    expect(check({ memberships: [{ userId: "u2", membershipStatus: "ACTIVE" }] })).toMatchObject({
+      code: "intent_capability_argument_mismatch",
     });
   });
 
@@ -178,6 +240,7 @@ describe("raw intent authority matcher", () => {
       }],
     });
     const aliasAuthority: WriteAuthorityMetadata = {
+      literalConstraintLimits: INTENT_LITERAL_LIMITS,
       literalControlledPaths: ["clientName", "projectName", "amount", "dueDate"],
       serverDerivedIdPaths: ["operation.clientId", "operation.projectId"],
       permittedServerDefaultPaths: ["operation.currency"],

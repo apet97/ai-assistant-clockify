@@ -3,6 +3,10 @@ import type { RiskLabel } from "../../harness/risk.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../../harness/receipts.js";
 import type { ActionResultRef } from "../action-results.js";
 import type { ExternalMutationPlan } from "../../harness/mutation-contract.js";
+import type {
+  InstallationAttestationBinding,
+  InstallationAttestationRecord,
+} from "../../addon/install-attestation.js";
 
 /**
  * Shared primitives every store concern module needs. Built once inside
@@ -41,7 +45,36 @@ export interface InstallationInput {
   backendUrl?: string;
   reportsUrl?: string;
   status?: InstallationStatus;
+  /** Verified Clockify lifecycle JWT `iat` (epoch seconds). */
+  lifecycleIssuedAt?: number;
   installedByUserId?: string;
+  /** Supplied only by the verified lifecycle route. The store records it only
+   * when no installation row existed before this callback; token replacements
+   * always invalidate and can never mint a fresh-install attestation. */
+  freshInstallAttestation?: InstallationAttestationBinding;
+}
+
+export type InstallationSaveOutcome =
+  | "applied"
+  | "same_token_retry"
+  | "stale_lifecycle"
+  | "retired_token_replay";
+
+export interface InstallationSaveResult {
+  outcome: InstallationSaveOutcome;
+  generation?: number;
+}
+
+export type InstallationStatusOutcome = "applied" | "stale_lifecycle" | "not_installed";
+
+export interface InstallationStatusResult {
+  outcome: InstallationStatusOutcome;
+  generation?: number;
+}
+
+export interface LifecycleDeletionResult {
+  accepted: boolean;
+  generation?: number;
 }
 
 export interface Installation {
@@ -53,6 +86,12 @@ export interface Installation {
   backendUrl?: string;
   reportsUrl?: string;
   status: InstallationStatus;
+  /** Monotonic install/token authority generation. */
+  generation: number;
+  /** Issuer-clock watermark for rejecting older lifecycle callbacks. */
+  lifecycleIssuedAt?: number;
+  /** Present while an uninstall tombstone is waiting for mutation settlement. */
+  deletionStartedAt?: string;
   installedByUserId?: string;
   installedAt: string;
   updatedAt: string;
@@ -183,6 +222,7 @@ export interface SanitizedOperationRun {
   status: OperationRunStatus;
   plan?: {
     mode: ExternalMutationPlan["mode"];
+    maxHostCalls: number;
     steps: ExternalMutationPlan["steps"];
     truncated?: boolean;
     originalStepCount?: number;
@@ -194,6 +234,7 @@ export interface SanitizedOperationRun {
     kind: OperationStepKind;
     status: OperationStepStatus;
     targetFingerprint?: string;
+    queuedAt?: string;
     dispatchedAt?: string;
     settledAt?: string;
     createdAt: string;
@@ -269,6 +310,7 @@ export interface OperationStep extends Omit<PrepareOperationStepInput, "id" | "p
   externalId?: string;
   effect?: unknown;
   detail?: unknown;
+  queuedAt?: string;
   dispatchedAt?: string;
   settledAt?: string;
   createdAt: string;
@@ -306,6 +348,8 @@ export interface UndoRecordInput {
   workspaceId: string;
   adminUserId: string;
   actionName: string;
+  /** Exact installation/token authority that created the undo handle. */
+  installationGeneration?: number;
   reversal: EntityRef[];
 }
 
@@ -322,6 +366,7 @@ export interface UndoRecord extends UndoRecordInput {
 /** Rows deleted per table by {@link Store.eraseWorkspace}. */
 export interface EraseCounts {
   installations: number;
+  installationAttestations: number;
   adminPolicies: number;
   chatSessions: number;
   chatMessages: number;
@@ -340,3 +385,5 @@ export interface EraseCounts {
   turnRunResultLinks: number;
   chatMessageResultLinks: number;
 }
+
+export type { InstallationAttestationRecord };

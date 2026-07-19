@@ -34,7 +34,10 @@ describe("durable external-mutation catalog coverage", () => {
       executeSafeWrite: undefined,
       mutationWorkflow: undefined,
     };
-    const coverage = mutationCatalogCoverage([...ACTION_CATALOG, synthetic]);
+    const coverage = mutationCatalogCoverage([
+      ...ACTION_CATALOG,
+      synthetic as unknown as ActionDefinition,
+    ]);
     expect(coverage.uncovered).toEqual(["clockify_unjournaled_test_write"]);
   });
 
@@ -51,7 +54,10 @@ describe("durable external-mutation catalog coverage", () => {
       mutationWorkflow: undefined,
     };
 
-    expect(mutationCatalogCoverage([...ACTION_CATALOG, synthetic]).uncovered)
+    expect(mutationCatalogCoverage([
+      ...ACTION_CATALOG,
+      synthetic as unknown as ActionDefinition,
+    ]).uncovered)
       .toEqual(["clockify_metadata_only_safe_write"]);
   });
 

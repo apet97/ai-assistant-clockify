@@ -11,6 +11,7 @@
  */
 
 import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
+import { formatLocalDateTime, intlLocale, promptsForPolicy, welcomeCopyForPolicy, type UiLanguage } from "./product.js";
 import {
   cancelOutcome,
   featureGroupRows,
@@ -149,6 +150,7 @@ export interface ChatSessionSummary {
 export interface ChatsMenuDeps {
   /** Switch to the picked conversation (never called for the CURRENT one). */
   onSelect: (id: string) => void;
+  language?: UiLanguage;
 }
 
 const TITLE_MAX = 48;
@@ -160,17 +162,17 @@ function truncateTitle(title: string): string {
 }
 
 /** A coarse "5m ago" / "2h ago" / "3d ago" label for the last-activity time. */
-export function relativeTime(iso: string, nowMs: number): string {
+export function relativeTime(iso: string, nowMs: number, language: UiLanguage = "en"): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
   const sec = Math.max(0, Math.round((nowMs - then) / 1000));
-  if (sec < 60) return "just now";
+  const formatter = new Intl.RelativeTimeFormat(intlLocale(language), { numeric: "auto" });
+  if (sec < 60) return formatter.format(0, "second");
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min}m ago`;
+  if (min < 60) return formatter.format(-min, "minute");
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.round(hr / 24);
-  return `${day}d ago`;
+  if (hr < 24) return formatter.format(-hr, "hour");
+  return formatter.format(-Math.round(hr / 24), "day");
 }
 
 /**
@@ -277,7 +279,7 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
       }
       // Title and time are untrusted/data — textContent only, never innerHTML.
       item.appendChild(el("span", "chats-title", truncateTitle(s.title)));
-      const when = relativeTime(s.lastMessageAt, now);
+      const when = relativeTime(s.lastMessageAt, now, deps.language);
       if (when) item.appendChild(el("span", "chats-time", when));
 
       const select = (): void => {
@@ -358,30 +360,21 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
  * reports, billing+project links, time off, team) so a new admin discovers
  * more than timers. One screen, no categories — chips stay scannable.
  */
-export const EXAMPLE_PROMPTS = [
-  "What did I track today?",
-  "Show this week's summary report",
-  "Start a timer for deep work",
-  "Log 2 hours on a project with a tag for yesterday",
-  "Log a $50 travel expense on a project",
-  "Invoice a client, due next month",
-  "Request 2 days off next week",
-  "What did you change recently?",
-];
+export const EXAMPLE_PROMPTS = promptsForPolicy();
 
 /** The empty-chat welcome card. Lives OUTSIDE the message log (never announced as a turn). */
-export function renderWelcome(deps: ClarifyDeps): HTMLElement {
+export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape; language?: UiLanguage }): HTMLElement {
   const box = el("div", "welcome");
   box.appendChild(el("h2", undefined, "What can I do for you?"));
   box.appendChild(
     el(
       "p",
       undefined,
-      "I can read and change this Clockify workspace. Safe changes run immediately with receipts; anything risky shows a preview you confirm with a button.",
+      welcomeCopyForPolicy(deps.policy),
     ),
   );
   const row = el("div", "chip-row");
-  for (const prompt of EXAMPLE_PROMPTS) {
+  for (const prompt of promptsForPolicy(deps.policy, deps.language)) {
     const chip = el("button", "chip", prompt);
     chip.type = "button";
     chip.addEventListener("click", () => deps.sendText(prompt));
@@ -433,6 +426,21 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
   if (!isPartial && result.receipt.message) card.appendChild(el("p", "receipt-message", result.receipt.message));
   // Surface warnings inline (not buried in Details) so the user sees them.
   for (const w of warnings) card.appendChild(el("p", "warning", w.message));
+  // Invoice PDF bytes remain behind the scoped, authenticated artifact route.
+  // The UI receives only its same-origin path, filename, and expiry; a normal
+  // anchor preserves the browser's authenticated cookie and avoids copying a
+  // binary into client state.
+  if (result.receipt.artifact) {
+    const artifact = result.receipt.artifact;
+    const download = el("a", "invoice-download", "Download invoice PDF");
+    download.setAttribute("href", artifact.downloadUrl);
+    download.setAttribute("download", artifact.filename);
+    download.setAttribute("aria-label", `Download invoice PDF: ${artifact.filename}`);
+    card.appendChild(download);
+    const language = document.documentElement?.lang === "sr" ? "sr" : "en";
+    const timeZone = document.documentElement?.dataset.timeZone;
+    card.appendChild(el("p", "artifact-meta", `${artifact.filename} · Expires ${formatLocalDateTime(artifact.expiresAt, language, timeZone)}`));
+  }
   // One-click undo for a reversible creation (deletes what was just created).
   if (result.receipt.ok && result.undo) {
     const undoId = result.undo.id;

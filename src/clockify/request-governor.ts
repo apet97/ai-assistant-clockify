@@ -4,13 +4,94 @@ export type HostRequestKind = "read" | "mutation";
 
 interface HostCallBudget { used: number; maximum: number }
 const hostCallBudget = new AsyncLocalStorage<HostCallBudget>();
+const hostCallReservation = new AsyncLocalStorage<{ remaining: number }>();
 
-export function withHostCallBudget<T>(operation: () => Promise<T>, maximum = 60): Promise<T> {
+export class HostCallBudgetExceededError extends Error {
+  readonly code = "host_call_budget_exceeded";
+
+  constructor(readonly maximum: number, readonly requested: number) {
+    super(`Clockify host-call budget exceeded (${maximum} per turn; requested ${requested}).`);
+    this.name = "HostCallBudgetExceededError";
+  }
+}
+
+/** Definitive cancellation while still queued; no external fetch began. */
+export class HostRequestCancelledError extends Error {
+  readonly code = "host_request_cancelled";
+
+  constructor() {
+    super("Clockify request was cancelled before dispatch.");
+    this.name = "HostRequestCancelledError";
+  }
+}
+
+export const HOST_CALL_BUDGET_MAXIMUM = 60;
+
+export function withHostCallBudget<T>(
+  operation: () => Promise<T>,
+  maximum = HOST_CALL_BUDGET_MAXIMUM,
+): Promise<T> {
+  // Route authentication and the action/confirmation helpers it invokes are
+  // one physical request budget. A nested helper must never reset that budget
+  // (which previously let a cold role lookup sit outside a 60-call mutation).
+  if (hostCallBudget.getStore()) return operation();
   return hostCallBudget.run({ used: 0, maximum }, operation);
 }
 
+/** Atomically charge a complete operation before its first mutation. Calls made
+ * by that operation consume reserved slots instead of charging the turn twice. */
+export function reserveHostCallBudget(count: number): void {
+  const budget = hostCallBudget.getStore();
+  if (!budget) return;
+  if (!Number.isSafeInteger(count) || count < 0 || budget.used + count > budget.maximum) {
+    throw new HostCallBudgetExceededError(budget.maximum, count);
+  }
+  budget.used += count;
+}
+
+export function withReservedHostCallBudget<T>(count: number, operation: () => Promise<T>): Promise<T> {
+  reserveHostCallBudget(count);
+  return hostCallReservation.run({ remaining: count }, operation);
+}
+
+/** Claim one physical host-call slot. Queued callers receive a refund closure
+ * that is valid only until dispatch; direct callers simply discard it once the
+ * fetch boundary is crossed. The operation-local reservation is enforced even
+ * when an isolated caller did not install an outer turn budget. */
+export function chargeHostCallBudget(): () => void {
+  const budget = hostCallBudget.getStore();
+  const reservation = hostCallReservation.getStore();
+  let charged: "reservation" | "turn" | undefined;
+  if (reservation) {
+    if (reservation.remaining <= 0) {
+      throw new HostCallBudgetExceededError(budget?.maximum ?? HOST_CALL_BUDGET_MAXIMUM, 1);
+    }
+    reservation.remaining -= 1;
+    charged = "reservation";
+  } else if (budget) {
+    if (budget.used + 1 > budget.maximum) {
+      throw new HostCallBudgetExceededError(budget.maximum, 1);
+    }
+    budget.used += 1;
+    charged = "turn";
+  }
+  return () => {
+    if (charged === "reservation" && reservation) reservation.remaining += 1;
+    else if (charged === "turn" && budget) budget.used -= 1;
+    charged = undefined;
+  };
+}
+
 export interface WorkspaceRequestGovernor {
-  run<T>(kind: HostRequestKind, operation: () => Promise<T>): Promise<T>;
+  run<T>(
+    kind: HostRequestKind,
+    operation: () => Promise<T>,
+    options?: {
+      signal?: AbortSignal;
+      /** Runs exactly once after dequeue and immediately before the external operation. */
+      onDispatch?: () => void | Promise<void>;
+    },
+  ): Promise<T>;
   /** Pause new dispatches after a host 429. Existing requests finish normally. */
   noteRateLimited(delayMs: number): void;
 }
@@ -88,25 +169,139 @@ export function createWorkspaceRequestGovernor(
   };
 
   return {
-    run<T>(kind: HostRequestKind, operation: () => Promise<T>): Promise<T> {
-      const budget = hostCallBudget.getStore();
-      if (budget) {
-        budget.used += 1;
-        if (budget.used > budget.maximum) {
-          return Promise.reject(new Error(`Clockify host-call budget exceeded (${budget.maximum} per turn).`));
-        }
+    run<T>(
+      kind: HostRequestKind,
+      operation: () => Promise<T>,
+      options?: { signal?: AbortSignal; onDispatch?: () => void | Promise<void> },
+    ): Promise<T> {
+      if (options?.signal?.aborted) return Promise.reject(new HostRequestCancelledError());
+      let refund: () => void;
+      try {
+        refund = chargeHostCallBudget();
+      } catch (error) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
       }
       return new Promise<T>((resolve, reject) => {
-        queue.push({
+        let state: "queued" | "pre_dispatch" | "cancelled" | "dispatched" | "settled" = "queued";
+        let activeReleased = false;
+        let budgetRefunded = false;
+        let promiseSettled = false;
+
+        const refundBeforeDispatch = (): void => {
+          if (budgetRefunded) return;
+          budgetRefunded = true;
+          refund();
+        };
+        const rejectOnce = (error: unknown): void => {
+          if (promiseSettled) return;
+          promiseSettled = true;
+          reject(error instanceof Error ? error : new Error(String(error)));
+        };
+        const releaseActive = (): void => {
+          if (activeReleased) return;
+          activeReleased = true;
+          active -= 1;
+          if (kind === "mutation") mutationActive = false;
+          drain();
+        };
+        const cancelBeforeDispatch = (): void => {
+          if (state !== "queued" && state !== "pre_dispatch") return;
+          const wasQueued = state === "queued";
+          state = "cancelled";
+          if (wasQueued) {
+            const index = queue.indexOf(pending);
+            if (index >= 0) queue.splice(index, 1);
+          }
+          options?.signal?.removeEventListener("abort", onAbort);
+          refundBeforeDispatch();
+          rejectOnce(new HostRequestCancelledError());
+          // An asynchronous pre-dispatch gate may never settle. Release its
+          // active/mutation slot immediately on cancellation; the eventual hook
+          // callbacks are state-aware and releaseActive is idempotent.
+          if (wasQueued) drain();
+          else releaseActive();
+        };
+        const failBeforeDispatch = (error: unknown): void => {
+          if (state === "cancelled") {
+            releaseActive();
+            return;
+          }
+          state = "settled";
+          options?.signal?.removeEventListener("abort", onAbort);
+          refundBeforeDispatch();
+          rejectOnce(error instanceof Error ? error : new Error(String(error)));
+          releaseActive();
+        };
+        const startExternalOperation = (): void => {
+          if (state === "cancelled") {
+            releaseActive();
+            return;
+          }
+          if (options?.signal?.aborted) {
+            cancelBeforeDispatch();
+            releaseActive();
+            return;
+          }
+          state = "dispatched";
+          options?.signal?.removeEventListener("abort", onAbort);
+          let dispatched: Promise<T>;
+          try {
+            // Invoke synchronously at the boundary. REST persists dispatched_at
+            // and calls fetch before this stack unwinds, so cancellation can
+            // never observe a journaled dispatch whose fetch has not started.
+            dispatched = operation();
+          } catch (error) {
+            state = "settled";
+            rejectOnce(error);
+            releaseActive();
+            return;
+          }
+          void Promise.resolve(dispatched)
+            .then(
+              (value) => {
+                state = "settled";
+                if (!promiseSettled) {
+                  promiseSettled = true;
+                  resolve(value);
+                }
+              },
+              (error: unknown) => {
+                state = "settled";
+                rejectOnce(error);
+              },
+            )
+            .finally(releaseActive);
+        };
+        const pending: PendingRequest = {
           kind,
           dispatch() {
-            void operation().then(resolve, reject).finally(() => {
-              active -= 1;
-              if (kind === "mutation") mutationActive = false;
-              drain();
-            });
+            state = "pre_dispatch";
+            let hookResult: void | Promise<void>;
+            try {
+              hookResult = options?.onDispatch?.();
+            } catch (error) {
+              failBeforeDispatch(error);
+              return;
+            }
+            // Preserve the synchronous boundary: once a synchronous dispatch
+            // hook returns and the signal is still live, cancellation no longer
+            // suppresses the external operation. An asynchronous authorization
+            // hook remains definitively cancellable until it resolves.
+            if (hookResult && typeof (hookResult as PromiseLike<void>).then === "function") {
+              void Promise.resolve(hookResult).then(startExternalOperation, failBeforeDispatch);
+            } else {
+              startExternalOperation();
+            }
           },
-        });
+        };
+        const onAbort = (): void => {
+          cancelBeforeDispatch();
+        };
+        queue.push(pending);
+        options?.signal?.addEventListener("abort", onAbort, { once: true });
+        // Close the add-listener race when a signal aborts between the initial
+        // check and queue insertion.
+        if (options?.signal?.aborted) onAbort();
         drain();
       });
     },

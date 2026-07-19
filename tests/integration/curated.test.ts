@@ -3,6 +3,7 @@ import { executeAction, commitConfirmedOperation } from "../../src/harness/actio
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { ActionContext, ConfirmableOperation } from "../../src/harness/catalog.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 function ctx(fake: FakeWorkspace): ActionContext {
   return {
@@ -72,6 +73,27 @@ describe("clockify_onboard_user (curated risky job — invite + group adds)", ()
     expect(fake.counts.inviteUser).toBe(1);
     expect(fake.counts.addUserToGroup).toBe(1);
     if (receipt.ok) expect((receipt.changed?.created ?? []).some((e) => e.type === "user")).toBe(true);
+  });
+
+  it("stops before group writes when an ambiguous invite is authoritatively reconciled", async () => {
+    const fake = createFakeWorkspace({ groups: [{ id: "g1", name: "Engineering" }] });
+    const preview = await executeAction({
+      actionName: "clockify_onboard_user",
+      args: { email: "ada@example.com", groups: ["Engineering"] },
+      context: ctx(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected a preview");
+    const original = fake.client.inviteUserAtomic.bind(fake.client);
+    fake.client.inviteUserAtomic = async (...args) => {
+      const invited = await original(...args);
+      throw new AmbiguousWriteOutcome("POST", `/users/${invited.id}`, "socket closed");
+    };
+
+    const result = await commitConfirmedOperation(ctx(fake), preview.operation as ConfirmableOperation);
+
+    expect(result).toMatchObject({ kind: "partial", receipt: { ok: true }, recovery: { retryable: false } });
+    expect(fake.counts.inviteUserAtomic).toBe(1);
+    expect(fake.counts.addUserToGroupAtomic ?? 0).toBe(0);
   });
 
   it("sendEmail=false previews truthfully: no 'sends a real invitation' warning", async () => {

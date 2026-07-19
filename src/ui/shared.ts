@@ -6,6 +6,7 @@
  * `main.ts` re-exports these, so the public/test import surface (e.g.
  * `import { featureGroupRows } from "./main.js"`) is unchanged.
  */
+import type { ArtifactDescriptor, ChatEvent } from "../shared/contracts.js";
 
 export interface PreviewRef {
   previewId: string;
@@ -52,7 +53,15 @@ export interface PreviewResult {
 
 export interface ReceiptResult {
   kind: "receipt";
-  receipt: { ok: boolean; action: string; message?: string; changed?: unknown; warnings?: Array<{ code?: string; message: string }> };
+  receipt: {
+    ok: boolean;
+    action: string;
+    message?: string;
+    changed?: unknown;
+    warnings?: Array<{ code?: string; message: string }>;
+    /** Short-lived, same-origin invoice PDF created by the authenticated artifact route. */
+    artifact?: ArtifactDescriptor;
+  };
   /** Present when the action can be reversed (a one-use undo handle). */
   undo?: { id: string };
 }
@@ -79,6 +88,7 @@ export interface ConfirmResponse {
   ok: boolean;
   code?: string;
   message?: string;
+  persistenceDegraded?: boolean;
   receipt?: { ok: boolean; action: string; message?: string };
   /** A truthfully partial confirmed commit; never flatten to receipt success. */
   result?: PartialResult;
@@ -112,21 +122,8 @@ export interface ConfirmHooks {
  */
 export const STALE_NONCE_CODE = "invalid_confirmation";
 
-/** One event from a streaming chat OR confirm endpoint (NDJSON, one per line). */
-export interface StreamEvent {
-  type: "result" | "reply" | "error" | "done" | "receipt" | "status" | string;
-  result?: ChatResult;
-  /** Only on a clean confirm stream's first `receipt` event. Partials use `result`. */
-  receipt?: ReceiptResult["receipt"];
-  undo?: { id: string };
-  kind?: string;
-  text?: string;
-  code?: string;
-  message?: string;
-  /** Only on `status` events: the executing action + its human label. */
-  action?: string;
-  label?: string;
-}
+/** One fully decoded event from a streaming chat or confirmation endpoint. */
+export type StreamEvent = ChatEvent<ChatResult, ReceiptResult["receipt"]>;
 
 export interface ConfirmStreamApi {
   confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -176,7 +173,8 @@ export class PreviewBuffer {
  * `onResults`; `reply` → flush the buffer THEN append the (truthful) reply text;
  * `error` routes a stale-nonce 400 to `onStale` when present (re-armable retry,
  * the preview was NOT burned) else `onError` with the caller's fallback; `status`
- * drives the optional label hook; unknown types are ignored.
+ * drives the optional label hook. Unknown types never reach this function: the
+ * runtime decoder turns them into a visible protocol error first.
  */
 export function dispatchStreamEvent(
   event: StreamEvent,
@@ -184,14 +182,14 @@ export function dispatchStreamEvent(
   buffer: PreviewBuffer,
   errorFallback: string,
 ): void {
-  if (event.type === "result" && event.result) {
+  if (event.type === "result") {
     if (event.result.kind === "preview") buffer.push(event.result);
     else hooks.onResults([event.result]);
   } else if (event.type === "reply") {
     buffer.flush();
     if (event.text) hooks.onAssistant(event.text);
   } else if (event.type === "error") {
-    const message = typeof event.message === "string" ? event.message : errorFallback;
+    const message = event.message || errorFallback;
     // A stale-nonce 400 (another tab rotated this preview's nonce) is a
     // RE-ARMABLE retry — route it to onStale so this tab can re-fetch + re-render
     // the still-live card, never a dead-end error. The preview is NOT burned on
@@ -200,7 +198,7 @@ export function dispatchStreamEvent(
     if (event.code === STALE_NONCE_CODE && hooks.onStale) hooks.onStale(message);
     else hooks.onError(message);
   } else if (event.type === "status") {
-    if (typeof event.label === "string") hooks.onStatus?.(event.label);
+    hooks.onStatus?.(event.label);
   }
 }
 

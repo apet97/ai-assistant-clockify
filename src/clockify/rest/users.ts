@@ -8,8 +8,10 @@ import { AmbiguousWriteOutcome } from "../write-outcome.js";
 type RoleEntry = {
   role?: string;
   name?: string;
+  formatterRoleName?: string;
   entityId?: string;
   entity?: { id?: string; type?: string };
+  entities?: Array<{ id?: string }>;
   sourceType?: string;
 };
 
@@ -49,6 +51,21 @@ function mapGroup(raw: GroupRow): GroupSummary {
   const out: GroupSummary = { id: raw.id, name: raw.name ?? raw.id };
   if (Array.isArray(raw.userIds)) out.userIds = raw.userIds;
   return out;
+}
+
+/** Normalize the two live workspace authority names into the session gate's
+ * canonical vocabulary. Preserve other strings so they remain an explicit
+ * non-admin verdict rather than becoming an availability error. */
+function normalizeWorkspaceRole(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) return undefined;
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "WORKSPACE_OWN" || normalized === "WORKSPACE_OWNER" || normalized === "OWNER") {
+    return "OWNER";
+  }
+  if (normalized === "WORKSPACE_ADMIN" || normalized === "ADMINISTRATOR" || normalized === "ADMIN") {
+    return "ADMIN";
+  }
+  return value;
 }
 
 const WEEKDAY_NUMBER: Record<string, number> = {
@@ -94,6 +111,17 @@ function calendarFrom(value: unknown): Partial<CalendarContext> {
  */
 export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
   const ws = `/workspaces/${workspaceId}`;
+  // Live-probed 2026-07-19: a by-id GET on /users/{userId} is 405 (PUT-only),
+  // while this workspace-membership query returns role-bearing rows and the
+  // OpenAPI permits page-size=5000. One bounded page keeps every mutation role
+  // gate exactly one physical call. A member absent from that page remains an
+  // unknown verdict (fail closed); we never paginate inside a prepared step.
+  const roleLookupQuery = new URLSearchParams({
+    page: "1",
+    "page-size": "5000",
+    memberships: "WORKSPACE",
+    "include-roles": "true",
+  }).toString();
 
   async function rawUser(userId: string): Promise<{ row?: UserRow; truncated: boolean }> {
     const result = await core.paginate("api", `${ws}/users`);
@@ -183,28 +211,37 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
       return { ...result, rows: (result.rows as UserRow[]).map(mapUser) };
     },
     async getWorkspaceMemberRole(userId): Promise<string | undefined> {
-      // I/O only. Single-member read for the opt-in per-request admin re-check
-      // (authz-surface-01). The /users list is the working member source (same
-      // paginate as listUsers); we find the caller and read the workspace-scoped
-      // role from the raw member object. Clockify member shapes vary by
-      // API/version, so read the common spots defensively: a top-level `role`, or
-      // a `roles: [{ role, entity?:{type} }]` array (prefer a WORKSPACE-scoped
-      // entry), falling back to the first role. Returns undefined when the member
-      // or a role string can't be resolved (the rechecker treats undefined as
-      // "no verdict" / fail-open). LIVE-VERIFY against a prod member doc before
-      // relying on ROLE_RECHECK=1 in production (T62).
-      const result = await core.paginate("api", `${ws}/users`);
-      const raw = (result.rows as UserRow[]).find((u) => u?.id === userId);
-      if (!raw) assertCompleteAbsence(result.truncated, "workspace-member", userId);
+      // I/O only. Read the caller from the single bounded role-bearing page.
+      // Clockify member shapes vary by API/version, so accept a top-level role or
+      // an explicitly WORKSPACE-scoped role entry. Never pick a project/group
+      // role merely because it happens to be first.
+      const rows = await core.call("api", "GET", `${ws}/users?${roleLookupQuery}`);
+      if (!Array.isArray(rows)) {
+        throw new Error(`Clockify GET ${ws}/users returned an invalid role lookup response; expected a JSON array.`);
+      }
+      const raw = (rows as UserRow[]).find((u) => u?.id === userId);
       if (!raw) return undefined;
-      if (typeof raw.role === "string" && raw.role.length > 0) return raw.role;
+      const topLevelRole = normalizeWorkspaceRole(raw.role);
+      if (topLevelRole) return topLevelRole;
       const roles = Array.isArray(raw.roles) ? raw.roles : [];
       const workspaceRole = roles.find(
-        (r) => String(r?.entity?.type ?? r?.sourceType ?? "").toUpperCase() === "WORKSPACE",
+        (r) => r?.entityId === workspaceId ||
+          r?.entities?.some((entity) => entity?.id === workspaceId) === true ||
+          String(r?.entity?.type ?? r?.sourceType ?? "").toUpperCase() === "WORKSPACE",
       );
-      const picked = workspaceRole ?? roles[0];
+      const onlyUnscopedRole = roles.length === 1 && !roles[0]?.entityId &&
+        !roles[0]?.entity?.id && !roles[0]?.entity?.type && !roles[0]?.sourceType &&
+        !(roles[0]?.entities?.length)
+        ? roles[0]
+        : undefined;
+      const picked = workspaceRole ?? onlyUnscopedRole;
       const roleValue = picked?.role ?? picked?.name;
-      return typeof roleValue === "string" && roleValue.length > 0 ? roleValue : undefined;
+      const normalizedRole = normalizeWorkspaceRole(roleValue);
+      if (normalizedRole) return normalizedRole;
+      // `include-roles=true` returning an explicit empty/scoped-non-admin array
+      // is a current negative verdict, not an outage. This lets the route gate
+      // invalidate every assistant session immediately after Clockify demotion.
+      return Array.isArray(raw.roles) ? "MEMBER" : undefined;
     },
     async listUserRoleAssignments(userId) {
       const found = await rawUser(userId);

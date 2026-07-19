@@ -11,6 +11,15 @@ import {
  * timestamps are ISO-8601 UTC strings, and every admin-scoped row carries
  * workspace_id + admin_user_id.
  */
+const CREATE_LIFECYCLE_AUTHORITY_WATERMARKS = `CREATE TABLE IF NOT EXISTS lifecycle_authority_watermarks (
+  workspace_fingerprint_sha256 TEXT PRIMARY KEY CHECK (length(workspace_fingerprint_sha256) = 64),
+  lifecycle_issued_at INTEGER NOT NULL CHECK (lifecycle_issued_at >= 0),
+  authority_state TEXT NOT NULL CHECK (authority_state IN ('active', 'inactive', 'deleted')),
+  installation_generation INTEGER NOT NULL CHECK (installation_generation >= 0),
+  recorded_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+)`;
+
 const SCHEMA_STATEMENTS: string[] = [
   `CREATE TABLE IF NOT EXISTS installations (
     workspace_id TEXT PRIMARY KEY,
@@ -21,9 +30,30 @@ const SCHEMA_STATEMENTS: string[] = [
     backend_url TEXT,
     reports_url TEXT,
     status TEXT NOT NULL CHECK (status IN ('active', 'inactive', 'deleted')),
+    generation INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 1),
+    lifecycle_issued_at INTEGER CHECK (lifecycle_issued_at IS NULL OR lifecycle_issued_at >= 0),
+    deletion_started_at TEXT,
     installed_by_user_id TEXT,
     installed_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS installation_attestations (
+    workspace_id TEXT PRIMARY KEY,
+    workspace_sha256 TEXT NOT NULL CHECK (length(workspace_sha256) = 64),
+    installation_generation INTEGER NOT NULL CHECK (installation_generation >= 1),
+    token_fingerprint_sha256 TEXT NOT NULL CHECK (length(token_fingerprint_sha256) = 64),
+    release_sha TEXT NOT NULL,
+    release_build_hash TEXT NOT NULL CHECK (length(release_build_hash) = 64),
+    server_artifact_sha256 TEXT NOT NULL CHECK (length(server_artifact_sha256) = 64),
+    source_relationship TEXT NOT NULL CHECK (source_relationship IN ('exact_head', 'evidence_descendant', 'source_bound_builder')),
+    source_binding_sha256 TEXT,
+    manifest_sha256 TEXT NOT NULL CHECK (length(manifest_sha256) = 64),
+    installed_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES installations(workspace_id) ON DELETE CASCADE
+  )`,
+  `CREATE TABLE IF NOT EXISTS retired_installation_tokens (
+    token_fingerprint_sha256 TEXT PRIMARY KEY CHECK (length(token_fingerprint_sha256) = 64),
+    retired_at TEXT NOT NULL
   )`,
   `CREATE TABLE IF NOT EXISTS admin_policies (
     id TEXT PRIMARY KEY,
@@ -203,7 +233,7 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON retention_runs(recorded_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 7;
+export const LATEST_SCHEMA_VERSION = 8;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -372,6 +402,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 5, statements: [] },
   { version: 6, statements: [] },
   { version: 7, statements: [] },
+  { version: 8, statements: [CREATE_LIFECYCLE_AUTHORITY_WATERMARKS] },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -389,6 +420,12 @@ export function migrate(db: Database.Database): void {
   // Additive column for DBs created before reports-host capture. ALTER ADD COLUMN
   // throws if it already exists, so add only when missing.
   addColumnIfMissing(db, "installations", "reports_url", "TEXT");
+  // Lifecycle authority is versioned independently from ordinary environment
+  // refreshes. Existing installations start at generation 1; uninstall leaves a
+  // durable tombstone until already-dispatched mutations truthfully settle.
+  addColumnIfMissing(db, "installations", "generation", "INTEGER NOT NULL DEFAULT 1 CHECK (generation >= 1)");
+  addColumnIfMissing(db, "installations", "lifecycle_issued_at", "INTEGER CHECK (lifecycle_issued_at IS NULL OR lifecycle_issued_at >= 0)");
+  addColumnIfMissing(db, "installations", "deletion_started_at", "TEXT");
   // Additive column for DBs created before the durable agentic resume (Phase 3):
   // a NULL agent_state_json row confirms exactly as before.
   addColumnIfMissing(db, "pending_confirmations", "agent_state_json", "TEXT");
@@ -401,6 +438,11 @@ export function migrate(db: Database.Database): void {
   addColumnIfMissing(db, "idempotency_keys", "claimed_at", "INTEGER");
   relaxIdempotencyReceiptNullable(db);
   const currentVersion = db.pragma("user_version", { simple: true }) as number;
+  // These triggers reference the final v4/v5 canonical-result and operation
+  // schemas. Drop any definition left by a prior open before a compatibility
+  // migration temporarily renames/rebuilds those tables, then reinstall the
+  // invariant against the final tables below.
+  dropConfirmationOperationTerminalTriggers(db);
   for (const migration of VERSIONED_MIGRATIONS) {
     if (migration.version <= currentVersion) continue;
     db.transaction(() => {
@@ -412,6 +454,15 @@ export function migrate(db: Database.Database): void {
       db.pragma(`user_version = ${migration.version}`);
     })();
   }
+  // Add these after versioned migrations because the v1-v3 compatibility
+  // rebuilds replace both tables. Legacy rows receive NULL and therefore fail
+  // closed instead of silently adopting a replacement installation token.
+  addColumnIfMissing(db, "pending_confirmations", "installation_generation", "INTEGER CHECK (installation_generation >= 1)");
+  addColumnIfMissing(db, "undo_records", "installation_generation", "INTEGER CHECK (installation_generation >= 1)");
+  // Queue admission and actual host dispatch are distinct safety boundaries.
+  // Older v5-v7 databases gain the timestamp additively; fresh databases pass
+  // through migrateToV5 before this statement runs.
+  addColumnIfMissing(db, "operation_steps", "queued_at", "TEXT");
   // Also repairs databases opened by an earlier build that already labelled
   // itself v7 before the INSERT-side invariant was added. IF NOT EXISTS keeps
   // normal migration reruns idempotent.
@@ -424,6 +475,13 @@ export function migrate(db: Database.Database): void {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_results_operation
        ON action_results(operation_id) WHERE operation_id IS NOT NULL`,
   ).run();
+  // Confirmation lifecycle and its prepared operation are one security unit.
+  // These triggers make every pending -> cancelled/expired transition atomic
+  // even when it originates in a one-statement retention batch, and ensure a
+  // settled/reconciled confirmation cannot leave an executable operation plan
+  // behind in operation_runs. Install them only after the additive canonical-
+  // result ownership column above is guaranteed to exist.
+  ensureConfirmationOperationTerminalTriggers(db);
   // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
   // in its final (rebuilt) shape, so indexing those columns can't throw.
   for (const statement of PRUNE_INDEX_STATEMENTS) {
@@ -512,6 +570,245 @@ function ensureExpiredPayloadScrubTriggers(db: Database.Database): void {
       BEGIN
         SELECT RAISE(ABORT, 'expired_undo_not_scrubbed');
       END;
+  `);
+}
+
+/**
+ * Cross-table confirmation terminalization invariant.
+ *
+ * `pruneExpired` intentionally expires up to 500 rows with one UPDATE per
+ * transaction. Keeping the operation transition in SQLite therefore matters:
+ * a process crash cannot commit an expired/cancelled confirmation while leaving
+ * its linked operation prepared and executable. The bounded canonical result is
+ * passive evidence only; the executable envelope is replaced with `{}`.
+ */
+function ensureConfirmationOperationTerminalTriggers(db: Database.Database): void {
+  db.transaction(() => db.exec(`
+    UPDATE pending_confirmations
+       SET nonce_hash = '', operation_json = NULL, agent_state_json = NULL
+     WHERE status <> 'pending';
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmation_nonpending_payload_guard
+      BEFORE UPDATE OF status, nonce_hash, operation_json, agent_state_json
+      ON pending_confirmations
+      WHEN NEW.status NOT IN ('pending', 'expired') AND (
+        NEW.nonce_hash <> '' OR NEW.operation_json IS NOT NULL OR
+        NEW.agent_state_json IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_confirmation_not_scrubbed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmation_nonpending_insert_guard
+      BEFORE INSERT ON pending_confirmations
+      WHEN NEW.status NOT IN ('pending', 'expired') AND (
+        NEW.nonce_hash <> '' OR NEW.operation_json IS NOT NULL OR
+        NEW.agent_state_json IS NOT NULL
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_confirmation_not_scrubbed');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmation_pre_dispatch_operation_guard
+      BEFORE UPDATE OF status ON pending_confirmations
+      WHEN OLD.status = 'pending'
+       AND NEW.status IN ('cancelled', 'expired')
+       AND EXISTS (
+         SELECT 1 FROM operation_runs o
+          WHERE o.id = OLD.operation_id
+            AND (o.status <> 'prepared' OR o.action_result_id IS NOT NULL)
+       )
+      BEGIN
+        SELECT RAISE(ABORT, 'confirmation_operation_not_prepared');
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmation_pre_dispatch_terminal
+      AFTER UPDATE OF status ON pending_confirmations
+      WHEN OLD.status = 'pending' AND NEW.status IN ('cancelled', 'expired')
+      BEGIN
+        INSERT INTO action_results (
+          id, operation_id, workspace_id, admin_user_id, session_id, action_name,
+          kind, result_json, summary_json, created_at
+        )
+        SELECT
+          lower(hex(randomblob(16))), o.id, o.workspace_id, o.admin_user_id,
+          o.session_id, o.action_name, 'definitive_failed',
+          json_object(
+            'kind', 'receipt',
+            'receipt', json_object(
+              'ok', json('false'),
+              'action', o.action_name,
+              'code', CASE NEW.status
+                WHEN 'cancelled' THEN 'confirmation_cancelled'
+                ELSE 'confirmation_expired'
+              END,
+              'message', CASE NEW.status
+                WHEN 'cancelled' THEN 'This preview was cancelled before dispatch. No change was made.'
+                ELSE 'This preview expired before dispatch. No change was made.'
+              END
+            )
+          ),
+          json_object(
+            'kind', 'receipt',
+            'receipt', json_object(
+              'ok', json('false'),
+              'action', o.action_name,
+              'code', CASE NEW.status
+                WHEN 'cancelled' THEN 'confirmation_cancelled'
+                ELSE 'confirmation_expired'
+              END,
+              'message', CASE NEW.status
+                WHEN 'cancelled' THEN 'This preview was cancelled before dispatch. No change was made.'
+                ELSE 'This preview expired before dispatch. No change was made.'
+              END
+            )
+          ),
+          COALESCE(NEW.used_at, NEW.created_at)
+        FROM operation_runs o
+        WHERE o.id = NEW.operation_id
+          AND o.status = 'prepared'
+          AND o.action_result_id IS NULL;
+
+        UPDATE operation_runs
+           SET status = 'definitive_failed',
+               action_result_id = (
+                 SELECT a.id FROM action_results a
+                  WHERE a.operation_id = operation_runs.id
+               ),
+               operation_json = '{}',
+               updated_at = COALESCE(NEW.used_at, NEW.created_at)
+         WHERE id = NEW.operation_id
+           AND status = 'prepared'
+           AND action_result_id IS NULL;
+
+        UPDATE pending_confirmations
+           SET action_result_id = (
+                 SELECT a.id FROM action_results a WHERE a.operation_id = NEW.operation_id
+               ),
+               result_summary_json = (
+                 SELECT a.summary_json FROM action_results a WHERE a.operation_id = NEW.operation_id
+               )
+         WHERE id = NEW.id
+           AND action_result_id IS NULL;
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS pending_confirmation_settlement_scrubs_operation
+      AFTER UPDATE OF status ON pending_confirmations
+      WHEN OLD.status IN ('executing', 'outcome_unknown')
+       AND NEW.status IN ('succeeded', 'partial', 'definitive_failed')
+      BEGIN
+        UPDATE operation_runs
+           SET operation_json = '{}'
+         WHERE id = NEW.operation_id;
+      END;
+
+    CREATE TRIGGER IF NOT EXISTS confirmed_operation_terminal_scrub
+      AFTER UPDATE OF status ON operation_runs
+      WHEN NEW.confirmation_id IS NOT NULL
+       AND NEW.status IN ('succeeded', 'partial', 'definitive_failed')
+       AND NEW.operation_json <> '{}'
+      BEGIN
+        UPDATE operation_runs SET operation_json = '{}' WHERE id = NEW.id;
+      END;
+
+    -- Repair previews terminalized by an older build that did not settle their
+    -- linked prepared operation. This is the startup counterpart of the live
+    -- trigger above and is idempotent via the unique operation-owned result.
+    INSERT INTO action_results (
+      id, operation_id, workspace_id, admin_user_id, session_id, action_name,
+      kind, result_json, summary_json, created_at
+    )
+    SELECT
+      lower(hex(randomblob(16))), o.id, o.workspace_id, o.admin_user_id,
+      o.session_id, o.action_name, 'definitive_failed',
+      json_object(
+        'kind', 'receipt',
+        'receipt', json_object(
+          'ok', json('false'),
+          'action', o.action_name,
+          'code', CASE c.status
+            WHEN 'cancelled' THEN 'confirmation_cancelled'
+            ELSE 'confirmation_expired'
+          END,
+          'message', CASE c.status
+            WHEN 'cancelled' THEN 'This preview was cancelled before dispatch. No change was made.'
+            ELSE 'This preview expired before dispatch. No change was made.'
+          END
+        )
+      ),
+      json_object(
+        'kind', 'receipt',
+        'receipt', json_object(
+          'ok', json('false'),
+          'action', o.action_name,
+          'code', CASE c.status
+            WHEN 'cancelled' THEN 'confirmation_cancelled'
+            ELSE 'confirmation_expired'
+          END,
+          'message', CASE c.status
+            WHEN 'cancelled' THEN 'This preview was cancelled before dispatch. No change was made.'
+            ELSE 'This preview expired before dispatch. No change was made.'
+          END
+        )
+      ),
+      COALESCE(c.used_at, c.created_at)
+    FROM pending_confirmations c
+    JOIN operation_runs o ON o.id = c.operation_id
+    WHERE c.status IN ('cancelled', 'expired')
+      AND c.action_result_id IS NULL
+      AND o.status = 'prepared'
+      AND o.action_result_id IS NULL;
+
+    UPDATE operation_runs
+       SET status = 'definitive_failed',
+           action_result_id = (
+             SELECT a.id FROM action_results a WHERE a.operation_id = operation_runs.id
+           ),
+           operation_json = '{}',
+           updated_at = COALESCE(
+             (SELECT c.used_at FROM pending_confirmations c
+               WHERE c.operation_id = operation_runs.id
+                 AND c.status IN ('cancelled', 'expired')),
+             (SELECT c.created_at FROM pending_confirmations c
+               WHERE c.operation_id = operation_runs.id
+                 AND c.status IN ('cancelled', 'expired')),
+             updated_at
+           )
+     WHERE status = 'prepared'
+       AND action_result_id IS NULL
+       AND id IN (
+         SELECT c.operation_id FROM pending_confirmations c
+          WHERE c.status IN ('cancelled', 'expired')
+       );
+
+    UPDATE pending_confirmations
+       SET action_result_id = (
+             SELECT a.id FROM action_results a WHERE a.operation_id = pending_confirmations.operation_id
+           ),
+           result_summary_json = (
+             SELECT a.summary_json FROM action_results a WHERE a.operation_id = pending_confirmations.operation_id
+           )
+     WHERE status IN ('cancelled', 'expired')
+       AND action_result_id IS NULL
+       AND EXISTS (
+         SELECT 1 FROM action_results a WHERE a.operation_id = pending_confirmations.operation_id
+       );
+
+    UPDATE operation_runs
+       SET operation_json = '{}'
+     WHERE confirmation_id IS NOT NULL
+       AND status IN ('succeeded', 'partial', 'definitive_failed');
+  `))();
+}
+
+function dropConfirmationOperationTerminalTriggers(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS pending_confirmation_nonpending_payload_guard;
+    DROP TRIGGER IF EXISTS pending_confirmation_nonpending_insert_guard;
+    DROP TRIGGER IF EXISTS pending_confirmation_pre_dispatch_operation_guard;
+    DROP TRIGGER IF EXISTS pending_confirmation_pre_dispatch_terminal;
+    DROP TRIGGER IF EXISTS pending_confirmation_settlement_scrubs_operation;
+    DROP TRIGGER IF EXISTS confirmed_operation_terminal_scrub;
   `);
 }
 

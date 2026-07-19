@@ -18,18 +18,32 @@ describe("createNdjsonParser", () => {
   it("emits one event per complete line and buffers the partial remainder", () => {
     const events: unknown[] = [];
     const feed = createNdjsonParser((e) => events.push(e));
-    feed('{"type":"result","x":1}\n{"type":"reply"');
-    expect(events).toEqual([{ type: "result", x: 1 }]); // the incomplete second line is buffered
+    feed('{"type":"result","result":{"kind":"receipt","receipt":{"ok":true,"action":"x"}}}\n{"type":"reply"');
+    expect(events).toEqual([{ type: "result", result: { kind: "receipt", receipt: { ok: true, action: "x" } } }]); // incomplete second line is buffered
     feed(',"text":"hi"}\n');
-    expect(events).toEqual([{ type: "result", x: 1 }, { type: "reply", text: "hi" }]);
+    expect(events).toEqual([
+      { type: "result", result: { kind: "receipt", receipt: { ok: true, action: "x" } } },
+      { type: "reply", text: "hi" },
+    ]);
   });
 
-  it("reassembles a line split across chunks and ignores malformed lines", () => {
+  it("reassembles split lines and surfaces malformed JSON as a visible protocol error", () => {
     const events: unknown[] = [];
     const feed = createNdjsonParser((e) => events.push(e));
     feed('{"ty');
     feed('pe":"a"}\nnot json\n{"type":"done"}\n');
-    expect(events).toEqual([{ type: "a" }, { type: "done" }]);
+    expect(events).toEqual([
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+      { type: "done" },
+    ]);
+  });
+
+  it("turns a well-formed but invalid protocol event into a visible error", () => {
+    const events: StreamEvent[] = [];
+    const feed = createNdjsonParser((e) => events.push(e));
+    feed('{"type":"reply","text":42}\n');
+    expect(events).toEqual([{ type: "error", message: "The assistant sent an invalid response. Please try again." }]);
   });
 });
 
@@ -72,17 +86,16 @@ describe("submitStreaming", () => {
     expect(log[log.length - 1]).toBe("working:false");
   });
 
-  it("dispatches status labels to onStatus; harmless without the hook; unknown event types stay ignored", async () => {
+  it("dispatches status labels to onStatus and remains harmless without the optional hook", async () => {
     const events: StreamEvent[] = [
       { type: "status", action: "clockify_tags_list", label: "Tags list" },
-      { type: "some_future_event" },
       { type: "reply", kind: "answer", text: "done" },
       { type: "done" },
     ];
     const withHook = recorder(true);
     await submitStreaming(streamApi(events), "m", withHook.hooks);
     expect(withHook.log).toContain("status:Tags list");
-    expect(withHook.log.filter((l) => l.startsWith("error"))).toEqual([]); // unknown type ignored
+    expect(withHook.log.filter((l) => l.startsWith("error"))).toEqual([]);
 
     const withoutHook = recorder(false);
     await submitStreaming(streamApi(events), "m", withoutHook.hooks); // must not throw
@@ -193,20 +206,20 @@ describe("dispatchStreamEvent", () => {
     expect(log).toEqual(["results:preview", "assistant:review and confirm"]);
   });
 
-  it("routes a stale-nonce error to onStale, a generic error to onError, and a missing message to the fallback", () => {
+  it("routes a stale-nonce error to onStale, a generic error to onError, and an empty message to the fallback", () => {
     const { hooks, log } = dispatchRecorder();
     const buffer = new PreviewBuffer((r) => hooks.onResults(r));
     dispatchStreamEvent({ type: "error", code: STALE_NONCE_CODE, message: "rotated" }, hooks, buffer, "fallback");
     dispatchStreamEvent({ type: "error", code: "model_unavailable", message: "down" }, hooks, buffer, "fallback");
-    dispatchStreamEvent({ type: "error" }, hooks, buffer, "fallback");
+    dispatchStreamEvent({ type: "error", message: "" }, hooks, buffer, "fallback");
     expect(log).toEqual(["stale:rotated", "error:down", "error:fallback"]);
   });
 
-  it("drives onStatus and ignores unknown event types", () => {
+  it("drives onStatus and treats the terminal done event as a no-op", () => {
     const { hooks, log } = dispatchRecorder();
     const buffer = new PreviewBuffer((r) => hooks.onResults(r));
     dispatchStreamEvent({ type: "status", label: "Tags list" }, hooks, buffer, "fallback");
-    dispatchStreamEvent({ type: "some_future_event" }, hooks, buffer, "fallback");
+    dispatchStreamEvent({ type: "done" }, hooks, buffer, "fallback");
     expect(log).toEqual(["status:Tags list"]);
   });
 
@@ -246,33 +259,64 @@ function byteStreamResponse(text: string, sliceSize: number): Response {
 describe("pumpNdjson", () => {
   it("emits every complete line across chunk boundaries", async () => {
     const events: StreamEvent[] = [];
-    const text = '{"type":"result","x":1}\n{"type":"reply","text":"hi"}\n';
+    const text = '{"type":"result","result":{"kind":"receipt","receipt":{"ok":true,"action":"x"}}}\n{"type":"reply","text":"hi"}\n{"type":"done"}\n';
     await pumpNdjson(byteStreamResponse(text, 7), (e) => events.push(e));
     expect(events).toEqual([
-      { type: "result", x: 1 } as unknown as StreamEvent,
+      { type: "result", result: { kind: "receipt", receipt: { ok: true, action: "x" } } },
       { type: "reply", text: "hi" },
+      { type: "done" },
     ]);
   });
 
-  // NOTE: against the REAL code a final line WITHOUT a trailing "\n" is NOT
-  // emitted — createNdjsonParser buffers the partial remainder and only emits on
-  // "\n" (pinned by the createNdjsonParser tests above), and pumpNdjson's
-  // `feed(decoder.decode())` flushes trailing UTF-8 BYTES, not buffered lines.
-  // (The server always newline-terminates its NDJSON lines.) So we pin BOTH the
-  // true contracts the trailing flush + stream-mode decode actually provide:
-  it("buffers an un-terminated final line (no spurious emit) — the real contract", async () => {
+  it("surfaces an unknown event and still decodes a valid final event without a trailing newline", async () => {
     const events: StreamEvent[] = [];
-    const text = '{"type":"a"}\n{"type":"done"}'; // no trailing \n on the last line
+    const text = '{"type":"some_future_event"}\n{"type":"done"}'; // no trailing \n on the last line
     await pumpNdjson(byteStreamResponse(text, 5), (e) => events.push(e));
-    expect(events).toEqual([{ type: "a" } as unknown as StreamEvent]); // 2nd line never terminated
+    expect(events).toEqual([
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+      { type: "done" },
+    ]);
+  });
+
+  it("surfaces malformed unterminated final bytes instead of dropping them", async () => {
+    const events: StreamEvent[] = [];
+    await pumpNdjson(byteStreamResponse('{"type":"done"}\nnot json', 4), (e) => events.push(e));
+    expect(events).toEqual([
+      { type: "done" },
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+    ]);
   });
 
   it("reassembles a multibyte UTF-8 char split across byte chunks (the trailing decoder flush)", async () => {
     const events: StreamEvent[] = [];
     // The em-dash U+2014 is 3 bytes; a 5-byte slice splits it across chunks, so
     // stream-mode decode + the trailing flush must reassemble it intact.
-    const text = '{"type":"reply","text":"a\u2014b"}\n';
+    const text = '{"type":"reply","text":"a\u2014b"}\n{"type":"done"}\n';
     await pumpNdjson(byteStreamResponse(text, 5), (e) => events.push(e));
-    expect(events).toEqual([{ type: "reply", text: "a\u2014b" }]);
+    expect(events).toEqual([{ type: "reply", text: "a\u2014b" }, { type: "done" }]);
+  });
+
+  it.each([
+    ["empty body", ""],
+    ["cleanly truncated after a status", '{"type":"status","label":"Understanding your request\u2026"}\n'],
+    ["cleanly truncated after a reply", '{"type":"reply","text":"looks complete"}\n'],
+  ])("surfaces a visible protocol error for %s without terminal done", async (_label, text) => {
+    const events: StreamEvent[] = [];
+    await pumpNdjson(byteStreamResponse(text, 7), (event) => events.push(event));
+    expect(events.at(-1)).toEqual({
+      type: "error",
+      message: "The assistant sent an invalid response. Please try again.",
+    });
+  });
+
+  it("requires exactly one terminal done and rejects every event after it", async () => {
+    const events: StreamEvent[] = [];
+    const text = '{"type":"done"}\n{"type":"reply","text":"late"}\n{"type":"done"}\n';
+    await pumpNdjson(byteStreamResponse(text, 6), (event) => events.push(event));
+    expect(events).toEqual([
+      { type: "done" },
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+      { type: "error", message: "The assistant sent an invalid response. Please try again." },
+    ]);
   });
 });

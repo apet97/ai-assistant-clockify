@@ -37,6 +37,25 @@ describe("confirmations", () => {
     expect(created.record.nonceHash).not.toContain(created.nonce);
   });
 
+  it("binds maxHostCalls into the confirmation operation hash", () => {
+    const now = new Date("2026-06-05T00:00:00.000Z");
+    const base = {
+      operationId: "operation-1",
+      actionName: "clockify_invoices_create",
+      featureGroup: "invoices",
+      risks: ["billing"],
+      payload: { clientId: "client-1" },
+      mutationPlan: {
+        mode: "single",
+        steps: [{ id: "create-invoice", kind: "primary" }],
+      },
+    };
+    const first = makePending(now, { operation: { ...base, mutationPlan: { ...base.mutationPlan, maxHostCalls: 3 } } });
+    const second = makePending(now, { operation: { ...base, mutationPlan: { ...base.mutationPlan, maxHostCalls: 4 } } });
+
+    expect(first.record.operationHash).not.toBe(second.record.operationHash);
+  });
+
   it("integrity-binds target snapshot content and order", () => {
     const now = new Date("2026-06-05T00:00:00.000Z");
     const targetSnapshots = [

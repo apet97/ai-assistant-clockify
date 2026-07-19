@@ -188,8 +188,6 @@ afterEach(() => {
   (globalThis as Record<string, unknown>).window = originalWindow;
 });
 
-const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
-
 function preview(over: Partial<PreviewResult> = {}): PreviewResult {
   return {
     kind: "preview",
@@ -322,11 +320,15 @@ describe("renderPreview — advisory expiry disables Confirm at TTL", () => {
 describe("renderPreview — single Confirm stale-nonce re-arm keeps the card", () => {
   it("re-fetches the re-served pending, re-renders it, posts a refresh note, and shows NO dead-end error", async () => {
     const reserved = preview({ previewId: "p1", nonce: "rotated-nonce" });
+    let signalRendered!: () => void;
+    const rendered = new Promise<void>((resolve) => {
+      signalRendered = resolve;
+    });
     const confirmStream = vi.fn(async (_ref: unknown, onEvent: (e: StreamEvent) => void) => {
       onEvent({ type: "error", code: "invalid_confirmation", message: "This preview was refreshed elsewhere." });
     });
     const controller = recordingController({ confirmStream });
-    const renderResults = vi.fn();
+    const renderResults = vi.fn((_results: unknown) => signalRendered());
     const appendMessage = vi.fn();
     const showError = vi.fn();
     const getHistory = vi.fn(async () => ({ pendingPreviews: [reserved] }));
@@ -336,8 +338,7 @@ describe("renderPreview — single Confirm stale-nonce re-arm keeps the card", (
     ) as unknown as StubNode;
 
     await card.buttons("Confirm")[0].dispatch("click");
-    await flush(); // drain the non-awaited handleStaleRearm IIFE
-    await flush();
+    await rendered; // the non-awaited stale-rearm IIFE reached its observable end state
 
     expect(getHistory).toHaveBeenCalledTimes(1);
     expect(renderResults).toHaveBeenCalledTimes(1);

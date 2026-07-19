@@ -12,6 +12,10 @@ import { makeTestConfig } from "../helpers/config.js";
 import type { AppConfig } from "../../src/config.js";
 import { mintAdminCookie } from "../helpers/session.js";
 import { testKeys } from "../helpers/test-keys.js";
+import {
+  createWorkspaceMutationCoordinator,
+  type WorkspaceMutationCoordinator,
+} from "../../src/clockify/workspace-mutation-coordinator.js";
 
 const SESSION_SECRET = "test-session-secret";
 const ADDON_KEY = "ai-assistant";
@@ -122,7 +126,13 @@ function setup(
   modelClient: ModelClient,
   configOverrides: Partial<AppConfig> = {},
   projects: Array<{ id: string; name: string }> = [{ id: "p1", name: "Acme" }],
-): { app: Express; store: Store; cookie: string; fake: ReturnType<typeof createFakeWorkspace> } {
+): {
+  app: Express;
+  store: Store;
+  cookie: string;
+  fake: ReturnType<typeof createFakeWorkspace>;
+  mutationCoordinator: WorkspaceMutationCoordinator;
+} {
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   store.saveInstallation({
     workspaceId: "ws-1",
@@ -131,6 +141,7 @@ function setup(
     addonToken: "addon-token",
   });
   const fake = createFakeWorkspace({ projects });
+  const mutationCoordinator = createWorkspaceMutationCoordinator();
   const app = createApp({
     config: makeTestConfig({
       clockifyAddonPublicKeyPem: publicKeyPem,
@@ -145,10 +156,11 @@ function setup(
     parser: createSignatureParser(ADDON_KEY, publicKeyPem),
     modelClient,
     clockifyForWorkspace: () => fake.client,
+    mutationCoordinator,
     enforceIntentCapabilitiesInTests: true,
   });
   const cookie = mintAdminCookie(store, SESSION_SECRET);
-  return { app, store, cookie, fake };
+  return { app, store, cookie, fake, mutationCoordinator };
 }
 
 const openStores: Store[] = [];
@@ -158,6 +170,114 @@ afterEach(() => {
 });
 
 describe("chat intent declaration integration", () => {
+  it("cancels a turn revoked during intent declaration without recreating erased workspace data", async () => {
+    let declarationStarted!: () => void;
+    const started = new Promise<void>((resolve) => { declarationStarted = resolve; });
+    let releaseDeclaration!: () => void;
+    const blocked = new Promise<void>((resolve) => { releaseDeclaration = resolve; });
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          declarationStarted();
+          // Deliberately ignore the signal: the route must still re-check its
+          // durable installation generation after an uncooperative provider returns.
+          await blocked;
+          return JSON.stringify({ writeActions: [] });
+        }
+        mainCalls += 1;
+        return JSON.stringify({ kind: "answer", text: "Ready." });
+      }),
+    };
+    const { app, store, cookie, mutationCoordinator } = setup(modelClient);
+    openStores.push(store);
+
+    const responsePromise = request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "show status" })
+      .then((response) => response);
+    await started;
+
+    const deletion = mutationCoordinator.beginDeletion("ws-1");
+    await deletion.drained;
+    const tombstone = store.tombstoneInstallation("ws-1");
+    expect(tombstone).toBeDefined();
+    expect(store.eraseWorkspaceForDeletion("ws-1", tombstone!.generation)).toBeDefined();
+    deletion.finish();
+    releaseDeclaration();
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      reply: { kind: "aborted", text: "" },
+      results: [],
+    });
+    expect(mainCalls).toBe(0);
+    const recreated = store.eraseWorkspace("ws-1");
+    expect(Object.values(recreated).reduce((total, count) => total + count, 0)).toBe(0);
+  });
+
+  it("cancels a turn revoked during the main planner without recreating erased workspace data", async () => {
+    let plannerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { plannerStarted = resolve; });
+    let releasePlanner!: () => void;
+    const blocked = new Promise<void>((resolve) => { releasePlanner = resolve; });
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (_messages, tools) => {
+        if (tools.length === 1 && tools[0]?.name === "declare_intent_capability") {
+          return {
+            text: "",
+            toolCalls: [{
+              id: "declaration",
+              name: "declare_intent_capability",
+              arguments: { writeActions: [] },
+            }],
+          };
+        }
+        mainCalls += 1;
+        plannerStarted();
+        // Model an HTTP client that resolves despite AbortSignal cancellation.
+        await blocked;
+        return { text: "Ready.", toolCalls: [] };
+      }),
+    };
+    const { app, store, cookie, mutationCoordinator } = setup(modelClient, {
+      llmMode: "tool",
+      llmAgentic: true,
+    });
+    openStores.push(store);
+
+    const responsePromise = request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "show status" })
+      .then((response) => response);
+    await started;
+
+    const deletion = mutationCoordinator.beginDeletion("ws-1");
+    await deletion.drained;
+    const tombstone = store.tombstoneInstallation("ws-1");
+    expect(tombstone).toBeDefined();
+    expect(store.eraseWorkspaceForDeletion("ws-1", tombstone!.generation)).toBeDefined();
+    deletion.finish();
+    releasePlanner();
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      reply: { kind: "aborted", text: "" },
+      results: [],
+    });
+    expect(mainCalls).toBe(1);
+    const recreated = store.eraseWorkspace("ws-1");
+    expect(Object.values(recreated).reduce((total, count) => total + count, 0)).toBe(0);
+  });
+
   it("declares and persists authority before the main planner, then filters its full catalog", async () => {
     const authoredSource = "delete project Acme with id p1";
     const model = jsonModel({
@@ -374,7 +494,10 @@ describe("chat intent declaration integration", () => {
     ]));
     expect(prepareOperation).not.toHaveBeenCalled();
     expect(saveConfirmation).not.toHaveBeenCalled();
-    expect(fake.counts).toEqual({});
+    expect(fake.counts.getWorkspaceMemberRole).toBe(1);
+    expect(Object.fromEntries(
+      Object.entries(fake.counts).filter(([method]) => method !== "getWorkspaceMemberRole"),
+    )).toEqual({});
   });
 
   it("keeps reads available but blocks invented safe and risky writes under deny-all", async () => {

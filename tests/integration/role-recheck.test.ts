@@ -3,7 +3,7 @@ import request from "supertest";
 import { testKeys } from "../helpers/test-keys.js";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
-import { createStore } from "../../src/db/store.js";
+import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
@@ -18,10 +18,8 @@ const modelClient: ModelClient = {
 };
 
 /**
- * authz-surface-01: with ROLE_RECHECK=1, a session minted for an admin who is
- * then demoted in Clockify is denied on the next /api request (the fake's
- * member-role read returns a non-admin role). With ROLE_RECHECK off, the same
- * request succeeds (the prior cookie-only posture, byte-identical).
+ * authz-surface-01: every authenticated API request re-verifies a current
+ * positive admin verdict. There is no cookie-only/fail-open mode.
  */
 async function buildApp(roleRecheckEnabled: boolean, memberRole: string, roleLookupFails = false) {
   const keys = await testKeys();
@@ -45,25 +43,284 @@ async function buildApp(roleRecheckEnabled: boolean, memberRole: string, roleLoo
 }
 
 describe("per-request admin re-check (authz-surface-01)", () => {
-  it("denies a demoted admin with 403 {forbidden} when ROLE_RECHECK is on", async () => {
+  it("coalesces four concurrent cold authenticated surfaces into one role I/O", async () => {
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      roleRecheckTtlMs: 60_000,
+    });
+    const store = createStore(":memory:", { encryptionKey: "test-key" });
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const fake = createFakeWorkspace();
+    let releaseRole!: () => void;
+    let roleStarted!: () => void;
+    const roleGate = new Promise<void>((resolve) => { releaseRole = resolve; });
+    const started = new Promise<void>((resolve) => { roleStarted = resolve; });
+    let lookups = 0;
+    const clockify = {
+      ...fake.client,
+      async getWorkspaceMemberRole() {
+        lookups += 1;
+        roleStarted();
+        await roleGate;
+        return "ADMIN";
+      },
+    };
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => clockify,
+    });
+    const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+
+    const responses = Promise.all([
+      request(app).get("/api/me").set("Cookie", cookie),
+      request(app).get("/api/permissions").set("Cookie", cookie),
+      request(app).get("/api/metrics").set("Cookie", cookie),
+      request(app).get("/api/chat/history").set("Cookie", cookie),
+    ]);
+    await started;
+    const coldLookups = lookups;
+    releaseRole();
+
+    for (const response of await responses) expect(response.status).toBe(200);
+    expect(coldLookups).toBe(1);
+    expect(lookups).toBe(1);
+    store.close();
+  });
+
+  it("does not recreate a session when uninstall erases the workspace during role verification", async () => {
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      roleRecheckTtlMs: 60_000,
+    });
+    const store = createStore(":memory:", { encryptionKey: "test-key" });
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const fake = createFakeWorkspace();
+    let roleStarted!: () => void;
+    let releaseRole!: () => void;
+    const started = new Promise<void>((resolve) => { roleStarted = resolve; });
+    const roleGate = new Promise<void>((resolve) => { releaseRole = resolve; });
+    const clockify = {
+      ...fake.client,
+      async getWorkspaceMemberRole() {
+        roleStarted();
+        await roleGate;
+        return "ADMIN";
+      },
+    };
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => clockify,
+    });
+    const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+    const responsePromise = Promise.resolve(request(app).post("/api/chat/new").set("Cookie", cookie).send({}));
+
+    await started;
+    const tombstone = store.tombstoneInstallation("ws-1");
+    if (!tombstone) throw new Error("expected deletion tombstone");
+    store.eraseWorkspaceForDeletion("ws-1", tombstone.generation);
+    releaseRole();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(503);
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(store.getInstallation("ws-1")).toBeUndefined();
+    expect(store.listSessions("ws-1", "admin-1", new Date().toISOString())).toEqual([]);
+    store.close();
+  });
+
+  it("does not recreate a session when uninstall erases at the chat/new write boundary", async () => {
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      roleRecheckTtlMs: 60_000,
+    });
+    const store = createStore(":memory:", { encryptionKey: "test-key" });
+    store.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "addon-token",
+    });
+    let armed = false;
+    let installationReads = 0;
+    const wrappedStore: Store = {
+      ...store,
+      getInstallation(workspaceId) {
+        if (armed) {
+          installationReads += 1;
+          if (installationReads === 3) {
+            const tombstone = store.tombstoneInstallation(workspaceId);
+            if (!tombstone) throw new Error("expected deletion tombstone");
+            store.eraseWorkspaceForDeletion(workspaceId, tombstone.generation);
+          }
+        }
+        return store.getInstallation(workspaceId);
+      },
+    };
+    const fake = createFakeWorkspace();
+    const app = createApp({
+      config,
+      store: wrappedStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => fake.client,
+    });
+    const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+    armed = true;
+
+    const response = await request(app).post("/api/chat/new").set("Cookie", cookie).send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("installation_changed");
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(store.getInstallation("ws-1")).toBeUndefined();
+    expect(store.listSessions("ws-1", "admin-1", new Date().toISOString())).toEqual([]);
+    expect(Object.values(store.eraseWorkspace("ws-1")).every((count) => count === 0)).toBe(true);
+    store.close();
+  });
+
+  it("does not recreate policy, result, or audit rows when uninstall erases at the permission write boundary", async () => {
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      roleRecheckTtlMs: 60_000,
+    });
+    const store = createStore(":memory:", { encryptionKey: "test-key" });
+    store.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "addon-token",
+    });
+    let armed = false;
+    let installationReads = 0;
+    const wrappedStore: Store = {
+      ...store,
+      getInstallation(workspaceId) {
+        if (armed) {
+          installationReads += 1;
+          if (installationReads === 5) {
+            const tombstone = store.tombstoneInstallation(workspaceId);
+            if (!tombstone) throw new Error("expected deletion tombstone");
+            store.eraseWorkspaceForDeletion(workspaceId, tombstone.generation);
+          }
+        }
+        return store.getInstallation(workspaceId);
+      },
+    };
+    const fake = createFakeWorkspace();
+    const app = createApp({
+      config,
+      store: wrappedStore,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => fake.client,
+    });
+    const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+    armed = true;
+
+    const response = await request(app)
+      .post("/api/permissions/confirm")
+      .set("Cookie", cookie)
+      .send({ groups: { invoices: "off" } });
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("installation_changed");
+    expect(store.getAdminPolicy("ws-1", "admin-1")).toBeUndefined();
+    expect(store.listActionOutcomes("ws-1", "admin-1")).toEqual([]);
+    expect(Object.values(store.eraseWorkspace("ws-1")).every((count) => count === 0)).toBe(true);
+    store.close();
+  });
+
+  it("denies a write when its session is invalidated during the forced role check", async () => {
+    const keys = await testKeys();
+    const config = makeTestConfig({
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+      roleRecheckTtlMs: 60_000,
+    });
+    const store = createStore(":memory:", { encryptionKey: "test-key" });
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const fake = createFakeWorkspace();
+    let forcedStarted!: () => void;
+    let releaseForced!: () => void;
+    const started = new Promise<void>((resolve) => { forcedStarted = resolve; });
+    const forcedGate = new Promise<void>((resolve) => { releaseForced = resolve; });
+    let lookups = 0;
+    const clockify = {
+      ...fake.client,
+      async getWorkspaceMemberRole() {
+        lookups += 1;
+        if (lookups === 1) return "ADMIN";
+        forcedStarted();
+        await forcedGate;
+        return "ADMIN";
+      },
+    };
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient,
+      clockifyForWorkspace: () => clockify,
+    });
+    const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+    const responsePromise = Promise.resolve(request(app)
+      .post("/api/permissions/confirm")
+      .set("Cookie", cookie)
+      .send({ groups: { invoices: "off" } }));
+
+    await started;
+    expect(store.invalidateAdminSessions("ws-1", "admin-1")).toBe(1);
+    releaseForced();
+    const response = await responsePromise;
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe("admin_required");
+    expect(store.getAdminPolicy("ws-1", "admin-1")).toBeUndefined();
+    store.close();
+  });
+
+  it("denies a demoted admin with 403 {forbidden}", async () => {
     const { app, cookie } = await buildApp(true, "MEMBER"); // demoted in Clockify
     const res = await request(app).get("/api/me").set("Cookie", cookie);
     expect(res.status).toBe(403);
     expect(res.body.code).toBe("forbidden");
   });
 
-  it("still admits a current admin with 200 when ROLE_RECHECK is on", async () => {
+  it("admits a current admin with 200", async () => {
     const { app, cookie } = await buildApp(true, "ADMIN");
     const res = await request(app).get("/api/me").set("Cookie", cookie);
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
   });
 
-  it("admits the same demoted admin with 200 when ROLE_RECHECK is off (prior posture)", async () => {
+  it("ignores the legacy ROLE_RECHECK toggle and still denies a demoted admin", async () => {
     const { app, cookie } = await buildApp(false, "MEMBER");
     const res = await request(app).get("/api/me").set("Cookie", cookie);
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
+    expect(res.status).toBe(403);
+    expect(res.body.code).toBe("forbidden");
+  });
+
+  it("fails authenticated reads closed when Clockify cannot verify the role", async () => {
+    const { app, cookie } = await buildApp(false, "ADMIN", true);
+    for (const path of ["/api/me", "/api/permissions", "/api/metrics", "/api/chat/history", "/api/chat/sessions"]) {
+      const response = await request(app).get(path).set("Cookie", cookie);
+      expect(response.status, path).toBe(503);
+      expect(response.body.code, path).toBe("role_verification_unavailable");
+    }
   });
 
   it("always rechecks immediately before a write and invalidates a demoted admin's sessions", async () => {
@@ -74,7 +331,7 @@ describe("per-request admin re-check (authz-surface-01)", () => {
       .send({ groups: { invoices: "off" } });
 
     expect(denied.status).toBe(403);
-    expect(denied.body.code).toBe("admin_required");
+    expect(denied.body.code).toBe("forbidden");
     const after = await request(app).get("/api/me").set("Cookie", cookie);
     expect(after.status).toBe(401);
   });

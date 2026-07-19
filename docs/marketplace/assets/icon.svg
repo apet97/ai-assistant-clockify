@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">AI Assistant for Clockify</title>
+  <desc id="desc">A blue assistant chat panel crossing a green confirmation boundary.</desc>
+  <defs>
+    <linearGradient id="panel" x1="70" y1="54" x2="442" y2="458" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1e242f"/>
+      <stop offset="1" stop-color="#0a0d12"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="137" y1="132" x2="357" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5b9bff"/>
+      <stop offset="1" stop-color="#2e6de0"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#000" flood-opacity=".35"/>
+    </filter>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="#0e1116"/>
+  <rect x="54" y="54" width="404" height="404" rx="88" fill="url(#panel)" stroke="#39424f" stroke-width="4"/>
+  <path d="M132 144c0-27 22-48 48-48h152c27 0 48 21 48 48v118c0 27-21 48-48 48h-71l-68 57c-15 13-38 2-38-18v-40c-14-8-23-23-23-41V144Z" fill="url(#blue)" filter="url(#shadow)"/>
+  <path d="M190 181h132M190 225h91" fill="none" stroke="#f7f9fc" stroke-width="22" stroke-linecap="round"/>
+  <path d="M340 289v101" stroke="#79828f" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="340" cy="365" r="58" fill="#171b23" stroke="#3fce8b" stroke-width="12"/>
+  <path d="m312 365 19 20 38-43" fill="none" stroke="#3fce8b" stroke-width="18" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -32,6 +32,7 @@ let removed = 0;
 let cleanupFailures = 0;
 let scanFailures = 0;
 
+/* eslint-disable-next-line @typescript-eslint/no-explicit-any -- live JSON is parsed at this HTTP boundary, then narrowed by each cleanup path. */
 async function call(method: string, path: string, body?: unknown): Promise<any> {
   const res = await fetch(`${BASE}${path}`, {
     method,

@@ -10,6 +10,8 @@ import {
   buildAllowIntentCapabilityV1,
   buildDenyAllWritesIntentCapabilityV1,
   hashIntentCapability,
+  INTENT_LITERAL_MAX_DEPTH,
+  INTENT_LITERAL_MAX_NODES,
   validateUtf8SourceSpan,
   type IntentCapabilityV1,
   type Utf8SourceSpan,
@@ -50,6 +52,96 @@ function scope() {
 }
 
 describe("IntentCapabilityV1 contract", () => {
+  it("accepts bounded structured JSON literals without changing capability version", () => {
+    const source = 'Create an invoice with items [{"description":"Audit","quantity":2}]';
+    const sourceSpan = spanFor(source, '[{"description":"Audit","quantity":2}]');
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-1",
+      writeActions: [{
+        actionName: "clockify_invoices_create",
+        sourceSpans: [sourceSpan],
+        literalConstraints: [{
+          path: "items",
+          value: [{ description: "Audit", quantity: 2 }],
+          sourceSpan,
+        }],
+      }],
+    });
+
+    expect(capability.version).toBe(1);
+    expect(capability.writeActions[0]?.literalConstraints[0]?.value).toEqual([
+      { description: "Audit", quantity: 2 },
+    ]);
+  });
+
+  it("preserves an authored __proto__ literal as signed data without prototype mutation", () => {
+    const source = 'Use {"__proto__":{"polluted":true}}';
+    const literalText = '{"__proto__":{"polluted":true}}';
+    const sourceSpan = spanFor(source, literalText);
+    const value = JSON.parse(literalText) as Record<string, unknown>;
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-1",
+      writeActions: [{
+        actionName: "clockify_projects_update",
+        sourceSpans: [sourceSpan],
+        literalConstraints: [{ path: "fields", value: value as never, sourceSpan }],
+      }],
+    });
+    const persisted = capability.writeActions[0]?.literalConstraints[0]?.value as Record<string, unknown>;
+
+    expect(Object.hasOwn(persisted, "__proto__")).toBe(true);
+    expect(persisted.__proto__).toEqual({ polluted: true });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it("accepts the documented structured-literal node/depth boundary and rejects boundary + 1", () => {
+    const source = "Use payload";
+    const sourceSpan = spanFor(source, "payload");
+    const build = (value: unknown) => buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-1",
+      writeActions: [{
+        actionName: "clockify_projects_update",
+        sourceSpans: [sourceSpan],
+        literalConstraints: [{ path: "payload", value: value as never, sourceSpan }],
+      }],
+    });
+    const nested = (depth: number): unknown => {
+      let value: unknown = "leaf";
+      for (let index = 1; index < depth; index += 1) value = { value };
+      return value;
+    };
+
+    expect(() => build(nested(INTENT_LITERAL_MAX_DEPTH))).not.toThrow();
+    expect(() => build(nested(INTENT_LITERAL_MAX_DEPTH + 1))).toThrow("intent_capability_literal_depth_exceeded");
+    expect(() => build(Array.from({ length: INTENT_LITERAL_MAX_NODES - 1 }, () => null))).not.toThrow();
+    expect(() => build(Array.from({ length: INTENT_LITERAL_MAX_NODES }, () => null)))
+      .toThrow("intent_capability_literal_nodes_exceeded");
+  });
+
+  it("uses the same 128-constraint boundary for persisted capabilities", () => {
+    const source = "Use x";
+    const sourceSpan = spanFor(source, "x");
+    const build = (count: number) => buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-1",
+      writeActions: [{
+        actionName: "clockify_projects_update",
+        sourceSpans: [sourceSpan],
+        literalConstraints: Array.from({ length: count }, (_, index) => ({
+          path: `fields.field${index}`,
+          value: "x",
+          sourceSpan,
+        })),
+      }],
+    });
+
+    expect(build(128).writeActions[0]?.literalConstraints).toHaveLength(128);
+    expect(() => build(129)).toThrow("intent_capability_constraints_invalid");
+  });
+
   it.each([
     ["Serbian Latin", "Kreiraj klijenta Acme danas"],
     ["Serbian Latin with diacritics", "Kreiraj klijenta Acme za Željka"],

@@ -58,6 +58,7 @@ describe("invoice durable operation contracts", () => {
     expect(result.operation.payload).not.toHaveProperty("operationId");
     expect(result.operation.mutationPlan).toEqual({
       mode: "curated",
+      maxHostCalls: 8,
       steps: [
         { id: "create-invoice", kind: "primary" },
         { id: "enrich-invoice", kind: "primary", reconciliationStrategy: "update" },

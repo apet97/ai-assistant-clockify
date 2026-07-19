@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
+import type { UiPreferences } from "../shared/contracts.js";
 
 /**
  * Signed, HTTP-only session cookie (ARCHITECTURE "Component Load").
@@ -13,6 +14,7 @@ export interface SessionClaims {
   workspaceId: string;
   adminUserId: string;
   workspaceRole: string;
+  uiPreferences?: UiPreferences;
   expiresAt: string;
 }
 
@@ -21,6 +23,11 @@ const sessionClaimsSchema = z.object({
   workspaceId: z.string().min(1),
   adminUserId: z.string().min(1),
   workspaceRole: z.string().min(1),
+  uiPreferences: z.object({
+    theme: z.enum(["system", "light", "dark"]),
+    language: z.enum(["en", "sr"]),
+    timeZone: z.string().min(1).max(100).optional(),
+  }).strict().optional(),
   expiresAt: z.string().min(1),
 });
 

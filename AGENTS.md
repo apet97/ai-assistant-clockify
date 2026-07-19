@@ -42,6 +42,12 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   `IntentCapabilityV1`: exact write actions, UTF-8 byte spans, literal constraints,
   cardinality, and request/catalog hashes. Provider failure, malformed spans, or
   invented values durably deny all writes while reads remain available.
+- Literal constraints may contain bounded structured JSON under the one shared
+  limit contract in `src/harness/safety-limits.ts`; declaration, persistence,
+  authority matching, schemas, and catalog metadata must not diverge.
+- Advertised batch limits come from the deterministic worst-case host-call
+  estimator; group-member additions cap at 14. Prepared operations bind and hash
+  `maxHostCalls` and reserve the full remaining call cost before first dispatch.
 - Raw model arguments are matched against that capability before Zod
   preprocessing or server-side id/date resolution. Every one of the 81 write
   actions has explicit authority metadata; server-derived ids, permitted
@@ -68,6 +74,21 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
 - Client cancellation can stop model work or a not-yet-dispatched action, never a
   Clockify mutation after dispatch. Per-session FIFO locks cover route settlement
   and skip disconnected queued requests.
+- Installation writes are generation-bound. Inactive/deleted installs reject new
+  and queued writes; uninstall immediately tombstones and wipes the token, drains
+  only already-dispatched work, erases workspace data, and resumes interrupted
+  tombstone deletion at startup. Same-token install retries are authority-neutral even
+  while inactive; only STATUS ACTIVE reactivates that token. Replacement/uninstall
+  retain only a separate-domain, workspace-unlinked token
+  fingerprint so delayed old callbacks cannot restore retired authority. A bounded,
+  separate-domain hashed-workspace lineage blocks never-before-seen older tokens after
+  row erasure/restart and expires after 24 hours + 2 minutes + 1 second. All add-on JWTs require
+  `exp`; lifecycle JWTs require bounded `iat`, persisted per generation so older
+  deliveries cannot roll authority back; equal times rank `DELETED > INACTIVE > ACTIVE`.
+- Component load performs a forced current Clockify role check after the active-install
+  gate and before any session reuse/create. Never authorize it from JWT role alone.
+- After any awaited role/provider boundary, synchronously recheck the exact active
+  installation generation before creating sessions, policies, results, or audit rows.
 - The model never receives Clockify tokens, add-on tokens, session secrets, the
   model API key, or raw headers. Never log tokens/headers. Tokens are encrypted at
   rest (AES-256-GCM).
@@ -89,10 +110,13 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
 ```bash
 npm install
 npm run type-check    # tsc --noEmit
-npm test              # vitest run (fakes only, no network)
+npm test              # build exact server artifact, then Vitest (no unmocked network)
 npm run build         # -> dist/server, dist/ui
-npm run lint          # eslint src (typed async-safety rules)
+npm run lint          # typed eslint across src + scripts
 npm run verify        # both type-checks + lint + cycles + dup + test + build
+npm run test:e2e      # Chromium + Firefox + WebKit product/browser matrix
+npm run perf:local-ui # UI/history/status/20 KiB gzip gates
+npm run media:marketplace # deterministic listing asset package
 npm run audit:prod    # fail-closed production advisory policy
 npm run license:prod  # production license policy + deterministic JSON evidence
 npm run eval:smoke    # offline scripted-model safety corpus (no credentials)
@@ -110,10 +134,13 @@ npm run dev           # tsx src/server.ts (needs env)
   cleanup sequence, always runs a bounded cleanup job, and uploads secret-free
   count/status evidence. Configuring those credentials and proving a real run
   remain operator work.
-- Manual `.github/workflows/release-evidence.yml` records the exact commit SHA and
-  machine conclusions for verify, audit, license, CodeQL, secret scan,
-  `eval:smoke`, SBOM, and live smoke. Human/operator gates are always emitted as
-  `not_evaluated`; the workflow does not deploy, approve, or submit the add-on.
+- Manual `.github/workflows/release-evidence.yml` records the exact commit SHA,
+  validated reviewed-PR/head/CI/CodeQL identities, three hashed zero-retry Vitest
+  count reports (minimum 2,366 passed, zero skipped/todo), and machine conclusions
+  for verify, audit, license, CodeQL, secret scan,
+  `eval:smoke`, SBOM, live smoke, backup/restore, deterministic DeepSeek safety,
+  and production AUDIT-host clearance. Only the three final admin packages are
+  emitted as `not_evaluated`; the workflow does not deploy, approve, or submit.
 
 ## Layout
 
@@ -190,7 +217,9 @@ npm run dev           # tsx src/server.ts (needs env)
   durable turn from nonce-free result/preview links (only a still-pending preview
   gets a freshly rotated nonce). Terminal confirmations scrub their nonce hash,
   saved agent state, and operation payload. `server.ts` — `createApp(deps)` + `start()`; `/live` is liveness and
-  `/health` performs a committed readiness probe.
+  `/health` performs a committed readiness probe. `release-artifact.ts` binds
+  production startup and `/version` to the post-build manifest and exact complete
+  `dist/server` bytes before the database/provider initializes.
 - `src/ui/` — vanilla TS chat UI (a11y; "New chat" + "Chats ▾" history dropdown);
   HTTP/NDJSON client in `api-client.ts`, composer/stream flows in
   `composer-flow.ts`, rendering in `render.ts`/`shared.ts`, `main.ts` keeps
@@ -198,7 +227,10 @@ npm run dev           # tsx src/server.ts (needs env)
   `tests/` — unit + integration (fakes via `tests/helpers/fake-clockify.ts`;
   `tests/helpers/session.ts` mints an admin cookie in-process). `scripts/` — opt-in
   live exercisers (sacrificial workspace only) plus checksum-verified
-  `backup-db.ts`/`restore-db.ts` recovery tooling.
+  `backup-db.ts`/`restore-db.ts` recovery tooling, a non-overwriting legacy-v7
+  metadata binder, plus the caller-read-only, secret-free `verify-restored-db.ts`
+  RTO/RPO gate (source-schema read/token proof, private mode-0600 v8 migration clone,
+  exact built server identity, and post-shutdown schema/integrity/writer-lock proof).
 
 ## Live request-shape gotchas (encoded in the adapter + unit tests)
 

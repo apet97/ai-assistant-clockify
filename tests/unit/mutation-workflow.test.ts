@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createStore } from "../../src/db/store.js";
 import { executeMutationWorkflow, executeStep } from "../../src/harness/mutation-workflow.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { HostCallBudgetExceededError, HostRequestCancelledError } from "../../src/clockify/request-governor.js";
 import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
 import * as workflowModule from "../../src/harness/mutation-workflow.js";
 import type { JournaledMutationStep, MutationStepJournal } from "../../src/harness/mutation-contract.js";
@@ -19,6 +20,7 @@ function operation(store: ReturnType<typeof createStore>, id: string): string {
     operation: { normalized: true },
     mutationPlan: {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [
         { id: "one", kind: "primary" },
         { id: "two", kind: "primary" },
@@ -39,6 +41,7 @@ function compensableOperation(store: ReturnType<typeof createStore>, id: string)
     operationHash: "operation",
     mutationPlan: {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [
         { id: "create", kind: "primary" },
         { id: "delete-created", kind: "compensation" },
@@ -631,6 +634,31 @@ describe("durable mutation workflow", () => {
       { id: sourceId, status: "succeeded", externalId: "created-1" },
       { id: result.id, status: "compensation_failed" },
     ]);
+    store.close();
+  });
+
+  it.each([
+    ["budget", new HostCallBudgetExceededError(60, 1)],
+    ["queued cancellation", new HostRequestCancelledError()],
+  ])("never labels a pre-dispatch compensation %s as ambiguous", async (_label, failure) => {
+    const store = createStore(":memory:");
+    const { operationId, sourceId, journal } = compensableOperation(store, `operation-compensation-${_label}`);
+
+    const result = await workflowModule.executeCompensationStep({
+      journal,
+      operationId,
+      step: {
+        id: "delete-created",
+        index: 1,
+        name: "Delete created",
+        kind: "compensation",
+        compensatesStepId: sourceId,
+      },
+      dispatch: async () => { throw failure; },
+    });
+
+    expect(result.status).toBe("compensation_failed");
+    expect(result).not.toMatchObject({ status: "outcome_unknown" });
     store.close();
   });
 

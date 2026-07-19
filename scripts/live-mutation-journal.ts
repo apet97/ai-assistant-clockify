@@ -7,6 +7,7 @@ import type { ExternalMutationPlan, MutationStepJournal } from "../src/harness/m
 import { actionFingerprint, catalogHash } from "../src/harness/catalog.js";
 import { hashOperation } from "../src/harness/confirmations.js";
 import { executeStep } from "../src/harness/mutation-workflow.js";
+import { bindMutationPlanHostCalls } from "../src/harness/safety-limits.js";
 import { withMutationPlanScope } from "../src/clockify/rest/core.js";
 
 function resultStatus(result: CommitResult): "succeeded" | "partial" | "definitive_failed" | "outcome_unknown" {
@@ -94,10 +95,10 @@ export function createLiveMutationJournal(workspaceId: string, adminUserId: stri
 
     async runSingle(actionName, detail, dispatch) {
       const stepId = `live-${sequence++}`;
-      const plan: ExternalMutationPlan = {
+      const plan = bindMutationPlanHostCalls(actionName, detail, {
         mode: "single",
         steps: [{ id: stepId, kind: "primary" }],
-      };
+      });
       const operationId = prepare(actionName, detail, plan);
       if (!store.markOperationExecuting(operationId)) throw new Error("live_operation_not_prepared");
       const step = await withMutationPlanScope({

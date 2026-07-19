@@ -38,12 +38,19 @@ async function makeApp(): Promise<{ app: Express; store: Store; sessionSecret: s
   const config = makeTestConfig({ clockifyAddonPublicKeyPem: keys.pem, clockifyAddonKey: ADDON_KEY });
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
+  store.saveInstallation({
+    workspaceId: "ws-A",
+    addonId: "addon-ws-A",
+    addonUserId: "addon-user-ws-A",
+    addonToken: "addon-token-ws-A",
+  });
+  const fake = createFakeWorkspace({ memberRoles: { "admin-1": "ADMIN" } });
   const app = createApp({
     config,
     store,
     parser: createSignatureParser(ADDON_KEY, keys.pem),
     modelClient: scriptedToolModel([]),
-    clockifyForWorkspace: () => createFakeWorkspace().client,
+    clockifyForWorkspace: () => fake.client,
   });
   return { app, store, sessionSecret: config.sessionSecret };
 }

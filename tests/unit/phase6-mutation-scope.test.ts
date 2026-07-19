@@ -1,9 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as coreModule from "../../src/clockify/rest/core.js";
-import { createRestCore, withMutationPlanStep } from "../../src/clockify/rest/core.js";
+import { createRestCore, PAGE_SIZE, withMutationPlanStep } from "../../src/clockify/rest/core.js";
+import {
+  createWorkspaceRequestGovernor,
+  HostCallBudgetExceededError,
+  withHostCallBudget,
+} from "../../src/clockify/request-governor.js";
 import { createStore } from "../../src/db/store.js";
 import type { ExternalMutationPlan } from "../../src/harness/mutation-contract.js";
-import { executeCompensationStep, executeMutationWorkflow } from "../../src/harness/mutation-workflow.js";
+import { executeCompensationStep, executeMutationWorkflow, executeStep } from "../../src/harness/mutation-workflow.js";
 import { errorReceipt, successReceipt, type ErrorReceipt } from "../../src/harness/receipts.js";
 
 type ScopeInput<T = unknown> = {
@@ -11,6 +16,7 @@ type ScopeInput<T = unknown> = {
   plan: ExternalMutationPlan;
   authorizeDispatch?(step: { id: string; kind: "primary" | "compensation" }):
     Promise<ErrorReceipt | undefined> | ErrorReceipt | undefined | void;
+  onDispatch?(step: { id: string; kind: "primary" | "compensation" }): Promise<void> | void;
   compensationEligible?(stepId: string): boolean;
   authoritativelyReconciled?(stepId: string): boolean;
   requiresComplete?(result: T): boolean;
@@ -69,6 +75,228 @@ function callbacks(action = "clockify_test_curated") {
 }
 
 describe("Phase 6 exact external mutation scope", () => {
+  it("rejects a legacy persisted plan with no bound host-call reservation", async () => {
+    let ran = false;
+    await expect(coreModule.withMutationPlanScope({
+      actionName: "clockify_test",
+      plan: { mode: "single", steps: [{ id: "write", kind: "primary" }] },
+    } as unknown as Parameters<typeof coreModule.withMutationPlanScope>[0], async () => {
+      ran = true;
+    })).rejects.toThrow("mutation_plan_host_call_budget_required");
+    expect(ran).toBe(false);
+  });
+
+  it("rejects a completed primary step whose callback dispatched no physical mutation", async () => {
+    const plan: ExternalMutationPlan = {
+      mode: "single",
+      maxHostCalls: 1,
+      steps: [{ id: "write", kind: "primary" }],
+    };
+
+    await expect(scopeFunction()({
+      actionName: "clockify_test",
+      plan,
+      requiresComplete: successfulReceiptRequiresComplete,
+    }, () => withMutationPlanStep(
+      { id: "write", index: 0, kind: "primary" },
+      async () => ({ ok: true }),
+    ))).rejects.toThrow("mutation_step_incomplete_dispatch:write");
+  });
+
+  it("does not retry a pre-dispatch GET inside a reserved mutation operation", async () => {
+    const governor = createWorkspaceRequestGovernor({ requestsPerSecond: 100, burst: 100, concurrency: 4 });
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(new Response('{"message":"temporary"}', { status: 503 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "secret" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      requestGovernor: governor,
+      enforceMutationScope: true,
+    });
+
+    await expect(withHostCallBudget(() => coreModule.withMutationPlanScope({
+      actionName: "clockify_test",
+      plan: { mode: "single", maxHostCalls: 1, steps: [{ id: "write", kind: "primary" }] },
+    }, () => core.call("api", "GET", "/workspaces/ws/users"))))
+      .rejects.toThrow(/503/);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a mutation-scope pagination read to one call and reports truncation", async () => {
+    const governor = createWorkspaceRequestGovernor({ requestsPerSecond: 100, burst: 100, concurrency: 4 });
+    const fullPage = Array.from({ length: PAGE_SIZE }, (_, index) => ({ id: `row-${index}` }));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(fullPage), { status: 200 }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "secret" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      requestGovernor: governor,
+      enforceMutationScope: true,
+    });
+
+    const result = await withHostCallBudget(() => coreModule.withMutationPlanScope({
+      actionName: "clockify_test",
+      plan: { mode: "single", maxHostCalls: 1, steps: [{ id: "write", kind: "primary" }] },
+    }, () => core.paginate("api", "/workspaces/ws/users")));
+    expect(result).toEqual({ rows: fullPage, truncated: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("enforces the reserved physical-call ceiling without a queue governor", async () => {
+    const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "secret" },
+      fetchImpl,
+      enforceMutationScope: true,
+    });
+
+    await expect(coreModule.withMutationPlanScope({
+      actionName: "clockify_test",
+      plan: { mode: "single", maxHostCalls: 1, steps: [{ id: "write", kind: "primary" }] },
+    }, async () => {
+      await core.call("api", "GET", "/workspaces/ws/users/first");
+      await core.call("api", "GET", "/workspaces/ws/users/second");
+    })).rejects.toBeInstanceOf(HostCallBudgetExceededError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a typed exhausted-budget denial pre-dispatch instead of wrapping it as ambiguous", async () => {
+    let calls = 0;
+    const core = rest(async () => {
+      calls += 1;
+      return new Response("{}", { status: 200 });
+    });
+    const plan: ExternalMutationPlan = {
+      mode: "single",
+      maxHostCalls: 2,
+      steps: [{ id: "write", kind: "primary" }],
+    };
+
+    await expect(withHostCallBudget(() => scopeFunction()({ actionName: "clockify_test", plan }, async () => {
+      await withMutationPlanStep(
+        { id: "write", index: 0, kind: "primary" },
+        () => core.mutate("api", "POST", "/write"),
+      );
+    }), 1)).rejects.toBeInstanceOf(HostCallBudgetExceededError);
+    expect(calls).toBe(0);
+  });
+
+  it("cancels a governor-queued durable write definitively before fetch and preserves queue evidence", async () => {
+    const governor = createWorkspaceRequestGovernor({ requestsPerSecond: 100, burst: 100, concurrency: 1 });
+    let releaseFirst!: () => void;
+    let firstStarted!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+    const blocker = governor.run("mutation", async () => {
+      firstStarted();
+      await firstGate;
+    });
+    await started;
+
+    const controller = new AbortController();
+    let fetchCalls = 0;
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "secret" },
+      requestGovernor: governor,
+      signal: controller.signal,
+      enforceMutationScope: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        return new Response("{}", { status: 200 });
+      },
+    });
+    const plan: ExternalMutationPlan = { mode: "single", maxHostCalls: 60, steps: [{ id: "write", kind: "primary" }] };
+    const store = createStore(":memory:");
+    const operationId = twoStepOperation(store, plan);
+    const journal = store.mutationStepJournal(operationId);
+
+    const queued = scopeFunction()({
+      actionName: "clockify_test",
+      plan,
+      onDispatch: (step) => {
+        const row = journal.listOperationSteps().find((candidate) => candidate.planStepId === step.id);
+        if (!row || !journal.markOperationStepDispatched(row.id)) throw new Error("dispatch_journal_failed");
+      },
+    }, () => executeStep({
+      journal,
+      operationId,
+      step: { id: "write", index: 0, name: "Write", kind: "primary" },
+      dispatch: async () => {
+        await core.mutate("api", "POST", "/write");
+        return {};
+      },
+    }));
+    await vi.waitFor(() => expect(journal.listOperationSteps()[0]).toMatchObject({ status: "executing" }));
+    controller.abort();
+    releaseFirst();
+
+    const cancelled = await queued;
+    expect(cancelled).toMatchObject({
+      status: "definitive_failed",
+      queuedAt: expect.any(String),
+      detail: { code: "host_request_cancelled" },
+    });
+    expect(cancelled).not.toHaveProperty("dispatchedAt");
+    expect(fetchCalls).toBe(0);
+    await blocker;
+    store.close();
+  });
+
+  it("starts fetch in the same boundary that persists dispatched_at", async () => {
+    const governor = createWorkspaceRequestGovernor({ requestsPerSecond: 100, burst: 100, concurrency: 1 });
+    const controller = new AbortController();
+    let journaled!: () => void;
+    const journalBoundary = new Promise<void>((resolve) => { journaled = resolve; });
+    let releaseFetch!: () => void;
+    const fetchGate = new Promise<void>((resolve) => { releaseFetch = resolve; });
+    let fetchCalls = 0;
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "secret" },
+      requestGovernor: governor,
+      signal: controller.signal,
+      enforceMutationScope: true,
+      fetchImpl: async () => {
+        fetchCalls += 1;
+        await fetchGate;
+        return new Response("{}", { status: 200 });
+      },
+    });
+    const plan: ExternalMutationPlan = { mode: "single", maxHostCalls: 1, steps: [{ id: "write", kind: "primary" }] };
+    const store = createStore(":memory:");
+    const operationId = twoStepOperation(store, plan);
+    const journal = store.mutationStepJournal(operationId);
+
+    const result = scopeFunction()({
+      actionName: "clockify_test",
+      plan,
+      onDispatch: (step) => {
+        const row = journal.listOperationSteps().find((candidate) => candidate.planStepId === step.id);
+        if (!row || !journal.markOperationStepDispatched(row.id)) throw new Error("dispatch_journal_failed");
+        journaled();
+      },
+    }, () => executeStep({
+      journal,
+      operationId,
+      step: { id: "write", index: 0, name: "Write", kind: "primary" },
+      dispatch: async () => {
+        await core.mutate("api", "POST", "/write");
+        return {};
+      },
+    }));
+
+    await journalBoundary;
+    controller.abort();
+    expect(fetchCalls).toBe(1);
+    releaseFetch();
+    await expect(result).resolves.toMatchObject({ status: "succeeded", dispatchedAt: expect.any(String) });
+    store.close();
+  });
+
   it("rejects an unscoped mutation before the network", async () => {
     let calls = 0;
     const core = rest(async () => {
@@ -87,7 +315,7 @@ describe("Phase 6 exact external mutation scope", () => {
       calls += 1;
       return new Response("{}", { status: 200 });
     });
-    const plan: ExternalMutationPlan = { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] };
+    const plan: ExternalMutationPlan = { mode: "single", maxHostCalls: 60, steps: [{ id: "create-tag", kind: "primary" }] };
     const store = createStore(":memory:");
     const operationId = twoStepOperation(store, plan);
 
@@ -119,6 +347,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
     const store = createStore(":memory:");
@@ -148,6 +377,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "base", kind: "primary" }, { id: "enrich", kind: "primary" }],
     };
     const store = createStore(":memory:");
@@ -174,6 +404,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
 
@@ -200,6 +431,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
 
@@ -229,6 +461,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "single",
+      maxHostCalls: 60,
       steps: [{ id: "write", kind: "primary" }],
     };
 
@@ -257,6 +490,7 @@ describe("Phase 6 exact external mutation scope", () => {
   it("does not let authoritative reconciliation override dispatch denial or a plan violation", async () => {
     const plan: ExternalMutationPlan = {
       mode: "single",
+      maxHostCalls: 60,
       steps: [{ id: "write", kind: "primary" }],
     };
     let deniedCalls = 0;
@@ -329,6 +563,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
 
@@ -358,6 +593,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "create", kind: "primary" }, { id: "undo-create", kind: "compensation" }],
     };
 
@@ -387,6 +623,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
     const store = createStore(":memory:");
@@ -421,7 +658,7 @@ describe("Phase 6 exact external mutation scope", () => {
       calls += 1;
       return new Response("{}", { status: 200 });
     });
-    const plan: ExternalMutationPlan = { mode: "single", steps: [{ id: "write", kind: "primary" }] };
+    const plan: ExternalMutationPlan = { mode: "single", maxHostCalls: 60, steps: [{ id: "write", kind: "primary" }] };
     const store = createStore(":memory:");
     const operationId = twoStepOperation(store, plan);
     const result = await scopeFunction()({
@@ -454,6 +691,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
 
@@ -493,6 +731,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "first", kind: "primary" }, { id: "second", kind: "primary" }],
     };
 
@@ -522,6 +761,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "create", kind: "primary" }, { id: "undo-create", kind: "compensation" }],
     };
     let status: "compensating" | "compensation_failed" = "compensating";
@@ -531,6 +771,8 @@ describe("Phase 6 exact external mutation scope", () => {
       getOperationStatus: () => "partial" as const,
       prepareOperationStep: () => "unused",
       markOperationStepExecuting: () => false,
+      markOperationStepDispatched: () => false,
+      cancelOperationStepBeforeDispatch: () => false,
       settleOperationStep: () => undefined,
       settleOperationStepDegraded: () => undefined,
       settleReconciledStep: () => undefined,
@@ -576,6 +818,7 @@ describe("Phase 6 exact external mutation scope", () => {
     });
     const plan: ExternalMutationPlan = {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [{ id: "create", kind: "primary" }, { id: "undo-create", kind: "compensation" }],
     };
 

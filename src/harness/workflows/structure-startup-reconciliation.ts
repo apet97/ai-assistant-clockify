@@ -68,7 +68,6 @@ const metadata = {
     "create-project": "create",
     "create-task": "create",
     "start-timer": "create",
-    "verify-reused-entities": "composed",
   },
   clockify_setup_project: {
     "create-project": "create",
@@ -677,54 +676,6 @@ const workPackageStartTimer: Handler = async (input) => {
   });
 };
 
-async function readSnapshot(input: HandlerInput, snapshot: Record<string, unknown>): Promise<ReconciliationCandidate | undefined> {
-  const ref = record(snapshot.ref);
-  const type = stringValue(ref?.type);
-  const id = stringValue(ref?.id);
-  if (!type || !id) return undefined;
-  if (type === "project") {
-    const row = await input.clockify.getProjectMutationState(id);
-    return row ? candidate(type, id, row) : undefined;
-  }
-  if (type === "client") {
-    const row = await input.clockify.getClientMutationState(id);
-    return row ? candidate(type, id, row) : undefined;
-  }
-  if (type === "tag") return candidate(type, id, await input.clockify.prepareTagUpdate(id, {}));
-  if (type === "task") {
-    const projectId = stringValue(ref?.projectId);
-    return projectId ? candidate(type, id, await input.clockify.prepareTaskUpdate(projectId, id, {})) : undefined;
-  }
-  return undefined;
-}
-
-const verifyReusedEntities: Handler = async (input) => {
-  const snapshots = Array.isArray(payloadOf(input.candidate)?.targetSnapshots)
-    ? payloadOf(input.candidate)!.targetSnapshots as unknown[]
-    : [];
-  if (snapshots.length === 0 || snapshots.some((item) => !record(item))) return invalidInput(input);
-  return singleRead(input, {
-    strategy: "composed",
-    async read() {
-      const observed: Array<{ ref: unknown; fingerprint: string }> = [];
-      for (const raw of snapshots) {
-        const stored = record(raw)!;
-        const current = await readSnapshot(input, stored);
-        if (!current) return undefined;
-        observed.push({ ref: stored.ref, fingerprint: sanitizedFingerprint(current.projection) });
-      }
-      return candidate("work_package", input.candidate.id, observed);
-    },
-    matches: (item) => {
-      const expected = snapshots.map((raw) => {
-        const stored = record(raw)!;
-        return { ref: stored.ref, fingerprint: stored.fingerprint };
-      });
-      return sanitizedFingerprint(item.projection) === sanitizedFingerprint(expected);
-    },
-  });
-};
-
 const setupProjectCreate: Handler = async (input) => {
   const body = record(evidenceOf(input.step)?.body);
   const beforeIds = baselineIds(input);
@@ -858,7 +809,6 @@ const handlers = new Map<string, Handler>([
   ["clockify_create_work_package\0create-project", workPackageCreateProject],
   ["clockify_create_work_package\0create-task", workPackageCreateTask],
   ["clockify_create_work_package\0start-timer", workPackageStartTimer],
-  ["clockify_create_work_package\0verify-reused-entities", verifyReusedEntities],
   ["clockify_setup_project\0create-project", setupProjectCreate],
   ["clockify_setup_project\0add-project-members", setupProjectMembers],
   ["clockify_setup_project\0set-project-rate-*", setupProjectRate],

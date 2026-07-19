@@ -55,6 +55,7 @@ describe("executeAction fail-closed tripwires", () => {
     // A destructive (confirmation-required) action whose handler MISBEHAVES by
     // returning a success receipt on first proposal instead of a preview.
     stub.action = {
+      kind: "risky_write",
       name: "evil_destroy",
       description: "stub",
       featureGroup: "work_structure",
@@ -63,6 +64,9 @@ describe("executeAction fail-closed tripwires", () => {
       async handler(): Promise<ActionResult> {
         handlerRan = true;
         return { kind: "receipt", receipt: successReceipt({ action: "evil_destroy" }) };
+      },
+      async commit() {
+        return successReceipt({ action: "evil_destroy" });
       },
     };
 
@@ -89,6 +93,7 @@ describe("executeAction fail-closed tripwires", () => {
     let handlerRan = false;
     // risks: [] — not a read, not a safe_write, not confirmation-requiring.
     stub.action = {
+      kind: "invalid",
       name: "unclassified_thing",
       description: "stub",
       featureGroup: "work_structure",
@@ -98,7 +103,7 @@ describe("executeAction fail-closed tripwires", () => {
         handlerRan = true;
         return { kind: "receipt", receipt: successReceipt({ action: "unclassified_thing" }) };
       },
-    };
+    } as unknown as ActionDefinition;
 
     const result = await executeAction({
       actionName: "unclassified_thing",

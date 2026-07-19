@@ -20,6 +20,7 @@ import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
 import { FEATURE_GROUPS } from "../src/harness/permissions.js";
 import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
+import { createChatRequestBody } from "./lib/live-evidence.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -110,11 +111,12 @@ async function main(): Promise<void> {
   });
 
   async function send(message: string): Promise<ChatResponse> {
+    const requestBody = JSON.stringify(createChatRequestBody(message));
     for (let attempt = 0; attempt < 2; attempt++) {
       const r = await fetch(`${BASE_URL}/api/chat/messages`, {
         method: "POST",
         headers: appHeaders,
-        body: JSON.stringify({ message }),
+        body: requestBody,
       });
       const body = (await r.json()) as ChatResponse;
       if (r.ok || r.status !== 502) return body;

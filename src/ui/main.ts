@@ -1,4 +1,5 @@
 import "./styles.css";
+import "./product.css";
 import { isNearBottom } from "./presentation.js";
 import {
   el,
@@ -20,6 +21,15 @@ import {
 } from "./api-client.js";
 import { submitStreaming, switchToSession } from "./composer-flow.js";
 import {
+  applyUiPreferences,
+  firstRunDisclosure,
+  formatTimeZoneName,
+  loadUiPreferences,
+  normalizeUiPreferences,
+  saveUiPreferences,
+  type UiPreferences,
+} from "./product.js";
+import {
   createRestoreGate,
   historyRestoreItems,
   type ChatController,
@@ -29,6 +39,7 @@ import {
   type PreviewResult,
   type RestoreGate,
 } from "./shared.js";
+import type { PermissionsResponse, SessionsResponse } from "./protocol.js";
 
 // Re-export barrel: `main.ts` is the bundle entry + the public/test import
 // surface, so every symbol the tests pull from `./main.js` is re-exported here.
@@ -66,6 +77,31 @@ export {
   levelLabel,
   msUntil,
 } from "./presentation.js";
+export {
+  DEFAULT_UI_PREFERENCES,
+  firstRunDisclosure,
+  formatLocalDateTime,
+  formatLocalCurrency,
+  formatTimeZoneName,
+  normalizeUiPreferences,
+  promptsForPolicy,
+} from "./product.js";
+export type { UiPreferences, UiTheme, UiLanguage } from "./product.js";
+export {
+  ProtocolError,
+  decodeApiEnvelope,
+  decodeChatResponse,
+  decodeConfirmResponse,
+  decodeHistoryResponse,
+  decodeMeResponse,
+  decodeNdjsonEvent,
+  decodeOperationResponse,
+  decodePermissionsResponse,
+  decodeReceipt,
+  decodeSessionsResponse,
+  decodeUndoResponse,
+  protocolErrorMessage,
+} from "./protocol.js";
 
 /**
  * Vanilla TS chat UI (frontend rules: no framework). The testable core is the
@@ -96,13 +132,11 @@ export function createController(api: ChatApi): ChatController {
 // DOM bootstrap (browser only). Not exercised by unit tests.
 // ---------------------------------------------------------------------------
 
-interface PermissionsResponse {
-  ok: boolean;
-  policy: PolicyShape;
-  firstRun: boolean;
-}
-
 function mount(root: HTMLElement, api: ChatApi): void {
+  // Apply a locally stored display preference before the first interactive
+  // frame. This is deliberately browser-local and never enters the chat/API.
+  let preferences: UiPreferences = loadUiPreferences(window.localStorage);
+  applyUiPreferences(document.documentElement, preferences);
   const controller = createController(api);
   root.replaceChildren();
   const header = el("header", "app-header");
@@ -113,7 +147,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
   // controls). refreshChatsMenu() rebuilds it with the current list whenever
   // that list can change (chat-up, New chat, after a turn) so it stays fresh.
   const chatsSlot = el("div", "chats-slot hidden");
+  let cachedSessions: ChatSessionSummary[] | undefined;
   header.appendChild(chatsSlot);
+  const displayButton = el("button", "secondary display-button", "Display");
+  displayButton.type = "button";
+  displayButton.setAttribute("aria-expanded", "false");
+  displayButton.setAttribute("aria-controls", "display-panel");
+  header.appendChild(displayButton);
   // Start a fresh conversation. Hidden until the chat is up (same as settings).
   // The previous chat stays on the server (retention + the audit log keep it);
   // this only resets the visible transcript to an empty session.
@@ -132,6 +172,62 @@ function mount(root: HTMLElement, api: ChatApi): void {
   settingsButton.appendChild(svgIcon(ICON_GEAR));
   header.appendChild(settingsButton);
   root.appendChild(header);
+
+  const displayPanel = el("section", "display-panel hidden");
+  displayPanel.id = "display-panel";
+  displayPanel.setAttribute("aria-label", "Display preferences");
+  const themeLabel = el("label", undefined, "Theme");
+  const theme = document.createElement("select");
+  theme.setAttribute("aria-label", "Theme");
+  for (const value of ["system", "light", "dark"]) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value[0].toUpperCase() + value.slice(1);
+    option.selected = preferences.theme === value;
+    theme.appendChild(option);
+  }
+  themeLabel.appendChild(theme);
+  const languageLabel = el("label", undefined, "Language");
+  const language = document.createElement("select");
+  language.setAttribute("aria-label", "Language");
+  for (const [value, label] of [["en", "English"], ["sr", "Srpski"]] as const) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    option.selected = preferences.language === value;
+    language.appendChild(option);
+  }
+  languageLabel.appendChild(language);
+  const timeZoneSummary = el("p", "display-time-zone");
+  const refreshTimeZoneSummary = (): void => {
+    timeZoneSummary.textContent = preferences.timeZone
+      ? `Clockify time zone: ${formatTimeZoneName(preferences.timeZone, preferences.language)}`
+      : "Clockify time zone is unavailable.";
+  };
+  refreshTimeZoneSummary();
+  const saveDisplay = el("button", "primary", "Save display");
+  saveDisplay.type = "button";
+  saveDisplay.addEventListener("click", () => {
+    preferences = {
+      ...preferences,
+      theme: theme.value as UiPreferences["theme"],
+      language: language.value as UiPreferences["language"],
+    };
+    saveUiPreferences(window.localStorage, preferences);
+    applyUiPreferences(document.documentElement, preferences);
+    refreshTimeZoneSummary();
+    refreshLocalizedUi();
+    displayPanel.classList.add("hidden");
+    displayButton.setAttribute("aria-expanded", "false");
+    displayButton.focus();
+  });
+  displayPanel.append(themeLabel, languageLabel, timeZoneSummary, saveDisplay);
+  root.appendChild(displayPanel);
+  displayButton.addEventListener("click", () => {
+    const open = displayPanel.classList.toggle("hidden");
+    displayButton.setAttribute("aria-expanded", String(!open));
+    if (!open) theme.focus();
+  });
 
   const setup = el("section", "setup hidden");
   setup.id = "permissions-panel";
@@ -156,6 +252,21 @@ function mount(root: HTMLElement, api: ChatApi): void {
   root.appendChild(statusBar);
   root.appendChild(setup);
   root.appendChild(chat);
+  const footer = el("footer", "app-footer");
+  const footerLinks = new Map<string, HTMLAnchorElement>();
+  for (const [label, href] of [
+    ["Privacy", "/privacy"],
+    ["Security", "/security"],
+    ["Support", "/support"],
+  ]) {
+    const link = el("a", undefined, label);
+    link.href = href;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    footerLinks.set(label.toLowerCase(), link);
+    footer.appendChild(link);
+  }
+  root.appendChild(footer);
 
   function showError(message: string): void {
     errorBar.textContent = message;
@@ -184,9 +295,12 @@ function mount(root: HTMLElement, api: ChatApi): void {
   typing.appendChild(typingLabel);
 
   function setWorking(working: boolean): void {
-    statusBar.textContent = working ? "Assistant is working…" : "";
+    // This local state happens synchronously before fetch/model work; it gives
+    // the admin a truthful <100ms acknowledgement without pretending a tool ran.
+    statusBar.textContent = working ? "Understanding your request…" : "";
     statusBar.classList.toggle("hidden", !working);
     if (working) {
+      typingLabel.textContent = "Understanding your request…";
       const stick = isNearBottom(messages);
       messages.appendChild(typing);
       if (stick) messages.scrollTop = messages.scrollHeight;
@@ -219,11 +333,34 @@ function mount(root: HTMLElement, api: ChatApi): void {
   function dropWelcome(): void {
     chat.querySelector(".welcome")?.remove();
   }
+  let activePolicy: PolicyShape | undefined;
   function showWelcome(): void {
+    dropWelcome();
     chat.insertBefore(
-      renderWelcome({ sendText: (text) => runUiTask(sendText(text), "Message failed to send.") }),
+      renderWelcome({
+        policy: activePolicy,
+        language: preferences.language,
+        sendText: (text) => runUiTask(sendText(text), "Message failed to send."),
+      }),
       messages,
     );
+  }
+
+  function renderSessionMenu(sessions: ChatSessionSummary[]): void {
+    cachedSessions = sessions;
+    chatsSlot.replaceChildren(
+      renderChatsMenu(sessions, {
+        language: preferences.language,
+        onSelect: (id) => runUiTask(selectSession(id), "Could not open that conversation. Please try again."),
+      }),
+    );
+  }
+
+  /** Re-render only locale/policy-derived empty-state chrome; never touch turns. */
+  function refreshLocalizedUi(): void {
+    refreshTimeZoneSummary();
+    if (chat.querySelector(".composer") && messages.childElementCount === 0) showWelcome();
+    if (cachedSessions) renderSessionMenu(cachedSessions);
   }
 
   // r1-new-session-restore-04: the composer goes live the moment renderChat()
@@ -265,7 +402,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
           // The stale-nonce re-arm path (r1-concurrency-races-02): re-fetch the
           // session's live pendings so a tab whose nonce was rotated by another
           // tab can re-render the re-served card.
-          getHistory: () => api.getHistory() as Promise<HistoryResponse>,
+          getHistory: () => api.getHistory(),
           // After Confirm/Cancel removes the card, return focus to the composer
           // (not <body>) — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04.
           returnFocus: () => focusComposer(),
@@ -288,7 +425,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     if (stick) messages.scrollTop = messages.scrollHeight;
   }
 
-  function renderChat(): void {
+  function renderChat(initialSessionsRequest?: Promise<SessionsResponse>): void {
     chat.replaceChildren();
     chat.appendChild(messages);
     const form = el("form", "composer");
@@ -304,10 +441,25 @@ function mount(root: HTMLElement, api: ChatApi): void {
     // focus to <body> — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04).
     focusComposer = () => input.focus();
     let busy = false;
+    const applyComposerWorking = (working: boolean): void => {
+      busy = working;
+      setWorking(working);
+      send.disabled = working;
+      input.disabled = working;
+      form.setAttribute("aria-busy", String(working));
+      if (!working) {
+        input.focus();
+        runUiTask(refreshChatsMenu(), "Could not load your conversations.");
+      }
+    };
     // The ONE path into chat for typed text AND clarify chips — never a
     // confirmation endpoint.
     sendText = async (text: string): Promise<void> => {
       if (busy || !text) return; // one-at-a-time guard (Enter/chip while working can't double-submit)
+      // Acknowledge locally before the ordered history gate or any model work.
+      // The user bubble still waits, preserving replay order, but the iframe
+      // responds within the current event turn instead of appearing frozen.
+      applyComposerWorking(true);
       // Wait for session restore to settle (r1-new-session-restore-04) so a
       // fast first message never renders ABOVE the replayed history. The gate
       // is already-settled outside the restore window, so this is a no-op then.
@@ -318,17 +470,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
       clearError();
       // Streaming: harness results render as they arrive, then the truthful reply.
       await submitStreaming(api, text, {
-        onWorking: (working) => {
-          busy = working;
-          setWorking(working); // announces "Assistant is working…" + shows the typing dots
-          send.disabled = working;
-          input.disabled = working;
-          form.setAttribute("aria-busy", String(working));
-          if (!working) {
-            input.focus(); // return focus to the composer after the turn
-            runUiTask(refreshChatsMenu(), "Could not load your conversations.");
-          }
-        },
+        onWorking: applyComposerWorking,
         onAssistant: (assistantText) => appendMessage("assistant", assistantText),
         onResults: (results) => renderResults(results),
         onError: (message) => showError(message),
@@ -353,7 +495,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     settingsButton.classList.remove("hidden");
     newChatButton.classList.remove("hidden");
     chatsSlot.classList.remove("hidden");
-    runUiTask(refreshChatsMenu(), "Could not load your conversations.");
+    runUiTask(refreshChatsMenu(initialSessionsRequest), "Could not load your conversations.");
     input.focus();
   }
 
@@ -367,15 +509,18 @@ function mount(root: HTMLElement, api: ChatApi): void {
   /**
    * The permissions panel — the first-run setup and the gear's settings reopen
    * are the SAME panel + the same GET/confirm endpoints; only the copy and the
-   * exit path differ. Always re-fetches so the table shows the current policy.
+   * exit path differ. A manual reopen re-fetches the current policy; first-run
+   * setup reuses the policy already fetched by the parallel initialization.
    */
-  async function openPermissions(firstRun: boolean): Promise<void> {
+  async function openPermissions(firstRun: boolean, prefetched?: PermissionsResponse): Promise<void> {
     try {
-      const perms = (await api.getPermissions()) as PermissionsResponse;
+      const perms = prefetched ?? await api.getPermissions();
+      activePolicy = perms.policy;
       setup.replaceChildren();
       setup.appendChild(
         el("h2", undefined, firstRun ? "Set up your assistant permissions" : "Assistant permissions"),
       );
+      if (firstRun) setup.appendChild(el("p", "first-run-disclosure", firstRunDisclosure()));
       setup.appendChild(
         el(
           "p",
@@ -388,11 +533,20 @@ function mount(root: HTMLElement, api: ChatApi): void {
       setup.appendChild(
         renderPermissionTable(perms.policy, async (groups) => {
           try {
-            await controller.savePermissions(groups);
+            const saved = await controller.savePermissions(groups) as {
+              ok?: boolean;
+              message?: string;
+              policy?: PolicyShape;
+            };
+            if (saved?.ok !== true || !saved.policy) {
+              showError(saved?.message ?? "Could not save permissions.");
+              return false;
+            }
+            activePolicy = saved.policy;
             if (firstRun) {
               setup.classList.add("hidden");
               renderChat();
-            }
+            } else refreshLocalizedUi();
             return true; // reopen: stay open so the inline "Saved" is visible
           } catch {
             showError("Could not save permissions.");
@@ -443,7 +597,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
    */
   async function startNewChat(): Promise<void> {
     try {
-      await api.newChat();
+      const result = await api.newChat();
+      if (!result.ok) {
+        showError(result.message ?? "Could not start a new chat. Please try again.");
+        return;
+      }
     } catch (error) {
       showError(error instanceof ApiError ? error.message : "Could not start a new chat. Please try again.");
       return;
@@ -465,9 +623,9 @@ function mount(root: HTMLElement, api: ChatApi): void {
    * pending previews (with freshly rotated nonces) after an iframe reload.
    * Best-effort but honest — a failure leaves the composer fully usable.
    */
-  async function restoreHistory(): Promise<void> {
+  async function restoreHistory(historyRequest?: Promise<HistoryResponse & { ok: true }>): Promise<void> {
     try {
-      const history = (await api.getHistory()) as HistoryResponse;
+      const history = await (historyRequest ?? api.getHistory());
       const items = historyRestoreItems(history);
       if (items.length === 0) return;
       dropWelcome(); // the conversation already started
@@ -483,7 +641,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
       // worth surfacing (its fix is a reload); anything else degrades quietly so
       // we never throw an alarming red bar over a benign first-load restore
       // (plan 006).
-      if (error instanceof ApiError && error.status === 401) {
+      if (error instanceof ApiError) {
         showError(error.message);
       } else {
         console.warn("history restore skipped:", error instanceof Error ? error.message : String(error));
@@ -536,15 +694,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
    * session) so the menu stays current. A failed list is non-fatal — show an
    * honest error and leave the slot's prior widget usable.
    */
-  async function refreshChatsMenu(): Promise<void> {
+  async function refreshChatsMenu(sessionsRequest?: Promise<SessionsResponse>): Promise<void> {
     try {
-      const body = (await api.listSessions()) as { ok?: boolean; sessions?: ChatSessionSummary[] };
-      const sessions: ChatSessionSummary[] = body?.sessions ?? [];
-      chatsSlot.replaceChildren(
-        renderChatsMenu(sessions, {
-          onSelect: (id) => runUiTask(selectSession(id), "Could not open that conversation. Please try again."),
-        }),
-      );
+      const body = await (sessionsRequest ?? api.listSessions());
+      const sessions: ChatSessionSummary[] = body.sessions;
+      renderSessionMenu(sessions);
     } catch (error) {
       showError(error instanceof ApiError ? error.message : "Could not load your conversations.");
     }
@@ -552,14 +706,38 @@ function mount(root: HTMLElement, api: ChatApi): void {
 
   async function init(): Promise<void> {
     try {
-      const perms = (await api.getPermissions()) as PermissionsResponse;
-      if (perms.firstRun) await openPermissions(true);
+      // Permissions, history, and the chat-menu request are independent. Start
+      // them together, then keep the restore gate closed until the ordered
+      // history replay completes so a fast typed message never jumps ahead.
+      const permissionsRequest = api.getPermissions();
+      const historyRequest = api.getHistory();
+      const sessionsRequest = api.listSessions();
+      const meRequest = api.getMe?.();
+      void historyRequest.catch(() => {});
+      void sessionsRequest.catch(() => {});
+      void meRequest?.then((value) => {
+        preferences = normalizeUiPreferences(value.preferences);
+        saveUiPreferences(window.localStorage, preferences);
+        applyUiPreferences(document.documentElement, preferences);
+        theme.value = preferences.theme;
+        language.value = preferences.language;
+        refreshTimeZoneSummary();
+        for (const key of ["privacy", "support", "security"] as const) {
+          footerLinks.get(key)!.href = value.links[key];
+        }
+        refreshLocalizedUi();
+      }).catch((error: unknown) => {
+        showError(error instanceof ApiError ? error.message : "Could not load this session.");
+      });
+      const perms = await permissionsRequest;
+      activePolicy = perms.policy;
+      if (perms.firstRun) await openPermissions(true, perms);
       else {
         // Arm the restore gate BEFORE the composer goes live so a message typed
         // during the history fetch waits for the replay (r1-new-session-restore-04).
         restoreGate = createRestoreGate();
-        renderChat();
-        await restoreHistory(); // settles the gate when the replay is appended
+        renderChat(sessionsRequest);
+        await restoreHistory(historyRequest); // settles after ordered replay
       }
     } catch {
       showError("Could not load the assistant.");

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { createRestCore } from "../../src/clockify/rest/core.js";
+import { createRestCore, withMutationPlanScope } from "../../src/clockify/rest/core.js";
+import { withHostCallBudget } from "../../src/clockify/request-governor.js";
 import { makeUserRest } from "../../src/clockify/rest/users.js";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -9,6 +10,87 @@ const rest = (fetchImpl: typeof fetch) =>
   makeUserRest(createRestCore({ apiBase: "https://api.clockify.me/api/v1", auth: { apiKey: "k" }, fetchImpl }), "ws-1");
 
 describe("user & group rest", () => {
+  it("reads a member beyond the normal 200-row page in one probed 5,000-row workspace-membership GET", async () => {
+    const rows = Array.from({ length: 249 }, (_, index) => ({ id: `user-${index}`, role: "USER" }));
+    rows.push({
+      id: "user-249",
+      roles: [
+        { role: "PROJECT_MANAGER", entity: { id: "project-1", type: "PROJECT" } },
+        { role: "WORKSPACE_ADMIN", entities: [{ id: "ws-1" }] },
+      ],
+    } as never);
+    const f = vi.fn(async (url: string | URL | Request) => {
+      const pageSize = Number(new URL(String(url)).searchParams.get("page-size"));
+      return jsonResponse(rows.slice(0, pageSize));
+    });
+
+    await expect(rest(f as unknown as typeof fetch).getWorkspaceMemberRole("user-249"))
+      .resolves.toBe("ADMIN");
+    expect(f).toHaveBeenCalledTimes(1);
+    const [url, init] = (f as any).mock.calls[0];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/users");
+    expect(parsed.searchParams.get("page")).toBe("1");
+    expect(parsed.searchParams.get("page-size")).toBe("5000");
+    expect(parsed.searchParams.get("memberships")).toBe("WORKSPACE");
+    expect(parsed.searchParams.get("include-roles")).toBe("true");
+    expect(init.method).toBe("GET");
+  });
+
+  it("fits the same beyond-row-200 role lookup in one prepared-operation reservation", async () => {
+    const rows = Array.from({ length: 249 }, (_, index) => ({ id: `user-${index}`, role: "USER" }));
+    rows.push({ id: "user-249", role: "ADMIN" });
+    const f = vi.fn(async (url: string | URL | Request) => {
+      const pageSize = Number(new URL(String(url)).searchParams.get("page-size"));
+      return jsonResponse(rows.slice(0, pageSize));
+    });
+    const client = rest(f as unknown as typeof fetch);
+
+    await expect(withHostCallBudget(() => withMutationPlanScope({
+      actionName: "role-boundary-test",
+      plan: { mode: "single", maxHostCalls: 1, steps: [{ id: "write", kind: "primary" }] },
+    }, () => client.getWorkspaceMemberRole("user-249"))))
+      .resolves.toBe("ADMIN");
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("decodes the live workspace-scoped roles[].entities[] response shape", async () => {
+    const f = vi.fn(async () => jsonResponse([{
+      id: "owner-1",
+      memberships: [{
+        userId: "owner-1",
+        targetId: "ws-1",
+        membershipType: "WORKSPACE",
+        membershipStatus: "ACTIVE",
+      }],
+      roles: [{
+        formatterRoleName: "Admin",
+        role: "WORKSPACE_OWN",
+        entities: [{ id: "ws-1", name: "", membershipStatus: "", source: null }],
+      }],
+    }]));
+
+    await expect(rest(f as unknown as typeof fetch).getWorkspaceMemberRole("owner-1"))
+      .resolves.toBe("OWNER");
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns an explicit non-admin verdict when the exact live member row has no workspace admin role", async () => {
+    const f = vi.fn(async () => jsonResponse([{
+      id: "demoted-1",
+      memberships: [{
+        userId: "demoted-1",
+        targetId: "ws-1",
+        membershipType: "WORKSPACE",
+        membershipStatus: "ACTIVE",
+      }],
+      roles: [],
+    }]));
+
+    await expect(rest(f as unknown as typeof fetch).getWorkspaceMemberRole("demoted-1"))
+      .resolves.toBe("MEMBER");
+  });
+
   it("listUsers GETs /users and maps name/email/status", async () => {
     const f = vi.fn(async () => jsonResponse([{ id: "u1", name: "Ann", email: "ann@x.com", status: "ACTIVE" }]));
     expect(await rest(f as unknown as typeof fetch).listUsers()).toEqual({ rows: [{ id: "u1", name: "Ann", email: "ann@x.com", status: "ACTIVE" }], truncated: false });

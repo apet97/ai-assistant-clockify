@@ -152,6 +152,15 @@ describe("orphaned execution recovery", () => {
       operationHash: "operation",
     });
     expect(store.markOperationExecuting(operationId)).toBe(true);
+    const stepId = store.prepareOperationStep({
+      operationId,
+      planStepId: "create-tag",
+      index: 0,
+      name: "Create tag",
+      kind: "primary",
+    });
+    expect(store.markOperationStepExecuting(stepId)).toBe(true);
+    expect(store.markOperationStepDispatched(stepId)).toBe(true);
     store.close();
 
     const recovered = createStore(path, { encryptionKey: "k" });
@@ -326,10 +335,20 @@ describe("orphaned execution recovery", () => {
       operation: { undoId, reversal },
       mutationPlan: {
         mode: "batch",
+      maxHostCalls: 60,
         steps: [{ id: "undo-0-tag-delete", kind: "primary", reconciliationStrategy: "delete" }],
       },
     });
     expect(operationId).toBe("op-route-undo");
+    const stepId = store.prepareOperationStep({
+      operationId: operationId!,
+      planStepId: "undo-0-tag-delete",
+      index: 0,
+      name: "Delete tag",
+      kind: "primary",
+    });
+    expect(store.markOperationStepExecuting(stepId)).toBe(true);
+    expect(store.markOperationStepDispatched(stepId)).toBe(true);
     store.close();
 
     const recovered = createStore(path, { encryptionKey: "k" });
@@ -353,5 +372,57 @@ describe("orphaned execution recovery", () => {
       "SELECT operation_id FROM action_results WHERE id = ?",
     ).get(operation!.actionResultId!)).toEqual({ operation_id: operationId });
     db.close();
+  });
+
+  it("settles a route-backed undo definitively when restart happens before dispatch", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const reversal = [{ type: "tag", id: "tag-queued-undo", name: "queued" }] as const;
+    const undoId = store.recordUndoable({
+      sessionId: "session-queued-undo",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "clockify_tags_create",
+      reversal: [...reversal],
+    });
+    const operationId = store.startUndoOperation(undoId, {
+      id: "op-queued-undo",
+      sessionId: "session-queued-undo",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: "undo",
+      actionFingerprint: "undo-fingerprint",
+      catalogHash: "catalog",
+      operationHash: "operation",
+      operation: { undoId, reversal },
+      mutationPlan: {
+        mode: "single",
+      maxHostCalls: 60,
+        steps: [{ id: "undo-0-tag-delete", kind: "primary", reconciliationStrategy: "delete" }],
+      },
+    });
+    expect(operationId).toBe("op-queued-undo");
+    const stepId = store.prepareOperationStep({
+      operationId: operationId!,
+      planStepId: "undo-0-tag-delete",
+      index: 0,
+      name: "Delete tag",
+      kind: "primary",
+    });
+    expect(store.markOperationStepExecuting(stepId)).toBe(true);
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    const operation = recovered.getOperationRun(operationId!);
+    const undo = recovered.getUndoRecord(undoId);
+    expect(operation).toMatchObject({ status: "definitive_failed" });
+    expect(undo).toMatchObject({ status: "failed", remaining: reversal });
+    expect(operation?.actionResultId).toBeDefined();
+    expect(undo?.actionResultId).toBe(operation?.actionResultId);
+    expect(recovered.getActionResult(operation!.actionResultId!)).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: false, action: "undo", code: "operation_cancelled_before_dispatch" },
+    });
+    recovered.close();
   });
 });

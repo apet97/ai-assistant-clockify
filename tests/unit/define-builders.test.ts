@@ -229,6 +229,7 @@ describe("defineRiskyAction", () => {
     if (preview.kind !== "preview") throw new Error("expected preview");
     expect(preview.operation.mutationPlan).toEqual({
       mode: "single",
+      maxHostCalls: 8,
       steps: [{ id: "create-invoice", kind: "primary", reconciliationStrategy: "create" }],
     });
     expect(seen.preview).toBe(preview.operation.operationId);

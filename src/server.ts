@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import express, { type Express } from "express";
 import { buildAddon, ADDON_ICON_SVG, ICON_PATH } from "./addon/manifest.js";
 import { createSignatureParser } from "./addon/verify.js";
@@ -8,6 +8,7 @@ import { createStore, type Installation } from "./db/store.js";
 import type { WorkspaceClient } from "./clockify/client.js";
 import { createRestWorkspaceClient } from "./clockify/rest-workspace.js";
 import { createWorkspaceRequestGovernor, type WorkspaceRequestGovernor } from "./clockify/request-governor.js";
+import { createWorkspaceMutationCoordinator } from "./clockify/workspace-mutation-coordinator.js";
 import {
   resolveClockifyApiBase,
   resolveClockifyAuditBase,
@@ -17,8 +18,13 @@ import { selectModelClient } from "./assistant/select-model-client.js";
 import { apiRouter } from "./routes/api.js";
 import { componentRouter } from "./routes/component.js";
 import { lifecycleRouter } from "./routes/lifecycle.js";
+import { installAttestationRouter } from "./routes/install-attestation.js";
+import { finishNdjsonWithServerError } from "./routes/ndjson.js";
 import type { AppDeps } from "./routes/deps.js";
 import { runProductionStartupReconciliation } from "./harness/startup-reconciliation-registry.js";
+import { completeInterruptedDeletionTombstones } from "./db/deletion-tombstones.js";
+import { renderPublicDocument, type PublicDocumentKind } from "./public-documents.js";
+import { verifyRuntimeReleaseArtifact } from "./release-artifact.js";
 
 /**
  * Compose the Express app from injected dependencies (server-as-a-function, so
@@ -26,7 +32,14 @@ import { runProductionStartupReconciliation } from "./harness/startup-reconcilia
  * dependencies from config and listens.
  */
 export function createApp(deps: AppDeps): Express {
+  const runtimeDeps: AppDeps = deps.mutationCoordinator
+    ? deps
+    : { ...deps, mutationCoordinator: createWorkspaceMutationCoordinator() };
   const app = express();
+  // Express identifies itself by default. The service has no need to disclose
+  // that implementation detail to a caller, so remove it before any middleware
+  // writes a response.
+  app.disable("x-powered-by");
   // Cap the request body: a hostile multi-MB JSON payload must never be parsed
   // into memory or persisted. Oversized bodies are rejected by body-parser before
   // any route runs (it raises a 413 PayloadTooLargeError, mapped below). The chat
@@ -40,17 +53,60 @@ export function createApp(deps: AppDeps): Express {
   // X-Frame-Options is intentionally NOT set — the add-on must stay
   // iframe-embeddable; clickjacking is controlled by the component CSP
   // frame-ancestors allow-list.
-  const httpsDeployment = deps.config.baseUrl.startsWith("https://");
+  const httpsDeployment = runtimeDeps.config.baseUrl.startsWith("https://");
   app.use((_req, res, next) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     if (httpsDeployment) {
-      res.setHeader("Strict-Transport-Security", "max-age=15552000; includeSubDomains");
+      res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     }
     next();
   });
 
+  const publicDocuments = new Map<string, PublicDocumentKind>([
+    ["/privacy", "privacy"],
+    ["/terms", "terms"],
+    ["/support", "support"],
+    ["/security", "security"],
+  ]);
+  for (const [route, kind] of publicDocuments) {
+    app.get(route, (_req, res) => {
+      res.setHeader("Cache-Control", "public, max-age=300");
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+      );
+      res.setHeader("Referrer-Policy", "no-referrer");
+      res.setHeader("X-Frame-Options", "DENY");
+      res.type("html").send(renderPublicDocument(kind, runtimeDeps.config.publicContactUrl));
+    });
+  }
+
   app.get("/manifest", (_req, res) => {
     res.json(buildAddon(deps.config.baseUrl).getManifest());
+  });
+
+  // Public, secret-free deployment identity. Railway CLI uploads are not tied to
+  // Git automatically, so release deploys set both values from a clean commit.
+  app.get("/version", (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      version: "1.0.0",
+      releaseSha: runtimeDeps.releaseArtifactIdentity?.releaseSha ?? null,
+      buildHash: runtimeDeps.releaseArtifactIdentity?.releaseBuildHash ?? null,
+      serverArtifactSha256: runtimeDeps.releaseArtifactIdentity?.serverArtifactSha256 ?? null,
+      sourceRelationship: runtimeDeps.releaseArtifactIdentity?.sourceRelationship ?? null,
+      sourceBindingSha256: runtimeDeps.releaseArtifactIdentity?.sourceBindingSha256 ?? null,
+      modelConfiguration: {
+        provider: runtimeDeps.config.llmProvider,
+        model: runtimeDeps.config.llmModel ?? null,
+        endpointSha256: runtimeDeps.config.llmEndpointSha256 ?? null,
+        mode: runtimeDeps.config.llmMode,
+        agentic: runtimeDeps.config.llmAgentic,
+        toolSelect: runtimeDeps.config.llmToolSelect,
+        reasoningEffort: runtimeDeps.config.llmReasoningEffort ?? null,
+        thinkingMode: runtimeDeps.config.llmThinkingMode ?? null,
+      },
+    });
   });
 
   // Process liveness is deliberately independent of dependencies/draining.
@@ -80,13 +136,14 @@ export function createApp(deps: AppDeps): Express {
     res.status(200).send(ADDON_ICON_SVG);
   });
 
-  app.use(lifecycleRouter(deps));
-  app.use(componentRouter(deps));
+  app.use(installAttestationRouter(runtimeDeps));
+  app.use(lifecycleRouter(runtimeDeps));
+  app.use(componentRouter(runtimeDeps));
   app.use("/api", (_req, res, next) => {
     res.setHeader("Cache-Control", "private, no-store");
     next();
   });
-  app.use("/api", apiRouter(deps));
+  app.use("/api", apiRouter(runtimeDeps));
 
   // Built UI assets (present after `npm run build`); harmless if absent.
   app.use("/ui", express.static(resolve("dist/ui")));
@@ -101,16 +158,7 @@ export function createApp(deps: AppDeps): Express {
   app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error("request error:", err instanceof Error ? err.message : String(err));
     if (res.headersSent) {
-      try {
-        res.write(`${JSON.stringify({ type: "error", code: "server_error", message: "Something went wrong." })}\n`);
-      } catch {
-        // Socket may already be torn down — nothing more to do.
-      }
-      try {
-        res.end();
-      } catch {
-        // Same — best-effort terminal flush.
-      }
+      finishNdjsonWithServerError(res);
       return;
     }
     // Body-parser client errors (oversized payload → 413, malformed JSON → 400)
@@ -139,6 +187,7 @@ function liveClockifyForWorkspace(
   installation: Installation,
   commitTimeoutMs?: number,
   requestGovernor?: WorkspaceRequestGovernor,
+  signal?: AbortSignal,
 ): WorkspaceClient {
   return createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
@@ -148,6 +197,7 @@ function liveClockifyForWorkspace(
     auth: { addonToken: installation.addonToken },
     commitTimeoutMs,
     requestGovernor,
+    ...(signal ? { signal } : {}),
   });
 }
 
@@ -156,6 +206,8 @@ const PRUNE_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Drain budget before force-exit — Railway SIGKILLs shortly after SIGTERM. */
 const FORCE_EXIT_AFTER_MS = 10_000;
+const RESTORE_PROBE_CHILD_ARG = "--restore-readiness-probe-child";
+const RESTORE_PROBE_HOST = "127.0.0.1";
 
 export interface ShutdownDeps {
   server: { close(cb: (err?: Error) => void): void; closeIdleConnections?: () => void };
@@ -212,7 +264,22 @@ export function createShutdownHandler(deps: ShutdownDeps): (signal: string, exit
 }
 
 export async function start(): Promise<void> {
+  const restoreProbeRequested = process.argv.includes(RESTORE_PROBE_CHILD_ARG);
+  if (restoreProbeRequested && typeof process.send !== "function") {
+    throw new Error("restore_readiness_probe_requires_ipc");
+  }
   const config = loadConfig();
+  // Runtime variables are claims, not proof. Bind them to the deterministic
+  // post-build manifest and the exact complete dist/server bytes before opening
+  // the database, initializing the provider, or listening on any port.
+  const releaseArtifactIdentity = verifyRuntimeReleaseArtifact({
+    // Compiled entrypoint: dist/server/server.js -> repository root.
+    repositoryRoot: fileURLToPath(new URL("../../", import.meta.url)),
+    nodeEnv: config.nodeEnv,
+    releaseSha: config.releaseSha,
+    releaseBuildHash: config.releaseBuildHash,
+    sourceBindingSha256: config.releaseSourceBindingSha256,
+  });
   const store = createStore(config.databasePath, {
     encryptionKey: config.dataEncryptionKey,
     previousEncryptionKey: config.dataEncryptionKeyPrevious,
@@ -230,6 +297,10 @@ export async function start(): Promise<void> {
     requestGovernors.set(workspaceId, created);
     return created;
   };
+  const completedDeletionTombstones = completeInterruptedDeletionTombstones(store);
+  if (completedDeletionTombstones.length > 0) {
+    console.log(`completed interrupted uninstall tombstones count=${completedDeletionTombstones.length}`);
+  }
   // Store construction has already marked dispatched orphans unknown. Complete
   // the read-only reconciliation pass before any listener can accept mutation
   // traffic. The pass can neither resume a prepared step nor compensate.
@@ -251,12 +322,14 @@ export async function start(): Promise<void> {
     store,
     parser,
     modelClient,
-    clockifyForWorkspace: (installation) => liveClockifyForWorkspace(
+    clockifyForWorkspace: (installation, options) => liveClockifyForWorkspace(
       installation,
       config.commitTimeoutMs,
       requestGovernorFor(installation.workspaceId),
+      options?.signal,
     ),
     readiness: { isReady: () => readiness.ready },
+    ...(releaseArtifactIdentity ? { releaseArtifactIdentity } : {}),
   });
 
   // Retention: prune expired operational rows + chat transcripts/audit log past
@@ -285,14 +358,28 @@ export async function start(): Promise<void> {
   const pruneTimer = setInterval(() => { void prune(); }, PRUNE_INTERVAL_MS);
   pruneTimer.unref();
 
-  const server = app.listen(config.port, () => {
+  const onListening = (): void => {
     // Intentionally minimal, non-secret startup log.
-    console.log(`AI Assistant add-on listening on port ${config.port}`);
+    if (restoreProbeRequested) {
+      const address = server.address();
+      if (!address || typeof address === "string" || typeof process.send !== "function") {
+        throw new Error("restore_readiness_probe_listen_failed");
+      }
+      process.send({ type: "restore_readiness_listening", port: address.port });
+    } else {
+      console.log(`AI Assistant add-on listening on port ${config.port}`);
+    }
     // Run the at-startup backlog sweep AFTER listen so readiness isn't gated by
     // it — the prune now seeks narrow retention indexes, but on a long-lived
     // instance the first sweep should never delay accepting connections.
     void prune();
-  });
+  };
+  // Ordinary PORT validation remains strictly positive. Only the explicit
+  // restore-probe child with a live IPC channel may ask the OS for loopback port
+  // 0, eliminating the reserve-close-bind race without opening a public listener.
+  const server = restoreProbeRequested
+    ? app.listen(0, RESTORE_PROBE_HOST, onListening)
+    : app.listen(config.port, onListening);
 
   // Railway redeploys SIGTERM the container — drain instead of dropping
   // in-flight turns, and close the store cleanly.

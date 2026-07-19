@@ -8,6 +8,9 @@ import type {
   InstallationInput,
   Installation,
   InstallationEnv,
+  InstallationSaveResult,
+  InstallationStatusResult,
+  LifecycleDeletionResult,
   ChatSession,
   NewSessionInput,
   SessionSummary,
@@ -91,6 +94,11 @@ export type {
   InstallationInput,
   Installation,
   InstallationEnv,
+  InstallationSaveOutcome,
+  InstallationSaveResult,
+  InstallationStatusOutcome,
+  InstallationStatusResult,
+  LifecycleDeletionResult,
   ChatSession,
   NewSessionInput,
   SessionSummary,
@@ -173,17 +181,38 @@ export type { PruneCounts };
 export interface Store {
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
   upsertAdminPolicy(workspaceId: string, adminUserId: string, policy: AdminPolicy): void;
-  saveInstallation(input: InstallationInput): void;
+  saveInstallation(input: InstallationInput): InstallationSaveResult;
   getInstallation(workspaceId: string): Installation | undefined;
+  /** Return the server-mintable fresh-install binding only when the supplied
+   * raw token matches the current active installation and exact generation. */
+  getAuthenticatedInstallationAttestation(
+    workspaceId: string,
+    addonToken: string,
+  ): import("../addon/install-attestation.js").InstallationAttestationRecord | undefined;
   /** Refresh environment URLs from the latest token; only provided fields change. */
   updateInstallationEnv(workspaceId: string, env: InstallationEnv): void;
-  setInstallationStatus(workspaceId: string, status: InstallationStatus): void;
+  setInstallationStatus(
+    workspaceId: string,
+    status: InstallationStatus,
+    lifecycleIssuedAt?: number,
+  ): InstallationStatusResult;
+  /** Atomically order a verified DELETED event and wipe the current token. */
+  tombstoneInstallationForLifecycle(
+    workspaceId: string,
+    lifecycleIssuedAt: number,
+  ): LifecycleDeletionResult;
+  /** Wipe the token and persist a deletion tombstone before waiting on host settlement. */
+  tombstoneInstallation(workspaceId: string): { generation: number } | undefined;
+  /** Workspaces whose interrupted uninstall must be completed at startup. */
+  listDeletionTombstones(): string[];
   /**
    * Erase ALL of a workspace's stored data (GDPR / uninstall): deletes every
    * workspace-scoped row and tombstones the installation with the token wiped.
    * Atomic; safe to call on an unknown workspace (no-op zero counts).
    */
   eraseWorkspace(workspaceId: string): EraseCounts;
+  /** Erase only the exact still-current tokenless uninstall tombstone. */
+  eraseWorkspaceForDeletion(workspaceId: string, generation: number): EraseCounts | undefined;
 
   createSession(input: NewSessionInput): ChatSession;
   getSession(id: string): ChatSession | undefined;
@@ -241,6 +270,8 @@ export interface Store {
   settleStartupReconciliation(id: string, stepId: string, result: unknown): ActionResultRef;
   prepareOperationStep(input: PrepareOperationStepInput): string;
   markOperationStepExecuting(id: string, operationId?: string): boolean;
+  markOperationStepDispatched(id: string, operationId?: string): boolean;
+  cancelOperationStepBeforeDispatch(id: string, detail: unknown, operationId?: string): boolean;
   settleOperationStep(
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
@@ -484,6 +515,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       operationId,
     }),
     markOperationStepExecuting: (id) => operationRunStore.markOperationStepExecuting(id, operationId),
+    markOperationStepDispatched: (id) => operationRunStore.markOperationStepDispatched(id, operationId),
+    cancelOperationStepBeforeDispatch: (id, detail) =>
+      operationRunStore.cancelOperationStepBeforeDispatch(id, detail, operationId),
     settleOperationStep: (id, status, detail) => operationRunStore.settleOperationStep(id, status, detail, operationId),
     settleOperationStepDegraded: (id, status, detail) =>
       operationRunStore.settleOperationStepDegraded(id, status, detail, operationId),
@@ -574,8 +608,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           "UPDATE turn_runs SET status = 'outcome_unknown', updated_at = ? WHERE status = 'executing'",
         ).run(timestamp).changes;
         // A dispatched step can have reached Clockify before the process died.
-        // Preserve prepared steps as undispatched, but classify executing primary
-        // or compensation effects as unknown. Recovery remains read-only: it
+        // Preserve prepared steps as undispatched; executing-but-undispatched steps
+        // fail definitively, while dispatched primary or compensation effects remain
+        // unknown. Recovery remains read-only: it
         // never creates or dispatches a compensation step in the background.
         // `compensating` is the known-succeeded source marker paired atomically
         // with an executing compensation row. Preserve that known source truth;
@@ -587,25 +622,40 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         ).run(timestamp);
         db.prepare(
           `UPDATE operation_steps
+              SET status = 'definitive_failed', settled_at = ?, updated_at = ?
+            WHERE status = 'executing' AND dispatched_at IS NULL`,
+        ).run(timestamp, timestamp);
+        db.prepare(
+          `UPDATE operation_steps
               SET status = 'outcome_unknown', settled_at = ?, updated_at = ?
-            WHERE status = 'executing'`,
+            WHERE status = 'executing' AND dispatched_at IS NOT NULL`,
         ).run(timestamp, timestamp);
 
-        const insertUnknownResult = (row: {
+        const operationWasDispatched = (operationId: string): boolean =>
+          (db.prepare(
+            `SELECT 1 FROM operation_steps
+              WHERE operation_id = ? AND dispatched_at IS NOT NULL LIMIT 1`,
+          ).get(operationId) as { 1: number } | undefined) !== undefined;
+        const insertRecoveryResult = (row: {
           session_id: string;
           workspace_id: string;
           admin_user_id: string;
           action_name: string;
-        }, operationId?: string): ActionResultRef => {
+        }, operationId?: string, kind: "definitive_failed" | "outcome_unknown" = "outcome_unknown"): ActionResultRef => {
           const id = randomUUID();
+          const undispatched = kind === "definitive_failed";
           const result = {
             kind: "receipt",
             receipt: {
               ok: false,
               action: row.action_name,
-              code: "commit_outcome_unknown",
-              message: "The server restarted while this action was executing, so its outcome is unknown.",
-              recovery: "Verify the result in Clockify before trying the action again.",
+              code: undispatched ? "operation_cancelled_before_dispatch" : "commit_outcome_unknown",
+              message: undispatched
+                ? "The server restarted before this queued action reached Clockify. No change was made."
+                : "The server restarted while this action was executing, so its outcome is unknown.",
+              recovery: undispatched
+                ? "Create a fresh request when the service is available."
+                : "Verify the result in Clockify before trying the action again.",
             },
           };
           const summary = buildActionResultSummary(id, result);
@@ -613,7 +663,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             `INSERT INTO action_results (
                id, operation_id, workspace_id, admin_user_id, session_id, action_name, kind,
                result_json, summary_json, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, 'outcome_unknown', ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           ).run(
             id,
             operationId ?? null,
@@ -621,11 +671,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             row.admin_user_id,
             row.session_id,
             row.action_name,
+            kind,
             actionResultJson(result),
             actionResultJson(summary),
             timestamp,
           );
-          return { id, kind: "outcome_unknown", summary };
+          return { id, kind, summary };
         };
         const operationResult = (operationId: string): ActionResultRef | undefined => {
           const row = db.prepare(
@@ -657,7 +708,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         }>;
         let operations = 0;
         for (const row of confirmationRows) {
-          const ref = operationResult(row.operation_id) ?? insertUnknownResult(row, row.operation_id);
+          const recoveryKind = operationWasDispatched(row.operation_id) ? "outcome_unknown" : "definitive_failed";
+          const ref = operationResult(row.operation_id) ?? insertRecoveryResult(row, row.operation_id, recoveryKind);
           db.prepare(
             `UPDATE pending_confirmations
                 SET status = ?, action_result_id = ?, result_summary_json = ?,
@@ -715,7 +767,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         }>;
         let undos = 0;
         for (const row of linkedUndoRows) {
-          const ref = operationResult(row.operation_id) ?? insertUnknownResult(row, row.operation_id);
+          const recoveryKind = operationWasDispatched(row.operation_id) ? "outcome_unknown" : "definitive_failed";
+          const ref = operationResult(row.operation_id) ?? insertRecoveryResult(row, row.operation_id, recoveryKind);
           operations += db.prepare(
             `UPDATE operation_runs
                 SET status = ?, action_result_id = ?, updated_at = ?
@@ -723,10 +776,16 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           ).run(ref.kind, ref.id, timestamp, row.operation_id).changes;
           undos += db.prepare(
             `UPDATE undo_records
-                SET status = 'outcome_unknown', action_result_id = ?,
+                SET status = ?, action_result_id = ?,
                     result_summary_json = ?, undone_at = ?
               WHERE id = ? AND status = 'executing'`,
-          ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
+          ).run(
+            recoveryKind === "outcome_unknown" ? "outcome_unknown" : "failed",
+            ref.id,
+            actionResultJson(ref.summary),
+            timestamp,
+            row.id,
+          ).changes;
         }
 
         const standaloneOperations = db.prepare(
@@ -741,7 +800,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           action_name: string;
         }>;
         for (const row of standaloneOperations) {
-          const ref = operationResult(row.id) ?? insertUnknownResult(row, row.id);
+          const recoveryKind = operationWasDispatched(row.id) ? "outcome_unknown" : "definitive_failed";
+          const ref = operationResult(row.id) ?? insertRecoveryResult(row, row.id, recoveryKind);
           operations += db.prepare(
             `UPDATE operation_runs
                 SET status = ?, action_result_id = ?, updated_at = ?
@@ -758,7 +818,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           admin_user_id: string;
         }>;
         for (const row of undoRows) {
-          const ref = insertUnknownResult({ ...row, action_name: "undo" });
+          const ref = insertRecoveryResult({ ...row, action_name: "undo" });
           undos += db.prepare(
             `UPDATE undo_records
                 SET status = 'outcome_unknown', action_result_id = ?,

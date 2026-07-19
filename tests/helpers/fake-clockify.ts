@@ -1,4 +1,5 @@
 import type { WorkspaceClient } from "../../src/clockify/client.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   createFakeState,
   makeNextId,
@@ -24,6 +25,7 @@ import { makeFakeReports } from "./fake/reports.js";
 import { makeFakeAudit } from "./fake/audit.js";
 import { makeFakeWorkspace } from "./fake/workspace.js";
 import { makeFakeMiscRisky } from "./fake/misc-risky.js";
+import { beginScopedMutationDispatchForTest } from "../../src/clockify/rest/core.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -43,6 +45,8 @@ export interface FakeWorkspace {
   state: FakeState;
 }
 
+const nestedFakeMutation = new AsyncLocalStorage<boolean>();
+
 export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace {
   const state = createFakeState(seed);
   const counts: Record<string, number> = {};
@@ -52,7 +56,7 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
   const nextId = makeNextId();
   const ctx: FakeContext = { state, seed, bump, nextId };
 
-  const client: WorkspaceClient = {
+  const rawClient: WorkspaceClient = {
     // Per-area factories spread into the single port — same structure as
     // `createRestWorkspaceClient` in src/clockify/rest-workspace.ts.
     ...makeFakeTags(ctx),
@@ -74,6 +78,24 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     ...makeFakeWorkspace(ctx),
     ...makeFakeMiscRisky(ctx),
   };
+
+  const mutationMethod = /^(?:add|archive|create|deactivate|delete|import|invite|mark|publish|remove|resubmit|set|start|stop|submit|update)/;
+  const client = new Proxy(rawClient, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (typeof property !== "string" || typeof value !== "function" || !mutationMethod.test(property)) {
+        return value;
+      }
+      return async (...args: unknown[]) => {
+        if (nestedFakeMutation.getStore()) {
+          return (value as (...methodArgs: unknown[]) => unknown).apply(target, args);
+        }
+        await beginScopedMutationDispatchForTest();
+        return nestedFakeMutation.run(true, () =>
+          (value as (...methodArgs: unknown[]) => unknown).apply(target, args));
+      };
+    },
+  }) as WorkspaceClient;
 
   return { client, counts, state };
 }

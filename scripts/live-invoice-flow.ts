@@ -19,6 +19,7 @@ import { createStore, type Installation } from "../src/db/store.js";
 import { createRestWorkspaceClient } from "../src/clockify/rest-workspace.js";
 import { resolveClockifyApiBase } from "../src/clockify/api-base.js";
 import { requireCompleteRows } from "../src/clockify/rest/list-pages.js";
+import { createChatRequestBody } from "./lib/live-evidence.js";
 
 const DATABASE_PATH = process.env.DATABASE_PATH ?? "./data/ai-assistant.sqlite";
 const DATA_ENCRYPTION_KEY = process.env.DATA_ENCRYPTION_KEY;
@@ -31,7 +32,9 @@ if (!DATA_ENCRYPTION_KEY || !BASE_URL) {
 let pass = 0;
 let fail = 0;
 function ok(label: string, cond: boolean, detail = ""): boolean {
-  (cond ? pass++ : fail++, console.log(`  ${cond ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`));
+  if (cond) pass++;
+  else fail++;
+  console.log(`  ${cond ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
   return cond;
 }
 
@@ -94,7 +97,7 @@ async function main(): Promise<void> {
     const r = await fetch(`${BASE_URL}/api/chat/messages`, {
       method: "POST",
       headers: appHeaders,
-      body: JSON.stringify({ message }),
+      body: JSON.stringify(createChatRequestBody(message)),
     });
     return (await r.json()) as ChatResponse;
   }

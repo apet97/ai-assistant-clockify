@@ -85,6 +85,7 @@ describe("undo route", () => {
       workspaceId: "ws-1",
       adminUserId: "admin-1",
       actionName: "clockify_tags_create",
+      installationGeneration: isoStore.getInstallation("ws-1")!.generation,
       reversal: [{ type: "tag", id: "tag-live", name: "Live tag" }],
     });
     const mutationPaths: string[] = [];
@@ -124,7 +125,13 @@ describe("undo route", () => {
       .find((candidate) => candidate.actionName === "undo");
     expect(run).toMatchObject({
       status: "succeeded",
-      steps: [{ planStepId: "undo-0-tag-delete", index: 0, status: "succeeded" }],
+      steps: [{
+        planStepId: "undo-0-tag-delete",
+        index: 0,
+        status: "succeeded",
+        queuedAt: expect.any(String),
+        dispatchedAt: expect.any(String),
+      }],
       result: { id: expect.any(String), kind: "succeeded" },
     });
     expect(isoStore.getUndoRecord(undoId)).toMatchObject({
@@ -148,6 +155,7 @@ describe("undo route", () => {
       workspaceId: "ws-1",
       adminUserId: "admin-1",
       actionName: "seed",
+      installationGeneration: isoStore.getInstallation("ws-1")!.generation,
       // Reverse execution order is tag -> invoice -> webhook.
       reversal: [
         { type: "webhook", id: "hook-later" },
@@ -162,7 +170,10 @@ describe("undo route", () => {
       const method = init?.method ?? "GET";
       if (url.pathname === "/api/v1/workspaces/ws-1/users") {
         roleReads += 1;
-        const role = roleReads <= 2 ? "ADMIN" : "USER";
+        // Authenticated surfaces now perform a fail-closed role check before the
+        // mutation-specific preflight and each dispatch. Keep the caller admin
+        // for surface + preflight + first step, then demote before step two.
+        const role = roleReads <= 3 ? "ADMIN" : "USER";
         return new Response(JSON.stringify([{ id: "admin-1", role }]), { status: 200 });
       }
       if (method === "DELETE") {

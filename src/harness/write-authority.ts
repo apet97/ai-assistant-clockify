@@ -4,6 +4,21 @@ import type {
   ExternalMutationPlan,
   WriteAuthorityMetadata,
 } from "./action.js";
+import {
+  GROUP_MEMBER_BATCH_MAX,
+  INVOICE_CREATE_MUTATION_STEP_MAX,
+  INVOICE_IMPORT_PROJECT_BATCH_MAX,
+  INVOICE_ITEM_BATCH_MAX,
+  INTENT_LITERAL_LIMITS,
+  MARK_INVOICED_ENTRY_BATCH_MAX,
+  ONBOARD_GROUP_BATCH_MAX,
+  ONBOARD_USER_MUTATION_STEP_MAX,
+  SETUP_PROJECT_MUTATION_STEP_MAX,
+  SETUP_PROJECT_RATE_BATCH_MAX,
+  SETUP_TASK_ASSIGNEE_BATCH_MAX,
+  TIME_OFF_BALANCE_USER_BATCH_MAX,
+  TURN_HOST_CALL_LIMIT,
+} from "./safety-limits.js";
 
 interface JsonSchemaNode {
   type?: string | readonly string[];
@@ -57,9 +72,10 @@ const repeated = (
   argumentPath: string,
   mutationPlans: WriteAuthorityMetadata["mutationPlans"],
   extras: Omit<ActionAuthoritySemantics, "cardinality" | "mutationPlans"> = {},
+  maxArgumentItems = maxExecutions,
 ): ActionAuthoritySemantics => ({
   ...extras,
-  cardinality: { mode: "argument", maxExecutions, argumentPath },
+  cardinality: { mode: "argument", maxExecutions, maxArgumentItems, argumentPath },
   mutationPlans,
 });
 
@@ -74,9 +90,8 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_log_work: single("log-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
   clockify_fix_entry: single("update-time-entry", { derivedIds: ["operation.entryId", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
   clockify_entries_delete: single("delete-time-entry", { derivedIds: ["operation.id"] }),
-  clockify_entries_mark_invoiced: single("mark-entries-invoiced", { derivedIds: ["operation.entryIds[]"] }),
+  clockify_entries_mark_invoiced: repeated(1, "ids[]", [plan("single", step("mark-entries-invoiced"))], { derivedIds: ["operation.entryIds[]"] }, MARK_INVOICED_ENTRY_BATCH_MAX),
   clockify_create_work_package: fixed(5, [
-    plan("single", step("verify-reused-entities")),
     ...["create-tag", "create-client", "create-project", "create-task", "start-timer"].map((id) => plan("single", step(id))),
     { ...plan("curated", step("create-tag", "primary", 0, 1), step("create-client", "primary", 0, 1), step("create-project", "primary", 0, 1), step("create-task", "primary", 0, 1), step("start-timer", "primary", 0, 1)), minSteps: 2 },
   ], { derivedIds: ["operation.clientId", "operation.projectId", "operation.taskId", "operation.tagId"], defaults: ["operation.timer.start"] }),
@@ -107,9 +122,9 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_tags_create: single("create-tag"),
   clockify_tags_update: single("update-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
   clockify_tags_delete: single("delete-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
-  clockify_invoices_create: repeated(102, "items[]", [
-    plan("curated", step("create-invoice"), step("enrich-invoice", "primary", 0, 1), step("add-invoice-item-*", "primary", 0, 100)),
-  ], { derivedIds: ["operation.clientId", "operation.base.clientId", "operation.items[].itemType", "operation.items[].itemTypeId"], defaults: ["operation.number", "operation.base.number", "operation.issuedDate", "operation.base.issuedDate", "operation.dueDate", "operation.base.dueDate", "operation.currency", "operation.base.currency", "operation.items[].description", "operation.items[].quantity", "operation.items[].amountUnit", "operation.items[].applyTaxes"] }),
+  clockify_invoices_create: repeated(INVOICE_CREATE_MUTATION_STEP_MAX, "items[]", [
+    plan("curated", step("create-invoice"), step("enrich-invoice", "primary", 0, 1), step("add-invoice-item-*", "primary", 0, INVOICE_ITEM_BATCH_MAX)),
+  ], { derivedIds: ["operation.clientId", "operation.base.clientId", "operation.items[].itemType", "operation.items[].itemTypeId"], defaults: ["operation.number", "operation.base.number", "operation.issuedDate", "operation.base.issuedDate", "operation.dueDate", "operation.base.dueDate", "operation.currency", "operation.base.currency", "operation.items[].description", "operation.items[].quantity", "operation.items[].amountUnit", "operation.items[].applyTaxes"] }, INVOICE_ITEM_BATCH_MAX),
   clockify_invoices_update: fixed(2, [
     plan("curated", step("update-invoice-fields", "primary", 0, 1), step("update-invoice-status", "primary", 0, 1)),
   ], { derivedIds: ["operation.invoiceId", "operation.id", "operation.clientId", "operation.patch.clientId", "operation.updateBody.clientId"] }),
@@ -118,7 +133,7 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_invoices_items_delete: single("delete-invoice-item", { derivedIds: ["operation.invoiceId"] }),
   clockify_invoices_payments_create: single("record-payment", { derivedIds: ["operation.invoiceId"], defaults: ["operation.amountUnit"] }),
   clockify_invoices_payments_delete: single("delete-invoice-payment", { derivedIds: ["operation.invoiceId", "operation.paymentId"] }),
-  clockify_invoices_import_time: single("import-invoice-time", { derivedIds: ["operation.invoiceId", "operation.projectId", "operation.userId", "operation.range.projectIds[]"] }),
+  clockify_invoices_import_time: repeated(1, "projectIds[]", [plan("single", step("import-invoice-time"))], { derivedIds: ["operation.invoiceId", "operation.projectId", "operation.userId", "operation.range.projectIds[]"] }, INVOICE_IMPORT_PROJECT_BATCH_MAX),
   clockify_expenses_create: single("create-expense", { derivedIds: ["operation.categoryId", "operation.projectId", "operation.taskId", "operation.userId", "operation.body.categoryId", "operation.body.projectId", "operation.body.taskId", "operation.body.userId", "operation.input.categoryId", "operation.input.projectId", "operation.input.taskId", "operation.input.userId"], defaults: ["operation.amountUnit", "operation.body.amountUnit"] }),
   clockify_expenses_update: single("update-expense", { derivedIds: ["operation.expenseId", "operation.id", "operation.categoryId", "operation.projectId", "operation.taskId", "operation.body.categoryId", "operation.body.projectId", "operation.body.taskId", "operation.updateBody.userId", "operation.updateBody.categoryId", "operation.updateBody.projectId", "operation.updateBody.taskId", "operation.values.categoryId", "operation.values.projectId", "operation.values.taskId"], defaults: ["operation.amountUnit", "operation.body.amountUnit"] }),
   clockify_expenses_delete: single("delete-expense", { derivedIds: ["operation.expenseId", "operation.id"] }),
@@ -140,7 +155,7 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_time_off_requests_delete: single("delete-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_approve: single("approve-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_deny: single("deny-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
-  clockify_time_off_balance_update: single("update-time-off-balance", { derivedIds: ["operation.policyId", "operation.userIds[]", "operation.expectedBalances[].userId"] }),
+  clockify_time_off_balance_update: repeated(1, "userIds[]", [plan("single", step("update-time-off-balance"))], { derivedIds: ["operation.policyId", "operation.userIds[]", "operation.expectedBalances[].userId"] }, TIME_OFF_BALANCE_USER_BATCH_MAX),
   clockify_holidays_create: single("create-holiday", { derivedIds: ["operation.body.userIds[]", "operation.body.userGroupIds[]"] }),
   clockify_holidays_update: single("update-holiday", { derivedIds: ["operation.holidayId", "operation.id", "operation.body.userIds[]", "operation.body.userGroupIds[]", "operation.updateBody.userIds[]", "operation.updateBody.userGroupIds[]", "operation.updateBody.source.userIds[]", "operation.updateBody.source.userGroupIds[]"] }),
   clockify_holidays_delete: single("delete-holiday", { derivedIds: ["operation.holidayId", "operation.id"] }),
@@ -163,7 +178,7 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_groups_create: single("create-group"),
   clockify_groups_update: single("update-group", { derivedIds: ["operation.groupId", "operation.id"] }),
   clockify_groups_delete: single("delete-group", { derivedIds: ["operation.groupId", "operation.id"] }),
-  clockify_groups_add_user: repeated(100, "members[]", [plan("single", step("add-user-to-group-*")), plan("batch", step("add-user-to-group-*", "primary", 2, 100))], { derivedIds: ["operation.groupId", "operation.userIds[]"] }),
+  clockify_groups_add_user: repeated(GROUP_MEMBER_BATCH_MAX, "members[]", [plan("single", step("add-user-to-group-*")), plan("batch", step("add-user-to-group-*", "primary", 2, GROUP_MEMBER_BATCH_MAX))], { derivedIds: ["operation.groupId", "operation.userIds[]"] }),
   clockify_groups_remove_user: single("remove-user-from-group", { derivedIds: ["operation.groupId", "operation.userId"] }),
   clockify_delete_entity: fixed(3, [
     ...["project", "client"].flatMap((entity) => [
@@ -175,15 +190,15 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_update_entity: fixed(1, [
     plan("single", step("update-project")), plan("single", step("update-client")), plan("single", step("update-tag")),
   ], { derivedIds: ["operation.id", "operation.body.clientId"] }),
-  clockify_onboard_user: repeated(101, "groups[]", [
+  clockify_onboard_user: repeated(ONBOARD_USER_MUTATION_STEP_MAX, "groups[]", [
     plan("single", step("invite-user")),
-    plan("curated", step("invite-user"), step("add-user-to-group-*", "primary", 1, 100)),
-  ], { derivedIds: ["operation.groups[].id", "operation.groupIds[]", "operation.userId"], defaults: ["operation.sendEmail"] }),
-  clockify_setup_project: repeated(102, "memberRates[]", [
+    plan("curated", step("invite-user"), step("add-user-to-group-*", "primary", 1, ONBOARD_GROUP_BATCH_MAX)),
+  ], { derivedIds: ["operation.groups[].id", "operation.groupIds[]", "operation.userId"], defaults: ["operation.sendEmail"] }, ONBOARD_GROUP_BATCH_MAX),
+  clockify_setup_project: repeated(SETUP_PROJECT_MUTATION_STEP_MAX, "memberRates[]", [
     plan("single", step("create-project")),
-    plan("curated", step("create-project"), step("add-project-members", "primary", 0, 1), step("set-project-rate-*", "primary", 0, 100)),
-  ], { derivedIds: ["operation.clientId", "operation.userIds[]", "operation.addUserIds[]", "operation.memberRates[].userId"], defaults: ["operation.projectRateKind", "operation.memberRates[].kind", "operation.rateUnit"] }),
-  clockify_setup_task: fixed(2, [plan("single", step("create-task")), plan("curated", step("create-task"), step("set-task-rate"))], { derivedIds: ["operation.projectId", "operation.assigneeIds[]"], defaults: ["operation.rate.kind", "operation.rateUnit"] }),
+    plan("curated", step("create-project"), step("add-project-members", "primary", 0, 1), step("set-project-rate-*", "primary", 0, SETUP_PROJECT_RATE_BATCH_MAX)),
+  ], { derivedIds: ["operation.clientId", "operation.userIds[]", "operation.addUserIds[]", "operation.memberRates[].userId"], defaults: ["operation.projectRateKind", "operation.memberRates[].kind", "operation.rateUnit"] }, SETUP_PROJECT_RATE_BATCH_MAX),
+  clockify_setup_task: repeated(2, "assignees[]", [plan("single", step("create-task")), plan("curated", step("create-task"), step("set-task-rate"))], { derivedIds: ["operation.projectId", "operation.assigneeIds[]"], defaults: ["operation.rate.kind", "operation.rateUnit"] }, SETUP_TASK_ASSIGNEE_BATCH_MAX),
 } satisfies Readonly<Record<string, ActionAuthoritySemantics>>);
 
 function collectPaths(node: JsonSchemaNode, prefix = ""): string[] {
@@ -212,7 +227,16 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     target: "jsonSchema7",
   }) as JsonSchemaNode;
   const schemaPaths = collectPaths(schema);
-  const literalControlledPaths = [...new Set([...schemaPaths, ...(action.argumentAliases ?? [])])].sort();
+  // Closed schema leaves remain exact. Reviewed open-record paths use an
+  // explicit `.*` suffix so the raw matcher can authorize descendants only
+  // when the action deliberately accepts dynamic keys; a scalar leaf such as
+  // `name` must never accidentally authorize `name.invented`.
+  const openRecordPaths = (action.argumentOpenPaths ?? []).map((path) => `${path}.*`);
+  const literalControlledPaths = [...new Set([
+    ...schemaPaths,
+    ...(action.argumentAliases ?? []),
+    ...openRecordPaths,
+  ])].sort();
   const semantics = ACTION_SEMANTICS[action.name as keyof typeof ACTION_SEMANTICS];
   if (!semantics) throw new Error(`missing_write_authority_semantics:${action.name}`);
   const serverDerivedIdPaths = [...new Set([
@@ -224,6 +248,7 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
   const permittedServerDefaultPaths = [...new Set(semantics.defaults ?? [])].sort();
   const preservedStatePaths = [...new Set(semantics.preservedState ?? [])].sort();
   return Object.freeze({
+    literalConstraintLimits: INTENT_LITERAL_LIMITS,
     literalControlledPaths: Object.freeze(literalControlledPaths),
     serverDerivedIdPaths: Object.freeze(serverDerivedIdPaths),
     permittedServerDefaultPaths: Object.freeze(permittedServerDefaultPaths),
@@ -316,6 +341,11 @@ export function validateWriteAuthorityOperation(
   }
   if (mutationPlan.steps.length > authority.cardinality.maxExecutions) {
     return "mutation_cardinality_exceeded";
+  }
+  if (!Number.isSafeInteger(mutationPlan.maxHostCalls) ||
+    (mutationPlan.maxHostCalls as number) < 1 ||
+    (mutationPlan.maxHostCalls as number) > TURN_HOST_CALL_LIMIT) {
+    return "invalid_mutation_host_call_budget";
   }
   const declaredPlan = authority.mutationPlans.some((variant) =>
     variant.mode === mutationPlan.mode &&

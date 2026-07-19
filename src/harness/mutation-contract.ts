@@ -1,13 +1,25 @@
+export interface ExternalMutationPlanStep {
+  id: string;
+  kind: "primary" | "compensation";
+  targetFingerprint?: string;
+  /** Exact read-only startup strategy bound to this persisted plan step. */
+  reconciliationStrategy?: "create" | "update" | "delete" | "state-command" | "composed";
+}
+
+/** Preparation-time plan. It cannot be persisted or dispatched until the
+ * deterministic host-call estimator binds `maxHostCalls`. */
+export interface ExternalMutationPlanDraft {
+  mode: "single" | "curated" | "batch";
+  maxHostCalls?: number;
+  steps: ExternalMutationPlanStep[];
+}
+
 /** Exact external dispatch order persisted before the first host mutation. */
 export interface ExternalMutationPlan {
   mode: "single" | "curated" | "batch";
-  steps: Array<{
-    id: string;
-    kind: "primary" | "compensation";
-    targetFingerprint?: string;
-    /** Exact read-only startup strategy bound to this persisted plan step. */
-    reconciliationStrategy?: "create" | "update" | "delete" | "state-command" | "composed";
-  }>;
+  /** Deterministic worst-case host cost, bound into persistence and confirmation hashes. */
+  maxHostCalls: number;
+  steps: ExternalMutationPlanStep[];
 }
 
 export type JournaledOperationStatus =
@@ -42,6 +54,7 @@ export interface JournaledMutationStep {
   externalId?: string;
   effect?: unknown;
   detail?: unknown;
+  queuedAt?: string;
   dispatchedAt?: string;
   settledAt?: string;
   createdAt: string;
@@ -77,7 +90,12 @@ export interface MutationStepJournal {
   readonly operationId: string;
   getOperationStatus(): JournaledOperationStatus | undefined;
   prepareOperationStep(input: ScopedPreparePrimaryStep): string;
+  /** Transition a durable prepared step into the governor queue. */
   markOperationStepExecuting(id: string): boolean;
+  /** Persist the exact host-boundary crossing immediately before fetch starts. */
+  markOperationStepDispatched(id: string): boolean;
+  /** Definitively settle a queued step that never crossed the host boundary. */
+  cancelOperationStepBeforeDispatch(id: string, detail: unknown): boolean;
   settleOperationStep(
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",

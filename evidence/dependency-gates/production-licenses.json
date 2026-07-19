@@ -117,6 +117,12 @@
       "status": "allowed"
     },
     {
+      "package": "debug",
+      "version": "4.4.3",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
       "package": "decompress-response",
       "version": "6.0.0",
       "license": "MIT",
@@ -209,6 +215,12 @@
     {
       "package": "express",
       "version": "4.22.2",
+      "license": "MIT",
+      "status": "allowed"
+    },
+    {
+      "package": "express-rate-limit",
+      "version": "8.6.0",
       "license": "MIT",
       "status": "allowed"
     },
@@ -312,6 +324,12 @@
       "package": "ini",
       "version": "1.3.8",
       "license": "ISC",
+      "status": "allowed"
+    },
+    {
+      "package": "ip-address",
+      "version": "10.2.0",
+      "license": "MIT",
       "status": "allowed"
     },
     {
@@ -665,7 +683,7 @@
   ],
   "blockingPackages": [],
   "summary": {
-    "allowed": 110,
+    "allowed": 113,
     "exceptions": 0,
     "blocked": 0
   }

@@ -5,6 +5,7 @@ import {
   isPartialCommitResult,
   isPreparedSafeWrite,
   isSafeWriteClarification,
+  isSafeWriteNoop,
   mutationPlanContractError,
   OperationPreparationError,
 } from "./action.js";
@@ -26,6 +27,8 @@ import { idempotencyScopeKey, markCommitReplayed, markReplayed } from "./idempot
 import { formatZodIssues, unknownArgumentPaths } from "./arg-shapes.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../clockify/write-outcome.js";
 import { withMutationPlanScope } from "../clockify/rest/core.js";
+import { HostCallBudgetExceededError } from "../clockify/request-governor.js";
+import { bindMutationPlanHostCalls } from "./safety-limits.js";
 import { validateWriteAuthorityOperation } from "./write-authority.js";
 
 /**
@@ -91,7 +94,7 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     };
   }
 
-  const externalWrite = action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read");
+  const externalWrite = action.name.startsWith("clockify_") && action.kind !== "read";
   if (externalWrite && input.context.authorizeWriteArguments) {
     if (!action.writeAuthority) {
       return {
@@ -131,7 +134,13 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
   const group = action.resolveFeatureGroup
     ? action.resolveFeatureGroup(parsed.data)
     : action.featureGroup;
-  const isRead = action.risks.length > 0 && action.risks.every((r) => r === "read");
+  const kindMatchesRisk = action.kind === "read"
+    ? action.risks.length > 0 && action.risks.every((risk) => risk === "read")
+    : action.kind === "safe_write"
+      ? isSafeWrite(action.risks)
+      : action.kind === "risky_write" && requiresConfirmation(action.risks);
+  if (!kindMatchesRisk) return unclassifiedAction(action.name);
+  const isRead = action.kind === "read";
   const isPermissionChange = action.risks.includes("permission_change");
 
   // Managing one's own assistant permissions is not gated by a Clockify feature
@@ -144,7 +153,7 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     }
   }
 
-  if (requiresConfirmation(action.risks)) {
+  if (action.kind === "risky_write") {
     const result = await action.handler(input.context, parsed.data);
     // A risky action must never execute on first proposal: a success receipt
     // here would mean it mutated without confirmation.
@@ -159,7 +168,12 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         }),
       };
     }
-    if (result.kind === "preview" && externalWrite) {
+    if (result.kind === "preview" && externalWrite && result.operation.mutationPlan) {
+      result.operation.mutationPlan = bindMutationPlanHostCalls(
+        action.name,
+        result.operation.payload,
+        result.operation.mutationPlan,
+      );
       const authorityPlanError = validateWriteAuthorityOperation(
         action,
         result.operation.payload,
@@ -170,17 +184,18 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     return result;
   }
 
-  if (isRead) {
+  if (action.kind === "read") {
     return action.handler(input.context, parsed.data);
   }
-  if (isSafeWrite(action.risks)) {
-    let prepared: Awaited<ReturnType<NonNullable<typeof action.prepareSafeWrite>>> | undefined;
+  if (action.kind === "safe_write") {
+    let prepared: Awaited<ReturnType<typeof action.prepareSafeWrite>> | undefined;
     try {
-      prepared = await action.prepareSafeWrite?.(input.context, parsed.data);
+      prepared = await action.prepareSafeWrite(input.context, parsed.data);
     } catch (error) {
       return { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
     }
     if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+    if (isSafeWriteNoop(prepared)) return { kind: "receipt", receipt: prepared.receipt };
     if (prepared !== undefined && !isPreparedSafeWrite(prepared)) {
       return {
         kind: "receipt",
@@ -192,8 +207,18 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
         }),
       };
     }
-    if (prepared) {
-      const authorityPlanError = validateWriteAuthorityOperation(action, prepared.operation, prepared.mutationPlan);
+    const boundedPrepared = prepared
+      ? {
+          ...prepared,
+          mutationPlan: bindMutationPlanHostCalls(action.name, prepared.operation, prepared.mutationPlan),
+        }
+      : undefined;
+    if (boundedPrepared) {
+      const authorityPlanError = validateWriteAuthorityOperation(
+        action,
+        boundedPrepared.operation,
+        boundedPrepared.mutationPlan,
+      );
       if (authorityPlanError) return invalidWriteAuthorityResult(action.name, authorityPlanError);
     }
     const authorityError = await input.context.authorizeWrite?.(action.name);
@@ -203,8 +228,8 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
       if (input.context.operationJournal) {
         operationId = input.context.operationJournal.prepare(
           action.name,
-          prepared?.operation ?? parsed.data,
-          prepared?.mutationPlan,
+          boundedPrepared?.operation ?? parsed.data,
+          boundedPrepared?.mutationPlan,
         );
         input.context.operationJournal.markExecuting(operationId);
       }
@@ -214,23 +239,21 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
             mutationJournal: input.context.operationJournal.scope(operationId),
           }
         : input.context;
-      const executed = prepared && action.executeSafeWrite
-        ? executionContext.mutationJournal
-          ? await withMutationPlanScope({
-              actionName: action.name,
-              plan: prepared.mutationPlan,
-              authorizeDispatch: () => input.context.authorizeWrite?.(action.name),
-              authoritativelyReconciled: (stepId) =>
-                hasAuthoritativelyReconciledStep(executionContext.mutationJournal!, stepId),
-              requiresComplete: commitResultRequiresComplete,
-            }, () => action.executeSafeWrite!(executionContext, prepared))
-          : await action.executeSafeWrite(executionContext, prepared)
-        : undefined;
-      const result: ActionResult = executed
-        ? isPartialCommitResult(executed)
-          ? executed
-          : { kind: "receipt", receipt: executed }
-        : await action.handler(input.context, parsed.data);
+      if (!boundedPrepared) return settleImmediateOperation(input.context, operationId, invalidSafeWritePreparation(action.name));
+      const executed = executionContext.mutationJournal
+        ? await withMutationPlanScope({
+            actionName: action.name,
+            plan: boundedPrepared.mutationPlan,
+            authorizeDispatch: () => input.context.authorizeWrite?.(action.name),
+            onDispatch: (step) => markScopedStepDispatched(executionContext.mutationJournal!, step.id, step.kind),
+            authoritativelyReconciled: (stepId) =>
+              hasAuthoritativelyReconciledStep(executionContext.mutationJournal!, stepId),
+            requiresComplete: commitResultRequiresComplete,
+          }, () => action.executeSafeWrite(executionContext, boundedPrepared))
+        : await action.executeSafeWrite(executionContext, boundedPrepared);
+      const result: ActionResult = isPartialCommitResult(executed)
+        ? executed
+        : { kind: "receipt", receipt: executed };
       return settleImmediateOperation(input.context, operationId, result);
     } catch (error) {
       if (error instanceof OperationPreparationError) operationId = error.operationId;
@@ -240,13 +263,29 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
   }
 
   // Fail closed: not a read, not a safe_write, not requiring confirmation.
+  return unclassifiedAction(input.actionName);
+}
+
+function invalidSafeWritePreparation(actionName: string): ActionResult {
   return {
     kind: "receipt",
     receipt: errorReceipt({
-      action: action.name,
+      action: actionName,
+      code: "invalid_safe_write_preparation",
+      message: "Safe-write preparation returned an invalid result.",
+      recovery: { hint: "Correct the action's prepare contract before retrying.", retryable: false },
+    }),
+  };
+}
+
+function unclassifiedAction(actionName: string): ActionResult {
+  return {
+    kind: "receipt",
+    receipt: errorReceipt({
+      action: actionName,
       code: "unclassified_action",
-      message: "Action risk is not classified as read or safe; refusing to execute.",
-      recovery: { hint: "This action needs a clearer risk classification.", retryable: false },
+      message: "Action kind and risk classification are inconsistent; refusing to execute.",
+      recovery: { hint: "This action needs a valid discriminated risk classification.", retryable: false },
     }),
   };
 }
@@ -290,7 +329,7 @@ export async function commitConfirmedOperation(
   operation: ConfirmableOperation,
 ): Promise<CommitResult> {
   const action = getAction(operation.actionName);
-  if (!action || !action.commit) {
+  if (!action || action.kind !== "risky_write") {
     return errorReceipt({
       action: operation.actionName,
       code: "unknown_action",
@@ -310,7 +349,7 @@ export async function commitConfirmedOperation(
       recovery: { hint: "Create a fresh preview after the action contract is corrected.", retryable: false },
     });
   }
-  const externalWrite = action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read");
+  const externalWrite = action.name.startsWith("clockify_");
   const authorityPlanError = externalWrite
     ? validateWriteAuthorityOperation(action, operation.payload, operation.mutationPlan)
     : undefined;
@@ -355,6 +394,7 @@ export async function commitConfirmedOperation(
         actionName: action.name,
         plan: commitOperation.mutationPlan,
         authorizeDispatch: () => commitCtx.authorizeWrite?.(action.name),
+        onDispatch: (step) => markScopedStepDispatched(commitCtx.mutationJournal!, step.id, step.kind),
         authoritativelyReconciled: (stepId) =>
           hasAuthoritativelyReconciledStep(commitCtx.mutationJournal!, stepId),
         requiresComplete: commitResultRequiresComplete,
@@ -365,8 +405,8 @@ export async function commitConfirmedOperation(
           return compensation?.compensatesStepId !== undefined && steps.some((step) =>
             step.id === compensation.compensatesStepId && step.kind === "primary" && step.status === "compensating");
         },
-      }, () => action.commit!(commitCtx, commitOperation))
-    : action.commit!(commitCtx, commitOperation);
+      }, () => action.commit(commitCtx, commitOperation))
+    : action.commit(commitCtx, commitOperation);
   const semantic = action.idempotencyKey?.(operation);
   const ledger = ctx.idempotency;
 
@@ -402,6 +442,18 @@ function commitResultRequiresComplete(result: unknown): boolean {
   if (typeof result !== "object" || result === null) return false;
   const commitResult = result as CommitResult;
   return !isPartialCommitResult(commitResult) && commitResult.ok === true;
+}
+
+function markScopedStepDispatched(
+  journal: NonNullable<ActionContext["mutationJournal"]>,
+  planStepId: string,
+  kind: "primary" | "compensation",
+): void {
+  const row = journal.listOperationSteps().find((candidate) =>
+    candidate.planStepId === planStepId && candidate.kind === kind);
+  if (!row || !journal.markOperationStepDispatched(row.id)) {
+    throw new Error(`dispatch_journal_unavailable:${planStepId}`);
+  }
 }
 
 /**
@@ -561,6 +613,14 @@ async function runCommit(
 }
 
 function writeFailureReceipt(actionName: string, error: unknown): ErrorReceipt {
+  if (error instanceof HostCallBudgetExceededError) {
+    return errorReceipt({
+      action: actionName,
+      code: error.code,
+      message: error.message,
+      recovery: { hint: "Start a fresh request with a smaller batch.", retryable: true },
+    });
+  }
   if (error instanceof AmbiguousWriteOutcome) {
     return errorReceipt({
       action: actionName,

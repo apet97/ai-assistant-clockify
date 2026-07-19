@@ -43,7 +43,7 @@ import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
 import { reversibleCreations } from "../harness/undo.js";
 import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../harness/catalog.js";
 import { actionStatusLabel } from "../harness/action-labels.js";
-import { canWrite, defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
+import { canWrite, type AdminPolicy } from "../harness/permissions.js";
 import {
   confirmPending,
   createPendingConfirmation,
@@ -67,9 +67,7 @@ import type { Installation, IntentCapabilityRecord } from "../db/store.js";
 import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
 import { CLAIM_TTL_MS } from "../db/store.js";
-import { resolveSession, type AppDeps } from "./deps.js";
-import { createRoleRechecker } from "../auth/role-recheck.js";
-import type { SessionClaims } from "../auth/sessions.js";
+import type { AppDeps } from "./deps.js";
 import {
   sanitizeStoredReplyForModel,
   isTransientErrorMessage,
@@ -92,6 +90,19 @@ import { bestEffort } from "./best-effort.js";
 import { authorizeIntentWriteArguments } from "../harness/intent-authority.js";
 import { boundedCompleteSanitizedJson } from "../harness/safe-json.js";
 import { ACTION_RESULT_SUMMARY_MAX_BYTES } from "../db/action-results.js";
+import {
+  createWorkspaceMutationCoordinator,
+  WorkspaceMutationRevokedError,
+  type WorkspaceMutationLease,
+} from "../clockify/workspace-mutation-coordinator.js";
+import { HostRequestCancelledError } from "../clockify/request-governor.js";
+import {
+  createRouteAuthority,
+  type VerifiedSessionClaims,
+  type WriteAuthorityOutcome,
+} from "./route-authority.js";
+
+export type { WriteAuthorityOutcome } from "./route-authority.js";
 
 /**
  * The user request that drove a suspended turn: the LAST user-role message in the
@@ -165,18 +176,24 @@ export type CommitConfirmationOutcome =
       persistenceDegraded?: true;
     };
 
-export type WriteAuthorityOutcome =
-  | { ok: true }
-  | { ok: false; status: 403 | 503; code: "admin_required" | "role_verification_unavailable"; message: string };
-
 export interface ChatPipeline {
   loadPolicy: (workspaceId: string, adminUserId: string) => AdminPolicy;
-  requireSession: (req: Request, res: Response) => Promise<SessionClaims | undefined>;
-  verifyWriteAuthority: (claims: Claims, installation?: Installation) => Promise<WriteAuthorityOutcome>;
+  requireSession: (req: Request, res: Response) => Promise<VerifiedSessionClaims | undefined>;
+  verifyWriteAuthority: (
+    claims: Claims,
+    installation?: Installation,
+    signal?: AbortSignal,
+  ) => Promise<WriteAuthorityOutcome>;
   /** Per-admin budget for creating fresh sessions (POST /chat/new) — bounds resetting
    *  the per-session paid-loop limit by minting sessions. Keyed by workspace+admin. */
   newChatAllowed: (workspaceId: string, adminUserId: string) => RateLimitDecision;
-  actionContext: (workspaceId: string, adminUserId: string, installation: Installation, sessionId?: string) => ActionContext;
+  actionContext: (
+    workspaceId: string,
+    adminUserId: string,
+    installation: Installation,
+    sessionId?: string,
+    signal?: AbortSignal,
+  ) => ActionContext;
   runResume: (
     claims: Claims,
     installation: Installation | undefined,
@@ -190,6 +207,7 @@ export interface ChatPipeline {
     claims: Claims,
     record: NonNullable<ReturnType<AppDeps["store"]["getPendingConfirmation"]>>,
     nonce: string,
+    signal?: AbortSignal,
   ) => Promise<CommitConfirmationOutcome>;
   executeChatTurn: (
     claims: { sessionId: string; workspaceId: string; adminUserId: string },
@@ -205,6 +223,7 @@ export interface ChatPipeline {
 
 export function createChatPipeline(deps: AppDeps): ChatPipeline {
   const now = deps.now ?? (() => new Date());
+  const mutationCoordinator = deps.mutationCoordinator ?? createWorkspaceMutationCoordinator();
   const intentCapabilitiesEnforced = deps.config.nodeEnv !== "test" ||
     deps.enforceIntentCapabilitiesInTests === true;
   // Per-SESSION chat rate limit — each turn drives a paid model loop, and
@@ -222,126 +241,33 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
   const newChatAllowed = (workspaceId: string, adminUserId: string): RateLimitDecision =>
     newChatLimiter.check(`${workspaceId}:${adminUserId}`, now().getTime());
 
-  const roleRechecker = createRoleRechecker(
-    deps.config.roleRecheckTtlMs ?? 60_000,
-    () => now().getTime(),
-  );
+  const {
+    loadPolicy,
+    requireSession,
+    verifyWriteAuthority,
+    actionContext,
+  } = createRouteAuthority(deps, now);
 
-  function loadPolicy(workspaceId: string, adminUserId: string): AdminPolicy {
-    return deps.store.getAdminPolicy(workspaceId, adminUserId) ?? defaultAdminPolicy();
-  }
-
-  async function requireSession(req: Request, res: Response): Promise<SessionClaims | undefined> {
-    const claims = resolveSession(req, deps);
-    if (!claims) {
-      res.status(401).json({ ok: false, code: "unauthorized", message: "No valid session." });
-      return undefined;
-    }
-    if (deps.config.roleRecheckEnabled) {
-      // Re-verify the caller is STILL a Clockify admin/owner (authz-surface-01).
-      // Cached per (workspace, admin); a Clockify outage fails OPEN (no verdict),
-      // bounded by the session TTL. Only an explicit non-admin verdict denies.
-      const installation = deps.store.getInstallation(claims.workspaceId);
-      if (installation && installation.status === "active") {
-        const live = await roleRechecker.check(
-          claims.workspaceId,
-          claims.adminUserId,
-          deps.clockifyForWorkspace(installation),
-        );
-        if (live === "non_admin") {
-          deps.store.invalidateAdminSessions(claims.workspaceId, claims.adminUserId);
-          res.status(403).json({ ok: false, code: "forbidden", message: "Admin access is required." });
-          return undefined;
-        }
-        // An ordinary read retains the configured cached/fail-open posture. Every
-        // mutation separately calls verifyWriteAuthority and fails closed.
-      }
-    }
-    return claims;
-  }
-
-  async function verifyWriteAuthority(
+  /** Synchronous final gate for persistence that is not protected by a mutation
+   * settlement lease. No await may appear between this check and the write. */
+  const turnAuthorityCurrent = (
     claims: Claims,
-    suppliedInstallation?: Installation,
-  ): Promise<WriteAuthorityOutcome> {
-    const installation = suppliedInstallation ?? deps.store.getInstallation(claims.workspaceId);
-    if (!installation || installation.status !== "active") {
-      return {
-        ok: false,
-        status: 503,
-        code: "role_verification_unavailable",
-        message: "Your current Clockify admin role could not be verified. No change was made.",
-      };
-    }
-    const verdict = await roleRechecker.check(
-      claims.workspaceId,
-      claims.adminUserId,
-      deps.clockifyForWorkspace(installation),
-      { force: true },
-    );
-    if (verdict === "admin") return { ok: true };
-    if (verdict === "non_admin") {
-      deps.store.invalidateAdminSessions(claims.workspaceId, claims.adminUserId);
-      return {
-        ok: false,
-        status: 403,
-        code: "admin_required",
-        message: "Clockify admin or owner access is required. Your assistant sessions were ended.",
-      };
-    }
-    return {
-      ok: false,
-      status: 503,
-      code: "role_verification_unavailable",
-      message: "Your current Clockify admin role could not be verified. No change was made.",
-    };
-  }
-
-  function actionContext(
-    workspaceId: string,
-    adminUserId: string,
     installation: Installation,
-    sessionId?: string,
-  ): ActionContext {
-    return {
-      workspaceId,
-      adminUserId,
-      policy: loadPolicy(workspaceId, adminUserId),
-      clockify: deps.clockifyForWorkspace(installation),
-      now,
-      savePolicy: (policy) => deps.store.upsertAdminPolicy(workspaceId, adminUserId, policy),
-      recentOutcomes: (sinceIso) => ({
-        outcomes: deps.store.listActionOutcomes(workspaceId, adminUserId, sinceIso),
-        confirmationStatuses: deps.store.listConfirmationOutcomes(workspaceId, adminUserId, sinceIso),
-      }),
-      authorizeWrite: async (actionName) => {
-        const verdict = await verifyWriteAuthority({ workspaceId, adminUserId, sessionId: "" }, installation);
-        return verdict.ok
-          ? undefined
-          : errorReceipt({
-              action: actionName,
-              code: verdict.code,
-              message: verdict.message,
-              recovery: { hint: "Restore admin access or retry after Clockify is reachable.", retryable: verdict.status === 503 },
-            });
-      },
-      ...(sessionId
-        ? {
-            saveArtifact: (artifact: { contentType: string; filename: string; bytes: Uint8Array }) =>
-              deps.store.createArtifact({
-                workspaceId,
-                adminUserId,
-                sessionId,
-                ...artifact,
-              }),
-          }
-        : {}),
-    };
-  }
+    signal?: AbortSignal,
+  ): boolean => {
+    if (signal?.aborted) return false;
+    const currentInstallation = deps.store.getInstallation(claims.workspaceId);
+    if (!currentInstallation || currentInstallation.status !== "active" ||
+      currentInstallation.generation !== installation.generation) return false;
+    const currentSession = deps.store.getSession(claims.sessionId);
+    return !!currentSession && currentSession.workspaceId === claims.workspaceId &&
+      currentSession.adminUserId === claims.adminUserId;
+  };
 
   /** Record a one-use undo for a successful reversible creation; return its id. */
   function recordUndoIfReversible(
     claims: { sessionId: string; workspaceId: string; adminUserId: string },
+    installationGeneration: number,
     receipt: SuccessReceipt | ErrorReceipt,
   ): string | undefined {
     if (!receipt.ok) return undefined;
@@ -357,6 +283,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       actionName: receipt.action,
+      installationGeneration,
       reversal,
     });
   }
@@ -370,6 +297,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     calendar?: CalendarContext,
     selectionContext?: string,
     intentCapability?: IntentCapabilityRecord,
+    signal?: AbortSignal,
   ): TurnMachinery {
     const results: unknown[] = [];
     const resultLinks: DurableResultLink[] = [];
@@ -382,7 +310,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     let calendarPromise: Promise<void> | undefined;
     const ensureCalendar = (): Promise<void> => {
       if (calendarLoaded) return Promise.resolve();
-      calendarPromise ??= deps.clockifyForWorkspace(installation)
+      calendarPromise ??= deps.clockifyForWorkspace(
+        installation,
+        signal ? { signal } : undefined,
+      )
         .getCalendarContext(claims.adminUserId)
         .then((resolved) => {
           Object.assign(ctx, resolved);
@@ -394,7 +325,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return calendarPromise;
     };
     const baseCtx = {
-      ...actionContext(claims.workspaceId, claims.adminUserId, installation, claims.sessionId),
+      ...actionContext(claims.workspaceId, claims.adminUserId, installation, claims.sessionId, signal),
       ...(calendar ?? {}),
       ...(intentCapability
         ? {
@@ -480,6 +411,17 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         }
       : baseCtx;
 
+    // A safe write owns its workspace lease until its canonical result has been
+    // settled/emitted. Key by the concrete result object so both the agentic and
+    // single-turn settlement paths release exactly the lease that produced it.
+    const resultLeases = new WeakMap<object, WorkspaceMutationLease>();
+    const releaseResultLease = (result: object): void => {
+      const lease = resultLeases.get(result);
+      if (!lease) return;
+      resultLeases.delete(result);
+      lease.release();
+    };
+
     // Every executed action — success or error, single-turn or agentic — is
     // audited under the catalog's risk labels and offered an undo if reversible.
     const persistCanonicalResult = (
@@ -516,6 +458,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     };
 
     const auditAndEmitReceipt = (actionName: string, receipt: SuccessReceipt | ErrorReceipt, operationId?: string): void => {
+      try {
+      // Reads and pre-dispatch errors own no mutation lease. If lifecycle
+      // revocation erased the workspace while their async host/model work was
+      // outstanding, do not let canonical results or audit rows recreate it.
+      // A safe write DOES retain its lease here: uninstall is waiting for this
+      // truthful settlement, so it must be persisted/emitted before release.
+      if (!resultLeases.has(receipt) &&
+        !turnAuthorityCurrent(claims, installation, signal)) return;
       // Post-execution bookkeeping is best-effort: a safe write executes
       // immediately (no confirm round-trip), so by the time we audit it the
       // change has ALREADY happened on the host. A transient DB error here (e.g.
@@ -530,7 +480,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           : "definitive_failed";
       let undoId: string | undefined;
       bestEffort("post-execution undo bookkeeping failed", () => {
-        undoId = recordUndoIfReversible(claims, receipt);
+        undoId = recordUndoIfReversible(claims, installation.generation, receipt);
       });
       const canonicalResult = {
         kind: "receipt" as const,
@@ -554,6 +504,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       }
       const degradedResult = { ...canonicalResult, persistenceDegraded: true as const };
       emit(degradedResult, { kind: "inline", descriptor: degradedInlineDescriptor(degradedResult) });
+      } finally {
+        releaseResultLease(receipt);
+      }
     };
 
     const auditAndEmitPartial = (
@@ -561,9 +514,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       result: Extract<ActionResult, { kind: "partial" }>,
       operationId?: string,
     ): void => {
+      try {
+      if (!resultLeases.has(result) &&
+        !turnAuthorityCurrent(claims, installation, signal)) return;
       let undoId: string | undefined;
       bestEffort("partial-result undo bookkeeping failed", () => {
-        undoId = recordUndoIfReversible(claims, result.receipt);
+        undoId = recordUndoIfReversible(claims, installation.generation, result.receipt);
       });
       const canonicalResult = { ...result, ...(undoId ? { undo: { id: undoId } } : {}) };
       delete canonicalResult.operationId;
@@ -584,73 +540,96 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       }
       const degradedResult = { ...canonicalResult, persistenceDegraded: true as const };
       emit(degradedResult, { kind: "inline", descriptor: degradedInlineDescriptor(degradedResult) });
+      } finally {
+        releaseResultLease(result);
+      }
     };
 
     // An agentic interrupt persists its suspended transcript alongside the
     // pending confirmation (Phase 3) so the confirm route can resume the loop.
     const emitPreviewFor = (preview: PreviewCard, operation: ConfirmableOperation, agentState?: AgentState): void => {
-      if (intentCapabilitiesEnforced && !intentCapability) throw new Error("intent_capability_missing");
-      const created = createPendingConfirmation({
-        sessionId: claims.sessionId,
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        risk: operation.risks,
-        preview,
-        operation,
-        sessionSecret: deps.config.sessionSecret,
-        now: now(),
-        agentState: agentState && intentCapability
-          ? {
-              ...agentState,
-              intentCapability: {
-                operationId: operation.operationId,
-                id: intentCapability.id,
-                hash: intentCapability.capabilityHash,
-              },
-            }
-          : agentState,
-        actionFingerprint: actionFingerprint(operation.actionName),
-        catalogHash: catalogHash(),
-      });
-      deps.store.prepareOperationRun({
-        id: created.record.operationId,
-        requestId: intentCapability?.requestId ?? requestId,
-        confirmationId: created.record.id,
-        sessionId: claims.sessionId,
-        workspaceId: claims.workspaceId,
-        adminUserId: claims.adminUserId,
-        actionName: operation.actionName,
-        actionFingerprint: created.record.actionFingerprint,
-        catalogHash: created.record.catalogHash,
-        operationHash: created.record.operationHash,
-        operation,
-        mutationPlan: operation.mutationPlan,
-      });
-      deps.store.savePendingConfirmation(created.record);
-      if (intentCapability) {
-        deps.store.bindIntentCapabilityOperation({
+      try {
+        if (intentCapabilitiesEnforced && !intentCapability) throw new Error("intent_capability_missing");
+        const lease = resultLeases.get(operation);
+        if (lease?.signal.aborted) {
+          const reason = lease.signal.reason;
+          if (reason instanceof WorkspaceMutationRevokedError) throw reason;
+          throw new HostRequestCancelledError();
+        }
+        // This synchronous reload is the final lifecycle gate before any preview
+        // or operation row is persisted. The workspace lease prevents uninstall
+        // from erasing the workspace until this block either finishes or fails.
+        const currentInstallation = deps.store.getInstallation(claims.workspaceId);
+        if (!currentInstallation || currentInstallation.status !== "active" ||
+            currentInstallation.generation !== installation.generation) {
+          throw new WorkspaceMutationRevokedError(claims.workspaceId, installation.generation);
+        }
+        const created = createPendingConfirmation({
+          sessionId: claims.sessionId,
           workspaceId: claims.workspaceId,
           adminUserId: claims.adminUserId,
-          sessionId: claims.sessionId,
-          requestId: intentCapability.requestId,
-          requestHash: intentCapability.requestHash,
-          catalogHash: intentCapability.catalogHash,
-          capabilityId: intentCapability.id,
-          capabilityHash: intentCapability.capabilityHash,
-          actionName: operation.actionName,
-          operationId: created.record.operationId,
-          confirmationId: created.record.id,
+          risk: operation.risks,
+          preview,
+          operation,
+          installationGeneration: installation.generation,
+          sessionSecret: deps.config.sessionSecret,
+          now: now(),
+          agentState: agentState && intentCapability
+            ? {
+                ...agentState,
+                intentCapability: {
+                  operationId: operation.operationId,
+                  id: intentCapability.id,
+                  hash: intentCapability.capabilityHash,
+                },
+              }
+            : agentState,
+          actionFingerprint: actionFingerprint(operation.actionName),
+          catalogHash: catalogHash(),
         });
+        const boundOperation = created.record.operation as ConfirmableOperation;
+        deps.store.prepareOperationRun({
+          id: created.record.operationId,
+          requestId: intentCapability?.requestId ?? requestId,
+          confirmationId: created.record.id,
+          sessionId: claims.sessionId,
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          actionName: boundOperation.actionName,
+          actionFingerprint: created.record.actionFingerprint,
+          catalogHash: created.record.catalogHash,
+          operationHash: created.record.operationHash,
+          operation: boundOperation,
+          mutationPlan: boundOperation.mutationPlan,
+        });
+        deps.store.savePendingConfirmation(created.record);
+        if (intentCapability) {
+          deps.store.bindIntentCapabilityOperation({
+            workspaceId: claims.workspaceId,
+            adminUserId: claims.adminUserId,
+            sessionId: claims.sessionId,
+            requestId: intentCapability.requestId,
+            requestHash: intentCapability.requestHash,
+            catalogHash: intentCapability.catalogHash,
+            capabilityId: intentCapability.id,
+            capabilityHash: intentCapability.capabilityHash,
+            actionName: boundOperation.actionName,
+            operationId: created.record.operationId,
+            confirmationId: created.record.id,
+          });
+        }
+        const livePreview = {
+          kind: "preview",
+          previewId: created.previewId,
+          nonce: created.nonce,
+          expiresAt: created.expiresAt,
+          preview,
+        };
+        const { nonce: _nonce, ...descriptor } = livePreview;
+        emit(livePreview, { kind: "preview", descriptor });
+      } finally {
+        releaseResultLease(operation);
       }
-      const livePreview = {
-        kind: "preview",
-        previewId: created.previewId,
-        nonce: created.nonce,
-        expiresAt: created.expiresAt,
-        preview,
-      };
-      const { nonce: _nonce, ...descriptor } = livePreview;
-      emit(livePreview, { kind: "preview", descriptor });
     };
 
     // Execute one model tool call through the harness trust boundary; an action
@@ -661,6 +640,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       // frozen). Label derived from the action NAME only — args can carry admin
       // text and never ride a status line. Ephemeral: never persisted/audited.
       onStatus?.({ action: call.name, label: actionStatusLabel(call.name) });
+      let lease: WorkspaceMutationLease | undefined;
       try {
         const action = getAction(call.name);
         const isWrite = !!action && action.risks.some((risk) => risk !== "read");
@@ -678,14 +658,52 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           };
         }
         if (action && (!isWrite || !intentCapabilitiesEnforced)) await ensureCalendar();
-        return await executeAction({ actionName: call.name, args: call.arguments, context: ctx });
+        let executionContext = ctx;
+        if (isWrite) {
+          lease = mutationCoordinator.acquire(
+            claims.workspaceId,
+            installation.generation,
+            signal,
+          );
+          if (lease.signal.aborted) throw new HostRequestCancelledError();
+          executionContext = {
+            ...ctx,
+            signal: lease.signal,
+            clockify: deps.clockifyForWorkspace(installation, { signal: lease.signal }),
+          };
+        }
+        const result = await executeAction({ actionName: call.name, args: call.arguments, context: executionContext });
+        if (lease) {
+          if (result.kind === "receipt") resultLeases.set(result.receipt, lease);
+          else if (result.kind === "partial") resultLeases.set(result, lease);
+          else if (result.kind === "preview") resultLeases.set(result.operation, lease);
+          else lease.release();
+          lease = undefined;
+        }
+        return result;
       } catch (err) {
+        lease?.release();
+        const revoked = err instanceof WorkspaceMutationRevokedError;
+        const cancelled = err instanceof HostRequestCancelledError;
         return {
           kind: "receipt",
           receipt: errorReceipt({
             action: call.name,
-            code: "action_failed",
-            message: err instanceof Error ? err.message.slice(0, 200) : "The action could not be completed.",
+            code: revoked
+              ? "installation_changed"
+              : cancelled
+                ? "request_cancelled"
+                : "action_failed",
+            message: revoked
+              ? "The Clockify installation changed before this action could run. No change was made."
+              : cancelled
+                ? "The request was cancelled before the Clockify change was dispatched. No change was made."
+                : err instanceof Error
+                  ? err.message.slice(0, 200)
+                  : "The action could not be completed.",
+            ...((revoked || cancelled)
+              ? { recovery: { hint: revoked ? "Retry from the active installation." : "Send the request again if you still want this change.", retryable: false } }
+              : {}),
           }),
         };
       }
@@ -752,7 +770,17 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
   }
 
   /** Telemetry must never break a turn — best-effort write, swallow failures. */
-  function recordTurnTelemetrySafely(claims: Claims, kind: "chat" | "resume", usage: TurnUsage, turnMs: number): void {
+  function recordTurnTelemetrySafely(
+    claims: Claims,
+    kind: "chat" | "resume",
+    usage: TurnUsage,
+    turnMs: number,
+    installation: Installation,
+    signal?: AbortSignal,
+  ): void {
+    // turn_telemetry intentionally has no session FK, so an in-flight provider
+    // response must not be able to recreate it after uninstall erases the workspace.
+    if (!turnAuthorityCurrent(claims, installation, signal)) return;
     try {
       deps.store.recordTurnTelemetry({
         sessionId: claims.sessionId,
@@ -806,6 +834,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     ) {
       return undefined;
     }
+    let turnSignal: AbortSignal;
+    try {
+      turnSignal = mutationCoordinator.observe(
+        claims.workspaceId,
+        installation.generation,
+        signal,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceMutationRevokedError) return undefined;
+      throw error;
+    }
+    if (!turnAuthorityCurrent(claims, installation, turnSignal)) return undefined;
     let intentCapability: IntentCapabilityRecord | undefined;
     if (intentCapabilitiesEnforced) {
       const binding = agentState.intentCapability;
@@ -845,6 +885,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       undefined,
       resumeSelectionContext,
       intentCapability,
+      turnSignal,
     );
     const resumeStartMs = now().getTime();
     const tracked = trackUsage(deps.modelClient, now);
@@ -863,12 +904,19 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         tools: resumeTools,
         runAction: m.runAction,
         onStep: m.onStep,
-        signal,
+        signal: turnSignal,
       });
     } catch {
       // The commit already happened and its receipt is returned regardless; a
       // model failure here only loses the follow-up narration.
-      recordTurnTelemetrySafely(claims, "resume", tracked.usage, now().getTime() - resumeStartMs);
+      recordTurnTelemetrySafely(
+        claims,
+        "resume",
+        tracked.usage,
+        now().getTime() - resumeStartMs,
+        installation,
+        turnSignal,
+      );
       return undefined;
     }
     const { replyKind, baseText } = settleAgentTurn(m, turn);
@@ -881,6 +929,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // keep using m.results so the committed receipt is never double-counted.
     const resultsForTruthfulness = receipt.ok ? [{ kind: "receipt" as const, receipt }, ...m.results] : m.results;
     const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind);
+    if (!turnAuthorityCurrent(claims, installation, turnSignal)) {
+      return { replyKind: "aborted", replyText: "", results: m.results };
+    }
     persistAssistantReply(
       claims,
       replyKind,
@@ -889,7 +940,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       m.resultLinks,
       resumeSelectionContext,
     );
-    recordTurnTelemetrySafely(claims, "resume", tracked.usage, now().getTime() - resumeStartMs);
+    recordTurnTelemetrySafely(
+      claims,
+      "resume",
+      tracked.usage,
+      now().getTime() - resumeStartMs,
+      installation,
+      turnSignal,
+    );
     return { replyKind, replyText, results: m.results };
   }
 
@@ -904,6 +962,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     claims: Claims,
     record: NonNullable<ReturnType<typeof deps.store.getPendingConfirmation>>,
     nonce: string,
+    signal?: AbortSignal,
   ): Promise<CommitConfirmationOutcome> {
     const validation = confirmPending({
       record,
@@ -922,6 +981,31 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     }
 
     const operation = record.operation as ConfirmableOperation;
+    const installation = deps.store.getInstallation(claims.workspaceId);
+    if (!installation || installation.status !== "active") {
+      return {
+        ok: false,
+        status: 503,
+        body: {
+          ok: false,
+          code: "role_verification_unavailable",
+          message: "The add-on is not active for this workspace. No change was made.",
+        },
+      };
+    }
+    if (!Number.isSafeInteger(record.installationGeneration) ||
+        record.installationGeneration !== installation.generation ||
+        operation.installationGeneration !== record.installationGeneration) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          ok: false,
+          code: "installation_changed",
+          message: "The Clockify installation changed after this preview was created. Create a fresh preview.",
+        },
+      };
+    }
     let capabilityScope: Parameters<typeof deps.store.consumeIntentCapabilityForOperation>[0] | undefined;
     if (intentCapabilitiesEnforced) {
       if (!record.capabilityId || !record.capabilityHash) {
@@ -978,8 +1062,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       }
     }
 
-    const installation = deps.store.getInstallation(claims.workspaceId);
-    const authority = await verifyWriteAuthority(claims, installation);
+    const authority = await verifyWriteAuthority(claims, installation, signal);
     if (!authority.ok) {
       return {
         ok: false,
@@ -988,11 +1071,41 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       };
     }
 
+    let mutationLease: WorkspaceMutationLease;
+    try {
+      mutationLease = mutationCoordinator.acquire(
+        claims.workspaceId,
+        installation.generation,
+        signal,
+      );
+    } catch (error) {
+      if (!(error instanceof WorkspaceMutationRevokedError)) throw error;
+      return {
+        ok: false,
+        status: 409,
+        body: { ok: false, code: "installation_changed", message: error.message },
+      };
+    }
+    if (mutationLease.signal.aborted) {
+      mutationLease.release();
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          ok: false,
+          code: "request_cancelled",
+          message: "The confirmation was cancelled before dispatch. No change was made.",
+        },
+      };
+    }
+
     // Atomic one-use claim: only the caller that transitions pending → executing wins.
     if (!deps.store.markConfirmationExecuting(record.id)) {
+      mutationLease.release();
       return { ok: false, status: 409, body: { ok: false, code: "already_used", message: "This preview was already used." } };
     }
 
+    try {
     // ALL confirmed operations go through the SAME commit path. The action's own
     // `commit` does the work; for a permission change that commit persists the new
     // policy itself via the `savePolicy` capability the context carries.
@@ -1006,12 +1119,6 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         code: "intent_capability_denied",
         message: "This write exceeds the exact admin-authored intent capability.",
         recovery: { hint: "Create a fresh request and preview.", retryable: false },
-      });
-    } else if (!installation || installation.status !== "active") {
-      commitResult = errorReceipt({
-        action: operation.actionName,
-        code: "not_installed",
-        message: "The add-on is not active for this workspace.",
       });
     } else {
       // A store-backed ATOMIC idempotency ledger (10-min window) so re-confirming
@@ -1056,7 +1163,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         touch: (key) => deps.store.touchIdempotencyClaim(key, claims.workspaceId, claims.adminUserId, now().getTime()),
       };
       const authorizedContext = {
-        ...actionContext(claims.workspaceId, claims.adminUserId, installation),
+        ...actionContext(
+          claims.workspaceId,
+          claims.adminUserId,
+          installation,
+          undefined,
+          mutationLease.signal,
+        ),
         mutationJournal: deps.store.mutationStepJournal(record.operationId),
       };
       // Keep authorizeWrite on the context: the exact mutation scope invokes it
@@ -1124,7 +1237,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     }
     let undoId: string | undefined;
     bestEffort("post-commit undo bookkeeping failed", () => {
-      undoId = recordUndoIfReversible(claims, receipt);
+      undoId = recordUndoIfReversible(claims, installation.generation, receipt);
     });
     const agentState = receipt.ok && !partialResult ? parseAgentState(record.agentState) : undefined;
     return {
@@ -1136,6 +1249,9 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       installation,
       ...(!resultRef ? { persistenceDegraded: true as const } : {}),
     };
+    } finally {
+      mutationLease.release();
+    }
   }
 
   /**
@@ -1410,6 +1526,28 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     signal?: AbortSignal,
     requestId?: string,
   ): Promise<ChatTurnOutcome> {
+    const aborted = (results: unknown[] = [], resultLinks: DurableResultLink[] = []): ChatTurnOutcome => ({
+      ok: true,
+      replyKind: "aborted",
+      replyText: "",
+      results,
+      resultLinks,
+    });
+    let turnSignal: AbortSignal;
+    try {
+      // Unlike a mutation lease, this observer is NOT part of uninstall's drain:
+      // revocation cancels provider work immediately, while only already-
+      // dispatched-capable mutations may delay erasure for truthful settlement.
+      turnSignal = mutationCoordinator.observe(
+        claims.workspaceId,
+        installation.generation,
+        signal,
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceMutationRevokedError) return aborted();
+      throw error;
+    }
+    if (!turnAuthorityCurrent(claims, installation, turnSignal)) return aborted();
     const priorClarificationContext = unresolvedClarificationContext(claims.sessionId);
     const selectionContext = combineSelectionContext(priorClarificationContext, message);
     // The user message is persisted BEFORE the deterministic guards so even a
@@ -1446,15 +1584,25 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
           writeActionNames,
           catalogHash: catalogHash(),
-          signal,
+          signal: turnSignal,
         });
       } catch {
-        if (signal?.aborted) {
-          recordTurnTelemetrySafely(claims, "chat", tracked.usage, now().getTime() - turnStartMs);
-          return { ok: true, replyKind: "aborted", replyText: "", results: [], resultLinks: [] };
+        if (turnSignal.aborted) {
+          recordTurnTelemetrySafely(
+            claims,
+            "chat",
+            tracked.usage,
+            now().getTime() - turnStartMs,
+            installation,
+            turnSignal,
+          );
+          return aborted();
         }
         throw new Error("intent_declaration_failed");
       }
+      // The provider may ignore AbortSignal. Reload durable authority after the
+      // await and immediately before the non-FK capability insert.
+      if (!turnAuthorityCurrent(claims, installation, turnSignal)) return aborted();
       intentCapability = deps.store.createIntentCapability({
         workspaceId: claims.workspaceId,
         adminUserId: claims.adminUserId,
@@ -1487,12 +1635,20 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       undefined,
       selectionContext,
       intentCapability,
+      turnSignal,
     );
 
     // Cost/latency telemetry: every model-touching turn records one row (the
     // deterministic early returns above never reach here — no model, no row).
     const recordTurn = (): void => {
-      recordTurnTelemetrySafely(claims, "chat", tracked.usage, now().getTime() - turnStartMs);
+      recordTurnTelemetrySafely(
+        claims,
+        "chat",
+        tracked.usage,
+        now().getTime() - turnStartMs,
+        installation,
+        turnSignal,
+      );
     };
 
     // A model/transport failure must never crash the server. Surface a calm,
@@ -1521,8 +1677,16 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       subsetNarrowed,
       fullIntentTools,
       fullIntentCatalog,
-      signal,
+      signal: turnSignal,
     });
+    // Agentic providers may resolve after ignoring AbortSignal, including a
+    // text-only completion for which the loop has no further boundary. Reload
+    // durable authority before any unleased reply/telemetry persistence.
+    // Mutation results already truthfully settled under a draining lease remain
+    // in `m.results` so an already-dispatched outcome is never concealed.
+    if (!turnAuthorityCurrent(claims, installation, turnSignal)) {
+      return aborted(m.results, m.resultLinks);
+    }
     if ("failed" in turn) return modelUnavailable();
     const { replyKind, baseText } = turn;
 

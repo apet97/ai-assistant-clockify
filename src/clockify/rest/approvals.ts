@@ -79,10 +79,18 @@ export function makeApprovalRest(core: RestCore, workspaceId: string): ApprovalP
   }
 
   async function resubmitApprovalAtomic(input: { period: string; periodStart: string }): Promise<EntitySummary> {
-    const path = `${ws}/approval-requests/resubmit-entries-for-approval`;
-    const row = (await core.mutate("api", "POST", path, input)) as { id?: unknown } | null;
+    const row = (await core.mutate(
+      "api",
+      "POST",
+      `${ws}/approval-requests/resubmit-entries-for-approval`,
+      input,
+    )) as { id?: unknown } | null;
     if (typeof row?.id !== "string" || row.id.length === 0) {
-      throw new AmbiguousWriteOutcome("POST", path, "Clockify accepted the approval resubmission without a usable id.");
+      throw new AmbiguousWriteOutcome(
+        "POST",
+        `${ws}/approval-requests/resubmit-entries-for-approval`,
+        "Clockify accepted the approval resubmission without a usable id.",
+      );
     }
     return { id: row.id, name: row.id };
   }

@@ -1,113 +1,117 @@
-# Marketplace readiness checklist
+# Marketplace readiness - version 1.0.0
 
-Marketplace submission is **blocked** until every row below has an owner, date, and
-evidence link. A green local test run is necessary but is not a production-readiness
-claim. Do not tag, deploy, or submit from this checklist while any required row is open.
+This repository is being completed through the private-production release candidate
+and stopped immediately before the Marketplace **Submit for Review** action. A checked
+box or workflow definition is not evidence by itself. The release is pre-Marketplace
+complete only when every engineering row in
+[`docs/marketplace/evidence/release-candidate.md`](./docs/marketplace/evidence/release-candidate.md)
+is backed by evidence for the exact tested and deployed source candidate. A pull-request
+head may be a descendant only when the checked-in validator proves every intervening
+change is allowlisted non-executable evidence and the source archive is unchanged.
 
-## Exact local automated gates
+Marketplace submission is not authorized by this document. Do not click **Submit for
+Review** during engineering execution.
 
-```bash
-npm run verify
-npm run audit:prod
-npm run license:prod
-npm run eval:smoke
-```
+## Release materials
 
-`verify` covers both TypeScript projects, lint, circular dependencies, duplication,
-the fake-only test suite, and builds. `audit:prod` and `license:prod` enforce the
-checked-in production dependency policies; the license gate rewrites deterministic
-`evidence/dependency-gates/production-licenses.json`. `eval:smoke` is the offline
-scripted-model safety corpus, not the configured-provider evaluation required by row 6.
+- [Listing copy, asset inventory, and portal field map](./docs/marketplace/01-listing-package.md)
+- [Independent reviewer instructions](./docs/marketplace/02-reviewer-package.md)
+- [Deployment, incident, reconciliation, and rollback runbook](./docs/marketplace/03-operations-evidence-rollback-package.md)
+- [Paste-ready 1.0.0 What's New entry](./docs/marketplace/04-whats-new-1.0.0.md)
+- [Public Terms source](./TERMS.md)
+- [Release-candidate evidence record](./docs/marketplace/evidence/release-candidate.md)
+- [Endpoint-to-scope contract](./docs/ENDPOINT_SCOPE_CONTRACT.md)
 
-## Required gates (must be signed off)
+The three Markdown packages above are release materials; they are not three extra
+approval queues. The only work allowed to remain after the engineering evidence record
+is green is the three admin-only packages below.
 
-| # | Gate | Status | Owner | Date | Evidence |
-|---|------|--------|-------|------|----------|
-| 1 | **Rotate prod LLM credentials** (plan T60). The prod `LLM_API_KEY` (Railway env) must be a fresh key, never a dev/test key. Confirm `.env.server` / `.env.gemini` keys (used for evals) are NOT the prod keys. | ☐ OPEN — requires human + credentials | | | |
-| 2 | **Security review before real users** (plan T62). A reviewer walks `SECURITY.md` + the harness trust boundary, the token-isolation tripwires, and the auth/rate-limit posture; records findings + sign-off. | ☐ OPEN — requires human reviewer | | | |
-| 3 | **AUDIT-host clearance** (plan T61). Confirm the prod add-on token clears the Clockify AUDIT host: run `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN` (dev cleanly reports "audit log not available"). Record the result here. | ☐ pending | | | |
-| 4 | **Model-provider privacy posture.** Record provider/subprocessor, DPA, processing region, retention/zero-retention setting, and evidence that customer content is not used for training. | ☐ OPEN — operator/provider evidence required | | | |
-| 5 | **Production backup + restore drill.** Run `db:backup`/`db:restore` against an encrypted production-like volume, verify checksum/integrity and a token-backed read, and record RTO/RPO. | ☐ OPEN — local drill only | | | |
-| 6 | **Deterministic planner/agentic safety evaluation.** Run the pinned safety corpus for the release model/config and attach the zero-regression report. | ☐ OPEN — requires configured provider | | | |
-| 7 | **Sacrificial-workspace smoke.** Run the full preview/confirm/commit/cleanup workflow and attach both sanitized smoke and cleanup artifacts. | ☐ OPEN — workflow added; protected environment, credentials, and successful remote run evidence required | | | |
-| 8 | **Repository security gates.** Required CI, blocking high/critical runtime audit, production license policy, CodeQL, dependency review, secret scan, and SBOM/license artifacts are green on the release commit. | ☐ OPEN — workflows added; release-commit remote conclusions and links required | | | |
-| 9 | **Ambiguous-write recovery review.** Fault-injection/restart evidence demonstrates canonical result ownership, exact-plan/target enforcement, no retry of unknown effects, and authoritative reconciliation or continued blocking for every supported write class. | ☐ OPEN — internal controls complete; independent review evidence required | | | |
+## Engineering exit criteria
 
-## Decisions made (recorded for the reviewer)
+The evidence record is the single status source. It covers:
 
-- **authz-surface-01 (write posture) — RESOLVED for mutations.** Every write,
-  confirmation, and undo performs a fresh role check, fails closed when Clockify cannot
-  establish the role, and invalidates that admin's sessions after a negative result.
-  `ROLE_RECHECK=1` additionally enables cached rechecks for authenticated read traffic.
-- **Policy migration posture — RESOLVED.** A genuinely new admin starts with the
-  documented full-access policy. Missing groups in an already stored policy migrate to
-  `off`; the admin must explicitly enable a newly introduced capability.
-- **External request governor — RESOLVED.** Per-workspace host calls use FIFO rate and
-  concurrency limits, adaptive `429` cooldown, single-flight writes, and a per-turn cap.
+- three consecutive cold Node 22 `npm run verify` passes without retries, each with a
+  hashed Vitest JSON report proving at least 2,366 passed tests and zero failed,
+  pending/skipped, or todo tests;
+- `audit:prod`, `license:prod`, `eval:smoke`, configured DeepSeek evaluation,
+  actionlint, dependency review, secret scan, CodeQL, SBOM, and license artifacts;
+- Chromium, Firefox, and WebKit coverage for the release viewport, theme, locale,
+  keyboard, policy, action, confirmation, partial-result, history, and PDF flows;
+- deterministic lifecycle, cancellation, demotion, provider-outage, throttle,
+  malformed-response, artifact-isolation, and crash-recovery coverage;
+- the DeepSeek safety and latency benchmark, including cache-hit tokens and comparison
+  with the pre-change baseline;
+- a measured backup/checksum/restore drill with RTO and RPO;
+- the server-attested fresh-install aggregate scope probe and explicit production
+  AUDIT-host POST when the production installation token is available;
+- backup, deployment of the exact candidate, private Clockify iframe exercise, member
+  denial, cleanup, performance measurements, and a green reviewed pull request whose
+  exact number/head plus first-attempt CI and CodeQL run ids are API-validated. The PR
+  requires approval, zero unresolved review threads, and green verify/browser,
+  dependency-review, gitleaks, and CodeQL jobs.
 
-## How to run gate 3 (AUDIT-host spike)
+No item in this section may be moved into an admin package. A missing run, result,
+artifact, or link means engineering is still in progress.
 
-```bash
-# With a captured PROD installation token (never a dev token; never commit it):
-LIVE_ADDON_TOKEN=… npx tsx scripts/host-auth-spike.ts
-```
-A clean prod result confirms the AUDIT host accepts the add-on token; a "not available"
-result means audit-log reads stay dev-gated. Either way, record the outcome in the table.
+## Exactly three admin-only packages
 
-## Status of the human-gated operational items (plan T60/T61/T62)
+When all engineering exit criteria are green, only these packages may remain. Keep
+their evidence outside source control when it contains account, contract, or personal
+contact information; record only a sanitized decision reference in the release record.
 
-All three remain **OPEN** at the end of the automated hardening pass — they require a human
-with production credentials, a captured prod `X-Addon-Token`, and/or a sacrificial workspace,
-none of which the autonomous run had. The *code/docs* they depend on are in place:
+### 1. DeepSeek and credentials
 
-- **T60 (rotate prod LLM key)** — OPEN. Operational only; no code change needed. Complete the
-  end-state checklist in the plan and record owner/date/fingerprint in row 1 above.
-- **T61 (clear AUDIT host)** — OPEN. Run `scripts/host-auth-spike.ts` with a captured prod
-  `LIVE_ADDON_TOKEN` (see "How to run gate 3" below) and record the VERDICT in row 3.
-- **T62 (pre-launch security review)** — OPEN. The code dependency (authz-surface-01 posture)
-  is resolved for writes and signed-off-ready; a human reviewer completes the checklist
-  and records findings + sign-off in row 2.
+- Rotate the production DeepSeek API key and record a nonsecret fingerprint or key id.
+- Approve and record the DeepSeek DPA/subprocessor terms, processing country or region,
+  retention or zero-retention setting, context-cache retention, training posture, and
+  final first-run disclosure wording.
 
-## Automated evidence from the hardening workspace
+### 2. Ownership and sign-off
 
-The completed internal controls include one canonical `action_results` owner for full
-outcomes; persisted immutable intent capabilities and operation bindings; normalized
-nonsecret operation data; exact mutation plans; authoritative target/parent snapshots;
-ordered primary/compensation step journals; and read-only startup reconciliation that
-never resumes prepared work, retries an ambiguous host effect, or auto-compensates.
-Invoice replay is anchored to its durable operation id, exact step journal, and
-reconciliation evidence — not semantic/payload-level idempotency.
+- Supply the monitored support, privacy, and security contact or routing destination.
+- Enable private vulnerability reporting.
+- Record independent human security and recovery approval for the exact tested/deployed
+  source candidate and any validated evidence-only PR descendant.
 
-As of 2026-07-14, the last pre-Phase-8 Node 22 full `npm run verify` was green at
-commit `18cdd0e`. The hardening reports record focused dependency/workflow tests,
-TypeScript checks, local `audit:prod`/`license:prod`, actionlint, fail-closed evidence
-probes, and a local SQLite backup/checksum/restore/data-read drill. They do not record
-a post-integration full verify, a real live-smoke run, or any remote release-evidence
-run. Rows 1–9 therefore remain open release authority.
+### 3. Marketplace administration
 
-## Workflow evidence boundaries
+- Review the prepared listing copy, supplied assets, version, scopes, free-add-on pricing,
+  What's New entry, Terms, and public URLs.
+- Upload or confirm those materials in the Marketplace portal.
+- Click **Submit for Review**. This final click is explicitly outside this engineering
+  task.
 
-- Push/PR CI runs `audit:prod`, `license:prod`, and `verify`, and retains the
-  CycloneDX SBOM beside the deterministic production-license report. Dependency
-  review, gitleaks, and CodeQL remain separate automated checks.
-- `live-smoke.yml` is weekly, manual, and reusable. It serializes all runs against
-  `clockify-live-smoke-sacrificial`, uses only that environment's API-key/workspace
-  secrets, always executes a separately bounded cleanup job, and uploads
-  prefix/count/status JSON that excludes secrets and resource identities.
-- Manual `release-evidence.yml` records the exact commit SHA and machine conclusions
-  for verify, audit, license, CodeQL, secret scan, `eval:smoke`, SBOM, and live smoke.
-  Credential rotation, provider governance, backup/restore, configured-model
-  evaluation, security review, AUDIT-host clearance, and Marketplace approval are
-  always `not_evaluated`; no caller can turn them into machine passes.
+Do not create a fourth package for AUDIT-host clearance, live smoke, backup/restore,
+model evaluation, deployment, browser testing, cleanup, performance, or CI. Those are
+engineering evidence and must be complete before this handoff.
 
-These workflow definitions do not prove a remote run, deployment, production drill,
-review, submission, or approval. Put the real run URL/artifact, owner, and date in the
-table; do not infer them from checked-in YAML or local output.
+## Product claims approved for public use
 
-## Notes
+- Only Clockify workspace admins and owners can open or use the assistant.
+- The model proposes typed actions; deterministic server-side controls authorize and
+  execute them.
+- Reads return directly. Only actions explicitly classified as safe writes may execute
+  immediately; edits and risky writes require a preview and button-only confirmation.
+- A confirmed multi-step operation can finish with a partial or unknown outcome. The UI
+  preserves that state and stops unsafe follow-on dispatch instead of claiming success.
+- Undo is available only for eligible recent creations. Compensation is best-effort and
+  is not a global rollback guarantee.
+- Exact request replay returns the durable result. Semantic duplicate suppression exists
+  only for explicitly documented setup actions; there is no blanket exactly-once claim.
+- Clockify and model credentials stay on the backend and are never sent to the model.
 
-- Env vars + the SQLite volume live in Railway; never commit tokens (see `DEPLOYMENT.md`).
-- Re-run this checklist whenever the prod credentials or the Clockify host topology change.
-- High/critical audit exceptions, if ever unavoidable, require an advisory-specific
-  allowlist entry with owner, justification, and an expiry date; no blanket
-  `continue-on-error` is permitted.
+## Evidence boundaries
+
+- Push/PR CI runs the production dependency policies and `verify`, and retains the
+  CycloneDX SBOM plus production-license report. Dependency review, gitleaks, and
+  CodeQL are separate required checks.
+- The scheduled/manual live-smoke workflow uses the protected sacrificial environment,
+  serializes the smoke and cleanup sequence, and uploads sanitized count/status
+  artifacts. A workflow file does not prove a run.
+- The manual release-evidence workflow validates the reviewed PR number, exact head,
+  first-attempt CI and CodeQL runs, approval, resolved review threads, and required job
+  conclusions through GitHub's API. Its immutable record also embeds the three cold-pass
+  test counts and report hashes. It intentionally leaves the three administrative
+  decisions unevaluated; it does not deploy, approve, or submit the add-on.
+- Tokens, prompts, headers, customer data, raw model responses, and contractual or
+  personal contact material must not be pasted into this checklist or committed.

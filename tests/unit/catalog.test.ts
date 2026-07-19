@@ -3,7 +3,7 @@ import { ACTION_CATALOG, catalogForModel, getAction } from "../../src/harness/ca
 import { requiresConfirmation } from "../../src/harness/risk.js";
 
 describe("catalog", () => {
-  it("every action has name, description, feature group, risk labels, schema, and handler", () => {
+  it("every action has metadata, schema, and exactly the executor required by its discriminant", () => {
     expect(ACTION_CATALOG.length).toBeGreaterThan(0);
     for (const action of ACTION_CATALOG) {
       expect(action.name).toBeTruthy();
@@ -12,7 +12,22 @@ describe("catalog", () => {
       expect(Array.isArray(action.risks)).toBe(true);
       expect(action.risks.length).toBeGreaterThan(0);
       expect(action.schema).toBeDefined();
-      expect(typeof action.handler).toBe("function");
+      if (action.kind === "safe_write") {
+        expect(typeof action.prepareSafeWrite).toBe("function");
+        expect(typeof action.executeSafeWrite).toBe("function");
+        expect(action.handler).toBeUndefined();
+        expect(action.commit).toBeUndefined();
+      } else if (action.kind === "risky_write") {
+        expect(typeof action.handler).toBe("function");
+        expect(typeof action.commit).toBe("function");
+        expect(action.prepareSafeWrite).toBeUndefined();
+        expect(action.executeSafeWrite).toBeUndefined();
+      } else {
+        expect(typeof action.handler).toBe("function");
+        expect(action.prepareSafeWrite).toBeUndefined();
+        expect(action.executeSafeWrite).toBeUndefined();
+        expect(action.commit).toBeUndefined();
+      }
     }
   });
 

@@ -27,6 +27,11 @@ describe("GitHub Actions workflow contracts", () => {
     const workflow = readWorkflow("ci.yml");
 
     expect(workflow).toContain("npm run verify");
+    expect(workflow).toContain("npm run perf:local-ui");
+    expect(workflow).toContain("raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7");
+    expect(workflow).toContain("version: 1.7.7");
+    expect(workflow).toContain("npx playwright install --with-deps chromium firefox webkit");
+    expect(workflow).toContain("npm run test:e2e");
     expect(workflow).toContain("npm run audit:prod");
     expect(workflow).toContain("npm run license:prod");
     expect(workflow).not.toMatch(/npm audit --omit=dev/);
@@ -104,6 +109,7 @@ describe("GitHub Actions workflow contracts", () => {
 
   it("records every machine release gate without asserting human completion", () => {
     const workflow = readWorkflow("release-evidence.yml");
+    const coldVerifyEvidence = readRepoFile("scripts/evidence/cold-verify-evidence.ts");
     const jobsStart = workflow.indexOf("\njobs:");
     const smokeStart = workflow.indexOf("\n  live-smoke:", jobsStart);
     const cleanupStart = workflow.indexOf("\n  live-smoke-cleanup:", smokeStart);
@@ -114,10 +120,56 @@ describe("GitHub Actions workflow contracts", () => {
     const recordJob = workflow.slice(workflow.indexOf("\n  record:"));
 
     expect(workflow).toMatch(/workflow_dispatch:/);
+    expect(workflow).not.toContain("backup_restore_drill_conclusion:");
+    expect(workflow).not.toContain("production_audit_host_clearance_conclusion:");
+    expect(workflow).not.toContain("deterministic_safety_evaluation_conclusion:");
+    expect(workflow).toContain("tested_candidate_sha:");
+    expect(workflow).toContain("deployed_base_url:");
+    expect(workflow).toContain("reviewed_pr_number:");
+    expect(workflow).toContain("reviewed_pr_ci_run_id:");
+    expect(workflow).toContain("reviewed_pr_codeql_run_id:");
+    expect(workflow).toContain("REVIEWED_PR_NUMBER: ${{ inputs.reviewed_pr_number }}");
+    expect(workflow).toContain("REVIEWED_PR_CI_RUN_ID: ${{ inputs.reviewed_pr_ci_run_id }}");
+    expect(workflow).toContain("REVIEWED_PR_CODEQL_RUN_ID: ${{ inputs.reviewed_pr_codeql_run_id }}");
+    expect(workflow).toContain("npm run check:reviewed-pr-evidence");
+    expect(workflow).toContain("reviewed-pr.json");
+    expect(workflow).toContain("deepseek-evidence:");
+    expect(workflow).toContain("npm run check:deepseek-evidence");
+    expect(workflow).toContain("operational-evidence:");
+    expect(workflow).toContain("npm run check:operational-evidence");
+    expect(workflow).toContain("private-production-evidence:");
+    expect(workflow).toContain("npm run check:private-production-evidence");
+    expect(workflow).toContain("live-browser-evidence:");
+    expect(workflow).toContain("npm run check:live-browser-evidence");
+    expect(workflow).toContain("production-browser.json");
+    expect(workflow).toContain("production-browser-trace.json");
+    expect(workflow).toContain("production-member-denial.json");
+    expect(workflow).toContain("evidence/performance/private-production.json");
+    expect(workflow).toContain("PRIVATE_PRODUCTION_DEPLOYED_VERSION_PATH");
+    expect(workflow).toContain("production-restore.json");
+    expect(workflow).toContain("production-scope-probe.json");
+    expect(workflow).toContain("/release/install-attestation/verify");
     expect(workflow).toContain("npm run verify");
+    expect(workflow).toContain("for pass in 1 2 3");
+    expect(workflow).toContain("rm -rf -- dist");
+    expect(workflow).toContain("git checkout --detach");
+    expect(workflow).toContain("cold-verifies.json");
+    expect(workflow).toContain("VITEST_RELEASE_REPORT_PATH");
+    expect(workflow).toContain("vitest-pass-${pass}.json");
+    expect(workflow).toContain("npm run record:cold-verifies");
+    expect(workflow).toContain("minimumPassedTests !== 2366");
+    expect(coldVerifyEvidence).toContain("numPendingTests");
+    expect(coldVerifyEvidence).toContain("numTodoTests");
+    expect(workflow).toContain("npm run perf:local-ui");
+    expect(workflow).toContain("local-ui-performance");
+    expect(workflow).toContain("raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7");
+    expect(workflow).toContain("RELEASE_GATE_ACTIONLINT");
+    expect(workflow).toContain("RELEASE_GATE_LOCAL_UI_PERFORMANCE");
     expect(workflow).toContain("npm run audit:prod");
     expect(workflow).toContain("npm run license:prod");
     expect(workflow).toContain("npm run eval:smoke");
+    expect(workflow).toContain("npx playwright install --with-deps chromium firefox webkit");
+    expect(workflow).toContain("npm run test:e2e");
     expect(workflow).toContain("npm sbom --sbom-format cyclonedx");
     expect(workflow).toContain("github/codeql-action/init@");
     expect(workflow).toContain("github/codeql-action/analyze@");
@@ -144,8 +196,10 @@ describe("GitHub Actions workflow contracts", () => {
     expect(cleanupJob).toMatch(
       /name:\s*Upload cleanup evidence[\s\S]*?if:\s*\$\{\{\s*always\(\)\s*\}\}/,
     );
-    expect(workflow).toContain("RELEASE_COMMIT_SHA: ${{ github.sha }}");
-    expect(recordJob).toContain("needs: [machine-gates, codeql, secret-scan, live-smoke, live-smoke-cleanup]");
+    expect(workflow).toContain("RELEASE_SOURCE_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}");
+    expect(workflow).toContain("RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}");
+    expect(workflow).not.toContain("RELEASE_COMMIT_SHA:");
+    expect(recordJob).toContain("needs: [machine-gates, codeql, secret-scan, deepseek-evidence, private-production-evidence, live-browser-evidence, operational-evidence, live-smoke, live-smoke-cleanup]");
     expect(recordJob).toContain(
       "RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result == 'success' && needs.live-smoke-cleanup.result == 'success' && 'success' || 'failure' }}",
     );
@@ -156,6 +210,34 @@ describe("GitHub Actions workflow contracts", () => {
     expect(recordJob).toContain("node <<'NODE'");
     expect(recordJob).toContain('"not_evaluated"');
     expect(recordJob).toContain("RELEASE_GATE_LIVE_SMOKE");
+    expect(recordJob).toContain("RELEASE_GATE_BROWSER_E2E");
+    expect(recordJob).toContain("RELEASE_GATE_BACKUP_RESTORE_DRILL: ${{ needs.operational-evidence.result }}");
+    expect(recordJob).toContain("RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION: ${{ needs.deepseek-evidence.result }}");
+    expect(recordJob).toContain("RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE: ${{ needs.operational-evidence.result }}");
+    expect(recordJob).toContain("RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE: ${{ needs.private-production-evidence.result }}");
+    expect(recordJob).toContain("RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE: ${{ needs.live-browser-evidence.result }}");
+    expect(recordJob).toContain("RELEASE_GATE_REVIEWED_PULL_REQUEST");
+    expect(recordJob).toContain("RELEASE_GATE_PULL_REQUEST_CI");
+    expect(recordJob).toContain("RELEASE_GATE_DEPENDENCY_REVIEW");
+    expect(recordJob).toContain("RELEASE_GATE_PULL_REQUEST_CODEQL");
+    expect(recordJob).toContain("RELEASE_GATE_PULL_REQUEST_SECRET_SCAN");
+    expect(recordJob).toContain("RELEASE_GATE_ENGINEERING_REVIEW");
+    expect(recordJob).toContain("RELEASE_REVIEWED_PR_EVIDENCE");
+    expect(recordJob).toContain("RELEASE_COLD_VERIFY_EVIDENCE");
+    expect(recordJob).toContain("backupRestoreDrill: status(process.env.RELEASE_GATE_BACKUP_RESTORE_DRILL)");
+    expect(recordJob).toContain("deterministicSafetyEvaluation: status(process.env.RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION)");
+    expect(recordJob).toContain("productionAuditHostClearance: status(process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE)");
+    expect(recordJob).toContain("privateProductionPerformance: status(process.env.RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE)");
+    expect(recordJob).toContain("liveBrowserAcceptance: status(process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE)");
+    expect(recordJob).toContain("browserE2e: status(process.env.RELEASE_GATE_BROWSER_E2E)");
+    expect(recordJob).toContain('providerAndCredentialsGovernance: "not_evaluated"');
+    expect(recordJob).toContain('ownershipAndHumanSignoff: "not_evaluated"');
+    expect(recordJob).toContain('marketplaceSubmission: "not_evaluated"');
+    expect(recordJob).toContain("Enforce release-ready engineering gates");
+    expect(recordJob).toContain("requiredEngineeringGates");
+    expect(recordJob).not.toContain('backupRestoreDrill: "not_evaluated"');
+    expect(recordJob).not.toContain('deterministicSafetyEvaluation: "not_evaluated"');
+    expect(recordJob).not.toContain('productionAuditHostClearance: "not_evaluated"');
     expect(recordJob).toMatch(
       /name:\s*Upload release evidence[\s\S]*?if:\s*\$\{\{\s*always\(\)\s*\}\}/,
     );

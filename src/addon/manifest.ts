@@ -3,8 +3,8 @@ import {
   ClockifyComponent,
   ClockifyLifecycleEvent,
   ClockifyManifest,
-  ClockifyScope,
 } from "@apet97/clockify-addon-sdk";
+import { REQUIRED_SCOPES } from "./scope-contract.js";
 
 /**
  * Clockify add-on manifest (SPEC / IMPLEMENTATION_PLAN Task 3).
@@ -15,7 +15,8 @@ import {
  * endpoints the backend serves.
  */
 export const ADDON_KEY = "ai-assistant";
-const ADDON_NAME = "AI Assistant";
+const ADDON_NAME = "AI Assistant for Clockify";
+const COMPONENT_LABEL = "AI Assistant";
 const COMPONENT_PATH = "/component/assistant";
 export const ICON_PATH = "/icon.svg";
 
@@ -27,10 +28,13 @@ export const ICON_PATH = "/icon.svg";
  * label becomes the hover tooltip.
  */
 export const ADDON_ICON_SVG =
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ' +
-  'stroke="#1f6feb" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
-  '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>' +
-  '<path d="M12 8v4M12 15.5h.01M9.5 10.5h5" stroke-width="1.6"/></svg>';
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="AI Assistant" ' +
+  'stroke-linecap="round" stroke-linejoin="round">' +
+  '<rect width="24" height="24" rx="5" fill="#0e1116"/>' +
+  '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h8A2.5 2.5 0 0 1 17 5.5v6a2.5 2.5 0 0 1-2.5 2.5H10l-3.7 3.1A.8.8 0 0 1 5 16.5V14a2.5 2.5 0 0 1-1-2V5.5Z" fill="#5b9bff"/>' +
+  '<path d="M7 7h7M7 10h4" fill="none" stroke="#f7f9fc" stroke-width="1.5"/>' +
+  '<circle cx="17.5" cy="17.5" r="4" fill="#0e1116" stroke="#3fce8b" stroke-width="1.5"/>' +
+  '<path d="m15.8 17.5 1.1 1.1 2.4-2.7" fill="none" stroke="#3fce8b" stroke-width="1.5"/></svg>';
 
 const LIFECYCLE_PATHS = {
   installed: "/lifecycle/installed",
@@ -38,45 +42,12 @@ const LIFECYCLE_PATHS = {
   deleted: "/lifecycle/deleted",
 } as const;
 
-const REQUIRED_SCOPES: ClockifyScope[] = [
-  ClockifyScope.CLIENT_READ,
-  ClockifyScope.CLIENT_WRITE,
-  ClockifyScope.PROJECT_READ,
-  ClockifyScope.PROJECT_WRITE,
-  ClockifyScope.TAG_READ,
-  ClockifyScope.TAG_WRITE,
-  ClockifyScope.TASK_READ,
-  ClockifyScope.TASK_WRITE,
-  ClockifyScope.TIME_ENTRY_READ,
-  ClockifyScope.TIME_ENTRY_WRITE,
-  ClockifyScope.EXPENSE_READ,
-  ClockifyScope.EXPENSE_WRITE,
-  ClockifyScope.INVOICE_READ,
-  ClockifyScope.INVOICE_WRITE,
-  ClockifyScope.USER_READ,
-  ClockifyScope.USER_WRITE,
-  ClockifyScope.GROUP_READ,
-  ClockifyScope.GROUP_WRITE,
-  ClockifyScope.WORKSPACE_READ,
-  ClockifyScope.WORKSPACE_WRITE,
-  ClockifyScope.CUSTOM_FIELDS_READ,
-  ClockifyScope.CUSTOM_FIELDS_WRITE,
-  ClockifyScope.APPROVAL_READ,
-  ClockifyScope.APPROVAL_WRITE,
-  ClockifyScope.SCHEDULING_READ,
-  ClockifyScope.SCHEDULING_WRITE,
-  ClockifyScope.REPORTS_READ,
-  ClockifyScope.REPORTS_WRITE,
-  ClockifyScope.TIME_OFF_READ,
-  ClockifyScope.TIME_OFF_WRITE,
-];
-
 export function buildManifest(baseUrl: string): ClockifyManifest<"1.5"> {
   const component = ClockifyComponent.v1_5Builder()
     .sidebar()
     .allowAdmins()
     .path(COMPONENT_PATH)
-    .label(ADDON_NAME)
+    .label(COMPONENT_LABEL)
     .iconPath(ICON_PATH)
     .build();
 

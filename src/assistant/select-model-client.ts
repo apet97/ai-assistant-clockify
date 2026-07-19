@@ -18,6 +18,8 @@ export interface ModelClientSelection {
   llmTimeoutMs?: number;
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   llmReasoningEffort?: string;
+  /** Optional provider thinking toggle; omitted by default. */
+  llmThinkingMode?: "enabled" | "disabled";
   /** Optional sampling seed for the HTTP client (reproducibility on weak models). */
   llmSeed?: number;
   geminiModel?: string;
@@ -26,6 +28,7 @@ export interface ModelClientSelection {
 /** Factory seam (defaults to the real builders) so tests can observe what is wired. */
 export interface ModelClientFactories {
   createGeminiCli?: typeof createGeminiCliModelClient;
+  createHttp?: typeof createModelClient;
 }
 
 export function selectModelClient(
@@ -42,12 +45,14 @@ export function selectModelClient(
   if (!config.llmBaseUrl || !config.llmApiKey || !config.llmModel) {
     throw new Error("LLM_BASE_URL, LLM_API_KEY, and LLM_MODEL are required when LLM_PROVIDER=http");
   }
-  return createModelClient({
+  const createHttp = factories.createHttp ?? createModelClient;
+  return createHttp({
     baseUrl: config.llmBaseUrl,
     apiKey: config.llmApiKey,
     model: config.llmModel,
     timeoutMs: config.llmTimeoutMs,
     reasoningEffort: config.llmReasoningEffort,
+    thinkingMode: config.llmThinkingMode,
     ...(config.llmSeed !== undefined ? { seed: config.llmSeed } : {}),
   });
 }

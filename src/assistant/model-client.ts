@@ -1,3 +1,5 @@
+import { modelChatCompletionsUrl } from "./model-endpoint.js";
+
 /**
  * Model adapter (TECH_STACK "Model Adapter"). A thin, provider-isolated client
  * that returns the raw completion text; the planner owns JSON validation and the
@@ -127,6 +129,9 @@ export interface ModelClientConfig {
    * from the wire when unset, so existing backends see byte-identical bodies.
    */
   reasoningEffort?: string;
+  /** Optional provider thinking toggle. Omitted unless explicitly configured,
+   * preserving the existing request body for every other deployment. */
+  thinkingMode?: "enabled" | "disabled";
   /**
    * Optional sampling seed (OpenAI-compatible `seed`). Providers that honor it make
    * temperature-0 runs more reproducible — an extra nudge toward run-to-run
@@ -269,7 +274,7 @@ function toWireMessage(message: ModelMessage): Record<string, unknown> {
 }
 
 export function createModelClient(config: ModelClientConfig): ModelClient {
-  const endpoint = `${config.baseUrl.replace(/\/$/, "")}/chat/completions`;
+  const endpoint = modelChatCompletionsUrl(config.baseUrl);
   const doFetch = config.fetchImpl ?? fetch;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const sleep = config.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -332,10 +337,14 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           model: config.model,
           temperature: 0,
           ...(config.reasoningEffort ? { reasoning_effort: config.reasoningEffort } : {}),
+          ...(config.thinkingMode ? { thinking: { type: config.thinkingMode } } : {}),
           ...(config.seed !== undefined ? { seed: config.seed } : {}),
           ...body,
         }),
           signal: requestSignal,
+          // A 30x from a credentialed model request must fail at this boundary;
+          // following it could forward the bearer key plus customer/tool text.
+          redirect: "error",
         });
       } catch (error) {
         const name = (error as { name?: string } | null)?.name;

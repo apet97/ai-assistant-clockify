@@ -2,9 +2,33 @@ name: Release evidence (manual)
 
 on:
   workflow_dispatch:
+    inputs:
+      tested_candidate_sha:
+        description: Exact clean source commit used for the DeepSeek candidate corpus and deployment
+        required: true
+        type: string
+      deployed_base_url:
+        description: Public HTTPS base URL of the deployed private release candidate
+        required: true
+        type: string
+      reviewed_pr_number:
+        description: Reviewed pull request number whose exact head is this evidence commit
+        required: true
+        type: string
+      reviewed_pr_ci_run_id:
+        description: First-attempt successful CI workflow run id for the reviewed PR head
+        required: true
+        type: string
+      reviewed_pr_codeql_run_id:
+        description: First-attempt successful CodeQL workflow run id for the reviewed PR head
+        required: true
+        type: string
 
 permissions:
+  actions: read
+  checks: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: clockify-live-smoke-sacrificial
@@ -16,12 +40,21 @@ jobs:
     timeout-minutes: 45
     outputs:
       verify: ${{ steps.verify.outcome }}
+      cold-verifies: ${{ steps.verify.outputs.cold_verifies }}
+      reviewed-pr: ${{ steps.reviewed-pr.outcome }}
+      reviewed-pr-evidence: ${{ steps.reviewed-pr.outputs.reviewed_pr_evidence }}
+      local-ui-performance: ${{ steps.local-ui-performance.outcome }}
+      actionlint: ${{ steps.actionlint.outcome }}
+      marketplace_media_binding: ${{ steps.marketplace_media_binding.outcome }}
       audit: ${{ steps.audit.outcome }}
       license: ${{ steps.license.outcome }}
       scripted-safety-corpus: ${{ steps.scripted-safety-corpus.outcome }}
+      browser-e2e: ${{ steps.browser-e2e.outcome }}
       sbom: ${{ steps.sbom.outcome }}
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -29,10 +62,120 @@ jobs:
       - id: install
         continue-on-error: true
         run: npm ci
+      - id: reviewed-pr
+        name: Bind approved PR head, CI, dependency review, CodeQL, gitleaks, and review resolution
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SOURCE_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          REVIEWED_PR_NUMBER: ${{ inputs.reviewed_pr_number }}
+          REVIEWED_PR_CI_RUN_ID: ${{ inputs.reviewed_pr_ci_run_id }}
+          REVIEWED_PR_CODEQL_RUN_ID: ${{ inputs.reviewed_pr_codeql_run_id }}
+          REVIEWED_PR_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/reviewed-pr.json
+        run: npm run check:reviewed-pr-evidence
       - id: verify
         if: steps.install.outcome == 'success'
         continue-on-error: true
-        run: npm run verify
+        shell: bash
+        env:
+          TESTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          VERIFY_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/cold-verifies.json
+        run: |
+          set -euo pipefail
+          evidence_sha="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "${TESTED_CANDIDATE_SHA}" "${evidence_sha}"
+          restore_evidence_head() {
+            git checkout --detach "${evidence_sha}" >/dev/null
+          }
+          trap restore_evidence_head EXIT
+          git checkout --detach "${TESTED_CANDIDATE_SHA}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          report_dir="/tmp/ai-assistant-release-evidence"
+          mkdir -p "${report_dir}"
+          COLD_VERIFY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export COLD_VERIFY_STARTED_AT
+          for pass in 1 2 3; do
+            echo "Cold verification pass ${pass}/3"
+            rm -rf -- dist
+            VITEST_RELEASE_REPORT_PATH="${report_dir}/vitest-pass-${pass}.json"
+            export VITEST_RELEASE_REPORT_PATH
+            rm -f -- "${VITEST_RELEASE_REPORT_PATH}"
+            npm run verify
+            test -s "${VITEST_RELEASE_REPORT_PATH}"
+          done
+          COLD_VERIFY_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          RELEASE_SOURCE_CANDIDATE_SHA="${TESTED_CANDIDATE_SHA}"
+          RELEASE_EVIDENCE_COMMIT_SHA="${evidence_sha}"
+          VITEST_RELEASE_REPORT_1="${report_dir}/vitest-pass-1.json"
+          VITEST_RELEASE_REPORT_2="${report_dir}/vitest-pass-2.json"
+          VITEST_RELEASE_REPORT_3="${report_dir}/vitest-pass-3.json"
+          export COLD_VERIFY_COMPLETED_AT RELEASE_SOURCE_CANDIDATE_SHA RELEASE_EVIDENCE_COMMIT_SHA
+          export VITEST_RELEASE_REPORT_1 VITEST_RELEASE_REPORT_2 VITEST_RELEASE_REPORT_3
+          npm run record:cold-verifies
+          node <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const evidence = JSON.parse(readFileSync(process.env.VERIFY_EVIDENCE_PATH, "utf8"));
+          if (
+            evidence.minimumPassedTests !== 2366
+            || evidence.consecutiveColdPasses !== 3
+            || evidence.retries !== 0
+            || evidence.passes?.length !== 3
+            || evidence.passes.some((pass) =>
+              pass.passedTests < 2366
+              || pass.passedTests !== pass.totalTests
+              || pass.failedTests !== 0
+              || pass.pendingTests !== 0
+              || pass.todoTests !== 0)
+          ) throw new Error("cold verify count evidence is incomplete");
+          NODE
+      - id: local-ui-performance
+        name: Exact-candidate local UI and asset performance gate
+        if: steps.verify.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        env:
+          TESTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          PERF_EVIDENCE_DIR: /tmp/ai-assistant-local-ui-performance
+        run: |
+          set -euo pipefail
+          evidence_sha="$(git rev-parse HEAD)"
+          restore_evidence_head() {
+            git checkout --detach "${evidence_sha}" >/dev/null
+          }
+          trap restore_evidence_head EXIT
+          git checkout --detach "${TESTED_CANDIDATE_SHA}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+          npm run perf:local-ui
+          node <<'NODE'
+          const { readFileSync } = require("node:fs");
+          const path = `${process.env.PERF_EVIDENCE_DIR}/local-ui-2026-07-18.json`;
+          const evidence = JSON.parse(readFileSync(path, "utf8"));
+          if (
+            evidence.conclusion !== "passed"
+            || evidence.source?.commitSha !== process.env.TESTED_CANDIDATE_SHA
+            || evidence.source?.workingTreeDirty !== false
+            || evidence.metrics?.uiAssets?.passed !== true
+            || evidence.metrics?.statusFeedback?.passed !== true
+          ) throw new Error("exact-candidate local UI performance evidence failed");
+          NODE
+      - id: actionlint
+        name: Validate GitHub Actions workflows
+        if: steps.verify.outcome == 'success'
+        continue-on-error: true
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
+        with:
+          version: 1.7.7
+      - id: marketplace_media_binding
+        name: Bind reviewed Marketplace media to the tested source candidate
+        if: steps.verify.outcome == 'success'
+        continue-on-error: true
+        env:
+          MARKETPLACE_MEDIA_SOURCE_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          MARKETPLACE_MEDIA_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          MARKETPLACE_MEDIA_BINDING_PATH: /tmp/marketplace-media-release-binding.json
+        run: npm run evidence:marketplace-media-binding
       - id: audit
         if: steps.install.outcome == 'success'
         continue-on-error: true
@@ -45,6 +188,14 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         run: npm run eval:smoke
+      - id: playwright-install
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npx playwright install --with-deps chromium firefox webkit
+      - id: browser-e2e
+        if: steps.playwright-install.outcome == 'success'
+        continue-on-error: true
+        run: npm run test:e2e
       - id: sbom
         if: steps.install.outcome == 'success'
         continue-on-error: true
@@ -57,6 +208,12 @@ jobs:
           path: |
             sbom.cdx.json
             evidence/dependency-gates/production-licenses.json
+            /tmp/marketplace-media-release-binding.json
+            /tmp/ai-assistant-release-evidence/cold-verifies.json
+            /tmp/ai-assistant-release-evidence/vitest-pass-*.json
+            /tmp/ai-assistant-release-evidence/reviewed-pr.json
+            /tmp/ai-assistant-local-ui-performance/local-ui-2026-07-18.json
+            /tmp/ai-assistant-local-ui-performance/local-ui-2026-07-18.md
           if-no-files-found: warn
           retention-days: 30
       - name: Enforce machine gates
@@ -64,13 +221,18 @@ jobs:
         env:
           INSTALL: ${{ steps.install.outcome }}
           VERIFY: ${{ steps.verify.outcome }}
+          REVIEWED_PR: ${{ steps.reviewed-pr.outcome }}
+          LOCAL_UI_PERFORMANCE: ${{ steps.local-ui-performance.outcome }}
+          ACTIONLINT: ${{ steps.actionlint.outcome }}
+          MARKETPLACE_MEDIA_BINDING: ${{ steps.marketplace_media_binding.outcome }}
           AUDIT: ${{ steps.audit.outcome }}
           LICENSE: ${{ steps.license.outcome }}
           SCRIPTED_SAFETY_CORPUS: ${{ steps.scripted-safety-corpus.outcome }}
+          BROWSER_E2E: ${{ steps.browser-e2e.outcome }}
           SBOM: ${{ steps.sbom.outcome }}
         run: |
           node <<'NODE'
-          const gates = ["INSTALL", "VERIFY", "AUDIT", "LICENSE", "SCRIPTED_SAFETY_CORPUS", "SBOM"];
+          const gates = ["INSTALL", "VERIFY", "REVIEWED_PR", "LOCAL_UI_PERFORMANCE", "ACTIONLINT", "MARKETPLACE_MEDIA_BINDING", "AUDIT", "LICENSE", "SCRIPTED_SAFETY_CORPUS", "BROWSER_E2E", "SBOM"];
           const failed = gates.filter((gate) => process.env[gate] !== "success");
           if (failed.length > 0) {
             console.error(`Machine gates not successful: ${failed.join(", ")}`);
@@ -103,6 +265,299 @@ jobs:
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  deepseek-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: clockify-deepseek-release
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      EVAL_RELEASE_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+      LLM_PROVIDER: http
+      LLM_BASE_URL: https://api.deepseek.com
+      LLM_API_KEY: ${{ secrets.DEEPSEEK_RELEASE_API_KEY }}
+      LLM_MODEL: deepseek-v4-pro
+      LLM_MODE: tool
+      LLM_AGENTIC: "1"
+      LLM_TOOL_SELECT: "1"
+      DEEPSEEK_LIVE_EVIDENCE_DIR: /tmp/deepseek-live-release
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run source-bound current DeepSeek capability and safety evaluations
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence_sha="$(git rev-parse HEAD)"
+          git merge-base --is-ancestor "${EVAL_RELEASE_CANDIDATE_SHA}" "${evidence_sha}"
+          mkdir -p "${DEEPSEEK_LIVE_EVIDENCE_DIR}"
+          chmod 700 "${DEEPSEEK_LIVE_EVIDENCE_DIR}"
+          restore_evidence_head() {
+            git checkout --detach "${evidence_sha}" >/dev/null
+          }
+          trap restore_evidence_head EXIT
+          git checkout --detach "${EVAL_RELEASE_CANDIDATE_SHA}"
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+          npx tsx scripts/eval/probe-deepseek-settings.ts \
+            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-capability-probe.raw.json"
+          env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-baseline.raw.json"
+          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-candidate.raw.json"
+          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+            npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+            --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-read.raw.json"
+          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+            npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+            --preview-only --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-risky-preview.raw.json"
+
+          export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-capability-probe.raw.json"
+          export DEEPSEEK_BASELINE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-baseline.raw.json"
+          export DEEPSEEK_CANDIDATE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-candidate.raw.json"
+          export DEEPSEEK_FOCUSED_READ_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-read.raw.json"
+          export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-risky-preview.raw.json"
+          export DEEPSEEK_BINDING_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-release-binding.json"
+          npm run --silent bind:deepseek-evidence
+          test -z "$(git status --porcelain --untracked-files=all)"
+          restore_evidence_head
+      - name: Fetch deployed release and DeepSeek configuration
+        env:
+          DEPLOYED_BASE_URL: ${{ inputs.deployed_base_url }}
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const raw = process.env.DEPLOYED_BASE_URL ?? "";
+          const base = new URL(raw.endsWith("/") ? raw : `${raw}/`);
+          if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+            throw new Error("deployed_base_url must be a credential-free HTTPS base URL");
+          }
+          async function main() {
+            const response = await fetch(new URL("version", base), { redirect: "error" });
+            if (!response.ok) throw new Error(`deployed /version returned ${response.status}`);
+            const text = await response.text();
+            if (Buffer.byteLength(text) > 65_536) throw new Error("deployed /version response is too large");
+            JSON.parse(text);
+            writeFileSync(`${process.env.DEEPSEEK_LIVE_EVIDENCE_DIR}/deployed-version.json`, text, { encoding: "utf8", mode: 0o600 });
+          }
+          main().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+      - name: Validate exact-candidate DeepSeek evidence and deployed settings
+        env:
+          DEEPSEEK_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          DEEPSEEK_EXPECTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          DEEPSEEK_CAPABILITY_PROBE_RAW_PATH: /tmp/deepseek-live-release/deepseek-capability-probe.raw.json
+          DEEPSEEK_BASELINE_RAW_PATH: /tmp/deepseek-live-release/deepseek-baseline.raw.json
+          DEEPSEEK_CANDIDATE_RAW_PATH: /tmp/deepseek-live-release/deepseek-candidate.raw.json
+          DEEPSEEK_FOCUSED_READ_RAW_PATH: /tmp/deepseek-live-release/deepseek-focused-read.raw.json
+          DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH: /tmp/deepseek-live-release/deepseek-focused-risky-preview.raw.json
+          DEEPSEEK_BINDING_PATH: /tmp/deepseek-live-release/deepseek-release-binding.json
+          DEEPSEEK_DEPLOYED_VERSION_PATH: /tmp/deepseek-live-release/deployed-version.json
+          DEEPSEEK_VALIDATION_PATH: /tmp/deepseek-live-release/deepseek-release-validation.json
+        run: npm run check:deepseek-evidence
+      - name: Attest the protected live DeepSeek release evidence
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: /tmp/deepseek-live-release/*.json
+      - name: Upload DeepSeek release validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-deepseek-evidence-${{ github.run_id }}
+          path: /tmp/deepseek-live-release/*.json
+          if-no-files-found: error
+          retention-days: 90
+
+  private-production-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fetch exact deployed release identity
+        env:
+          DEPLOYED_BASE_URL: ${{ inputs.deployed_base_url }}
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const raw = process.env.DEPLOYED_BASE_URL ?? "";
+          const base = new URL(raw.endsWith("/") ? raw : `${raw}/`);
+          if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+            throw new Error("deployed_base_url must be a credential-free HTTPS base URL");
+          }
+          async function main() {
+            const response = await fetch(new URL("version", base), { redirect: "error" });
+            if (!response.ok) throw new Error(`deployed /version returned ${response.status}`);
+            const text = await response.text();
+            if (Buffer.byteLength(text) > 65_536) throw new Error("deployed /version response is too large");
+            JSON.parse(text);
+            writeFileSync("/tmp/private-production-deployed-version.json", text, { encoding: "utf8", mode: 0o600 });
+          }
+          main().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+      - name: Validate committed private-production performance evidence
+        env:
+          PRIVATE_PRODUCTION_EXPECTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          PRIVATE_PRODUCTION_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          PRIVATE_PRODUCTION_DEPLOYED_VERSION_PATH: /tmp/private-production-deployed-version.json
+          PRIVATE_PRODUCTION_VALIDATION_PATH: /tmp/private-production-release-validation.json
+        run: npm run check:private-production-evidence
+      - name: Upload private-production release validation and aggregate evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-private-production-evidence-${{ github.run_id }}
+          path: |
+            /tmp/private-production-release-validation.json
+            evidence/performance/private-production.json
+            evidence/performance/private-production.md
+          if-no-files-found: error
+          retention-days: 90
+
+  live-browser-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fetch exact deployed release identity
+        env:
+          DEPLOYED_BASE_URL: ${{ inputs.deployed_base_url }}
+        run: |
+          node <<'NODE'
+          const { writeFileSync } = require("node:fs");
+          const raw = process.env.DEPLOYED_BASE_URL ?? "";
+          const base = new URL(raw.endsWith("/") ? raw : `${raw}/`);
+          if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+            throw new Error("deployed_base_url must be a credential-free HTTPS base URL");
+          }
+          async function main() {
+            const response = await fetch(new URL("version", base), { redirect: "error" });
+            if (!response.ok) throw new Error(`deployed /version returned ${response.status}`);
+            const text = await response.text();
+            if (Buffer.byteLength(text) > 65_536) throw new Error("deployed /version response is too large");
+            JSON.parse(text);
+            writeFileSync("/tmp/live-browser-deployed-version.json", text, { encoding: "utf8", mode: 0o600 });
+          }
+          main().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+      - name: Validate exact-candidate production browser and member-denial evidence
+        env:
+          LIVE_BROWSER_EXPECTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          LIVE_BROWSER_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          LIVE_BROWSER_TRACE_PATH: evidence/operations/production-browser-trace.json
+          LIVE_BROWSER_DEPLOYED_VERSION_PATH: /tmp/live-browser-deployed-version.json
+          LIVE_BROWSER_VALIDATION_PATH: /tmp/live-browser-acceptance-validation.json
+        run: npm run check:live-browser-evidence
+      - name: Upload production browser release validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-live-browser-evidence-${{ github.run_id }}
+          path: |
+            /tmp/live-browser-acceptance-validation.json
+            evidence/operations/production-browser.json
+            evidence/operations/production-browser-trace.json
+            evidence/operations/production-member-denial.json
+          if-no-files-found: error
+          retention-days: 90
+
+  operational-evidence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Fetch deployed identity, manifest, and verify the signed fresh-install attestation
+        env:
+          DEPLOYED_BASE_URL: ${{ inputs.deployed_base_url }}
+          OPERATIONAL_SCOPE_EVIDENCE_PATH: evidence/operations/production-scope-probe.json
+        run: |
+          node <<'NODE'
+          const { readFileSync, writeFileSync } = require("node:fs");
+          const raw = process.env.DEPLOYED_BASE_URL ?? "";
+          const base = new URL(raw.endsWith("/") ? raw : `${raw}/`);
+          if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash) {
+            throw new Error("deployed_base_url must be a credential-free HTTPS base URL");
+          }
+          const scope = JSON.parse(readFileSync(process.env.OPERATIONAL_SCOPE_EVIDENCE_PATH, "utf8"));
+          const envelope = scope?.freshInstall?.verificationEnvelope;
+          if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
+            throw new Error("signed fresh-install verification envelope missing");
+          }
+          async function boundedJson(response, label) {
+            if (!response.ok) throw new Error(`${label} returned ${response.status}`);
+            const text = await response.text();
+            if (Buffer.byteLength(text) > 65_536) throw new Error(`${label} response is too large`);
+            JSON.parse(text);
+            return text;
+          }
+          async function main() {
+            const [version, manifest, attestation] = await Promise.all([
+              fetch(new URL("version", base), { redirect: "error" }),
+              fetch(new URL("manifest", base), { redirect: "error" }),
+              fetch(new URL("/release/install-attestation/verify", base), {
+                method: "POST",
+                headers: { "content-type": "application/json", accept: "application/json" },
+                body: JSON.stringify(envelope),
+                redirect: "error",
+              }),
+            ]);
+            writeFileSync("/tmp/operational-deployed-version.json", await boundedJson(version, "deployed /version"), { mode: 0o600 });
+            writeFileSync("/tmp/operational-deployed-manifest.json", await boundedJson(manifest, "deployed /manifest"), { mode: 0o600 });
+            writeFileSync("/tmp/operational-attestation-verification.json", await boundedJson(attestation, "fresh-install attestation verification"), { mode: 0o600 });
+          }
+          main().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+      - name: Validate measured exact-candidate operational evidence
+        env:
+          OPERATIONAL_EXPECTED_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          OPERATIONAL_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          OPERATIONAL_DEPLOYED_VERSION_PATH: /tmp/operational-deployed-version.json
+          OPERATIONAL_DEPLOYED_MANIFEST_PATH: /tmp/operational-deployed-manifest.json
+          OPERATIONAL_ATTESTATION_VERIFICATION_PATH: /tmp/operational-attestation-verification.json
+          OPERATIONAL_RESTORE_EVIDENCE_PATH: evidence/operations/production-restore.json
+          OPERATIONAL_SCOPE_EVIDENCE_PATH: evidence/operations/production-scope-probe.json
+          OPERATIONAL_VALIDATION_PATH: /tmp/operational-release-validation.json
+        run: npm run check:operational-evidence
+      - name: Upload operational release validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-operational-evidence-${{ github.run_id }}
+          path: |
+            /tmp/operational-release-validation.json
+            evidence/operations/production-restore.json
+            evidence/operations/production-scope-probe.json
+          if-no-files-found: error
+          retention-days: 90
 
   live-smoke:
     runs-on: ubuntu-latest
@@ -174,19 +629,37 @@ jobs:
 
   record:
     if: ${{ always() }}
-    needs: [machine-gates, codeql, secret-scan, live-smoke, live-smoke-cleanup]
+    needs: [machine-gates, codeql, secret-scan, deepseek-evidence, private-production-evidence, live-browser-evidence, operational-evidence, live-smoke, live-smoke-cleanup]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      RELEASE_COMMIT_SHA: ${{ github.sha }}
+      RELEASE_SOURCE_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+      RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
       RELEASE_GATE_VERIFY: ${{ needs.machine-gates.outputs.verify || 'skipped' }}
+      RELEASE_GATE_REVIEWED_PULL_REQUEST: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_GATE_PULL_REQUEST_CI: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_GATE_DEPENDENCY_REVIEW: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_GATE_PULL_REQUEST_CODEQL: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_GATE_PULL_REQUEST_SECRET_SCAN: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_GATE_ENGINEERING_REVIEW: ${{ needs.machine-gates.outputs.reviewed-pr || 'skipped' }}
+      RELEASE_REVIEWED_PR_EVIDENCE: ${{ needs.machine-gates.outputs.reviewed-pr-evidence || '{}' }}
+      RELEASE_COLD_VERIFY_EVIDENCE: ${{ needs.machine-gates.outputs.cold-verifies || '{}' }}
+      RELEASE_GATE_LOCAL_UI_PERFORMANCE: ${{ needs.machine-gates.outputs.local-ui-performance || 'skipped' }}
+      RELEASE_GATE_ACTIONLINT: ${{ needs.machine-gates.outputs.actionlint || 'skipped' }}
+      RELEASE_GATE_MARKETPLACE_MEDIA_BINDING: ${{ needs.machine-gates.outputs.marketplace_media_binding || 'skipped' }}
       RELEASE_GATE_AUDIT: ${{ needs.machine-gates.outputs.audit || 'skipped' }}
       RELEASE_GATE_LICENSE: ${{ needs.machine-gates.outputs.license || 'skipped' }}
       RELEASE_GATE_SCRIPTED_SAFETY_CORPUS: ${{ needs.machine-gates.outputs.scripted-safety-corpus || 'skipped' }}
+      RELEASE_GATE_BROWSER_E2E: ${{ needs.machine-gates.outputs.browser-e2e || 'skipped' }}
       RELEASE_GATE_SBOM: ${{ needs.machine-gates.outputs.sbom || 'skipped' }}
       RELEASE_GATE_CODEQL: ${{ needs.codeql.result }}
       RELEASE_GATE_SECRET_SCAN: ${{ needs.secret-scan.result }}
       RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result == 'success' && needs.live-smoke-cleanup.result == 'success' && 'success' || 'failure' }}
+      RELEASE_GATE_BACKUP_RESTORE_DRILL: ${{ needs.operational-evidence.result }}
+      RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION: ${{ needs.deepseek-evidence.result }}
+      RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE: ${{ needs.private-production-evidence.result }}
+      RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE: ${{ needs.live-browser-evidence.result }}
+      RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE: ${{ needs.operational-evidence.result }}
       RELEASE_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/release-evidence.json
     steps:
       - name: Record machine conclusions and unevaluated human gates
@@ -203,9 +676,13 @@ jobs:
           rmSync(outputPath, { force: true });
           rmSync(temporaryPath, { force: true });
 
-          const commitSha = process.env.RELEASE_COMMIT_SHA ?? "";
-          if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commitSha)) {
-            throw new Error("release commit SHA is invalid");
+          const sourceCandidateSha = process.env.RELEASE_SOURCE_CANDIDATE_SHA ?? "";
+          const evidenceCommitSha = process.env.RELEASE_EVIDENCE_COMMIT_SHA ?? "";
+          if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(sourceCandidateSha)) {
+            throw new Error("release source candidate SHA is invalid");
+          }
+          if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(evidenceCommitSha)) {
+            throw new Error("release evidence commit SHA is invalid");
           }
           const status = (value) => ({
             success: "passed",
@@ -213,30 +690,106 @@ jobs:
             cancelled: "cancelled",
             skipped: "skipped",
           })[value] ?? "unknown";
+          const reviewedPullRequest = JSON.parse(process.env.RELEASE_REVIEWED_PR_EVIDENCE ?? "{}");
+          const coldVerifies = JSON.parse(process.env.RELEASE_COLD_VERIFY_EVIDENCE ?? "{}");
+          if (
+            reviewedPullRequest.conclusion !== "passed"
+            || reviewedPullRequest.sourceCandidateSha !== sourceCandidateSha
+            || reviewedPullRequest.evidenceCommitSha !== evidenceCommitSha
+            || reviewedPullRequest.pullRequest?.headSha !== evidenceCommitSha
+            || reviewedPullRequest.pullRequest?.unresolvedReviewThreads !== 0
+          ) throw new Error("reviewed pull request evidence is not release-bound");
+          if (
+            coldVerifies.conclusion !== "passed"
+            || coldVerifies.sourceCandidateSha !== sourceCandidateSha
+            || coldVerifies.evidenceCommitSha !== evidenceCommitSha
+            || coldVerifies.minimumPassedTests !== 2366
+            || coldVerifies.consecutiveColdPasses !== 3
+            || coldVerifies.retries !== 0
+            || coldVerifies.passes?.length !== 3
+            || coldVerifies.passes.some((pass) =>
+              pass.passedTests < 2366
+              || pass.passedTests !== pass.totalTests
+              || pass.failedTests !== 0
+              || pass.pendingTests !== 0
+              || pass.todoTests !== 0)
+          ) throw new Error("cold verify evidence is not release-bound");
           const evidence = {
-            commitSha,
+            sourceCandidateSha,
+            evidenceCommitSha,
+            reviewedPullRequest,
+            coldVerifies,
             machineGates: {
               verify: status(process.env.RELEASE_GATE_VERIFY),
+              reviewedPullRequest: status(process.env.RELEASE_GATE_REVIEWED_PULL_REQUEST),
+              pullRequestCi: status(process.env.RELEASE_GATE_PULL_REQUEST_CI),
+              dependencyReview: status(process.env.RELEASE_GATE_DEPENDENCY_REVIEW),
+              pullRequestCodeql: status(process.env.RELEASE_GATE_PULL_REQUEST_CODEQL),
+              pullRequestSecretScan: status(process.env.RELEASE_GATE_PULL_REQUEST_SECRET_SCAN),
+              engineeringReview: status(process.env.RELEASE_GATE_ENGINEERING_REVIEW),
+              localUiPerformance: status(process.env.RELEASE_GATE_LOCAL_UI_PERFORMANCE),
+              actionlint: status(process.env.RELEASE_GATE_ACTIONLINT),
+              marketplaceMediaBinding: status(process.env.RELEASE_GATE_MARKETPLACE_MEDIA_BINDING),
               audit: status(process.env.RELEASE_GATE_AUDIT),
               license: status(process.env.RELEASE_GATE_LICENSE),
               codeql: status(process.env.RELEASE_GATE_CODEQL),
               secretScan: status(process.env.RELEASE_GATE_SECRET_SCAN),
               scriptedSafetyCorpus: status(process.env.RELEASE_GATE_SCRIPTED_SAFETY_CORPUS),
+              browserE2e: status(process.env.RELEASE_GATE_BROWSER_E2E),
               sbom: status(process.env.RELEASE_GATE_SBOM),
               liveSmoke: status(process.env.RELEASE_GATE_LIVE_SMOKE),
+              backupRestoreDrill: status(process.env.RELEASE_GATE_BACKUP_RESTORE_DRILL),
+              deterministicSafetyEvaluation: status(process.env.RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION),
+              privateProductionPerformance: status(process.env.RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE),
+              liveBrowserAcceptance: status(process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE),
+              productionAuditHostClearance: status(process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE),
             },
             humanGates: {
-              productionCredentialRotation: "not_evaluated",
-              providerDataGovernanceReview: "not_evaluated",
-              backupRestoreDrill: "not_evaluated",
-              deterministicSafetyEvaluation: "not_evaluated",
-              securityReview: "not_evaluated",
-              productionAuditHostClearance: "not_evaluated",
-              marketplaceApproval: "not_evaluated",
+              providerAndCredentialsGovernance: "not_evaluated",
+              ownershipAndHumanSignoff: "not_evaluated",
+              marketplaceSubmission: "not_evaluated",
             },
           };
           writeFileSync(temporaryPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
           renameSync(temporaryPath, outputPath);
+          NODE
+      - name: Enforce release-ready engineering gates
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          node <<'NODE'
+          const requiredEngineeringGates = {
+            verify: process.env.RELEASE_GATE_VERIFY,
+            reviewedPullRequest: process.env.RELEASE_GATE_REVIEWED_PULL_REQUEST,
+            pullRequestCi: process.env.RELEASE_GATE_PULL_REQUEST_CI,
+            dependencyReview: process.env.RELEASE_GATE_DEPENDENCY_REVIEW,
+            pullRequestCodeql: process.env.RELEASE_GATE_PULL_REQUEST_CODEQL,
+            pullRequestSecretScan: process.env.RELEASE_GATE_PULL_REQUEST_SECRET_SCAN,
+            engineeringReview: process.env.RELEASE_GATE_ENGINEERING_REVIEW,
+            localUiPerformance: process.env.RELEASE_GATE_LOCAL_UI_PERFORMANCE,
+            actionlint: process.env.RELEASE_GATE_ACTIONLINT,
+            marketplaceMediaBinding: process.env.RELEASE_GATE_MARKETPLACE_MEDIA_BINDING,
+            audit: process.env.RELEASE_GATE_AUDIT,
+            license: process.env.RELEASE_GATE_LICENSE,
+            codeql: process.env.RELEASE_GATE_CODEQL,
+            secretScan: process.env.RELEASE_GATE_SECRET_SCAN,
+            scriptedSafetyCorpus: process.env.RELEASE_GATE_SCRIPTED_SAFETY_CORPUS,
+            browserE2e: process.env.RELEASE_GATE_BROWSER_E2E,
+            sbom: process.env.RELEASE_GATE_SBOM,
+            liveSmoke: process.env.RELEASE_GATE_LIVE_SMOKE,
+            backupRestoreDrill: process.env.RELEASE_GATE_BACKUP_RESTORE_DRILL,
+            deterministicSafetyEvaluation: process.env.RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION,
+            privateProductionPerformance: process.env.RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE,
+            liveBrowserAcceptance: process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE,
+            productionAuditHostClearance: process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE,
+          };
+          const failed = Object.entries(requiredEngineeringGates)
+            .filter(([, value]) => value !== "success")
+            .map(([gate, value]) => `${gate}=${value ?? "missing"}`);
+          if (failed.length > 0) {
+            console.error(`Release-ready engineering gates are not all successful: ${failed.join(", ")}`);
+            process.exit(1);
+          }
           NODE
       - name: Upload release evidence
         if: ${{ always() }}

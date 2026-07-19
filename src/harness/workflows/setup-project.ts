@@ -19,6 +19,13 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { dynamicMutationPlan, fetchCompositeSnapshot, userProjection } from "./composite-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import {
+  estimateSetupProjectHostCalls,
+  SETUP_PROJECT_MEMBER_BATCH_MAX,
+  SETUP_PROJECT_RATE_BATCH_MAX,
+  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+  TURN_HOST_CALL_LIMIT,
+} from "../safety-limits.js";
 
 /**
  * `clockify_setup_project` — the single-approval composite. A request like
@@ -83,7 +90,7 @@ const setupProject = defineRiskyAction({
     clientId: z.string().optional(),
     clientName: z.string().optional(),
     /** Members to ADD (names or "me"). */
-    members: zStringList(z.array(z.string().min(1))).optional(),
+    members: zStringList(z.array(z.string().min(1)).max(SETUP_PROJECT_MEMBER_BATCH_MAX)).optional(),
     /** Project DEFAULT rate amount (set in the project create body — not a separate endpoint). */
     projectRate: zNumberLike(z.number().nonnegative()).optional(),
     projectRateKind: rateKindEnum.default("hourly"),
@@ -96,9 +103,27 @@ const setupProject = defineRiskyAction({
           kind: rateKindEnum.default("hourly"),
         }),
       )
+      .max(SETUP_PROJECT_RATE_BATCH_MAX)
       .optional(),
     /** `major` (e.g. 50.00) is converted ×100 to the minor units Clockify wants. */
     rateUnit: z.enum(["major", "minor"]).default("major"),
+  }).superRefine((value, ctx) => {
+    // A rate implies membership. Before name resolution, treat every supplied
+    // member/rate as distinct so the advertised shape is safe in the worst case.
+    const memberCount = (value.members?.length ?? 0) + (value.memberRates?.length ?? 0);
+    const maxHostCalls = estimateSetupProjectHostCalls({
+      memberCount,
+      rateCount: value.memberRates?.length ?? 0,
+      hasClient: value.clientId !== undefined || value.clientName !== undefined,
+    });
+    // Cold route auth plus the two forced confirmation checks run before the
+    // mutation scope can atomically reserve its remaining operation cost.
+    if (CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS + maxHostCalls > TURN_HOST_CALL_LIMIT) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Combined members and rates require up to ${CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS + maxHostCalls} host calls including authentication and confirmation checks; maximum is ${TURN_HOST_CALL_LIMIT}.`,
+      });
+    }
   }),
   async preview(ctx, args) {
     const unit = args.rateUnit ?? "major";
@@ -278,6 +303,7 @@ const setupProject = defineRiskyAction({
       return errorReceipt({ action: operation.actionName, code: "list_truncated", message: "Clockify returned an incomplete project baseline. No project was created." });
     }
     let created: { id: string; name: string } | undefined;
+    let createReconciled = false;
     const createStep = await executeDurableRiskyStep({
       ctx,
       operation,
@@ -299,6 +325,7 @@ const setupProject = defineRiskyAction({
             return state && projectMatchesCreateBody(state, body) ? candidate : undefined;
           },
         });
+        createReconciled = dispatched.reconciled;
         created = dispatched.value;
         return { externalId: dispatched.value.id, effect: { created: { type: "project", id: dispatched.value.id, name: dispatched.value.name } }, detail: { reconciled: dispatched.reconciled } };
       },
@@ -309,6 +336,9 @@ const setupProject = defineRiskyAction({
     if (createStep.status !== "succeeded" || !created) {
       return errorReceipt({ action: operation.actionName, code: "write_failed", message: "Clockify rejected the project create; no setup steps were sent." });
     }
+    if (createReconciled && (p.addUserIds.length > 0 || p.memberRates.length > 0)) {
+      return setupProjectPartial(created, "The project create was proven successful after an ambiguous response, so no membership or rate mutation was sent.");
+    }
 
     let planIndex = 1;
     if (p.addUserIds.length) {
@@ -318,6 +348,7 @@ const setupProject = defineRiskyAction({
       const have = new Set(memberships.rows.map((row) => String(row.userId)));
       const expectedRows = [...memberships.rows, ...p.addUserIds.filter((id) => !have.has(id)).map((userId) => ({ userId }))];
       const expectedFingerprint = membershipFingerprint(expectedRows);
+      let membershipReconciled = false;
       const memberStep = await executeDurableRiskyStep({
         ctx, operation, planStepId: "add-project-members", index: planIndex++, name: "Add project members",
         preparedDetail: { projectId: created.id, memberships: expectedRows },
@@ -334,10 +365,14 @@ const setupProject = defineRiskyAction({
               return !current.truncated && membershipFingerprint(current.rows) === expectedFingerprint ? true as const : undefined;
             },
           });
+          membershipReconciled = dispatched.reconciled;
           return { externalId: created!.id, effect: { membersUpdated: p.addUserIds }, detail: { reconciled: dispatched.reconciled } };
         },
       });
       if (memberStep.status !== "succeeded") return setupProjectPartial(created, memberStep.status === "outcome_unknown" ? "The project was created, but the membership update outcome is unknown; rate steps were not sent." : "The project was created, but Clockify rejected the membership update; rate steps were not sent.");
+      if (membershipReconciled && p.memberRates.length > 0) {
+        return setupProjectPartial(created, "The membership update was proven successful after an ambiguous response, so no rate mutation was sent.");
+      }
     }
 
     for (let rateIndex = 0; rateIndex < p.memberRates.length; rateIndex += 1) {
@@ -349,6 +384,7 @@ const setupProject = defineRiskyAction({
       if (!member) return setupProjectPartial(created, `The project was created, but member ${rate.userId} could not be verified; no rate write was sent.`);
       const key = rate.kind === "cost" ? "costRate" : "hourlyRate";
       const expectedMember = { ...member, [key]: { amount: rate.amountMinor } };
+      let rateReconciled = false;
       const rateStep = await executeDurableRiskyStep({
         ctx, operation, planStepId: `set-project-rate-${rateIndex}`, index: planIndex++, name: `Set ${rate.kind} member rate`,
         preparedDetail: { projectId: created.id, userId: rate.userId, amountMinor: rate.amountMinor, kind: rate.kind, expectedMember },
@@ -367,10 +403,14 @@ const setupProject = defineRiskyAction({
               return row && sanitizedFingerprint(row) === sanitizedFingerprint(expectedMember) ? true as const : undefined;
             },
           });
+          rateReconciled = dispatched.reconciled;
           return { externalId: created!.id, effect: { rateUpdated: { userId: rate.userId, kind: rate.kind, amountMinor: rate.amountMinor } }, detail: { reconciled: dispatched.reconciled } };
         },
       });
       if (rateStep.status !== "succeeded") return setupProjectPartial(created, rateStep.status === "outcome_unknown" ? "The project and earlier setup changes remain, but a member-rate outcome is unknown; later rates were not sent." : "The project and earlier setup changes remain, but Clockify rejected a member rate; later rates were not sent.");
+      if (rateReconciled && rateIndex + 1 < p.memberRates.length) {
+        return setupProjectPartial(created, "A member rate was proven successful after an ambiguous response, so no later rate mutation was sent.");
+      }
     }
 
     return successReceipt({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, SESSION_EXPIRED_MESSAGE, switchToSession, type ChatApi } from "../../src/ui/main.js";
+import { ApiError, SESSION_EXPIRED_MESSAGE, switchToSession, type SwitchApiLike } from "../../src/ui/main.js";
 
 /**
  * The chat-history switch flow (Phase 6 wiring core): selecting a past
@@ -10,23 +10,8 @@ import { ApiError, SESSION_EXPIRED_MESSAGE, switchToSession, type ChatApi } from
  * transcript must not be torn down). A 401 maps to the session-expired copy
  * (reload), mirroring the rest of the UI's error discipline.
  */
-function recordingApi(impl: () => Promise<unknown>): ChatApi {
-  const stub = async (): Promise<unknown> => ({ ok: true });
-  const confirm = async () => ({ ok: true });
-  return {
-    getPermissions: stub,
-    savePermissions: stub,
-    getHistory: stub,
-    newChat: stub,
-    listSessions: stub,
-    switchSession: impl,
-    sendMessage: stub,
-    streamMessage: async () => {},
-    confirmPreview: confirm,
-    confirmStream: async () => {},
-    cancelPreview: stub,
-    undo: stub,
-  };
+function recordingApi(impl: () => Promise<unknown>): SwitchApiLike {
+  return { switchSession: impl };
 }
 
 describe("switchToSession", () => {

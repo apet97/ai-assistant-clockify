@@ -16,7 +16,7 @@ function makeClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
 
 describe("session cookie", () => {
   it("verifies with the same secret and round-trips claims", () => {
-    const claims = makeClaims();
+    const claims = makeClaims({ uiPreferences: { theme: "dark", language: "sr" } });
     const cookie = signSessionCookie(claims, SECRET);
     const verified = verifySessionCookie(cookie, SECRET);
     expect(verified).toEqual(claims);

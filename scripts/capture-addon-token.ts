@@ -2,8 +2,8 @@
  * After the add-on is installed on a sacrificial workspace (Clockify has POSTed
  * /lifecycle/installed and the server stored the installation), copy the add-on
  * token + backendUrl from the ENCRYPTED SQLite store into the gitignored .env as
- * LIVE_ADDON_TOKEN / LIVE_BACKEND_URL, so scripts/addon-smoke.ts can drive the
- * production X-Addon-Token path. The token is read from the store and written
+ * LIVE_ADDON_TOKEN / LIVE_BACKEND_URL, so the fresh-install scope and multi-host
+ * probes can drive the production X-Addon-Token path. The token is read from the store and written
  * straight to .env — it is NEVER printed (only its length is reported).
  *
  * Requires the SAME values the server ran with:
@@ -15,7 +15,7 @@
  *   DATABASE_PATH=./data/ai-assistant.sqlite DATA_ENCRYPTION_KEY=... \
  *   LIVE_WORKSPACE_ID=... npx tsx scripts/capture-addon-token.ts
  */
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createStore } from "../src/db/store.js";
 
 function loadDotEnv(): void {
@@ -56,9 +56,11 @@ function upsertEnv(content: string, key: string, value: string): string {
 let content = existsSync(".env") ? readFileSync(".env", "utf8") : "";
 content = upsertEnv(content, "LIVE_ADDON_TOKEN", installation.addonToken);
 content = upsertEnv(content, "LIVE_BACKEND_URL", backendUrl);
-writeFileSync(".env", content);
+writeFileSync(".env", content, { mode: 0o600 });
+// writeFileSync's mode applies only on creation. Tighten an existing file too.
+chmodSync(".env", 0o600);
 
 console.log(
   `Captured into .env: LIVE_ADDON_TOKEN (length ${installation.addonToken.length}, value not printed), ` +
-    `LIVE_BACKEND_URL=${backendUrl}. Now run: LIVE_CLOCKIFY=1 npx tsx scripts/addon-smoke.ts`,
+    `LIVE_BACKEND_URL=${backendUrl}. Run the exact-release scope and host-auth commands in DEPLOYMENT.md.`,
 );

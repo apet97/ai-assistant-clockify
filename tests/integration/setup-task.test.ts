@@ -7,7 +7,7 @@ import type { ActionContext, ConfirmableOperation, IdempotencyLedger } from "../
 import type { UpdateTaskRateInput } from "../../src/clockify/ports/tasks.js";
 import type { SuccessReceipt } from "../../src/harness/receipts.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
-import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * clockify_setup_task — the task analog of setup_project: create a task in an
@@ -77,6 +77,25 @@ describe("clockify_setup_task — single-approval task composite", () => {
     expect(task?.assigneeIds).toEqual(expect.arrayContaining(["admin-1", "u2"]));
     expect(s.rate).toHaveLength(1);
     expect(s.rate[0]).toMatchObject({ projectId: "p1", taskId: task?.id, rateKind: "HOURLY", amountMinor: 6000 });
+  });
+
+  it("stops the rate write after an ambiguous task create reconciles successfully", async () => {
+    const fake = createFakeWorkspace(SEED);
+    const original = fake.client.createTaskAtomic.bind(fake.client);
+    const client: WorkspaceClient = {
+      ...fake.client,
+      createTaskAtomic: async (input) => {
+        const created = await original(input);
+        throw new AmbiguousWriteOutcome("POST", `/tasks/${created.id}`, "socket closed");
+      },
+    };
+    const op = await previewSetup(ctxWith(fake, client));
+
+    const result = await commitConfirmedOperation(ctxWith(fake, client), op);
+
+    expect(result).toMatchObject({ kind: "partial", receipt: { ok: true }, recovery: { retryable: false } });
+    expect(fake.counts.createTaskAtomic).toBe(1);
+    expect(fake.counts.updateTaskRateAtomic ?? 0).toBe(0);
   });
 
   it("a drifted stored payload (e.g. a deploy during a pending preview) fails with an honest receipt, not a silent wrong commit", async () => {

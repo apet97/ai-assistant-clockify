@@ -2,19 +2,17 @@ import type { z } from "zod";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import type { ListResult } from "../../clockify/types.js";
 import {
-  clarifyResult,
   defineAction,
   isPartialCommitResult,
   isPreparedSafeWrite,
   isSafeWriteClarification,
   mutationPlanContractError,
   type ActionContext,
-  type ActionDefinition,
-  type ActionResult,
+  type BoundedPreparedSafeWrite,
   type CommitResult,
   type DurableMutationContract,
-  type ExternalMutationPlan,
-  type PreparedSafeWrite,
+  type ExternalMutationPlanDraft,
+  type SafeWriteActionDefinition,
   type SafeWritePreparationResult,
   type TargetSnapshot,
 } from "../action.js";
@@ -43,8 +41,8 @@ export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, St
   prepare(ctx: ActionContext, args: z.infer<S>): Promise<SafeWritePreparationResult> | SafeWritePreparationResult;
   prepareDispatch(ctx: ActionContext, operation: unknown): Promise<{ preparedDetail: unknown; state: State }>;
   dispatch(ctx: ActionContext, operation: unknown, state: State): Promise<StructureSafeWriteDispatch>;
-}): ActionDefinition {
-  const executePrepared = async (ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult> => {
+}): SafeWriteActionDefinition {
+  const executePrepared = async (ctx: ActionContext, prepared: BoundedPreparedSafeWrite): Promise<CommitResult> => {
     const contractError = mutationPlanContractError(def.mutationContract, prepared.mutationPlan);
     const primary = prepared.mutationPlan.steps.filter((step) => step.kind === "primary");
     if (contractError || primary.length !== 1 || prepared.mutationPlan.mode !== "single") {
@@ -114,21 +112,12 @@ export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, St
       return prepared;
     },
     executeSafeWrite: executePrepared,
-    async handler(ctx, args): Promise<ActionResult> {
-      const prepared = await def.prepare(ctx, args);
-      if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
-      if (!isPreparedSafeWrite(prepared)) {
-        return { kind: "receipt", receipt: errorReceipt({ action: def.name, code: "invalid_safe_write_preparation", message: "Safe-write preparation failed." }) };
-      }
-      const result = await executePrepared(ctx, prepared);
-      return isPartialCommitResult(result) ? result : { kind: "receipt", receipt: result };
-    },
-  });
+  }) as SafeWriteActionDefinition;
 }
 
 export function mutationPlan(
   steps: Array<{ id: string; kind?: "primary" | "compensation"; strategy: "create" | "update" | "delete" | "state-command" | "composed"; fingerprint?: string }>,
-): ExternalMutationPlan {
+): ExternalMutationPlanDraft {
   return {
     mode: steps.length === 1 ? "single" : "curated",
     steps: steps.map((step) => ({

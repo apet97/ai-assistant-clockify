@@ -5,7 +5,7 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import type { ActionContext, ConfirmableOperation } from "../../src/harness/catalog.js";
 import type { CreateProjectInput, UpdateProjectRateInput } from "../../src/clockify/ports/projects.js";
 import type { WorkspaceClient } from "../../src/clockify/client.js";
-import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 
 /**
  * clockify_setup_project — the single-approval composite: ONE preview listing
@@ -95,6 +95,30 @@ describe("clockify_setup_project — single-approval composite", () => {
     expect(fake.state.projectMemberships[projectId].some((m) => String(m.userId) === "admin-1")).toBe(true);
     // exactly one created entity (the project) → one undo handle.
     expect(receipt.ok && receipt.changed?.created).toHaveLength(1);
+  });
+
+  it("stops later setup writes after an ambiguous project create reconciles successfully", async () => {
+    const fake = createFakeWorkspace({ users: [{ id: "admin-1", name: "Ada" }] });
+    const original = fake.client.createProjectAtomic.bind(fake.client);
+    const client: WorkspaceClient = {
+      ...fake.client,
+      createProjectAtomic: async (input) => {
+        const created = await original(input);
+        throw new AmbiguousWriteOutcome("POST", `/projects/${created.id}`, "socket closed");
+      },
+    };
+    const op = await previewSetup(ctxWith(fake, client), {
+      name: "reconciled-project",
+      members: ["me"],
+      memberRates: [{ member: "me", amount: 25 }],
+    });
+
+    const result = await commitConfirmedOperation(ctxWith(fake, client), op);
+
+    expect(result).toMatchObject({ kind: "partial", receipt: { ok: true }, recovery: { retryable: false } });
+    expect(fake.counts.createProjectAtomic).toBe(1);
+    expect(fake.counts.updateProjectMembershipsAtomic ?? 0).toBe(0);
+    expect(fake.counts.updateProjectRateAtomic ?? 0).toBe(0);
   });
 
   it("a drifted stored payload (e.g. a deploy during a pending preview) fails with an honest receipt, not a silent wrong commit", async () => {

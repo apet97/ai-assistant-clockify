@@ -27,12 +27,12 @@ function requestWithId(testId: string): FakeRequest {
   return { testId, aborted: false } as unknown as FakeRequest;
 }
 
-async function until(predicate: () => boolean): Promise<void> {
-  for (let i = 0; i < 50; i += 1) {
-    if (predicate()) return;
-    await new Promise<void>((resolve) => setImmediate(resolve));
-  }
-  throw new Error("condition did not settle");
+function eventSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("fifoAsyncHandler", () => {
@@ -41,12 +41,20 @@ describe("fifoAsyncHandler", () => {
     let releaseBookkeeping!: () => void;
     const bookkeeping = new Promise<void>((resolve) => { releaseBookkeeping = resolve; });
     const started: string[] = [];
+    const firstStarted = eventSignal();
+    const secondQueued = eventSignal();
+    const secondStarted = eventSignal();
     const handler = fifoAsyncHandler(
       fifo,
-      () => "session-1",
+      (req) => {
+        if ((req as FakeRequest).testId === "second") secondQueued.resolve();
+        return "session-1";
+      },
       async (req, res) => {
         const id = (req as FakeRequest).testId;
         started.push(id);
+        if (id === "first") firstStarted.resolve();
+        if (id === "second") secondStarted.resolve();
         if (id === "first") {
           (res as unknown as FakeResponse).end();
           await bookkeeping;
@@ -56,13 +64,13 @@ describe("fifoAsyncHandler", () => {
     const next = vi.fn() as unknown as NextFunction;
 
     handler(requestWithId("first"), new FakeResponse() as unknown as Response, next);
-    await until(() => started.includes("first"));
+    await firstStarted.promise;
     handler(requestWithId("second"), new FakeResponse() as unknown as Response, next);
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await secondQueued.promise;
     expect(started).toEqual(["first"]);
 
     releaseBookkeeping();
-    await until(() => started.includes("second"));
+    await secondStarted.promise;
     expect(started).toEqual(["first", "second"]);
     expect(next).not.toHaveBeenCalled();
   });
@@ -72,12 +80,16 @@ describe("fifoAsyncHandler", () => {
     let releaseFirst!: () => void;
     const blocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const started: string[] = [];
+    const firstStarted = eventSignal();
+    const thirdStarted = eventSignal();
     const handler = fifoAsyncHandler(
       fifo,
       () => "session-1",
       async (req) => {
         const id = (req as FakeRequest).testId;
         started.push(id);
+        if (id === "first") firstStarted.resolve();
+        if (id === "third") thirdStarted.resolve();
         if (id === "first") await blocked;
       },
     );
@@ -85,13 +97,13 @@ describe("fifoAsyncHandler", () => {
     const disconnected = new FakeResponse();
 
     handler(requestWithId("first"), new FakeResponse() as unknown as Response, next);
-    await until(() => started.includes("first"));
+    await firstStarted.promise;
     handler(requestWithId("disconnected"), disconnected as unknown as Response, next);
     handler(requestWithId("third"), new FakeResponse() as unknown as Response, next);
     disconnected.disconnect();
     releaseFirst();
 
-    await until(() => started.includes("third"));
+    await thirdStarted.promise;
     expect(started).toEqual(["first", "third"]);
     expect(next).not.toHaveBeenCalled();
   });

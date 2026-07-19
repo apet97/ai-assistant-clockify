@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
@@ -34,6 +36,30 @@ jobs:
       # `npm run verify` now runs the cycles check (madge) itself, so no
       # separate cycles step is needed — the local gate equals the CI gate.
       - run: npm run verify
+      - name: Exact-head local UI and asset performance gate
+        env:
+          PERF_EVIDENCE_DIR: /tmp/ai-assistant-local-ui-performance
+        run: npm run perf:local-ui
+      - name: Validate GitHub Actions workflows
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
+        with:
+          version: 1.7.7
+      - name: Bind reviewed Marketplace media to the exact source candidate
+        env:
+          MARKETPLACE_MEDIA_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          MARKETPLACE_MEDIA_BINDING_PATH: /tmp/marketplace-media-release-binding.json
+        run: |
+          MARKETPLACE_MEDIA_SOURCE_CANDIDATE_SHA="$(node -e '
+            const binding = require("./evidence/performance/deepseek-release-binding.json");
+            process.stdout.write(binding.candidate.testedSha);
+          ')"
+          export MARKETPLACE_MEDIA_SOURCE_CANDIDATE_SHA
+          npm run evidence:marketplace-media-binding
+      - name: Validate machine-bound DeepSeek benchmark evidence
+        env:
+          DEEPSEEK_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+          DEEPSEEK_VALIDATION_PATH: /tmp/deepseek-benchmark-validation.json
+        run: npm run check:deepseek-evidence -- --benchmark-only
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx > sbom.cdx.json
       - name: Upload supply-chain evidence
@@ -43,7 +69,24 @@ jobs:
           path: |
             sbom.cdx.json
             evidence/dependency-gates/production-licenses.json
+            /tmp/deepseek-benchmark-validation.json
+            /tmp/marketplace-media-release-binding.json
           retention-days: 30
+
+  browser-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install pinned Playwright browser engines
+        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Cross-browser product journeys
+        run: npm run test:e2e
 
   dependency-review:
     if: github.event_name == 'pull_request'

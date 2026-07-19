@@ -7,6 +7,8 @@ import { signSessionCookie, type SessionClaims } from "../auth/sessions.js";
 import { asyncHandler } from "./async-handler.js";
 import { buildSessionCookie, resolveSession, type AppDeps } from "./deps.js";
 import { canonicalClockifyServiceUrl } from "../clockify/service-url.js";
+import { clockifyUiPreferences } from "../ui-preferences.js";
+import { createRouteAuthority } from "./route-authority.js";
 
 /**
  * Admin-only component route (ARCHITECTURE "Component Load"). Verifies the
@@ -72,6 +74,7 @@ function shellHtml(): string {
 
 export function componentRouter(deps: AppDeps): Router {
   const router = Router();
+  const authority = createRouteAuthority(deps);
 
   router.get(
     "/component/assistant",
@@ -86,14 +89,15 @@ export function componentRouter(deps: AppDeps): Router {
       if (!claims) {
         return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
       }
-      if (!isAdminRole(claims.workspaceRole)) {
-        return res.status(403).type("html").send(ADMIN_ONLY_PAGE);
-      }
 
       const workspaceId = claims.workspaceId;
       const adminUserId = claims.user;
       if (!workspaceId || !adminUserId) {
         return res.status(401).type("html").send(ADMIN_ONLY_PAGE);
+      }
+      if (!isAdminRole(claims.workspaceRole)) {
+        deps.store.invalidateAdminSessions(workspaceId, adminUserId);
+        return res.status(403).type("html").send(ADMIN_ONLY_PAGE);
       }
 
       // Active-installation gate: a valid admin token for a workspace where the
@@ -126,6 +130,46 @@ export function componentRouter(deps: AppDeps): Router {
         return res.status(400).type("html").send(ADMIN_ONLY_PAGE);
       }
 
+      // The iframe JWT role can be stale after demotion. Force a current-role
+      // lookup through the shared authority choke point before reusing or
+      // creating any privileged session. Non-admin invalidates every existing
+      // session; lookup uncertainty fails closed without setting a cookie.
+      const refreshedInstallation = deps.store.getInstallation(workspaceId);
+      if (!refreshedInstallation || refreshedInstallation.status !== "active") {
+        return res.status(409).type("html").send(NOT_INSTALLED_PAGE);
+      }
+      // Role and display-context reads are independent. Start both together so
+      // verified Clockify timezone propagation adds no sequential iframe delay.
+      // A missing/invalid display context is omitted rather than guessed; role
+      // uncertainty still fails the entire privileged session closed.
+      const [liveAuthority, calendarContext] = await Promise.all([
+        authority.verifyWriteAuthority(
+          { sessionId: "", workspaceId, adminUserId },
+          refreshedInstallation,
+        ),
+        deps.clockifyForWorkspace(refreshedInstallation)
+          .getCalendarContext(adminUserId)
+          .catch(() => undefined),
+      ]);
+      if (!liveAuthority.ok) {
+        return res.status(liveAuthority.status).type("html").send(ADMIN_ONLY_PAGE);
+      }
+
+      // verifyWriteAuthority awaited Clockify. Recheck the durable generation
+      // synchronously at the session-creation boundary so uninstall/reinstall
+      // cannot erase the workspace during that await and then have this request
+      // recreate a session after deletion. There is deliberately no await
+      // between this check and resolve/create below.
+      const sessionBoundaryInstallation = deps.store.getInstallation(workspaceId);
+      if (
+        !refreshedInstallation
+        || !sessionBoundaryInstallation
+        || sessionBoundaryInstallation.status !== "active"
+        || sessionBoundaryInstallation.generation !== refreshedInstallation.generation
+      ) {
+        return res.status(409).type("html").send(NOT_INSTALLED_PAGE);
+      }
+
       // Reuse the SAME session across an iframe RELOAD so the conversation history
       // and the still-live pending previews survive it. resolveSession already
       // verifies the incoming cookie is signed AND backs a live (non-expired) session
@@ -146,6 +190,7 @@ export function componentRouter(deps: AppDeps): Router {
         workspaceId,
         adminUserId,
         workspaceRole: String(claims.workspaceRole),
+        uiPreferences: clockifyUiPreferences(claims.theme, claims.language, calendarContext?.timeZone),
         expiresAt: session.expiresAt,
       };
       const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);

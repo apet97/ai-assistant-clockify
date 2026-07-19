@@ -29,6 +29,7 @@ import type { AppConfig } from "../src/config.js";
 import { selectModelClient, type ModelClientSelection } from "../src/assistant/select-model-client.js";
 import type { ModelClient } from "../src/assistant/model-client.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
+import { createChatRequestBody } from "./lib/live-evidence.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -138,7 +139,7 @@ async function main(): Promise<void> {
     }
 
     const message = step as string;
-    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message });
+    const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send(createChatRequestBody(message));
     const reply = (res.body?.reply ?? {}) as { kind?: string; text?: string };
     const results = (res.body?.results ?? []) as TurnResult[];
 

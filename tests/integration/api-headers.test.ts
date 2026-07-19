@@ -50,6 +50,11 @@ describe("/api security headers (T51)", () => {
     expect(res.headers["x-frame-options"]).toBeUndefined();
   });
 
+  it("does not disclose Express through X-Powered-By", async () => {
+    const res = await request(app).get("/live");
+    expect(res.headers["x-powered-by"]).toBeUndefined();
+  });
+
   it("omits HSTS for a local http (non-https) deployment base", async () => {
     // The shared test config baseUrl is https://example.com/... so HSTS IS set
     // there; assert the conditional by building an http-base app.
@@ -70,7 +75,7 @@ describe("/api security headers (T51)", () => {
 
   it("sets HSTS for an https deployment base", async () => {
     const res = await request(app).get("/api/me");
-    expect(res.headers["strict-transport-security"]).toContain("max-age=");
+    expect(res.headers["strict-transport-security"]).toBe("max-age=31536000; includeSubDomains");
   });
 
   it("marks authenticated API responses private, no-store", async () => {

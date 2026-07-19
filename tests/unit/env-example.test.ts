@@ -16,7 +16,7 @@ function templateKeys(): Set<string> {
   const text = readFileSync(envExamplePath, "utf8");
   const keys = new Set<string>();
   // Matches "FOO=" and commented "# FOO=" lines.
-  const re = /^#? ?([A-Z_]+)=/gm;
+  const re = /^#? ?([A-Z0-9_]+)=/gm;
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     keys.add(m[1]);

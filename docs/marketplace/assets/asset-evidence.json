@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 2,
+  "source": "deterministic synthetic release-build fixture",
+  "liveConnectivityEvidence": false,
+  "containsSecrets": false,
+  "captureSourceSha256": "b5df1ca3e824b51c833b39acf5af15a463f5206b5365c5d1f7b39dc687004876",
+  "visualReview": {
+    "artifact": "docs/marketplace/assets/media-engineering-review.json",
+    "requiredStatus": "passed"
+  },
+  "reproducibility": {
+    "fixedClock": "2026-07-18T14:25:00.000Z",
+    "pngCanonicalization": "retain prior bytes only when every YUV pixel delta is at most 1",
+    "videoCanonicalization": "retain prior bytes only when dimensions and duration match, SSIM >= 0.99998, and PSNR >= 65 dB"
+  },
+  "demoSteps": [
+    {
+      "step": 1,
+      "label": "First-run DeepSeek disclosure, permissions, and public links"
+    },
+    {
+      "step": 2,
+      "label": "Read-only request and receipt"
+    },
+    {
+      "step": 3,
+      "label": "Safe write and immediate receipt"
+    },
+    {
+      "step": 4,
+      "label": "Risky preview and button confirmation"
+    },
+    {
+      "step": 5,
+      "label": "Confirmed receipt and truthful undo"
+    },
+    {
+      "step": 6,
+      "label": "History reload and authenticated PDF action"
+    },
+    {
+      "step": 7,
+      "label": "Permission controls and member-denial statement"
+    }
+  ],
+  "assets": [
+    {
+      "file": "docs/marketplace/assets/icon.png",
+      "bytes": 87705,
+      "sha256": "d57cff8c6609ded25729902bf94e81545f8862d27ad7619c833d4d77c3f1de6e",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "file": "docs/marketplace/assets/banner.png",
+      "bytes": 181941,
+      "sha256": "697f4d5438b968857aa383e4d3b4cb6b9f03422febea82b108e95d7615e12bab",
+      "width": 1600,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/screenshots/01-first-run-permissions.png",
+      "bytes": 119551,
+      "sha256": "ad83185e5201cea32a5c50ddaad7adb8dce8c54572326ef778a9a29845b407cb",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/screenshots/02-read-and-receipt.png",
+      "bytes": 70077,
+      "sha256": "b1015c0eac05a336e193727427434532ff284986d228cc64810c5c55b789254e",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/screenshots/03-risky-preview-confirm.png",
+      "bytes": 88005,
+      "sha256": "3b831a8fe448fdd54a7df4a1df5ee1dc108a1c8f2c2cf7bf7120b98d427a4b64",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/screenshots/04-receipt-and-undo.png",
+      "bytes": 92206,
+      "sha256": "dbd652c49e48412af78f078be01870a9d2e663ba4f4d75f9f0cbceb1e373b3cb",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/screenshots/05-history-and-pdf-download.png",
+      "bytes": 94751,
+      "sha256": "14a64b450711c0662afcaadb6296370c0c4a497d8bb2053ba524b82a4426b43f",
+      "width": 1440,
+      "height": 900
+    },
+    {
+      "file": "docs/marketplace/assets/video/ai-assistant-1.0.0-demo.mp4",
+      "bytes": 411504,
+      "sha256": "31f8ea323774a32e574602744b78cbd716eaaf93fae79cb6afad96d085ab75d3",
+      "width": 1440,
+      "height": 900,
+      "durationSeconds": 35
+    }
+  ]
+}

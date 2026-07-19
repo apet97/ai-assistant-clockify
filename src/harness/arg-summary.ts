@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import { inspectZodSchema } from "./schema-introspection.js";
 
 /**
  * Terse argument-signature summariser (Phase 1B — the model-agnostic variance
@@ -7,8 +8,9 @@ import type { z } from "zod";
  * the system prompt so the planner uses the *exact* argument names instead of
  * inventing shapes (`projectName` vs `project`, `startTimer: true`, missing ids).
  *
- * It introspects Zod's internal `_def` (read-only) rather than taking a new
- * dependency. Wrappers that don't change a field's "shape category" are peeled
+ * It obtains a small, compatibility-tested description from the schema
+ * introspection adapter rather than taking a new dependency. Wrappers that
+ * don't change a field's "shape category" are peeled
  * (optional/default/nullable/effects/branded/readonly); `optional`/`default` mark
  * a field omittable. Anything it can't see inside falls back to `object`, and the
  * whole line is length-bounded so the prompt stays compact. It only reads the
@@ -24,46 +26,27 @@ const MAX_ENUM_VALUES = 8;
 /** Most union options rendered before an ellipsis. */
 const MAX_UNION_OPTIONS = 4;
 
-interface ZodNode {
-  _def?: {
-    typeName?: string;
-    innerType?: ZodNode;
-    schema?: ZodNode;
-    type?: ZodNode;
-    out?: ZodNode;
-    values?: unknown[];
-    value?: unknown;
-    options?: unknown;
-    valueType?: ZodNode;
-    shape?: () => Record<string, ZodNode>;
-  };
-  shape?: Record<string, ZodNode>;
-}
-
-function asNode(schema: unknown): ZodNode {
-  return (schema ?? {}) as ZodNode;
-}
-
 /**
  * Peel wrappers that don't change a field's shape category. Returns the inner
  * base node and whether the field is omittable (optional/default).
  */
-function unwrap(schema: unknown): { base: ZodNode; optional: boolean } {
-  let node = asNode(schema);
+function unwrap(schema: unknown): { base: unknown; optional: boolean } {
+  let node = schema;
   let optional = false;
-  for (let i = 0; i < 32 && node?._def; i += 1) {
-    const tn = node._def.typeName;
+  for (let i = 0; i < 32; i += 1) {
+    const description = inspectZodSchema(node);
+    const tn = description.typeName;
     if (tn === "ZodOptional" || tn === "ZodDefault") {
       optional = true;
-      node = asNode(node._def.innerType);
+      node = description.innerType;
     } else if (tn === "ZodNullable" || tn === "ZodReadonly") {
-      node = asNode(node._def.innerType);
+      node = description.innerType;
     } else if (tn === "ZodEffects") {
-      node = asNode(node._def.schema);
+      node = description.schema;
     } else if (tn === "ZodBranded") {
-      node = asNode(node._def.type);
+      node = description.type;
     } else if (tn === "ZodPipeline") {
-      node = asNode(node._def.out);
+      node = description.out;
     } else {
       break;
     }
@@ -95,8 +78,8 @@ function unionLabel(options: unknown): string {
 /** A short type label for a field's base node. */
 function labelOf(schema: unknown): string {
   const { base } = unwrap(schema);
-  const def = base._def;
-  switch (def?.typeName) {
+  const description = inspectZodSchema(base);
+  switch (description.typeName) {
     case "ZodString":
       return "string";
     case "ZodNumber":
@@ -107,20 +90,20 @@ function labelOf(schema: unknown): string {
     case "ZodDate":
       return "date";
     case "ZodEnum":
-      return clamp(enumLabel(def.values ?? []));
+      return clamp(enumLabel(description.values ?? []));
     case "ZodNativeEnum":
       return "enum";
     case "ZodLiteral":
-      return clamp(typeof def.value === "string" ? JSON.stringify(def.value) : String(def.value));
+      return clamp(typeof description.value === "string" ? JSON.stringify(description.value) : String(description.value));
     case "ZodArray":
-      return clamp(`${labelOf(def.type)}[]`);
+      return clamp(`${labelOf(description.type)}[]`);
     case "ZodObject":
     case "ZodRecord":
     case "ZodMap":
       return "object";
     case "ZodUnion":
     case "ZodDiscriminatedUnion":
-      return clamp(unionLabel(def.options));
+      return clamp(unionLabel(description.options));
     case "ZodTuple":
       return "array";
     case "ZodAny":
@@ -131,10 +114,9 @@ function labelOf(schema: unknown): string {
   }
 }
 
-function objectShape(base: ZodNode): Record<string, ZodNode> | undefined {
-  if (base._def?.typeName !== "ZodObject") return undefined;
-  if (typeof base._def.shape === "function") return base._def.shape();
-  return base.shape;
+function objectShape(base: unknown): Record<string, unknown> | undefined {
+  const description = inspectZodSchema(base);
+  return description.typeName === "ZodObject" ? description.shape : undefined;
 }
 
 /**

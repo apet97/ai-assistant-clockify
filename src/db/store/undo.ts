@@ -32,14 +32,16 @@ export function buildUndoStore(ctx: StoreContext): {
       const expiresAt = new Date(now().getTime() + UNDO_TTL_MS).toISOString();
       db.prepare(
         `INSERT INTO undo_records
-          (id, session_id, workspace_id, admin_user_id, action_name, reversal_json, remaining_json, status, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)`,
+          (id, session_id, workspace_id, admin_user_id, action_name, installation_generation,
+           reversal_json, remaining_json, status, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'available', ?, ?)`,
       ).run(
         id,
         input.sessionId,
         input.workspaceId,
         input.adminUserId,
         input.actionName,
+        input.installationGeneration ?? null,
         JSON.stringify(input.reversal),
         JSON.stringify(input.reversal),
         createdAt,
@@ -56,6 +58,7 @@ export function buildUndoStore(ctx: StoreContext): {
             workspace_id: string;
             admin_user_id: string;
             action_name: string;
+            installation_generation: number | null;
             reversal_json: string;
             remaining_json: string;
             status: UndoRecord["status"];
@@ -80,6 +83,9 @@ export function buildUndoStore(ctx: StoreContext): {
         workspaceId: row.workspace_id,
         adminUserId: row.admin_user_id,
         actionName: row.action_name,
+        ...(row.installation_generation === null
+          ? {}
+          : { installationGeneration: row.installation_generation }),
         reversal: JSON.parse(row.reversal_json) as EntityRef[],
         remaining: JSON.parse(row.remaining_json) as EntityRef[],
         status: row.status,

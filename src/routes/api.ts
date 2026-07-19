@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { rateLimit } from "express-rate-limit";
 import { buildMetrics, buildUsageMetrics } from "../metrics/metrics.js";
 import { firstDeniedGroup, reverseCreationDurably, undoMutationPlan } from "../harness/undo.js";
 import {
@@ -28,6 +29,15 @@ import { KeyedFifo } from "./fifo-lock.js";
 import { withHostCallBudget } from "../clockify/request-governor.js";
 import { hashOperation } from "../harness/confirmations.js";
 import { catalogHash } from "../harness/catalog.js";
+import {
+  createWorkspaceMutationCoordinator,
+  WorkspaceMutationRevokedError,
+  type WorkspaceMutationLease,
+} from "../clockify/workspace-mutation-coordinator.js";
+import {
+  DEFAULT_API_RATE_LIMIT_MAX,
+  DEFAULT_API_RATE_LIMIT_WINDOW_MS,
+} from "./rate-limit.js";
 
 /**
  * JSON API (SPEC "Chat Flow", "Confirmation Rules", "Permissions Inside Chat").
@@ -45,17 +55,46 @@ import { catalogHash } from "../harness/catalog.js";
  */
 export const CHAT_HISTORY_RESTORE_LIMIT = 50;
 
+/** Abort not-yet-dispatched route work when the HTTP client disappears. The
+ * REST/governor boundary deliberately stops observing this signal once a host
+ * mutation dispatches, so its outcome is still settled truthfully. */
+function requestAbortScope(req: Request, res: Response): {
+  signal: AbortSignal;
+  dispose(): void;
+} {
+  const controller = new AbortController();
+  const abort = (): void => {
+    if (!res.writableEnded && !controller.signal.aborted) {
+      controller.abort(new Error("client_disconnected"));
+    }
+  };
+  req.once("aborted", abort);
+  res.once("close", abort);
+  if (req.aborted || res.destroyed) abort();
+  return {
+    signal: controller.signal,
+    dispose() {
+      req.off("aborted", abort);
+      res.off("close", abort);
+    },
+  };
+}
+
 export function apiRouter(deps: AppDeps): Router {
   const router = Router();
   const now = deps.now ?? (() => new Date());
+  const mutationCoordinator = deps.mutationCoordinator ?? createWorkspaceMutationCoordinator();
   // The deps-capturing turn/confirm/commit pipeline (plan 007 Phase B). It
   // owns the per-instance chat rate limiter and a derived clock; the route
   // handlers below call its methods.
-  const pipeline = createChatPipeline(deps);
+  const pipeline = createChatPipeline(
+    deps.mutationCoordinator ? deps : { ...deps, mutationCoordinator },
+  );
   const { loadPolicy, requireSession, verifyWriteAuthority, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
 
   const expectedOrigin = new URL(deps.config.baseUrl).origin;
+  const authenticatedRateLimitClaims = new WeakMap<Request, SessionClaims>();
   const sessionFifo = new KeyedFifo();
   const sessionAsyncHandler = (
     handler: (req: Request, res: Response) => Promise<unknown>,
@@ -63,7 +102,9 @@ export function apiRouter(deps: AppDeps): Router {
     fifoAsyncHandler(
       sessionFifo,
       (req) => resolveSession(req, deps)?.sessionId,
-      handler,
+      // Install the request budget before requireSession performs its cold role
+      // lookup. Nested chat/confirm/undo scopes reuse this same budget.
+      (req, res) => withHostCallBudget(() => handler(req, res)),
     );
   const finishTurnRunSafely = (...args: Parameters<AppDeps["store"]["finishTurnRun"]>): void => {
     try {
@@ -75,6 +116,59 @@ export function apiRouter(deps: AppDeps): Router {
       console.error("turn-run finalization degraded; response preserved");
     }
   };
+  const activeGenerationAtBoundary = (workspaceId: string, generation: number): boolean => {
+    const installation = deps.store.getInstallation(workspaceId);
+    return installation?.status === "active" && installation.generation === generation;
+  };
+  const rejectInstallationChange = (res: Response): void => {
+    res.status(409).json({
+      ok: false,
+      code: "installation_changed",
+      message: "The Clockify installation changed before this request could be saved. No change was made.",
+    });
+  };
+
+  // Bound every authenticated API surface before authorization, DB hydration,
+  // or model/Clockify work. The key deliberately excludes sessionId: opening a
+  // prior chat or minting a new session cannot reset the workspace/admin budget.
+  // Invalid/absent sessions continue to the ordinary 401 path and cannot create
+  // attacker-controlled limiter keys. One HTTP request counts once, so NDJSON
+  // event volume and artifact bytes do not consume extra quota.
+  router.use(rateLimit({
+    windowMs: deps.config.apiRateLimitWindowMs ?? DEFAULT_API_RATE_LIMIT_WINDOW_MS,
+    limit: deps.config.apiRateLimitMax ?? DEFAULT_API_RATE_LIMIT_MAX,
+    // Draft 7 reports only quota/reset numbers. Draft 8 also emits a stable
+    // partition-key hash; avoid giving clients a cross-request scope correlator.
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    passOnStoreError: false,
+    skip: (req) => {
+      if (req.method === "OPTIONS") return true;
+      const claims = resolveSession(req, deps);
+      if (!claims) return true;
+      // Reuse the verified, server-backed claims in keyGenerator so the hot
+      // path pays for one session lookup here, not two. WeakMap cannot retain a
+      // request after Express releases it.
+      authenticatedRateLimitClaims.set(req, claims);
+      return false;
+    },
+    keyGenerator: (req) => {
+      const claims = authenticatedRateLimitClaims.get(req);
+      // express-rate-limit runs `skip` before `keyGenerator`; this fallback is
+      // fail-closed if that package contract ever changes.
+      return claims
+        ? `workspace:${claims.workspaceId}:admin:${claims.adminUserId}`
+        : "invalid-authenticated-session";
+    },
+    handler: (_req, res) => {
+      res.status(429).json({
+        ok: false,
+        code: "rate_limited",
+        message: "Too many API requests. Please wait a moment and try again.",
+      });
+    },
+  }));
+
   router.use((req, res, next) => {
     if (["GET", "HEAD", "OPTIONS"].includes(req.method) || deps.config.nodeEnv === "test") {
       next();
@@ -135,6 +229,12 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
+      preferences: claims.uiPreferences ?? { theme: "system", language: "en" },
+      links: {
+        privacy: new URL("/privacy", deps.config.baseUrl).toString(),
+        support: new URL("/support", deps.config.baseUrl).toString(),
+        security: new URL("/security", deps.config.baseUrl).toString(),
+      },
       csrfToken: createCsrfToken(claims.sessionId, deps.config.sessionSecret),
     });
   }));
@@ -199,6 +299,13 @@ export function apiRouter(deps: AppDeps): Router {
     const r = resolvePermissionPatch(req, res, claims);
     if (!r) return;
     const next = r.next;
+    // verifyWriteAuthority awaited Clockify. No await may occur between this
+    // final durable generation check and the policy/result/audit transaction-
+    // free synchronous writes below, so uninstall cannot recreate erased rows.
+    if (!activeGenerationAtBoundary(claims.workspaceId, authority.installationGeneration)) {
+      rejectInstallationChange(res);
+      return;
+    }
     deps.store.upsertAdminPolicy(claims.workspaceId, claims.adminUserId, next);
     const receipt = successReceipt({
       action: "assistant_update_permissions",
@@ -323,6 +430,13 @@ export function apiRouter(deps: AppDeps): Router {
       });
       return;
     }
+    // requireSession awaited current-role I/O. Recheck the exact generation at
+    // the session-creation boundary so uninstall/reinstall cannot recreate a
+    // session after workspace erasure at the promise handoff.
+    if (!activeGenerationAtBoundary(claims.workspaceId, claims.installationGeneration)) {
+      rejectInstallationChange(res);
+      return;
+    }
     const session = deps.store.createSession({
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
@@ -333,6 +447,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
+      ...(claims.uiPreferences ? { uiPreferences: claims.uiPreferences } : {}),
       expiresAt: session.expiresAt,
     };
     setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl, deps.config.sessionTtlMs);
@@ -363,6 +478,7 @@ export function apiRouter(deps: AppDeps): Router {
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
+      ...(claims.uiPreferences ? { uiPreferences: claims.uiPreferences } : {}),
       expiresAt: target.expiresAt,
     };
     setSessionCookie(res, sessionClaims, deps.config.sessionSecret, deps.config.baseUrl, deps.config.sessionTtlMs);
@@ -377,15 +493,21 @@ export function apiRouter(deps: AppDeps): Router {
     const pre = await chatPreconditions(req, res);
     if (!pre) return;
     if (pre.replay) return res.status(pre.replay.status).json(pre.replay.body);
-    const turn = await withHostCallBudget(() => executeChatTurn(
-      pre.claims,
-      pre.installation,
-      pre.message,
-      undefined,
-      undefined,
-      undefined,
-      pre.requestId,
-    ));
+    const requestAbort = requestAbortScope(req, res);
+    let turn: Awaited<ReturnType<typeof executeChatTurn>>;
+    try {
+      turn = await withHostCallBudget(() => executeChatTurn(
+        pre.claims,
+        pre.installation,
+        pre.message,
+        undefined,
+        undefined,
+        requestAbort.signal,
+        pre.requestId,
+      ));
+    } finally {
+      requestAbort.dispose();
+    }
     const status = turn.ok ? 200 : 502;
     const body = turn.ok
       ? { ok: true, reply: { kind: turn.replyKind, text: turn.replyText }, results: turn.results }
@@ -516,10 +638,18 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(404).json({ ok: false, code: "not_found", message: "No such pending preview." });
     }
 
-    const committed = await withHostCallBudget(
-      () => commitConfirmation(claims, record, parsed.data.nonce),
-    );
+    const requestAbort = requestAbortScope(req, res);
+    let committed: Awaited<ReturnType<typeof commitConfirmation>>;
+    try {
+      committed = await withHostCallBudget(
+        () => commitConfirmation(claims, record, parsed.data.nonce, requestAbort.signal),
+      );
+    } catch (error) {
+      requestAbort.dispose();
+      throw error;
+    }
     if (!committed.ok) {
+      requestAbort.dispose();
       // Validation/policy/the one-use claim rejected BEFORE any commit — always
       // JSON (the stream is never opened), and a denied confirm never burns the nonce.
       return res.status(committed.status).json(committed.body);
@@ -533,6 +663,7 @@ export function apiRouter(deps: AppDeps): Router {
     // timeout / "Confirmation failed" the way one blocking JSON response could. The
     // JSON path (no ?stream) is unchanged for scripts/tests.
     if (req.query.stream === "1") {
+      requestAbort.dispose();
       // openNdjsonStream sets the streaming headers and fires `signal` if the
       // client drops mid-resume (see /chat/stream).
       const { write, signal } = openNdjsonStream(res);
@@ -571,11 +702,24 @@ export function apiRouter(deps: AppDeps): Router {
     }
 
     // JSON path: collect the resume into the response (unchanged behavior).
-    const resumed = partialResult
-      ? undefined
-      : await withHostCallBudget(
-          () => runResume(claims, installation, agentState, receipt),
-        );
+    let resumed: Awaited<ReturnType<typeof runResume>>;
+    try {
+      resumed = partialResult
+        ? undefined
+        : await withHostCallBudget(
+            () => runResume(
+              claims,
+              installation,
+              agentState,
+              receipt,
+              undefined,
+              undefined,
+              requestAbort.signal,
+            ),
+          );
+    } finally {
+      requestAbort.dispose();
+    }
     return res.status(receipt.ok ? 200 : 400).json({
       ok: receipt.ok,
       receipt,
@@ -619,14 +763,51 @@ export function apiRouter(deps: AppDeps): Router {
     if (!installation || installation.status !== "active") {
       return res.status(400).json({ ok: false, code: "not_installed", message: "The add-on is not active for this workspace." });
     }
+    if (!Number.isSafeInteger(record.installationGeneration) ||
+        record.installationGeneration !== installation.generation) {
+      return res.status(409).json({
+        ok: false,
+        code: "installation_changed",
+        message: "The Clockify installation changed after this undo was created. Run the action again before undoing it.",
+      });
+    }
 
-    const authority = await verifyWriteAuthority(claims, installation);
+    const requestAbort = requestAbortScope(req, res);
+    const authority = await verifyWriteAuthority(claims, installation, requestAbort.signal);
     if (!authority.ok) {
+      requestAbort.dispose();
       return res.status(authority.status).json({ ok: false, code: authority.code, message: authority.message });
     }
 
+    let mutationLease: WorkspaceMutationLease;
+    try {
+      mutationLease = mutationCoordinator.acquire(
+        claims.workspaceId,
+        installation.generation,
+        requestAbort.signal,
+      );
+    } catch (error) {
+      requestAbort.dispose();
+      if (!(error instanceof WorkspaceMutationRevokedError)) throw error;
+      return res.status(409).json({ ok: false, code: "installation_changed", message: error.message });
+    }
+    if (mutationLease.signal.aborted) {
+      mutationLease.release();
+      requestAbort.dispose();
+      return res.status(409).json({
+        ok: false,
+        code: "request_cancelled",
+        message: "The undo was cancelled before dispatch. No change was made.",
+      });
+    }
+
+    try {
     const mutationPlan = undoMutationPlan(record.reversal);
-    const operation = { undoId: record.id, reversal: record.reversal };
+    const operation = {
+      undoId: record.id,
+      installationGeneration: record.installationGeneration,
+      reversal: record.reversal,
+    };
     const operationId = deps.store.startUndoOperation(record.id, {
       sessionId: claims.sessionId,
       workspaceId: claims.workspaceId,
@@ -643,14 +824,20 @@ export function apiRouter(deps: AppDeps): Router {
       return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
     }
 
-    const undoContext = actionContext(claims.workspaceId, claims.adminUserId, installation, claims.sessionId);
+    const undoContext = actionContext(
+      claims.workspaceId,
+      claims.adminUserId,
+      installation,
+      claims.sessionId,
+      mutationLease.signal,
+    );
     undoContext.mutationJournal = deps.store.mutationStepJournal(operationId);
-    const undo = await reverseCreationDurably(
+    const undo = await withHostCallBudget(() => reverseCreationDurably(
       undoContext,
       record.reversal,
       operationId,
       mutationPlan,
-    );
+    ));
     const { receipt, remaining, status: undoStatus } = undo;
     let undoResultRef: import("../db/store.js").ActionResultRef | undefined;
     let undoSettlementError: unknown;
@@ -686,6 +873,10 @@ export function apiRouter(deps: AppDeps): Router {
       receipt,
       ...(!undoResultRef ? { persistenceDegraded: true } : {}),
     });
+    } finally {
+      mutationLease.release();
+      requestAbort.dispose();
+    }
   }));
 
   router.post("/confirmations/:id/cancel", sessionAsyncHandler(async (req, res) => {

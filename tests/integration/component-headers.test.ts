@@ -7,7 +7,7 @@ import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
-import { createFakeWorkspace } from "../helpers/fake-clockify.js";
+import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { Express } from "express";
 
 const ADDON_KEY = "ai-assistant";
@@ -15,6 +15,7 @@ const ADDON_KEY = "ai-assistant";
 let keys: { privateKey: unknown; pem: string };
 let store: Store;
 let app: Express;
+let fake: FakeWorkspace;
 
 const modelClient: ModelClient = {
   async complete() {
@@ -36,7 +37,7 @@ beforeAll(async () => {
     addonToken: "addon-token",
   });
   const parser = createSignatureParser(ADDON_KEY, keys.pem);
-  const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
+  fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
   app = createApp({
     config,
     store,
@@ -105,6 +106,89 @@ describe("component HTML security headers (injection/clickjacking backstop)", ()
     expect(res.status).toBe(403);
     expect(res.headers["content-security-policy"]).toContain("frame-ancestors");
     expect(res.headers["x-content-type-options"]).toBe("nosniff");
+  });
+
+  it("rejects a stale admin JWT after live demotion, invalidates prior sessions, and mints no cookie", async () => {
+    const userId = "demoted-admin";
+    const priorSession = store.createSession({ workspaceId: "ws-1", adminUserId: userId });
+    fake.state.memberRoles[userId] = "USER";
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: userId,
+      workspaceRole: "ADMIN",
+    });
+
+    const response = await request(app).get("/component/assistant").query({ auth_token: token });
+
+    expect(response.status).toBe(403);
+    expect(response.headers["set-cookie"]).toBeUndefined();
+    expect(store.getSession(priorSession.id)).toBeUndefined();
+  });
+
+  it("fails closed before session creation when the current-role lookup is unavailable", async () => {
+    const original = fake.client.getWorkspaceMemberRole;
+    (fake.client as { getWorkspaceMemberRole: typeof original }).getWorkspaceMemberRole = async () => {
+      throw new Error("role lookup unavailable");
+    };
+    try {
+      const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+        workspaceId: "ws-1",
+        user: "lookup-failure-admin",
+        workspaceRole: "ADMIN",
+      });
+      const response = await request(app).get("/component/assistant").query({ auth_token: token });
+
+      expect(response.status).toBe(503);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+    } finally {
+      (fake.client as { getWorkspaceMemberRole: typeof original }).getWorkspaceMemberRole = original;
+    }
+  });
+
+  it("rechecks installation authority synchronously before creating a session after role I/O", async () => {
+    const workspaceId = "ws-component-uninstall-race";
+    store.saveInstallation({
+      workspaceId,
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "race-token",
+    });
+    const originalGetInstallation = store.getInstallation.bind(store);
+    const originalCreateSession = store.createSession.bind(store);
+    let workspaceReads = 0;
+    let createCalls = 0;
+    store.getInstallation = (id) => {
+      if (id === workspaceId) {
+        workspaceReads += 1;
+        // Initial gate, post-env reload, authority load, authority final reload,
+        // then the component's session-boundary reload.
+        if (workspaceReads === 5) {
+          const tombstone = store.tombstoneInstallation(workspaceId);
+          if (tombstone) store.eraseWorkspaceForDeletion(workspaceId, tombstone.generation);
+        }
+      }
+      return originalGetInstallation(id);
+    };
+    store.createSession = (input) => {
+      createCalls += 1;
+      return originalCreateSession(input);
+    };
+    try {
+      const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+        workspaceId,
+        user: "admin-race",
+        workspaceRole: "ADMIN",
+      });
+      const response = await request(app).get("/component/assistant").query({ auth_token: token });
+
+      expect(response.status).toBe(409);
+      expect(response.headers["set-cookie"]).toBeUndefined();
+      expect(createCalls).toBe(0);
+      expect(originalGetInstallation(workspaceId)).toBeUndefined();
+    } finally {
+      store.getInstallation = originalGetInstallation;
+      store.createSession = originalCreateSession;
+    }
   });
 
   it("rejects a malicious signed service claim before it can be persisted", async () => {

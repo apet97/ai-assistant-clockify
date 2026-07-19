@@ -841,6 +841,29 @@ describe("schema v6 persisted intent capabilities", () => {
   });
 });
 
+describe("schema v8 lifecycle lineage", () => {
+  it("upgrades a v7 database with the bounded hashed-workspace watermark table", () => {
+    const db = new Database(":memory:");
+    migrate(db);
+    db.exec("DROP TABLE lifecycle_authority_watermarks; PRAGMA user_version = 7;");
+
+    migrate(db);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(8);
+    const columns = (db.pragma("table_info(lifecycle_authority_watermarks)") as Array<{ name: string }>)
+      .map(({ name }) => name);
+    expect(columns).toEqual([
+      "workspace_fingerprint_sha256",
+      "lifecycle_issued_at",
+      "authority_state",
+      "installation_generation",
+      "recorded_at",
+      "expires_at",
+    ]);
+    db.close();
+  });
+});
+
 describe("schema v7 retention evidence and scrub constraints", () => {
   it("adds bounded retention evidence and enforces expired-payload scrubbing", () => {
     const db = new Database(":memory:");
@@ -980,6 +1003,10 @@ describe("checked historical schema fixtures", () => {
       expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
       expect(db.prepare("PRAGMA integrity_check").pluck().get()).toBe("ok");
       expect(db.prepare("SELECT COUNT(*) FROM retention_runs").pluck().get()).toBeTypeOf("number");
+      const confirmationColumns = db.prepare("PRAGMA table_info(pending_confirmations)").all() as Array<{ name: string }>;
+      const undoColumns = db.prepare("PRAGMA table_info(undo_records)").all() as Array<{ name: string }>;
+      expect(confirmationColumns.map((column) => column.name)).toContain("installation_generation");
+      expect(undoColumns.map((column) => column.name)).toContain("installation_generation");
       db.close();
     });
   }

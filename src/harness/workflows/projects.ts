@@ -28,6 +28,7 @@ import {
   requireFreshSnapshots,
   snapshot,
 } from "./structure-durable.js";
+import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -48,6 +49,7 @@ async function reconcileCreatedProject(
   if (after.truncated) return undefined;
   const before = new Set(beforeIds);
   const candidates = after.rows.filter((row) => !before.has(row.id) && row.name === expected.name);
+  if (candidates.length > STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX) return undefined;
   const matches: typeof candidates = [];
   for (const candidate of candidates) {
     const raw = await ctx.clockify.getProjectMutationState(candidate.id);

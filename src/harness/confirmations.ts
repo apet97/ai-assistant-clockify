@@ -33,6 +33,8 @@ export interface PendingConfirmationRecord {
   risk: RiskLabel[];
   preview: unknown;
   operation: unknown;
+  /** Missing only on legacy previews, which the commit route rejects closed. */
+  installationGeneration?: number;
   operationHash: string;
   targetFingerprints: string[];
   actionFingerprint: string;
@@ -62,6 +64,8 @@ export interface CreateConfirmationInput {
   risk: RiskLabel[];
   preview: unknown;
   operation: unknown;
+  /** Bind the preview to the exact installation token generation. */
+  installationGeneration?: number;
   sessionSecret: string;
   now?: Date;
   ttlMs?: number;
@@ -161,11 +165,15 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
   const id = input.id ?? randomUUID();
   const nonce = input.nonce ?? randomBytes(32).toString("base64url");
   const expiresAt = new Date(now.getTime() + ttlMs).toISOString();
-  const operationHash = hashOperation(input.operation);
+  const operation = input.installationGeneration === undefined ||
+      !input.operation || typeof input.operation !== "object" || Array.isArray(input.operation)
+    ? input.operation
+    : { ...input.operation as Record<string, unknown>, installationGeneration: input.installationGeneration };
+  const operationHash = hashOperation(operation);
   const previewTargets = (input.preview as { targets?: unknown[] } | undefined)?.targets ?? [];
 
-  const suppliedOperationId = input.operation && typeof input.operation === "object"
-    ? (input.operation as { operationId?: unknown }).operationId
+  const suppliedOperationId = operation && typeof operation === "object"
+    ? (operation as { operationId?: unknown }).operationId
     : undefined;
   const record: PendingConfirmationRecord = {
     id,
@@ -176,10 +184,13 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
     status: "pending",
     risk: input.risk,
     preview: input.preview,
-    operation: input.operation,
+    operation,
+    ...(input.installationGeneration === undefined
+      ? {}
+      : { installationGeneration: input.installationGeneration }),
     operationHash,
     targetFingerprints: previewTargets.map((target) => hashOperation(target)),
-    actionFingerprint: input.actionFingerprint ?? hashOperation({ operation: input.operation, version: 1 }),
+    actionFingerprint: input.actionFingerprint ?? hashOperation({ operation, version: 1 }),
     catalogHash: input.catalogHash ?? "unbound",
     ...(input.capabilityId ? { capabilityId: input.capabilityId } : {}),
     ...(input.capabilityHash ? { capabilityHash: input.capabilityHash } : {}),
@@ -223,6 +234,12 @@ function checkConfirmationGate(
     record.adminUserId !== g.adminUserId
   ) {
     return { ok: false, code: "forbidden", message: "This preview belongs to a different session." };
+  }
+  // Store reads lazily terminalize a due preview together with its prepared
+  // operation. Preserve the precise public expiry response after that atomic
+  // transition instead of degrading it to the generic already-used message.
+  if (record.status === "expired") {
+    return { ok: false, code: "expired", message: "This preview has expired. Ask me to run a fresh preview." };
   }
   if (record.status !== "pending") {
     return { ok: false, code: "not_pending", message: "This preview is no longer pending." };

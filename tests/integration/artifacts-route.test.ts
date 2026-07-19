@@ -17,7 +17,15 @@ function setup() {
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
   const config = makeTestConfig();
-  const fake = createFakeWorkspace();
+  const fake = createFakeWorkspace({ memberRoles: { "admin-1": "ADMIN", "admin-2": "ADMIN" } });
+  for (const workspaceId of ["ws-1", "ws-2"]) {
+    store.saveInstallation({
+      workspaceId,
+      addonId: `addon-${workspaceId}`,
+      addonUserId: `addon-user-${workspaceId}`,
+      addonToken: `addon-token-${workspaceId}`,
+    });
+  }
   const app = createApp({
     config,
     store,

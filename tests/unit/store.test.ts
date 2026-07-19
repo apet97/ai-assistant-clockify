@@ -14,6 +14,7 @@ import {
   adminPolicySchema,
   defaultAdminPolicy,
 } from "../../src/harness/permissions.js";
+import { LIFECYCLE_LINEAGE_RETENTION_SECONDS } from "../../src/addon/lifecycle-authority.js";
 
 const ENC_KEY = "test-encryption-key-do-not-use-in-prod";
 
@@ -33,6 +34,9 @@ describe("store", () => {
     const tables = store.tables();
     for (const t of [
       "installations",
+      "installation_attestations",
+      "retired_installation_tokens",
+      "lifecycle_authority_watermarks",
       "admin_policies",
       "chat_sessions",
       "chat_messages",
@@ -41,6 +45,228 @@ describe("store", () => {
     ]) {
       expect(tables).toContain(t);
     }
+  });
+
+  it("stores only a fresh installation token fingerprint, preserves exact retries, and invalidates replacement", () => {
+    const path = tempDbPath();
+    const binding = {
+      releaseSha: "a".repeat(40),
+      releaseBuildHash: "b".repeat(64),
+      serverArtifactSha256: "c".repeat(64),
+      sourceRelationship: "source_bound_builder" as const,
+      sourceBindingSha256: "d".repeat(64),
+      manifestSha256: "e".repeat(64),
+    };
+    let store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-attested-store",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "raw-token-must-not-be-the-fingerprint",
+      freshInstallAttestation: binding,
+    });
+    store.close();
+
+    let db = new Database(path, { readonly: true });
+    const row = db.prepare(
+      "SELECT token_fingerprint_sha256, workspace_sha256, installation_generation FROM installation_attestations",
+    ).get() as Record<string, unknown>;
+    expect(row.token_fingerprint_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(row.workspace_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(row.installation_generation).toBe(1);
+    expect(row.token_fingerprint_sha256).not.toBe("raw-token-must-not-be-the-fingerprint");
+    db.close();
+
+    store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-attested-store",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "raw-token-must-not-be-the-fingerprint",
+      freshInstallAttestation: binding,
+    });
+    expect(store.getInstallation("ws-attested-store")?.generation).toBe(1);
+    store.close();
+    db = new Database(path, { readonly: true });
+    expect((db.prepare("SELECT COUNT(*) AS count FROM installation_attestations").get() as { count: number }).count).toBe(1);
+    db.close();
+
+    store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-attested-store",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "replacement-token",
+      freshInstallAttestation: binding,
+    });
+    store.close();
+    db = new Database(path, { readonly: true });
+    expect((db.prepare("SELECT COUNT(*) AS count FROM installation_attestations").get() as { count: number }).count).toBe(0);
+    db.close();
+  });
+
+  it("rejects a retired install token after erasure and process restart but accepts a genuinely new token", () => {
+    const path = tempDbPath();
+    const oldToken = "retired-installation-token-must-never-return";
+    let store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-retired-token",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: oldToken,
+      lifecycleIssuedAt: 1_700_000_100,
+    });
+    const tombstone = store.tombstoneInstallation("ws-retired-token");
+    expect(tombstone).toBeDefined();
+    expect(store.eraseWorkspaceForDeletion("ws-retired-token", tombstone!.generation)).toBeDefined();
+    expect(store.getInstallation("ws-retired-token")).toBeUndefined();
+    store.close();
+
+    store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-retired-token",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: oldToken,
+    });
+    expect(store.getInstallation("ws-retired-token")).toBeUndefined();
+
+    store.saveInstallation({
+      workspaceId: "ws-retired-token",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "genuinely-new-installation-token",
+      lifecycleIssuedAt: 1_700_000_200,
+    });
+    expect(store.getInstallation("ws-retired-token")).toMatchObject({
+      status: "active",
+      addonToken: "genuinely-new-installation-token",
+      lifecycleIssuedAt: 1_700_000_200,
+    });
+    store.close();
+
+    store = createStore(path, { encryptionKey: ENC_KEY });
+    expect(store.getInstallation("ws-retired-token")?.lifecycleIssuedAt).toBe(1_700_000_200);
+    store.close();
+
+    const db = new Database(path, { readonly: true });
+    const rows = db.prepare("SELECT * FROM retired_installation_tokens").all() as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    expect(Object.keys(rows[0] ?? {}).sort()).toEqual([
+      "retired_at",
+      "token_fingerprint_sha256",
+    ]);
+    expect(rows[0]?.token_fingerprint_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(rows)).not.toContain(oldToken);
+    expect(JSON.stringify(rows)).not.toContain("ws-retired-token");
+    const lineageRows = db.prepare("SELECT * FROM lifecycle_authority_watermarks").all() as Array<
+      Record<string, unknown>
+    >;
+    expect(lineageRows).toHaveLength(1);
+    expect(Object.keys(lineageRows[0] ?? {}).sort()).toEqual([
+      "authority_state",
+      "expires_at",
+      "installation_generation",
+      "lifecycle_issued_at",
+      "recorded_at",
+      "workspace_fingerprint_sha256",
+    ]);
+    expect(lineageRows[0]).toMatchObject({
+      authority_state: "active",
+      lifecycle_issued_at: 1_700_000_200,
+    });
+    expect(lineageRows[0]?.workspace_fingerprint_sha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(lineageRows)).not.toContain("ws-retired-token");
+    db.close();
+  });
+
+  it("prunes erased lifecycle lineage only after every acceptable callback has expired", () => {
+    const path = tempDbPath();
+    let current = new Date("2026-07-19T00:00:00.000Z");
+    let store = createStore(path, { encryptionKey: ENC_KEY, now: () => current });
+    const eventIat = Math.floor(current.getTime() / 1000);
+    store.saveInstallation({
+      workspaceId: "ws-bounded-lineage",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "token",
+      lifecycleIssuedAt: eventIat,
+    });
+    const deletion = store.tombstoneInstallationForLifecycle(
+      "ws-bounded-lineage",
+      eventIat + 1,
+    );
+    expect(deletion.accepted).toBe(true);
+    expect(store.eraseWorkspaceForDeletion("ws-bounded-lineage", deletion.generation!)).toBeDefined();
+    store.close();
+
+    let db = new Database(path, { readonly: true });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM lifecycle_authority_watermarks").get())
+      .toEqual({ count: 1 });
+    db.close();
+
+    current = new Date(current.getTime() + LIFECYCLE_LINEAGE_RETENTION_SECONDS * 1000 + 1);
+    store = createStore(path, { encryptionKey: ENC_KEY, now: () => current });
+    store.close();
+    db = new Database(path, { readonly: true });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM lifecycle_authority_watermarks").get())
+      .toEqual({ count: 0 });
+    db.close();
+  });
+
+  it("does not let an equal-iat absent INACTIVE event downgrade DELETED lineage", () => {
+    const path = tempDbPath();
+    const store = createStore(path, { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-terminal-rank",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "token",
+      lifecycleIssuedAt: 1_700_000_000,
+    });
+    const deletion = store.tombstoneInstallationForLifecycle("ws-terminal-rank", 1_700_000_100);
+    expect(store.eraseWorkspaceForDeletion("ws-terminal-rank", deletion.generation!)).toBeDefined();
+    expect(store.setInstallationStatus("ws-terminal-rank", "inactive", 1_700_000_100).outcome)
+      .toBe("stale_lifecycle");
+    store.close();
+
+    const db = new Database(path, { readonly: true });
+    expect(db.prepare(
+      "SELECT lifecycle_issued_at, authority_state FROM lifecycle_authority_watermarks",
+    ).get()).toEqual({ lifecycle_issued_at: 1_700_000_100, authority_state: "deleted" });
+    db.close();
+  });
+
+  it("persists absent-row INACTIVE authority and requires a strictly newer install after reopen", () => {
+    const path = tempDbPath();
+    let store = createStore(path, { encryptionKey: ENC_KEY });
+    expect(store.setInstallationStatus("ws-inactive-before-install", "inactive", 1_700_000_100))
+      .toMatchObject({ outcome: "applied" });
+    store.close();
+
+    store = createStore(path, { encryptionKey: ENC_KEY });
+    expect(store.saveInstallation({
+      workspaceId: "ws-inactive-before-install",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "equal-token",
+      lifecycleIssuedAt: 1_700_000_100,
+    }).outcome).toBe("stale_lifecycle");
+    expect(store.getInstallation("ws-inactive-before-install")).toBeUndefined();
+
+    expect(store.saveInstallation({
+      workspaceId: "ws-inactive-before-install",
+      addonId: "a",
+      addonUserId: "u",
+      addonToken: "newer-token",
+      lifecycleIssuedAt: 1_700_000_101,
+    }).outcome).toBe("applied");
+    expect(store.getInstallation("ws-inactive-before-install")).toMatchObject({
+      addonToken: "newer-token",
+      generation: 1,
+      status: "active",
+    });
+    store.close();
   });
 
   it("round-trips turn telemetry incl. cached prompt tokens (NULL when the backend reported none)", () => {
@@ -126,6 +352,130 @@ describe("store", () => {
     expect(raw).toBeDefined();
     expect(raw).not.toContain("secret-addon-token");
     expect(raw?.startsWith("v1:")).toBe(true);
+  });
+
+  it("advances installation generations and durably tombstones a deleted token", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY }) as TestStore;
+    store.saveInstallation({
+      workspaceId: "ws-generation",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "token-v1",
+      lifecycleIssuedAt: 1_700_000_001,
+    });
+    expect(store.getInstallation("ws-generation")?.generation).toBe(1);
+    expect(store.getInstallation("ws-generation")?.lifecycleIssuedAt).toBe(1_700_000_001);
+
+    store.saveInstallation({
+      workspaceId: "ws-generation",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "token-v2",
+      lifecycleIssuedAt: 1_700_000_002,
+    });
+    expect(store.getInstallation("ws-generation")?.generation).toBe(2);
+    expect(store.getInstallation("ws-generation")?.lifecycleIssuedAt).toBe(1_700_000_002);
+
+    store.setInstallationStatus("ws-generation", "inactive");
+    expect(store.getInstallation("ws-generation")?.generation).toBe(2);
+    store.setInstallationStatus("ws-generation", "active");
+    expect(store.getInstallation("ws-generation")?.generation).toBe(3);
+
+    const tombstone = store.tombstoneInstallation("ws-generation");
+    expect(tombstone?.generation).toBe(4);
+    expect(store.getInstallation("ws-generation")).toMatchObject({
+      status: "deleted",
+      addonToken: "",
+      generation: 4,
+    });
+    expect(store.listDeletionTombstones()).toEqual(["ws-generation"]);
+
+    store.eraseWorkspace("ws-generation");
+    expect(store.listDeletionTombstones()).toEqual([]);
+  });
+
+  it("does not resurrect a tokenless deletion tombstone from a status event", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-deleted-status",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "secret",
+    });
+    const tombstone = store.tombstoneInstallation("ws-deleted-status");
+
+    store.setInstallationStatus("ws-deleted-status", "active");
+
+    expect(store.getInstallation("ws-deleted-status")).toMatchObject({
+      status: "deleted",
+      addonToken: "",
+      generation: tombstone?.generation,
+    });
+    store.close();
+  });
+
+  it("never reuses an erased installation generation within the running store", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-reinstalled",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "old-token",
+    });
+    const tombstone = store.tombstoneInstallation("ws-reinstalled");
+    store.eraseWorkspace("ws-reinstalled");
+
+    store.saveInstallation({
+      workspaceId: "ws-reinstalled",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "fresh-token",
+    });
+
+    expect(store.getInstallation("ws-reinstalled")).toMatchObject({
+      status: "active",
+      addonToken: "fresh-token",
+      generation: (tombstone?.generation ?? 0) + 1,
+    });
+    store.close();
+  });
+
+  it("binds uninstall erasure to the exact deleted installation generation", () => {
+    const store = createStore(":memory:", { encryptionKey: ENC_KEY });
+    store.saveInstallation({
+      workspaceId: "ws-conditional-erase",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "old-token",
+    });
+    const oldSession = store.createSession({
+      workspaceId: "ws-conditional-erase",
+      adminUserId: "admin-1",
+    });
+    const tombstone = store.tombstoneInstallation("ws-conditional-erase");
+    if (!tombstone) throw new Error("expected deletion tombstone");
+
+    // Simulate an out-of-band newer install. The old deletion generation must
+    // never erase its replacement, even though normal lifecycle routing now
+    // serializes this transition behind the deletion barrier.
+    store.saveInstallation({
+      workspaceId: "ws-conditional-erase",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "replacement-token",
+    });
+
+    expect(store.eraseWorkspaceForDeletion(
+      "ws-conditional-erase",
+      tombstone.generation,
+    )).toBeUndefined();
+    expect(store.getInstallation("ws-conditional-erase")).toMatchObject({
+      status: "active",
+      addonToken: "replacement-token",
+      generation: tombstone.generation + 1,
+    });
+    expect(store.getSession(oldSession.id)).toBeDefined();
+    store.close();
   });
 
   it("re-encrypts installation tokens from DATA_ENCRYPTION_KEY_PREVIOUS on startup", () => {

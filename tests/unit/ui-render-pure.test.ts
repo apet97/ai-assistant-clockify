@@ -4,6 +4,7 @@ import {
   renderReceipt,
   renderPermissionTable,
   renderPreview,
+  renderWelcome,
   type ReceiptDeps,
   type PreviewDeps,
 } from "../../src/ui/render.js";
@@ -18,14 +19,19 @@ import type { ChatController, PreviewResult, ReceiptResult } from "../../src/ui/
 
 describe("relativeTime (pure)", () => {
   const now = 1_000_000_000_000;
-  it("buckets elapsed time into just-now / m / h / d", () => {
-    expect(relativeTime(new Date(now - 30_000).toISOString(), now)).toBe("just now");
-    expect(relativeTime(new Date(now - 5 * 60_000).toISOString(), now)).toBe("5m ago");
-    expect(relativeTime(new Date(now - 3 * 60 * 60_000).toISOString(), now)).toBe("3h ago");
-    expect(relativeTime(new Date(now - 2 * 24 * 60 * 60_000).toISOString(), now)).toBe("2d ago");
+  it("buckets elapsed time through English Intl relative-time units", () => {
+    expect(relativeTime(new Date(now - 30_000).toISOString(), now)).toBe("now");
+    expect(relativeTime(new Date(now - 5 * 60_000).toISOString(), now)).toBe("5 minutes ago");
+    expect(relativeTime(new Date(now - 3 * 60 * 60_000).toISOString(), now)).toBe("3 hours ago");
+    expect(relativeTime(new Date(now - 2 * 24 * 60 * 60_000).toISOString(), now)).toBe("2 days ago");
   });
   it("returns '' for an unparseable date", () => {
     expect(relativeTime("not-a-date", now)).toBe("");
+  });
+
+  it("uses Intl.RelativeTimeFormat for Serbian history labels", () => {
+    expect(relativeTime(new Date(now - 5 * 60_000).toISOString(), now, "sr")).toBe("pre 5 minuta");
+    expect(relativeTime(new Date(now - 24 * 60 * 60_000).toISOString(), now, "sr")).toBe("juče");
   });
 });
 
@@ -153,6 +159,27 @@ function receipt(undoId = "u1"): ReceiptResult {
 }
 
 describe("renderReceipt — Undo button", () => {
+  it("renders a prominent authenticated invoice-PDF link with filename and expiry", () => {
+    const result: ReceiptResult = {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "clockify_invoices_export",
+        artifact: {
+          downloadUrl: "/api/artifacts/artifact-1",
+          filename: "clockify-invoice-artifact-1.pdf",
+          expiresAt: "2026-07-18T13:00:00.000Z",
+        },
+      },
+    };
+    const card = renderReceipt(result, { controller: controller(), showError: vi.fn() }) as unknown as StubNode;
+    const download = card.all().find((node) => node.textContent === "Download invoice PDF");
+    expect(download?.tagName).toBe("a");
+    expect(download?.getAttribute("href")).toBe("/api/artifacts/artifact-1");
+    expect(card.allText().join(" ")).toContain("clockify-invoice-artifact-1.pdf");
+    expect(card.allText().join(" ")).toContain("Expires");
+  });
+
   it("an ok undo swaps the button for an 'Undone' node", async () => {
     const ctrl = controller({ undo: vi.fn(async () => ({ ok: true })) });
     const deps: ReceiptDeps = { controller: ctrl, showError: vi.fn() };
@@ -191,6 +218,22 @@ describe("renderReceipt — Undo button", () => {
     expect(undoBtn.disabled).toBe(false);
     expect(undoBtn.removed).toBe(false);
     expect(showError).toHaveBeenCalledWith("Policy denies this undo.");
+  });
+});
+
+describe("renderWelcome — effective policy copy", () => {
+  it("does not claim write capability when the saved policy is read-only", () => {
+    const welcome = renderWelcome({
+      policy: {
+        version: 3,
+        groups: { time_tracking: "read", reports: "read", expenses: "off", invoices: "off" },
+      },
+      sendText: vi.fn(),
+    }) as unknown as StubNode;
+
+    const copy = welcome.allText().join(" ");
+    expect(copy).toContain("Changes are disabled by your saved permission policy.");
+    expect(copy).not.toContain("Safe changes run immediately");
   });
 });
 

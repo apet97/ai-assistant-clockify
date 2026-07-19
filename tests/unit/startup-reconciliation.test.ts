@@ -63,7 +63,7 @@ describe("startup reconciliation", () => {
       candidate: {
         ...candidateBase,
         operation: { payload: { baselineUserIds: ["old"], email: " New@Example.com " } },
-        mutationPlan: { mode: "curated", steps: [{ id: "invite-user", kind: "primary", reconciliationStrategy: "create" }] },
+        mutationPlan: { mode: "curated", maxHostCalls: 60, steps: [{ id: "invite-user", kind: "primary", reconciliationStrategy: "create" }] },
         steps: [inviteStep],
       },
       step: inviteStep,
@@ -87,7 +87,7 @@ describe("startup reconciliation", () => {
       candidate: {
         ...candidateBase,
         operation: { payload: { email: "new@example.com" } },
-        mutationPlan: { mode: "curated", steps: [{ id: groupStep.planStepId, kind: "primary", reconciliationStrategy: "update" }] },
+        mutationPlan: { mode: "curated", maxHostCalls: 60, steps: [{ id: groupStep.planStepId, kind: "primary", reconciliationStrategy: "update" }] },
         steps: [groupStep],
       },
       step: groupStep,
@@ -103,6 +103,7 @@ describe("startup reconciliation", () => {
     const store = createStore(":memory:");
     const mutationPlan = {
       mode: "single" as const,
+      maxHostCalls: 60,
       steps: [{ id: "set-approval-state", kind: "primary" as const, targetFingerprint: "target-fp", reconciliationStrategy: "state-command" as const }],
     };
     const operation = {
@@ -139,7 +140,7 @@ describe("startup reconciliation", () => {
 
   it("omits oversized startup intent instead of reconciling from a truncated preview", () => {
     const store = createStore(":memory:");
-    const plan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const plan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
     const operation = { value: "x".repeat(70_000) };
     store.prepareOperationRun({
       id: "oversized-startup", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
@@ -157,7 +158,7 @@ describe("startup reconciliation", () => {
 
   it("atomically settles an authoritative startup result and creates exactly one canonical result", () => {
     const store = createStore(":memory:");
-    const plan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "update" as const }] };
+    const plan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "update" as const }] };
     store.prepareOperationRun({
       id: "authoritative", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
       actionFingerprint: "af", catalogHash: "ch", operationHash: hashOperation({ actionName: "safe_action", operation: { id: "x" }, mutationPlan: plan }),
@@ -186,7 +187,7 @@ describe("startup reconciliation", () => {
 
   it("reports partial when an authoritative step applied but later planned primaries were never dispatched", () => {
     const store = createStore(":memory:");
-    const plan = { mode: "curated" as const, steps: [
+    const plan = { mode: "curated" as const, maxHostCalls: 60, steps: [
       { id: "first", kind: "primary" as const, reconciliationStrategy: "update" as const },
       { id: "later", kind: "primary" as const, reconciliationStrategy: "update" as const },
     ] };
@@ -226,7 +227,7 @@ describe("startup reconciliation", () => {
         id: "op", status: "outcome_unknown", sessionId: "s", workspaceId: "w", adminUserId: "a", operationHash: "oh",
         actionName: binding.actionName, actionFingerprint: "af", catalogHash: "ch",
         operation: { payload: { baselineIds: [], finalFingerprint: "never" } },
-        mutationPlan: { mode: "single", steps: [{ id: "submit-approval", kind: "primary", reconciliationStrategy: "create" }] },
+        mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "submit-approval", kind: "primary", reconciliationStrategy: "create" }] },
         targetSnapshots: [], steps: [{ id: "step", status: "outcome_unknown", kind: "primary", planStepId: "submit-approval", strategy: "create", evidence: {} }],
       },
       step: { id: "step", status: "outcome_unknown", kind: "primary", planStepId: "submit-approval", strategy: "create", evidence: {} },
@@ -239,7 +240,7 @@ describe("startup reconciliation", () => {
   it("uses only the owning active installation, settles one authoritative match, and never exposes a mutation", async () => {
     const store = createStore(":memory:");
     store.saveInstallation({ workspaceId: "w", addonId: "addon", addonUserId: "addon-user", addonToken: "SECRET", status: "active" });
-    const plan = { mode: "single" as const, steps: [{ id: "submit-approval", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const plan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "submit-approval", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
     const operation = {
       operationId: "startup-supported", actionName: "clockify_approvals_submit",
       payload: { baselineIds: ["old"], finalFingerprint: sanitizedFingerprint({ state: "PENDING", periodStart: "2026-07-14" }) },
@@ -252,6 +253,7 @@ describe("startup reconciliation", () => {
     store.markOperationExecuting(operation.operationId);
     const stepId = store.prepareOperationStep({ operationId: operation.operationId, planStepId: "submit-approval", index: 0, name: "Submit", kind: "primary" });
     store.markOperationStepExecuting(stepId);
+    store.markOperationStepDispatched(stepId);
     store.recoverOrphanedRuns();
     const unknownResultId = store.getOperationRun(operation.operationId)?.actionResultId;
     expect(unknownResultId).toEqual(expect.any(String));
@@ -274,6 +276,8 @@ describe("startup reconciliation", () => {
     expect(factory).toHaveBeenCalledTimes(1);
     expect(mutation).not.toHaveBeenCalled();
     expect(store.getOperationRun(operation.operationId)).toMatchObject({ status: "succeeded", actionResultId: unknownResultId });
+    expect(store.getOperationRun(operation.operationId)).not.toHaveProperty("operation");
+    expect(store.getOperationRun(operation.operationId)).not.toHaveProperty("mutationPlan");
     expect(store.listOperationSteps(operation.operationId)).toMatchObject([{ status: "succeeded", externalId: "new" }]);
     expect(store.getActionResult(unknownResultId!)).toMatchObject({ kind: "receipt", receipt: { ok: true, action: operation.actionName } });
     store.close();
@@ -291,7 +295,7 @@ describe("startup reconciliation", () => {
     }
     const actionName = mode === "handler" ? "clockify_unknown_write" : "clockify_approvals_submit";
     const stepName = mode === "handler" ? "unknown-step" : "submit-approval";
-    const plan = { mode: "single" as const, steps: [{ id: stepName, kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const plan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: stepName, kind: "primary" as const, reconciliationStrategy: "create" as const }] };
     const operation = { operationId: `failure-${mode}`, actionName, payload: { baselineIds: [], finalFingerprint: "x" }, mutationPlan: plan };
     store.prepareOperationRun({
       id: operation.operationId, confirmationId: "c", sessionId: "s", workspaceId: "w", adminUserId: "a",
@@ -397,7 +401,7 @@ describe("startup reconciliation", () => {
     const path = join(tmpdir(), `startup-reconcile-${randomUUID()}.sqlite`);
     try {
       const before = createStore(path);
-      const mutationPlan = { mode: "single" as const, steps: [{ id: "create-tag", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+      const mutationPlan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "create-tag", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
       const operationHash = hashOperation({ actionName: "clockify_tags_create", mutationPlan });
       before.prepareOperationRun({
         id: "executing-op", sessionId: "s1", workspaceId: "w1", adminUserId: "a1",
@@ -407,6 +411,7 @@ describe("startup reconciliation", () => {
       before.markOperationExecuting("executing-op");
       const executingStep = before.prepareOperationStep({ operationId: "executing-op", planStepId: "create-tag", index: 0, name: "Create", kind: "primary" });
       before.markOperationStepExecuting(executingStep);
+      before.markOperationStepDispatched(executingStep);
       before.prepareOperationRun({
         id: "prepared-op", sessionId: "s1", workspaceId: "w1", adminUserId: "a1",
         actionName: "clockify_tags_create", actionFingerprint: "af", catalogHash: "ch", operationHash,
@@ -456,8 +461,8 @@ describe("startup reconciliation", () => {
 
   it("rejects tampered safe and confirmed plans before any reconciliation read", async () => {
     const store = createStore(":memory:");
-    const originalPlan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
-    const tamperedPlan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "delete" as const }] };
+    const originalPlan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const tamperedPlan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "delete" as const }] };
     const makeUnknown = (id: string, input: Parameters<typeof store.prepareOperationRun>[0]) => {
       store.prepareOperationRun({ ...input, id });
       store.markOperationExecuting(id);
@@ -507,7 +512,7 @@ describe("startup reconciliation", () => {
       store.settleOperationStep(step, "outcome_unknown");
       store.settleOperationRun(id, "outcome_unknown");
     };
-    const validPlan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const validPlan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
     const safeOperation = { operationId: "admin-authored-value", actionName: "not-the-catalog-action", value: 1 };
     makeUnknown({
       id: "valid", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
@@ -521,23 +526,23 @@ describe("startup reconciliation", () => {
       actionName: "confirmed_action", actionFingerprint: "af", catalogHash: "ch",
       operationHash: hashOperation(legacyOperation), operation: legacyOperation,
     });
-    const duplicatePlan = { mode: "batch" as const, steps: [
+    const duplicatePlan = { mode: "batch" as const, maxHostCalls: 60, steps: [
       { id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const },
       { id: "write", kind: "primary" as const, reconciliationStrategy: "delete" as const },
     ] };
-    makeUnknown({
+    expect(() => makeUnknown({
       id: "duplicate", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
       actionFingerprint: "af", catalogHash: "ch",
       operationHash: hashOperation({ actionName: "safe_action", operation: {}, mutationPlan: duplicatePlan }),
       operation: {}, mutationPlan: duplicatePlan,
-    });
+    })).toThrow("invalid_mutation_plan");
     makeUnknown({
       id: "wrong-index", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
       actionFingerprint: "af", catalogHash: "ch",
       operationHash: hashOperation({ actionName: "safe_action", operation: {}, mutationPlan: validPlan }),
       operation: {}, mutationPlan: validPlan,
     }, "write", 1);
-    const compositePlan = { mode: "curated" as const, steps: [
+    const compositePlan = { mode: "curated" as const, maxHostCalls: 60, steps: [
       { id: "create-invoice", kind: "primary" as const },
       { id: "enrich-invoice", kind: "primary" as const, reconciliationStrategy: "update" as const },
     ] };
@@ -550,12 +555,13 @@ describe("startup reconciliation", () => {
 
     expect(store.listStartupReconciliationCandidates()).toMatchObject([{ id: "valid", steps: [{ planStepId: "write", strategy: "create" }] }]);
     expect(store.listStartupReconciliationCandidates()).toHaveLength(1);
+    expect(store.getOperationRun("duplicate")).toBeUndefined();
     store.close();
   });
 
   it("leaves operation and step unknown when the real store persistence seam fails", async () => {
     const store = createStore(":memory:");
-    const plan = { mode: "single" as const, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
+    const plan = { mode: "single" as const, maxHostCalls: 60, steps: [{ id: "write", kind: "primary" as const, reconciliationStrategy: "create" as const }] };
     store.prepareOperationRun({
       id: "persistence-failure", sessionId: "s", workspaceId: "w", adminUserId: "a", actionName: "safe_action",
       actionFingerprint: "af", catalogHash: "ch",

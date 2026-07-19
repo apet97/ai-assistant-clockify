@@ -1,4 +1,4 @@
-import type { ActionContext, ExternalMutationPlan, TargetSnapshot } from "../action.js";
+import type { ActionContext, ExternalMutationPlanDraft, TargetSnapshot } from "../action.js";
 import type { EntityRef } from "../receipts.js";
 import { captureTargetSnapshot } from "../target-snapshots.js";
 import { sanitizedFingerprint } from "../safe-json.js";
@@ -10,7 +10,7 @@ export function dynamicMutationPlan(
     strategy: "create" | "update" | "delete" | "state-command" | "composed";
     targetFingerprint?: string;
   }>,
-): ExternalMutationPlan {
+): ExternalMutationPlanDraft {
   return {
     mode: steps.length === 1 ? "single" : "curated",
     steps: steps.map((step) => ({

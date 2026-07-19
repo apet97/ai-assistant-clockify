@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createController, featureGroupRows, type ChatApi } from "../../src/ui/main.js";
+import { createController, featureGroupRows, type ChatApi, type StreamEvent } from "../../src/ui/main.js";
 
 function fakeApi(): ChatApi & { calls: Record<string, number> } {
   const calls: Record<string, number> = {};
@@ -36,7 +36,7 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("sendMessage");
       return { ok: true, reply: { kind: "answer", text: "" }, results: [] };
     },
-    async streamMessage(_message: string, onEvent: (event: { type: string }) => void) {
+    async streamMessage(_message: string, onEvent: (event: StreamEvent) => void) {
       bump("streamMessage");
       onEvent({ type: "done" });
     },

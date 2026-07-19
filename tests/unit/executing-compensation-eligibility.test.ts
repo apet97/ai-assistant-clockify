@@ -8,6 +8,7 @@ type Store = ReturnType<typeof createStore>;
 
 const DEFAULT_PLAN: ExternalMutationPlan = {
   mode: "curated",
+      maxHostCalls: 60,
   steps: [
     { id: "source", kind: "primary" },
     { id: "later", kind: "primary" },
@@ -81,6 +82,17 @@ async function compensate(
 }
 
 describe("compensation eligibility before route settlement", () => {
+  it("rejects a persisted legacy plan that lacks its host-call bound", () => {
+    const store = createStore(":memory:");
+    const legacyPlan = {
+      mode: "curated",
+      steps: DEFAULT_PLAN.steps,
+    } as unknown as ExternalMutationPlan;
+    expect(() => operation(store, "missing-host-call-bound", legacyPlan)).toThrow("invalid_mutation_plan");
+    expect(store.getOperationRun("missing-host-call-bound")).toBeUndefined();
+    store.close();
+  });
+
   it.each([
     {
       name: "success",
@@ -206,6 +218,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "source descriptor is declared as compensation",
       plan: {
         mode: "curated" as const,
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "compensation" as const },
           { id: "later", kind: "primary" as const },
@@ -234,6 +247,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "later failure descriptor is declared as compensation",
       plan: {
         mode: "curated" as const,
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "primary" as const },
           { id: "later", kind: "compensation" as const },
@@ -262,6 +276,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "requested compensation descriptor is declared as primary",
       plan: {
         mode: "curated" as const,
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "primary" as const },
           { id: "later", kind: "primary" as const },
@@ -300,6 +315,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "duplicate plan ids",
       plan: {
         mode: "curated",
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "primary" },
           { id: "source", kind: "primary" },
@@ -311,6 +327,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "malformed plan kind",
       plan: {
         mode: "curated",
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "primary" },
           { id: "later", kind: "mutation" },
@@ -320,6 +337,23 @@ describe("compensation eligibility before route settlement", () => {
     },
   ])("denies a $name before compensation persistence or dispatch", async ({ name, plan }) => {
     const store = createStore(":memory:");
+    if (plan !== undefined) {
+      expect(() => store.prepareOperationRun({
+        id: `invalid-plan-${name.replaceAll(" ", "-")}`,
+        sessionId: "session",
+        workspaceId: "workspace",
+        adminUserId: "admin",
+        actionName: "test_composed_write",
+        actionFingerprint: "action",
+        catalogHash: "catalog",
+        operationHash: "operation",
+        operation: { normalized: true },
+        mutationPlan: plan as never,
+      })).toThrow("invalid_mutation_plan");
+      expect(store.getOperationRun(`invalid-plan-${name.replaceAll(" ", "-")}`)).toBeUndefined();
+      store.close();
+      return;
+    }
     const operationId = store.prepareOperationRun({
       id: `invalid-plan-${name.replaceAll(" ", "-")}`,
       sessionId: "session",
@@ -330,7 +364,6 @@ describe("compensation eligibility before route settlement", () => {
       catalogHash: "catalog",
       operationHash: "operation",
       operation: { normalized: true },
-      ...(plan === undefined ? {} : { mutationPlan: plan as never }),
     });
     store.markOperationExecuting(operationId);
     const sourceId = primary(store, operationId, { id: "source", index: 0, status: "succeeded" });
@@ -443,6 +476,7 @@ describe("compensation eligibility before route settlement", () => {
     const store = createStore(":memory:");
     const operationId = operation(store, `fingerprint-mismatch-${name.replaceAll(" ", "-")}`, {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [
         { id: "source", kind: "primary", targetFingerprint: "source-fp" },
         { id: "later", kind: "primary", targetFingerprint: "later-fp" },
@@ -483,6 +517,7 @@ describe("compensation eligibility before route settlement", () => {
       name: "binds exact declared fingerprints",
       plan: {
         mode: "curated" as const,
+      maxHostCalls: 60,
         steps: [
           { id: "source", kind: "primary" as const, targetFingerprint: "source-fp" },
           { id: "later", kind: "primary" as const, targetFingerprint: "later-fp" },

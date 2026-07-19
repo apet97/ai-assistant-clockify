@@ -47,7 +47,7 @@ function preparedConfirmation(store: Store) {
     catalogHash: "catalog",
     operationHash: created.record.operationHash,
     operation: { id: "tag-1", patch: { name: "New" } },
-    mutationPlan: { mode: "single", steps: [{ id: "update-tag", kind: "primary" }] },
+    mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "update-tag", kind: "primary" }] },
   });
   store.savePendingConfirmation(created.record);
   return created.record;
@@ -80,7 +80,7 @@ describe("atomic confirmed-operation settlement", () => {
     expect(store.getOperationRun(confirmation.operationId)).toMatchObject({
       status: "executing",
       operation: { id: "tag-1", patch: { name: "New" } },
-      mutationPlan: { mode: "single", steps: [{ id: "update-tag", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "update-tag", kind: "primary" }] },
     });
     store.close();
   });

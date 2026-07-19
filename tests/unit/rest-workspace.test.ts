@@ -111,6 +111,15 @@ describe("rest workspace client", () => {
     expect(init.method).toBe("DELETE");
   });
 
+  it("routes generic time-entry deletion through the typed mutation adapter", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    await client(f as any).deleteEntity!({ entityType: "time_entry", id: "e1" });
+    expect((f as any).mock.calls).toHaveLength(1);
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/time-entries/e1");
+    expect(init.method).toBe("DELETE");
+  });
+
   it("deleteEntity archives a project BEFORE deleting (Clockify rejects deleting active projects)", async () => {
     const f = vi.fn(async (_url: string, init: any) => {
       if (init.method === "GET") return jsonResponse({ id: "p1", name: "Site", archived: false });

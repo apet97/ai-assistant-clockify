@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import Database from "better-sqlite3";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStore } from "../../src/db/store.js";
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
@@ -9,6 +10,91 @@ import { DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
 import type { MutationStepJournal } from "../../src/harness/mutation-contract.js";
 
 describe("durable operation runs", () => {
+  it.each([
+    ["missing", { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] }],
+    ["excess", { mode: "single", maxHostCalls: 61, steps: [{ id: "create-tag", kind: "primary" }] }],
+    ["under-counted", { mode: "batch", maxHostCalls: 1, steps: [{ id: "one", kind: "primary" }, { id: "two", kind: "primary" }] }],
+  ])("rejects a %s persisted host-call bound before inserting the operation", (_label, mutationPlan) => {
+    const store = createStore(":memory:");
+
+    expect(() => store.prepareOperationRun({
+      id: "invalid-host-bound",
+      sessionId: "session",
+      workspaceId: "workspace",
+      adminUserId: "admin",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "action",
+      catalogHash: "catalog",
+      operationHash: "operation",
+      operation: { body: { name: "Tag" } },
+      mutationPlan: mutationPlan as never,
+    })).toThrow("invalid_mutation_plan");
+
+    expect(store.getOperationRun("invalid-host-bound")).toBeUndefined();
+    store.close();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("lists a bounded scoped history with exactly one operation query and one step query", () => {
+    const store = createStore(":memory:");
+    for (let index = 1; index <= 5; index += 1) {
+      const operationId = store.prepareOperationRun({
+        id: `run-${index}`,
+        sessionId: "history-session",
+        workspaceId: "history-workspace",
+        adminUserId: "history-admin",
+        actionName: `clockify_history_${index}`,
+        actionFingerprint: "af",
+        catalogHash: "ch",
+        operationHash: `oh-${index}`,
+      });
+      store.prepareOperationStep({
+        operationId,
+        planStepId: `step-${index}`,
+        index: 0,
+        name: `Step ${index}`,
+        kind: "primary",
+      });
+      if (index === 5) {
+        for (let stepIndex = 1; stepIndex <= 50; stepIndex += 1) {
+          store.prepareOperationStep({
+            operationId,
+            planStepId: `step-${index}-${stepIndex}`,
+            index: stepIndex,
+            name: `Step ${index}-${stepIndex}`,
+            kind: "primary",
+          });
+        }
+      }
+    }
+    store.prepareOperationRun({
+      id: "other-scope",
+      sessionId: "history-session",
+      workspaceId: "other-workspace",
+      adminUserId: "history-admin",
+      actionName: "clockify_other_scope",
+      actionFingerprint: "af",
+      catalogHash: "ch",
+      operationHash: "oh-other",
+    });
+
+    const prepare = vi.spyOn(Database.prototype, "prepare");
+    const history = store.listScopedOperationRuns("history-workspace", "history-admin", "history-session", 3);
+    const reads = prepare.mock.calls.map(([sql]) => sql.replace(/\s+/g, " ").trim());
+
+    expect(history.map((run) => run.id)).toEqual(["run-3", "run-4", "run-5"]);
+    expect(history.map((run) => run.steps.length)).toEqual([1, 1, 50]);
+    expect(history.at(-1)?.stepsTruncated).toBe(true);
+    expect(reads.filter((sql) => sql.includes("FROM operation_runs o")).length).toBe(1);
+    expect(reads.filter((sql) => sql.includes("FROM operation_steps s")).length).toBe(1);
+    expect(reads.find((sql) => sql.includes("FROM operation_steps s"))).toContain("step_position <= ?");
+    expect(reads).toHaveLength(2);
+    store.close();
+  });
+
   it("persists and reloads ordered target snapshots inside the hashed confirmable operation", () => {
     const store = createStore(":memory:");
     const targetSnapshots = [
@@ -60,6 +146,7 @@ describe("durable operation runs", () => {
       });
       before.markOperationExecuting(operationId);
       before.markOperationStepExecuting(stepId);
+      before.markOperationStepDispatched(stepId);
       before.close();
 
       const after = createStore(path);
@@ -68,6 +155,53 @@ describe("durable operation runs", () => {
         { id: stepId, status: "outcome_unknown", kind: "primary" },
       ]);
       expect(after.listOperationSteps(operationId)).toHaveLength(1);
+      after.close();
+    } finally {
+      rmSync(path, { force: true });
+      rmSync(`${path}-wal`, { force: true });
+      rmSync(`${path}-shm`, { force: true });
+    }
+  });
+
+  it("recovers an undispatched queued orphan as definitive instead of ambiguous", () => {
+    const path = join(tmpdir(), `operation-queued-recovery-${randomUUID()}.sqlite`);
+    try {
+      const before = createStore(path);
+      const operationId = before.prepareOperationRun({
+        id: "operation-queued-restart",
+        sessionId: "s1",
+        workspaceId: "w1",
+        adminUserId: "a1",
+        actionName: "clockify_tags_create",
+        actionFingerprint: "af",
+        catalogHash: "ch",
+        operationHash: "oh",
+      });
+      const stepId = before.prepareOperationStep({
+        operationId,
+        planStepId: "create-tag",
+        index: 0,
+        name: "Create tag",
+        kind: "primary",
+      });
+      before.markOperationExecuting(operationId);
+      before.markOperationStepExecuting(stepId);
+      before.close();
+
+      const after = createStore(path);
+      expect(after.getOperationRun(operationId)?.status).toBe("definitive_failed");
+      expect(after.listOperationSteps(operationId)).toMatchObject([
+        {
+          id: stepId,
+          status: "definitive_failed",
+          queuedAt: expect.any(String),
+          settledAt: expect.any(String),
+        },
+      ]);
+      expect(after.listOperationSteps(operationId)[0]).not.toHaveProperty("dispatchedAt");
+      expect(after.getActionResult(after.getOperationRun(operationId)!.actionResultId!)).toMatchObject({
+        receipt: { code: "operation_cancelled_before_dispatch" },
+      });
       after.close();
     } finally {
       rmSync(path, { force: true });
@@ -109,7 +243,7 @@ describe("durable operation runs", () => {
       catalogHash: "ch",
       operationHash: "oh",
       operation: { name: "Billing" },
-      mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "create-tag", kind: "primary" }] },
     });
     const result = {
       kind: "receipt" as const,
@@ -151,13 +285,13 @@ describe("durable operation runs", () => {
       catalogHash: "ch",
       operationHash: "oh",
       operation: { name: "Normalized tag" },
-      mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "create-tag", kind: "primary" }] },
     });
 
     expect(store.getOperationRun(id)).toMatchObject({
       status: "prepared",
       operation: { name: "Normalized tag" },
-      mutationPlan: { mode: "single", steps: [{ id: "create-tag", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "create-tag", kind: "primary" }] },
     });
     const stepId = store.prepareOperationStep({
       operationId: id,
@@ -172,6 +306,15 @@ describe("durable operation runs", () => {
     ]);
     expect(store.markOperationExecuting(id)).toBe(true);
     expect(store.markOperationStepExecuting(stepId)).toBe(true);
+    const queuedStep = store.listOperationSteps(id)[0];
+    expect(queuedStep).toMatchObject(
+      {
+        status: "executing",
+        queuedAt: expect.any(String),
+      },
+    );
+    expect(queuedStep).not.toHaveProperty("dispatchedAt");
+    expect(store.markOperationStepDispatched(stepId)).toBe(true);
     store.settleOperationStep(stepId, "succeeded", {
       externalId: "tag-1",
       effect: { created: [{ type: "tag", id: "tag-1" }] },
@@ -181,10 +324,53 @@ describe("durable operation runs", () => {
         status: "succeeded",
         externalId: "tag-1",
         effect: { created: [{ type: "tag", id: "tag-1" }] },
+        queuedAt: expect.any(String),
         dispatchedAt: expect.any(String),
         settledAt: expect.any(String),
       },
     ]);
+    store.close();
+  });
+
+  it("definitively cancels a queued primary step without ever recording dispatch", () => {
+    const store = createStore(":memory:");
+    const operationId = store.prepareOperationRun({
+      id: "queued-cancellation",
+      sessionId: "s1",
+      workspaceId: "w1",
+      adminUserId: "a1",
+      actionName: "clockify_tags_create",
+      actionFingerprint: "af",
+      catalogHash: "ch",
+      operationHash: "oh",
+    });
+    expect(store.markOperationExecuting(operationId)).toBe(true);
+    const journal = store.mutationStepJournal(operationId);
+    const stepId = journal.prepareOperationStep({
+      planStepId: "create-tag",
+      index: 0,
+      name: "Create tag",
+      kind: "primary",
+    });
+    expect(journal.markOperationStepExecuting(stepId)).toBe(true);
+
+    expect(journal.cancelOperationStepBeforeDispatch(stepId, {
+      code: "host_request_cancelled",
+      message: "Cancelled while queued.",
+    })).toBe(true);
+
+    const cancelledStep = journal.listOperationSteps()[0];
+    expect(cancelledStep).toMatchObject(
+      {
+        id: stepId,
+        status: "definitive_failed",
+        queuedAt: expect.any(String),
+        settledAt: expect.any(String),
+        detail: { code: "host_request_cancelled" },
+      },
+    );
+    expect(cancelledStep).not.toHaveProperty("dispatchedAt");
+    expect(journal.markOperationStepDispatched(stepId)).toBe(false);
     store.close();
   });
 
@@ -238,6 +424,7 @@ describe("durable operation runs", () => {
       operation: { name: "Tag" },
       mutationPlan: {
         mode: "curated",
+      maxHostCalls: 60,
         steps: [
           { id: "create", kind: "primary" },
           { id: "delete-created", kind: "compensation" },
@@ -330,6 +517,7 @@ describe("durable operation runs", () => {
         operationHash: "oh",
         mutationPlan: {
           mode: "curated",
+      maxHostCalls: 60,
           steps: [
             { id: "create", kind: "primary" },
             { id: "delete-created", kind: "compensation" },
@@ -384,6 +572,7 @@ describe("durable operation runs", () => {
         operationHash: "oh",
         mutationPlan: {
           mode: "curated",
+      maxHostCalls: 60,
           steps: [
             { id: "create", kind: "primary" },
             { id: "delete-created", kind: "compensation" },
@@ -399,6 +588,7 @@ describe("durable operation runs", () => {
         kind: "primary",
       });
       before.markOperationStepExecuting(sourceId);
+      before.markOperationStepDispatched(sourceId);
       before.settleOperationStep(sourceId, "succeeded", { externalId: "tag-1" });
       before.settleOperationRun(operationId, "definitive_failed");
       const compensationId = before.prepareCompensationStep({
@@ -409,6 +599,7 @@ describe("durable operation runs", () => {
         compensatesStepId: sourceId,
       });
       before.markOperationStepCompensating(compensationId);
+      before.markOperationStepDispatched(compensationId);
       before.close();
 
       const after = createStore(path);

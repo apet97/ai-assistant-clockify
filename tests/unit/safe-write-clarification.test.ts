@@ -78,7 +78,7 @@ describe("durable safe-write prepare clarification", () => {
     expect(test.fake.counts.createTag ?? 0).toBe(0);
   });
 
-  it("returns the identical clarify result through the builder's direct handler", async () => {
+  it("returns the grounded clarification through the canonical prepare path", async () => {
     let dispatches = 0;
     const options = [{ id: "one", label: "One" }];
     const action = defineDurableSafeWriteAction({
@@ -96,9 +96,9 @@ describe("durable safe-write prepare clarification", () => {
     });
 
     const test = context();
-    const result = await action.handler(test.value, { name: "ambiguous" });
+    const result = await action.prepareSafeWrite(test.value, { name: "ambiguous" });
 
-    expect(result).toEqual({ kind: "clarify", message: "Choose one.", options });
+    expect(result).toEqual({ kind: "clarify", clarify: "Choose one.", options });
     expect(dispatches).toBe(0);
     expect(test.calls).toEqual({ authorize: 0, prepare: 0, executing: 0, scope: 0, settle: 0 });
   });
@@ -127,12 +127,14 @@ describe("durable safe-write prepare clarification", () => {
     });
 
     const test = context();
-    const result = await action.handler(test.value, { name: "prepared" });
-
-    expect(result).toEqual({
-      kind: "receipt",
-      receipt: successReceipt({ action: "clockify_test_safe_prepared" }),
+    const prepared = await action.prepareSafeWrite(test.value, { name: "prepared" });
+    if ("kind" in prepared) throw new Error("expected prepared safe write");
+    const result = await action.executeSafeWrite(test.value, {
+      ...prepared,
+      mutationPlan: { ...prepared.mutationPlan, maxHostCalls: 4 },
     });
+
+    expect(result).toEqual(successReceipt({ action: "clockify_test_safe_prepared" }));
     expect(dispatches).toBe(1);
   });
 

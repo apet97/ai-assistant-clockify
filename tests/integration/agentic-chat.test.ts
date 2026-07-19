@@ -23,6 +23,33 @@ import { scriptedToolModel, type ScriptedToolModel } from "../helpers/scripted-m
  */
 const ADDON_KEY = "ai-assistant";
 
+function eventSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function waitForAbort(signal: AbortSignal | undefined): Promise<void> {
+  if (!signal) throw new Error("expected the route to pass an AbortSignal to the model");
+  if (signal.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+/** Queue a no-op authenticated mutation route behind the disconnected request.
+ * Its 404 can only arrive after the shared per-session FIFO releases, which is a
+ * deterministic route-settlement barrier (not an event-loop delay). */
+async function waitForSessionFifoDrain(app: Express, cookie: string): Promise<void> {
+  const drained = await request(app)
+    .post("/api/confirmations/fifo-drain-sentinel/cancel")
+    .set("Cookie", cookie)
+    .send({});
+  expect(drained.status).toBe(404);
+}
+
 let stores: Store[] = [];
 afterEach(() => {
   for (const s of stores) s.close();
@@ -114,7 +141,7 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
         return { text: "", toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "once" } }] };
       }),
     };
-    const { app, cookie } = await makeApp([], fake, { agentic: false, modelClient: delayedModel });
+    const { app, cookie, store } = await makeApp([], fake, { agentic: false, modelClient: delayedModel });
     const requestId = "d3a40aeb-4a76-4f3a-85e1-a9686a8e1ab1";
 
     const first = request(app)
@@ -123,19 +150,33 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
       .send({ message: "create tag once", requestId })
       .then((response) => response);
     await started;
+    const secondEntered = eventSignal();
+    const realGetSession = store.getSession.bind(store);
+    const sessionLookup = vi.spyOn(store, "getSession").mockImplementation((sessionId) => {
+      secondEntered.resolve();
+      return realGetSession(sessionId);
+    });
+    let secondSettled = false;
     const second = request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
       .send({ message: "create tag once", requestId })
-      .then((response) => response);
-    const beforeRelease = await Promise.race([
-      second.then(() => "responded" as const),
-      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 50)),
-    ]);
+      .then((response) => {
+        secondSettled = true;
+        return response;
+      });
+    // The second HTTP request has reached the session resolver and synchronously
+    // entered the FIFO. The first model call is still held on `blocked`, so this
+    // is an explicit queue-position barrier rather than a wall-clock guess.
+    await secondEntered.promise;
+    const settledBeforeRelease = secondSettled;
+    const modelCallsBeforeRelease = (delayedModel.completeWithTools as ReturnType<typeof vi.fn>).mock.calls.length;
+    sessionLookup.mockRestore();
     release();
     const [firstResponse, secondResponse] = await Promise.all([first, second]);
 
-    expect(beforeRelease).toBe("waiting");
+    expect(settledBeforeRelease).toBe(false);
+    expect(modelCallsBeforeRelease).toBe(1);
     expect(firstResponse.status).toBe(200);
     expect(secondResponse.status).toBe(200);
     expect(secondResponse.body).toEqual(firstResponse.body);
@@ -473,6 +514,7 @@ describe("streaming confirm — receipt instant, resume streamed (no blocking th
 
     expect(res.status).toBe(200);
     expect(res.headers["content-type"]).toContain("x-ndjson");
+    expect(res.headers["cache-control"]).toBe("private, no-store, no-transform");
     const events = parseEvents(res.text);
     // The committed receipt is the FIRST event (instant feedback) — before any
     // resume model call blocks.
@@ -621,6 +663,7 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
 
     const res = await request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "clean up the urgent tag" });
     expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toBe("private, no-store, no-transform");
     const events = parseEvents(res.text);
     const kinds = events.map((e) => (e.type === "result" ? `result:${(e.result as ResultItem).kind}` : e.type));
     // Each tool execution announces itself with an ephemeral status line first.
@@ -744,26 +787,30 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
   // the handler starts the loop runs to its 6-step budget in one uninterrupted
   // microtask burst — a timer-scheduled abort always loses that race (it fires after
   // res.end()). Instead the disconnect is driven FROM INSIDE the first model call:
-  // we abort the request, then park that call on a real timer long enough for the
-  // server's `res.on("close")` → `ac.abort()` to fire (loopback close-propagation is
-  // sub-ms; 100ms is a vast margin). The loop is provably parked at that model await
-  // when the signal flips, so it hits the abort guard before the NEXT boundary. The
+  // we abort the request, then park that call on the exact AbortSignal the route
+  // passed to the model. The loop is provably parked at that model await when the
+  // signal flips, so it hits the abort guard before the NEXT boundary. The
   // unit test (tests/unit/agent-loop-abort.test.ts) covers the loop logic directly;
   // THIS test only proves the route wires the signal end-to-end.
   it("aborts the agentic loop when the client disconnects mid-stream (no runaway model calls)", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const reqHolder: { abort: () => void } = { abort: () => undefined };
     let calls = 0;
+    let modelCompletion: Promise<ToolCompletion> | undefined;
     const disconnectingModel: ModelClient = {
       complete: vi.fn(async () => "{}"),
-      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
+      completeWithTools: vi.fn((_messages, _tools, signal): Promise<ToolCompletion> => {
         calls += 1;
         if (calls === 1) {
+          modelCompletion = waitForAbort(signal).then(() => ({
+            text: "",
+            toolCalls: [{ id: `c${calls}`, name: "clockify_tags_list", arguments: {} }],
+          }));
           reqHolder.abort(); // the iframe/proxy drops the connection mid-turn
-          await new Promise((r) => setTimeout(r, 100)); // let the server abort the signal first
+          return modelCompletion;
         }
         // Always propose another read, so ONLY the disconnect can stop the loop.
-        return { text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_tags_list", arguments: {} }] };
+        return Promise.resolve({ text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_tags_list", arguments: {} }] });
       }),
     };
     const { app, cookie } = await makeApp([], fake, { modelClient: disconnectingModel });
@@ -771,7 +818,11 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     const req = request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "list tags repeatedly" });
     reqHolder.abort = () => req.abort();
     await req.catch(() => undefined); // the aborted request rejects; ignore it
-    await new Promise((r) => setTimeout(r, 20)); // let the loop settle past the abort guard
+    if (!modelCompletion) throw new Error("model call never started");
+    // The agent loop registered its await continuation before this test does, so
+    // resolving this exact model promise also crosses the next abort guard.
+    await modelCompletion;
+    await waitForSessionFifoDrain(app, cookie);
 
     // The loop stopped at the boundary right after the disconnect: exactly the one
     // model call that triggered it (far below the 6-step budget), and the read it
@@ -783,17 +834,18 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
   it("does not dispatch a single-turn action returned after the client disconnects", async () => {
     const fake = createFakeWorkspace();
     const reqHolder: { abort: () => void } = { abort: () => undefined };
+    let modelCompletion: Promise<ToolCompletion> | undefined;
     const disconnectingModel: ModelClient = {
       complete: vi.fn(async () => "{}"),
-      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
-        reqHolder.abort();
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        // A provider adapter may resolve despite cancellation. The route must
-        // still check the signal before dispatching this not-yet-started write.
-        return {
+      completeWithTools: vi.fn((_messages, _tools, signal): Promise<ToolCompletion> => {
+        modelCompletion = waitForAbort(signal).then(() => ({
           text: "",
           toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "too-late" } }],
-        };
+        }));
+        reqHolder.abort();
+        // A provider adapter may resolve despite cancellation. The route must
+        // still check the signal before dispatching this not-yet-started write.
+        return modelCompletion;
       }),
     };
     const { app, cookie } = await makeApp([], fake, { agentic: false, modelClient: disconnectingModel });
@@ -801,7 +853,9 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     const req = request(app).post("/api/chat/stream").set("Cookie", cookie).send({ message: "create a tag" });
     reqHolder.abort = () => req.abort();
     await req.catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 150));
+    if (!modelCompletion) throw new Error("model call never started");
+    await modelCompletion;
+    await waitForSessionFifoDrain(app, cookie);
 
     expect(disconnectingModel.completeWithTools).toHaveBeenCalledTimes(1);
     expect(fake.counts.createTag ?? 0).toBe(0);
@@ -813,28 +867,33 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
   // the chat route had an end-to-end disconnect test (audit finding #6). Same
   // deterministic technique: drive the disconnect from inside the FIRST RESUME
   // model call (call #2 overall — call #1 is the chat turn that builds the
-  // preview), park ~100ms so res.on("close") → ac.abort() fires, and keep
+  // preview), await that call's exact route signal, and keep
   // proposing a read so ONLY the disconnect can stop the resumed loop.
   it("aborts the RESUME loop when the client disconnects mid-confirm-stream (commit lands; no runaway resume)", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const reqHolder: { abort: () => void } = { abort: () => undefined };
     let calls = 0;
+    let resumeModelCompletion: Promise<ToolCompletion> | undefined;
     const disconnectingModel: ModelClient = {
       complete: vi.fn(async () => "{}"),
-      completeWithTools: vi.fn(async (): Promise<ToolCompletion> => {
+      completeWithTools: vi.fn((_messages, _tools, signal): Promise<ToolCompletion> => {
         calls += 1;
         if (calls === 1) {
           // Chat turn: propose the risky delete → the loop interrupts into a preview.
-          return { text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] };
+          return Promise.resolve({ text: "", toolCalls: [{ id: "r1", name: "clockify_tags_delete", arguments: { name: "urgent" } }] });
         }
         if (calls === 2) {
+          resumeModelCompletion = waitForAbort(signal).then(() => ({
+            text: "",
+            toolCalls: [{ id: `c${calls}`, name: "clockify_clients_list", arguments: {} }],
+          }));
           reqHolder.abort(); // the admin closes the iframe mid-resume
-          await new Promise((r) => setTimeout(r, 100)); // let the server abort the signal first
+          return resumeModelCompletion;
         }
         // The resume keeps proposing a read, so ONLY the disconnect can stop the
         // loop. Use a CLIENTS read — the delete-tag flow lists tags to resolve
         // "urgent", so listClients is a clean "did the resume read run?" signal.
-        return { text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_clients_list", arguments: {} }] };
+        return Promise.resolve({ text: "", toolCalls: [{ id: `c${calls}`, name: "clockify_clients_list", arguments: {} }] });
       }),
     };
     const { app, cookie } = await makeApp([], fake, { modelClient: disconnectingModel });
@@ -848,7 +907,9 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
       .send({ nonce: preview.nonce });
     reqHolder.abort = () => req.abort();
     await req.catch(() => undefined); // the aborted request rejects; ignore it
-    await new Promise((r) => setTimeout(r, 20)); // let the loop settle past the abort guard
+    if (!resumeModelCompletion) throw new Error("resume model call never started");
+    await resumeModelCompletion;
+    await waitForSessionFifoDrain(app, cookie);
 
     // The confirmed delete committed (its receipt is streamed BEFORE the resume model call blocks)…
     expect(fake.counts.deleteTagAtomic).toBe(1);

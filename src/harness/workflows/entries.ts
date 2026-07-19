@@ -12,6 +12,7 @@ import { nowDate } from "../../durations.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete } from "./structure-durable.js";
+import { MARK_INVOICED_ENTRY_BATCH_MAX } from "../safety-limits.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -167,7 +168,7 @@ const markInvoiced = defineRiskyAction({
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] }),
   schema: z.object({
-    ids: z.array(z.string().min(1)).min(1),
+    ids: z.array(z.string().min(1)).min(1).max(MARK_INVOICED_ENTRY_BATCH_MAX),
     invoiced: z.boolean(),
   }),
   async preview(ctx, args) {

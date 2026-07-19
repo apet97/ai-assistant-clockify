@@ -18,7 +18,7 @@
   --border-strong: #39424f;
   --text: #e9edf4;
   --text-2: #a7b0bf;
-  --text-3: #79828f;
+  --text-3: #85909f;
 
   --accent: #5b9bff;
   --accent-strong: #2e6de0;
@@ -70,16 +70,16 @@
     --border-strong: #c4ccd9;
     --text: #1c2433;
     --text-2: #4d586b;
-    --text-3: #758092;
+    --text-3: #626f82;
 
-    --accent: #2563eb;
+    --accent: #245fdf;
     --accent-strong: #1f5ad6;
-    --accent-soft: rgba(37, 99, 235, 0.1);
-    --ok: #0d8a57;
+    --accent-soft: rgba(36, 95, 223, 0.1);
+    --ok: #087245;
     --ok-soft: rgba(13, 138, 87, 0.12);
-    --warn: #9a6700;
+    --warn: #8a5b00;
     --warn-soft: rgba(154, 103, 0, 0.12);
-    --danger: #d23b3b;
+    --danger: #bd2b2b;
     --danger-soft: rgba(210, 59, 59, 0.12);
     --focus: #2563eb;
 
@@ -92,8 +92,14 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
+  overflow: hidden;
   background: var(--bg);
   /* A faint accent wash at the top gives the panel depth without noise. */
   background-image: radial-gradient(1200px 280px at 50% -80px, var(--accent-soft), transparent 70%);
@@ -110,7 +116,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);
-  min-height: 100vh;
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .hidden {
@@ -138,6 +147,7 @@ body {
   gap: var(--sp-2);
   padding-bottom: var(--sp-2);
   border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 .app-header h1 {
@@ -166,8 +176,8 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border-radius: var(--r-sm);
   border: 1px solid transparent;
@@ -230,6 +240,7 @@ body {
   max-width: 80%;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
   animation: rise-in 160ms ease-out;
 }
 
@@ -380,6 +391,13 @@ button.chip.chip-selected {
   font-size: var(--fs-md);
   box-shadow: var(--shadow-card);
   animation: rise-in 160ms ease-out;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.operation-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* ----- 9. Preview card ----------------------------------------------------- */
@@ -469,7 +487,6 @@ button.chip.chip-selected {
 
 .preview-card.expired {
   border-color: var(--danger);
-  opacity: 0.85;
 }
 
 .expired-note {
@@ -524,10 +541,6 @@ button.chip.chip-selected {
   font-size: var(--fs-xs);
 }
 
-.preview-card.settled {
-  opacity: 0.92;
-}
-
 /* ----- 10. Receipt card ----------------------------------------------------- */
 .receipt {
   border-left: 3px solid var(--border-strong);
@@ -550,6 +563,11 @@ button.chip.chip-selected {
   align-items: center;
   gap: var(--sp-2);
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+.receipt-head > * {
+  min-width: 0;
 }
 
 .receipt-icon {
@@ -684,6 +702,12 @@ button.chip.chip-selected {
   box-shadow: var(--shadow-card);
 }
 
+.setup {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
 table.permissions {
   width: 100%;
   border-collapse: collapse;
@@ -722,6 +746,8 @@ select {
   padding: 5px 8px;
   font-size: var(--fs-md);
   font-family: var(--font-sans);
+  height: 44px;
+  min-height: 44px;
 }
 
 .permission-footer {
@@ -776,6 +802,7 @@ button {
   background: var(--surface);
   color: var(--text);
   transition: background 140ms ease, border-color 140ms ease;
+  min-height: 44px;
 }
 
 button.primary {
@@ -785,8 +812,8 @@ button.primary {
 }
 
 button.primary:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
+  border-color: var(--focus);
 }
 
 button.secondary {
@@ -802,6 +829,7 @@ button.link {
   border: none;
   color: var(--accent);
   padding: 0;
+  min-width: 44px;
   align-self: flex-start;
 }
 

@@ -1,5 +1,18 @@
 import { createHash } from "node:crypto";
-import { exactNonsecretJson } from "./safe-json.js";
+import { exactNonsecretJson, jsonByteLength } from "./safe-json.js";
+import {
+  INTENT_LITERAL_CONSTRAINT_LIMIT,
+  INTENT_LITERAL_MAX_BYTES,
+  INTENT_LITERAL_MAX_DEPTH,
+  INTENT_LITERAL_MAX_NODES,
+} from "./safety-limits.js";
+
+export {
+  INTENT_LITERAL_CONSTRAINT_LIMIT,
+  INTENT_LITERAL_MAX_BYTES,
+  INTENT_LITERAL_MAX_DEPTH,
+  INTENT_LITERAL_MAX_NODES,
+} from "./safety-limits.js";
 
 const CAPABILITY_MAX_BYTES = 65_536;
 const SENSITIVE_PATH = /authorization|cookie|header|secret|token|password|api[_-]?key|bytes|binary/i;
@@ -13,7 +26,13 @@ export interface Utf8SourceSpan {
   text: string;
 }
 
-export type IntentLiteralValue = string | number | boolean | null | IntentLiteralValue[];
+export type IntentLiteralValue =
+  | string
+  | number
+  | boolean
+  | null
+  | IntentLiteralValue[]
+  | { [key: string]: IntentLiteralValue };
 
 export interface IntentLiteralConstraintV1 {
   /** Raw model-argument path controlled by the authored literal. */
@@ -84,14 +103,44 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function copyLiteral(value: unknown): IntentLiteralValue {
+function copyLiteralNode(value: unknown, depth: number, state: { nodes: number }, seen: WeakSet<object>): IntentLiteralValue {
+  state.nodes += 1;
+  if (state.nodes > INTENT_LITERAL_MAX_NODES) fail("intent_capability_literal_nodes_exceeded");
+  if (depth > INTENT_LITERAL_MAX_DEPTH) fail("intent_capability_literal_depth_exceeded");
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
     if (!Number.isFinite(value)) fail("intent_capability_literal_non_json");
     return value;
   }
-  if (Array.isArray(value)) return value.map(copyLiteral);
+  if (Array.isArray(value)) {
+    if (depth >= INTENT_LITERAL_MAX_DEPTH) fail("intent_capability_literal_depth_exceeded");
+    if (seen.has(value)) fail("intent_capability_literal_non_json");
+    seen.add(value);
+    const result = value.map((child) => copyLiteralNode(child, depth + 1, state, seen));
+    seen.delete(value);
+    return result;
+  }
+  if (value && typeof value === "object") {
+    if (depth >= INTENT_LITERAL_MAX_DEPTH) fail("intent_capability_literal_depth_exceeded");
+    if (seen.has(value)) fail("intent_capability_literal_non_json");
+    seen.add(value);
+    // A null-prototype intermediate prevents an authored `__proto__` key from
+    // invoking Object.prototype's legacy setter and disappearing from the
+    // signed capability value.
+    const result = Object.create(null) as Record<string, IntentLiteralValue>;
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      result[key] = copyLiteralNode((value as Record<string, unknown>)[key], depth + 1, state, seen);
+    }
+    seen.delete(value);
+    return result;
+  }
   return fail("intent_capability_literal_non_json");
+}
+
+export function parseIntentLiteralValue(value: unknown): IntentLiteralValue {
+  const literal = copyLiteralNode(value, 1, { nodes: 0 }, new WeakSet());
+  if (jsonByteLength(literal) > INTENT_LITERAL_MAX_BYTES) fail("intent_capability_literal_bytes_exceeded");
+  return literal;
 }
 
 function parseSpan(value: unknown): Utf8SourceSpan {
@@ -151,7 +200,7 @@ function parseWriteAction(value: unknown, authoredSource?: string): IntentWriteA
   }
   const sourceSpans = action.sourceSpans.map(parseSpan);
   for (const span of sourceSpans) if (authoredSource !== undefined) validateUtf8SourceSpan(authoredSource, span);
-  if (!Array.isArray(action.literalConstraints) || action.literalConstraints.length > 128) {
+  if (!Array.isArray(action.literalConstraints) || action.literalConstraints.length > INTENT_LITERAL_CONSTRAINT_LIMIT) {
     fail("intent_capability_constraints_invalid");
   }
   const paths = new Set<string>();
@@ -170,7 +219,7 @@ function parseWriteAction(value: unknown, authoredSource?: string): IntentWriteA
       span.endByte === sourceSpan.endByte && span.text === sourceSpan.text)) {
       fail("intent_capability_constraint_span_unbound");
     }
-    return { path: constraint.path, value: copyLiteral(constraint.value), sourceSpan };
+    return { path: constraint.path, value: parseIntentLiteralValue(constraint.value), sourceSpan };
   });
   const maxExecutions = action.maxExecutions === undefined ? 1 : action.maxExecutions;
   if (typeof maxExecutions !== "number" || !Number.isSafeInteger(maxExecutions) ||

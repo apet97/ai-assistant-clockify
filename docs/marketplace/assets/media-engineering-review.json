@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "captureSourceSha256": "b5df1ca3e824b51c833b39acf5af15a463f5206b5365c5d1f7b39dc687004876",
+  "assetSetSha256": "5916528ef0f3632dc7cb03b04004fea8aa70b1bb19bd03a008b8e0743f61d507",
+  "reviewer": "OpenAI Codex engineering review",
+  "reviewedAt": "2026-07-19T03:43:01Z",
+  "checks": [
+    {
+      "id": "icon-boundary-and-alpha",
+      "status": "passed",
+      "notes": "Inspected the 512 by 512 RGBA PNG at original resolution: transparent corners, rounded boundary, glyph, and status badge are clean and fully contained."
+    },
+    {
+      "id": "banner-copy-and-legibility",
+      "status": "passed",
+      "notes": "Inspected the 1600 by 900 PNG at original resolution: all copy is readable and unclipped; the small REQUEST label measures 7.12 to 1 and ASK, PREVIEW, and RECEIPT measure 7.89 to 1."
+    },
+    {
+      "id": "all-permission-groups-visible",
+      "status": "passed",
+      "notes": "Inspected the first-run screenshot and both video permission states: all 13 permission groups, DeepSeek disclosure, save action, and persistent public links are fully visible."
+    },
+    {
+      "id": "screenshots-readable-and-secret-free",
+      "status": "passed",
+      "notes": "Inspected all five 1440 by 900 screenshots at original resolution: every visible card has complete top and bottom edges, controls and copy are readable, the PDF action is prominent, and no secret or customer data is present."
+    },
+    {
+      "id": "video-storyboard-readable-and-secret-free",
+      "status": "passed",
+      "notes": "Inspected the complete 35-second 1440 by 900 MP4, a nine-frame contact sheet, and step boundary frames: all seven states are coherent and truthful, every visible card and shell control is fully framed, and no secret, customer data, audio, or nonstandard metadata is present."
+    }
+  ],
+  "instructions": "Inspect every generated asset at original size. Set status/checks to passed and record reviewer/reviewedAt only when this exact capture source and asset set passed final engineering inspection. A post-commit workflow artifact binds the checked-in review and evidence to the tested source-candidate SHA and archive hash, and records the evidence commit separately."
+}

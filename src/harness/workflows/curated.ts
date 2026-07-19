@@ -15,6 +15,7 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { dynamicMutationPlan, fetchCompositeSnapshot, groupProjection } from "./composite-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { ONBOARD_GROUP_BATCH_MAX } from "../safety-limits.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -97,7 +98,7 @@ const onboardUser = defineRiskyAction({
   }),
   schema: z.object({
     email: z.string().min(1),
-    groups: zStringList().optional(),
+    groups: zStringList(z.array(z.string().min(1)).max(ONBOARD_GROUP_BATCH_MAX)).optional(),
     sendEmail: z.boolean().optional(),
   }),
   async preview(ctx, args) {
@@ -195,6 +196,7 @@ const onboardUser = defineRiskyAction({
       });
     }
     let invited: Awaited<ReturnType<typeof ctx.clockify.inviteUserAtomic>> | undefined;
+    let inviteReconciled = false;
     const invite = await executeDurableRiskyStep({
       ctx,
       operation,
@@ -211,6 +213,7 @@ const onboardUser = defineRiskyAction({
             matches: (row) => row.email?.toLocaleLowerCase("en-US") === p.email.toLocaleLowerCase("en-US"),
           }),
         });
+        inviteReconciled = dispatched.reconciled;
         invited = dispatched.value;
         return {
           externalId: invited.id,
@@ -231,6 +234,14 @@ const onboardUser = defineRiskyAction({
       return errorReceipt({ action: "clockify_onboard_user", code: "onboard_failed", message: `Couldn't invite ${p.email}.` });
     }
     const created = { type: "user", id: invited.id, name: invited.name };
+    if (inviteReconciled && p.groups.length > 0) {
+      return onboardPartial(
+        created,
+        0,
+        p.groups.length,
+        "The invitation was proven successful after an ambiguous response, so no group mutation was sent.",
+      );
+    }
     for (let index = 0; index < p.groups.length; index += 1) {
       const group = p.groups[index]!;
       const snapshot = operation.targetSnapshots?.[index];
@@ -240,6 +251,7 @@ const onboardUser = defineRiskyAction({
       const current = groupEvidence.rows.find((row) => row.id === group.id);
       if (!current) return onboardPartial(created, index, p.groups.length, `Group "${group.name}" no longer exists.`);
       const expectedUserIds = [...new Set([...(current.userIds ?? []), invited.id])].sort();
+      let membershipReconciled = false;
       const membership = await executeDurableRiskyStep({
         ctx,
         operation,
@@ -261,11 +273,20 @@ const onboardUser = defineRiskyAction({
                 : undefined;
             },
           });
+          membershipReconciled = dispatched.reconciled;
           return { externalId: invited!.id, effect: { groupId: group.id, userId: invited!.id }, detail: { reconciled: dispatched.reconciled } };
         },
       });
       if (membership.status !== "succeeded") {
         return onboardPartial(created, index, p.groups.length, `Adding the user to "${group.name}" did not complete definitively.`);
+      }
+      if (membershipReconciled && index + 1 < p.groups.length) {
+        return onboardPartial(
+          created,
+          index + 1,
+          p.groups.length,
+          `Adding the user to "${group.name}" was proven successful after an ambiguous response, so no later group mutation was sent.`,
+        );
       }
     }
     return successReceipt({

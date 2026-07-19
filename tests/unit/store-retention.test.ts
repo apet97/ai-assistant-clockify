@@ -220,8 +220,21 @@ describe("store.pruneExpired", () => {
     clock.value = new Date(NOW.getTime() + 31 * DAY_MS);
     const eventual = await store.pruneExpired(clock.value.toISOString());
     expect(eventual.pendingConfirmations).toBe(1);
-    expect(eventual.operationRuns).toBe(1);
-    expect(eventual.intentCapabilities).toBe(1);
+    // Expiry now atomically terminalizes the linked prepared operation and
+    // writes a passive result. Its retention clock starts at that truthful
+    // terminal transition, so neither the operation nor its capability can be
+    // deleted in the same pass that expired the preview.
+    expect(eventual.operationRuns).toBe(0);
+    expect(eventual.intentCapabilities).toBe(0);
+    expect(store.getOperationRun(operationId)).toMatchObject({
+      status: "definitive_failed",
+      actionResultId: expect.any(String),
+    });
+
+    clock.value = new Date(NOW.getTime() + 62 * DAY_MS);
+    const afterTerminalRetention = await store.pruneExpired(clock.value.toISOString());
+    expect(afterTerminalRetention.operationRuns).toBe(1);
+    expect(afterTerminalRetention.intentCapabilities).toBe(1);
     expect(store.getIntentCapability(referenced.id, {
       workspaceId: "ws-1", adminUserId: "admin-1", sessionId: session.id,
       requestId: referenced.requestId, requestHash: referenced.requestHash, catalogHash: referenced.catalogHash,

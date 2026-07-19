@@ -9,6 +9,7 @@ const base = {
   workspaceId: "ws-1",
   adminUserId: "admin-1",
   actionName: "clockify_create_work_package",
+  installationGeneration: 7,
   reversal: [{ type: "project", id: "p1", name: "Phoenix" }],
 };
 
@@ -29,6 +30,7 @@ describe("store undo records", () => {
     expect(rec?.status).toBe("available");
     expect(rec?.reversal).toEqual(base.reversal);
     expect(rec?.actionName).toBe("clockify_create_work_package");
+    expect(rec?.installationGeneration).toBe(7);
   });
 
   it("claims available → executing once, then settles as undone", () => {

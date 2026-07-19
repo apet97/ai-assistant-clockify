@@ -115,6 +115,11 @@ beforeAll(async () => {
   const config = makeTestConfig({
     clockifyAddonPublicKeyPem: keys.pem,
     clockifyAddonKey: ADDON_KEY,
+    publicContactUrl: "mailto:support@example.com",
+    // Deliberately different from the verified artifact proof below: /version
+    // must never echo these environment-shaped config values.
+    releaseSha: "d".repeat(40),
+    releaseBuildHash: "e".repeat(64),
   });
   store = createStore(":memory:", { encryptionKey: "test-key" });
   store.saveInstallation({
@@ -133,6 +138,13 @@ beforeAll(async () => {
     parser,
     modelClient,
     clockifyForWorkspace: () => fake.client,
+    releaseArtifactIdentity: {
+      releaseSha: "a".repeat(40),
+      releaseBuildHash: "b".repeat(64),
+      serverArtifactSha256: "c".repeat(64),
+      sourceBindingSha256: null,
+      sourceRelationship: "exact_head",
+    },
   });
 });
 
@@ -149,10 +161,35 @@ describe("routes", () => {
   it("GET /manifest returns the manifest", async () => {
     const res = await request(app).get("/manifest");
     expect(res.status).toBe(200);
-    expect(res.body.name).toBe("AI Assistant");
+    expect(res.body.name).toBe("AI Assistant for Clockify");
+    expect(res.body.components?.[0].label).toBe("AI Assistant");
     expect(res.body.components?.[0].path).toBe("/component/assistant");
     expect(res.body.components?.[0].type).toBe("sidebar");
     expect(res.body.iconPath).toBe("/icon.svg");
+  });
+
+  it("GET /version binds the deployed process to immutable release metadata", async () => {
+    const res = await request(app).get("/version");
+    expect(res.status).toBe(200);
+    expect(res.headers["cache-control"]).toContain("no-store");
+    expect(res.body).toEqual({
+      version: "1.0.0",
+      releaseSha: "a".repeat(40),
+      buildHash: "b".repeat(64),
+      serverArtifactSha256: "c".repeat(64),
+      sourceRelationship: "exact_head",
+      sourceBindingSha256: null,
+      modelConfiguration: {
+        provider: "http",
+        model: "cheap-model",
+        endpointSha256: null,
+        mode: "tool",
+        agentic: true,
+        toolSelect: true,
+        reasoningEffort: null,
+        thinkingMode: null,
+      },
+    });
   });
 
   it("GET /icon.svg serves the sidebar icon", async () => {
@@ -188,6 +225,53 @@ describe("routes", () => {
     expect(Array.isArray(setCookie) && setCookie[0]).toContain("HttpOnly");
     // Cross-site iframe: cookie must be SameSite=None over HTTPS or the chat 401s.
     expect(Array.isArray(setCookie) && setCookie[0]).toContain("SameSite=None");
+  });
+
+  it("propagates verified Clockify theme/language into sanitized UI preferences and public links", async () => {
+    const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
+      workspaceId: "ws-1",
+      user: "admin-1",
+      workspaceRole: "ADMIN",
+      language: "SR",
+      theme: "DARK",
+    });
+    const component = await request(app).get("/component/assistant").query({ auth_token: token });
+    const setCookie = component.headers["set-cookie"];
+    const cookie = Array.isArray(setCookie) ? setCookie[0].split(";")[0] : "";
+    const me = await request(app).get("/api/me").set("Cookie", cookie);
+
+    expect(me.status).toBe(200);
+    expect(me.body.preferences).toMatchObject({ theme: "dark", language: "sr", timeZone: "UTC" });
+    expect(me.body.links).toEqual({
+      privacy: "https://example.com/privacy",
+      support: "https://example.com/support",
+      security: "https://example.com/security",
+    });
+  });
+
+  it.each(["/privacy", "/terms", "/support", "/security"])("serves a customer-facing public document at %s", async (path) => {
+    const response = await request(app).get(path);
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.headers["cache-control"]).toContain("public");
+    expect(response.headers["content-security-policy"]).toContain("default-src 'none'");
+    expect(response.text).toContain("mailto:support@example.com");
+    expect(response.text).not.toContain("src/");
+    expect(response.text).not.toContain("admin package");
+    expect(response.text).not.toContain("MARKETPLACE_READINESS");
+    expect(response.text.length).toBeGreaterThan(100);
+  });
+
+  it("publishes prepared Terms with the complete public-document navigation", async () => {
+    const response = await request(app).get("/terms");
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain("Terms of Use");
+    expect(response.text).toContain('href="/privacy"');
+    expect(response.text).toContain('href="/terms"');
+    expect(response.text).toContain('href="/support"');
+    expect(response.text).toContain('href="/security"');
+    expect(response.text).toContain("partial or unknown outcome");
   });
 
   it("component route rejects an admin whose workspace has no active installation (no session minted)", async () => {

@@ -14,6 +14,7 @@ interface PendingRow {
   risk_json: string;
   preview_json: string;
   operation_json: string | null;
+  installation_generation: number | null;
   operation_hash: string;
   target_fingerprints_json: string;
   action_fingerprint: string;
@@ -68,6 +69,9 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     risk: JSON.parse(row.risk_json) as RiskLabel[],
     preview: JSON.parse(row.preview_json),
     operation: row.operation_json ? JSON.parse(row.operation_json) : {},
+    ...(row.installation_generation === null
+      ? {}
+      : { installationGeneration: row.installation_generation }),
     operationHash: row.operation_hash,
     targetFingerprints: JSON.parse(row.target_fingerprints_json) as string[],
     actionFingerprint: row.action_fingerprint,
@@ -123,14 +127,15 @@ export function buildConfirmationStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     savePendingConfirmation(record) {
-      const expired = record.status === "expired";
+      const executable = record.status === "pending";
+      const scrubPreview = record.status === "cancelled" || record.status === "expired";
       db.prepare(
         `INSERT INTO pending_confirmations (
            id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
            operation_json, operation_hash, target_fingerprints_json, action_fingerprint, catalog_hash,
            capability_id, capability_hash, nonce_hash, expires_at, created_at, used_at, action_result_id, idempotency_key,
-           result_summary_json, agent_state_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           result_summary_json, agent_state_json, installation_generation
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
         record.operationId ?? record.id,
@@ -138,32 +143,48 @@ export function buildConfirmationStore(ctx: StoreContext): {
         record.workspaceId,
         record.adminUserId,
         record.status,
-        JSON.stringify(expired ? [] : record.risk),
-        JSON.stringify(expired ? {} : record.preview),
-        expired ? null : JSON.stringify(record.operation),
+        JSON.stringify(scrubPreview ? [] : record.risk),
+        JSON.stringify(scrubPreview ? {} : record.preview),
+        executable ? JSON.stringify(record.operation) : null,
         record.operationHash,
-        JSON.stringify(expired ? [] : (record.targetFingerprints ?? [])),
+        JSON.stringify(scrubPreview ? [] : (record.targetFingerprints ?? [])),
         record.actionFingerprint ?? "legacy",
         record.catalogHash ?? "legacy",
         record.capabilityId ?? null,
         record.capabilityHash ?? null,
-        expired ? "" : record.nonceHash,
+        executable ? record.nonceHash : "",
         record.expiresAt,
         record.createdAt,
         record.usedAt ?? null,
         record.actionResultId ?? null,
         null,
         null,
-        expired || record.agentState === undefined ? null : JSON.stringify(record.agentState),
+        !executable || record.agentState === undefined ? null : JSON.stringify(record.agentState),
+        record.installationGeneration ?? null,
       );
     },
 
     getPendingConfirmation(id) {
-      const row = db.prepare("SELECT * FROM pending_confirmations WHERE id = ?").get(id) as
-        | PendingRow
-        | undefined;
-      if (!row) return undefined;
-      return pendingRowToRecord(row);
+      return db.transaction(() => {
+        let row = db.prepare("SELECT * FROM pending_confirmations WHERE id = ?").get(id) as
+          | PendingRow
+          | undefined;
+        if (!row) return undefined;
+        if (row.status === "pending") {
+          const expiresAt = new Date(row.expires_at).getTime();
+          if (Number.isNaN(expiresAt) || expiresAt <= now().getTime()) {
+            db.prepare(
+              `UPDATE pending_confirmations
+                  SET status = 'expired', used_at = ?, nonce_hash = '',
+                      risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
+                      agent_state_json = NULL, operation_json = NULL, idempotency_key = NULL
+                WHERE id = ? AND status = 'pending'`,
+            ).run(nowIso(), id);
+            row = db.prepare("SELECT * FROM pending_confirmations WHERE id = ?").get(id) as PendingRow;
+          }
+        }
+        return pendingRowToRecord(row);
+      })();
     },
 
     listPendingConfirmations(sessionId, nowIsoArg) {
@@ -172,8 +193,9 @@ export function buildConfirmationStore(ctx: StoreContext): {
           `UPDATE pending_confirmations
               SET status = 'expired', used_at = ?, nonce_hash = '',
                   risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
-                  agent_state_json = NULL, operation_json = NULL
-            WHERE session_id = ? AND status = 'pending' AND expires_at <= ?`,
+                  agent_state_json = NULL, operation_json = NULL, idempotency_key = NULL
+            WHERE session_id = ? AND status = 'pending'
+              AND (expires_at <= ? OR julianday(expires_at) IS NULL)`,
         ).run(nowIsoArg, sessionId, nowIsoArg);
         const rows = db
           .prepare(
@@ -262,7 +284,8 @@ export function buildConfirmationStore(ctx: StoreContext): {
         .prepare(
           `UPDATE pending_confirmations
               SET status = 'cancelled', used_at = ?, nonce_hash = '',
-                  agent_state_json = NULL, operation_json = NULL
+                  risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
+                  agent_state_json = NULL, operation_json = NULL, idempotency_key = NULL
             WHERE id = ? AND status = 'pending'`,
         )
         .run(nowIso(), id);
@@ -274,8 +297,9 @@ export function buildConfirmationStore(ctx: StoreContext): {
         `UPDATE pending_confirmations
             SET status = 'expired', used_at = ?, nonce_hash = '',
                 risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
-                agent_state_json = NULL, operation_json = NULL
-          WHERE id = ? AND status = 'pending' AND expires_at <= ?`,
+                agent_state_json = NULL, operation_json = NULL, idempotency_key = NULL
+          WHERE id = ? AND status = 'pending'
+            AND (expires_at <= ? OR julianday(expires_at) IS NULL)`,
       ).run(nowIso(), id, nowIso()).changes === 1;
     },
 
@@ -410,8 +434,10 @@ export function buildConfirmationStore(ctx: StoreContext): {
         db.prepare(
           `UPDATE pending_confirmations
               SET status = 'expired', used_at = ?, nonce_hash = '',
-                  agent_state_json = NULL, operation_json = NULL
-            WHERE session_id = ? AND status = 'pending' AND expires_at <= ?`,
+                  risk_json = '[]', preview_json = '{}', target_fingerprints_json = '[]',
+                  agent_state_json = NULL, operation_json = NULL, idempotency_key = NULL
+            WHERE session_id = ? AND status = 'pending'
+              AND (expires_at <= ? OR julianday(expires_at) IS NULL)`,
         ).run(nowIso, sessionId, nowIso);
         const row = db
           .prepare(

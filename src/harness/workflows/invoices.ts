@@ -32,6 +32,10 @@ import { paymentBaseline } from "../invoice-reconciliation.js";
 import { billingFingerprint } from "../billing-fingerprint.js";
 import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
+import {
+  INVOICE_IMPORT_PROJECT_BATCH_MAX,
+  INVOICE_ITEM_BATCH_MAX,
+} from "../safety-limits.js";
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { dispatchWithReconciliation } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
@@ -334,6 +338,17 @@ const exportInvoice = defineInvoiceRead({
     if (exp.bytes.byteLength > 1_000_000) {
       return artifactTooLargeReceipt();
     }
+    const normalizedContentType = exp.contentType.split(";", 1)[0]?.trim().toLowerCase();
+    const hasPdfSignature =
+      exp.bytes.byteLength >= 5 &&
+      exp.bytes[0] === 0x25 &&
+      exp.bytes[1] === 0x50 &&
+      exp.bytes[2] === 0x44 &&
+      exp.bytes[3] === 0x46 &&
+      exp.bytes[4] === 0x2d;
+    if (normalizedContentType !== "application/pdf" || !hasPdfSignature) {
+      return artifactInvalidReceipt();
+    }
     if (!ctx.saveArtifact) {
       return errorReceipt({
         action: "clockify_invoices_export",
@@ -341,9 +356,10 @@ const exportInvoice = defineInvoiceRead({
         message: "The secure artifact store is unavailable; no PDF data was exposed.",
       });
     }
+    const filename = `clockify-invoice-${id}.pdf`;
     const artifact = ctx.saveArtifact({
-      contentType: exp.contentType,
-      filename: `clockify-invoice-${id}.pdf`,
+      contentType: "application/pdf",
+      filename,
       bytes: exp.bytes,
     });
     return successReceipt({
@@ -351,17 +367,27 @@ const exportInvoice = defineInvoiceRead({
       entity: "invoice",
       ids: { workspaceId: ctx.workspaceId, invoiceId: id },
       data: {
-        contentType: exp.contentType,
+        contentType: "application/pdf",
         bytes: exp.bytes.byteLength,
         artifact: {
           id: artifact.id,
           downloadUrl: `/api/artifacts/${artifact.id}`,
+          filename,
           expiresAt: artifact.expiresAt,
         },
       },
     });
   },
 });
+
+function artifactInvalidReceipt(): ReturnType<typeof errorReceipt> {
+  return errorReceipt({
+    action: "clockify_invoices_export",
+    code: "artifact_invalid",
+    message: "Clockify returned an invalid PDF export. Nothing was stored.",
+    recovery: { hint: "Try the export again. If it repeats, contact support.", retryable: true },
+  });
+}
 
 function artifactTooLargeReceipt(): ReturnType<typeof errorReceipt> {
   return errorReceipt({
@@ -401,7 +427,7 @@ const createInvoice = defineRiskyAction({
       dueDate: z.string().min(1).optional(), // full ISO or YYYY-MM-DD
       note: z.string().optional(),
       subject: z.string().optional(),
-      items: z.array(invoiceItemSchema).optional(),
+      items: z.array(invoiceItemSchema).max(INVOICE_ITEM_BATCH_MAX).optional(),
       // Invoice-level tax/discount as whole percents (Clockify item-based tax —
       // the RATE lives on the invoice; items carry the apply flag). "3" → 3.
       taxPercent: zNumberLike(z.number().min(0).max(100)).optional(),
@@ -1142,7 +1168,7 @@ const importInvoiceTime = defineRiskyAction({
     invoiceId: z.string().min(1),
     from: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
     to: z.string().min(1), // YYYY-MM-DD or a relative day/period (resolved server-side)
-    projectIds: z.array(z.string().min(1)).optional(),
+    projectIds: z.array(z.string().min(1)).max(INVOICE_IMPORT_PROJECT_BATCH_MAX).optional(),
   }),
   async preview(ctx, args) {
     const invoice = await resolveInvoiceRef(ctx, { id: args.invoiceId }, "import time into");

@@ -71,11 +71,16 @@ async function previewInvoice(ctx: ActionContext, clientName: string): Promise<C
 /** Wrap the atomic invoice base POST so the next call blocks on a manually-resolved promise. */
 function deferredCreateInvoice(fake: FakeWorkspace): {
   client: WorkspaceClient;
+  started: Promise<void>;
   resolve: () => void;
   reject: (e: unknown) => void;
   calls: () => number;
 } {
   const real = fake.client.createInvoiceBase.bind(fake.client);
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
   let gate!: { resolve: (v?: unknown) => void; reject: (e?: unknown) => void };
   const barrier = new Promise((resolve, reject) => {
     gate = { resolve, reject };
@@ -86,6 +91,7 @@ function deferredCreateInvoice(fake: FakeWorkspace): {
       if (prop === "createInvoiceBase") {
         return async (...args: Parameters<typeof real>) => {
           calls += 1;
+          signalStarted();
           await barrier; // block until the test resolves the gate
           return real(...args);
         };
@@ -93,7 +99,7 @@ function deferredCreateInvoice(fake: FakeWorkspace): {
       return Reflect.get(target, prop, receiver);
     },
   });
-  return { client, resolve: () => gate.resolve(), reject: (e) => gate.reject(e), calls: () => calls };
+  return { client, started, resolve: () => gate.resolve(), reject: (e) => gate.reject(e), calls: () => calls };
 }
 
 let store: Store | undefined;
@@ -108,15 +114,14 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const ctx = ctxWith(fake, ledger, deferred.client);
     const op = await previewInvoice(ctx, "qwen");
 
-    // Fire both confirms before resolving the in-flight commit.
-    const both = Promise.all([
-      commitConfirmedOperation(ctx, op),
-      commitConfirmedOperation(ctx, op),
-    ]);
-    // Give the loser a tick to take the in_flight branch, then resolve the winner.
-    await new Promise((r) => setTimeout(r, 10));
+    // Hold the winning host call open, then start the second confirm while that
+    // exact call is known to be in flight. No elapsed-time guess is involved.
+    const winner = commitConfirmedOperation(ctx, op);
+    await deferred.started;
+    const loser = commitConfirmedOperation(ctx, op);
+    const loserResult = await loser;
     deferred.resolve();
-    const [r1, r2] = await both;
+    const [r1, r2] = [await winner, loserResult];
 
     expect(deferred.calls()).toBe(1); // the host was reached EXACTLY ONCE
     expect(fake.counts.createInvoiceBase).toBe(1);
@@ -143,7 +148,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const op = await previewInvoice(ctx, "qwen");
 
     const winner = commitConfirmedOperation(ctx, op); // takes the claim, blocks on the gate
-    await new Promise((r) => setTimeout(r, 10));
+    await deferred.started;
     // A concurrent same-key confirm while the winner is in flight.
     const loser = await commitConfirmedOperation(ctx, op);
     expect(loser.ok).toBe(false);
@@ -170,7 +175,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
     const op = await previewInvoice(ctx, "qwen");
 
     const winner = commitConfirmedOperation(ctx, op);
-    await new Promise((r) => setTimeout(r, 10));
+    await deferred.started;
     deferred.reject(new DefinitiveWriteFailure("POST", "/workspaces/ws-1/invoices", "host rejected invoice", 400));
     const r1 = await winner;
     expect(r1.ok).toBe(false); // surfaced honestly
@@ -199,6 +204,7 @@ describe("concurrent confirm race (r1-concurrency-races-01)", () => {
       const op = await previewInvoice(ctx, "qwen");
 
       const commit = commitConfirmedOperation(ctx, op); // claims, then blocks on the gate
+      await deferred.started;
       await vi.advanceTimersByTimeAsync(CLAIM_HEARTBEAT_MS * 2 + 1_000); // ~2 beats in flight
       expect(touched.length).toBeGreaterThanOrEqual(2); // the live claim is being refreshed
 

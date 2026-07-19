@@ -1,5 +1,5 @@
 import type { ListResult } from "../types.js";
-import { MAX_PAGES } from "./core.js";
+import { mutationReadPageLimit } from "./core.js";
 
 export interface PageResult<T> {
   rows: T[];
@@ -25,7 +25,8 @@ export async function collectPages<T>(input: {
 }): Promise<ListResult<T>> {
   const rows: T[] = [];
   const firstPage = input.firstPage ?? 1;
-  for (let offset = 0; offset < MAX_PAGES; offset++) {
+  const pageLimit = mutationReadPageLimit();
+  for (let offset = 0; offset < pageLimit; offset++) {
     const page = await input.load(firstPage + offset, input.pageSize);
     rows.push(...page.rows);
     if (page.total !== undefined && rows.length >= page.total) {
@@ -36,7 +37,7 @@ export async function collectPages<T>(input: {
     }
   }
   console.warn(
-    `Clockify list ${input.label} hit the ${MAX_PAGES}-page backstop (${rows.length} rows); the result is truncated/incomplete.`,
+    `Clockify list ${input.label} hit the ${pageLimit}-page backstop (${rows.length} rows); the result is truncated/incomplete.`,
   );
   return { rows, truncated: true };
 }

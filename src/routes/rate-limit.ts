@@ -21,6 +21,14 @@ export const DEFAULT_CHAT_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 export const DEFAULT_NEW_CHAT_RATE_LIMIT_MAX = 10;
 export const DEFAULT_NEW_CHAT_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 
+/** Broad authenticated API budget. Unlike the paid-loop limiter, this is keyed
+ * by workspace + admin so minting/opening another chat session cannot reset it.
+ * The default leaves ample headroom for shell hydration, NDJSON, artifacts, and
+ * the release benchmark while bounding database/authorization work. api.ts uses
+ * express-rate-limit for this layer so CodeQL recognizes the route protection. */
+export const DEFAULT_API_RATE_LIMIT_MAX = 600;
+export const DEFAULT_API_RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+
 /** Sweep dead keys every N checks so the map can't grow unboundedly. */
 const SWEEP_EVERY_CHECKS = 512;
 

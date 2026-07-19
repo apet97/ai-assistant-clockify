@@ -23,6 +23,7 @@ import {
   sanitizeCompleteJson,
 } from "../../harness/safe-json.js";
 import { hashOperation } from "../../harness/confirmations.js";
+import { HOST_CALL_BUDGET_MAXIMUM } from "../../clockify/request-governor.js";
 import { successReceipt } from "../../harness/receipts.js";
 
 interface OperationRunRow {
@@ -59,6 +60,7 @@ interface OperationStepRow {
   target_fingerprint: string | null;
   effect_json: string | null;
   detail_json: string | null;
+  queued_at: string | null;
   dispatched_at: string | null;
   settled_at: string | null;
   compensates_step_id: string | null;
@@ -66,27 +68,28 @@ interface OperationStepRow {
   updated_at: string;
 }
 
+type ScopedOperationRunRow = OperationRunRow & {
+  result_kind: ActionResultRef["kind"] | null;
+  summary_json: string | null;
+};
+
 interface PersistedPlanDescriptor {
   id: string;
   kind: "primary" | "compensation";
   targetFingerprint?: string;
 }
 
-/** Parse only the plan surface needed to authorize a host compensation. A
+/** Parse only the plan surface needed to authorize durable host work. A
  * malformed/duplicate descriptor fails closed instead of letting a journal row
  * manufacture authority that was never persisted with the operation. */
-function persistedPlanDescriptors(operationJson: string): PersistedPlanDescriptor[] | undefined {
-  let decoded: unknown;
-  try {
-    decoded = JSON.parse(operationJson) as unknown;
-  } catch {
-    return undefined;
-  }
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return undefined;
-  const plan = (decoded as { mutationPlan?: unknown }).mutationPlan;
+function mutationPlanDescriptors(plan: unknown): PersistedPlanDescriptor[] | undefined {
   if (!plan || typeof plan !== "object" || Array.isArray(plan)) return undefined;
-  const record = plan as { mode?: unknown; steps?: unknown };
-  if (!(["single", "curated", "batch"] as unknown[]).includes(record.mode) || !Array.isArray(record.steps) || record.steps.length === 0) {
+  const record = plan as { mode?: unknown; maxHostCalls?: unknown; steps?: unknown };
+  if (!(["single", "curated", "batch"] as unknown[]).includes(record.mode) ||
+    !Number.isSafeInteger(record.maxHostCalls) || (record.maxHostCalls as number) < 1 ||
+    (record.maxHostCalls as number) > HOST_CALL_BUDGET_MAXIMUM ||
+    !Array.isArray(record.steps) || record.steps.length === 0 ||
+    record.steps.length > (record.maxHostCalls as number)) {
     return undefined;
   }
   if (record.mode === "single" && record.steps.length !== 1) return undefined;
@@ -115,6 +118,17 @@ function persistedPlanDescriptors(operationJson: string): PersistedPlanDescripto
     });
   }
   return descriptors;
+}
+
+function persistedPlanDescriptors(operationJson: string): PersistedPlanDescriptor[] | undefined {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(operationJson) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) return undefined;
+  return mutationPlanDescriptors((decoded as { mutationPlan?: unknown }).mutationPlan);
 }
 
 function matchesPersistedDescriptor(
@@ -183,6 +197,7 @@ function toStep(row: OperationStepRow): OperationStep {
     ...(row.external_id ? { externalId: row.external_id } : {}),
     ...(row.effect_json ? { effect: JSON.parse(row.effect_json) } : {}),
     ...(row.detail_json ? { detail: JSON.parse(row.detail_json) } : {}),
+    ...(row.queued_at ? { queuedAt: row.queued_at } : {}),
     ...(row.dispatched_at ? { dispatchedAt: row.dispatched_at } : {}),
     ...(row.settled_at ? { settledAt: row.settled_at } : {}),
     createdAt: row.created_at,
@@ -212,6 +227,98 @@ function hasValidPersistedOperationHash(run: OperationRun): boolean {
   return expected === run.operationHash;
 }
 
+function toSanitizedScopedOperationRun(
+  row: ScopedOperationRunRow,
+  rows: readonly OperationStepRow[],
+): SanitizedOperationRun {
+  const run = toRun(row);
+  const rawPlan = run.mutationPlan as unknown;
+  const validModes = new Set(["single", "curated", "batch"]);
+  const planRecord = rawPlan && typeof rawPlan === "object" ? rawPlan as Record<string, unknown> : undefined;
+  const planMode = typeof planRecord?.mode === "string" && validModes.has(planRecord.mode)
+    ? planRecord.mode as "single" | "curated" | "batch"
+    : undefined;
+  const planMaxHostCalls = Number.isSafeInteger(planRecord?.maxHostCalls) &&
+    (planRecord?.maxHostCalls as number) >= 1 &&
+    (planRecord?.maxHostCalls as number) <= HOST_CALL_BUDGET_MAXIMUM
+    ? planRecord?.maxHostCalls as number
+    : undefined;
+  const rawPlanSteps = Array.isArray(planRecord?.steps) ? planRecord.steps : [];
+  const allPlanSteps = rawPlanSteps.flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const step = value as Record<string, unknown>;
+    if (typeof step.id !== "string" || (step.kind !== "primary" && step.kind !== "compensation")) return [];
+    return [{
+      id: step.id,
+      kind: step.kind as "primary" | "compensation",
+      ...(typeof step.targetFingerprint === "string" ? { targetFingerprint: step.targetFingerprint } : {}),
+    }];
+  });
+  const planLimit = 50;
+  const rawReconciliation = run.reconciliation && typeof run.reconciliation === "object"
+    ? run.reconciliation as { stepId?: unknown; authoritative?: unknown; result?: unknown }
+    : undefined;
+  const reconciliationResult = rawReconciliation?.result && typeof rawReconciliation.result === "object"
+    ? rawReconciliation.result as { reason?: unknown }
+    : undefined;
+  return {
+    id: run.id,
+    actionName: run.actionName.slice(0, 256),
+    status: run.status,
+    ...(planMode && planMaxHostCalls !== undefined
+      ? {
+          plan: {
+            mode: planMode,
+            maxHostCalls: planMaxHostCalls,
+            steps: allPlanSteps.slice(0, planLimit).map((step) => ({
+              id: step.id.slice(0, 256),
+              kind: step.kind,
+              ...(step.targetFingerprint ? { targetFingerprint: step.targetFingerprint.slice(0, 256) } : {}),
+            })),
+            ...(rawPlanSteps.length > planLimit || allPlanSteps.length !== rawPlanSteps.length
+              ? { truncated: true, originalStepCount: rawPlanSteps.length }
+              : {}),
+          },
+        }
+      : {}),
+    steps: rows.slice(0, planLimit).map((step) => ({
+      planStepId: step.plan_step_id.slice(0, 256),
+      index: step.step_index,
+      name: step.name.slice(0, 256),
+      kind: step.kind,
+      status: step.status,
+      ...(step.target_fingerprint ? { targetFingerprint: step.target_fingerprint.slice(0, 256) } : {}),
+      ...(step.queued_at ? { queuedAt: step.queued_at } : {}),
+      ...(step.dispatched_at ? { dispatchedAt: step.dispatched_at } : {}),
+      ...(step.settled_at ? { settledAt: step.settled_at } : {}),
+      createdAt: step.created_at,
+      updatedAt: step.updated_at,
+    })),
+    ...(rows.length > planLimit ? { stepsTruncated: true } : {}),
+    ...(row.action_result_id && row.result_kind && row.summary_json
+      ? {
+          result: {
+            id: row.action_result_id,
+            kind: row.result_kind,
+            summary: boundedSanitizedJson(JSON.parse(row.summary_json), 65_536),
+          },
+        }
+      : {}),
+    ...(rawReconciliation
+      ? {
+          reconciliation: {
+            ...(typeof rawReconciliation.stepId === "string" ? { stepId: rawReconciliation.stepId.slice(0, 256) } : {}),
+            ...(typeof rawReconciliation.authoritative === "boolean" ? { authoritative: rawReconciliation.authoritative } : {}),
+            ...(typeof reconciliationResult?.reason === "string" ? { reason: reconciliationResult.reason.slice(0, 256) } : {}),
+          },
+        }
+      : {}),
+    ...(run.reconciledAt ? { reconciledAt: run.reconciledAt } : {}),
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+  };
+}
+
 export function buildOperationRunStore(ctx: StoreContext): {
   prepareOperationRun(input: PrepareOperationRunInput): string;
   markOperationExecuting(id: string): boolean;
@@ -229,6 +336,8 @@ export function buildOperationRunStore(ctx: StoreContext): {
   settleStartupReconciliation(id: string, stepId: string, result: unknown): ActionResultRef;
   prepareOperationStep(input: PrepareOperationStepInput): string;
   markOperationStepExecuting(id: string, operationId?: string): boolean;
+  markOperationStepDispatched(id: string, operationId?: string): boolean;
+  cancelOperationStepBeforeDispatch(id: string, detail: unknown, operationId?: string): boolean;
   settleOperationStep(
     id: string,
     status: "succeeded" | "definitive_failed" | "outcome_unknown",
@@ -275,6 +384,9 @@ export function buildOperationRunStore(ctx: StoreContext): {
   const { db, nowIso } = ctx;
   const store: ReturnType<typeof buildOperationRunStore> = {
     prepareOperationRun(input) {
+      if (input.mutationPlan && !mutationPlanDescriptors(input.mutationPlan)) {
+        throw new Error("invalid_mutation_plan");
+      }
       const id = input.id ?? randomUUID();
       const timestamp = nowIso();
       const operationEnvelope = exactNonsecretJson({
@@ -382,106 +494,49 @@ export function buildOperationRunStore(ctx: StoreContext): {
              AND a.admin_user_id = o.admin_user_id
              AND a.session_id = o.session_id
           WHERE o.id = ? AND o.workspace_id = ? AND o.admin_user_id = ? AND o.session_id = ?`,
-      ).get(id, workspaceId, adminUserId, sessionId) as (OperationRunRow & {
-        result_kind: ActionResultRef["kind"] | null;
-        summary_json: string | null;
-      }) | undefined;
+      ).get(id, workspaceId, adminUserId, sessionId) as ScopedOperationRunRow | undefined;
       if (!row) return undefined;
-      const run = toRun(row);
-      const rawPlan = run.mutationPlan as unknown;
-      const validModes = new Set(["single", "curated", "batch"]);
-      const planRecord = rawPlan && typeof rawPlan === "object" ? rawPlan as Record<string, unknown> : undefined;
-      const planMode = typeof planRecord?.mode === "string" && validModes.has(planRecord.mode)
-        ? planRecord.mode as "single" | "curated" | "batch"
-        : undefined;
-      const rawPlanSteps = Array.isArray(planRecord?.steps) ? planRecord.steps : [];
-      const allPlanSteps = rawPlanSteps.flatMap((value) => {
-        if (!value || typeof value !== "object") return [];
-        const step = value as Record<string, unknown>;
-        if (typeof step.id !== "string" || (step.kind !== "primary" && step.kind !== "compensation")) return [];
-        return [{
-          id: step.id,
-          kind: step.kind as "primary" | "compensation",
-          ...(typeof step.targetFingerprint === "string" ? { targetFingerprint: step.targetFingerprint } : {}),
-        }];
-      });
       const planLimit = 50;
       const rows = db.prepare(
         `SELECT * FROM operation_steps
           WHERE operation_id = ? ORDER BY step_index ASC LIMIT ?`,
       ).all(id, planLimit + 1) as OperationStepRow[];
-      const rawReconciliation = run.reconciliation && typeof run.reconciliation === "object"
-        ? run.reconciliation as { stepId?: unknown; authoritative?: unknown; result?: unknown }
-        : undefined;
-      const reconciliationResult = rawReconciliation?.result && typeof rawReconciliation.result === "object"
-        ? rawReconciliation.result as { reason?: unknown }
-        : undefined;
-      return {
-        id: run.id,
-        actionName: run.actionName.slice(0, 256),
-        status: run.status,
-        ...(planMode
-          ? {
-              plan: {
-                mode: planMode,
-                steps: allPlanSteps.slice(0, planLimit).map((step) => ({
-                  id: step.id.slice(0, 256),
-                  kind: step.kind,
-                  ...(step.targetFingerprint ? { targetFingerprint: step.targetFingerprint.slice(0, 256) } : {}),
-                })),
-                ...(rawPlanSteps.length > planLimit || allPlanSteps.length !== rawPlanSteps.length
-                  ? { truncated: true, originalStepCount: rawPlanSteps.length }
-                  : {}),
-              },
-            }
-          : {}),
-        steps: rows.slice(0, planLimit).map((step) => ({
-          planStepId: step.plan_step_id.slice(0, 256),
-          index: step.step_index,
-          name: step.name.slice(0, 256),
-          kind: step.kind,
-          status: step.status,
-          ...(step.target_fingerprint ? { targetFingerprint: step.target_fingerprint.slice(0, 256) } : {}),
-          ...(step.dispatched_at ? { dispatchedAt: step.dispatched_at } : {}),
-          ...(step.settled_at ? { settledAt: step.settled_at } : {}),
-          createdAt: step.created_at,
-          updatedAt: step.updated_at,
-        })),
-        ...(rows.length > planLimit ? { stepsTruncated: true } : {}),
-        ...(row.action_result_id && row.result_kind && row.summary_json
-          ? {
-              result: {
-                id: row.action_result_id,
-                kind: row.result_kind,
-                summary: boundedSanitizedJson(JSON.parse(row.summary_json), 65_536),
-              },
-            }
-          : {}),
-        ...(rawReconciliation
-          ? {
-              reconciliation: {
-                ...(typeof rawReconciliation.stepId === "string" ? { stepId: rawReconciliation.stepId.slice(0, 256) } : {}),
-                ...(typeof rawReconciliation.authoritative === "boolean" ? { authoritative: rawReconciliation.authoritative } : {}),
-                ...(typeof reconciliationResult?.reason === "string" ? { reason: reconciliationResult.reason.slice(0, 256) } : {}),
-              },
-            }
-          : {}),
-        ...(run.reconciledAt ? { reconciledAt: run.reconciledAt } : {}),
-        createdAt: run.createdAt,
-        updatedAt: run.updatedAt,
-      };
+      return toSanitizedScopedOperationRun(row, rows);
     },
     listScopedOperationRuns(workspaceId, adminUserId, sessionId, limit = 20) {
       const boundedLimit = Math.max(1, Math.min(50, Math.floor(limit)));
-      const ids = db.prepare(
-        `SELECT id FROM operation_runs
-          WHERE workspace_id = ? AND admin_user_id = ? AND session_id = ?
-          ORDER BY created_at DESC, id DESC LIMIT ?`,
-      ).all(workspaceId, adminUserId, sessionId, boundedLimit) as Array<{ id: string }>;
-      return ids.reverse().flatMap(({ id }) => {
-        const view = scopedView(id, workspaceId, adminUserId, sessionId);
-        return view ? [view] : [];
-      });
+      const runs = db.prepare(
+        `SELECT o.*, a.kind AS result_kind, a.summary_json
+           FROM operation_runs o
+           LEFT JOIN action_results a ON a.id = o.action_result_id
+             AND a.operation_id = o.id
+             AND a.workspace_id = o.workspace_id
+             AND a.admin_user_id = o.admin_user_id
+             AND a.session_id = o.session_id
+          WHERE o.workspace_id = ? AND o.admin_user_id = ? AND o.session_id = ?
+          ORDER BY o.created_at DESC, o.id DESC LIMIT ?`,
+      ).all(workspaceId, adminUserId, sessionId, boundedLimit) as ScopedOperationRunRow[];
+      if (runs.length === 0) return [];
+      const planLimit = 50;
+      const placeholders = runs.map(() => "?").join(", ");
+      const stepRows = db.prepare(
+        `WITH ranked_steps AS (
+           SELECT s.*, ROW_NUMBER() OVER (PARTITION BY s.operation_id ORDER BY s.step_index ASC) AS step_position
+             FROM operation_steps s
+            WHERE s.operation_id IN (${placeholders})
+         )
+         SELECT * FROM ranked_steps
+          WHERE step_position <= ?
+          ORDER BY operation_id ASC, step_index ASC
+          LIMIT ?`,
+      ).all(...runs.map((run) => run.id), planLimit + 1, runs.length * (planLimit + 1)) as OperationStepRow[];
+      const stepsByOperation = new Map<string, OperationStepRow[]>();
+      for (const step of stepRows) {
+        const steps = stepsByOperation.get(step.operation_id) ?? [];
+        steps.push(step);
+        stepsByOperation.set(step.operation_id, steps);
+      }
+      return runs.reverse().map((run) => toSanitizedScopedOperationRun(run, stepsByOperation.get(run.id) ?? []));
     },
     listStartupReconciliationCandidates() {
       const operations = db.prepare(
@@ -494,7 +549,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
         const run = toRun(row);
         if (!hasValidPersistedOperationHash(run)) return [];
         const plan = run.mutationPlan;
-        if (!plan || !Array.isArray(plan.steps)) return [];
+        if (!plan || !mutationPlanDescriptors(plan)) return [];
         let safeOperation: unknown;
         let safePlan: typeof plan;
         let targetSnapshots: unknown[];
@@ -568,13 +623,14 @@ export function buildOperationRunStore(ctx: StoreContext): {
           "action_fingerprint_drift", "catalog_hash_drift", "read_failed", "incomplete_evidence",
           "evaluation_failed", "not_found", "non_unique", "truncated", "post_list_truncated",
           "reconciliation_settlement_failed", "handler_missing", "installation_unavailable",
+          "candidate_scan_limit",
         ]);
         const scalarResult = Object.entries(raw).slice(0, 50).reduce<Record<string, string | number | boolean | null>>(
           (safe, [key, value]) => {
             if (["binding", "evidence"].includes(key) || /token|secret|header|authorization|cookie|bytes|binary/i.test(key)) return safe;
             if (key === "reason" && typeof value === "string") {
               safe.reason = stableReasons.has(value) ? value : "invalid_reconciliation_reason";
-            } else if (["matches", "matchCount", "rowCount", "complete", "compatible"].includes(key) &&
+            } else if (["matches", "matchCount", "candidateCount", "rowCount", "complete", "compatible"].includes(key) &&
               (typeof value === "number" || typeof value === "boolean" || value === null)) {
               safe[key] = value;
             }
@@ -628,6 +684,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
         ).get(stepId, id) as OperationStepRow | undefined;
         if (!step) throw new Error("reconciliation_step_not_unknown");
         const plan = run.mutationPlan;
+        if (!plan || !mutationPlanDescriptors(plan)) throw new Error("reconciliation_plan_drift");
         const descriptor = plan?.steps[step.step_index];
         if (!descriptor || descriptor.id !== step.plan_step_id || descriptor.kind !== "primary" ||
           descriptor.reconciliationStrategy !== (result as { binding?: { strategy?: unknown } })?.binding?.strategy) {
@@ -769,7 +826,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
       const timestamp = nowIso();
       return db.prepare(
         `UPDATE operation_steps
-            SET status = 'executing', dispatched_at = ?, updated_at = ?
+            SET status = 'executing', queued_at = ?, updated_at = ?
           WHERE id = ? AND (? IS NULL OR operation_id = ?) AND status = 'prepared'
             AND kind = 'primary'
             AND EXISTS (
@@ -778,6 +835,25 @@ export function buildOperationRunStore(ctx: StoreContext): {
                  AND operation_runs.status = 'executing'
             )`,
       ).run(timestamp, timestamp, id, operationId ?? null, operationId ?? null).changes === 1;
+    },
+    markOperationStepDispatched(id, operationId) {
+      const timestamp = nowIso();
+      return db.prepare(
+        `UPDATE operation_steps
+            SET dispatched_at = ?, updated_at = ?
+          WHERE id = ? AND (? IS NULL OR operation_id = ?) AND status = 'executing'
+            AND dispatched_at IS NULL`,
+      ).run(timestamp, timestamp, id, operationId ?? null, operationId ?? null).changes === 1;
+    },
+    cancelOperationStepBeforeDispatch(id, detail, operationId) {
+      const timestamp = nowIso();
+      const safeDetail = actionResultJson(boundedCompleteSanitizedJson(detail, 8_000));
+      return db.prepare(
+        `UPDATE operation_steps
+            SET status = 'definitive_failed', detail_json = ?, settled_at = ?, updated_at = ?
+          WHERE id = ? AND (? IS NULL OR operation_id = ?) AND status = 'executing'
+            AND dispatched_at IS NULL`,
+      ).run(safeDetail, timestamp, timestamp, id, operationId ?? null, operationId ?? null).changes === 1;
     },
     settleOperationStep(id, status, detail = {}, operationId) {
       db.transaction(() => {
@@ -1006,7 +1082,7 @@ export function buildOperationRunStore(ctx: StoreContext): {
         const timestamp = nowIso();
         const compensation = db.prepare(
           `UPDATE operation_steps
-              SET status = 'executing', dispatched_at = ?, updated_at = ?
+              SET status = 'executing', queued_at = ?, updated_at = ?
             WHERE id = ? AND status = 'prepared' AND kind = 'compensation'`,
         ).run(timestamp, timestamp, id);
         const source = db.prepare(
@@ -1120,8 +1196,5 @@ export function buildOperationRunStore(ctx: StoreContext): {
       return { id, kind: input.status, summary };
     },
   };
-  function scopedView(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined {
-    return store.getScopedOperationRun(id, workspaceId, adminUserId, sessionId);
-  }
   return store;
 }

@@ -4,6 +4,7 @@ import type { ActionContext } from "../../src/harness/action.js";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
+import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../../src/harness/safety-limits.js";
 
 function context(fake: FakeWorkspace, clockify = fake.client): ActionContext {
   return {
@@ -193,6 +194,25 @@ describe("structure/time durable target and outcome safety", () => {
     expect(dispatches).toBe(1);
   });
 
+  it("stops project reconciliation before an over-budget candidate detail scan", async () => {
+    const fake = createFakeWorkspace();
+    fake.client.createProjectAtomic = async (input) => {
+      for (let index = 0; index <= STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX; index += 1) {
+        fake.state.projects.push({ id: `project-candidate-${index}`, ...input } as never);
+      }
+      throw new AmbiguousWriteOutcome("POST", "/projects", "socket closed");
+    };
+
+    const result = await executeAction({
+      actionName: "clockify_projects_create",
+      args: { name: "Created" },
+      context: context(fake),
+    });
+
+    expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "commit_outcome_unknown" } });
+    expect(fake.counts.getProjectMutationState ?? 0).toBe(0);
+  });
+
   it("does not dispatch project create when its complete baseline is truncated", async () => {
     const fake = createFakeWorkspace({ listTruncated: { listProjects: true } });
 
@@ -246,5 +266,24 @@ describe("structure/time durable target and outcome safety", () => {
     expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "commit_outcome_unknown" } });
     expect(dispatches).toBe(1);
     expect(fake.counts.updateClientAtomic ?? 0).toBe(0);
+  });
+
+  it("stops client reconciliation before an over-budget candidate detail scan", async () => {
+    const fake = createFakeWorkspace();
+    fake.client.createClientBaseAtomic = async (input) => {
+      for (let index = 0; index <= STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX; index += 1) {
+        fake.state.clients.push({ id: `client-candidate-${index}`, ...input });
+      }
+      throw new AmbiguousWriteOutcome("POST", "/clients", "socket closed");
+    };
+
+    const result = await executeAction({
+      actionName: "clockify_clients_create",
+      args: { name: "Created" },
+      context: context(fake),
+    });
+
+    expect(result).toMatchObject({ kind: "receipt", receipt: { ok: false, code: "commit_outcome_unknown" } });
+    expect(fake.counts.getClientMutationState ?? 0).toBe(0);
   });
 });

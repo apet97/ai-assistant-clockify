@@ -5,12 +5,14 @@ import { errorReceipt, type EntityRef, type ErrorReceipt, type RecoveryHint, typ
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
 import { randomUUID } from "node:crypto";
+import { bindMutationPlanHostCalls } from "./safety-limits.js";
 import type {
   ExternalMutationPlan,
+  ExternalMutationPlanDraft,
   MutationStepJournal,
 } from "./mutation-contract.js";
 
-export type { ExternalMutationPlan } from "./mutation-contract.js";
+export type { ExternalMutationPlan, ExternalMutationPlanDraft } from "./mutation-contract.js";
 
 /**
  * A durable operation row can exist before the rest of preparation finishes.
@@ -38,6 +40,8 @@ export interface ActionContext {
   adminUserId: string;
   policy: AdminPolicy;
   clockify: WorkspaceClient;
+  /** Caller/lifecycle cancellation for reads and not-yet-dispatched writes. */
+  signal?: AbortSignal;
   /** Verified Clockify calendar settings; calendar actions fail closed if absent. */
   timeZone?: string;
   /** ISO weekday number (Monday=1 … Sunday=7). */
@@ -207,6 +211,12 @@ export interface DurableMutationContract {
  * raw model literals, server-derived identifiers, and permitted host defaults
  * can never silently substitute for one another. */
 export interface WriteAuthorityMetadata {
+  literalConstraintLimits: {
+    maxConstraints: number;
+    maxDepth: number;
+    maxNodes: number;
+    maxBytes: number;
+  };
   literalControlledPaths: readonly string[];
   serverDerivedIdPaths: readonly string[];
   permittedServerDefaultPaths: readonly string[];
@@ -214,7 +224,10 @@ export interface WriteAuthorityMetadata {
   preservedStatePaths: readonly string[];
   cardinality: {
     mode: "single" | "fixed" | "argument";
+    /** Maximum exact external plan steps. */
     maxExecutions: number;
+    /** Maximum raw items at argumentPath when plan-step and input counts differ. */
+    maxArgumentItems?: number;
     argumentPath?: string;
   };
   /** Reviewed host-dispatch grammars. A persisted plan must match one variant
@@ -238,7 +251,7 @@ export interface WriteAuthorityMetadata {
  * dispatch when a step is missing a strategy or invents an undeclared one. */
 export function mutationPlanContractError(
   contract: DurableMutationContract | undefined,
-  plan: ExternalMutationPlan | undefined,
+  plan: ExternalMutationPlanDraft | undefined,
 ): string | undefined {
   if (!contract) return "missing_mutation_contract";
   if (!plan || !["single", "curated", "batch"].includes(plan.mode) ||
@@ -265,6 +278,8 @@ export function mutationPlanContractError(
 export interface ConfirmableOperation {
   operationId: string;
   actionName: string;
+  /** Installation/token authority captured when this preview was persisted. */
+  installationGeneration?: number;
   featureGroup: FeatureGroup;
   risks: RiskLabel[];
   payload: Record<string, unknown>;
@@ -302,8 +317,10 @@ export function isPartialCommitResult(
   return "kind" in result && result.kind === "partial";
 }
 
-/** Uniform stored form of an action (args already validated by its schema). */
-export interface ActionDefinition {
+/** Fields shared by every stored action definition. Execution-only fields live
+ * on the discriminated variants below so a read can never masquerade as a
+ * committable write and a safe write cannot carry a second shadow handler. */
+interface ActionDefinitionBase {
   name: string;
   description: string;
   featureGroup: FeatureGroup;
@@ -318,23 +335,49 @@ export interface ActionDefinition {
   /** Override the feature group used for the policy gate from validated args
    *  (e.g. delete_entity maps entityType → group). */
   resolveFeatureGroup?(args: unknown): FeatureGroup;
-  handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
-  /** New safe-write path: normalize nonsecret wire intent without mutation. */
-  prepareSafeWrite?(ctx: ActionContext, args: unknown): Promise<SafeWritePreparationResult>;
-  /** Dispatch exactly the prepared safe-write intent. */
-  executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   /** Marks a confirmed action whose external effects use mutation-workflow steps. */
   mutationWorkflow?: "durable";
   mutationContract?: DurableMutationContract;
   /** Required by the catalog invariant for every Clockify external write. */
   writeAuthority?: WriteAuthorityMetadata;
-  /** Executes the stored operation after confirmation (risky actions only). */
-  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
+}
+
+export interface ReadActionDefinition extends ActionDefinitionBase {
+  kind: "read";
+  handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
+  prepareSafeWrite?: never;
+  executeSafeWrite?: never;
+  commit?: never;
+  idempotencyKey?: never;
+}
+
+export interface SafeWriteActionDefinition extends ActionDefinitionBase {
+  kind: "safe_write";
+  prepareSafeWrite(ctx: ActionContext, args: unknown): Promise<SafeWritePreparationResult>;
+  executeSafeWrite(ctx: ActionContext, prepared: BoundedPreparedSafeWrite): Promise<CommitResult>;
+  handler?: never;
+  commit?: never;
+  idempotencyKey?: never;
+}
+
+export interface RiskyWriteActionDefinition extends ActionDefinitionBase {
+  kind: "risky_write";
+  handler(ctx: ActionContext, args: unknown): Promise<ActionResult>;
+  prepareSafeWrite?: never;
+  executeSafeWrite?: never;
+  /** Executes the stored operation after confirmation. */
+  commit(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   /** Opt into idempotent commits: return the operation's SEMANTIC identity (e.g.
    *  client + items), excluding volatile defaults, so a repeated confirm of the
    *  same intent returns the prior receipt instead of creating a duplicate. */
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
 }
+
+/** Uniform catalog form, narrowed by `kind` at every execution boundary. */
+export type ActionDefinition =
+  | ReadActionDefinition
+  | SafeWriteActionDefinition
+  | RiskyWriteActionDefinition;
 
 /** Model-visible catalog entry — no schema/handler, never any secret. */
 export interface ActionCatalogEntry {
@@ -350,7 +393,7 @@ export interface ActionCatalogEntry {
  * Define an action with per-action arg typing (handler receives `z.infer<S>`),
  * erased to the uniform `ActionDefinition` for storage in the catalog.
  */
-export function defineAction<S extends z.ZodTypeAny>(def: {
+interface DefineActionCommon<S extends z.ZodTypeAny> {
   name: string;
   description: string;
   featureGroup: FeatureGroup;
@@ -359,16 +402,61 @@ export function defineAction<S extends z.ZodTypeAny>(def: {
   argumentAliases?: readonly string[];
   argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
-  handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
-  prepareSafeWrite?(ctx: ActionContext, args: z.infer<S>): Promise<SafeWritePreparationResult>;
-  executeSafeWrite?(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult>;
   mutationWorkflow?: "durable";
   mutationContract?: DurableMutationContract;
   writeAuthority?: WriteAuthorityMetadata;
-  commit?(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
+}
+
+type DefineReadActionInput<S extends z.ZodTypeAny> = DefineActionCommon<S> & {
+  handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
+  prepareSafeWrite?: never;
+  executeSafeWrite?: never;
+  commit?: never;
+  idempotencyKey?: never;
+};
+
+type DefineSafeWriteActionInput<S extends z.ZodTypeAny> = DefineActionCommon<S> & {
+  handler?: never;
+  prepareSafeWrite(ctx: ActionContext, args: z.infer<S>): Promise<SafeWritePreparationResult>;
+  executeSafeWrite(ctx: ActionContext, prepared: BoundedPreparedSafeWrite): Promise<CommitResult>;
+  commit?: never;
+  idempotencyKey?: never;
+};
+
+type DefineRiskyWriteActionInput<S extends z.ZodTypeAny> = DefineActionCommon<S> & {
+  handler(ctx: ActionContext, args: z.infer<S>): Promise<ActionResult>;
+  prepareSafeWrite?: never;
+  executeSafeWrite?: never;
+  commit(ctx: ActionContext, operation: ConfirmableOperation): Promise<CommitResult>;
   idempotencyKey?(operation: ConfirmableOperation): string | undefined;
-}): ActionDefinition {
-  return def as unknown as ActionDefinition;
+};
+
+type DefineActionInput<S extends z.ZodTypeAny> =
+  | DefineReadActionInput<S>
+  | DefineSafeWriteActionInput<S>
+  | DefineRiskyWriteActionInput<S>;
+
+export function defineAction<S extends z.ZodTypeAny>(def: DefineActionInput<S>): ActionDefinition {
+  const actionName = def.name;
+  const hasPrepare = typeof def.prepareSafeWrite === "function";
+  const hasExecute = typeof def.executeSafeWrite === "function";
+  const hasHandler = typeof def.handler === "function";
+  const hasCommit = typeof def.commit === "function";
+
+  if (hasPrepare || hasExecute) {
+    if (!hasPrepare || !hasExecute || hasHandler || hasCommit) {
+      throw new Error(`invalid_safe_write_definition:${actionName}`);
+    }
+    return { ...def, kind: "safe_write" } as unknown as SafeWriteActionDefinition;
+  }
+  if (def.risks.length > 0 && def.risks.every((risk) => risk === "read")) {
+    if (!hasHandler || hasCommit) throw new Error(`invalid_read_definition:${actionName}`);
+    return { ...def, kind: "read" } as unknown as ReadActionDefinition;
+  }
+  if (hasHandler && hasCommit) {
+    return { ...def, kind: "risky_write" } as unknown as RiskyWriteActionDefinition;
+  }
+  throw new Error(`unclassified_action_definition:${actionName}`);
 }
 
 /**
@@ -384,13 +472,21 @@ export interface RiskyPreviewResult {
   warnings?: string[];
   payload: Record<string, unknown>;
   /** Exact durable host-step order persisted with the confirmation. */
-  mutationPlan?: ExternalMutationPlan;
+  mutationPlan?: ExternalMutationPlanDraft;
   /** Ordered target/parent evidence captured from authoritative reads. */
   targetSnapshots?: TargetSnapshot[];
 }
 
 export interface PreparedSafeWrite {
   /** Normalized, nonsecret wire intent. */
+  operation: unknown;
+  mutationPlan: ExternalMutationPlanDraft;
+}
+
+/** A prepared safe write after the deterministic estimator has bound its
+ * complete host-call reservation. Only this shape may reach persistence or
+ * dispatch. */
+export interface BoundedPreparedSafeWrite {
   operation: unknown;
   mutationPlan: ExternalMutationPlan;
 }
@@ -404,10 +500,19 @@ export interface SafeWriteClarification {
   options?: ClarifyOption[];
 }
 
+/** Preparation proved that the requested end state already exists and no host
+ * mutation is needed. This deliberately bypasses mutation-plan persistence;
+ * representing a read-only verification as a completed mutation step would
+ * violate the exact-one-physical-dispatch invariant. */
+export interface SafeWriteNoop {
+  kind: "noop";
+  receipt: SuccessReceipt | ErrorReceipt;
+}
+
 /** Read-only preparation either produces durable wire intent or asks the admin
  * to choose among grounded options. Plain `PreparedSafeWrite` remains accepted
  * so existing builders do not need a mechanical discriminator migration. */
-export type SafeWritePreparationResult = PreparedSafeWrite | SafeWriteClarification;
+export type SafeWritePreparationResult = PreparedSafeWrite | SafeWriteClarification | SafeWriteNoop;
 
 export function isSafeWriteClarification(value: unknown): value is SafeWriteClarification {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -422,6 +527,14 @@ export function isSafeWriteClarification(value: unknown): value is SafeWriteClar
     return typeof item.id === "string" && item.id.length > 0 &&
       typeof item.label === "string" && item.label.length > 0;
   });
+}
+
+export function isSafeWriteNoop(value: unknown): value is SafeWriteNoop {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.kind !== "noop" || !candidate.receipt || typeof candidate.receipt !== "object" ||
+      Array.isArray(candidate.receipt)) return false;
+  return typeof (candidate.receipt as Record<string, unknown>).ok === "boolean";
 }
 
 /** Runtime boundary for provider/workflow code. A malformed pseudo-prepared
@@ -486,7 +599,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     payload: Record<string, unknown>,
     operation: ConfirmableOperation,
   ): Promise<CommitResult>;
-}): ActionDefinition {
+}): RiskyWriteActionDefinition {
   return defineAction({
     name: def.name,
     description: def.description,
@@ -533,6 +646,9 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
           }),
         };
       }
+      const mutationPlan = r.mutationPlan
+        ? bindMutationPlanHostCalls(def.name, r.payload, r.mutationPlan)
+        : undefined;
       return {
         kind: "preview",
         preview: {
@@ -550,7 +666,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
           featureGroup: group,
           risks: def.risks,
           payload: r.payload,
-          ...(r.mutationPlan ? { mutationPlan: r.mutationPlan } : {}),
+          ...(mutationPlan ? { mutationPlan } : {}),
           targetSnapshots: r.targetSnapshots ?? [],
         },
       };
@@ -558,7 +674,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     commit(ctx, operation) {
       return def.commit(ctx, operation.payload, operation);
     },
-  });
+  }) as RiskyWriteActionDefinition;
 }
 
 /**
@@ -578,7 +694,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     args: z.infer<S>,
   ): Promise<SafeWritePreparationResult> | SafeWritePreparationResult;
   execute(ctx: ActionContext, operation: unknown): Promise<CommitResult>;
-}): ActionDefinition {
+}): SafeWriteActionDefinition {
   return defineAction({
     name: def.name,
     description: def.description,
@@ -589,26 +705,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     prepareSafeWrite: async (ctx, args) => def.prepare(ctx, args),
     executeSafeWrite: (ctx, prepared) => def.execute(ctx, prepared.operation),
-    async handler(ctx, args): Promise<ActionResult> {
-      const prepared = await def.prepare(ctx, args);
-      if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
-      if (!isPreparedSafeWrite(prepared)) {
-        return {
-          kind: "receipt",
-          receipt: errorReceipt({
-            action: def.name,
-            code: "invalid_safe_write_preparation",
-            message: "Safe-write preparation returned an invalid result.",
-            recovery: { hint: "Correct the action's prepare contract before retrying.", retryable: false },
-          }),
-        };
-      }
-      const result = await def.execute(ctx, prepared.operation);
-      return isPartialCommitResult(result)
-        ? result
-        : { kind: "receipt", receipt: result };
-    },
-  });
+  }) as SafeWriteActionDefinition;
 }
 
 /**
@@ -622,7 +719,7 @@ export function defineReadAction<S extends z.ZodTypeAny>(def: {
   schema: S;
   argumentOpenPaths?: readonly string[];
   handler(ctx: ActionContext, args: z.infer<S>): Promise<SuccessReceipt | ErrorReceipt>;
-}): ActionDefinition {
+}): ReadActionDefinition {
   return defineAction({
     name: def.name,
     description: def.description,
@@ -633,5 +730,5 @@ export function defineReadAction<S extends z.ZodTypeAny>(def: {
     async handler(ctx, args): Promise<ActionResult> {
       return { kind: "receipt", receipt: await def.handler(ctx, args) };
     },
-  });
+  }) as ReadActionDefinition;
 }

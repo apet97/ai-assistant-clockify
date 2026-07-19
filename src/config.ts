@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM } from "./addon/clockify-public-key.js";
+import {
+  assertProductionDeepSeekConfiguration,
+  modelEndpointSha256,
+} from "./assistant/model-endpoint.js";
 
 /**
  * Application configuration loaded and validated from environment variables
@@ -12,21 +16,24 @@ export interface AppConfig {
   nodeEnv: string;
   port: number;
   baseUrl: string;
+  /** Monitored customer contact destination rendered on public support/privacy/security pages. */
+  publicContactUrl?: string;
+  /** Immutable source identity supplied to the deployed release candidate. */
+  releaseSha?: string;
+  releaseBuildHash?: string;
+  /** SHA-256 of the pre-upload source-candidate binding used by Git-less builders. */
+  releaseSourceBindingSha256?: string;
   clockifyAddonPublicKeyPem: string;
   clockifyAddonKey: string;
   sessionSecret: string;
-  /** Signed-session lifetime (ms). The workspace ROLE is baked into the cookie at
-   *  mint and not re-checked per request (authz-surface-01), so this TTL also bounds
-   *  how long a demoted admin keeps access. Shorter = tighter revocation but a shorter
-   *  history-switcher window (it lists only live sessions). loadConfig always sets it
-   *  (default 2h, SESSION_TTL_HOURS); the store falls back to 8h if a caller omits it.
-   *  For near-real-time revocation, enable the opt-in per-request admin re-check
-   *  (`roleRecheckEnabled` / ROLE_RECHECK=1) instead of shrinking this TTL. */
+  /** Signed-session lifetime (ms). Every authenticated API request also rechecks the
+   *  current workspace role; this TTL bounds cookie lifetime and chat-history scope,
+   *  not authorization freshness. loadConfig always sets it (default 2h,
+   *  SESSION_TTL_HOURS); the store falls back to 8h only for legacy direct callers. */
   sessionTtlMs: number;
-  /** When true, every authenticated /api request re-verifies the caller is still a
-   *  Clockify admin/owner (closes authz-surface-01), cached per admin for
-   *  `roleRecheckTtlMs`. Default OFF: byte-identical to the cookie-only posture
-   *  (the role baked into the cookie, bounded only by `sessionTtlMs`). */
+  /** @deprecated Compatibility-only config field. Role rechecking is mandatory;
+   *  callers cannot disable it. Kept for one release so an existing ROLE_RECHECK
+   *  deployment variable does not become an unknown configuration input. */
   roleRecheckEnabled?: boolean;
   /** Cache window (ms) for a passed admin re-check. Default 60000. */
   roleRecheckTtlMs?: number;
@@ -56,6 +63,9 @@ export interface AppConfig {
    *  validates + gates every proposed action. */
   llmToolSelect: boolean;
   llmBaseUrl?: string;
+  /** Secret-free hash of the normalized provider base, exposed in release
+   * evidence so a DeepSeek-labeled run cannot silently target another host. */
+  llmEndpointSha256?: string;
   llmApiKey?: string;
   llmModel?: string;
   /** Per-request model timeout (ms); the HTTP client defaults to 120s when unset. */
@@ -66,6 +76,9 @@ export interface AppConfig {
   retentionDays?: number;
   /** Provider thinking control passed through as reasoning_effort. */
   llmReasoningEffort?: string;
+  /** Optional OpenAI-compatible thinking toggle. Omitted by default so existing
+   *  provider request bodies remain byte-compatible. DeepSeek V4 accepts both. */
+  llmThinkingMode?: "enabled" | "disabled";
   /** Optional sampling seed (OpenAI-compatible `seed`) for run-to-run reproducibility
    *  on weak models. Unset ⇒ not sent (byte-identical). */
   llmSeed?: number;
@@ -78,24 +91,39 @@ export interface AppConfig {
    *  to reset the per-session paid-loop budget. Route defaults apply when unset. */
   newChatRateLimitMax?: number;
   newChatRateLimitWindowMs?: number;
+  /** Broad authenticated API budget per workspace/admin. This is intentionally
+   *  separate from the tighter paid-model-loop and new-chat budgets. */
+  apiRateLimitMax?: number;
+  apiRateLimitWindowMs?: number;
 }
 
 const envObjectSchema = z.object({
   NODE_ENV: z.string().min(1).optional(),
   PORT: z.coerce.number().int().positive(),
   BASE_URL: z.string().min(1),
+  PUBLIC_CONTACT_URL: z.string().min(1).refine((value) => {
+    try {
+      const protocol = new URL(value).protocol;
+      return protocol === "https:" || protocol === "mailto:";
+    } catch {
+      return false;
+    }
+  }, "PUBLIC_CONTACT_URL must be an absolute HTTPS or mailto URL").optional(),
+  RELEASE_SHA: z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/).optional(),
+  RELEASE_BUILD_HASH: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  RELEASE_SOURCE_BINDING_SHA256: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   CLOCKIFY_ADDON_PUBLIC_KEY_PEM: z.string().min(1).optional(),
   CLOCKIFY_ADDON_KEY: z.string().min(1),
   // Keys both the signed session cookie (forgery resistance) AND the confirmation
   // nonce hash (src/harness/confirmations.ts). A weak value silently weakens both, so
   // require real entropy and fail closed — matching DATA_ENCRYPTION_KEY's floor.
   SESSION_SECRET: z.string().min(32),
-  /** Signed-session lifetime in HOURS (also the authz-surface-01 role-staleness bound).
-   *  Default 2h; min 0.1 (6 min) so a typo can't mint an effectively-zero session. */
+  /** Signed-session lifetime in HOURS. Default 2h; min 0.1 (6 min) so a typo can't
+   *  mint an effectively-zero session. Current role is checked independently. */
   SESSION_TTL_HOURS: z.coerce.number().positive().min(0.1).optional(),
-  // authz-surface-01: opt-in per-request admin re-check (default OFF).
+  // Deprecated compatibility input. Rechecking is mandatory regardless of value.
   ROLE_RECHECK: z.enum(["0", "1"]).default("0"),
-  ROLE_RECHECK_TTL_MS: z.coerce.number().int().positive().optional(),
+  ROLE_RECHECK_TTL_MS: z.coerce.number().int().positive().max(60_000).optional(),
   // A passphrase, SHA-256-derived to the AES-256-GCM key (src/db/encryption.ts);
   // NOT raw hex bytes. Require real entropy (>=32 chars), not a 1-char value.
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
@@ -127,6 +155,8 @@ const envObjectSchema = z.object({
   RETENTION_DAYS: z.coerce.number().int().min(30).optional(),
   /** Provider thinking control (e.g. "none" disables Gemini thinking). */
   LLM_REASONING_EFFORT: z.string().min(1).optional(),
+  /** Provider thinking toggle (DeepSeek V4/OpenAI-compatible extension). */
+  LLM_THINKING_MODE: z.enum(["enabled", "disabled"]).optional(),
   /** Optional sampling seed (OpenAI-compatible `seed`) for reproducible weak-model runs. */
   LLM_SEED: z.coerce.number().int().optional(),
   GEMINI_MODEL: z.string().min(1).optional(),
@@ -137,6 +167,10 @@ const envObjectSchema = z.object({
    *  per-session paid-loop budget by minting fresh sessions. */
   NEW_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().optional(),
   NEW_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().optional(),
+  /** Broad authenticated API rate limit. Keep the knobs finite so an operator
+   *  cannot accidentally disable the security boundary with an extreme value. */
+  API_RATE_LIMIT_MAX: z.coerce.number().int().positive().max(10_000).optional(),
+  API_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(1_000).max(60 * 60 * 1000).optional(),
 });
 
 const envSchema = envObjectSchema.superRefine((v, ctx) => {
@@ -147,12 +181,41 @@ const envSchema = envObjectSchema.superRefine((v, ctx) => {
       }
     }
   }
+  if (v.NODE_ENV === "production") {
+    try {
+      assertProductionDeepSeekConfiguration({
+        provider: v.LLM_PROVIDER,
+        baseUrl: v.LLM_BASE_URL,
+        model: v.LLM_MODEL,
+      });
+    } catch (error) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: error instanceof Error ? error.message : "Invalid production DeepSeek configuration",
+        path: ["LLM_BASE_URL"],
+      });
+    }
+  }
   if (v.COMMIT_TIMEOUT_MS !== undefined && v.COMMIT_TIMEOUT_MS >= 290_000) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ["COMMIT_TIMEOUT_MS"],
       message:
         "COMMIT_TIMEOUT_MS must be < 290000ms — it has to stay strictly below the idempotency CLAIM_TTL_MS (300000ms, src/db/store.ts) so a slow live commit's claim is never swept.",
+    });
+  }
+  if ((v.RELEASE_SHA === undefined) !== (v.RELEASE_BUILD_HASH === undefined)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: [v.RELEASE_SHA === undefined ? "RELEASE_SHA" : "RELEASE_BUILD_HASH"],
+      message: "RELEASE_SHA and RELEASE_BUILD_HASH must be set together",
+    });
+  }
+  if (v.RELEASE_SOURCE_BINDING_SHA256 !== undefined && v.RELEASE_SHA === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["RELEASE_SOURCE_BINDING_SHA256"],
+      message: "RELEASE_SOURCE_BINDING_SHA256 requires RELEASE_SHA and RELEASE_BUILD_HASH",
     });
   }
 });
@@ -179,6 +242,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     nodeEnv,
     port: parsed.PORT,
     baseUrl: parsed.BASE_URL,
+    publicContactUrl: parsed.PUBLIC_CONTACT_URL,
+    releaseSha: parsed.RELEASE_SHA,
+    releaseBuildHash: parsed.RELEASE_BUILD_HASH,
+    releaseSourceBindingSha256: parsed.RELEASE_SOURCE_BINDING_SHA256,
     // Clockify signs every add-on token with one platform-wide key. Default to
     // the built-in key so install/lifecycle verification works out of the box;
     // the env var only overrides it for other Clockify environments/regions.
@@ -186,11 +253,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       parsed.CLOCKIFY_ADDON_PUBLIC_KEY_PEM ?? CLOCKIFY_PLATFORM_PUBLIC_KEY_PEM,
     clockifyAddonKey: parsed.CLOCKIFY_ADDON_KEY,
     sessionSecret: parsed.SESSION_SECRET,
-    // Default 2h (down from the store's 8h) to tighten the authz-surface-01 role-
-    // staleness window; an operator can raise SESSION_TTL_HOURS for a longer history
-    // window. Always set here, so prod never falls through to the store's 8h default.
+    // Default 2h; operators can raise it for a longer history window. Current-role
+    // checks remain mandatory and independent of this cookie lifetime.
     sessionTtlMs: (parsed.SESSION_TTL_HOURS ?? 2) * 60 * 60 * 1000,
-    roleRecheckEnabled: parsed.ROLE_RECHECK === "1",
+    roleRecheckEnabled: true,
     roleRecheckTtlMs: parsed.ROLE_RECHECK_TTL_MS ?? 60_000,
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
     dataEncryptionKeyPrevious: parsed.DATA_ENCRYPTION_KEY_PREVIOUS,
@@ -200,17 +266,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     llmAgentic: parsed.LLM_AGENTIC === "1",
     llmToolSelect: parsed.LLM_TOOL_SELECT === "1",
     llmBaseUrl: parsed.LLM_BASE_URL,
+    llmEndpointSha256: parsed.LLM_BASE_URL === undefined
+      ? undefined
+      : modelEndpointSha256(parsed.LLM_BASE_URL),
     llmApiKey: parsed.LLM_API_KEY,
     llmModel: parsed.LLM_MODEL,
     llmTimeoutMs: parsed.LLM_TIMEOUT_MS,
     commitTimeoutMs: parsed.COMMIT_TIMEOUT_MS,
     retentionDays: parsed.RETENTION_DAYS,
     llmReasoningEffort: parsed.LLM_REASONING_EFFORT,
+    llmThinkingMode: parsed.LLM_THINKING_MODE,
     llmSeed: parsed.LLM_SEED,
     geminiModel: parsed.GEMINI_MODEL,
     chatRateLimitMax: parsed.CHAT_RATE_LIMIT_MAX,
     chatRateLimitWindowMs: parsed.CHAT_RATE_LIMIT_WINDOW_MS,
     newChatRateLimitMax: parsed.NEW_CHAT_RATE_LIMIT_MAX,
     newChatRateLimitWindowMs: parsed.NEW_CHAT_RATE_LIMIT_WINDOW_MS,
+    apiRateLimitMax: parsed.API_RATE_LIMIT_MAX,
+    apiRateLimitWindowMs: parsed.API_RATE_LIMIT_WINDOW_MS,
   };
 }

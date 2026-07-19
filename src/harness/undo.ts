@@ -2,9 +2,10 @@ import type { ActionContext } from "./action.js";
 import type { EntityRef, SuccessReceipt, ErrorReceipt, Warning } from "./receipts.js";
 import { successReceipt, errorReceipt } from "./receipts.js";
 import { canWrite, type AdminPolicy, type FeatureGroup } from "./permissions.js";
-import type { ExternalMutationPlan, JournaledMutationStep } from "./mutation-contract.js";
+import type { ExternalMutationPlan, ExternalMutationPlanDraft, JournaledMutationStep } from "./mutation-contract.js";
 import { executeStep, isJournalDegradedStep } from "./mutation-workflow.js";
 import { withMutationPlanScope } from "../clockify/rest/core.js";
+import { bindMutationPlanHostCalls } from "./safety-limits.js";
 
 /**
  * Undo of the last reversible action (Phase 5b). The only thing we reverse is a
@@ -75,7 +76,7 @@ function undoPlanSteps(refs: EntityRef[]): UndoPlanStep[] {
 
 /** Exact ordered host plan for one durable undo operation. */
 export function undoMutationPlan(refs: EntityRef[]): ExternalMutationPlan {
-  return {
+  const plan: ExternalMutationPlanDraft = {
     mode: "batch",
     steps: undoPlanSteps(refs).map((step) => ({
       id: step.id,
@@ -83,6 +84,7 @@ export function undoMutationPlan(refs: EntityRef[]): ExternalMutationPlan {
       reconciliationStrategy: step.operation === "delete" ? "delete" as const : "state-command" as const,
     })),
   };
+  return bindMutationPlanHostCalls("undo", { refs }, plan);
 }
 
 async function prepareTransition(ctx: ActionContext, ref: EntityRef): Promise<Record<string, unknown>> {
@@ -200,6 +202,7 @@ export async function reverseCreationDurably(
     actionName: "undo",
     plan,
     authorizeDispatch: async () => ctx.authorizeWrite?.("undo"),
+    onDispatch: (step) => markUndoStepDispatched(ctx, step.id, step.kind),
     requiresComplete: () =>
       terminal?.status === "succeeded"
       && !isJournalDegradedStep(terminal)
@@ -398,4 +401,18 @@ export async function reverseCreation(
     changed: { deleted: undone },
     warnings: warnings.length ? warnings : undefined,
   });
+}
+
+function markUndoStepDispatched(
+  ctx: ActionContext,
+  planStepId: string,
+  kind: "primary" | "compensation",
+): void {
+  const journal = ctx.mutationJournal;
+  if (!journal) throw new Error("undo_operation_journal_required");
+  const row = journal.listOperationSteps().find((candidate) =>
+    candidate.planStepId === planStepId && candidate.kind === kind);
+  if (!row || !journal.markOperationStepDispatched(row.id)) {
+    throw new Error(`dispatch_journal_unavailable:${planStepId}`);
+  }
 }

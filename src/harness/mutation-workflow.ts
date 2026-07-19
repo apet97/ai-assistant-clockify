@@ -15,6 +15,10 @@ import {
   MutationPlanViolation,
   withMutationPlanStep,
 } from "../clockify/rest/core.js";
+import {
+  HostCallBudgetExceededError,
+  HostRequestCancelledError,
+} from "../clockify/request-governor.js";
 
 export interface MutationDispatchResult {
   externalId?: string;
@@ -40,6 +44,9 @@ function safeFailureDetail(error: unknown): Record<string, unknown> {
     return { type: error.name, code: "mutation_dispatch_denied", denial: error.denial, message: error.message };
   }
   if (error instanceof MutationPlanViolation) {
+    return { type: error.name, code: error.code, message: error.message };
+  }
+  if (error instanceof HostCallBudgetExceededError || error instanceof HostRequestCancelledError) {
     return { type: error.name, code: error.code, message: error.message };
   }
   if (error instanceof AmbiguousWriteOutcome || error instanceof DefinitiveWriteFailure) {
@@ -155,10 +162,24 @@ export async function executeStep(input: {
     status = "succeeded";
   } catch (error) {
     status = error instanceof DefinitiveWriteFailure ||
-      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation
+      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation ||
+      error instanceof HostCallBudgetExceededError || error instanceof HostRequestCancelledError
       ? "definitive_failed"
       : "outcome_unknown";
     outcome = { detail: safeFailureDetail(error) };
+    if (error instanceof HostRequestCancelledError) {
+      const cancellationDetail = preparedDetail === undefined
+        ? outcome.detail
+        : combinePreparedDetail(preparedDetail, outcome.detail);
+      if (input.journal.cancelOperationStepBeforeDispatch(stepId, cancellationDetail)) {
+        const cancelled = input.journal.listOperationSteps().find((step) => step.id === stepId);
+        if (!cancelled) throw new Error("operation_step_not_found");
+        return cancelled;
+      }
+      // A cancellation is definitive only while the durable row proves that no
+      // external dispatch occurred. Otherwise preserve conservative uncertainty.
+      status = "outcome_unknown";
+    }
   }
   outcome = {
     ...outcome,
@@ -241,7 +262,8 @@ export async function executeCompensationStep(input: {
     status = "compensated";
   } catch (error) {
     status = error instanceof DefinitiveWriteFailure ||
-      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation
+      error instanceof MutationDispatchDenied || error instanceof MutationPlanViolation ||
+      error instanceof HostCallBudgetExceededError || error instanceof HostRequestCancelledError
       ? "compensation_failed"
       : "outcome_unknown";
     outcome = { detail: safeFailureDetail(error) };

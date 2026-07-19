@@ -1,16 +1,11 @@
 import { z } from "zod";
 import {
-  clarifyResult,
   type ActionContext,
-  type ActionResult,
+  type BoundedPreparedSafeWrite,
   type CommitResult,
-  type PreparedSafeWrite,
   defineAction,
   defineReadAction,
   defineRiskyAction,
-  isPartialCommitResult,
-  isPreparedSafeWrite,
-  isSafeWriteClarification,
   type ActionDefinition,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
@@ -22,6 +17,7 @@ import { errorReceipt } from "../receipts.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import { sanitizedFingerprint } from "../safe-json.js";
+import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
 
 /** Resolve a currency code or exact id to its workspace currencyId, or clarify. */
 async function resolveCurrencyId(
@@ -75,6 +71,7 @@ async function reconcileCreatedClient(
   if (after.truncated) return undefined;
   const before = new Set(beforeIds);
   const candidates = after.rows.filter((row) => !before.has(row.id) && row.name === expected.name);
+  if (candidates.length > STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX) return undefined;
   const matches = [];
   for (const candidate of candidates) {
     const raw = await ctx.clockify.getClientMutationState(candidate.id);
@@ -131,7 +128,7 @@ async function prepareClientCreate(
 
 async function executeClientCreate(
   ctx: ActionContext,
-  prepared: PreparedSafeWrite,
+  prepared: BoundedPreparedSafeWrite,
 ): Promise<CommitResult> {
   const payload = prepared.operation as ClientCreateOperation;
   const operation = {
@@ -322,15 +319,6 @@ const createClient = defineAction({
   }),
   prepareSafeWrite: prepareClientCreate,
   executeSafeWrite: executeClientCreate,
-  async handler(ctx, args): Promise<ActionResult> {
-    const prepared = await prepareClientCreate(ctx, args);
-    if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
-    if (!isPreparedSafeWrite(prepared)) {
-      return { kind: "receipt", receipt: errorReceipt({ action: "clockify_clients_create", code: "invalid_safe_write_preparation", message: "Client create preparation failed." }) };
-    }
-    const result = await executeClientCreate(ctx, prepared);
-    return isPartialCommitResult(result) ? result : { kind: "receipt", receipt: result };
-  },
 });
 
 const updateClient = defineRiskyAction({

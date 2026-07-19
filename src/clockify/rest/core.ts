@@ -24,7 +24,14 @@ import {
   DefinitiveWriteFailure,
   isMutationMethod,
 } from "../write-outcome.js";
-import type { WorkspaceRequestGovernor } from "../request-governor.js";
+import {
+  HostCallBudgetExceededError,
+  HostRequestCancelledError,
+  HOST_CALL_BUDGET_MAXIMUM,
+  chargeHostCallBudget,
+  withReservedHostCallBudget,
+  type WorkspaceRequestGovernor,
+} from "../request-governor.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 export type { ClockifyAuth };
 export type ClockifyHost = "api" | "reports" | "audit";
@@ -51,6 +58,8 @@ export interface RestCoreOptions {
   commitTimeoutMs?: number;
   /** Shared per-workspace host-call governor. */
   requestGovernor?: WorkspaceRequestGovernor;
+  /** Cancels requests only until they cross the external dispatch boundary. */
+  signal?: AbortSignal;
   /** Production adapters enable the Phase 6 exact-plan network gate. */
   enforceMutationScope?: boolean;
 }
@@ -62,8 +71,10 @@ export interface MutationPlanScopeStep {
 
 export interface MutationPlanScopeInput {
   actionName: string;
-  plan: { mode: "single" | "curated" | "batch"; steps: MutationPlanScopeStep[] };
+  plan: { mode: "single" | "curated" | "batch"; maxHostCalls: number; steps: MutationPlanScopeStep[] };
   authorizeDispatch?(step: MutationPlanScopeStep): Promise<unknown> | unknown;
+  /** Durable journal hook after authorization and immediately before fetch. */
+  onDispatch?(step: MutationPlanScopeStep): void;
   compensationEligible?(stepId: string): boolean;
   /** Durable read-only reconciliation may terminalize an ambiguous primary
    * after its dispatch threw. The caller must prove this exact plan step is now
@@ -79,6 +90,7 @@ type MutationDescriptorStatus = "pending" | "dispatching" | "completed" | "faile
 interface MutationDescriptorState {
   step: MutationPlanScopeStep;
   status: MutationDescriptorStatus;
+  authorized: boolean;
   networkCalls: number;
   failure?: unknown;
 }
@@ -96,6 +108,13 @@ function readDescriptorFailure(descriptor: MutationDescriptorState): { failed: b
 }
 
 const mutationPlanStorage = new AsyncLocalStorage<MutationPlanScopeState>();
+
+/** Mutation reservations must have deterministic physical I/O cost. A list
+ * scan inside a prepared operation is therefore one page only; a full page is
+ * returned as `truncated` so the harness fails closed before relying on it. */
+export function mutationReadPageLimit(): number {
+  return mutationPlanStorage.getStore() ? 1 : MAX_PAGES;
+}
 
 export class MutationPlanViolation extends Error {
   readonly code = "mutation_plan_violation";
@@ -139,15 +158,21 @@ function reconciledAmbiguousDescriptor(
 }
 
 export function withMutationPlanScope<T>(input: MutationPlanScopeInput, run: () => Promise<T>): Promise<T> {
+  const maxHostCalls = input.plan.maxHostCalls;
+  if (!Number.isSafeInteger(maxHostCalls) ||
+    maxHostCalls < 1 ||
+    maxHostCalls > HOST_CALL_BUDGET_MAXIMUM) {
+    return Promise.reject(new MutationPlanViolation("mutation_plan_host_call_budget_required"));
+  }
   const ids = input.plan.steps.map((step) => step.id);
   if (ids.length === 0 || ids.some((id) => !id) || new Set(ids).size !== ids.length) {
     return Promise.reject(new MutationPlanViolation("invalid_mutation_plan_scope"));
   }
   const scope: MutationPlanScopeState = {
     ...input,
-    descriptors: input.plan.steps.map((step) => ({ step, status: "pending", networkCalls: 0 })),
+    descriptors: input.plan.steps.map((step) => ({ step, status: "pending", authorized: false, networkCalls: 0 })),
   };
-  return mutationPlanStorage.run(scope, async () => {
+  const execute = () => mutationPlanStorage.run(scope, async () => {
     const result = await run();
     if (input.requiresComplete?.(result)) {
       const incomplete = scope.descriptors.find((descriptor) =>
@@ -157,6 +182,11 @@ export function withMutationPlanScope<T>(input: MutationPlanScopeInput, run: () 
     }
     return result;
   });
+  try {
+    return withReservedHostCallBudget(maxHostCalls, execute);
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
 }
 
 /** Bind one durable workflow dispatch to its exact persisted plan descriptor. */
@@ -200,6 +230,12 @@ export async function withMutationPlanStep<T>(
     const result = await run();
     const afterRun = readDescriptorFailure(descriptor);
     if (afterRun.failed) throw afterRun.failure;
+    if (descriptor.networkCalls !== 1) {
+      const violation = new MutationPlanViolation(`mutation_step_incomplete_dispatch:${input.id}`);
+      descriptor.status = "failed";
+      descriptor.failure = violation;
+      throw violation;
+    }
     descriptor.status = "completed";
     return result;
   } catch (error) {
@@ -216,11 +252,11 @@ export async function withMutationPlanStep<T>(
   }
 }
 
-async function beginScopedMutationDispatch(): Promise<void> {
+async function authorizeScopedMutationDispatch(signal?: AbortSignal): Promise<void> {
   const scope = mutationPlanStorage.getStore();
   if (!scope?.active) throw new MutationPlanViolation("mutation_scope_required");
   const { descriptor } = scope.active;
-  if (descriptor.status !== "pending" || descriptor.networkCalls > 0) {
+  if (descriptor.status !== "pending" || descriptor.authorized || descriptor.networkCalls > 0) {
     const violation = new MutationPlanViolation(`mutation_step_excess_dispatch:${descriptor.step.id}`);
     descriptor.status = "failed";
     descriptor.failure = violation;
@@ -237,11 +273,49 @@ async function beginScopedMutationDispatch(): Promise<void> {
     }
     throw error;
   }
+  if (signal?.aborted) throw new HostRequestCancelledError();
+  descriptor.authorized = true;
+}
+
+function commitScopedMutationDispatch(signal?: AbortSignal): void {
+  const scope = mutationPlanStorage.getStore();
+  if (!scope?.active) throw new MutationPlanViolation("mutation_scope_required");
+  const { descriptor } = scope.active;
+  if (descriptor.status !== "pending" || !descriptor.authorized || descriptor.networkCalls > 0) {
+    const violation = new MutationPlanViolation(`mutation_step_excess_dispatch:${descriptor.step.id}`);
+    descriptor.status = "failed";
+    descriptor.failure = violation;
+    if (descriptor.step.kind === "primary") scope.primaryPoison = violation;
+    throw violation;
+  }
+  if (signal?.aborted) throw new HostRequestCancelledError();
+  try {
+    scope.onDispatch?.(descriptor.step);
+  } catch {
+    const error = new MutationDispatchDenied({ code: "dispatch_journal_unavailable" });
+    descriptor.status = "failed";
+    descriptor.failure = error;
+    if (descriptor.step.kind === "primary") {
+      scope.primaryPoison = new MutationPlanViolation(`mutation_primary_denied:${descriptor.step.id}`);
+    }
+    throw error;
+  }
   // The descriptor advances only after the fresh role gate succeeds, directly
   // before the fetch call begins. A swallowed denial therefore cannot unlock a
   // later descriptor.
   descriptor.status = "dispatching";
+  descriptor.authorized = false;
   descriptor.networkCalls += 1;
+}
+
+/** Deterministic WorkspaceClient test doubles have no HTTP adapter in which to
+ * cross the physical dispatch boundary. Their shared helper calls this seam
+ * immediately before applying an in-memory mutation; production callers must
+ * use RestCore.mutate instead. */
+export async function beginScopedMutationDispatchForTest(signal?: AbortSignal): Promise<void> {
+  if (!mutationPlanStorage.getStore()) return;
+  await authorizeScopedMutationDispatch(signal);
+  commitScopedMutationDispatch(signal);
 }
 
 export interface RestCore {
@@ -366,24 +440,41 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // context-free "fetch failed" (r1-error-handling-03). Only method/path are added;
   // no secrets (the url/header are never put in the message).
   async function doFetch(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
+    const mutation = isMutationMethod(method);
     try {
-      const dispatch = async () => {
-        if (isMutationMethod(method) && opts.enforceMutationScope) {
-          await beginScopedMutationDispatch();
-        }
+      const externalOperation = async () => {
+        if (mutation && opts.enforceMutationScope) commitScopedMutationDispatch(opts.signal);
+        const timeoutSignal = AbortSignal.timeout(commitTimeoutMs);
+        const signal = !mutation && opts.signal
+          ? AbortSignal.any([opts.signal, timeoutSignal])
+          : timeoutSignal;
         return baseFetch(url, {
           ...init,
           ...("addonToken" in opts.auth ? { redirect: "error" as const } : {}),
-          signal: AbortSignal.timeout(commitTimeoutMs),
+          signal,
         });
       };
-      return opts.requestGovernor
-        ? await opts.requestGovernor.run(isMutationMethod(method) ? "mutation" : "read", dispatch)
-        : await dispatch();
+      if (opts.requestGovernor) {
+        return await opts.requestGovernor.run(
+          mutation ? "mutation" : "read",
+          externalOperation,
+          {
+            ...(opts.signal ? { signal: opts.signal } : {}),
+            ...(mutation && opts.enforceMutationScope
+              ? { onDispatch: () => authorizeScopedMutationDispatch(opts.signal) }
+              : {}),
+          },
+        );
+      }
+      if (opts.signal?.aborted) throw new HostRequestCancelledError();
+      chargeHostCallBudget();
+      if (mutation && opts.enforceMutationScope) await authorizeScopedMutationDispatch(opts.signal);
+      return await externalOperation();
     } catch (error) {
-      if (error instanceof MutationPlanViolation || error instanceof MutationDispatchDenied) throw error;
-      const mutation = isMutationMethod(method);
+      if (error instanceof MutationPlanViolation || error instanceof MutationDispatchDenied ||
+        error instanceof HostCallBudgetExceededError || error instanceof HostRequestCancelledError) throw error;
       if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+        if (!mutation && opts.signal?.aborted) throw new HostRequestCancelledError();
         const message = `Clockify request timed out after ${commitTimeoutMs}ms (${method} ${path}).`;
         if (mutation) throw new AmbiguousWriteOutcome(method, path, message);
         throw new Error(message);
@@ -435,10 +526,15 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // bounded). GETs carry no body, so there is no body-reuse concern across attempts.
   async function fetchWithRetry(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
     let res: Response;
+    // A prepared mutation has an exact, pre-reserved physical call ceiling.
+    // Retrying a GET inside that scope would make the persisted estimator lie
+    // and could exhaust the reservation after earlier writes. Ordinary reads
+    // retain the existing bounded retry behavior.
+    const maxRetries = mutationPlanStorage.getStore() ? 0 : MAX_GET_RETRIES;
     for (let attempt = 0; ; attempt++) {
       res = await doFetch(method, path, url, init);
       if (res.status === 429) opts.requestGovernor?.noteRateLimited(retryDelayMs(res, attempt));
-      const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < MAX_GET_RETRIES;
+      const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < maxRetries;
       if (!willRetry) break;
       await res.text().catch(() => undefined); // drain the body before retrying
       await sleep(retryDelayMs(res, attempt));
@@ -505,21 +601,25 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     params: Record<string, string> = {},
   ): Promise<ListResult<unknown>> {
     const out: unknown[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
+    const pageLimit = mutationReadPageLimit();
+    for (let page = 1; page <= pageLimit; page++) {
       const qs = new URLSearchParams({
         ...params,
         page: String(page),
         "page-size": String(PAGE_SIZE),
       });
       const sep = path.includes("?") ? "&" : "?";
-      const rows = (await call(host, "GET", `${path}${sep}${qs.toString()}`)) as unknown[] | null;
-      const arr = Array.isArray(rows) ? rows : [];
+      const rows = await call(host, "GET", `${path}${sep}${qs.toString()}`);
+      if (!Array.isArray(rows)) {
+        throw new Error(`Clockify GET ${path} returned an invalid list response; expected a JSON array.`);
+      }
+      const arr = rows;
       out.push(...arr);
       if (arr.length < PAGE_SIZE) return { rows: out, truncated: false }; // short page = natural end
     }
     // Reached only if all MAX_PAGES pages were full → there is almost certainly more.
     console.warn(
-      `Clockify list ${path} hit the ${MAX_PAGES}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
+      `Clockify list ${path} hit the ${pageLimit}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
     );
     return { rows: out, truncated: true };
   }
@@ -544,18 +644,30 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   ): Promise<ListResult<unknown>> {
     // A dotted key walks nested envelopes level by level (e.g. expenses:
     // "expenses.expenses" for {expenses:{expenses:[…]}}); at each level a bare
-    // array short-circuits (taken as-is) and a missing key yields [].
+    // array short-circuits (taken as-is). A missing/wrong envelope fails closed:
+    // an empty array would falsely prove absence or uniqueness to the harness.
     const keys = envelopeKey.split(".");
     const unwrap = (data: unknown): unknown[] => {
       let cursor: unknown = data;
       for (const key of keys) {
         if (Array.isArray(cursor)) break; // a bare array at this level is the list
-        cursor = (cursor as Record<string, unknown> | null)?.[key];
+        if (typeof cursor !== "object" || cursor === null) {
+          throw new Error(
+            `Clockify GET ${path} returned an invalid list response; envelope ${envelopeKey} must resolve to a JSON array.`,
+          );
+        }
+        cursor = (cursor as Record<string, unknown>)[key];
       }
-      return Array.isArray(cursor) ? cursor : [];
+      if (!Array.isArray(cursor)) {
+        throw new Error(
+          `Clockify GET ${path} returned an invalid list response; envelope ${envelopeKey} must resolve to a JSON array.`,
+        );
+      }
+      return cursor;
     };
     const out: unknown[] = [];
-    for (let page = 1; page <= MAX_PAGES; page++) {
+    const pageLimit = mutationReadPageLimit();
+    for (let page = 1; page <= pageLimit; page++) {
       const qs = new URLSearchParams({ ...params, page: String(page), "page-size": String(PAGE_SIZE) });
       const sep = path.includes("?") ? "&" : "?";
       const data = (await call(host, "GET", `${path}${sep}${qs.toString()}`)) as
@@ -567,7 +679,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       if (arr.length < PAGE_SIZE) return { rows: out, truncated: false }; // short page = natural end
     }
     console.warn(
-      `Clockify list ${path} hit the ${MAX_PAGES}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
+      `Clockify list ${path} hit the ${pageLimit}-page backstop (${out.length} rows); the result is truncated/incomplete.`,
     );
     return { rows: out, truncated: true };
   }

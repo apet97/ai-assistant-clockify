@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import {
+  INTENT_LITERAL_LIMITS,
+  INVOICE_CREATE_MUTATION_STEP_MAX,
+  INVOICE_ITEM_BATCH_MAX,
+  MARK_INVOICED_ENTRY_BATCH_MAX,
+  SETUP_PROJECT_MEMBER_BATCH_MAX,
+} from "../../src/harness/safety-limits.js";
 import type { ActionContext, ActionDefinition } from "../../src/harness/action.js";
 import { executeAction } from "../../src/harness/actions.js";
 import { ACTION_CATALOG, actionFingerprint } from "../../src/harness/catalog.js";
@@ -20,6 +27,7 @@ interface WriteAuthorityMetadata {
   cardinality: {
     mode: "single" | "fixed" | "argument";
     maxExecutions: number;
+    maxArgumentItems?: number;
     argumentPath?: string;
   };
   mutationPlans: readonly unknown[];
@@ -31,10 +39,39 @@ function externalWrites(): ActionDefinition[] {
 }
 
 describe("Phase 6 write authority enforcement", () => {
+  it("advertises only host-budget-safe batch maxima at the exact boundary", () => {
+    const action = (name: string) => ACTION_CATALOG.find((candidate) => candidate.name === name)!;
+    const strings = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => `${prefix}-${index}`);
+    const items = (count: number) => Array.from({ length: count }, (_, index) => ({ itemType: `type-${index}` }));
+    const rates = (count: number) => Array.from({ length: count }, (_, index) => ({
+      member: `member-${index}`, amount: 10, kind: "hourly" as const,
+    }));
+
+    expect(action("clockify_groups_add_user").schema.safeParse({ groupName: "Ops", members: strings(14, "user") }).success).toBe(true);
+    expect(action("clockify_groups_add_user").schema.safeParse({ groupName: "Ops", members: strings(15, "user") }).success).toBe(false);
+    expect(action("clockify_onboard_user").schema.safeParse({ email: "a@example.com", groups: strings(13, "group") }).success).toBe(true);
+    expect(action("clockify_onboard_user").schema.safeParse({ email: "a@example.com", groups: strings(14, "group") }).success).toBe(false);
+    expect(action("clockify_invoices_create").schema.safeParse({ clientName: "Acme", items: items(INVOICE_ITEM_BATCH_MAX) }).success).toBe(true);
+    expect(action("clockify_invoices_create").schema.safeParse({ clientName: "Acme", items: items(INVOICE_ITEM_BATCH_MAX + 1) }).success).toBe(false);
+    expect(action("clockify_setup_project").schema.safeParse({ name: "Apollo", memberRates: rates(4) }).success).toBe(true);
+    expect(action("clockify_setup_project").schema.safeParse({ name: "Apollo", memberRates: rates(5) }).success).toBe(false);
+    expect(action("clockify_setup_project").schema.safeParse({ name: "Apollo", members: strings(SETUP_PROJECT_MEMBER_BATCH_MAX, "member") }).success).toBe(true);
+    expect(action("clockify_setup_project").schema.safeParse({ name: "Apollo", members: strings(SETUP_PROJECT_MEMBER_BATCH_MAX + 1, "member") }).success).toBe(false);
+    expect(action("clockify_groups_add_user").schema.safeParse({ groupId: "g1", members: strings(13, "member"), userId: "u14" }).success).toBe(true);
+    expect(action("clockify_groups_add_user").schema.safeParse({ groupId: "g1", members: strings(14, "member"), userId: "u15" }).success).toBe(false);
+    expect(action("clockify_setup_project").schema.safeParse({
+      name: "Apollo", clientName: "Acme", members: ["extra"], memberRates: rates(4),
+    }).success).toBe(true);
+    expect(action("clockify_setup_project").schema.safeParse({
+      name: "Apollo", clientName: "Acme", members: ["extra", "excess"], memberRates: rates(4),
+    }).success).toBe(false);
+  });
+
   it("requires explicit literal, derived-id, default, and cardinality metadata on every external write", () => {
     const invalid = externalWrites().flatMap((action) => {
       const authority = (action as ActionDefinition & { writeAuthority?: WriteAuthorityMetadata }).writeAuthority;
       if (!authority || !Array.isArray(authority.literalControlledPaths) ||
+        authority.literalConstraintLimits !== INTENT_LITERAL_LIMITS ||
         !Array.isArray(authority.serverDerivedIdPaths) || !Array.isArray(authority.permittedServerDefaultPaths) ||
         !Array.isArray(authority.preservedStatePaths) ||
         !authority.cardinality || !["single", "fixed", "argument"].includes(authority.cardinality.mode) ||
@@ -57,6 +94,7 @@ describe("Phase 6 write authority enforcement", () => {
     const operation = { id: "p1", entityType: "project" };
     const valid = {
       mode: "curated" as const,
+      maxHostCalls: 60,
       steps: [
         { id: "archive-project", kind: "primary" as const },
         { id: "delete-project", kind: "primary" as const },
@@ -79,16 +117,18 @@ describe("Phase 6 write authority enforcement", () => {
     const steps = [
       { id: "create-invoice", kind: "primary" as const },
       { id: "enrich-invoice", kind: "primary" as const },
-      ...Array.from({ length: 100 }, (_, index) => ({ id: `add-invoice-item-${index}`, kind: "primary" as const })),
+      ...Array.from({ length: INVOICE_ITEM_BATCH_MAX }, (_, index) => ({ id: `add-invoice-item-${index}`, kind: "primary" as const })),
     ];
-    expect(validateWriteAuthorityOperation(invoice, { items: Array(100).fill({}) }, {
-      mode: "curated", steps,
+    expect(validateWriteAuthorityOperation(invoice, { items: Array(INVOICE_ITEM_BATCH_MAX).fill({}) }, {
+      mode: "curated", maxHostCalls: 60, steps,
     })).toBeUndefined();
-    expect(validateWriteAuthorityOperation(invoice, { items: Array(101).fill({}) }, {
-      mode: "curated", steps: [...steps, { id: "add-invoice-item-100", kind: "primary" }],
+    expect(validateWriteAuthorityOperation(invoice, { items: Array(INVOICE_ITEM_BATCH_MAX + 1).fill({}) }, {
+      mode: "curated", maxHostCalls: 60,
+      steps: [...steps, { id: `add-invoice-item-${INVOICE_ITEM_BATCH_MAX}`, kind: "primary" }],
     })).toBe("mutation_cardinality_exceeded");
     expect(validateWriteAuthorityOperation(invoice, { items: [{}, {}] }, {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [
         { id: "create-invoice", kind: "primary" },
         { id: "add-invoice-item-0", kind: "primary" },
@@ -97,6 +137,7 @@ describe("Phase 6 write authority enforcement", () => {
     })).toBe("undeclared_mutation_plan");
     expect(validateWriteAuthorityOperation(invoice, { items: [{}] }, {
       mode: "curated",
+      maxHostCalls: 60,
       steps: [
         { id: "create-invoice", kind: "primary" },
         { id: "add-invoice-item-0", kind: "primary" },
@@ -109,10 +150,10 @@ describe("Phase 6 write authority enforcement", () => {
     const project = ACTION_CATALOG.find((action) => action.name === "clockify_projects_create")!;
     expect(validateWriteAuthorityOperation(project, {
       body: { name: "Apollo", clientId: "client-1", rateUnit: "HOUR" },
-    }, { mode: "single", steps: [{ id: "create-project", kind: "primary" }] })).toBeUndefined();
+    }, { mode: "single", maxHostCalls: 60, steps: [{ id: "create-project", kind: "primary" }] })).toBeUndefined();
     expect(validateWriteAuthorityOperation(project, {
       body: { name: "Apollo", inventedTargetId: "client-2" },
-    }, { mode: "single", steps: [{ id: "create-project", kind: "primary" }] })).toBe(
+    }, { mode: "single", maxHostCalls: 60, steps: [{ id: "create-project", kind: "primary" }] })).toBe(
       "undeclared_server_derived_path:operation.body.inventedTargetId",
     );
   });
@@ -142,15 +183,22 @@ describe("Phase 6 write authority enforcement", () => {
       return action!.writeAuthority!;
     };
 
-    // These arrays are values inside one host mutation, not repeated dispatches.
+    // These arrays are values inside one host mutation. Their raw item ceiling
+    // is distinct from the one exact external plan step.
     expect(authorityFor("clockify_start_timer").cardinality).toEqual({ mode: "single", maxExecutions: 1 });
-    expect(authorityFor("clockify_entries_mark_invoiced").cardinality).toEqual({ mode: "single", maxExecutions: 1 });
+    expect(authorityFor("clockify_entries_mark_invoiced").cardinality).toEqual({
+      mode: "argument",
+      maxExecutions: 1,
+      maxArgumentItems: MARK_INVOICED_ENTRY_BATCH_MAX,
+      argumentPath: "ids[]",
+    });
     // Curated actions declare their real host-step ceiling explicitly.
     expect(authorityFor("clockify_clients_create").cardinality).toEqual({ mode: "fixed", maxExecutions: 2 });
     expect(authorityFor("clockify_create_work_package").cardinality).toEqual({ mode: "fixed", maxExecutions: 5 });
     expect(authorityFor("clockify_invoices_create").cardinality).toEqual({
       mode: "argument",
-      maxExecutions: 102,
+      maxExecutions: INVOICE_CREATE_MUTATION_STEP_MAX,
+      maxArgumentItems: INVOICE_ITEM_BATCH_MAX,
       argumentPath: "items[]",
     });
   });
@@ -209,7 +257,7 @@ describe("Phase 6 write authority enforcement", () => {
     expect(validateWriteAuthorityOperation(
       ACTION_CATALOG.find((action) => action.name === "clockify_custom_fields_set_value_entry")!,
       { invented: { description: "not-authoritative" } },
-      { mode: "single", steps: [{ id: "set-entry-custom-field", kind: "primary" }] },
+      { mode: "single", maxHostCalls: 60, steps: [{ id: "set-entry-custom-field", kind: "primary" }] },
     )).toBe("undeclared_server_default_path:operation.invented.description");
 
     expect(under(authorityFor("clockify_time_off_policies_create").serverDerivedIdPaths, "operation.input.")).toEqual([

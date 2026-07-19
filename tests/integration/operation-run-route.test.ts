@@ -16,7 +16,15 @@ function setup() {
   const store = createStore(":memory:", { encryptionKey: "test-key" });
   stores.push(store);
   const config = makeTestConfig();
-  const fake = createFakeWorkspace();
+  const fake = createFakeWorkspace({ memberRoles: { "admin-1": "ADMIN", "admin-2": "ADMIN" } });
+  for (const workspaceId of ["ws-1", "ws-2", "ws-foreign"]) {
+    store.saveInstallation({
+      workspaceId,
+      addonId: `addon-${workspaceId}`,
+      addonUserId: `addon-user-${workspaceId}`,
+      addonToken: `addon-token-${workspaceId}`,
+    });
+  }
   const app = createApp({
     config,
     store,
@@ -43,7 +51,7 @@ describe("GET /api/operation-runs/:operationId", () => {
   it("returns only bounded allowlisted scoped status, reconciliation, summary, plan, steps, and timestamps", async () => {
     const { store, app, config } = setup();
     const { session, cookie } = ownedSession(store, config.sessionSecret);
-    const planSteps = Array.from({ length: 80 }, (_, index) => ({ id: `step-${index}`, kind: "primary" as const }));
+    const planSteps = Array.from({ length: 55 }, (_, index) => ({ id: `step-${index}`, kind: "primary" as const }));
     store.prepareOperationRun({
       id: "operation-owned",
       sessionId: session.id,
@@ -56,7 +64,7 @@ describe("GET /api/operation-runs/:operationId", () => {
       operation: {
         huge: "x".repeat(200_000),
       },
-      mutationPlan: { mode: "batch", steps: planSteps },
+      mutationPlan: { mode: "batch", maxHostCalls: 60, steps: planSteps },
     });
     store.markOperationExecuting("operation-owned");
     let reconciledStep = "";
@@ -174,24 +182,24 @@ describe("GET /api/operation-runs/:operationId", () => {
     expect(JSON.stringify(response.body)).not.toContain("FOREIGN_RESULT_SECRET");
   });
 
-  it("fails closed over malformed persisted plan entries without exposing their payload", async () => {
+  it("rejects malformed plan entries before persistence or scoped exposure", async () => {
     const { store, app, config } = setup();
     const owner = ownedSession(store, config.sessionSecret);
-    store.prepareOperationRun({
+    expect(() => store.prepareOperationRun({
       id: "malformed-plan", sessionId: owner.session.id, workspaceId: "ws-1", adminUserId: "admin-1",
       actionName: "owned-action", actionFingerprint: "af", catalogHash: "ch", operationHash: "oh",
       mutationPlan: {
         mode: "single",
+        maxHostCalls: 60,
         steps: [
           { id: 7, kind: "primary", payload: { note: "MALFORMED_PLAN_MARKER" } },
           { id: "valid", kind: "not-a-kind", detail: "MALFORMED_PLAN_MARKER" },
         ],
       } as never,
-    });
+    })).toThrow("invalid_mutation_plan");
 
     const response = await request(app).get("/api/operation-runs/malformed-plan").set("Cookie", owner.cookie);
-    expect(response.status).toBe(200);
-    expect(response.body.operation.plan).toMatchObject({ mode: "single", steps: [], truncated: true });
+    expect(response.status).toBe(404);
     expect(JSON.stringify(response.body)).not.toContain("MALFORMED_PLAN_MARKER");
   });
 });

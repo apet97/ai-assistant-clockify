@@ -34,7 +34,7 @@ import { makeWorkspaceRest } from "./rest/workspace.js";
 export type { ClockifyAuth };
 
 export interface RestWorkspaceOptions
-  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor"> {
+  extends Pick<RestCoreOptions, "reportsBase" | "auditBase" | "auth" | "fetchImpl" | "commitTimeoutMs" | "requestGovernor" | "signal"> {
   baseUrl: string; // e.g. https://api.clockify.me/api/v1
   workspaceId: string;
   /** Unit/integration adapter probes only. Production always leaves this true. */
@@ -43,7 +43,6 @@ export interface RestWorkspaceOptions
 
 export function createRestWorkspaceClient(opts: RestWorkspaceOptions): WorkspaceClient {
   const base = opts.baseUrl.replace(/\/$/, "");
-  const ws = `/workspaces/${opts.workspaceId}`;
 
   // Per-area REST modules built on the multi-host core (D2). The core shares this
   // adapter's auth + base; areas are migrated off the inline `call` phase by phase.
@@ -55,6 +54,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
     fetchImpl: opts.fetchImpl,
     commitTimeoutMs: opts.commitTimeoutMs,
     requestGovernor: opts.requestGovernor,
+    signal: opts.signal,
     enforceMutationScope: process.env.NODE_ENV === "test"
       ? (opts.testOnlyEnforceMutationScope ?? true)
       : true,
@@ -122,7 +122,7 @@ export function createRestWorkspaceClient(opts: RestWorkspaceOptions): Workspace
         group: (i) => userRest.deleteGroup(i),
         holiday: (i) => holidayRest.deleteHoliday(i),
         assignment: (i) => schedulingRest.deleteAssignment(i),
-        time_entry: (i) => core.call("api", "DELETE", `${ws}/time-entries/${i}`).then(() => undefined),
+        time_entry: (i) => timeEntryRest.deleteTimeEntryAtomic(i),
       };
       const del = deleteByType[entityType];
       if (!del) throw new Error(`delete not supported for entity type: ${entityType}`);

@@ -21,7 +21,7 @@ describe("verified durable mutation step", () => {
     risks: ["destructive", "billing"],
     payload: { id: "invoice-1" },
     targetSnapshots: snapshots,
-    mutationPlan: { mode: "single", steps: [{ id: "delete-invoice", kind: "primary", reconciliationStrategy: "delete" }] },
+    mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "delete-invoice", kind: "primary", reconciliationStrategy: "delete" }] },
   });
 
   it("fails closed with a stable receipt for missing snapshots and no-journal target drift", async () => {
@@ -54,7 +54,7 @@ describe("verified durable mutation step", () => {
       id: "operation-1", sessionId: "session-1", workspaceId: "workspace-1", adminUserId: "admin-1",
       actionName: "clockify_invoices_delete", actionFingerprint: "af", catalogHash: "ch", operationHash: "oh",
       operation: { targetSnapshots: snapshots },
-      mutationPlan: { mode: "single", steps: [{ id: "delete-invoice", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "delete-invoice", kind: "primary" }] },
     });
     store.markOperationExecuting(operationId);
     const dispatch = vi.fn();
@@ -86,7 +86,7 @@ describe("verified durable mutation step", () => {
       id: "operation-2", sessionId: "session-1", workspaceId: "workspace-1", adminUserId: "admin-1",
       actionName: "clockify_tasks_delete", actionFingerprint: "af", catalogHash: "ch", operationHash: "oh",
       operation: { targetSnapshots: snapshots },
-      mutationPlan: { mode: "single", steps: [{ id: "delete-task", kind: "primary" }] },
+      mutationPlan: { mode: "single", maxHostCalls: 60, steps: [{ id: "delete-task", kind: "primary" }] },
     });
     store.markOperationExecuting(operationId);
     const events: string[] = [];

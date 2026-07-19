@@ -66,6 +66,72 @@ rewrites `evidence/dependency-gates/production-licenses.json`; it never leaves s
 passing evidence after a failed inspection. `eval:smoke` is an offline scripted-model
 safety floor, not the credentialed release-model evaluation.
 
+## Canonical production release order
+
+For an existing production service, this is the only valid order: freeze and build the
+exact source candidate; run the machine/browser gates and both DeepSeek settings; create
+an online SQLite backup on the current production service; copy the database and both
+sidecars to the verified encrypted recovery volume; complete the isolated restore drill;
+run the executable stop gate below; and only then upload the candidate to Railway.
+
+The current capability probe, baseline, candidate, and focused setting measurements must use
+the **same exact clean source-candidate SHA**, Node 22, the pinned DeepSeek endpoint, and
+external (off-worktree) evidence paths. `--repeat=5` emits five ordered complete cohorts, each
+containing every configured safety case exactly once; unordered five-times case counts do
+not pass release validation:
+
+```bash
+export EVAL_RELEASE_CANDIDATE_SHA="$RELEASE_SHA"
+export LLM_MODE=tool LLM_AGENTIC=1 LLM_TOOL_SELECT=1
+railway run -s ai-assistant -e production -- \
+  npx tsx scripts/eval/probe-deepseek-settings.ts \
+  --out="$RECOVERY_EVIDENCE_DIR/deepseek-capability-probe.raw.json"
+railway run -s ai-assistant -e production -- \
+  env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+  --out="$RECOVERY_EVIDENCE_DIR/deepseek-baseline.raw.json"
+railway run -s ai-assistant -e production -- \
+  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+  --out="$RECOVERY_EVIDENCE_DIR/deepseek-candidate.raw.json"
+railway run -s ai-assistant -e production -- \
+  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+  --tool-select --concurrency=4 --out="$RECOVERY_EVIDENCE_DIR/deepseek-focused-read.raw.json"
+railway run -s ai-assistant -e production -- \
+  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+  --preview-only --tool-select --concurrency=4 \
+  --out="$RECOVERY_EVIDENCE_DIR/deepseek-focused-risky-preview.raw.json"
+export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-capability-probe.raw.json"
+export DEEPSEEK_BASELINE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-baseline.raw.json"
+export DEEPSEEK_CANDIDATE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-candidate.raw.json"
+export DEEPSEEK_FOCUSED_READ_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-read.raw.json"
+export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-risky-preview.raw.json"
+export DEEPSEEK_BINDING_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-binding.json"
+npm run --silent bind:deepseek-evidence
+```
+
+Immediately before production upload, bind the still-present encrypted backup, checksum
+sidecar, metadata sidecar, measured restore proof, and exact locally built server artifact
+to the candidate. The command calls `diskutil`, rejects symlinks and paths outside
+`RECOVERY_VOLUME`, rehashes the database, and revalidates the complete restore schema.
+At execution it captures a fresh UTC gate clock, rejects future-dated or misordered
+backup/incident/drill/readiness timestamps, and requires both backup completion and restore
+readiness to be no more than one hour old. **STOP: do not run Railway upload** if it exits
+nonzero or if any input changed:
+
+```bash
+export RECOVERY_VOLUME=/Volumes/AIASSIST_RECOVERY
+export PREDEPLOY_BACKUP_PATH="$LOCAL_BACKUP"
+export PREDEPLOY_BACKUP_CHECKSUM_PATH="$LOCAL_BACKUP.sha256"
+export PREDEPLOY_BACKUP_METADATA_PATH="$RELEASE_METADATA"
+export PREDEPLOY_RESTORE_EVIDENCE_PATH="$RESTORE_EVIDENCE"
+export RELEASE_SERVER_ARTIFACT_SHA256="$(node -p \
+  'JSON.parse(require("node:fs").readFileSync("dist/release-artifact-manifest.json", "utf8")).serverArtifactSha256')"
+npm run --silent gate:predeploy-backup
+```
+
 ## 1. Create the Railway service
 
 Railway auto-detects Nixpacks; `railway.json` pins the build/start/healthcheck
@@ -79,7 +145,6 @@ Railway auto-detects Nixpacks; `railway.json` pins the build/start/healthcheck
 ```bash
 railway login
 railway init                 # new project  (or: railway link  for an existing one)
-railway up                   # build + deploy the current dir via Nixpacks
 railway domain               # generate the public URL -> use it as BASE_URL below
 ```
 
@@ -113,24 +178,51 @@ not set it.
 | `CLOCKIFY_ADDON_KEY` | `ai-assistant` |
 | `SESSION_SECRET` | a long random string — `openssl rand -hex 32` |
 | `DATA_ENCRYPTION_KEY` | a strong random passphrase, **min 32 chars** (SHA-256-derived to the AES-256-GCM key — not raw hex) — `openssl rand -hex 32` gives 64 chars |
-| `LLM_BASE_URL` | your OpenAI-compatible endpoint |
-| `LLM_API_KEY` | the model API key |
-| `LLM_MODEL` | the model name |
+| `LLM_PROVIDER` | `http` for the version 1.0.0 DeepSeek release |
+| `LLM_BASE_URL` | the approved DeepSeek OpenAI-compatible endpoint |
+| `LLM_API_KEY` | the rotated production DeepSeek key from admin package 1 |
+| `LLM_MODEL` | the exact DeepSeek release model recorded in the evidence record |
+| `LLM_THINKING_MODE` | `disabled` - the fastest supported DeepSeek setting that passed five consecutive configured safety runs |
+| `PUBLIC_CONTACT_URL` | Admin package 2's monitored HTTPS form or `mailto:` destination for the public Privacy, Support, and Security pages |
+| `RELEASE_SHA` | Full, lowercase SHA of the clean commit uploaded by `railway up` |
+| `RELEASE_BUILD_HASH` | `git archive "$RELEASE_SHA" | shasum -a 256` for the binding's tested candidate |
+| `RELEASE_SOURCE_BINDING_SHA256` | SHA-256 printed by the pre-upload source-binding command below |
 
-CLI equivalent: `railway variables --set "BASE_URL=https://…" --set
-"DATABASE_PATH=/data/ai-assistant.sqlite" --set "SESSION_SECRET=…"` (etc.).
+`npm run build` creates `dist/release-artifact-manifest.json`. An exact Git checkout
+records Git-verified candidate/archive provenance. A Git-less Railway builder requires
+all three release-binding variables, verifies the canonical uploaded source tree against
+the independently generated Git binding, and records `source_bound_builder` provenance
+plus the complete built-server hash; production startup rejects a missing/mismatched
+manifest or changed bytes before opening the database. `/version` serves only that
+verified manifest identity, never the environment strings directly. Restore readiness
+does not promote the transported builder proof to Git restore evidence and does not trust the two release
+environment values by themselves: before starting the
+one-off built server it revalidates the Git commit/archive relationship, the permitted
+source-candidate versus evidence-only-descendant relationship, and the SHA-256 of the
+complete `dist/server` tree. A dirty/non-evidence checkout or stale/tampered artifact is
+not valid release or recovery evidence.
 
-Optional knobs (defaults are fine): `LLM_PROVIDER=http`, `LLM_MODE=tool`,
-`LLM_AGENTIC=1`, `LLM_TOOL_SELECT=1` (deterministic tool subsetting, **default on** —
+Railway 4.37 CLI equivalent: `railway variable set -s ai-assistant -e production
+"BASE_URL=https://…" "DATABASE_PATH=/data/ai-assistant.sqlite"
+"SESSION_SECRET=…"` (etc.). Do not place this secret-bearing command in shell history;
+prefer the protected Variables tab or `railway variable set --stdin` one secret at a time.
+
+Release model knobs are `LLM_PROVIDER=http`, `LLM_MODE=tool`, `LLM_AGENTIC=1`,
+and `LLM_TOOL_SELECT=1` (deterministic tool subsetting, **default on** -
 the model sees only the message-relevant actions; no-match/non-ASCII/>3-area requests
-fail open to the full catalog; eval-proven 100% on DeepSeek + both
-Gemini tiers with ~61–65% fewer prompt tokens; set `=0` to roll back to the full
-catalog), `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
+fail open to the full catalog). Do not change these on the 1.0.0 candidate without
+rerunning the configured DeepSeek safety and performance gates. `LLM_TOOL_SELECT=0`
+is an operational fallback to the full catalog, not a provider migration.
+
+Other optional knobs include `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 120000 — **must be < 290000** so the two setup-composite semantic-dedupe claims
 stay below their claim TTL; invoice replay instead uses its persisted durable
 operation identity and step journal),
 `RETENTION_DAYS` (chat-transcript + audit-log retention in days, default 90,
-**min 30**; see [`PRIVACY.md`](./PRIVACY.md)). Leave `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** — the platform
+**min 30**; see [`PRIVACY.md`](./PRIVACY.md)) and `ROLE_RECHECK_TTL_MS` (positive
+admin-verdict cache, default 60000 ms). Role rechecking is mandatory; the deprecated
+`ROLE_RECHECK` compatibility input cannot disable it. Leave
+`CLOCKIFY_ADDON_PUBLIC_KEY_PEM` **unset** - the platform
 RS256 key is built in. Never set a real token here; the add-on receives its
 install token from Clockify at runtime.
 
@@ -164,22 +256,173 @@ embedded chat loads and a read action returns a receipt.
 - `GET https://<your-app>.up.railway.app/manifest` → `200` (the add-on manifest).
 - Sidebar chat loads; a read ("list my projects") returns a receipt; a risky write
   shows a preview + Confirm button.
-- With the stable URL, you can finally answer the prod **AUDIT-host** question: run
-  `scripts/host-auth-spike.ts` with a captured prod `LIVE_ADDON_TOKEN`.
+
+For a release-candidate upload, Railway CLI 4.37.x must receive identity variables from
+the same clean commit before `railway up`. This service is not Git-linked, so a successful
+deployment alone does not prove what source was uploaded:
+
+```bash
+set -euo pipefail
+test -z "$(git status --porcelain --untracked-files=all)"
+DEEPSEEK_BINDING_PATH="${DEEPSEEK_BINDING_PATH:-evidence/performance/deepseek-release-binding.json}"
+RELEASE_SHA="$(node -e '
+  const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(binding.candidate.testedSha);
+' "$DEEPSEEK_BINDING_PATH")"
+printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+git cat-file -e "$RELEASE_SHA^{commit}"
+git merge-base --is-ancestor "$RELEASE_SHA" HEAD
+RELEASE_BUILD_HASH="$(git archive "$RELEASE_SHA" | shasum -a 256 | awk '{print $1}')"
+export RELEASE_SHA RELEASE_BUILD_HASH
+RELEASE_STAGING="$(mktemp -d)"
+trap 'rm -rf -- "$RELEASE_STAGING"' EXIT
+git archive "$RELEASE_SHA" | tar -xf - -C "$RELEASE_STAGING"
+RELEASE_SOURCE_BINDING_SHA256="$(npx tsx scripts/release-source-binding.ts --write "$RELEASE_STAGING")"
+export RELEASE_SOURCE_BINDING_SHA256
+test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
+
+railway --version                         # required release tool: 4.37.x
+railway variable set -s ai-assistant -e production --skip-deploys \
+  "RELEASE_SHA=$RELEASE_SHA" "RELEASE_BUILD_HASH=$RELEASE_BUILD_HASH" \
+  "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256"
+# Re-run the stop gate in this same shell immediately before transport.
+# STOP: do not run Railway upload when this command fails.
+npm run --silent gate:predeploy-backup
+railway up "$RELEASE_STAGING" --path-as-root \
+  -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304 -s ai-assistant -e production --ci \
+  --message "marketplace-1.0.0 $RELEASE_SHA"
+```
+
+Set `BASE_URL` to the already-configured production origin, then require `/version` to
+match both local values exactly. Do not proceed to live tests on a null or mismatched
+identity:
+
+```bash
+VERSION_JSON="$(curl --fail --silent --show-error "$BASE_URL/version")"
+node -e '
+  const value = JSON.parse(process.argv[1]);
+  if (value.version !== "1.0.0" || value.releaseSha !== process.env.RELEASE_SHA ||
+      value.buildHash !== process.env.RELEASE_BUILD_HASH ||
+      value.sourceRelationship !== "source_bound_builder" ||
+      value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
+      !/^[a-f0-9]{64}$/.test(value.serverArtifactSha256)) process.exit(1);
+' "$VERSION_JSON"
+curl --fail --silent --show-error "$BASE_URL/live" >/dev/null
+curl --fail --silent --show-error "$BASE_URL/health" >/dev/null
+curl --fail --silent --show-error "$BASE_URL/manifest" >/dev/null
+```
+
+### Release-only scope and AUDIT-host probes
+
+Both live probes require `LIVE_RELEASE_SHA` to equal the checked-out final SHA. Point
+`SCOPE_PROBE_EVIDENCE_PATH` and `HOST_AUTH_EVIDENCE_PATH` at controlled locations for
+the scripts' secret-free JSON; never redirect `.env`, tokens, raw responses, or shell
+history into release evidence.
+
+The full scope probe must use a newly issued production add-on token from a genuine
+install after the exact candidate is deployed. Token `iat` and a replacement token
+are never accepted as installation proof. The verified `/lifecycle/installed`
+callback atomically stores a token fingerprint plus a secret-free attestation bound
+to the installation generation, canonical manifest, release SHA/build hash, exact
+server artifact, and source binding. A token replacement invalidates that proof and
+cannot mint another; uninstall deletes it immediately. Before any Clockify scope
+request, the probe fetches deployed `/version` and `/manifest`, authenticates to the
+attestation GET with the current `X-Addon-Token`, and asks the deployed public verify
+route to validate the HMAC envelope. The callback must be no more than 15 minutes old.
+No operator-authored install-event JSON or immutable-reference assertion is accepted:
+
+```bash
+export LIVE_ADDON_BASE_URL="$BASE_URL"
+MANIFEST_SHA256="$(npm run --silent manifest:hash)"
+test "${#MANIFEST_SHA256}" -eq 64
+```
+
+```bash
+export LIVE_RELEASE_SHA="$RELEASE_SHA"
+export RECOVERY_EVIDENCE_DIR="/Volumes/AIASSIST_RECOVERY/ai-assistant/$RELEASE_SHA/probes"
+umask 077
+mkdir -p "$RECOVERY_EVIDENCE_DIR"
+export SCOPE_PROBE_EVIDENCE_PATH="$RECOVERY_EVIDENCE_DIR/scope-probe.json"
+LIVE_CLOCKIFY=1 LIVE_SCOPE_FRESH_INSTALL=1 npm run --silent probe:scopes
+```
+
+The one all-scopes token proves aggregate endpoint reachability, not the necessity
+of each individual scope (which would require controlled omission tokens). The JSON
+labels that boundary explicitly and also contains a separate, valid read-only POST
+to the derived AUDIT host. It never contains a raw workspace id, token, header,
+request path, response body, or error detail.
+
+The production AUDIT-host conclusion must run with `LIVE_ADDON_TOKEN`, not the API-key
+fallback. It binds the result to the same final SHA:
+
+```bash
+export LIVE_RELEASE_SHA="$RELEASE_SHA"
+export HOST_AUTH_EVIDENCE_PATH="$RECOVERY_EVIDENCE_DIR/host-auth.json"
+LIVE_CLOCKIFY=1 npx tsx scripts/host-auth-spike.ts
+```
+
+Supply `LIVE_ADDON_TOKEN`, workspace, and service URLs through the approved local secret
+mechanism; do not put them in a command line, committed file, or evidence path.
+
+### Import timestamped release evidence
+
+Use `npm run --silent import:release-evidence --` with the exact timestamped
+private-production, restore, scope, production-browser, and real member-denial JSON plus captured public `/version`, `/manifest`,
+the exact strict sanitized browser-trace bytes, and attestation-verification JSON. The complete command is in the Marketplace operations
+runbook. It validates source/release binding, schema, thresholds, cleanup, scope/AUDIT
+coverage, and secret isolation before deterministically writing
+`evidence/performance/private-production.{json,md}`,
+`evidence/operations/production-restore.json`, and
+`evidence/operations/production-scope-probe.json`,
+`evidence/operations/production-browser.json`,
+`evidence/operations/production-browser-trace.json`, and
+`evidence/operations/production-member-denial.json`. Never hand-copy these workflow inputs.
+
+The exact logged-in Chrome journey and member-denial commands, strict PDF byte/status
+proof, cleanup boundary, and secret-free capture rules are in the Marketplace operations
+runbook. Use `npm run perf:private-production:secure` for the private speed gate: it mints
+the admin component credential in memory only after a redirect-blocked, credential-free
+`/version` preflight proves the exact SHA/archive at a root HTTPS `*.up.railway.app` origin.
+It passes the authenticated URL only through the gate child's environment, never argv,
+logs, files, evidence, or the clipboard. The member-denial probe enforces the same root
+Railway production-origin contract before any request or member-token exchange; custom
+ports, paths, queries, fragments, user info, and non-Railway hosts fail with zero network
+requests.
 
 ## Operational constraints
 
-- **Run a single instance.** The chat/new-chat rate limiters are in-process (per
-  Railway instance) by design (src/routes/rate-limit.ts). Scaling to >1 instance
-  multiplies the effective caps and weakens the paid-loop abuse damping. If you
-  must scale out, move the limiter to the shared SQLite (or a shared store) first.
-- **SESSION_SECRET keys two things.** It signs the session cookie AND hashes the
-  one-use confirmation nonce. Rotating it invalidates ALL live sessions AND ALL
-  live pending confirmations at once — expect admins to re-open the panel and
-  re-preview after a rotation.
+- **Run a single instance.** The chat, new-chat, and authenticated API rate limiters
+  are in-process (per Railway instance) by design. Scaling to >1 instance multiplies
+  the effective caps and weakens both paid-loop and API abuse damping. If you must
+  scale out, move every limiter to shared SQLite (or another shared store) first.
+- **SESSION_SECRET keys three domain-separated things.** It signs the session
+  cookie, hashes the one-use confirmation nonce, and derives the fresh-install
+  attestation HMAC key. Rotating it invalidates all live sessions, all live pending
+  confirmations, and previously emitted attestation envelopes. The stored current
+  installation binding remains; retrieve a newly signed envelope before rerunning
+  release evidence.
 - Clockify host calls are governed per workspace at 10 requests/second, burst 10,
   concurrency 4, one mutation at a time, and 60 host calls per chat/resume turn.
-  A `429` pauses new dispatches according to `Retry-After`; writes are never retried.
+  Supported batches derive their limits from a worst-case call estimator, and each
+  prepared operation hashes and reserves its complete `maxHostCalls` cost before the
+  first mutation. A `429` pauses new dispatches according to `Retry-After`; writes are
+  never retried after dispatch.
+- Activation and token replacement increment an installation generation. Every
+  pre-dispatch gate reloads installation state and generation. Inactive, deleted, or
+  stale-generation work fails before dispatch.
+- Redelivery of the exact same installation token is idempotent even while inactive: it does not
+  increment the generation, revoke work, or replace the fresh-install proof. Replacement
+  and uninstall first persist a domain-separated retired-token fingerprint with no
+  workspace identifier. A separate-domain hashed-workspace lifecycle lineage covers older
+  tokens that were never previously persisted; it retains only issuer time/state/generation
+  for 24 hours + 2 minutes + 1 second after the latest accepted event. A delayed old INSTALLED callback
+  is ignored after row erasure/restart; a genuinely new, strictly newer token may install.
+- Lifecycle and component JWTs must carry a finite expiry; lifecycle JWTs must also carry
+  an issuer time no more than 24 hours old (plus 60 seconds skew). The current install
+  generation stores that `iat`. An older INSTALLED, STATUS_CHANGED, or DELETED delivery
+  is acknowledged but ignored even if it physically arrives later. Equal whole-second
+  times fail closed as `DELETED > INACTIVE > ACTIVE`; different-token INSTALLED authority
+  must be strictly newer, and only `STATUS ACTIVE` can reactivate an inactive same token.
 
 ## Automated release evidence (does not deploy)
 
@@ -196,16 +439,25 @@ embedded chat loads and a read action returns a receipt.
   removed. Both jobs always upload sanitized prefix/count/status JSON; logs and
   artifacts omit credentials, workspace/user/resource identities, payloads,
   response bodies, and prompts.
-- Manual `.github/workflows/release-evidence.yml` records the exact commit SHA and
-  machine conclusions for verify, audit, license, CodeQL, secret scan,
-  `eval:smoke`, SBOM, and the reusable live smoke. It always records credential
-  rotation, provider governance, recovery drill, release-model evaluation,
-  security review, AUDIT-host clearance, and Marketplace approval as
-  `not_evaluated`.
+- Manual `.github/workflows/release-evidence.yml` records the tested/deployed source-
+  candidate SHA, the current evidence-commit SHA, and machine conclusions for verify,
+  audit, license, CodeQL, secret scan,
+  `eval:smoke`, SBOM, and the reusable live smoke. Its required dispatch inputs also
+  record the operator-run backup/restore drill, configured DeepSeek safety evaluation,
+  and production AUDIT-host probe as engineering conclusions. The three administrative
+  packages remain `not_evaluated`; the workflow cannot deploy, approve, or submit the
+  add-on.
 
-The workflow definitions and local checks are implementation evidence only. This
-document does not attest that a GitHub workflow, live smoke, deployment, production
-drill, or Marketplace submission has run.
+The workflow definitions and local checks are implementation evidence only. Bind actual
+run URLs and artifacts to the tested/deployed source candidate in
+[`docs/marketplace/evidence/release-candidate.md`](./docs/marketplace/evidence/release-candidate.md).
+This document does not attest that a GitHub workflow, live smoke, deployment,
+production drill, or Marketplace submission has run.
+
+The pull-request/evidence head may be a later commit only when the tested source
+candidate is its ancestor and the checked-in validators prove the entire intervening diff
+is allowlisted non-executable evidence. `/version`, Railway, DeepSeek evaluation, and the
+source archive remain bound to the source candidate, not that descendant.
 
 ## Startup retention and write recovery
 
@@ -216,45 +468,223 @@ canonical in `action_results`; replay, audit, confirmation, undo, and operation 
 retain ordered links and bounded summaries.
 
 Before an external write, the backend persists the immutable intent capability,
-normalized nonsecret operation data, exact mutation plan, authoritative target/parent
-snapshots where applicable, and step-bound reconciliation strategy. Each host effect
-is journaled `prepared` → `executing` → terminal and rechecks the admin role immediately
-before dispatch. After restart, only dispatched orphan steps become unknown; startup
-reconciliation uses complete-list or exact-target reads and settles only authoritative
-compatible evidence. It never dispatches prepared work, retries an ambiguous mutation,
-or compensates automatically.
+normalized nonsecret operation data, exact mutation plan and hashed call budget,
+authoritative target/parent snapshots where applicable, and step-bound reconciliation
+strategy. `queued_at` records admission to the mutation queue; `dispatched_at` is set only
+immediately before the external request begins. Each dispatch rechecks the role,
+installation state, and installation generation. After restart, only dispatched orphan
+steps become unknown; an undispatched queued step settles as a definitive cancellation.
+Startup reconciliation uses complete-list or exact-target reads and settles only
+authoritative compatible evidence. It never dispatches prepared work, retries an
+ambiguous mutation, or compensates automatically.
+
+Uninstall immediately marks the installation deleted, blocks new and queued mutations,
+and wipes the persisted token. A workspace settlement barrier lets only already-dispatched
+work finish truthfully, then erases workspace data. Startup finishes any interrupted
+deletion tombstone before the workspace can accept work again.
 
 ## Backup, restore, and point-in-time recovery
 
-Back up the live SQLite database with its online backup API; do not copy the live
-`.sqlite`, `-wal`, and `-shm` files independently:
+Back up the live SQLite database with its online backup API; never copy the live
+`.sqlite`, `-wal`, and `-shm` files independently. The following release drill is pinned
+to Railway CLI 4.37.x and keeps the production service online while SQLite creates a
+transactionally consistent snapshot.
+
+First mount an encrypted APFS/FileVault volume at the explicit local path
+`/Volumes/AIASSIST_RECOVERY`. This is off the Railway volume and must not be a cloud-sync
+folder. Verify encryption before creating any local file:
 
 ```bash
-npm run db:backup -- /data/ai-assistant.sqlite /data/backups/ai-assistant-$(date +%Y%m%dT%H%M%S).sqlite
+set -euo pipefail
+railway --version                         # required release tool: 4.37.x
+: "${RELEASE_SHA:?exact release SHA is required}"
+: "${RELEASE_BUILD_HASH:?exact release build hash is required}"
+printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}([0-9a-f]{24})?$'
+printf '%s' "$RELEASE_BUILD_HASH" | grep -Eq '^[0-9a-f]{64}$'
+export RELEASE_SHA RELEASE_BUILD_HASH
+RECOVERY_VOLUME=/Volumes/AIASSIST_RECOVERY
+test -d "$RECOVERY_VOLUME"
+diskutil info "$RECOVERY_VOLUME" | grep -Eq '(FileVault|Encrypted):[[:space:]]+Yes'
+umask 077
+
+DRILL_ID="$(date -u +%Y%m%dT%H%M%SZ)"
+REMOTE_NAME="ai-assistant-${DRILL_ID}.sqlite"
+REMOTE_BACKUP="/data/backups/${REMOTE_NAME}"
+LOCAL_DIR="${RECOVERY_VOLUME}/ai-assistant/${RELEASE_SHA}/${DRILL_ID}"
+mkdir -p "$LOCAL_DIR"
+
+# Capture the conservative RPO boundary before production starts the snapshot.
+BACKUP_BOUNDARY_FILE="$LOCAL_DIR/pre-backup-boundary.txt"
+npm run --silent db:capture-backup-boundary -- "$BACKUP_BOUNDARY_FILE"
 ```
 
-The command runs `PRAGMA integrity_check`, creates a consistent snapshot, and writes
-`.sha256` plus JSON metadata sidecars. Copy all three files to encrypted off-volume
-storage. Keep daily backups for 30 days and one monthly backup for the applicable
+Run the online backup inside the production service. The command integrity-checks the
+source and completed snapshot, then creates `.sha256` and `.json` sidecars. The current
+v7 production build emits format-1 metadata; the frozen candidate binds that sidecar to
+the already-captured boundary after transport:
+
+```bash
+railway ssh -s ai-assistant -e production sh -lc '
+  set -eu
+  umask 077
+  mkdir -p /data/backups
+  npm run --silent db:backup -- /data/ai-assistant.sqlite "$1"
+' sh "$REMOTE_BACKUP"
+```
+
+Transfer exactly the database and its two sidecars as a base64-wrapped tar stream. The
+binary and sidecar contents go directly to the encrypted directory; they are never
+printed to the terminal or shell history:
+
+```bash
+railway ssh -s ai-assistant -e production sh -lc '
+  set -eu
+  cd /data/backups
+  test -f "$1" && test -f "$1.sha256" && test -f "$1.json"
+  tar -cf - -- "$1" "$1.sha256" "$1.json" | base64
+' sh "$REMOTE_NAME" | /usr/bin/base64 -D | tar -xf - -C "$LOCAL_DIR"
+
+LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
+chmod 600 "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json"
+(cd "$LOCAL_DIR" && shasum -a 256 -c "$REMOTE_NAME.sha256")
+
+METADATA_FORMAT="$(node -p \
+  'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).format' \
+  "$LOCAL_BACKUP.json")"
+case "$METADATA_FORMAT" in
+  1)
+    RELEASE_METADATA="$LOCAL_BACKUP.release.json"
+    npm run --silent db:bind-legacy-backup-metadata -- \
+      "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json" \
+      "$BACKUP_BOUNDARY_FILE" "$RELEASE_METADATA"
+    ;;
+  2) RELEASE_METADATA="$LOCAL_BACKUP.json" ;;
+  *) printf 'Unsupported backup metadata format: %s\n' "$METADATA_FORMAT" >&2; exit 1 ;;
+esac
+chmod 600 "$RELEASE_METADATA"
+```
+
+The candidate binder rehashes the backup, verifies the checksum and legacy byte/count
+bindings, requires the captured boundary to be no later than backup completion, rejects
+symlink inputs and an existing output, and writes a separate mode-0600 format-2 sidecar.
+It never rewrites the backup, checksum, or legacy metadata.
+
+Verify an isolated restored file from the exact already-built release checkout. Set
+`DATA_ENCRYPTION_KEY` from the approved secret
+manager without echoing it; never obtain it with a command that prints all Railway
+variables. The verifier creates a private mode-0600 temporary clone, verifies its checksum
+and format-2 metadata, then opens the source schema read-only. It accepts only supported
+v7/v8 input, runs `PRAGMA integrity_check`, validates the installation columns, decrypts
+one active installation, and performs exactly one redirect-blocked `GET /user` with
+`X-Addon-Token`. It then starts the exact built production entrypoint
+`dist/server/server.js` against only that private clone, allowing the candidate to migrate
+v7 to v8. The caller-owned restore and even a symlink target are never opened read-write.
+That one-off instance executes Store startup, interrupted-deletion completion, and the
+production read-only startup reconciliation path before listening; it makes no model
+request and uses synthetic unused planner/session configuration. The verifier requires a
+child-bound loopback port reported over IPC, an exact release SHA/build-hash identity
+match, then `GET /health` 200 with `{ "ok": true }`. It records that instant, stops the
+instance, independently reopens the clone, requires v8 plus every critical table/column,
+re-runs integrity, and proves an immediate writer lock is available before deleting the
+clone. The JSON
+contains only bounded counts, hashes, fixed route/status conclusions, timestamps, timing,
+RTO, and RPO:
+
+```bash
+RESTORE_INCIDENT_AT="$(node -p 'new Date().toISOString()')"
+RESTORE_DRILL_STARTED_AT="$RESTORE_INCIDENT_AT"
+export RESTORE_INCIDENT_AT RESTORE_DRILL_STARTED_AT
+ISOLATED_DIR="$LOCAL_DIR/isolated"
+RESTORED_PATH="$ISOLATED_DIR/restored.sqlite"
+RESTORE_EVIDENCE="$LOCAL_DIR/restore-verification.json"
+mkdir -p "$ISOLATED_DIR"
+test -f dist/server/server.js
+
+if [ -z "${DATA_ENCRYPTION_KEY:-}" ]; then
+  printf 'DATA_ENCRYPTION_KEY (approved secret manager): ' >&2
+  IFS= read -r -s DATA_ENCRYPTION_KEY
+  printf '\n' >&2
+  export DATA_ENCRYPTION_KEY
+fi
+
+RESTORE_DATABASE=YES npm run --silent db:restore -- "$LOCAL_BACKUP" "$RESTORED_PATH"
+npm run --silent db:verify-restore -- \
+  "$RESTORED_PATH" "$LOCAL_BACKUP.sha256" "$RELEASE_METADATA" \
+  >"$RESTORE_EVIDENCE"
+node -e '
+  const evidence = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const drillStarted = Date.parse(evidence.recovery?.drillStartedAt);
+  const ready = Date.parse(evidence.recovery?.readinessConfirmedAt);
+  const incident = Date.parse(evidence.recovery?.incidentAt);
+  const dataAsOf = Date.parse(evidence.recovery?.dataAsOf);
+  if (evidence.conclusion !== "passed" || !evidence.recovery ||
+      evidence.checks.tokenBackedRead.status !== "passed" ||
+      evidence.checks.applicationReadiness.status !== "passed" ||
+      evidence.checks.applicationReadiness.endpoint !== "GET /health" ||
+      evidence.checks.applicationReadiness.httpStatus !== 200 ||
+      evidence.checks.applicationReadiness.serverArtifact !== "dist/server/server.js" ||
+      evidence.checks.applicationReadiness.releaseSha !== process.env.RELEASE_SHA ||
+      evidence.checks.applicationReadiness.releaseBuildHash !== process.env.RELEASE_BUILD_HASH ||
+      evidence.checks.applicationReadiness.shutdownVerification?.databaseIntegrity !== "ok" ||
+      evidence.checks.applicationReadiness.shutdownVerification?.writerLock !== "available" ||
+      evidence.checks.integrity.sourceResult !== "ok" ||
+      evidence.checks.integrity.migratedResult !== "ok" ||
+      ![7, 8].includes(evidence.checks.schema.sourceUserVersion) ||
+      evidence.checks.schema.userVersion !== 8 ||
+      evidence.checks.schema.migration !==
+        (evidence.checks.schema.sourceUserVersion === 8 ? "not_required" : "candidate_private_clone") ||
+      evidence.checks.metadata.format !== 2 ||
+      !Number.isFinite(Date.parse(evidence.checks.metadata.dataAsOf)) ||
+      !Number.isFinite(drillStarted) || !Number.isFinite(ready) ||
+      !Number.isFinite(incident) || !Number.isFinite(dataAsOf) ||
+      evidence.recovery.rtoMs !== ready - drillStarted ||
+      evidence.recovery.rpoMs !== incident - dataAsOf) process.exit(1);
+' "$RESTORE_EVIDENCE"
+shasum -a 256 "$RESTORE_EVIDENCE"
+unset DATA_ENCRYPTION_KEY DATA_ENCRYPTION_KEY_PREVIOUS
+```
+
+`recovery.rtoMs` measures restore start through `recovery.readinessConfirmedAt`, the
+first successful `/health` response from the one-off production startup path (not merely
+static verification and not process-shutdown time);
+`recovery.rpoMs` measures the conservative pre-snapshot `dataAsOf` time through the
+simulated incident; later sidecar creation and hashing can never understate it. Attach
+the secret-free JSON and its hash to the exact release SHA. The drill never changes
+production `DATABASE_PATH`, never writes the caller-owned restored file, and performs no
+Clockify mutation.
+
+After evidence is safely attached, delete only the isolated restored copy and the three
+explicit remote temporary files. Retain the local backup, original sidecars, pre-backup
+boundary capture, and any separate release sidecar according to the
+approved backup policy:
+
+```bash
+case "$RESTORED_PATH" in "$LOCAL_DIR"/isolated/*) ;; *) exit 64 ;; esac
+rm -f -- "$RESTORED_PATH" "$RESTORED_PATH-wal" "$RESTORED_PATH-shm"
+rmdir "$ISOLATED_DIR"
+
+railway ssh -s ai-assistant -e production sh -lc '
+  set -eu
+  case "$1" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
+  rm -f -- "$1" "$1.sha256" "$1.json"
+' sh "$REMOTE_BACKUP"
+```
+
+Keep daily backups for 30 days and one monthly backup for the applicable
 legal/contractual period; never retain them longer than the source data policy.
 
-Restore only while the service is stopped/draining:
+For a real recovery, stop or drain the service before changing `DATABASE_PATH`.
+`db:restore` refuses checksum/integrity failure and existing targets unless
+`RESTORE_OVERWRITE=YES`; prefer a new path and the same verifier first. A point-in-time
+recovery restores only through the completed backup timestamp. Newer host-side effects
+may remain: only steps whose durable evidence says dispatch began become
+`outcome_unknown`; queued/prepared work must not be promoted to ambiguity. Reconcile
+unknown effects before another write.
 
-```bash
-RESTORE_DATABASE=YES npm run db:restore -- backup.sqlite restored.sqlite
-```
-
-The restore refuses a checksum mismatch or failed integrity check and will not
-overwrite an existing target unless `RESTORE_OVERWRITE=YES`. Prefer restoring to a
-new path, start a one-off instance against it, verify `/health`, schema version, and
-a token-backed read, then atomically switch `DATABASE_PATH`. A point-in-time recovery
-can restore only to a completed backup timestamp; application rows written after that
-snapshot may have host-side effects, so all recovered `executing` operations become
-`outcome_unknown` and must be reconciled before another write.
-
-Run and record a restore drill before launch and at least quarterly. The automated
-hardening pass verified a local backup/checksum/restore/data-read drill; production
-volume recovery remains an operator gate.
+Run and record this drill before launch and at least quarterly. A script definition or
+prior local run is not release evidence; record the current candidate's measured RTO,
+RPO, checksum, integrity, schema, token-backed-read conclusion, and one-off application
+readiness conclusion.
 
 ## Required alerts
 
@@ -263,16 +693,22 @@ failure, SQLite `BUSY`/`FULL`/read-only errors, operation `outcome_unknown`, sus
 Clockify `429`/5xx responses, model-provider failures, and artifact oversize rejects.
 Do not include prompts, headers, tool results, or tokens in alert payloads.
 
-## Still human-gated (unchanged by hosting)
+## Final handoff - exactly three admin-only packages
 
-- Configure/protect the sacrificial GitHub environment and attach a successful
-  release-commit live-smoke plus cleanup artifact.
-- Rotate production model credentials and record the provider DPA, processing
-  region, retention/training posture, and subprocessor terms.
-- Run the production-like backup/restore drill with RTO/RPO and a token-backed read,
-  plus the deterministic evaluation against the configured release model.
-- Complete the independent security/recovery review and prod AUDIT-host
-  `X-Addon-Token` clearance (the spike above).
-- Record owner, date, and evidence link for every open gate in
-  `MARKETPLACE_READINESS.md`; Marketplace approval/submission is never inferred from
-  an automated artifact.
+Live smoke and cleanup, the configured DeepSeek evaluation, backup/restore with RTO/RPO,
+the production AUDIT-host probe, deployment, browser exercise, performance evidence, and
+green pull-request checks are engineering exit criteria. They may not remain as a fourth
+operator package.
+
+After those criteria pass, only these packages remain:
+
+1. Rotate the production DeepSeek key and approve the DPA, processing country/region,
+   provider and context-cache retention, training posture, and final disclosure wording.
+2. Supply monitored support/privacy/security routing, enable private vulnerability
+   reporting, and record independent human security/recovery approval.
+3. Review the prepared Marketplace listing, assets, version, scopes, free-add-on pricing,
+   Terms, What's New entry, and public URLs;
+   upload or confirm them; then click **Submit for Review**.
+
+Package 3's final click is outside engineering execution. See
+[`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) for the stop condition.

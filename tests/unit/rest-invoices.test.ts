@@ -372,7 +372,7 @@ describe("invoice rest", () => {
   });
 
   it("exportInvoice returns backend-only PDF bytes under the cap", async () => {
-    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46]); // "%PDF"
+    const pdf = new TextEncoder().encode("%PDF-1.7\nfixture");
     const f = vi.fn(async () => binaryResponse(pdf));
     const out = await rest(f as unknown as typeof fetch).exportInvoice("inv1");
     expect(out.contentType).toBe("application/pdf");

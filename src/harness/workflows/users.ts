@@ -22,6 +22,7 @@ import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js"
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import type { UserRoleAssignment } from "../../clockify/ports/users.js";
+import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -452,6 +453,7 @@ const deactivateUser = defineAction({
     const evidence = await currentUserEvidence(ctx, member.userId);
     if (!evidence || evidence.truncated) return { kind: "clarify", message: "I couldn't obtain complete evidence for that workspace member." };
     const targetSnapshot = captureTargetSnapshot("target", { type: "user", id: member.userId, name: evidence.row.name }, userProjection(evidence.row));
+    const payload = { userId: member.userId, previousStatus: evidence.row.status };
     return {
       kind: "preview",
       preview: {
@@ -465,8 +467,11 @@ const deactivateUser = defineAction({
       },
       operation: {
         operationId: randomUUID(), actionName: "clockify_users_deactivate", featureGroup: UG, risks: ["high_risk_write"],
-        payload: { userId: member.userId, previousStatus: evidence.row.status }, targetSnapshots: [targetSnapshot],
-        mutationPlan: { mode: "single", steps: [{ id: "deactivate-user", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "state-command" }] },
+        payload, targetSnapshots: [targetSnapshot],
+        mutationPlan: bindMutationPlanHostCalls("clockify_users_deactivate", payload, {
+          mode: "single",
+          steps: [{ id: "deactivate-user", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "state-command" }],
+        }),
       },
     };
   },
@@ -704,10 +709,12 @@ function partialGroupAdd(
   groupId: string,
   succeededUserIds: readonly string[],
   total: number,
-  reason: "stale" | "definitive" | "ambiguous",
+  reason: "stale" | "definitive" | "ambiguous" | "reconciled",
 ) {
   const uncertain = reason === "ambiguous"
     ? " The next membership add may or may not have applied."
+    : reason === "reconciled"
+      ? " The last add was proven successful after an ambiguous response, so no later mutation was sent."
     : reason === "stale"
       ? " The group changed before the next add, so no later mutation was sent."
       : " Clockify definitively rejected the next add.";
@@ -738,7 +745,7 @@ const addUser = defineRiskyAction({
       groupId: z.string().min(1).optional(),
       groupName: z.string().min(1).optional(),
       /** Members to add: user ids, exact names, or 'me' (resolved + verified server-side). */
-      members: zStringList().optional(),
+      members: zStringList(z.array(z.string().min(1)).max(GROUP_MEMBER_BATCH_MAX)).optional(),
       // Single-member shape, tolerated because the planner emits both.
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
@@ -746,6 +753,9 @@ const addUser = defineRiskyAction({
     .refine((v) => v.groupId !== undefined || v.groupName !== undefined, { message: "Provide the group id or its exact name." })
     .refine((v) => (v.members?.length ?? 0) > 0 || v.userId !== undefined || v.userName !== undefined, {
       message: "Provide at least one member (id, exact name, or 'me').",
+    })
+    .refine((v) => (v.members?.length ?? 0) + (v.userId ? 1 : 0) + (v.userName ? 1 : 0) <= GROUP_MEMBER_BATCH_MAX, {
+      message: `Provide at most ${GROUP_MEMBER_BATCH_MAX} member selectors across members, userId, and userName.`,
     }),
   async preview(ctx, args) {
     const group = await resolveGroupRef(ctx, args, "add members to");
@@ -802,6 +812,7 @@ const addUser = defineRiskyAction({
       const planStep = operation.mutationPlan?.steps[index];
       const selected = (operation.targetSnapshots ?? []).slice(index * 2, index * 2 + 2);
       let stale: "stale_target" | "stale_parent" | undefined;
+      let reconciled = false;
       const dispatch = async () => {
         const parent = selected[0]?.projection as { userIds?: string[] } | undefined;
         const expectedUserIds = [...(parent?.userIds ?? []), userId].sort();
@@ -809,6 +820,7 @@ const addUser = defineRiskyAction({
           dispatch: async () => { await ctx.clockify.addUserToGroupAtomic(groupId, userId); return true; },
           reconcile: () => expectedGroupMembership(ctx, groupId, expectedUserIds),
         });
+        reconciled = dispatched.reconciled;
         return { externalId: userId, effect: { groupId, userId, membership: "added" }, detail: { reconciled: dispatched.reconciled, expectedUserIds } };
       };
       const step = ctx.mutationJournal
@@ -832,7 +844,13 @@ const addUser = defineRiskyAction({
         if (succeededUserIds.length > 0) return partialGroupAdd(ctx, groupId, succeededUserIds, userIds.length, "stale");
         return errorReceipt({ action: "clockify_groups_add_user", code: stale, message: "The group membership changed. No further Clockify mutation was sent.", recovery: { hint: "Refresh the group and create a fresh preview.", retryable: true } });
       }
-      if (step.status === "succeeded") { succeededUserIds.push(userId); continue; }
+      if (step.status === "succeeded") {
+        succeededUserIds.push(userId);
+        if (reconciled && succeededUserIds.length < userIds.length) {
+          return partialGroupAdd(ctx, groupId, succeededUserIds, userIds.length, "reconciled");
+        }
+        continue;
+      }
       if (step.status === "outcome_unknown") {
         if (succeededUserIds.length > 0) return partialGroupAdd(ctx, groupId, succeededUserIds, userIds.length, "ambiguous");
         return errorReceipt({ action: "clockify_groups_add_user", code: "commit_outcome_unknown", message: "A group membership add may or may not have been applied.", recovery: { hint: "Verify the group membership in Clockify before retrying.", retryable: false } });

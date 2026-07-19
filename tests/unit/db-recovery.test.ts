@@ -117,7 +117,8 @@ describe("database backup and restore", () => {
       `${backupResult.sha256}  ${basename(backup)}\n`,
     );
     expect(JSON.parse(readFileSync(`${backup}.json`, "utf8"))).toEqual({
-      format: 1,
+      format: 2,
+      dataAsOf: createdAt.toISOString(),
       createdAt: createdAt.toISOString(),
       source,
       bytes: readFileSync(backup).byteLength,
@@ -130,6 +131,29 @@ describe("database backup and restore", () => {
     expect(store.getInstallation("workspace-recovery")?.addonToken).toBe("secret-addon-token");
     expect(store.rawAddonTokenForTest("workspace-recovery")).not.toContain("secret-addon-token");
     store.close();
+  });
+
+  it("records a conservative data-as-of instant before snapshot work begins", async () => {
+    const directory = tempDirectory();
+    const source = join(directory, "source.sqlite");
+    const backup = join(directory, "backup.sqlite");
+    seedEncryptedDatabase(source);
+    const timestamps = [
+      new Date("2026-07-14T11:59:00.000Z"),
+      new Date("2026-07-14T12:00:00.000Z"),
+    ];
+
+    await backupDatabase({
+      sourcePath: source,
+      destinationPath: backup,
+      now: () => timestamps.shift() ?? new Date("2026-07-14T12:00:00.000Z"),
+    });
+
+    expect(JSON.parse(readFileSync(`${backup}.json`, "utf8"))).toMatchObject({
+      format: 2,
+      dataAsOf: "2026-07-14T11:59:00.000Z",
+      createdAt: "2026-07-14T12:00:00.000Z",
+    });
   });
 
   it("rejects a checksum mismatch without creating the restore target", async () => {

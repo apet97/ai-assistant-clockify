@@ -304,6 +304,39 @@ describe("phase 5 control domains use durable host steps", () => {
     prepared.store.close();
   });
 
+  it("stops the advertised 14-member boundary after a middle known-success reconciliation", async () => {
+    const memberIds = Array.from({ length: 14 }, (_, index) => `batch-user-${index + 1}`);
+    const fake = createFakeWorkspace({
+      ...seed(),
+      users: [
+        { id: "admin-1", name: "Me", email: "me@example.com", status: "ACTIVE" },
+        ...memberIds.map((id) => ({ id, name: id, email: `${id}@example.com`, status: "ACTIVE" })),
+      ],
+      groups: [{ id: "g1", name: "Devs", userIds: [] }],
+    } as any);
+    const prepared = await prepare(fake, "clockify_groups_add_user", { groupId: "g1", members: memberIds });
+    expect(prepared.operation.mutationPlan?.maxHostCalls).toBe(57);
+    const original = fake.client.addUserToGroupAtomic.bind(fake.client);
+    let calls = 0;
+    fake.client.addUserToGroupAtomic = async (groupId, userId) => {
+      calls += 1;
+      await original(groupId, userId);
+      if (calls === 7) throw new AmbiguousWriteOutcome("POST", "/membership", "socket closed");
+    };
+
+    const result = await commitConfirmedOperation(prepared.commitContext, prepared.operation);
+
+    expect(result).toMatchObject({ kind: "partial", receipt: { ok: true }, recovery: { retryable: false } });
+    if (!isPartialCommitResult(result)) throw new Error("expected reconciled partial group-add result");
+    expect(result.message).toMatch(/7 of 14/i);
+    expect(calls).toBe(7);
+    expect(fake.state.groups[0]?.userIds).toEqual(memberIds.slice(0, 7));
+    expect(fake.state.groups[0]?.userIds).not.toContain(memberIds[7]);
+    expect(prepared.store.listOperationSteps(prepared.operation.operationId).map((step) => [step.planStepId, step.status]))
+      .toEqual(Array.from({ length: 7 }, (_, index) => [`add-user-to-group-${index}`, "succeeded"]));
+    prepared.store.close();
+  });
+
   it("keeps an ambiguous approval create unknown with zero matching candidates", async () => {
     const fake = createFakeWorkspace(seed() as any);
     const prepared = await prepare(fake, "clockify_approvals_submit", { periodStart: "2026-06-08" });

@@ -83,6 +83,11 @@ export async function backupDatabase(options: BackupDatabaseOptions): Promise<Ba
   if (sourcePath === destinationPath) {
     throw new Error("Backup destination must differ from the live database.");
   }
+  const now = options.now ?? (() => new Date());
+  // RPO must be conservative. Capture the data-as-of boundary before opening or
+  // inspecting the source, never after integrity verification and hashing have
+  // made the completed sidecars look newer than the SQLite snapshot can be.
+  const dataAsOf = now().toISOString();
 
   await mkdir(dirname(destinationPath), { recursive: true });
   const checksumPath = `${destinationPath}.sha256`;
@@ -109,8 +114,9 @@ export async function backupDatabase(options: BackupDatabaseOptions): Promise<Ba
   const checksum = sha256(bytes);
   await writeFile(checksumPath, `${checksum}  ${basename(destinationPath)}\n`, { mode: 0o600 });
   await writeFile(metadataPath, `${JSON.stringify({
-    format: 1,
-    createdAt: (options.now ?? (() => new Date()))().toISOString(),
+    format: 2,
+    dataAsOf,
+    createdAt: now().toISOString(),
     source: sourcePath,
     bytes: bytes.byteLength,
     sha256: checksum,

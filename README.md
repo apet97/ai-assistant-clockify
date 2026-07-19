@@ -71,26 +71,33 @@ stays a thin, replaceable translator:
 - **Recall-safe tool selection** (default on): focused ASCII requests see a small
   relevant tool set; no match, non-ASCII, or more than three areas fail open to the
   full catalog. Clarification context survives terse follow-ups and confirm resumes.
-- **Atomic multi-step composition** — a multi-entity request either completes or rolls
-  back what it created; no orphans.
-- **Idempotency** — re-confirming the same intent can't create a duplicate (e.g. a
-  second invoice).
-- **Undo** — the last reversible action (a creation) can be undone with one click.
+- **Durable multi-step composition** — every host step is journaled. A definitive
+  failure after a known effect is reported as partial; an ambiguous effect stops
+  later dispatches. Eligible compensation is best-effort, not a global rollback
+  guarantee.
+- **Scoped idempotency** — exact operation replay is safe. Semantic deduplication
+  is limited to the documented setup actions; invoice safety is based on the
+  persisted operation journal and reconciliation evidence, not payload equality.
+- **Scoped undo** — an eligible recent creation can expose a one-click Undo action.
+  Its compensation is separately journaled and may fail or remain unknown.
 - **Constraint surfacing** — known platform limits (e.g. an invoice needing a configured
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
   reaches for instead of scrambling 137 primitives.
-- **Operational metrics** (`GET /api/metrics`, incl. per-turn token/latency
+- **Operational metrics** (`GET /api/metrics`, including per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
-  `scripts/eval-agentic.ts`) that score planner accuracy *and* run-to-run
-  consistency over a real corpus — measured at 100% on three backends
-  (DeepSeek v4-pro, gemini-3.1-flash-lite, gemini-3.5-flash) via the opt-in
-  eval battery (`scripts/eval-*.ts`); results are not committed or CI-gated.
-- **Backend-agnostic model client** — any OpenAI-compatible endpoint via
-  `LLM_BASE_URL`/`LLM_MODEL`; provider quirks (DeepSeek `reasoning_content`,
-  Gemini 3.x `thought_signature`, `reasoning_effort`) are handled in one place
-  and inert elsewhere. Swapping backends is an env change, not a code change.
+  `scripts/eval-agentic.ts`) that score planner accuracy, write safety, latency,
+  cache-hit tokens, and run-to-run consistency. The release evidence binds the
+  configured DeepSeek result to the exact candidate; historical claims are not a
+  substitute for that run.
+- **DeepSeek release configuration on an OpenAI-compatible client** — the 1.0.0
+  release keeps DeepSeek through `LLM_BASE_URL`/`LLM_MODEL`; provider quirks
+  (DeepSeek `reasoning_content` and optional `thinking`, Gemini 3.x
+  `thought_signature`, and `reasoning_effort`) are handled in one place and inert
+  elsewhere. Backend configurability remains available to self-hosters, but version
+  1.0.0 includes no provider migration and requires fresh safety evidence after any
+  provider change.
 - **Streaming** — `POST /api/chat/stream` streams the harness's results as they execute
   (never the model's narration, which would conflict with the safety override).
 
@@ -134,7 +141,7 @@ cp .env.example .env     # then fill in real values
 
 ```bash
 npm run type-check       # tsc --noEmit
-npm test                 # vitest run (fakes only; no network)
+npm test                 # build exact server artifact, then Vitest; no unmocked network
 npm run build            # -> dist/server, dist/ui
 npm run lint             # eslint src (typed async-safety rules)
 npm run verify           # type-check + lint + cycles + test + build (the gate)
@@ -145,10 +152,11 @@ CI runs `npm run verify` + a circular-dependency check (madge) on every push and
 PR (`.github/workflows/ci.yml`). Production deploys to Railway with the SQLite
 database on a persistent volume — see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
-`GET /manifest` serves the admin-only Clockify add-on manifest — a **sidebar**
-component (`/component/assistant`) plus an add-on icon at `/icon.svg`. It installs
-and runs end-to-end on real Clockify workspaces (verified on a dev workspace:
-install → sidebar → chat → action → receipt).
+`GET /manifest` serves the admin-only Clockify add-on manifest - a **sidebar**
+component (`/component/assistant`) plus an add-on icon at `/icon.svg`. The current
+private deployment and live Clockify flow are recorded in
+[`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md); an older dev run is not
+release evidence.
 
 ### Environment
 
@@ -156,6 +164,11 @@ See [`.env.example`](./.env.example) for the full list. Key variables: `PORT`,
 `BASE_URL`, `CLOCKIFY_ADDON_KEY`, `SESSION_SECRET`, `DATA_ENCRYPTION_KEY`
 (32-byte key for token encryption), `DATABASE_PATH`, and `LLM_BASE_URL` /
 `LLM_API_KEY` / `LLM_MODEL` for the OpenAI-compatible model endpoint.
+DeepSeek V4 production keeps HTTP tool mode with `LLM_AGENTIC=1`,
+`LLM_TOOL_SELECT=1`, and the release-selected `LLM_THINKING_MODE=disabled`.
+The thinking field is omitted unless configured; the five-run safety, latency,
+and cache comparison is in
+[`evidence/performance/deepseek-v4-pro-2026-07-18.md`](./evidence/performance/deepseek-v4-pro-2026-07-18.md).
 `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` is **optional** — Clockify's fixed platform
 token-signing key is built in; only set it to target a non-production Clockify
 environment. The Clockify API/reports hosts are read from the install token (never
@@ -173,10 +186,15 @@ env (`LIVE_CLOCKIFY=1`, plus the relevant tokens/IDs):
   any run is considered clean.
 - `scripts/live-smoke.ts` — drives the real harness (read + safe write + risky
   preview→confirm→commit) via a personal-API-key adapter; self-cleaning.
-- `scripts/addon-smoke.ts` — exercises the production add-on-token request path.
-  Prerequisite: run `scripts/capture-addon-token.ts` first to copy the encrypted
+- `scripts/live-scope-probe.ts` and `scripts/host-auth-spike.ts` — secret-free,
+  release-bound production add-on-token aggregate scope reachability and explicit
+  AUDIT-host clearance probes. The scope result does not claim per-scope necessity.
+  Deploy the exact candidate, freshly reinstall it, then run
+  `scripts/capture-addon-token.ts` to copy the encrypted
   installation token from the store into the gitignored `.env` as
-  `LIVE_ADDON_TOKEN` (the token is never printed, only its length).
+  `LIVE_ADDON_TOKEN` (the token is never printed, only its length). The probe fetches
+  and remotely verifies the server-minted fresh-install envelope; no operator-authored
+  install-event JSON is accepted.
 - `scripts/chat-smoke.ts` — live model round-trip (the model is sent only the
   action catalog + policy, never a token).
 
@@ -192,8 +210,14 @@ Never commit or paste live credentials.
 
 The model is treated as untrusted: it proposes, the harness disposes. Secrets
 never reach the model or the logs, installation tokens are encrypted at rest,
-and risky writes can only execute through an explicit button confirmation. See
+retired tokens are blocked by a workspace-unlinked anti-replay fingerprint; a bounded
+hashed-workspace lifecycle lineage also blocks never-before-seen older callbacks after
+uninstall erasure/restart, and
+risky writes can only execute through an explicit button confirmation. See
 the inline documentation in `src/harness/` for the enforcement details.
 
 What data is stored, retention windows (chat + audit log default 90 days), and how
 to have a workspace's data erased are documented in [`PRIVACY.md`](./PRIVACY.md).
+The complete trust model, deployment/recovery procedure, and safe support intake are
+documented in [`SECURITY.md`](./SECURITY.md), [`DEPLOYMENT.md`](./DEPLOYMENT.md),
+[`SUPPORT.md`](./SUPPORT.md), and [`TERMS.md`](./TERMS.md).

@@ -5,6 +5,17 @@ const MAX_STRING = 4_096;
 const MAX_ARRAY = 128;
 const MAX_DEPTH = 12;
 
+function setJsonProperty(result: Record<string, unknown>, key: string, value: unknown): void {
+  // Define the key directly so `__proto__` remains inert JSON data instead of
+  // invoking Object.prototype's legacy prototype setter.
+  Object.defineProperty(result, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function normalized(value: unknown, depth: number): unknown {
   if (value === null || typeof value === "boolean" || typeof value === "number") return value;
   if (typeof value === "string") {
@@ -33,7 +44,7 @@ function normalized(value: unknown, depth: number): unknown {
     for (const key of keys.sort()) {
       if (SENSITIVE_KEY.test(key)) continue;
       const child = normalized(record[key], depth + 1);
-      if (child !== undefined) result[key] = child;
+      if (child !== undefined) setJsonProperty(result, key, child);
     }
     return result;
   }
@@ -69,7 +80,7 @@ function completeNormalized(value: unknown, seen: WeakSet<object>): unknown {
     for (const key of keys.sort()) {
       if (SENSITIVE_KEY.test(key)) continue;
       const child = completeNormalized(record[key], seen);
-      if (child !== undefined) result[key] = child;
+      if (child !== undefined) setJsonProperty(result, key, child);
     }
     seen.delete(value);
     return result;
@@ -108,7 +119,7 @@ function exactNonsecret(value: unknown, seen: WeakSet<object>): unknown {
     const result: Record<string, unknown> = {};
     for (const key of Object.keys(record).sort()) {
       if (SENSITIVE_KEY.test(key)) throw new Error("durable_evidence_sensitive");
-      result[key] = exactNonsecret(record[key], seen);
+      setJsonProperty(result, key, exactNonsecret(record[key], seen));
     }
     seen.delete(value);
     return result;

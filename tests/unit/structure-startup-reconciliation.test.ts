@@ -48,7 +48,6 @@ const EXPECTED_BINDINGS = [
   ["clockify_create_work_package", "create-project", "create"],
   ["clockify_create_work_package", "create-task", "create"],
   ["clockify_create_work_package", "start-timer", "create"],
-  ["clockify_create_work_package", "verify-reused-entities", "composed"],
   ["clockify_setup_project", "create-project", "create"],
   ["clockify_setup_project", "add-project-members", "update"],
   ["clockify_setup_project", "set-project-rate-*", "update"],

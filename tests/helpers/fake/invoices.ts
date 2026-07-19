@@ -201,7 +201,10 @@ export function makeFakeInvoices({ state, seed, bump, nextId }: FakeContext): Pi
     async exportInvoice(id) {
       bump("exportInvoice");
       void id;
-      return { contentType: "application/pdf", bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46]) };
+      return {
+        contentType: "application/pdf",
+        bytes: new TextEncoder().encode("%PDF-1.7\nfixture"),
+      };
     },
     createInvoiceBase: createBase,
     async createInvoice(input) {

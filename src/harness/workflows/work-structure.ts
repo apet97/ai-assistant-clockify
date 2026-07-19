@@ -3,10 +3,9 @@ import {
   defineAction,
   type ActionContext,
   type ActionDefinition,
-  type ActionResult,
   type CommitResult,
   type ConfirmableOperation,
-  type PreparedSafeWrite,
+  type BoundedPreparedSafeWrite,
   type SafeWritePreparationResult,
   type TargetSnapshot,
 } from "../action.js";
@@ -14,7 +13,6 @@ import type { EntitySummary } from "../../clockify/client.js";
 import type { ListResult } from "../../clockify/types.js";
 import { canWrite, type FeatureGroup } from "../permissions.js";
 import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
-import { leftBehindNote, runComposition, type CompositionStep } from "../compose.js";
 import { nowIso } from "../../durations.js";
 import { matchByName, suggestOptions } from "./resolve.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
@@ -262,11 +260,29 @@ async function prepareWorkPackage(ctx: ActionContext, args: {
   if (operation.project && !operation.project.existing) planSteps.push({ id: "create-project", strategy: "create", ...(snapshotFingerprint(targetSnapshots, "client") ? { targetFingerprint: snapshotFingerprint(targetSnapshots, "client") } : {}) });
   if (operation.task && !operation.task.existing) planSteps.push({ id: "create-task", strategy: "create", ...(snapshotFingerprint(targetSnapshots, "project") ? { targetFingerprint: snapshotFingerprint(targetSnapshots, "project") } : {}) });
   if (operation.timer) planSteps.push({ id: "start-timer", strategy: "create", ...(snapshotFingerprint(targetSnapshots, "project") ? { targetFingerprint: snapshotFingerprint(targetSnapshots, "project") } : {}) });
-  if (planSteps.length === 0) planSteps.push({ id: "verify-reused-entities", strategy: "composed" });
+  if (planSteps.length === 0) {
+    const reused: EntityRef[] = [];
+    if (operation.tag?.existing) reused.push({ type: "tag", ...operation.tag.existing });
+    if (operation.client?.existing) reused.push({ type: "client", ...operation.client.existing });
+    if (operation.project?.existing) reused.push({ type: "project", ...operation.project.existing });
+    if (operation.task?.existing) reused.push({ type: "task", ...operation.task.existing });
+    return {
+      kind: "noop",
+      receipt: successReceipt({
+        action: "clockify_create_work_package",
+        entity: "work_package",
+        ids: { workspaceId: ctx.workspaceId },
+        changed: { created: [], reused },
+        warnings: operation.timerDenied
+          ? [{ code: "policy_denied", message: "Timer not started: write access to time_tracking is disabled in your assistant permissions." }]
+          : [],
+      }),
+    };
+  }
   return { operation, mutationPlan: dynamicMutationPlan(planSteps) };
 }
 
-async function executeWorkPackage(ctx: ActionContext, prepared: PreparedSafeWrite): Promise<CommitResult> {
+async function executeWorkPackage(ctx: ActionContext, prepared: BoundedPreparedSafeWrite): Promise<CommitResult> {
   const data = prepared.operation as WorkPackageOperation;
   const operation: ConfirmableOperation = {
     operationId: ctx.mutationJournal?.operationId ?? "direct:clockify_create_work_package",
@@ -442,14 +458,6 @@ async function executeWorkPackage(ctx: ActionContext, prepared: PreparedSafeWrit
     if (result) return result;
     if (entry) created.push({ type: "time_entry", id: entry.id, ...(entry.description ? { name: entry.description } : {}) });
   }
-  if (prepared.mutationPlan.steps[0]?.id === "verify-reused-entities") {
-    const step = await executeDurableRiskyStep({
-      ctx, operation, planStepId: "verify-reused-entities", index: 0, name: "Verify reused entities",
-      dispatch: async () => { await verifyAll(); return { detail: { verifiedOnly: true } }; },
-    });
-    const result = fail(step, "reused-entity verification");
-    if (result) return result;
-  }
   return successReceipt({
     action: operation.actionName,
     entity: "work_package",
@@ -549,7 +557,7 @@ const createWorkPackage = defineAction({
   mutationContract: durableMutationContract({
     source: "safe",
     targeting: { mode: "snapshots", relations: ["target", "parent"] },
-    strategies: ["create", "composed"],
+    strategies: ["create"],
   }),
   argumentAliases: ["tagName", "projectName", "taskName"],
   schema: z.preprocess(
@@ -580,290 +588,7 @@ const createWorkPackage = defineAction({
   ),
   prepareSafeWrite: prepareWorkPackage,
   executeSafeWrite: executeWorkPackage,
-  async handler(ctx, args) {
-    // Resolve every dependency and ambiguity before the first write. A work
-    // package must never create an early tag/client and only then discover that
-    // a later task or timer has no parent, or that a reused name is ambiguous.
-    if (args.task && !args.project) {
-      return {
-        kind: "clarify",
-        message: `To create task "${args.task.name}" I need a project. Which project should it belong to?`,
-      };
-    }
-    if (args.startTimer && !args.project) {
-      return {
-        kind: "clarify",
-        message: "To start a timer I need a project. Add a project to create or reuse, or start the timer separately.",
-      };
-    }
-
-    const [tagsResult, clientsResult, projectsResult] = await Promise.all([
-      args.tag ? ctx.clockify.listTags() : Promise.resolve({ rows: [], truncated: false }),
-      args.client || args.project?.clientName ? ctx.clockify.listClients() : Promise.resolve({ rows: [], truncated: false }),
-      args.project ? ctx.clockify.listProjects() : Promise.resolve({ rows: [], truncated: false }),
-    ]);
-    const tags = tagsResult.rows;
-    const clients = clientsResult.rows;
-    const projects = projectsResult.rows;
-    const tagMatch = args.tag ? matchByName(tags, args.tag.name) : undefined;
-    if (args.tag && tagMatch?.kind === "many") return ambiguous("tag", args.tag.name, tagMatch.matches);
-    if (args.tag && tagsResult.truncated) return incompleteIdentity("tag", args.tag.name);
-
-    const clientMatch = args.client ? matchByName(clients, args.client.name) : undefined;
-    if (args.client && clientMatch?.kind === "many") {
-      return ambiguous("client", args.client.name, clientMatch.matches);
-    }
-    if (args.client && clientsResult.truncated) return incompleteIdentity("client", args.client.name);
-
-    const projectClientMatch = args.project?.clientName
-      ? matchByName(clients, args.project.clientName)
-      : undefined;
-    if (args.project?.clientName && projectClientMatch?.kind === "many") {
-      return ambiguous("client", args.project.clientName, projectClientMatch.matches);
-    }
-    if (args.project?.clientName && clientsResult.truncated) {
-      return incompleteIdentity("client", args.project.clientName);
-    }
-    const projectClientWillBeCreated =
-      args.project?.clientName !== undefined &&
-      args.client !== undefined &&
-      args.project.clientName.trim().toLowerCase() === args.client.name.trim().toLowerCase() &&
-      clientMatch?.kind === "none";
-    if (args.project?.clientName && projectClientMatch?.kind === "none" && !projectClientWillBeCreated) {
-      const options = suggestOptions(clients, args.project.clientName);
-      return {
-        kind: "clarify",
-        message: options.length
-          ? `I couldn't find an active client named "${args.project.clientName}". Did you mean one of these, or should I create it?`
-          : `I couldn't find an active client named "${args.project.clientName}". Should I create it?`,
-        options: options.length ? options : undefined,
-      };
-    }
-
-    const preflightClientId =
-      projectClientMatch?.kind === "one"
-        ? projectClientMatch.entity.id
-        : clientMatch?.kind === "one"
-          ? clientMatch.entity.id
-          : undefined;
-    const projectCandidates =
-      args.client && clientMatch?.kind === "none"
-        ? []
-        : preflightClientId
-          ? projects.filter((project) => project.clientId === preflightClientId)
-          : projects;
-    const projectMatch = args.project ? matchByName(projectCandidates, args.project.name) : undefined;
-    if (args.project && projectMatch?.kind === "many") {
-      return ambiguous("project", args.project.name, projectMatch.matches);
-    }
-    if (args.project && projectsResult.truncated) return incompleteIdentity("project", args.project.name);
-
-    const taskResult = args.task && projectMatch?.kind === "one"
-      ? await ctx.clockify.listTasks(projectMatch.entity.id)
-      : undefined;
-    const taskMatch = args.task && taskResult
-      ? matchByName(taskResult.rows, args.task.name)
-      : undefined;
-    if (args.task && taskMatch?.kind === "many") {
-      return ambiguous("task", args.task.name, taskMatch.matches);
-    }
-    if (args.task && taskResult?.truncated) return incompleteIdentity("task", args.task.name);
-
-    // Each entity is a composition STEP. A required step that fails rolls back the
-    // entities this op already created (no orphan client/project when a later step
-    // errors); the timer is best-effort (a failure warns, never rolls back).
-    // Identity/dependency stops were handled above, before this list can mutate.
-    const del = ctx.clockify.deleteEntity?.bind(ctx.clockify);
-    // projectId is only needed (and only passed) for a `task` delete — it's
-    // project-scoped on the wire; every other type ignores it.
-    const undoFor = (entityType: string, id: string, projectId?: string): (() => Promise<void>) | undefined =>
-      del ? () => del({ entityType, id, ...(projectId ? { projectId } : {}) }) : undefined;
-
-    // Shared, forward-flowing ids (client → project → task → timer).
-    const ids: { clientId?: string; projectId?: string; taskId?: string } = {};
-    const steps: CompositionStep[] = [];
-
-    if (args.tag) {
-      const tag = args.tag;
-      steps.push({
-        label: "tag",
-        required: true,
-        run: async () => {
-          const match = tagMatch!;
-          if (match.kind === "one") return { kind: "done", reused: [{ type: "tag", id: match.entity.id, name: match.entity.name }] };
-          const created = await ctx.clockify.createTag({ name: tag.name });
-          return { kind: "done", created: [{ type: "tag", id: created.id, name: created.name }], undo: undoFor("tag", created.id) };
-        },
-      });
-    }
-
-    if (args.client) {
-      const client = args.client;
-      steps.push({
-        label: "client",
-        required: true,
-        run: async () => {
-          const match = clientMatch!;
-          if (match.kind === "one") {
-            ids.clientId = match.entity.id;
-            return { kind: "done", reused: [{ type: "client", id: match.entity.id, name: match.entity.name }] };
-          }
-          const created = await ctx.clockify.createClient({ name: client.name });
-          ids.clientId = created.id;
-          return { kind: "done", created: [{ type: "client", id: created.id, name: created.name }], undo: undoFor("client", created.id) };
-        },
-      });
-    }
-
-    if (args.project) {
-      const project = args.project;
-      steps.push({
-        label: "project",
-        required: true,
-        run: async () => {
-          if (projectClientMatch?.kind === "one") {
-            ids.clientId = projectClientMatch.entity.id;
-          }
-          const match = projectMatch!;
-          if (match.kind === "one") {
-            ids.projectId = match.entity.id;
-            return { kind: "done", reused: [{ type: "project", id: match.entity.id, name: match.entity.name }] };
-          }
-          const created = await ctx.clockify.createProject({ name: project.name, clientId: ids.clientId });
-          ids.projectId = created.id;
-          return { kind: "done", created: [{ type: "project", id: created.id, name: created.name }], undo: undoFor("project", created.id) };
-        },
-      });
-    }
-
-    if (args.task) {
-      const task = args.task;
-      steps.push({
-        label: "task",
-        required: true,
-        run: async () => {
-          const match = taskMatch ?? { kind: "none" as const };
-          if (match.kind === "one") {
-            ids.taskId = match.entity.id;
-            return { kind: "done", reused: [{ type: "task", id: match.entity.id, name: match.entity.name }] };
-          }
-          const projectId = ids.projectId!;
-          const created = await ctx.clockify.createTask({ projectId, name: task.name });
-          ids.taskId = created.id;
-          return { kind: "done", created: [{ type: "task", id: created.id, name: created.name, projectId }], undo: undoFor("task", created.id, projectId) };
-        },
-      });
-    }
-
-    if (args.startTimer) {
-      const timerOpts = typeof args.startTimer === "object" ? args.startTimer : {};
-      steps.push({
-        // Best-effort: a timer failure warns but never rolls back the work that was
-        // successfully created. Starting a timer is a `time_tracking` write, gated
-        // by that group independently of this action's `work_structure` gate.
-        label: "timer",
-        required: false,
-        run: async () => {
-          if (!canWrite(ctx.policy, "time_tracking")) {
-            return {
-              kind: "done",
-              warnings: [
-                {
-                  code: "policy_denied",
-                  message:
-                    "Timer not started: write access to time_tracking is disabled in your assistant permissions.",
-                },
-              ],
-            };
-          }
-          const entry = await ctx.clockify.startTimeEntry({
-            userId: ctx.adminUserId,
-            description: timerOpts.description,
-            projectId: ids.projectId!,
-            taskId: ids.taskId,
-            billable: timerOpts.billable,
-            start: nowIso(ctx),
-          });
-          return { kind: "done", created: [{ type: "time_entry", id: entry.id, name: entry.description }], undo: undoFor("time_entry", entry.id) };
-        },
-      });
-    }
-
-    const outcome = await runComposition(steps);
-    if (outcome.status.kind === "stopped") {
-      if (!outcome.status.retained && outcome.status.rollbackWarnings.length === 0) {
-        return outcome.status.result;
-      }
-      const rolledBack = new Set(outcome.status.rolledBack.map((ref) => `${ref.type}:${ref.id}`));
-      const remaining = outcome.created.filter((ref) => !rolledBack.has(`${ref.type}:${ref.id}`));
-      const stopMessage = "message" in outcome.status.result
-        ? outcome.status.result.message
-        : "The workflow stopped before it could finish.";
-      return {
-        kind: "partial",
-        receipt: successReceipt({
-          action: "clockify_create_work_package",
-          entity: "work_package",
-          ids: { workspaceId: ctx.workspaceId },
-          changed: { created: remaining, reused: outcome.reused },
-          warnings: [...outcome.warnings, ...outcome.status.rollbackWarnings],
-        }),
-        message: `The request stopped part-way through. ${stopMessage}`,
-        ...(outcome.status.result.kind === "clarify" && outcome.status.result.options
-          ? { options: outcome.status.result.options }
-          : {}),
-        recovery: {
-          hint: "Review the listed changes in Clockify before continuing or retrying.",
-          retryable: false,
-        },
-      };
-    }
-    if (outcome.status.kind === "failed") {
-      const rolled = outcome.status.rolledBack.length
-        ? ` Rolled back: ${outcome.status.rolledBack.map((r) => `${r.type} ${r.name ?? r.id}`).join(", ")}.`
-        : "";
-      return {
-        kind: "receipt",
-        receipt: errorReceipt({
-          action: "clockify_create_work_package",
-          code: "composition_failed",
-          message: `Couldn't complete the request: the ${outcome.status.label} step failed (${outcome.status.message}). ${leftBehindNote(outcome.status.rollbackWarnings)}${rolled}`,
-          recovery: { hint: "Adjust the request and try again.", retryable: true },
-        }),
-      };
-    }
-
-    return {
-      kind: "receipt",
-      receipt: successReceipt({
-        action: "clockify_create_work_package",
-        entity: "work_package",
-        ids: { workspaceId: ctx.workspaceId },
-        changed: { created: outcome.created, reused: outcome.reused },
-        warnings: outcome.warnings,
-      }),
-    };
-  },
 });
-
-function ambiguous(
-  type: string,
-  name: string,
-  matches: Array<{ id: string; name: string }>,
-): ActionResult {
-  return {
-    kind: "clarify",
-    message: `Several ${type}s are named "${name}". Which one?`,
-    options: matches.map((m) => ({ id: m.id, label: m.name })),
-  };
-}
-
-function incompleteIdentity(type: string, name: string): ActionResult {
-  return {
-    kind: "clarify",
-    message: `Clockify returned an incomplete ${type} list, so I can't prove "${name}" is unique or absent. Provide the exact id or use a narrower filter.`,
-  };
-}
 
 const listEntities = defineAction({
   name: "clockify_list_entities",

@@ -60,7 +60,7 @@ async function call(method: string, path: string, body?: unknown, allow404 = fal
   return text ? JSON.parse(text) : null;
 }
 
-type Status = "PASS" | "PREVIEW_OK" | "UNSUPPORTED" | "FAIL" | "SKIP";
+type Status = "PASS" | "PREVIEW_OK" | "FAIL" | "SKIP";
 interface Row {
   action: string;
   status: Status;
@@ -69,7 +69,7 @@ interface Row {
 const rows: Row[] = [];
 function record(action: string, status: Status, detail = ""): void {
   rows.push({ action, status, detail });
-  const icon = { PASS: "✓", PREVIEW_OK: "·", UNSUPPORTED: "⊘", FAIL: "✗", SKIP: "–" }[status];
+  const icon = { PASS: "✓", PREVIEW_OK: "·", FAIL: "✗", SKIP: "–" }[status];
   console.log(`  ${icon} ${status.padEnd(11)} ${action}${detail ? ` — ${detail}` : ""}`);
 }
 
@@ -80,6 +80,7 @@ function record(action: string, status: Status, detail = ""): void {
  * previewOnly), uses `call` for raw setup + self-cleanup, and `record`s its rows.
  * Area runners must self-clean (create→delete round-trips) so the sweep stays 0.
  */
+/* eslint-disable @typescript-eslint/no-explicit-any -- executeAction and live HTTP responses are intentionally untyped at this opt-in boundary. */
 export interface LiveHarness {
   ctx: ActionContext;
   /** Random per-run suffix so AIASSIST_SMOKE_* names never collide. */
@@ -102,7 +103,6 @@ export interface LiveHarness {
  */
 const AREA_RUNNERS: Array<(h: LiveHarness) => Promise<void>> = [];
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 async function read(ctx: ActionContext, actionName: string, args: any): Promise<any> {
   try {
     const r: any = await executeAction({ actionName, args, context: ctx });
@@ -188,10 +188,6 @@ async function risky(ctx: ActionContext, actionName: string, args: any): Promise
   if (commit.ok) {
     record(actionName, "PASS", `preview→confirm→commit ok ${summarize(commit)}`);
     return commit;
-  }
-  if (commit.code === "unsupported") {
-    record(actionName, "UNSUPPORTED", `preview ok; commit: ${commit.message ?? "unsupported"}`);
-    return null;
   }
   record(actionName, "FAIL", `commit error: ${commit.code ?? ""} ${commit.message ?? ""}`);
   return null;
@@ -1201,7 +1197,7 @@ async function main(): Promise<void> {
   console.log("\n──────── RESULT MATRIX ────────");
   const by = (s: Status) => rows.filter((r) => r.status === s).length;
   console.log(
-    `PASS=${by("PASS")}  PREVIEW_OK=${by("PREVIEW_OK")}  UNSUPPORTED=${by("UNSUPPORTED")}  FAIL=${by("FAIL")}  SKIP=${by("SKIP")}`,
+    `PASS=${by("PASS")}  PREVIEW_OK=${by("PREVIEW_OK")}  FAIL=${by("FAIL")}  SKIP=${by("SKIP")}`,
   );
   const fails = rows.filter((r) => r.status === "FAIL");
   if (fails.length) {
@@ -1209,7 +1205,7 @@ async function main(): Promise<void> {
     for (const f of fails) console.log(`  ✗ ${f.action} — ${f.detail}`);
     process.exitCode = 1;
   } else {
-    console.log("\nNo hard failures. (UNSUPPORTED = adapter method not implemented; expected.)");
+    console.log("\nNo hard failures.");
   }
 }
 

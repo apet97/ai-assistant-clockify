@@ -21,13 +21,14 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { selectModelClient, type ModelClientSelection } from "../src/assistant/select-model-client.js";
+import type { ModelClientSelection } from "../src/assistant/select-model-client.js";
 import type { ModelClient } from "../src/assistant/model-client.js";
 import { planConversation, type ModelPlan } from "../src/assistant/planner.js";
 import { buildSystemPrompt } from "../src/assistant/prompts.js";
 import { catalogForModel, getAction } from "../src/harness/catalog.js";
 import { toolsForModel } from "../src/harness/tools.js";
 import { selectActionsForMessage } from "../src/harness/tool-select.js";
+import { selectEvalModelClient } from "./eval/model-client.js";
 import { trackUsage } from "../src/assistant/usage.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { scoreCase } from "../src/eval/score.js";
@@ -73,7 +74,10 @@ function riskFor(actionName: string): readonly string[] {
 
 /** Canonical "action+arg-keys" identity for the consistency metric. */
 function planSignature(plan: ModelPlan): string {
-  if (plan.kind !== "actions" || !plan.actions?.length) return `:${plan.kind}`;
+  if (plan.kind !== "actions" || !plan.actions?.length) {
+    const kind = Array.isArray(plan.kind) ? plan.kind.join(",") : plan.kind;
+    return ":" + kind;
+  }
   return plan.actions
     .map((a) => `${a.name}(${Object.keys(a.arguments ?? {}).sort().join(",")})`)
     .join(" + ");
@@ -84,7 +88,7 @@ function describeExpect(c: EvalCase): string {
   const parts: string[] = [];
   if (e.action) parts.push(e.action);
   if (e.anyAction?.length) parts.push(`anyOf[${e.anyAction.join("|")}]`);
-  if (e.kind) parts.push(`kind=${e.kind}`);
+  if (e.kind) parts.push("kind=" + (Array.isArray(e.kind) ? e.kind.join("|") : e.kind));
   if (e.noDestructive) parts.push("noDestructive");
   if (e.args) {
     const a = e.args;
@@ -120,6 +124,8 @@ interface RunOutcome {
   promptTokens: number;
   completionTokens: number;
   usageReported: boolean;
+  cachedPromptTokens: number;
+  cachedPromptReported: boolean;
 }
 
 interface CaseReport {
@@ -147,14 +153,16 @@ async function main(): Promise<void> {
     llmBaseUrl: process.env.LLM_BASE_URL,
     llmApiKey: process.env.LLM_API_KEY,
     llmModel: process.env.LLM_MODEL,
+    llmTimeoutMs: process.env.LLM_TIMEOUT_MS ? Number(process.env.LLM_TIMEOUT_MS) : undefined,
     llmReasoningEffort: process.env.LLM_REASONING_EFFORT,
+    llmThinkingMode: process.env.LLM_THINKING_MODE as ModelClientSelection["llmThinkingMode"],
     llmSeed: process.env.LLM_SEED ? Number(process.env.LLM_SEED) : undefined,
     geminiModel: process.env.GEMINI_MODEL,
   };
 
   let modelClient: ModelClient;
   try {
-    modelClient = selectModelClient(selection);
+    modelClient = selectEvalModelClient(selection);
   } catch (err) {
     console.error(
       `Refusing to run: ${err instanceof Error ? err.message : String(err)}\n` +
@@ -227,6 +235,8 @@ async function main(): Promise<void> {
       promptTokens: tracked.usage.promptTokens,
       completionTokens: tracked.usage.completionTokens,
       usageReported: tracked.usage.usageReported,
+      cachedPromptTokens: tracked.usage.cachedPromptTokens,
+      cachedPromptReported: tracked.usage.cachedPromptReported,
     };
   });
   process.stdout.write("\n\n");
@@ -278,6 +288,10 @@ async function main(): Promise<void> {
   const meanPromptTokens = mean(outcomes.map((o) => o.promptTokens));
   const meanCompletionTokens = mean(outcomes.map((o) => o.completionTokens));
   const tokensReported = outcomes.some((o) => o.usageReported);
+  const totalPromptTokens = outcomes.reduce((sum, o) => sum + o.promptTokens, 0);
+  const totalCachedPromptTokens = outcomes.reduce((sum, o) => sum + o.cachedPromptTokens, 0);
+  const cachedPromptReported = outcomes.some((o) => o.cachedPromptReported);
+  const cacheHitRate = totalPromptTokens > 0 ? totalCachedPromptTokens / totalPromptTokens : 0;
 
   // Failures / variance table (worst first).
   const ranked = [...reports].sort(
@@ -305,6 +319,13 @@ async function main(): Promise<void> {
   console.log(
     `  PERF: latency p50 ${latencyP50Ms}ms / p95 ${latencyP95Ms}ms | ` +
       `tokens/run ${tokensReported ? `~${Math.round(meanPromptTokens)} prompt + ${Math.round(meanCompletionTokens)} completion` : "(not reported by backend)"}`,
+  );
+  console.log(
+    `  CACHE: ${
+      cachedPromptReported
+        ? `${totalCachedPromptTokens}/${totalPromptTokens} prompt tokens hit (${pct(cacheHitRate)})`
+        : "not reported by backend"
+    }`,
   );
 
   // Persist for trend tracking (gitignored). The matrix runner pins --out per model.
@@ -338,6 +359,10 @@ async function main(): Promise<void> {
           meanPromptTokens,
           meanCompletionTokens,
           tokensReported,
+          totalPromptTokens,
+          totalCachedPromptTokens,
+          cachedPromptReported,
+          cacheHitRate,
         },
         reports,
       },

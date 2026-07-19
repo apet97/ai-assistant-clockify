@@ -1,13 +1,16 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildAddon, buildManifest } from "../../src/addon/manifest.js";
+import { ENDPOINT_SCOPE_SOURCES } from "../../src/addon/scope-contract.js";
 
 const BASE_URL = "https://example.com/ai-assistant";
 
 describe("manifest", () => {
-  it("names the add-on AI Assistant", () => {
+  it("uses the public marketplace name while keeping the sidebar label short", () => {
     const manifest = buildManifest(BASE_URL);
-    expect(manifest.name).toBe("AI Assistant");
-    expect(JSON.stringify(manifest)).toContain("AI Assistant");
+    expect(manifest.name).toBe("AI Assistant for Clockify");
+    expect(manifest.components?.[0]?.label).toBe("AI Assistant");
   });
 
   it("exposes a single admin-only sidebar component at /component/assistant", () => {
@@ -45,33 +48,48 @@ describe("manifest", () => {
     expect(scopes.length).toBeGreaterThanOrEqual(20);
   });
 
-  it("requests every scope the API-coverage phases depend on (Phase 0 Task 0.6)", () => {
+  it("requests exactly the scopes in the checked-in endpoint contract", () => {
     const manifest = buildManifest(BASE_URL);
-    const scopes = manifest.scopes ?? [];
-    // Each later phase needs read+write for its area; assert the manifest carries
-    // them so a phase isn't blocked at install time by a missing scope.
-    for (const scope of [
-      "CUSTOM_FIELDS_READ",
-      "CUSTOM_FIELDS_WRITE",
-      "APPROVAL_READ",
-      "APPROVAL_WRITE",
-      "SCHEDULING_READ",
-      "SCHEDULING_WRITE",
-      "TIME_OFF_READ",
-      "TIME_OFF_WRITE",
-      "EXPENSE_READ",
-      "EXPENSE_WRITE",
-      "INVOICE_READ",
-      "INVOICE_WRITE",
-      "REPORTS_READ",
-      "REPORTS_WRITE",
-    ]) {
-      expect(scopes).toContain(scope);
-    }
+    expect(manifest.scopes).toEqual(ENDPOINT_SCOPE_SOURCES.map(({ scope }) => scope));
+    expect(manifest.scopes).toContain("REPORTS_READ");
+    expect(manifest.scopes).not.toContain("REPORTS_WRITE");
+  });
+
+  it("includes binary invoice export in the generated exact endpoint inventory", () => {
+    const contractPath = fileURLToPath(new URL("../../docs/ENDPOINT_SCOPE_CONTRACT.md", import.meta.url));
+    const contract = readFileSync(contractPath, "utf8");
+
+    expect(contract).toContain("Generated inventory: **118 distinct adapter request shapes**");
+    expect(contract).toContain("`API GET /workspaces/{workspaceId}/invoices/{id}/export`");
+  });
+
+  it("labels the mapping as callsite-specific and requires exact per-scope live probes", () => {
+    const contractPath = fileURLToPath(new URL("../../docs/ENDPOINT_SCOPE_CONTRACT.md", import.meta.url));
+    const generatorPath = fileURLToPath(new URL("../../scripts/generate-endpoint-scope-contract.ts", import.meta.url));
+    const contract = readFileSync(contractPath, "utf8");
+    const generator = readFileSync(generatorPath, "utf8");
+
+    expect(generator).toContain("multiplyAssigned");
+    expect(generator).toContain("scopes.length !== 1");
+    expect(contract).toContain("adapter callsite");
+    expect(contract).toContain("one distinct exact endpoint probe");
+    expect(contract).toContain("Static extraction alone is not treated as live permission evidence");
+  });
+
+  it("fails closed when RestCore calls escape the scanned adapter root or use call for a mutation", () => {
+    const generatorPath = fileURLToPath(new URL("../../scripts/generate-endpoint-scope-contract.ts", import.meta.url));
+    const workspaceAdapterPath = fileURLToPath(new URL("../../src/clockify/rest-workspace.ts", import.meta.url));
+    const generator = readFileSync(generatorPath, "utf8");
+    const workspaceAdapter = readFileSync(workspaceAdapterPath, "utf8");
+
+    expect(generator).toContain("RestCore callsite outside scanned adapter root");
+    expect(generator).toContain("core.call cannot carry a mutation method");
+    expect(workspaceAdapter).not.toMatch(/\bcore\.(?:call|mutate|paginate|paginateEnvelope|getBinary)\s*\(/u);
+    expect(workspaceAdapter).toContain("timeEntryRest.deleteTimeEntryAtomic(i)");
   });
 
   it("builds a ClockifyAddon exposing the manifest via getManifest()", () => {
     const addon = buildAddon(BASE_URL);
-    expect(addon.getManifest().name).toBe("AI Assistant");
+    expect(addon.getManifest().name).toBe("AI Assistant for Clockify");
   });
 });

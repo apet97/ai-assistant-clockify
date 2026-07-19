@@ -27,6 +27,36 @@ function client(payload: unknown, ok = true, captured?: { body?: string }) {
 }
 
 describe("createModelClient.completeWithTools", () => {
+  it("rejects unsafe base URLs and blocks credential-bearing redirects", async () => {
+    for (const unsafe of [
+      "http://api.test/v1",
+      "https://user:pass@api.test/v1",
+      "https://api.test/v1?destination=elsewhere",
+      "https://api.test/v1#fragment",
+    ] as const) {
+      expect(() => createModelClient({ baseUrl: unsafe, apiKey: "fake", model: "test-model" }))
+        .toThrow(/model endpoint/u);
+    }
+
+    const captured: { redirect?: RequestRedirect; url?: string } = {};
+    const c = createModelClient({
+      baseUrl: "https://api.test/v1/",
+      apiKey: "fake",
+      model: "test-model",
+      fetchImpl: vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        captured.url = String(url);
+        captured.redirect = init?.redirect;
+        return new Response(JSON.stringify({ choices: [{ message: { content: "ok" } }] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    });
+    await c.complete([{ role: "user", content: "hello" }]);
+    expect(captured.url).toBe("https://api.test/v1/chat/completions");
+    expect(captured.redirect).toBe("error");
+  });
+
   it("maps tool_calls to parsed ToolCall objects", async () => {
     const payload = {
       choices: [
@@ -281,6 +311,35 @@ describe("createModelClient reasoning effort", () => {
     });
     await plain.complete([{ role: "user", content: "hi" }]);
     expect("reasoning_effort" in JSON.parse(captured.body ?? "{}")).toBe(false);
+  });
+});
+
+describe("createModelClient thinking mode", () => {
+  it("keeps the default request body byte-compatible and emits the exact field only when configured", async () => {
+    const captured: { body?: string } = {};
+    const payload = { choices: [{ message: { content: "{}", tool_calls: [] } }] };
+    const plain = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await plain.complete([{ role: "user", content: "hi" }]);
+    expect(captured.body).toBe(
+      '{"model":"m","temperature":0,"messages":[{"role":"user","content":"hi"}],"response_format":{"type":"json_object"}}',
+    );
+
+    const disabled = createModelClient({
+      baseUrl: "https://api.test/v1",
+      apiKey: "fake",
+      model: "m",
+      thinkingMode: "disabled",
+      fetchImpl: fakeFetch(payload, true, captured),
+    });
+    await disabled.complete([{ role: "user", content: "hi" }]);
+    expect(JSON.parse(captured.body ?? "{}").thinking).toEqual({ type: "disabled" });
+    await disabled.completeWithTools!([{ role: "user", content: "hi" }], tools);
+    expect(JSON.parse(captured.body ?? "{}").thinking).toEqual({ type: "disabled" });
   });
 });
 

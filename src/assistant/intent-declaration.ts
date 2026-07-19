@@ -3,6 +3,10 @@ import type { ActionCatalogEntry } from "../harness/action.js";
 import {
   buildAllowIntentCapabilityV1,
   buildDenyAllWritesIntentCapabilityV1,
+  INTENT_LITERAL_CONSTRAINT_LIMIT,
+  INTENT_LITERAL_MAX_DEPTH,
+  INTENT_LITERAL_MAX_NODES,
+  parseIntentLiteralValue,
   type IntentCapabilityV1,
   type IntentWriteActionDraftV1,
 } from "../harness/intent-capability.js";
@@ -12,7 +16,6 @@ export const DECLARE_INTENT_TOOL_NAME = "declare_intent_capability";
 
 const MAX_AUTHORED_TEXT_BYTES = 64 * 1024;
 const MAX_DECLARED_WRITES = 64;
-const MAX_CONSTRAINTS_PER_WRITE = 64;
 
 const sourceSpanSchema = z.object({
   startByte: z.number().int().nonnegative(),
@@ -20,23 +23,24 @@ const sourceSpanSchema = z.object({
   text: z.string().min(1),
 }).strict();
 
-const scalarSchema = z.union([
-  z.string(),
-  z.number().finite(),
-  z.boolean(),
-  z.null(),
-]);
+const literalSchema = z.unknown().superRefine((value, ctx) => {
+  try {
+    parseIntentLiteralValue(value);
+  } catch (error) {
+    ctx.addIssue({ code: "custom", message: error instanceof Error ? error.message : "invalid_literal" });
+  }
+});
 
 const constraintSchema = z.object({
   path: z.string().min(1),
-  value: scalarSchema,
+  value: literalSchema,
   sourceSpan: sourceSpanSchema,
 }).strict();
 
 const declaredWriteSchema = z.object({
   actionName: z.string().min(1),
   sourceSpans: z.array(sourceSpanSchema).min(1).max(16),
-  literalConstraints: z.array(constraintSchema).max(MAX_CONSTRAINTS_PER_WRITE),
+  literalConstraints: z.array(constraintSchema).max(INTENT_LITERAL_CONSTRAINT_LIMIT),
   maxExecutions: z.literal(1),
 }).strict();
 
@@ -74,6 +78,19 @@ export interface DeclareIntentCapabilityInput {
   signal?: AbortSignal;
 }
 
+function literalJsonSchema(depth: number): Record<string, unknown> {
+  const scalar = [{ type: "string" }, { type: "number" }, { type: "boolean" }, { type: "null" }];
+  if (depth >= INTENT_LITERAL_MAX_DEPTH) return { anyOf: scalar };
+  const child = literalJsonSchema(depth + 1);
+  return {
+    anyOf: [
+      ...scalar,
+      { type: "array", maxItems: INTENT_LITERAL_MAX_NODES - 1, items: child },
+      { type: "object", maxProperties: INTENT_LITERAL_MAX_NODES - 1, additionalProperties: child },
+    ],
+  };
+}
+
 const declarationTool: ToolDefinition = {
   name: DECLARE_INTENT_TOOL_NAME,
   description: "Declare only write actions and literal constraints explicitly authored by the admin.",
@@ -108,14 +125,14 @@ const declarationTool: ToolDefinition = {
             },
             literalConstraints: {
               type: "array",
-              maxItems: MAX_CONSTRAINTS_PER_WRITE,
+              maxItems: INTENT_LITERAL_CONSTRAINT_LIMIT,
               items: {
                 type: "object",
                 additionalProperties: false,
                 required: ["path", "value", "sourceSpan"],
                 properties: {
                   path: { type: "string", minLength: 1 },
-                  value: { type: ["string", "number", "boolean", "null"] },
+                  value: literalJsonSchema(1),
                   sourceSpan: {
                     type: "object",
                     additionalProperties: false,
@@ -227,19 +244,37 @@ function normalizeString(text: string): string {
   return unquote(text.trim()).normalize("NFC");
 }
 
-function normalizedLiteral(spanText: string, declared: string | number | boolean | null): typeof declared | undefined {
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function normalizedLiteral(spanText: string, declared: unknown): ReturnType<typeof parseIntentLiteralValue> | undefined {
+  if (Array.isArray(declared) || (declared !== null && typeof declared === "object")) {
+    try {
+      const source = parseIntentLiteralValue(JSON.parse(spanText.trim()) as unknown);
+      const expected = parseIntentLiteralValue(declared);
+      return stableJson(source) === stableJson(expected) ? expected : undefined;
+    } catch {
+      return undefined;
+    }
+  }
   const normalizedSource = normalizeString(spanText);
   if (typeof declared === "string") {
     const normalizedDeclared = normalizeString(declared);
-    return normalizedSource === normalizedDeclared ? normalizedDeclared : undefined;
+    return normalizedSource === normalizedDeclared ? parseIntentLiteralValue(normalizedDeclared) : undefined;
   }
   if (typeof declared === "number") {
     if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(normalizedSource)) return undefined;
     const parsed = Number(normalizedSource);
-    return Number.isFinite(parsed) && Object.is(parsed, declared) ? declared : undefined;
+    return Number.isFinite(parsed) && Object.is(parsed, declared) ? parseIntentLiteralValue(declared) : undefined;
   }
   if (typeof declared === "boolean") {
-    return normalizedSource === String(declared) ? declared : undefined;
+    return normalizedSource === String(declared) ? parseIntentLiteralValue(declared) : undefined;
   }
   return normalizedSource === "null" ? null : undefined;
 }

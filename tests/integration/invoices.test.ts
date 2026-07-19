@@ -69,18 +69,23 @@ describe("invoice actions", () => {
 
   it("clockify_invoices_export returns only authenticated artifact metadata", async () => {
     const fake = createFakeWorkspace(seed());
-    const result = await executeAction({ actionName: "clockify_invoices_export", args: { id: "inv1" }, context: makeContext(fake) });
+    const context = makeContext(fake);
+    const saveArtifact = vi.fn(context.saveArtifact!);
+    context.saveArtifact = saveArtifact;
+    const result = await executeAction({ actionName: "clockify_invoices_export", args: { id: "inv1" }, context });
     if (result.kind === "receipt" && result.receipt.ok) {
       expect((result.receipt.data as any).contentType).toBe("application/pdf");
       expect((result.receipt.data as any).base64).toBeUndefined();
       expect((result.receipt.data as any).artifact).toMatchObject({
         id: "artifact-1",
         downloadUrl: "/api/artifacts/artifact-1",
+        filename: "clockify-invoice-inv1.pdf",
       });
       const encoded = JSON.stringify(result);
       expect(encoded).not.toContain('"0":');
       expect(encoded).not.toContain("%PDF");
     } else throw new Error("expected receipt");
+    expect(saveArtifact).toHaveBeenCalledWith(expect.objectContaining({ filename: "clockify-invoice-inv1.pdf" }));
     expect(fake.counts.exportInvoice).toBe(1);
   });
 
@@ -131,6 +136,54 @@ describe("invoice actions", () => {
       receipt: { ok: false, code: "artifact_too_large" },
     });
     expect(saveArtifact).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["empty body", "application/pdf", new Uint8Array()],
+    ["HTML response", "text/html", new TextEncoder().encode("<html>gateway error</html>")],
+    ["JSON response", "application/json", new TextEncoder().encode('{"error":"down"}')],
+    ["PDF MIME without a PDF signature", "application/pdf", new TextEncoder().encode("not-a-pdf")],
+  ])("rejects an invalid exported artifact (%s) before persistence", async (_label, contentType, bytes) => {
+    const fake = createFakeWorkspace(seed());
+    vi.spyOn(fake.client, "exportInvoice").mockResolvedValue({ contentType, bytes });
+    const saveArtifact = vi.fn(() => ({ id: "must-not-exist", expiresAt: "2026-06-06T01:00:00.000Z" }));
+    const context = makeContext(fake);
+    context.saveArtifact = saveArtifact;
+
+    const result = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "inv1" },
+      context,
+    });
+
+    expect(result).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: false, code: "artifact_invalid" },
+    });
+    expect(saveArtifact).not.toHaveBeenCalled();
+  });
+
+  it("accepts a parameterized PDF MIME type but persists normalized application/pdf", async () => {
+    const fake = createFakeWorkspace(seed());
+    vi.spyOn(fake.client, "exportInvoice").mockResolvedValue({
+      contentType: "Application/PDF; charset=binary",
+      bytes: new TextEncoder().encode("%PDF-1.7\nfixture"),
+    });
+    const context = makeContext(fake);
+    const saveArtifact = vi.fn(context.saveArtifact!);
+    context.saveArtifact = saveArtifact;
+
+    const result = await executeAction({
+      actionName: "clockify_invoices_export",
+      args: { id: "inv1" },
+      context,
+    });
+
+    expect(result).toMatchObject({
+      kind: "receipt",
+      receipt: { ok: true, data: { contentType: "application/pdf" } },
+    });
+    expect(saveArtifact).toHaveBeenCalledWith(expect.objectContaining({ contentType: "application/pdf" }));
   });
 
   it("clockify_invoices_create previews billing then creates once on commit", async () => {

@@ -8,6 +8,22 @@ import {
   type StreamEvent,
 } from "../../src/ui/main.js";
 
+function meBody(preferences: { theme: "system" | "light" | "dark"; language: "en" | "sr" } = { theme: "system", language: "en" }) {
+  return {
+    ok: true,
+    workspaceId: "workspace-1",
+    adminUserId: "admin-1",
+    workspaceRole: "ADMIN",
+    csrfToken: "csrf-token",
+    preferences,
+    links: {
+      privacy: "https://assistant.example/privacy",
+      support: "https://assistant.example/support",
+      security: "https://assistant.example/security",
+    },
+  };
+}
+
 /**
  * The UI must surface real HTTP failures honestly: a 401 means "reload"
  * (sessions expire after 8h), and the routes' own JSON copy (e.g. the rate
@@ -24,7 +40,7 @@ function stubFetch(status: number, body: unknown): void {
         ok: responseStatus < 400,
         status: responseStatus,
         body: null,
-        json: async () => isMeBootstrap ? { ok: true, csrfToken: "csrf-token" } : body,
+        json: async () => isMeBootstrap ? meBody() : body,
       };
     }),
   );
@@ -101,11 +117,33 @@ describe("createFetchApi error surfacing", () => {
     expect(expired).toEqual([{ type: "error", message: SESSION_EXPIRED_MESSAGE }]);
   });
 
+  it("turns a malformed streaming HTTP error body into the safe fallback", async () => {
+    stubFetch(502, { ok: false, code: 42, message: { unexpected: true } });
+    const events: StreamEvent[] = [];
+    await createFetchApi().streamMessage("hi", (event) => events.push(event));
+    expect(events).toEqual([{
+      type: "error",
+      message: "The assistant is temporarily unavailable. Please try again.",
+    }]);
+  });
+
   it("a non-401 confirm error still RESOLVES with the JSON body (the confirm flow renders it)", async () => {
     stubFetch(409, { ok: false, code: "expired", message: "This confirmation has expired." });
     const result = (await createFetchApi().confirmPreview("p1", "n1")) as { ok: boolean; message?: string };
     expect(result.ok).toBe(false);
     expect(result.message).toContain("expired");
+  });
+
+  it("rejects a malformed ok:true route body with a visible protocol ApiError", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      body: null,
+      json: async () => ({ ok: true, firstRun: false }),
+    })));
+    await expect(createFetchApi().getPermissions()).rejects.toMatchObject({
+      message: "The assistant sent an invalid response. Please try again.",
+    });
   });
 
   it("confirmStream maps a 401 to the session copy (and carries the server code through)", async () => {
@@ -146,7 +184,11 @@ describe("createFetchApi chat-history switcher methods", () => {
           ok: true,
           status: 200,
           body: null,
-          json: async () => path === "/api/me" ? { ok: true, csrfToken: "csrf-token" } : { ok: true },
+          json: async () => path === "/api/me"
+            ? meBody()
+            : path === "/api/chat/sessions"
+              ? { ok: true, sessions: [] }
+              : { ok: true },
         };
       }),
     );
@@ -174,11 +216,34 @@ describe("createFetchApi chat-history switcher methods", () => {
 });
 
 describe("createFetchApi CSRF fallback", () => {
+  it("shares one decoded /api/me request between preference bootstrap and CSRF", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (path: string) => {
+      calls.push(path);
+      return {
+        ok: true,
+        status: 200,
+        body: null,
+        json: async () => path === "/api/me"
+          ? meBody({ theme: "dark", language: "sr" })
+          : { ok: true, status: "cancelled" },
+      };
+    }));
+    const api = createFetchApi();
+    expect((await api.getMe?.() as { preferences: unknown }).preferences).toEqual({ theme: "dark", language: "sr" });
+    await api.cancelPreview("p1");
+    expect(calls).toEqual(["/api/me", "/api/confirmations/p1/cancel"]);
+  });
+
   it("loads the session token once from /api/me and sends it on every mutation", async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
     vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
       calls.push({ path, init });
-      const body = path === "/api/me" ? { ok: true, csrfToken: "csrf-token" } : { ok: true };
+      const body = path === "/api/me"
+        ? meBody()
+        : path === "/api/chat/messages"
+          ? { ok: true, reply: { kind: "answer", text: "" }, results: [] }
+          : { ok: true, status: "cancelled" };
       return { ok: true, status: 200, body: null, json: async () => body };
     }));
     const api = createFetchApi();
