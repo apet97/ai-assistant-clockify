@@ -23,6 +23,7 @@ import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 
 interface WriteAuthorityMetadata {
   literalControlledPaths: readonly string[];
+  numericLiteralPaths: readonly string[];
   semanticLiteralAliases: ReadonlyArray<{ path: string }>;
   serverDerivedIdPaths: readonly string[];
   permittedServerDefaultPaths: readonly string[];
@@ -45,6 +46,17 @@ interface WriteAuthorityMetadata {
     }>;
     safeOmissionPaths: readonly string[];
   };
+}
+
+function hasValidNumericLiteralTopology(authority: unknown): boolean {
+  if (!authority || typeof authority !== "object") return false;
+  const candidate = authority as Partial<WriteAuthorityMetadata>;
+  if (!Array.isArray(candidate.literalControlledPaths) || !Array.isArray(candidate.numericLiteralPaths) ||
+    !Object.isFrozen(candidate.numericLiteralPaths)) return false;
+  const numericPaths = candidate.numericLiteralPaths as unknown[];
+  return new Set(numericPaths).size === numericPaths.length && numericPaths.every((path) =>
+    typeof path === "string" && path.length > 0 && !path.includes(".*") &&
+    path.replace(/\[\d+\]/gu, "[]") === path && candidate.literalControlledPaths!.includes(path));
 }
 
 function externalWrites(): ActionDefinition[] {
@@ -89,6 +101,7 @@ describe("Phase 6 write authority enforcement", () => {
     const invalid = externalWrites().flatMap((action) => {
       const authority = (action as ActionDefinition & { writeAuthority?: WriteAuthorityMetadata }).writeAuthority;
       if (!authority || !Array.isArray(authority.literalControlledPaths) ||
+        !hasValidNumericLiteralTopology(authority) ||
         authority.literalConstraintLimits !== INTENT_LITERAL_LIMITS ||
         !Array.isArray(authority.serverDerivedIdPaths) || !Array.isArray(authority.permittedServerDefaultPaths) ||
         !Array.isArray(authority.preservedStatePaths) ||
@@ -101,6 +114,36 @@ describe("Phase 6 write authority enforcement", () => {
     });
 
     expect(invalid).toEqual([]);
+  });
+
+  it("requires valid numeric literal topology on every model-visible write authority", () => {
+    expect(modelVisibleWrites().filter((action) =>
+      !hasValidNumericLiteralTopology(action.writeAuthority)).map((action) => action.name)).toEqual([]);
+  });
+
+  it("rejects missing, mutable, open, duplicate, concrete-index, and unknown numeric authority paths", () => {
+    const authority = ACTION_CATALOG.find((action) =>
+      action.name === "clockify_invoices_create")!.writeAuthority!;
+    const validPath = "items[].amount";
+    expect(hasValidNumericLiteralTopology(authority)).toBe(true);
+    for (const numericLiteralPaths of [
+      undefined,
+      "items[].amount",
+      [validPath],
+      Object.freeze([validPath, validPath]),
+      Object.freeze(["groups.*"]),
+      Object.freeze(["items[0].amount"]),
+      Object.freeze(["items[].invented"]),
+    ]) {
+      expect(hasValidNumericLiteralTopology({
+        ...authority,
+        numericLiteralPaths,
+      }), JSON.stringify(numericLiteralPaths)).toBe(false);
+    }
+    expect(hasValidNumericLiteralTopology({
+      ...authority,
+      numericLiteralPaths: Object.freeze([validPath]),
+    })).toBe(true);
   });
 
   it("has one reviewed semantics entry for every model-visible write and no extras", () => {

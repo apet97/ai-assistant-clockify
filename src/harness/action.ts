@@ -247,6 +247,8 @@ export interface WriteAuthorityMetadata {
     maxBytes: number;
   };
   literalControlledPaths: readonly string[];
+  /** Closed-schema literal leaves whose only accepted scalar type is numeric. */
+  numericLiteralPaths: readonly string[];
   /** Reviewed natural-language spellings for one exact raw argument path and
    * canonical scalar value. Callers must select this metadata from the exact
    * action being declared; aliases never apply across actions or paths. */

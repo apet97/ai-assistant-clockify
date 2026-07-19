@@ -24,6 +24,12 @@ export const DECLARE_INTENT_TOOL_NAME = "declare_intent_capability";
 const MAX_AUTHORED_TEXT_BYTES = 64 * 1024;
 const MAX_DECLARED_WRITES = 64;
 const MAX_SOURCE_QUOTE_OCCURRENCE = 1023;
+// Largest known downstream decimal scale for a raw numeric write: an invoice
+// major-unit amount is converted to minor units (x100), then its unit price is
+// encoded for Clockify's wire contract (x100). Keep every repaired literal safe
+// through both integer transformations, whether the provider emitted a quoted
+// numeric token or a native JSON number.
+const MAX_CANONICAL_NUMERIC_ABS = Math.floor(Number.MAX_SAFE_INTEGER / 10_000);
 
 const sourceSpanSchema = z.object({
   startByte: z.number().int().nonnegative(),
@@ -101,6 +107,7 @@ interface DeclarationRequest {
   writeActionContracts?: Array<{
     actionName: string;
     literalControlledPaths: readonly string[];
+    numericLiteralPaths: readonly string[];
     semanticLiteralAliases: readonly SemanticLiteralAlias[];
     authoredIntent?: AuthoredIntentMetadata;
   }>;
@@ -218,6 +225,7 @@ const declarationSystemMessage: ModelMessage = {
     "Literal constraints must cite the exact authored literal and occurrence; do not infer IDs, dates, amounts, or values.",
     "A literal constraint sourceRef.quote must be the shortest exact authored substring that encodes its value (for value qwen quote qwen, not the whole sentence).",
     "Use only paths in the exact action's writeActionContracts entry. A semantic scalar mapping is valid only when that same action/path/value lists the exact authored phrase.",
+    "For paths listed in numericLiteralPaths, emit a JSON number rather than a quoted numeric string.",
     "Check candidateWriteActionNames first as a recall hint, but declare an action only when the authored segments explicitly request it; the full writeActionNames list remains the only name allowlist.",
     "When an action contract includes authoredIntent, sourceRefs must overlap its authored command and every matching literal cue must bind the listed path. authoredIntent is present only for extra safe-write grounding; for a contract without authoredIntent, its absence is not a denial—declare it when the authored segment explicitly commands that action and bind every exact authored literal path.",
     "Use only action names from writeActionNames. Set maxExecutions to 1. Return no prose.",
@@ -263,6 +271,7 @@ function buildRequest(input: DeclareIntentCapabilityInput): DeclarationRequest |
     return authority ? [{
       actionName,
       literalControlledPaths: authority.literalControlledPaths,
+      numericLiteralPaths: authority.numericLiteralPaths,
       semanticLiteralAliases: authority.semanticLiteralAliases,
       ...(authority.authoredIntent ? { authoredIntent: authority.authoredIntent } : {}),
     }] : [];
@@ -441,7 +450,9 @@ function normalizedLiteral(
   aliases: readonly SemanticLiteralAlias[] = [],
   sourceSpan?: SourceSpan,
   segments?: AuthoredSegment[],
+  requiresNumeric = false,
 ): ReturnType<typeof parseIntentLiteralValue> | undefined {
+  if (requiresNumeric && typeof declared !== "string" && typeof declared !== "number") return undefined;
   if (Array.isArray(declared) || (declared !== null && typeof declared === "object")) {
     try {
       const source = parseIntentLiteralValue(JSON.parse(spanText.trim()) as unknown);
@@ -453,10 +464,28 @@ function normalizedLiteral(
   }
   const normalizedSource = normalizeString(spanText);
   if (typeof declared === "string") {
+    if (requiresNumeric) {
+      if (declared !== spanText ||
+        !/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(spanText)) return undefined;
+      const parsed = Number(spanText);
+      if (!Number.isFinite(parsed) || Object.is(parsed, -0) || Math.abs(parsed) > MAX_CANONICAL_NUMERIC_ABS ||
+        (!spanText.includes(".") && !Number.isSafeInteger(parsed))) {
+        return undefined;
+      }
+      const [integer, fraction] = spanText.split(".");
+      const normalizedToken = fraction === undefined
+        ? integer!
+        : `${integer!}.${fraction.replace(/0+$/u, "")}`.replace(/\.$/u, "");
+      if (String(parsed) !== normalizedToken) return undefined;
+      return parseIntentLiteralValue(parsed);
+    }
     const normalizedDeclared = normalizeString(declared);
     return normalizedSource === normalizedDeclared ? parseIntentLiteralValue(normalizedDeclared) : undefined;
   }
   if (typeof declared === "number") {
+    if (requiresNumeric && (Object.is(declared, -0) || Math.abs(declared) > MAX_CANONICAL_NUMERIC_ABS)) {
+      return undefined;
+    }
     if (!/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(normalizedSource)) return undefined;
     const parsed = Number(normalizedSource);
     return Number.isFinite(parsed) && Object.is(parsed, declared) ? parseIntentLiteralValue(declared) : undefined;
@@ -768,7 +797,14 @@ function validateDeclaration(
       const sourceText = sourceTextForSpan(sourceSpan, request.segments);
       if (sourceText === undefined) return undefined;
       const aliases = contract.semanticLiteralAliases.filter((alias) => alias.path === constraint.path);
-      const value = normalizedLiteral(sourceText, constraint.value, aliases, sourceSpan, request.segments);
+      const value = normalizedLiteral(
+        sourceText,
+        constraint.value,
+        aliases,
+        sourceSpan,
+        request.segments,
+        contract.numericLiteralPaths.includes(normalizedConstraintPath(constraint.path)),
+      );
       if (value === undefined) return undefined;
       if (literalConstraints.some((prior) =>
         prior.sourceSpan.startByte < sourceSpan.endByte && sourceSpan.startByte < prior.sourceSpan.endByte)) {

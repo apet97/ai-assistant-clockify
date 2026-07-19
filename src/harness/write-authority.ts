@@ -620,6 +620,32 @@ function schemaNodesAtPath(
   return schemaNodesAtPath(child, segments, index + 1);
 }
 
+function schemaRequiresNumericScalar(node: JsonSchemaNode): boolean {
+  const branches = node.anyOf ?? node.oneOf;
+  if (branches) return branches.length > 0 && branches.every(schemaRequiresNumericScalar);
+  if (node.const !== undefined) return typeof node.const === "number" && Number.isFinite(node.const);
+  if (node.enum) {
+    return node.enum.length > 0 && node.enum.every((value) =>
+      typeof value === "number" && Number.isFinite(value));
+  }
+  const types = typeof node.type === "string" ? [node.type] : node.type;
+  return types !== undefined && types.length > 0 &&
+    types.every((type) => type === "number" || type === "integer");
+}
+
+/** Public-JSON-schema-derived numeric leaves. Ambiguous union paths and aliases
+ * absent from the closed schema are intentionally excluded. */
+function numericLiteralPathsFromJsonSchema(
+  schema: JsonSchemaNode,
+  literalControlledPaths: readonly string[],
+): readonly string[] {
+  return Object.freeze(literalControlledPaths.filter((path) => {
+    if (path.includes(".*")) return false;
+    const nodes = schemaNodesAtPath(schema, path.split("."));
+    return nodes.length > 0 && nodes.every(schemaRequiresNumericScalar);
+  }).sort());
+}
+
 function sameScalar(left: unknown, right: unknown): boolean {
   return typeof left === "number" && typeof right === "number"
     ? Object.is(left, right)
@@ -734,6 +760,7 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     ...openRecordPaths,
   ])].sort();
   const semanticLiteralAliases = semanticLiteralAliasesFor(action, schema, literalControlledPaths);
+  const numericLiteralPaths = numericLiteralPathsFromJsonSchema(schema, literalControlledPaths);
   const authoredIntent = authoredIntentFor(
     action,
     schema,
@@ -753,6 +780,7 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
   return Object.freeze({
     literalConstraintLimits: INTENT_LITERAL_LIMITS,
     literalControlledPaths: Object.freeze(literalControlledPaths),
+    numericLiteralPaths,
     semanticLiteralAliases,
     ...(authoredIntent ? { authoredIntent } : {}),
     serverDerivedIdPaths: Object.freeze(serverDerivedIdPaths),

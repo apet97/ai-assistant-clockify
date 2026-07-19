@@ -13,6 +13,7 @@ import { INTENT_LITERAL_LIMITS } from "../../src/harness/safety-limits.js";
 const authority: WriteAuthorityMetadata = {
   literalConstraintLimits: INTENT_LITERAL_LIMITS,
   literalControlledPaths: ["name", "amount", "members[]"],
+  numericLiteralPaths: ["amount"],
   semanticLiteralAliases: [],
   serverDerivedIdPaths: ["clientId"],
   permittedServerDefaultPaths: ["currencyId"],
@@ -338,6 +339,7 @@ describe("raw intent authority matcher", () => {
     const aliasAuthority: WriteAuthorityMetadata = {
       literalConstraintLimits: INTENT_LITERAL_LIMITS,
       literalControlledPaths: ["clientName", "projectName", "amount", "dueDate"],
+      numericLiteralPaths: ["amount"],
       semanticLiteralAliases: [],
       serverDerivedIdPaths: ["operation.clientId", "operation.projectId"],
       permittedServerDefaultPaths: ["operation.currency"],

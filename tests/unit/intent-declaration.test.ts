@@ -8,7 +8,10 @@ import {
 import { buildCandidateWriteActionNames } from "../../src/assistant/intent-candidates.js";
 import type { ModelClient, ModelMessage, ToolDefinition } from "../../src/assistant/model-client.js";
 import type { ActionCatalogEntry } from "../../src/harness/action.js";
-import { ACTION_CATALOG } from "../../src/harness/catalog.js";
+import { ACTION_CATALOG, getAction } from "../../src/harness/catalog.js";
+import { authorizeIntentWriteArguments } from "../../src/harness/intent-authority.js";
+import { hashIntentCapability } from "../../src/harness/intent-capability.js";
+import { createStore } from "../../src/db/store.js";
 import { selectActionsForMessage } from "../../src/harness/tool-select.js";
 
 const catalogHash = createHash("sha256").update("test-catalog").digest("hex");
@@ -1161,6 +1164,355 @@ describe("declareIntentCapability", () => {
     expect(capability.mode).toBe("allow");
     expect(capability.writeActions[0]?.literalConstraints[0]?.value).toBe(125.5);
     expect(complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("canonicalizes an exact numeric-string declaration only for a trusted numeric path", async () => {
+    const currentText = "Create an invoice for qwen for 1000.";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: "Create an invoice for qwen for 1000", occurrence: 0 }],
+          literalConstraints: [{
+            path: "items[].amount",
+            value: "1000",
+            sourceRef: { segment: "current", quote: "1000", occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("allow");
+    expect(capability.writeActions[0]?.literalConstraints).toEqual([
+      expect.objectContaining({ path: "items[].amount", value: 1000 }),
+    ]);
+    const authority = getAction("clockify_invoices_create")?.writeAuthority;
+    expect(authority).toBeDefined();
+    expect(authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_invoices_create",
+      rawArgs: { items: [{ amount: 1000 }] },
+      authority: authority!,
+      catalogHash,
+    })).toBeUndefined();
+    expect(authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_invoices_create",
+      rawArgs: { items: [{ amount: "1000" }] },
+      authority: authority!,
+      catalogHash,
+    })).toMatchObject({ ok: false, code: "intent_capability_argument_mismatch" });
+
+    const store = createStore(":memory:");
+    const persisted = store.createIntentCapability({
+      id: "numeric-capability",
+      workspaceId: "workspace-1",
+      adminUserId: "admin-1",
+      sessionId: "session-1",
+      requestId: "request-1",
+      authoredSource: currentText,
+      capability,
+    });
+    expect(persisted.capability.writeActions[0]?.literalConstraints[0]?.value).toBe(1000);
+    expect(persisted.capabilityHash).toBe(hashIntentCapability(capability));
+    store.close();
+  });
+
+  it.each([
+    ["0", 0],
+    ["125.5", 125.5],
+    ["125.50", 125.5],
+    ["-5", -5],
+    ["-5.50", -5.5],
+    ["900719925474", 900_719_925_474],
+  ])("canonicalizes the exact safe numeric token %s", async (token, expected) => {
+    const currentText = `Create invoice for qwen for ${token}.`;
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "items[0].amount",
+            value: token,
+            sourceRef: { segment: "current", quote: token, occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("allow");
+    expect(capability.writeActions[0]?.literalConstraints[0]?.value).toBe(expected);
+  });
+
+  it("pins the repaired numeric ceiling to the largest known downstream decimal scale", () => {
+    expect(Number.isSafeInteger(900_719_925_474 * 10_000)).toBe(true);
+    expect(Number.isSafeInteger(900_719_925_475 * 10_000)).toBe(false);
+  });
+
+  it("applies the post-scale ceiling equally to provider JSON numbers", async () => {
+    const declare = (value: number) => {
+      const token = String(value);
+      const currentText = `Create invoice for qwen for ${token}.`;
+      return declareIntentCapability({
+        modelClient: nativeModel({
+          writeActions: [{
+            actionName: "clockify_invoices_create",
+            sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+            literalConstraints: [{
+              path: "items[].amount",
+              value,
+              sourceRef: { segment: "current", quote: token, occurrence: 0 },
+            }],
+            maxExecutions: 1,
+          }],
+        }),
+        currentText,
+        writeActionNames: ["clockify_invoices_create"],
+        catalogHash,
+      });
+    };
+
+    await expect(declare(900_719_925_474)).resolves.toMatchObject({ mode: "allow" });
+    await expect(declare(900_719_925_475)).resolves.toMatchObject({ mode: "deny_all_writes" });
+  });
+
+  it.each([
+    ["quoted source", '"1000"', "1000"],
+    ["leading whitespace", " 1000", " 1000"],
+    ["trailing whitespace", "1000 ", "1000 "],
+    ["positive sign", "+1000", "+1000"],
+    ["exponent", "1e3", "1e3"],
+    ["leading zero", "01000", "01000"],
+    ["leading decimal point", ".5", ".5"],
+    ["trailing decimal point", "1.", "1."],
+    ["negative zero", "-0", "-0"],
+    ["negative decimal zero", "-0.0", "-0.0"],
+    ["currency prefix", "$1000", "$1000"],
+    ["approximation prefix", "~1000", "~1000"],
+    ["unit suffix", "1000USD", "1000USD"],
+    ["nonfinite", "Infinity", "Infinity"],
+    ["not a number", "NaN", "NaN"],
+    ["unsafe integer", "9007199254740992", "9007199254740992"],
+    ["first unsafe post-scale integer", "900719925475", "900719925475"],
+    ["declared/source mismatch", "1000", "1000.0"],
+  ])("denies numeric-string repair for %s", async (_label, quote, declared) => {
+    const currentText = `Create invoice for qwen for ${quote}.`;
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "items[].amount",
+            value: declared,
+            sourceRef: { segment: "current", quote, occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("deny_all_writes");
+  });
+
+  it("denies an ambiguous numeric quote when a compatibility client omits occurrence", async () => {
+    const currentText = "Create invoice for qwen for 1000 and 1000.";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "items[].amount",
+            value: "1000",
+            sourceRef: { segment: "current", quote: "1000" },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("deny_all_writes");
+  });
+
+  it("uses an explicit numeric source occurrence and denies an out-of-range occurrence", async () => {
+    const currentText = "Create invoice for qwen for 1000 and another for 1000.";
+    const declare = (occurrence: number) => declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "items[].amount",
+            value: "1000",
+            sourceRef: { segment: "current", quote: "1000", occurrence },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    await expect(declare(1)).resolves.toMatchObject({
+      mode: "allow",
+      writeActions: [expect.objectContaining({
+        literalConstraints: [expect.objectContaining({ value: 1000 })],
+      })],
+    });
+    await expect(declare(2)).resolves.toMatchObject({ mode: "deny_all_writes" });
+  });
+
+  it("preserves the same authored token as a string on a trusted string path", async () => {
+    const currentText = "Create invoice for client 1000.";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_invoices_create",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "clientName",
+            value: "1000",
+            sourceRef: { segment: "current", quote: "1000", occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("allow");
+    expect(capability.writeActions[0]?.literalConstraints[0]?.value).toBe("1000");
+  });
+
+  it("does not canonicalize a string-or-number union path and denies unknown or structured numeric paths", async () => {
+    const mixedText = "Set custom field value to 1000.";
+    const mixed = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_custom_fields_set_value_project",
+          sourceRefs: [{ segment: "current", quote: mixedText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "value",
+            value: "1000",
+            sourceRef: { segment: "current", quote: "1000", occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: mixedText,
+      writeActionNames: ["clockify_custom_fields_set_value_project"],
+      catalogHash,
+    });
+    expect(mixed.mode).toBe("allow");
+    expect(mixed.writeActions[0]?.literalConstraints[0]?.value).toBe("1000");
+
+    for (const constraint of [
+      {
+        path: "items[].unknown",
+        value: "1000",
+        sourceRef: { segment: "current" as const, quote: "1000", occurrence: 0 },
+      },
+      {
+        path: "items[].amount",
+        value: { amount: 1000 },
+        sourceRef: { segment: "current" as const, quote: '{"amount":1000}', occurrence: 0 },
+      },
+    ]) {
+      const currentText = constraint.path.endsWith("unknown")
+        ? "Create invoice for qwen for 1000."
+        : 'Create invoice for qwen for {"amount":1000}.';
+      const denied = await declareIntentCapability({
+        modelClient: nativeModel({
+          writeActions: [{
+            actionName: "clockify_invoices_create",
+            sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+            literalConstraints: [constraint],
+            maxExecutions: 1,
+          }],
+        }),
+        currentText,
+        writeActionNames: ["clockify_invoices_create"],
+        catalogHash,
+      });
+      expect(denied.mode, constraint.path).toBe("deny_all_writes");
+    }
+  });
+
+  it("canonicalizes an exact negative balance adjustment on its trusted numeric path", async () => {
+    const currentText = "Adjust the time-off balance by -5.";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_time_off_balance_update",
+          sourceRefs: [{ segment: "current", quote: currentText.slice(0, -1), occurrence: 0 }],
+          literalConstraints: [{
+            path: "value",
+            value: "-5",
+            sourceRef: { segment: "current", quote: "-5", occurrence: 0 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      writeActionNames: ["clockify_time_off_balance_update"],
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("allow");
+    expect(capability.writeActions[0]?.literalConstraints[0]?.value).toBe(-5);
+  });
+
+  it("publishes numeric scalar paths from trusted public schema metadata", async () => {
+    const capture: { messages?: ModelMessage[] } = {};
+    await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [] }, capture),
+      currentText: "Do nothing.",
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+    const payload = JSON.parse(capture.messages?.[1]?.content ?? "") as {
+      writeActionContracts: Array<{ numericLiteralPaths: string[] }>;
+    };
+
+    expect(payload.writeActionContracts[0]?.numericLiteralPaths).toEqual(expect.arrayContaining([
+      "items[].amount",
+      "items[].quantity",
+      "taxPercent",
+    ]));
+    expect(payload.writeActionContracts[0]?.numericLiteralPaths).not.toContain("number");
+    expect(payload.writeActionContracts[0]?.numericLiteralPaths).not.toContain("items[].description");
+  });
+
+  it("tells the declaration provider to emit JSON numbers for trusted numeric paths", async () => {
+    const capture: { messages?: ModelMessage[] } = {};
+    await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [] }, capture),
+      currentText: "Do nothing.",
+      writeActionNames: ["clockify_invoices_create"],
+      catalogHash,
+    });
+    expect(capture.messages?.[0]?.content).toContain(
+      "paths listed in numericLiteralPaths, emit a JSON number rather than a quoted numeric string",
+    );
   });
 
   it("passes the exact AbortSignal through native and JSON provider calls", async () => {
