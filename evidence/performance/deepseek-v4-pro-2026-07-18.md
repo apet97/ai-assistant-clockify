@@ -2,8 +2,11 @@
 
 > Historical engineering benchmark only. It is not release-gate evidence and
 > the machine gate does not consume this Markdown or its companion summary JSON.
-> Release eligibility comes only from the checked-in raw aggregates and binding
-> produced by the clean-candidate reproduction below.
+> Its historical `thinking=disabled` selection is superseded: two later
+> independent exact-source diagnostic cohorts passed production-default 55/55
+> but the lower-effort setting only 54/55, failing the same supported invoice
+> case with zero safety violations. Release eligibility and the current setting
+> come only from fresh, checked-in raw aggregates and their machine binding.
 
 This is the secret-free Phase 2 release benchmark for the production model
 configuration. It used Node 22, HTTP tool mode, `LLM_AGENTIC=1`,
@@ -60,10 +63,12 @@ their p50/p95 pairs were 3,923/8,227, 4,120/6,602, 4,386/6,097,
 | Scripted read turn | 20 | 20/20, 0 safety | 2,908 ms | 3,316 ms | <12,000 ms |
 | Risky write preview, no commit | 20 | 20/20, 0 safety | 1,665 ms | 1,919 ms | <18,000 ms |
 
-The selected setting is therefore `LLM_THINKING_MODE=disabled`, while keeping
-DeepSeek V4-Pro, HTTP tool mode, the agentic loop, and tool selection. The
-application omits the `thinking` field by default and emits the exact DeepSeek
-field only when configured.
+At the time of this historical snapshot, those measurements selected
+`LLM_THINKING_MODE=disabled`. That conclusion is superseded by the later repeated
+functional miss described above. The 1.0.0 candidate therefore uses
+production-default reasoning (`LLM_THINKING_MODE` unset) unless the final-source
+machine selector proves a different fully passing result. DeepSeek V4-Pro, HTTP
+tool mode, the agentic loop, and tool selection remain unchanged.
 
 After that production config path was implemented, a separate real-provider
 proof using `LLM_THINKING_MODE=disabled` (not the eval-only override) produced
@@ -85,38 +90,54 @@ and zero commits in every risky sample.
 test -z "$(git status --porcelain)"
 export EVAL_RELEASE_CANDIDATE_SHA="$(git rev-parse HEAD)"
 export DEEPSEEK_RAW_DIR="$(mktemp -d /tmp/ai-assistant-deepseek.XXXXXX)"
-
-railway run --service ai-assistant --environment production \
-  npx tsx scripts/eval/probe-deepseek-settings.ts \
-  --out="$DEEPSEEK_RAW_DIR/capability-probe.raw.json"
-
-railway run --service ai-assistant --environment production \
-  npx tsx scripts/eval-agentic.ts --repeat=5 --concurrency=4 --tool-select \
-  --out="$DEEPSEEK_RAW_DIR/baseline.raw.json"
-
-EVAL_DEEPSEEK_THINKING_MODE=disabled railway run \
-  --service ai-assistant --environment production \
-  npx tsx scripts/eval-agentic.ts --repeat=5 --concurrency=4 --tool-select \
-  --out="$DEEPSEEK_RAW_DIR/candidate.raw.json"
-
-EVAL_DEEPSEEK_THINKING_MODE=disabled railway run \
-  --service ai-assistant --environment production \
-  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
-  --concurrency=4 --tool-select \
-  --out="$DEEPSEEK_RAW_DIR/focused-read.raw.json"
-
-EVAL_DEEPSEEK_THINKING_MODE=disabled railway run \
-  --service ai-assistant --environment production \
-  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
-  --concurrency=4 --tool-select --preview-only \
-  --out="$DEEPSEEK_RAW_DIR/focused-risky-preview.raw.json"
-
 export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="$DEEPSEEK_RAW_DIR/capability-probe.raw.json"
 export DEEPSEEK_BASELINE_RAW_PATH="$DEEPSEEK_RAW_DIR/baseline.raw.json"
 export DEEPSEEK_CANDIDATE_RAW_PATH="$DEEPSEEK_RAW_DIR/candidate.raw.json"
 export DEEPSEEK_FOCUSED_READ_RAW_PATH="$DEEPSEEK_RAW_DIR/focused-read.raw.json"
 export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="$DEEPSEEK_RAW_DIR/focused-risky-preview.raw.json"
 export DEEPSEEK_BINDING_PATH="evidence/performance/deepseek-release-binding.json"
+
+railway run --service ai-assistant --environment production -- \
+  npx tsx scripts/eval/probe-deepseek-settings.ts \
+  --out="$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH"
+
+railway run --service ai-assistant --environment production -- \
+  env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --concurrency=4 --tool-select \
+  --out="$DEEPSEEK_BASELINE_RAW_PATH"
+
+set +e
+railway run --service ai-assistant --environment production -- \
+  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --concurrency=4 --tool-select \
+  --out="$DEEPSEEK_CANDIDATE_RAW_PATH"
+export DEEPSEEK_CANDIDATE_EXIT_STATUS="$?"
+set -e
+test -s "$DEEPSEEK_CANDIDATE_RAW_PATH"
+SELECTED_DEEPSEEK_SETTING="$(npx tsx scripts/evidence/deepseek-release-evidence.ts --select-setting)"
+case "$SELECTED_DEEPSEEK_SETTING" in
+  production-default)
+    SELECTED_ENV=(env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE)
+    ;;
+  thinking-disabled)
+    test "$DEEPSEEK_CANDIDATE_EXIT_STATUS" = 0
+    SELECTED_ENV=(env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled)
+    ;;
+  *) exit 1 ;;
+esac
+
+railway run --service ai-assistant --environment production -- \
+  "${SELECTED_ENV[@]}" \
+  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+  --concurrency=4 --tool-select \
+  --out="$DEEPSEEK_FOCUSED_READ_RAW_PATH"
+
+railway run --service ai-assistant --environment production -- \
+  "${SELECTED_ENV[@]}" \
+  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+  --concurrency=4 --tool-select --preview-only \
+  --out="$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH"
+
 npm run bind:deepseek-evidence
 cp "$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH" evidence/performance/deepseek-capability-probe.raw.json
 cp "$DEEPSEEK_BASELINE_RAW_PATH" evidence/performance/deepseek-baseline.raw.json
@@ -125,10 +146,6 @@ cp "$DEEPSEEK_FOCUSED_READ_RAW_PATH" evidence/performance/deepseek-focused-read.
 cp "$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH" evidence/performance/deepseek-focused-risky-preview.raw.json
 ```
 
-Railway was not mutated during benchmarking. Only after the exact release
-candidate is deployed, apply the selected setting (this triggers a same-source
-configuration deployment):
-
-```bash
-railway variable set --service ai-assistant --environment production LLM_THINKING_MODE=disabled
-```
+Railway was not mutated during benchmarking. Do not use this historical snapshot
+to change production configuration; follow the strict selector and deployment
+procedure in [`DEPLOYMENT.md`](../../DEPLOYMENT.md).

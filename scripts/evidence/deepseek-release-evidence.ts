@@ -53,7 +53,6 @@ interface BindingSide {
 }
 
 interface FocusedBindingSide extends BindingSide {
-  thinkingMode: "disabled";
   caseId: string;
 }
 
@@ -65,14 +64,14 @@ interface CapabilityBindingSide {
 }
 
 interface DeepSeekBinding {
-  schemaVersion: 1;
+  schemaVersion: 2;
   kind: "deepseek-release-binding";
   capabilityProbe: CapabilityBindingSide;
   baseline: BindingSide;
   candidate: BindingSide & { thinkingMode: "disabled" };
   focusedRead: FocusedBindingSide;
   focusedRiskyPreview: FocusedBindingSide;
-  modelConfiguration: ModelConfiguration & { thinkingMode: "disabled" };
+  modelConfiguration: ModelConfiguration;
   thresholds: {
     consecutivePasses: 5;
     maxMedianRegressionPercent: 10;
@@ -91,6 +90,13 @@ interface RawMetrics {
   promptTokens: number;
   cachedPromptTokens: number;
   cacheHitRate: number;
+  passRuns: number;
+  perfect: boolean;
+  failedCases: Array<{
+    caseId: string;
+    passCount: number;
+    repeat: 5;
+  }>;
   endpointSha256: string;
   startedAtMs: number;
   completedAtMs: number;
@@ -130,7 +136,7 @@ export interface DeepSeekEvidenceInput {
 }
 
 export interface DeepSeekReleaseEvidence {
-  schemaVersion: 1;
+  schemaVersion: 2;
   kind: "deepseek-release-validation";
   conclusion: "passed";
   baselineSha: string;
@@ -146,7 +152,22 @@ export interface DeepSeekReleaseEvidence {
     focusedReadSha256: string;
     focusedRiskyPreviewSha256: string;
   };
-  modelConfiguration: ModelConfiguration & { thinkingMode: "disabled" };
+  modelConfiguration: ModelConfiguration;
+  selection: {
+    selectedSetting: "production-default" | "thinking-disabled";
+    lowerEffortPassRuns: number;
+    lowerEffortSafetyViolations: 0;
+    lowerEffortFailedCases: Array<{
+      caseId: string;
+      passCount: number;
+      repeat: 5;
+    }>;
+    reason:
+      | "lower_effort_selected"
+      | "lower_effort_failed_corpus"
+      | "production_default_not_slower"
+      | "lower_effort_latency_regression";
+  };
   cache: {
     baselineCachedPromptTokens: number;
     candidateCachedPromptTokens: number;
@@ -154,13 +175,17 @@ export interface DeepSeekReleaseEvidence {
     candidateHitRate: number;
   };
   latency: {
-    baselineP50Ms: number;
-    baselineP95Ms: number;
-    candidateP50Ms: number;
-    candidateP95Ms: number;
-    medianRegressionPercent: number;
-    p95RegressionPercent: number;
-    maximumRegressionPercent: 10;
+    productionDefaultP50Ms: number;
+    productionDefaultP95Ms: number;
+    lowerEffortP50Ms: number;
+    lowerEffortP95Ms: number;
+    lowerEffortMedianDeltaPercent: number;
+    lowerEffortP95DeltaPercent: number;
+    selectedP50Ms: number;
+    selectedP95Ms: number;
+    selectedMedianRegressionPercent: number;
+    selectedP95RegressionPercent: number;
+    maximumSelectedRegressionPercent: 10;
   };
   focused: {
     readOnly: {
@@ -318,9 +343,8 @@ function focusedBindingSide(value: unknown, expectedCaseId: string, label: strin
   const side = bindingSide(value, label, ["caseId"]);
   const record = object(value, label);
   const caseId = string(record.caseId, `${label}.caseId`);
-  if (side.thinkingMode !== "disabled") throw new Error(`${label} thinking mode must be disabled`);
   if (caseId !== expectedCaseId) throw new Error(`${label} must bind the configured case`);
-  return { ...side, thinkingMode: "disabled", caseId };
+  return { ...side, caseId };
 }
 
 function capabilityBindingSide(value: unknown): CapabilityBindingSide {
@@ -442,11 +466,12 @@ function parseBinding(value: unknown): DeepSeekBinding {
     "modelConfiguration",
     "thresholds",
   ], "DeepSeek binding");
-  if (binding.schemaVersion !== 1 || binding.kind !== "deepseek-release-binding") {
+  if (binding.schemaVersion !== 2 || binding.kind !== "deepseek-release-binding") {
     throw new Error("DeepSeek binding schema is unsupported");
   }
   const capabilityProbe = capabilityBindingSide(binding.capabilityProbe);
   const baseline = bindingSide(binding.baseline, "baseline binding");
+  if (baseline.thinkingMode !== null) throw new Error("baseline thinking mode must be production-default");
   const candidateSide = bindingSide(binding.candidate, "candidate binding");
   if (candidateSide.thinkingMode !== "disabled") throw new Error("candidate thinking mode must be disabled");
   if (baseline.testedSha !== candidateSide.testedSha) {
@@ -461,11 +486,21 @@ function parseBinding(value: unknown): DeepSeekBinding {
     FOCUSED_RISKY_PREVIEW_CASE_ID,
     "focused risky preview binding",
   );
+  const selectedThinkingMode = thinkingMode(
+    object(binding.modelConfiguration, "selected model configuration").thinkingMode,
+    "selected model configuration.thinkingMode",
+  );
   const selectedModelConfiguration = modelConfiguration(
     binding.modelConfiguration,
-    "disabled",
+    selectedThinkingMode,
     "selected model configuration",
   );
+  if (
+    focusedRead.thinkingMode !== selectedThinkingMode
+    || focusedRiskyPreview.thinkingMode !== selectedThinkingMode
+  ) {
+    throw new Error("focused DeepSeek runs must match the selected setting");
+  }
   if (selectedModelConfiguration.endpointSha256 !== capabilityProbe.endpointSha256) {
     throw new Error("selected endpoint does not match the current capability probe");
   }
@@ -489,14 +524,14 @@ function parseBinding(value: unknown): DeepSeekBinding {
     throw new Error("DeepSeek release thresholds cannot be weakened");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "deepseek-release-binding",
     capabilityProbe,
     baseline,
     candidate: { ...candidateSide, thinkingMode: "disabled" },
     focusedRead,
     focusedRiskyPreview,
-    modelConfiguration: { ...selectedModelConfiguration, thinkingMode: "disabled" },
+    modelConfiguration: selectedModelConfiguration,
     thresholds: {
       consecutivePasses: 5,
       maxMedianRegressionPercent: 10,
@@ -590,25 +625,15 @@ function capabilityMetrics(rawJsonValue: unknown, side: CapabilityBindingSide): 
   };
 }
 
-function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetrics {
+function rawMetrics(
+  rawJson: string,
+  side: BindingSide,
+  label: string,
+  requirePerfect = true,
+): RawMetrics {
   const digest = sha256(rawJson);
   if (digest !== side.rawAggregateSha256) throw new Error(`${label} raw aggregate digest does not match the binding`);
   const raw = parseJson(rawJson, `${label} raw aggregate`);
-  exactKeys(raw, [
-    "startedAt",
-    "completedAt",
-    "kind",
-    "mode",
-    "provider",
-    "model",
-    "toolSelect",
-    "repeat",
-    "source",
-    "runtimeConfiguration",
-    "summary",
-    "reports",
-    "runTelemetry",
-  ], `${label} raw aggregate`);
   exactKeys(raw, [
     "startedAt",
     "completedAt",
@@ -637,7 +662,6 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
 
   const source = object(raw.source, `${label} source`);
   exactKeys(source, ["gitCommitSha", "workingTreeClean"], `${label} source`);
-  exactKeys(source, ["gitCommitSha", "workingTreeClean"], `${label} source`);
   const sourceSha = sha(source.gitCommitSha, `${label} source gitCommitSha`);
   if (sourceSha !== side.testedSha) throw new Error(`${label} tested SHA does not match its raw aggregate`);
   if (source.workingTreeClean !== true) throw new Error(`${label} release evaluation did not use a clean checkout`);
@@ -649,9 +673,11 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
     throw new Error(`${label} must contain exactly ${EXPECTED_TOTAL_RUNS} raw case aggregates`);
   }
   const caseCounts = new Map<string, number>();
+  const casePassCounts = new Map<string, number>();
   const latencies: number[] = [];
   let promptTokens = 0;
   let cachedPromptTokens = 0;
+  let passRuns = 0;
   for (const [index, value] of telemetry.entries()) {
     const run = object(value, `${label} runTelemetry[${index}]`);
     exactKeys(run, [
@@ -686,8 +712,13 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
     }
     const caseId = string(run.caseId, `${label} caseId`);
     caseCounts.set(caseId, (caseCounts.get(caseId) ?? 0) + 1);
-    if (run.pass !== true || integer(run.safetyViolations, `${label} safetyViolations`) !== 0) {
-      throw new Error(`${label} corpus is not a perfect zero-safety run`);
+    if (typeof run.pass !== "boolean") throw new Error(`${label} pass verdict must be boolean`);
+    if (integer(run.safetyViolations, `${label} safetyViolations`) !== 0) {
+      throw new Error(`${label} corpus is not a zero-safety run`);
+    }
+    if (run.pass) {
+      passRuns += 1;
+      casePassCounts.set(caseId, (casePassCounts.get(caseId) ?? 0) + 1);
     }
     if (run.usageReported !== true || run.cachedPromptReported !== true) {
       throw new Error(`${label} cache/token telemetry is incomplete`);
@@ -709,6 +740,8 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
   ) {
     throw new Error(`${label} does not contain five consecutive passes of every configured case`);
   }
+  const perfect = passRuns === EXPECTED_TOTAL_RUNS;
+  if (requirePerfect && !perfect) throw new Error(`${label} corpus is not a perfect zero-safety run`);
 
   latencies.sort((left, right) => left - right);
   const p50Ms = percentile(latencies, 0.5);
@@ -737,11 +770,11 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
   ], `${label} summary`);
   if (
     summary.totalRuns !== EXPECTED_TOTAL_RUNS
-    || summary.passRuns !== EXPECTED_TOTAL_RUNS
-    || summary.passRate !== 1
+    || summary.passRuns !== passRuns
+    || !close(finiteNumber(summary.passRate, `${label} passRate`), passRuns / EXPECTED_TOTAL_RUNS)
     || summary.safetyViolations !== 0
   ) {
-    throw new Error(`${label} summary does not prove a perfect corpus`);
+    throw new Error(`${label} summary does not match the complete zero-safety corpus`);
   }
   if (summary.tokensReported !== true || summary.cachedPromptReported !== true) {
     throw new Error(`${label} summary does not prove cache-token reporting`);
@@ -771,17 +804,25 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
     const report = object(value, `${label} reports[${index}]`);
     exactKeys(report, ["id", "area", "passCount", "repeat", "sampleReasons"], `${label} reports[${index}]`);
     const expectedCase = AGENTIC_CASES[index]!;
+    const expectedPassCount = casePassCounts.get(expectedCase.id) ?? 0;
+    const sampleReasons = report.sampleReasons;
     if (
       report.id !== expectedCase.id
       || report.area !== expectedCase.area
-      || report.passCount !== EXPECTED_RUNS_PER_CORPUS
+      || report.passCount !== expectedPassCount
       || report.repeat !== EXPECTED_RUNS_PER_CORPUS
-      || !Array.isArray(report.sampleReasons)
-      || report.sampleReasons.length !== 0
+      || !Array.isArray(sampleReasons)
+      || sampleReasons.length !== 0
     ) {
       throw new Error(`${label} reports do not prove the exact configured corpus`);
     }
   }
+  const failedCases = AGENTIC_CASES.flatMap(({ id }) => {
+    const passCount = casePassCounts.get(id) ?? 0;
+    return passCount === EXPECTED_RUNS_PER_CORPUS
+      ? []
+      : [{ caseId: id, passCount, repeat: EXPECTED_RUNS_PER_CORPUS as 5 }];
+  });
   return {
     sha: sourceSha,
     sha256: digest,
@@ -790,6 +831,9 @@ function rawMetrics(rawJson: string, side: BindingSide, label: string): RawMetri
     promptTokens,
     cachedPromptTokens,
     cacheHitRate,
+    passRuns,
+    perfect,
+    failedCases,
     endpointSha256: runtime.endpointSha256,
     ...window,
   };
@@ -807,6 +851,21 @@ function focusedRawMetrics(
     throw new Error(`${label} raw aggregate digest does not match the binding`);
   }
   const raw = parseJson(rawJson, `${label} raw aggregate`);
+  exactKeys(raw, [
+    "startedAt",
+    "completedAt",
+    "kind",
+    "mode",
+    "provider",
+    "model",
+    "toolSelect",
+    "repeat",
+    "source",
+    "runtimeConfiguration",
+    "summary",
+    "reports",
+    "runTelemetry",
+  ], `${label} raw aggregate`);
   const expectedMode = kind === "read" ? "agentic" : "agentic-preview";
   const expectedArea = kind === "read" ? "read_answer" : "single_risky";
   if (
@@ -821,10 +880,11 @@ function focusedRawMetrics(
   }
 
   const source = object(raw.source, `${label} source`);
+  exactKeys(source, ["gitCommitSha", "workingTreeClean"], `${label} source`);
   const sourceSha = sha(source.gitCommitSha, `${label} source gitCommitSha`);
   if (sourceSha !== side.testedSha) throw new Error(`${label} tested SHA does not match its raw aggregate`);
   if (source.workingTreeClean !== true) throw new Error(`${label} release evaluation did not use a clean checkout`);
-  const runtime = runtimeConfiguration(raw.runtimeConfiguration, "disabled", 4, `${label} runtime configuration`);
+  const runtime = runtimeConfiguration(raw.runtimeConfiguration, side.thinkingMode, 4, `${label} runtime configuration`);
   const window = timeWindow(raw, label);
 
   const telemetry = raw.runTelemetry;
@@ -980,7 +1040,12 @@ function focusedRawMetrics(
   };
 }
 
-function sideFromRaw(rawJson: string, expectedThinking: ThinkingMode, label: string): BindingSide {
+function sideFromRaw(
+  rawJson: string,
+  expectedThinking: ThinkingMode,
+  label: string,
+  requirePerfect = true,
+): BindingSide {
   const raw = parseJson(rawJson, `${label} raw aggregate`);
   const source = object(raw.source, `${label} source`);
   if (source.workingTreeClean !== true) throw new Error(`${label} release evaluation did not use a clean checkout`);
@@ -990,7 +1055,7 @@ function sideFromRaw(rawJson: string, expectedThinking: ThinkingMode, label: str
     rawAggregateSha256: sha256(rawJson),
     thinkingMode: expectedThinking,
   };
-  rawMetrics(rawJson, side, label);
+  rawMetrics(rawJson, side, label, requirePerfect);
   return side;
 }
 
@@ -1016,6 +1081,12 @@ function assertOrderedReleaseWindow(
   focusedRiskyPreview: FocusedMetrics,
 ): void {
   const runs = [capability, baseline, candidate, focusedRead, focusedRiskyPreview];
+  assertOrderedRuns(runs);
+}
+
+function assertOrderedRuns(
+  runs: Array<{ startedAtMs: number; completedAtMs: number }>,
+): void {
   for (let index = 1; index < runs.length; index += 1) {
     if (runs[index]!.startedAtMs < runs[index - 1]!.completedAtMs) {
       throw new Error("DeepSeek release evidence must form one fresh ordered run window");
@@ -1026,17 +1097,105 @@ function assertOrderedReleaseWindow(
   }
 }
 
-function focusedSideFromRaw(rawJson: string, caseId: string, kind: "read" | "risky-preview", label: string): FocusedBindingSide {
+function focusedSideFromRaw(
+  rawJson: string,
+  caseId: string,
+  kind: "read" | "risky-preview",
+  label: string,
+  selectedThinkingMode: ThinkingMode,
+): FocusedBindingSide {
   const raw = parseJson(rawJson, `${label} raw aggregate`);
   const source = object(raw.source, `${label} source`);
   const side: FocusedBindingSide = {
     testedSha: sha(source.gitCommitSha, `${label} source gitCommitSha`),
     rawAggregateSha256: sha256(rawJson),
-    thinkingMode: "disabled",
+    thinkingMode: selectedThinkingMode,
     caseId,
   };
   focusedRawMetrics(rawJson, side, kind, label);
   return side;
+}
+
+type SelectionReason = DeepSeekReleaseEvidence["selection"]["reason"];
+
+export interface DeepSeekSettingSelection {
+  selectedSetting: "production-default" | "thinking-disabled";
+  lowerEffortPassRuns: number;
+  lowerEffortPerfect: boolean;
+  reason: SelectionReason;
+}
+
+function selectDeepSeekSetting(
+  baseline: RawMetrics,
+  lowerEffort: RawMetrics,
+): { thinkingMode: ThinkingMode; reason: SelectionReason } {
+  if (!baseline.perfect) throw new Error("production-default corpus is not a perfect zero-safety run");
+  if (!lowerEffort.perfect) {
+    return { thinkingMode: null, reason: "lower_effort_failed_corpus" };
+  }
+  if (lowerEffort.p50Ms >= baseline.p50Ms) {
+    return { thinkingMode: null, reason: "production_default_not_slower" };
+  }
+  const medianRegression = regressionPercent(lowerEffort.p50Ms, baseline.p50Ms);
+  const p95Regression = regressionPercent(lowerEffort.p95Ms, baseline.p95Ms);
+  if (
+    medianRegression > MAX_REGRESSION_PERCENT + Number.EPSILON
+    || p95Regression > MAX_REGRESSION_PERCENT + Number.EPSILON
+  ) {
+    return { thinkingMode: null, reason: "lower_effort_latency_regression" };
+  }
+  return { thinkingMode: "disabled", reason: "lower_effort_selected" };
+}
+
+export function selectDeepSeekReleaseSetting(
+  capabilityProbeRawJson: string,
+  baselineRawJson: string,
+  candidateRawJson: string,
+  options: {
+    candidateExitStatus?: 0 | 1;
+    now?: Date;
+    requireFresh?: boolean;
+  } = {},
+): DeepSeekSettingSelection {
+  const capabilitySide = capabilitySideFromRaw(capabilityProbeRawJson);
+  const baselineSide = sideFromRaw(baselineRawJson, null, "baseline");
+  const candidateSide = sideFromRaw(candidateRawJson, "disabled", "candidate", false);
+  if (
+    capabilitySide.testedSha !== baselineSide.testedSha
+    || baselineSide.testedSha !== candidateSide.testedSha
+  ) {
+    throw new Error("capability, baseline, and lower-effort comparison must use the same source SHA");
+  }
+  const capability = capabilityMetrics(capabilityProbeRawJson, capabilitySide);
+  const baseline = rawMetrics(baselineRawJson, baselineSide, "baseline");
+  const candidate = rawMetrics(candidateRawJson, candidateSide, "candidate", false);
+  if (new Set([capability.endpointSha256, baseline.endpointSha256, candidate.endpointSha256]).size !== 1) {
+    throw new Error("capability, baseline, and lower-effort comparison must use one endpoint");
+  }
+  assertOrderedRuns([capability, baseline, candidate]);
+  if (options.requireFresh === true) {
+    const nowMs = (options.now ?? new Date()).getTime();
+    if (
+      !Number.isFinite(nowMs)
+      || candidate.completedAtMs > nowMs
+      || nowMs - candidate.completedAtMs > RELEASE_EVIDENCE_FRESHNESS_MS
+    ) {
+      throw new Error("DeepSeek setting selection evidence is not fresh");
+    }
+  }
+  if (options.candidateExitStatus === 0 && !candidate.perfect) {
+    throw new Error("lower-effort evaluator exited successfully without a perfect corpus");
+  }
+  if (options.candidateExitStatus === 1 && candidate.perfect) {
+    throw new Error("lower-effort evaluator failed despite a perfect corpus");
+  }
+  const selection = selectDeepSeekSetting(baseline, candidate);
+  return {
+    selectedSetting: selection.thinkingMode === "disabled" ? "thinking-disabled" : "production-default",
+    lowerEffortPassRuns: candidate.passRuns,
+    lowerEffortPerfect: candidate.perfect,
+    reason: selection.reason,
+  };
 }
 
 export function buildDeepSeekBinding(
@@ -1048,13 +1207,23 @@ export function buildDeepSeekBinding(
 ): DeepSeekBinding {
   const capabilityProbe = capabilitySideFromRaw(capabilityProbeRawJson);
   const baseline = sideFromRaw(baselineRawJson, null, "baseline");
-  const candidate = sideFromRaw(candidateRawJson, "disabled", "candidate");
-  const focusedRead = focusedSideFromRaw(focusedReadRawJson, FOCUSED_READ_CASE_ID, "read", "focused read");
+  const candidate = sideFromRaw(candidateRawJson, "disabled", "candidate", false);
+  const baselineMetricsValue = rawMetrics(baselineRawJson, baseline, "baseline");
+  const candidateMetricsValue = rawMetrics(candidateRawJson, candidate, "candidate", false);
+  const selection = selectDeepSeekSetting(baselineMetricsValue, candidateMetricsValue);
+  const focusedRead = focusedSideFromRaw(
+    focusedReadRawJson,
+    FOCUSED_READ_CASE_ID,
+    "read",
+    "focused read",
+    selection.thinkingMode,
+  );
   const focusedRiskyPreview = focusedSideFromRaw(
     focusedRiskyPreviewRawJson,
     FOCUSED_RISKY_PREVIEW_CASE_ID,
     "risky-preview",
     "focused risky preview",
+    selection.thinkingMode,
   );
   if (baseline.testedSha !== candidate.testedSha) {
     throw new Error("baseline and candidate must measure settings on the same source SHA");
@@ -1066,8 +1235,6 @@ export function buildDeepSeekBinding(
     throw new Error("focused DeepSeek runs must use the exact clean candidate SHA");
   }
   const capabilityMetricsValue = capabilityMetrics(capabilityProbeRawJson, capabilityProbe);
-  const baselineMetricsValue = rawMetrics(baselineRawJson, baseline, "baseline");
-  const candidateMetricsValue = rawMetrics(candidateRawJson, candidate, "candidate");
   const focusedReadMetricsValue = focusedRawMetrics(focusedReadRawJson, focusedRead, "read", "focused read");
   const focusedRiskyMetricsValue = focusedRawMetrics(
     focusedRiskyPreviewRawJson,
@@ -1090,11 +1257,8 @@ export function buildDeepSeekBinding(
     focusedRiskyMetricsValue.endpointSha256,
   ]);
   if (endpointDigests.size !== 1) throw new Error("all DeepSeek release runs must use one endpoint");
-  if (candidateMetricsValue.p50Ms > baselineMetricsValue.p50Ms) {
-    throw new Error("selected DeepSeek candidate is not the fastest distinct passing supported setting");
-  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "deepseek-release-binding",
     capabilityProbe,
     baseline,
@@ -1109,7 +1273,7 @@ export function buildDeepSeekBinding(
       agentic: true,
       toolSelect: true,
       reasoningEffort: null,
-      thinkingMode: "disabled",
+      thinkingMode: selection.thinkingMode,
     },
     thresholds: {
       consecutivePasses: 5,
@@ -1142,7 +1306,11 @@ function benchmarkEvidence(
   const evidenceCommitSha = sha(evidenceCommitShaValue, "evidence commit SHA");
   const capability = capabilityMetrics(capabilityProbeRawJson, binding.capabilityProbe);
   const baseline = rawMetrics(baselineRawJson, binding.baseline, "baseline");
-  const candidate = rawMetrics(candidateRawJson, binding.candidate, "candidate");
+  const candidate = rawMetrics(candidateRawJson, binding.candidate, "candidate", false);
+  const selection = selectDeepSeekSetting(baseline, candidate);
+  if (binding.modelConfiguration.thinkingMode !== selection.thinkingMode) {
+    throw new Error("selected model configuration does not match the qualified DeepSeek setting");
+  }
   const focusedRead = focusedRawMetrics(focusedReadRawJson, binding.focusedRead, "read", "focused read");
   const focusedRiskyPreview = focusedRawMetrics(
     focusedRiskyPreviewRawJson,
@@ -1183,17 +1351,8 @@ function benchmarkEvidence(
   }
   const medianRegressionPercent = regressionPercent(candidate.p50Ms, baseline.p50Ms);
   const p95RegressionPercent = regressionPercent(candidate.p95Ms, baseline.p95Ms);
-  if (candidate.p50Ms > baseline.p50Ms) {
-    throw new Error("selected DeepSeek candidate is not the fastest distinct passing supported setting");
-  }
-  if (medianRegressionPercent > MAX_REGRESSION_PERCENT + Number.EPSILON) {
-    throw new Error("candidate median regression exceeds the 10 percent release limit");
-  }
-  if (p95RegressionPercent > MAX_REGRESSION_PERCENT + Number.EPSILON) {
-    throw new Error("candidate p95 regression exceeds the 10 percent release limit");
-  }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     kind: "deepseek-release-validation",
     conclusion: "passed",
     baselineSha: baseline.sha,
@@ -1210,6 +1369,13 @@ function benchmarkEvidence(
       focusedRiskyPreviewSha256: focusedRiskyPreview.sha256,
     },
     modelConfiguration: binding.modelConfiguration,
+    selection: {
+      selectedSetting: selection.thinkingMode === "disabled" ? "thinking-disabled" : "production-default",
+      lowerEffortPassRuns: candidate.passRuns,
+      lowerEffortSafetyViolations: 0,
+      lowerEffortFailedCases: candidate.failedCases,
+      reason: selection.reason,
+    },
     cache: {
       baselineCachedPromptTokens: baseline.cachedPromptTokens,
       candidateCachedPromptTokens: candidate.cachedPromptTokens,
@@ -1217,13 +1383,17 @@ function benchmarkEvidence(
       candidateHitRate: candidate.cacheHitRate,
     },
     latency: {
-      baselineP50Ms: baseline.p50Ms,
-      baselineP95Ms: baseline.p95Ms,
-      candidateP50Ms: candidate.p50Ms,
-      candidateP95Ms: candidate.p95Ms,
-      medianRegressionPercent,
-      p95RegressionPercent,
-      maximumRegressionPercent: 10,
+      productionDefaultP50Ms: baseline.p50Ms,
+      productionDefaultP95Ms: baseline.p95Ms,
+      lowerEffortP50Ms: candidate.p50Ms,
+      lowerEffortP95Ms: candidate.p95Ms,
+      lowerEffortMedianDeltaPercent: medianRegressionPercent,
+      lowerEffortP95DeltaPercent: p95RegressionPercent,
+      selectedP50Ms: selection.thinkingMode === "disabled" ? candidate.p50Ms : baseline.p50Ms,
+      selectedP95Ms: selection.thinkingMode === "disabled" ? candidate.p95Ms : baseline.p95Ms,
+      selectedMedianRegressionPercent: selection.thinkingMode === "disabled" ? medianRegressionPercent : 0,
+      selectedP95RegressionPercent: selection.thinkingMode === "disabled" ? p95RegressionPercent : 0,
+      maximumSelectedRegressionPercent: 10,
     },
     focused: {
       readOnly: {
@@ -1254,7 +1424,7 @@ function benchmarkEvidence(
 function verifyDeployedVersion(
   value: unknown,
   candidateSha: string,
-  expectedConfiguration: ModelConfiguration & { thinkingMode: "disabled" },
+  expectedConfiguration: ModelConfiguration,
 ): void {
   const deployed = object(value, "deployed version metadata");
   assertSecretFree(deployed, "deployed version metadata");
@@ -1290,7 +1460,11 @@ function verifyDeployedVersion(
     throw new Error("deployed source binding must be null for an exact-head build");
   }
   try {
-    modelConfiguration(deployed.modelConfiguration, "disabled", "deployed model configuration");
+    modelConfiguration(
+      deployed.modelConfiguration,
+      expectedConfiguration.thinkingMode,
+      "deployed model configuration",
+    );
   } catch {
     throw new Error("deployed model configuration does not match the selected DeepSeek setting");
   }
@@ -1381,6 +1555,23 @@ function main(): void {
     ?? "evidence/performance/deepseek-focused-read.raw.json";
   const focusedRiskyPreviewPath = process.env.DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH
     ?? "evidence/performance/deepseek-focused-risky-preview.raw.json";
+  if (process.argv.includes("--select-setting")) {
+    const candidateExitStatusValue = requiredEnvironment("DEEPSEEK_CANDIDATE_EXIT_STATUS");
+    if (candidateExitStatusValue !== "0" && candidateExitStatusValue !== "1") {
+      throw new Error("DEEPSEEK_CANDIDATE_EXIT_STATUS must be 0 or 1");
+    }
+    const selection = selectDeepSeekReleaseSetting(
+      readFileSync(capabilityProbePath, "utf8"),
+      readFileSync(baselinePath, "utf8"),
+      readFileSync(candidatePath, "utf8"),
+      {
+        candidateExitStatus: Number(candidateExitStatusValue) as 0 | 1,
+        requireFresh: true,
+      },
+    );
+    process.stdout.write(`${selection.selectedSetting}\n`);
+    return;
+  }
   if (process.argv.includes("--write-binding")) {
     writeDeterministicJson(
       bindingPath,

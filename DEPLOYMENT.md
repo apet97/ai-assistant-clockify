@@ -83,34 +83,64 @@ not pass release validation:
 ```bash
 export EVAL_RELEASE_CANDIDATE_SHA="$RELEASE_SHA"
 export LLM_MODE=tool LLM_AGENTIC=1 LLM_TOOL_SELECT=1
-railway run -s ai-assistant -e production -- \
-  npx tsx scripts/eval/probe-deepseek-settings.ts \
-  --out="$RECOVERY_EVIDENCE_DIR/deepseek-capability-probe.raw.json"
-railway run -s ai-assistant -e production -- \
-  env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
-  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
-  --out="$RECOVERY_EVIDENCE_DIR/deepseek-baseline.raw.json"
-railway run -s ai-assistant -e production -- \
-  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
-  --out="$RECOVERY_EVIDENCE_DIR/deepseek-candidate.raw.json"
-railway run -s ai-assistant -e production -- \
-  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
-  --tool-select --concurrency=4 --out="$RECOVERY_EVIDENCE_DIR/deepseek-focused-read.raw.json"
-railway run -s ai-assistant -e production -- \
-  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-  npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
-  --preview-only --tool-select --concurrency=4 \
-  --out="$RECOVERY_EVIDENCE_DIR/deepseek-focused-risky-preview.raw.json"
 export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-capability-probe.raw.json"
 export DEEPSEEK_BASELINE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-baseline.raw.json"
 export DEEPSEEK_CANDIDATE_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-candidate.raw.json"
 export DEEPSEEK_FOCUSED_READ_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-read.raw.json"
 export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-focused-risky-preview.raw.json"
 export DEEPSEEK_BINDING_PATH="$RECOVERY_EVIDENCE_DIR/deepseek-release-binding.json"
+railway run -s ai-assistant -e production -- \
+  npx tsx scripts/eval/probe-deepseek-settings.ts \
+  --out="$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH"
+railway run -s ai-assistant -e production -- \
+  env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+  --out="$DEEPSEEK_BASELINE_RAW_PATH"
+
+set +e
+railway run -s ai-assistant -e production -- \
+  env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+  npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+  --out="$DEEPSEEK_CANDIDATE_RAW_PATH"
+export DEEPSEEK_CANDIDATE_EXIT_STATUS="$?"
+set -e
+case "$DEEPSEEK_CANDIDATE_EXIT_STATUS" in 0|1) ;; *) exit 1 ;; esac
+test -s "$DEEPSEEK_CANDIDATE_RAW_PATH"
+SELECTED_DEEPSEEK_SETTING="$(npx tsx scripts/evidence/deepseek-release-evidence.ts --select-setting)"
+
+case "$SELECTED_DEEPSEEK_SETTING" in
+  production-default)
+    railway run -s ai-assistant -e production -- \
+      env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+      npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+      --tool-select --concurrency=4 --out="$DEEPSEEK_FOCUSED_READ_RAW_PATH"
+    railway run -s ai-assistant -e production -- \
+      env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+      npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+      --preview-only --tool-select --concurrency=4 \
+      --out="$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH"
+    ;;
+  thinking-disabled)
+    test "$DEEPSEEK_CANDIDATE_EXIT_STATUS" = 0
+    railway run -s ai-assistant -e production -- \
+      env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+      npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+      --tool-select --concurrency=4 --out="$DEEPSEEK_FOCUSED_READ_RAW_PATH"
+    railway run -s ai-assistant -e production -- \
+      env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+      npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+      --preview-only --tool-select --concurrency=4 \
+      --out="$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH"
+    ;;
+  *) exit 1 ;;
+esac
 npm run --silent bind:deepseek-evidence
 ```
+
+The lower-effort evaluator intentionally exits `1` when it records a complete
+functional miss. That status is acceptable only when the strict raw-telemetry
+selector validates the artifact and chooses `production-default`; missing,
+malformed, unsafe, stale, cross-source, or cross-endpoint evidence still fails.
 
 Immediately before production upload, bind the still-present encrypted backup, checksum
 sidecar, metadata sidecar, measured restore proof, and exact locally built server artifact
@@ -182,7 +212,7 @@ not set it.
 | `LLM_BASE_URL` | the approved DeepSeek OpenAI-compatible endpoint |
 | `LLM_API_KEY` | the rotated production DeepSeek key from admin package 1 |
 | `LLM_MODEL` | the exact DeepSeek release model recorded in the evidence record |
-| `LLM_THINKING_MODE` | `disabled` - the fastest supported DeepSeek setting that passed five consecutive configured safety runs |
+| `LLM_THINKING_MODE` | **Unset** for the 1.0.0 production-default selection; `disabled` remains a comparison-only value until a fresh corpus qualifies it |
 | `PUBLIC_CONTACT_URL` | Admin package 2's monitored HTTPS form or `mailto:` destination for the public Privacy, Support, and Security pages |
 | `RELEASE_SHA` | Full, lowercase SHA of the clean commit uploaded by `railway up` |
 | `RELEASE_BUILD_HASH` | `git archive "$RELEASE_SHA" | shasum -a 256` for the binding's tested candidate |
@@ -213,6 +243,8 @@ the model sees only the message-relevant actions; no-match/non-ASCII/>3-area req
 fail open to the full catalog). Do not change these on the 1.0.0 candidate without
 rerunning the configured DeepSeek safety and performance gates. `LLM_TOOL_SELECT=0`
 is an operational fallback to the full catalog, not a provider migration.
+For 1.0.0, remove rather than blank `LLM_THINKING_MODE`; an empty string is not
+a valid configured mode, and `/version` must report `thinkingMode: null`.
 
 Other optional knobs include `COMMIT_TIMEOUT_MS` (Clockify commit/IO timeout in ms, default
 120000 — **must be < 290000** so the two setup-composite semantic-dedupe claims

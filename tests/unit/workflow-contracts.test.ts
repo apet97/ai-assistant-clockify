@@ -114,6 +114,39 @@ describe("GitHub Actions workflow contracts", () => {
     expectRemoteActionsPinned(workflow);
   });
 
+  it("selects the qualified DeepSeek setting before running focused release cohorts", () => {
+    const workflow = readWorkflow("release-evidence.yml");
+    const deepSeekStart = workflow.indexOf("\n  deepseek-evidence:");
+    const nextJobStart = workflow.indexOf("\n  private-production-evidence:", deepSeekStart);
+    const deepSeekJob = workflow.slice(deepSeekStart, nextJobStart);
+
+    expect(deepSeekStart).toBeGreaterThan(0);
+    expect(nextJobStart).toBeGreaterThan(deepSeekStart);
+    expect(deepSeekJob).not.toContain("|| true");
+    expect(deepSeekJob).toMatch(
+      /set \+e[\s\S]*?DEEPSEEK_CANDIDATE_RAW_PATH[\s\S]*?lower_effort_status="\$\?"[\s\S]*?set -e/,
+    );
+    expect(deepSeekJob).toContain('test -s "${DEEPSEEK_CANDIDATE_RAW_PATH}"');
+    expect(deepSeekJob).toContain('export DEEPSEEK_CANDIDATE_EXIT_STATUS="${lower_effort_status}"');
+    expect(deepSeekJob).toContain(
+      'npx tsx scripts/evidence/deepseek-release-evidence.ts --select-setting',
+    );
+    expect(deepSeekJob).toMatch(/case "\$\{selected_setting\}" in[\s\S]*?production-default\)[\s\S]*?thinking-disabled\)[\s\S]*?\*\)/);
+    expect(deepSeekJob).toMatch(
+      /if \[\[ "\$\{lower_effort_status\}" -eq 1 && "\$\{selected_setting\}" != "production-default" \]\]/,
+    );
+    expect(deepSeekJob).toMatch(
+      /production-default\)[\s\S]*?env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE[\s\S]*?--only=agentic\.count_projects[\s\S]*?env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE[\s\S]*?--only=agentic\.delete_tag_by_name/,
+    );
+    expect(deepSeekJob).toMatch(
+      /thinking-disabled\)[\s\S]*?env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled[\s\S]*?--only=agentic\.count_projects[\s\S]*?env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled[\s\S]*?--only=agentic\.delete_tag_by_name/,
+    );
+    expect(deepSeekJob.indexOf("--select-setting"))
+      .toBeLessThan(deepSeekJob.indexOf("--only=agentic.count_projects"));
+    expect(deepSeekJob.lastIndexOf("--only=agentic.delete_tag_by_name"))
+      .toBeLessThan(deepSeekJob.indexOf("npm run --silent bind:deepseek-evidence"));
+  });
+
   it("records every machine release gate without asserting human completion", () => {
     const workflow = readWorkflow("release-evidence.yml");
     const coldVerifyEvidence = readRepoFile("scripts/evidence/cold-verify-evidence.ts");

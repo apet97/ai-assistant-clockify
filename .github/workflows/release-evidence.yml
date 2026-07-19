@@ -308,29 +308,71 @@ jobs:
           git checkout --detach "${EVAL_RELEASE_CANDIDATE_SHA}"
           test -z "$(git status --porcelain --untracked-files=all)"
 
-          npx tsx scripts/eval/probe-deepseek-settings.ts \
-            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-capability-probe.raw.json"
-          env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
-            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
-            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-baseline.raw.json"
-          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
-            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-candidate.raw.json"
-          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-            npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
-            --tool-select --concurrency=4 \
-            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-read.raw.json"
-          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
-            npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
-            --preview-only --tool-select --concurrency=4 \
-            --out="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-risky-preview.raw.json"
-
           export DEEPSEEK_CAPABILITY_PROBE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-capability-probe.raw.json"
           export DEEPSEEK_BASELINE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-baseline.raw.json"
           export DEEPSEEK_CANDIDATE_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-candidate.raw.json"
           export DEEPSEEK_FOCUSED_READ_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-read.raw.json"
           export DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-focused-risky-preview.raw.json"
           export DEEPSEEK_BINDING_PATH="${DEEPSEEK_LIVE_EVIDENCE_DIR}/deepseek-release-binding.json"
+
+          npx tsx scripts/eval/probe-deepseek-settings.ts \
+            --out="${DEEPSEEK_CAPABILITY_PROBE_RAW_PATH}"
+          env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_BASELINE_RAW_PATH}"
+
+          set +e
+          env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+            npx tsx scripts/eval-agentic.ts --repeat=5 --tool-select --concurrency=4 \
+            --out="${DEEPSEEK_CANDIDATE_RAW_PATH}"
+          lower_effort_status="$?"
+          set -e
+
+          if [[ "${lower_effort_status}" -ne 0 && "${lower_effort_status}" -ne 1 ]]; then
+            echo "Lower-effort DeepSeek evaluation failed before producing a classifiable corpus" >&2
+            exit "${lower_effort_status}"
+          fi
+          test -s "${DEEPSEEK_CANDIDATE_RAW_PATH}"
+          export DEEPSEEK_CANDIDATE_EXIT_STATUS="${lower_effort_status}"
+          selected_setting="$(
+            npx tsx scripts/evidence/deepseek-release-evidence.ts --select-setting
+          )"
+          case "${selected_setting}" in
+            production-default) ;;
+            thinking-disabled) ;;
+            *)
+              echo "DeepSeek selector returned an invalid setting" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "${lower_effort_status}" -eq 1 && "${selected_setting}" != "production-default" ]]; then
+            echo "A failed lower-effort corpus may only fall back to production-default" >&2
+            exit 1
+          fi
+
+          case "${selected_setting}" in
+            production-default)
+              env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+                npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+                --tool-select --concurrency=4 \
+                --out="${DEEPSEEK_FOCUSED_READ_RAW_PATH}"
+              env -u LLM_THINKING_MODE -u EVAL_DEEPSEEK_THINKING_MODE \
+                npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+                --preview-only --tool-select --concurrency=4 \
+                --out="${DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH}"
+              ;;
+            thinking-disabled)
+              env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+                npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.count_projects \
+                --tool-select --concurrency=4 \
+                --out="${DEEPSEEK_FOCUSED_READ_RAW_PATH}"
+              env LLM_THINKING_MODE=disabled EVAL_DEEPSEEK_THINKING_MODE=disabled \
+                npx tsx scripts/eval-agentic.ts --repeat=20 --only=agentic.delete_tag_by_name \
+                --preview-only --tool-select --concurrency=4 \
+                --out="${DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH}"
+              ;;
+          esac
+
           npm run --silent bind:deepseek-evidence
           test -z "$(git status --porcelain --untracked-files=all)"
           restore_evidence_head

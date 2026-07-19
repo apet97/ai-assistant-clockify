@@ -2,6 +2,12 @@
   "schemaVersion": 1,
   "generatedAt": "2026-07-18T20:17:00.000Z",
   "secretFree": true,
+  "historicalStatus": {
+    "status": "superseded_for_release_selection",
+    "reason": "Two later independent exact-source diagnostic cohorts passed production-default 55/55 while thinking-disabled passed 54/55 and failed the same supported invoice case with zero safety violations.",
+    "currentReleaseSelection": "production-default",
+    "authoritativeEvidence": "deepseek-release-binding.json"
+  },
   "source": {
     "branch": "codex/marketplace-1.0.0",
     "headAtRun": "3ec78ac19458347b0b1de3e340c592f8a08f9bb7",
@@ -139,9 +145,9 @@
     "agentic": true,
     "toolSelect": true,
     "thinkingMode": "disabled",
-    "reason": "Fastest aggregate median among genuinely distinct supported settings; five consecutive corpora passed with zero write-safety regressions and p95 stayed within the 10 percent guard.",
+    "reason": "Historical selection only: this snapshot had the fastest aggregate median among passing settings, but later repeated exact-source diagnostics disqualified thinking-disabled on functional correctness.",
     "railwayChangedDuringBenchmark": false,
-    "postReleaseCandidateDeployCommand": "railway variable set --service ai-assistant --environment production LLM_THINKING_MODE=disabled"
+    "superseded": true
   },
   "sources": [
     "https://api-docs.deepseek.com/guides/thinking_mode",

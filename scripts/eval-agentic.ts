@@ -504,9 +504,6 @@ async function main(): Promise<void> {
             ...(result.outcome.committed.length === 0 ? [] : ["preview-only mode must not commit"]),
           ]
         : c.check(result.outcome);
-      if (result.outcome.kind === "error" && result.outcome.finalText) {
-        reasons.push(`error: ${result.outcome.finalText.slice(0, 160)}`);
-      }
       done += 1;
       process.stdout.write(`\r  ${done}/${cases.length * flags.repeat} runs complete`);
       return {
@@ -536,17 +533,17 @@ async function main(): Promise<void> {
     byCase.set(r.caseId, list);
   }
 
-  console.log("id (area)                                  pass    sample failure");
+  console.log("id (area)                                  pass    result");
   console.log("-".repeat(100));
   const reports = cases.map((c) => {
     const list = byCase.get(c.id) ?? [];
     const passCount = list.filter((r) => r.pass).length;
-    const sample = list.find((r) => !r.pass)?.reasons ?? [];
-    const flag = passCount === list.length ? "  " : "✗ ";
+    const failed = passCount !== list.length;
+    const flag = failed ? "✗ " : "  ";
     console.log(
-      `${flag}${`${c.id} (${c.area})`.padEnd(42)} ${`${passCount}/${list.length}`.padEnd(7)} ${sample.join("; ").slice(0, 60)}`,
+      `${flag}${`${c.id} (${c.area})`.padEnd(42)} ${`${passCount}/${list.length}`.padEnd(7)} ${failed ? "failed" : "passed"}`,
     );
-    return { id: c.id, area: c.area, passCount, repeat: list.length, sampleReasons: sample };
+    return { id: c.id, area: c.area, passCount, repeat: list.length };
   });
 
   const totalRuns = runs.length;
@@ -665,7 +662,13 @@ async function main(): Promise<void> {
           escapeHatchFires,
           escapeHatchFireRate: narrowedRuns ? escapeHatchFires / narrowedRuns : 0,
         },
-        reports,
+        reports: reports.map(({ id, area, passCount, repeat }) => ({
+          id,
+          area,
+          passCount,
+          repeat,
+          sampleReasons: [],
+        })),
         // Secret-free per-case telemetry makes release aggregation exact across
         // several consecutive corpus runs. Do not persist model text, arguments,
         // fake workspace state, or provider request bodies here.

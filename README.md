@@ -165,9 +165,11 @@ See [`.env.example`](./.env.example) for the full list. Key variables: `PORT`,
 (32-byte key for token encryption), `DATABASE_PATH`, and `LLM_BASE_URL` /
 `LLM_API_KEY` / `LLM_MODEL` for the OpenAI-compatible model endpoint.
 DeepSeek V4 production keeps HTTP tool mode with `LLM_AGENTIC=1`,
-`LLM_TOOL_SELECT=1`, and the release-selected `LLM_THINKING_MODE=disabled`.
-The thinking field is omitted unless configured; the five-run safety, latency,
-and cache comparison is in
+`LLM_TOOL_SELECT=1`, and the release-selected production-default reasoning
+(`LLM_THINKING_MODE` unset). The lower-effort comparison failed a supported
+invoice case in two independent exact-source diagnostic cohorts, so speed did
+not override functional correctness. The final-source five-run safety, latency,
+and cache comparison is machine-bound; historical context is in
 [`evidence/performance/deepseek-v4-pro-2026-07-18.md`](./evidence/performance/deepseek-v4-pro-2026-07-18.md).
 `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` is **optional** — Clockify's fixed platform
 token-signing key is built in; only set it to target a non-production Clockify

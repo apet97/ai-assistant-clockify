@@ -31,11 +31,12 @@ release evidence.
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
 - **Model:** the production release keeps DeepSeek V4 Pro through the existing
   OpenAI-compatible HTTP client, native tool mode, `LLM_AGENTIC=1`, and
-  `LLM_TOOL_SELECT=1`. `LLM_THINKING_MODE=disabled` is the selected 1.0.0 setting
-  only because five consecutive configured safety-corpus passes had zero write
-  regressions; rerun the exact-commit benchmark rather than extrapolating from a
-  historical result. The client remains backend-configurable for development,
-  but provider migration is not part of this release.
+  `LLM_TOOL_SELECT=1`. The selected 1.0.0 setting is production-default reasoning,
+  represented by an unset `LLM_THINKING_MODE`: the supported lower-effort mode
+  failed the same invoice case in two independent exact-source diagnostic cohorts.
+  The release gate still derives the setting from fresh final-source corpora and
+  fail-closes on any write-safety regression. The client remains backend-configurable
+  for development, but provider migration is not part of this release.
 - **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
   an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
   **default ON**, `=0` rolls back) shows the model only the message-relevant actions

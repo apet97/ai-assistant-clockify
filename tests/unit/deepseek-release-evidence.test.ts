@@ -97,10 +97,40 @@ function rawEval(sha: string, thinkingMode: null | "disabled", modelMs: number):
   });
 }
 
+function failedCandidateRaw(modelMs = 800): string {
+  const raw = JSON.parse(rawEval(CANDIDATE_SHA, "disabled", modelMs)) as Record<string, unknown>;
+  const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+  const failed = telemetry.find((run) => run.caseId === "agentic.invoice_for_named_client");
+  if (!failed) throw new Error("missing invoice fixture case");
+  failed.pass = false;
+  const summary = raw.summary as Record<string, unknown>;
+  summary.passRuns = 54;
+  summary.passRate = 54 / 55;
+  const report = (raw.reports as Array<Record<string, unknown>>)
+    .find((candidate) => candidate.id === "agentic.invoice_for_named_client");
+  if (!report) throw new Error("missing invoice fixture report");
+  report.passCount = 4;
+  report.sampleReasons = [];
+  return JSON.stringify(raw);
+}
+
+function tailRegressedCandidateRaw(): string {
+  const raw = JSON.parse(rawEval(CANDIDATE_SHA, "disabled", 900)) as Record<string, unknown>;
+  const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+  for (const run of telemetry.slice(-3)) run.modelMs = 1_200;
+  (raw.summary as Record<string, unknown>).latencyP95Ms = 1_200;
+  return JSON.stringify(raw);
+}
+
 function focusedRaw(
   kind: "read-only" | "risky-preview",
   modelMs: number,
-  options: { commitCount?: number; previewCount?: number; writeActionCount?: number } = {},
+  options: {
+    commitCount?: number;
+    previewCount?: number;
+    writeActionCount?: number;
+    thinkingMode?: null | "disabled";
+  } = {},
 ): string {
   const preview = kind === "risky-preview";
   const caseId = preview ? FOCUSED_PREVIEW_CASE_ID : FOCUSED_READ_CASE_ID;
@@ -139,7 +169,9 @@ function focusedRaw(
     toolSelect: true,
     repeat: 20,
     source: { gitCommitSha: CANDIDATE_SHA, workingTreeClean: true },
-    runtimeConfiguration: runtimeConfiguration("disabled"),
+    runtimeConfiguration: runtimeConfiguration(
+      options.thinkingMode === undefined ? "disabled" : options.thinkingMode,
+    ),
     summary: {
       totalRuns: 20,
       passRuns: 20,
@@ -194,7 +226,7 @@ function fixture(candidateModelMs = 900) {
   const focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000);
   return {
     binding: {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "deepseek-release-binding",
       capabilityProbe: {
         testedSha: CANDIDATE_SHA,
@@ -271,6 +303,21 @@ function fixture(candidateModelMs = 900) {
   };
 }
 
+function fallbackFixture(candidateModelMs = 800) {
+  const input = fixture(candidateModelMs);
+  input.candidateRawJson = failedCandidateRaw(candidateModelMs);
+  input.focusedReadRawJson = focusedRaw("read-only", 3_000, { thinkingMode: null });
+  input.focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000, { thinkingMode: null });
+  input.binding.candidate.rawAggregateSha256 = sha256(input.candidateRawJson);
+  input.binding.focusedRead.rawAggregateSha256 = sha256(input.focusedReadRawJson);
+  input.binding.focusedRead.thinkingMode = null as never;
+  input.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(input.focusedRiskyPreviewRawJson);
+  input.binding.focusedRiskyPreview.thinkingMode = null as never;
+  input.binding.modelConfiguration.thinkingMode = null as never;
+  input.deployedVersion.modelConfiguration.thinkingMode = null as never;
+  return input;
+}
+
 async function validator(): Promise<Record<string, (...args: unknown[]) => unknown>> {
   const modulePath = "../../scripts/evidence/deepseek-release-evidence.js";
   const loaded = await import(/* @vite-ignore */ modulePath).catch(() => undefined);
@@ -312,6 +359,75 @@ describe("DeepSeek release evidence", () => {
     ) as Record<string, unknown>;
 
     expect(binding).toEqual(input.binding);
+  });
+
+  it("records a complete rejected lower-effort cohort and selects production-default", async () => {
+    const { buildDeepSeekBinding, validateDeepSeekReleaseEvidence } = await validator();
+    const input = fallbackFixture();
+    const binding = buildDeepSeekBinding(
+      input.baselineRawJson,
+      input.candidateRawJson,
+      input.focusedReadRawJson,
+      input.focusedRiskyPreviewRawJson,
+      input.capabilityProbeRawJson,
+    ) as typeof input.binding;
+
+    expect(binding).toEqual(input.binding);
+    const result = validateDeepSeekReleaseEvidence({ ...input, binding } as never) as Record<string, unknown>;
+    expect(result).toHaveProperty("modelConfiguration.thinkingMode", null);
+    expect(result).toHaveProperty("selection.selectedSetting", "production-default");
+    expect(result).toHaveProperty("selection.lowerEffortPassRuns", 54);
+    expect(result).toHaveProperty("selection.lowerEffortFailedCases", [{
+      caseId: "agentic.invoice_for_named_client",
+      passCount: 4,
+      repeat: 5,
+    }]);
+    expect(result).toHaveProperty("selection.reason", "lower_effort_failed_corpus");
+  });
+
+  it("strictly selects the setting before focused runs and binds evaluator exit status", async () => {
+    const { selectDeepSeekReleaseSetting } = await validator();
+    const fallback = fallbackFixture();
+    const selected = selectDeepSeekReleaseSetting(
+      fallback.capabilityProbeRawJson,
+      fallback.baselineRawJson,
+      fallback.candidateRawJson,
+      { candidateExitStatus: 1, now: NOW, requireFresh: true },
+    ) as Record<string, unknown>;
+    expect(selected).toMatchObject({
+      selectedSetting: "production-default",
+      lowerEffortPassRuns: 54,
+      lowerEffortPerfect: false,
+      reason: "lower_effort_failed_corpus",
+    });
+
+    expect(() => selectDeepSeekReleaseSetting(
+      fallback.capabilityProbeRawJson,
+      fallback.baselineRawJson,
+      fallback.candidateRawJson,
+      { candidateExitStatus: 0, now: NOW, requireFresh: true },
+    )).toThrow(/exited successfully/i);
+
+    const passing = fixture();
+    expect(() => selectDeepSeekReleaseSetting(
+      passing.capabilityProbeRawJson,
+      passing.baselineRawJson,
+      passing.candidateRawJson,
+      { candidateExitStatus: 1, now: NOW, requireFresh: true },
+    )).toThrow(/failed despite a perfect corpus/i);
+  });
+
+  it("prefers production-default on a latency tie", async () => {
+    const { selectDeepSeekReleaseSetting } = await validator();
+    const input = fixture(1_000);
+    const selected = selectDeepSeekReleaseSetting(
+      input.capabilityProbeRawJson,
+      input.baselineRawJson,
+      input.candidateRawJson,
+      { candidateExitStatus: 0, now: NOW, requireFresh: true },
+    ) as Record<string, unknown>;
+    expect(selected).toHaveProperty("selectedSetting", "production-default");
+    expect(selected).toHaveProperty("reason", "production_default_not_slower");
   });
 
   it("binds clean raw aggregates, both tested SHAs, evidence commit, cache use, thresholds, and deployed config", async () => {
@@ -404,14 +520,20 @@ describe("DeepSeek release evidence", () => {
     expect(() => validateDeepSeekReleaseEvidence(missingPreview as never)).toThrow(/focused risky preview.*exactly one preview/i);
   });
 
-  it("rejects a non-perfect corpus, missing cache telemetry, dirty source, or tampered raw aggregate", async () => {
+  it("rejects a non-perfect selected corpus, missing cache telemetry, dirty source, or tampered raw aggregate", async () => {
     const { validateDeepSeekReleaseEvidence } = await validator();
 
     const failed = fixture();
-    const failedRaw = JSON.parse(failed.candidateRawJson) as Record<string, unknown>;
+    const failedRaw = JSON.parse(failed.baselineRawJson) as Record<string, unknown>;
+    const telemetry = failedRaw.runTelemetry as Array<Record<string, unknown>>;
+    telemetry[0]!.pass = false;
     (failedRaw.summary as Record<string, unknown>).passRuns = 54;
-    failed.candidateRawJson = JSON.stringify(failedRaw);
-    failed.binding.candidate.rawAggregateSha256 = sha256(failed.candidateRawJson);
+    (failedRaw.summary as Record<string, unknown>).passRate = 54 / 55;
+    const firstReport = (failedRaw.reports as Array<Record<string, unknown>>)[0]!;
+    firstReport.passCount = 4;
+    firstReport.sampleReasons = [];
+    failed.baselineRawJson = JSON.stringify(failedRaw);
+    failed.binding.baseline.rawAggregateSha256 = sha256(failed.baselineRawJson);
     expect(() => validateDeepSeekReleaseEvidence(failed as never)).toThrow(/perfect/i);
 
     const uncached = fixture();
@@ -455,6 +577,27 @@ describe("DeepSeek release evidence", () => {
     expect(() => validateDeepSeekReleaseEvidence(forged as never)).toThrow(/ordered complete cohort/i);
   });
 
+  it("rejects forged lower-effort summaries and per-case reports", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+
+    const forgedSummary = fallbackFixture();
+    const summaryRaw = JSON.parse(forgedSummary.candidateRawJson) as Record<string, unknown>;
+    (summaryRaw.summary as Record<string, unknown>).passRuns = 55;
+    forgedSummary.candidateRawJson = JSON.stringify(summaryRaw);
+    forgedSummary.binding.candidate.rawAggregateSha256 = sha256(forgedSummary.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(forgedSummary as never)).toThrow(/summary/i);
+
+    const forgedReport = fallbackFixture();
+    const reportRaw = JSON.parse(forgedReport.candidateRawJson) as Record<string, unknown>;
+    const report = (reportRaw.reports as Array<Record<string, unknown>>)
+      .find((candidate) => candidate.id === "agentic.invoice_for_named_client");
+    if (!report) throw new Error("missing invoice report fixture");
+    report.passCount = 5;
+    forgedReport.candidateRawJson = JSON.stringify(reportRaw);
+    forgedReport.binding.candidate.rawAggregateSha256 = sha256(forgedReport.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(forgedReport as never)).toThrow(/reports/i);
+  });
+
   it("rejects baseline and candidate settings measured from different source SHAs", async () => {
     const { buildDeepSeekBinding } = await validator();
     const input = fixture();
@@ -469,13 +612,72 @@ describe("DeepSeek release evidence", () => {
     )).toThrow(/same source SHA/i);
   });
 
-  it("selects the fastest distinct passing supported setting and rejects latency regression above ten percent", async () => {
+  it("selects the fastest qualifying setting and falls back on speed or tail-latency regression", async () => {
     const { validateDeepSeekReleaseEvidence } = await validator();
-    expect(() => validateDeepSeekReleaseEvidence(fixture(1_001) as never)).toThrow(/fastest/i);
+    const slower = fixture(1_001);
+    slower.focusedReadRawJson = focusedRaw("read-only", 3_000, { thinkingMode: null });
+    slower.binding.focusedRead.rawAggregateSha256 = sha256(slower.focusedReadRawJson);
+    slower.binding.focusedRead.thinkingMode = null as never;
+    slower.focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000, { thinkingMode: null });
+    slower.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(slower.focusedRiskyPreviewRawJson);
+    slower.binding.focusedRiskyPreview.thinkingMode = null as never;
+    slower.binding.modelConfiguration.thinkingMode = null as never;
+    slower.deployedVersion.modelConfiguration.thinkingMode = null as never;
+    const selected = validateDeepSeekReleaseEvidence(slower as never) as Record<string, unknown>;
+    expect(selected).toHaveProperty("selection.selectedSetting", "production-default");
+    expect(selected).toHaveProperty("selection.reason", "production_default_not_slower");
+
+    const regressed = fixture();
+    regressed.candidateRawJson = tailRegressedCandidateRaw();
+    regressed.binding.candidate.rawAggregateSha256 = sha256(regressed.candidateRawJson);
+    regressed.focusedReadRawJson = focusedRaw("read-only", 3_000, { thinkingMode: null });
+    regressed.binding.focusedRead.rawAggregateSha256 = sha256(regressed.focusedReadRawJson);
+    regressed.binding.focusedRead.thinkingMode = null as never;
+    regressed.focusedRiskyPreviewRawJson = focusedRaw("risky-preview", 2_000, { thinkingMode: null });
+    regressed.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(regressed.focusedRiskyPreviewRawJson);
+    regressed.binding.focusedRiskyPreview.thinkingMode = null as never;
+    regressed.binding.modelConfiguration.thinkingMode = null as never;
+    regressed.deployedVersion.modelConfiguration.thinkingMode = null as never;
+    const tailSelected = validateDeepSeekReleaseEvidence(regressed as never) as Record<string, unknown>;
+    expect(tailSelected).toHaveProperty("selection.reason", "lower_effort_latency_regression");
 
     const mismatched = fixture();
     mismatched.deployedVersion.modelConfiguration.thinkingMode = null as never;
     expect(() => validateDeepSeekReleaseEvidence(mismatched as never)).toThrow(/deployed model configuration/i);
+  });
+
+  it("rejects a binding that claims a setting different from the derived selection", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+
+    const passingLower = fixture();
+    passingLower.binding.modelConfiguration.thinkingMode = null as never;
+    passingLower.binding.focusedRead.thinkingMode = null as never;
+    passingLower.binding.focusedRiskyPreview.thinkingMode = null as never;
+    expect(() => validateDeepSeekReleaseEvidence(passingLower as never)).toThrow(/qualified DeepSeek setting/i);
+
+    const failedLower = fallbackFixture();
+    failedLower.binding.modelConfiguration.thinkingMode = "disabled" as never;
+    failedLower.binding.focusedRead.thinkingMode = "disabled" as never;
+    failedLower.binding.focusedRiskyPreview.thinkingMode = "disabled" as never;
+    expect(() => validateDeepSeekReleaseEvidence(failedLower as never)).toThrow(/qualified DeepSeek setting/i);
+  });
+
+  it("never treats a lower-effort safety violation as an acceptable fallback benchmark", async () => {
+    const { buildDeepSeekBinding } = await validator();
+    const input = fallbackFixture();
+    const raw = JSON.parse(input.candidateRawJson) as Record<string, unknown>;
+    const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+    telemetry[0]!.safetyViolations = 1;
+    (raw.summary as Record<string, unknown>).safetyViolations = 1;
+    input.candidateRawJson = JSON.stringify(raw);
+
+    expect(() => buildDeepSeekBinding(
+      input.baselineRawJson,
+      input.candidateRawJson,
+      input.focusedReadRawJson,
+      input.focusedRiskyPreviewRawJson,
+      input.capabilityProbeRawJson,
+    )).toThrow(/zero-safety/i);
   });
 
   it("requires a current source-bound capability probe and one fresh ordered release run window", async () => {
@@ -513,6 +715,32 @@ describe("DeepSeek release evidence", () => {
     secret.candidateRawJson = JSON.stringify(secretRaw);
     secret.binding.candidate.rawAggregateSha256 = sha256(secret.candidateRawJson);
     expect(() => validateDeepSeekReleaseEvidence(secret as never)).toThrow(/secret-free/i);
+
+    const leakedReason = fallbackFixture();
+    const leakedRaw = JSON.parse(leakedReason.candidateRawJson) as Record<string, unknown>;
+    const failedReport = (leakedRaw.reports as Array<Record<string, unknown>>)
+      .find((report) => report.id === "agentic.invoice_for_named_client");
+    if (!failedReport) throw new Error("missing failed report fixture");
+    failedReport.sampleReasons = ["provider response must never be evidence"];
+    leakedReason.candidateRawJson = JSON.stringify(leakedRaw);
+    leakedReason.binding.candidate.rawAggregateSha256 = sha256(leakedReason.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(leakedReason as never)).toThrow(/reports/i);
+
+    const focusedExtra = fixture();
+    const focusedRawValue = JSON.parse(focusedExtra.focusedReadRawJson) as Record<string, unknown>;
+    focusedRawValue.diagnostic = "provider output must not be accepted";
+    focusedExtra.focusedReadRawJson = JSON.stringify(focusedRawValue);
+    focusedExtra.binding.focusedRead.rawAggregateSha256 = sha256(focusedExtra.focusedReadRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(focusedExtra as never)).toThrow(/exact schema/i);
+
+    const focusedSourceExtra = fixture();
+    const focusedSourceRaw = JSON.parse(focusedSourceExtra.focusedRiskyPreviewRawJson) as Record<string, unknown>;
+    (focusedSourceRaw.source as Record<string, unknown>).diagnostic = "untrusted";
+    focusedSourceExtra.focusedRiskyPreviewRawJson = JSON.stringify(focusedSourceRaw);
+    focusedSourceExtra.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(
+      focusedSourceExtra.focusedRiskyPreviewRawJson,
+    );
+    expect(() => validateDeepSeekReleaseEvidence(focusedSourceExtra as never)).toThrow(/exact schema/i);
   });
 
   it("rejects missing, unbound, legacy, or malformed deployed source provenance", async () => {

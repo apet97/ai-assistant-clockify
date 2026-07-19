@@ -33,4 +33,13 @@ describe("DeepSeek release evaluator contract", () => {
     expect(evaluator).toContain("selectEvalCases(AGENTIC_CASES, flags.only)");
     expect(evaluator).not.toContain("c.id.includes(flags.only");
   });
+
+  it("never persists provider or planner failure text in release reports", () => {
+    const evaluator = read("scripts/eval-agentic.ts");
+    expect(evaluator).toContain("reports: reports.map(({ id, area, passCount, repeat })");
+    expect(evaluator).toContain("sampleReasons: []");
+    expect(evaluator).not.toContain("reports,\n        // Secret-free per-case telemetry");
+    expect(evaluator).not.toContain("result.outcome.finalText.slice");
+    expect(evaluator).not.toContain('sample.join("; ")');
+  });
 });
