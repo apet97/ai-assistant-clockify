@@ -581,6 +581,27 @@ describe("DeepSeek release evidence", () => {
     forgedWrite.candidateRawJson = JSON.stringify(writeRaw);
     forgedWrite.binding.candidate.rawAggregateSha256 = sha256(forgedWrite.candidateRawJson);
     expect(() => validateDeepSeekReleaseEvidence(forgedWrite as never)).toThrow(/intent|declaration/i);
+
+    const forgedClarify = fixture();
+    const clarifyRaw = JSON.parse(forgedClarify.candidateRawJson) as Record<string, unknown>;
+    const clarifyRun = (clarifyRaw.runTelemetry as Array<Record<string, unknown>>)
+      .find((run) => run.area === "clarify");
+    if (!clarifyRun) throw new Error("missing clarify fixture");
+    clarifyRun.intentDeclarationProvenance = "local_empty_zero_tool";
+    forgedClarify.candidateRawJson = JSON.stringify(clarifyRaw);
+    forgedClarify.binding.candidate.rawAggregateSha256 = sha256(forgedClarify.candidateRawJson);
+    expect(() => validateDeepSeekReleaseEvidence(forgedClarify as never)).toThrow(/intent|declaration/i);
+
+    const forgedFocusedRisky = fixture();
+    const focusedRiskyRaw = JSON.parse(forgedFocusedRisky.focusedRiskyPreviewRawJson) as Record<string, unknown>;
+    for (const run of focusedRiskyRaw.runTelemetry as Array<Record<string, unknown>>) {
+      run.intentDeclarationProvenance = "local_empty_zero_tool";
+    }
+    forgedFocusedRisky.focusedRiskyPreviewRawJson = JSON.stringify(focusedRiskyRaw);
+    forgedFocusedRisky.binding.focusedRiskyPreview.rawAggregateSha256 = sha256(
+      forgedFocusedRisky.focusedRiskyPreviewRawJson,
+    );
+    expect(() => validateDeepSeekReleaseEvidence(forgedFocusedRisky as never)).toThrow(/intent|declaration/i);
   });
 
   it("rejects a nominally read-only focused run that attempts any write action", async () => {

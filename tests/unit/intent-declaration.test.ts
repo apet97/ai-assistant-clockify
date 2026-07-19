@@ -1670,6 +1670,51 @@ describe("declareIntentCapability", () => {
     expect(provenance).toHaveBeenCalledWith("invalid");
   });
 
+  it("rejects a zero-tool completion that contradictorily reports tool_calls termination", async () => {
+    const provenance = vi.fn();
+    const capability = await declareIntentCapability({
+      modelClient: {
+        complete: vi.fn(async () => "must not run"),
+        completeWithTools: vi.fn(async () => ({
+          text: "",
+          toolCalls: [],
+          finishReason: "tool_calls",
+        })),
+      },
+      currentText: "Create project Atlas",
+      writeActionNames,
+      catalogHash,
+      onProvenance: provenance,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+    expect(provenance).toHaveBeenCalledWith("invalid");
+  });
+
+  it("accepts one valid declaration tool call with tool_calls termination", async () => {
+    const currentText = "Rename to Atlas";
+    const atlas = byteSpan(currentText, "Atlas");
+    const capability = await declareIntentCapability({
+      modelClient: {
+        complete: vi.fn(async () => "must not run"),
+        completeWithTools: vi.fn(async () => ({
+          text: "",
+          finishReason: "tool_calls",
+          toolCalls: [{
+            id: "declare-1",
+            name: DECLARE_INTENT_TOOL_NAME,
+            arguments: declaration("clockify_projects_update", atlas),
+          }],
+        })),
+      },
+      currentText,
+      writeActionNames,
+      catalogHash,
+    });
+
+    expect(capability.mode).toBe("allow");
+  });
+
   it("rejects a truncated one-tool declaration before validating its partial arguments", async () => {
     const currentText = "Rename to Atlas and archive the project";
     const atlas = byteSpan(currentText, "Atlas");

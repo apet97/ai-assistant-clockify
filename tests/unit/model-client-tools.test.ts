@@ -143,6 +143,12 @@ describe("createModelClient.completeWithTools", () => {
     ["missing choices", {}],
     ["empty choices", { choices: [] }],
     ["missing assistant message", { choices: [{}] }],
+    ["multiple choices", {
+      choices: [
+        { finish_reason: "stop", message: { content: "first", tool_calls: [] } },
+        { finish_reason: "stop", message: { content: "second", tool_calls: [] } },
+      ],
+    }],
   ])("rejects a malformed 2xx %s instead of presenting it as a zero-tool answer", async (_label, payload) => {
     const error = await client(payload)
       .completeWithTools!([{ role: "user", content: "weather?" }], tools)
@@ -590,6 +596,24 @@ describe("createModelClient retry + provider error detail", () => {
     const seq = sequencedFetch([{ status: 429, body: "rate limited" }, { status: 200 }]);
     const text = await retryClient(seq.impl, sleeps).complete([{ role: "user", content: "hi" }]);
     expect(text).toBe("ok");
+    expect(seq.calls()).toBe(2);
+    expect(sleeps).toHaveLength(1);
+  });
+
+  it("keeps the default transient retry for normal tool completions", async () => {
+    const sleeps: number[] = [];
+    const seq = sequencedFetch([
+      { status: 429, body: "rate limited" },
+      {
+        status: 200,
+        payload: { choices: [{ finish_reason: "stop", message: { content: "Ready.", tool_calls: [] } }] },
+      },
+    ]);
+    const result = await retryClient(seq.impl, sleeps).completeWithTools!(
+      [{ role: "user", content: "hello" }],
+      tools,
+    );
+    expect(result).toMatchObject({ text: "Ready.", toolCalls: [], finishReason: "stop" });
     expect(seq.calls()).toBe(2);
     expect(sleeps).toHaveLength(1);
   });

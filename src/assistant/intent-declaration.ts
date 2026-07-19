@@ -891,8 +891,11 @@ export async function declareIntentCapability(
         input.signal,
         { retryTransient: false },
       );
-      if (completion.finishReason !== undefined &&
-        completion.finishReason !== "stop" && completion.finishReason !== "tool_calls") {
+      const finishReasonContradictsCalls = completion.finishReason !== undefined && (
+        (completion.toolCalls.length === 0 && completion.finishReason !== "stop") ||
+        (completion.toolCalls.length > 0 && completion.finishReason !== "tool_calls")
+      );
+      if (finishReasonContradictsCalls) {
         reportProvenance(input, "invalid");
         return denied;
       }

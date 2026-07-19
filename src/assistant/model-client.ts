@@ -468,8 +468,12 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
         })),
         tool_choice: "auto",
       }, signal, options?.retryTransient !== false);
-      const message = data.choices?.[0]?.message;
-      const finishReason = data.choices?.[0]?.finish_reason;
+      if (!Array.isArray(data.choices) || data.choices.length !== 1) {
+        throw new ProviderProtocolError("malformed_completion");
+      }
+      const choice = data.choices[0]!;
+      const message = choice.message;
+      const finishReason = choice.finish_reason;
       if (!message || typeof message !== "object" || Array.isArray(message)) {
         throw new ProviderProtocolError("malformed_completion");
       }

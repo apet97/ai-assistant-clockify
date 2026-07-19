@@ -1,16 +1,14 @@
 import type { IntentCapabilityV1 } from "../../src/harness/intent-capability.js";
+import type {
+  IntentDeclarationProvenance as ProductionIntentDeclarationProvenance,
+} from "../../src/assistant/intent-declaration.js";
 
 export type IntentDeclarationContract =
   | "quote_refs_v1"
   | "invalid_or_legacy"
   | "not_evaluated";
 
-export type IntentDeclarationProvenance =
-  | "provider_tool"
-  | "provider_json"
-  | "local_empty_zero_tool"
-  | "invalid"
-  | "not_evaluated";
+export type IntentDeclarationProvenance = ProductionIntentDeclarationProvenance | "not_evaluated";
 
 /** Secret-free counters and booleans proving that one eval run crossed the
  * production declaration, raw-authority, durable binding, and consumption path. */
