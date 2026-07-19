@@ -25,9 +25,16 @@ const expectRemoteActionsPinned = (workflow: string): void => {
 describe("GitHub Actions workflow contracts", () => {
   it("keeps CI security gates and uploads the license report beside the SBOM", () => {
     const workflow = readWorkflow("ci.yml");
+    const verifyJob = workflow.slice(
+      workflow.indexOf("\n  verify:"),
+      workflow.indexOf("\n  browser-e2e:"),
+    );
 
     expect(workflow).toContain("npm run verify");
     expect(workflow).toContain("npm run perf:local-ui");
+    expect(verifyJob).toContain("npx playwright install --with-deps chromium");
+    expect(verifyJob.indexOf("npx playwright install --with-deps chromium"))
+      .toBeLessThan(verifyJob.indexOf("npm run perf:local-ui"));
     expect(workflow).toContain("raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7");
     expect(workflow).toContain("version: 1.7.7");
     expect(workflow).toContain("npx playwright install --with-deps chromium firefox webkit");

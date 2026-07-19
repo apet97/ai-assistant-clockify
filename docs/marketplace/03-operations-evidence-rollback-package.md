@@ -92,17 +92,37 @@ mkdir -p "$LOCAL_DIR"
 BACKUP_BOUNDARY_FILE="$LOCAL_DIR/pre-backup-boundary.txt"
 npm run --silent db:capture-backup-boundary -- "$BACKUP_BOUNDARY_FILE"
 
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  mkdir -p /data/backups
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  npm run --silent db:backup -- /data/ai-assistant.sqlite "$REMOTE_BACKUP"
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  chmod 600 "$REMOTE_BACKUP" "$REMOTE_BACKUP.sha256" "$REMOTE_BACKUP.json"
+# In the authenticated Railway dashboard Console for the exact production service,
+# substitute the resolved DRILL_ID and enter each line separately:
+mkdir -p /data/backups
+npm run --silent db:backup -- /data/ai-assistant.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite
+chmod 600 /data/backups/ai-assistant-<DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
 ```
 
-Transfer the database and both evidence sidecars through Railway's file API without a
-remote shell or printing their contents. Each partial file is written only inside the
-verified encrypted volume and renamed after a successful download:
+Railway does not publish an authoritative `ssh.railway.com` host-key set. Do not use
+`ssh-keyscan`, `StrictHostKeyChecking=no`, `accept-new`, or a first-seen key for this
+database. In the Railway dashboard **Console**, open **Files**, browse `Root` -> `data` ->
+`backups`, and Save As each exact file directly to its `.partial` path inside `LOCAL_DIR`.
+Never run `env`, `set`, `printenv`, or `sh -lc`. Finalize the browser transfer with:
+
+```bash
+LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
+for suffix in "" ".sha256" ".json"; do
+  target_path="${LOCAL_BACKUP}${suffix}"
+  partial_path="${target_path}.partial"
+  test -f "$partial_path"
+  chmod 600 "$partial_path"
+  mv "$partial_path" "$target_path"
+done
+```
+
+If and only if an approved SSH host-key trust record exists, this Railway CLI 5.27.0
+SFTP transfer may replace that browser loop. Its release-only key must be in an isolated
+`ssh-agent`, registered by fingerprint/comment, and removed from both Railway and the
+agent afterward because key scope is broader than one project:
 
 ```bash
 LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
@@ -114,6 +134,11 @@ for suffix in "" ".sha256" ".json"; do
   chmod 600 "$partial_path"
   mv "$partial_path" "$target_path"
 done
+```
+
+After either transfer path, verify the checksum and bind legacy metadata when required:
+
+```bash
 chmod 600 "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json"
 (cd "$LOCAL_DIR" && shasum -a 256 -c "$REMOTE_NAME.sha256")
 
@@ -138,8 +163,9 @@ rewrites it: it verifies the backup/checksum/legacy byte binding and emits a sep
 format-2 sidecar from the UTC boundary captured before the remote backup began. A later
 timestamp cannot be substituted without the binder failing closed.
 
-Set `DATA_ENCRYPTION_KEY` through the approved secret manager without echoing or listing
-Railway variables. Start RTO immediately before restoring. The simulated incident time
+The 1.0.0 drill is a data-encryption-key rotation drill. Set the new key in
+`DATA_ENCRYPTION_KEY` and the old key in `DATA_ENCRYPTION_KEY_PREVIOUS` through the
+approved encrypted recovery location without echoing or listing Railway variables. Start RTO immediately before restoring. The simulated incident time
 minus format-2 metadata's conservative pre-snapshot `dataAsOf` is RPO. The verifier copies
 the caller-owned restore to a private mode-0600 clone, verifies checksum, integrity, and
 the supported v7/v8 source schema read-only, blocks redirects, and makes one authenticated
@@ -172,11 +198,16 @@ mkdir -p "$ISOLATED_DIR"
 test -f dist/server/server.js
 
 if [ -z "${DATA_ENCRYPTION_KEY:-}" ]; then
-  printf 'DATA_ENCRYPTION_KEY (approved secret manager): ' >&2
+  printf 'DATA_ENCRYPTION_KEY (new production key): ' >&2
   IFS= read -r -s DATA_ENCRYPTION_KEY
   printf '\n' >&2
-  export DATA_ENCRYPTION_KEY
 fi
+if [ -z "${DATA_ENCRYPTION_KEY_PREVIOUS:-}" ]; then
+  printf 'DATA_ENCRYPTION_KEY_PREVIOUS (old production key): ' >&2
+  IFS= read -r -s DATA_ENCRYPTION_KEY_PREVIOUS
+  printf '\n' >&2
+fi
+export DATA_ENCRYPTION_KEY DATA_ENCRYPTION_KEY_PREVIOUS
 
 RESTORE_DATABASE=YES npm run --silent db:restore -- "$LOCAL_BACKUP" "$RESTORED_PATH"
 npm run --silent db:verify-restore -- \
@@ -225,10 +256,22 @@ rm -f -- "$RESTORED_PATH" "$RESTORED_PATH-wal" "$RESTORED_PATH-shm"
 rmdir "$ISOLATED_DIR"
 
 case "$REMOTE_BACKUP" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
-for suffix in "" ".sha256" ".json"; do
-  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-    delete "${REMOTE_BACKUP}${suffix}" --yes --json >/dev/null
-done
+# Run in the authenticated Railway dashboard Console after substituting the same DRILL_ID.
+rm -f -- /data/backups/ai-assistant-<DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
+test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite && \
+  test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 && \
+  test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
+```
+
+If the conditional CLI/SFTP path was used, remove its exact registered fingerprint and
+private key from the agent, then require the unique release-key name to be absent:
+
+```bash
+railway ssh keys remove "$RELEASE_KEY_FINGERPRINT"
+ssh-add -d "$RELEASE_KEY"
+! railway ssh keys list | grep -F "$RELEASE_KEY_NAME"
 ```
 
 The drill never changes production `DATABASE_PATH` and never mutates Clockify. For an
@@ -282,7 +325,7 @@ node -e '
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
-      !/^[a-f0-9]{64}$/.test(value.serverArtifactSha256)) process.exit(1);
+      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256) process.exit(1);
 ' "$VERSION_JSON"
 ```
 
@@ -293,6 +336,12 @@ changed source byte. It records the complete `dist/server` tree hash; production
 rehashes that tree before database/provider initialization. Record the deployment id,
 full SHA, archive hash, source-binding hash, server-artifact hash, and secret-free
 `/version`. Abort live testing when any value is null or differs.
+
+After health and a real token-backed read, repeat the online backup, encrypted transfer,
+bind, restore, and token-backed verification with the new `DATA_ENCRYPTION_KEY` and
+`DATA_ENCRYPTION_KEY_PREVIOUS` explicitly unset. Only after that second restore passes may
+the previous variable be removed and its single resulting Railway deployment accepted.
+Recheck exact `/version`, `/health`, and a token-backed read before remote cleanup.
 
 ## Scope and AUDIT evidence binding
 

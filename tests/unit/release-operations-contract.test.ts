@@ -86,15 +86,35 @@ describe("release operations contract", () => {
     }
   });
 
-  it("uses Railway file APIs and direct argv commands without a remote shell", () => {
+  it("uses the authenticated Railway Console fallback without trusting an unpublished SSH host key", () => {
     for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
       const runbook = read(path);
       expect(runbook).toContain("Railway CLI 5.27.0");
+      expect(runbook).toContain("Railway dashboard **Console**");
+      expect(runbook).toContain("StrictHostKeyChecking=no");
+      expect(runbook).toContain("ssh-keyscan");
       expect(runbook).toContain("railway service files");
       expect(runbook).toContain('download "${REMOTE_BACKUP}${suffix}" "$partial_path"');
-      expect(runbook).toContain('delete "${REMOTE_BACKUP}${suffix}" --yes');
-      expect(runbook).not.toContain("sh -lc");
+      expect(runbook).toContain("rm -f -- /data/backups/ai-assistant-<DRILL_ID>.sqlite");
+      expect(runbook).not.toContain('delete "${REMOTE_BACKUP}${suffix}" --yes');
+      expect(runbook).toContain('railway ssh keys remove "$RELEASE_KEY_FINGERPRINT"');
+      expect(runbook).toContain('ssh-add -d "$RELEASE_KEY"');
+      expect(runbook).not.toMatch(/railway ssh[^\n]*sh -lc/u);
       expect(runbook).not.toContain("| /usr/bin/base64 -D");
+    }
+  });
+
+  it("requires both encryption keys when the release drill proves a production key rotation", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      expect(runbook).toContain("The 1.0.0 drill is a data-encryption-key rotation drill");
+      expect(runbook).toContain("DATA_ENCRYPTION_KEY_PREVIOUS (old production key)");
+      expect(runbook).toContain("export DATA_ENCRYPTION_KEY DATA_ENCRYPTION_KEY_PREVIOUS");
+      expect(runbook).toMatch(/`DATA_ENCRYPTION_KEY_PREVIOUS` explicitly\s+unset/u);
+      expect(runbook).toContain("Only after that second restore");
+      expect(runbook).toContain(
+        "value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256",
+      );
     }
   });
 

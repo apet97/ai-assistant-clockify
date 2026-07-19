@@ -36,6 +36,8 @@ jobs:
       # `npm run verify` now runs the cycles check (madge) itself, so no
       # separate cycles step is needed — the local gate equals the CI gate.
       - run: npm run verify
+      - name: Install Chromium for the local UI performance gate
+        run: npx playwright install --with-deps chromium
       - name: Exact-head local UI and asset performance gate
         env:
           PERF_EVIDENCE_DIR: /tmp/ai-assistant-local-ui-performance

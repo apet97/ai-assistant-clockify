@@ -305,12 +305,19 @@ node -e '
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
-      !/^[a-f0-9]{64}$/.test(value.serverArtifactSha256)) process.exit(1);
+      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256) process.exit(1);
 ' "$VERSION_JSON"
 curl --fail --silent --show-error "$BASE_URL/live" >/dev/null
 curl --fail --silent --show-error "$BASE_URL/health" >/dev/null
 curl --fail --silent --show-error "$BASE_URL/manifest" >/dev/null
 ```
+
+After health and a real token-backed read pass, repeat the exact online backup, encrypted
+transfer, bind, restore, and token-backed verification once more with
+`DATA_ENCRYPTION_KEY` set to the new key and `DATA_ENCRYPTION_KEY_PREVIOUS` explicitly
+unset. Only after that second restore passes may `DATA_ENCRYPTION_KEY_PREVIOUS` be
+removed and its single resulting Railway deployment accepted. Recheck exact `/version`,
+`/health`, and a token-backed read before cleanup.
 
 ### Release-only scope and AUDIT-host probes
 
@@ -518,26 +525,47 @@ BACKUP_BOUNDARY_FILE="$LOCAL_DIR/pre-backup-boundary.txt"
 npm run --silent db:capture-backup-boundary -- "$BACKUP_BOUNDARY_FILE"
 ```
 
-Run the online backup inside the production service. The command integrity-checks the
-source and completed snapshot, then creates `.sha256` and `.json` sidecars. The current
-v7 production build emits format-1 metadata; the frozen candidate binds that sidecar to
-the already-captured boundary after transport:
+Run the online backup in the exact production service's authenticated Railway dashboard **Console**.
+Railway does not publish an authoritative `ssh.railway.com` host-key set, so
+do not use `ssh-keyscan`, `StrictHostKeyChecking=no`, `accept-new`, or a first-seen key for
+this database. Open project `ai-assistant-clockify`, environment `production`, service
+`ai-assistant`, substitute the resolved `DRILL_ID` below, and enter each line separately.
+Never run `env`, `set`, `printenv`, or `sh -lc`. The command integrity-checks the source
+and snapshot, then creates `.sha256` and `.json` sidecars. The current v7 build emits
+format-1 metadata; the candidate binds it to the captured boundary after transport:
+
+```bash
+mkdir -p /data/backups
+npm run --silent db:backup -- /data/ai-assistant.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite
+chmod 600 /data/backups/ai-assistant-<DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
+```
+
+In the same authenticated Console, open **Files**, browse `Root` -> `data` -> `backups`,
+and use Save As to write the exact three files directly to their `.partial` paths inside
+`LOCAL_DIR`. Do not first download them elsewhere. Finalize that browser transfer with:
+
+```bash
+LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
+for suffix in "" ".sha256" ".json"; do
+  target_path="${LOCAL_BACKUP}${suffix}"
+  partial_path="${target_path}.partial"
+  test -f "$partial_path"
+  chmod 600 "$partial_path"
+  mv "$partial_path" "$target_path"
+done
+```
+
+If and only if an organization-approved Railway SSH host-key trust record exists, the
+following Railway CLI 5.27.0 SFTP transfer may replace that browser loop. It requires a
+release-only key already in an isolated `ssh-agent` and registered by exact
+fingerprint/comment; remove that key from both Railway and the agent after cleanup. Key
+registration is broader than one project:
 
 ```bash
 RAILWAY_PROJECT=fb1fa3c6-cc28-40d8-b985-2a7ee7051304
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  mkdir -p /data/backups
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  npm run --silent db:backup -- /data/ai-assistant.sqlite "$REMOTE_BACKUP"
-railway ssh -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-  chmod 600 "$REMOTE_BACKUP" "$REMOTE_BACKUP.sha256" "$REMOTE_BACKUP.json"
-```
-
-Transfer exactly the database and its two sidecars with Railway's file API. No remote
-shell parses the command and no binary or environment value is printed to the terminal
-or shell history:
-
-```bash
 LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
 for suffix in "" ".sha256" ".json"; do
   target_path="${LOCAL_BACKUP}${suffix}"
@@ -547,6 +575,11 @@ for suffix in "" ".sha256" ".json"; do
   chmod 600 "$partial_path"
   mv "$partial_path" "$target_path"
 done
+```
+
+After either transfer path, verify the checksum and bind legacy metadata when required:
+
+```bash
 chmod 600 "$LOCAL_BACKUP" "$LOCAL_BACKUP.sha256" "$LOCAL_BACKUP.json"
 (cd "$LOCAL_DIR" && shasum -a 256 -c "$REMOTE_NAME.sha256")
 
@@ -571,10 +604,11 @@ bindings, requires the captured boundary to be no later than backup completion, 
 symlink inputs and an existing output, and writes a separate mode-0600 format-2 sidecar.
 It never rewrites the backup, checksum, or legacy metadata.
 
-Verify an isolated restored file from the exact already-built release checkout. Set
-`DATA_ENCRYPTION_KEY` from the approved secret
-manager without echoing it; never obtain it with a command that prints all Railway
-variables. The verifier creates a private mode-0600 temporary clone, verifies its checksum
+Verify an isolated restored file from the exact already-built release checkout. The 1.0.0 drill is a data-encryption-key rotation drill: set the new key in
+`DATA_ENCRYPTION_KEY` and the old production key in `DATA_ENCRYPTION_KEY_PREVIOUS`.
+Load both from the approved encrypted recovery location without echoing either; never
+obtain them with a command that prints Railway variables. The verifier creates a private
+mode-0600 temporary clone, verifies its checksum
 and format-2 metadata, then opens the source schema read-only. It accepts only supported
 v7/v8 input, runs `PRAGMA integrity_check`, validates the installation columns, decrypts
 one active installation, and performs exactly one redirect-blocked `GET /user` with
@@ -603,11 +637,16 @@ mkdir -p "$ISOLATED_DIR"
 test -f dist/server/server.js
 
 if [ -z "${DATA_ENCRYPTION_KEY:-}" ]; then
-  printf 'DATA_ENCRYPTION_KEY (approved secret manager): ' >&2
+  printf 'DATA_ENCRYPTION_KEY (new production key): ' >&2
   IFS= read -r -s DATA_ENCRYPTION_KEY
   printf '\n' >&2
-  export DATA_ENCRYPTION_KEY
 fi
+if [ -z "${DATA_ENCRYPTION_KEY_PREVIOUS:-}" ]; then
+  printf 'DATA_ENCRYPTION_KEY_PREVIOUS (old production key): ' >&2
+  IFS= read -r -s DATA_ENCRYPTION_KEY_PREVIOUS
+  printf '\n' >&2
+fi
+export DATA_ENCRYPTION_KEY DATA_ENCRYPTION_KEY_PREVIOUS
 
 RESTORE_DATABASE=YES npm run --silent db:restore -- "$LOCAL_BACKUP" "$RESTORED_PATH"
 npm run --silent db:verify-restore -- \
@@ -666,10 +705,23 @@ rm -f -- "$RESTORED_PATH" "$RESTORED_PATH-wal" "$RESTORED_PATH-shm"
 rmdir "$ISOLATED_DIR"
 
 case "$REMOTE_BACKUP" in /data/backups/ai-assistant-*.sqlite) ;; *) exit 64 ;; esac
-for suffix in "" ".sha256" ".json"; do
-  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
-    delete "${REMOTE_BACKUP}${suffix}" --yes --json >/dev/null
-done
+# Run these lines in the authenticated Railway dashboard Console after substituting the
+# same resolved DRILL_ID used for the backup.
+rm -f -- /data/backups/ai-assistant-<DRILL_ID>.sqlite \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 \
+  /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
+test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite && \
+  test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite.sha256 && \
+  test ! -e /data/backups/ai-assistant-<DRILL_ID>.sqlite.json
+```
+
+If the conditional CLI/SFTP path was used, remove its exact registered fingerprint and
+private key from the agent, then require the unique release-key name to be absent:
+
+```bash
+railway ssh keys remove "$RELEASE_KEY_FINGERPRINT"
+ssh-add -d "$RELEASE_KEY"
+! railway ssh keys list | grep -F "$RELEASE_KEY_NAME"
 ```
 
 Keep daily backups for 30 days and one monthly backup for the applicable
