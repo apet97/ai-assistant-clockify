@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import request from "supertest";
+import request, { type Response } from "supertest";
 import { testKeys } from "../helpers/test-keys.js";
 import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
@@ -67,30 +67,92 @@ describe("per-request admin re-check (authz-surface-01)", () => {
         return "ADMIN";
       },
     };
+    const paths = ["/api/me", "/api/permissions", "/api/metrics", "/api/chat/history"] as const;
+    let requestsEntered = 0;
+    let allRequestsEntered!: () => void;
+    const entered = new Promise<void>((resolve) => { allRequestsEntered = resolve; });
     const app = createApp({
       config,
       store,
       parser: createSignatureParser(ADDON_KEY, keys.pem),
       modelClient,
-      clockifyForWorkspace: () => clockify,
+      clockifyForWorkspace: () => {
+        requestsEntered += 1;
+        if (requestsEntered === paths.length) allRequestsEntered();
+        return clockify;
+      },
     });
     const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+    const server = app.listen(0);
+    let responsePromises: Array<Promise<Response>> = [];
+    let readinessTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      if (!server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.once("listening", resolve);
+          server.once("error", reject);
+        });
+      }
+      const sharedRequest = request(server);
+      responsePromises = paths.map(async (path) => {
+        try {
+          return await sharedRequest.get(path).set("Cookie", cookie);
+        } catch (error) {
+          throw new Error(`${path} request failed before settlement: ${String(error)}`);
+        }
+      });
+      const readinessTimeout = new Promise<never>((_resolve, reject) => {
+        readinessTimer = setTimeout(() => {
+          reject(new Error(
+            `Timed out waiting for all authenticated surfaces to reach role verification: `
+            + `entered=${requestsEntered}/${paths.length}, roleLookups=${lookups}`,
+          ));
+        }, 10_000);
+      });
+      const readiness = await Promise.race([
+        Promise.all([started, entered]).then(() => ({ kind: "entered" as const })),
+        ...responsePromises.map(async (response, index) => ({
+          kind: "early_response" as const,
+          path: paths[index],
+          response: await response,
+        })),
+        readinessTimeout,
+      ]);
+      if (readiness.kind === "early_response") {
+        throw new Error(
+          `${readiness.path} settled before all authenticated surfaces reached role verification: `
+          + `${readiness.response.status} ${JSON.stringify(readiness.response.body)}`,
+        );
+      }
+      const coldLookups = lookups;
+      releaseRole();
+      const responses = await Promise.all(responsePromises);
 
-    const responses = Promise.all([
-      request(app).get("/api/me").set("Cookie", cookie),
-      request(app).get("/api/permissions").set("Cookie", cookie),
-      request(app).get("/api/metrics").set("Cookie", cookie),
-      request(app).get("/api/chat/history").set("Cookie", cookie),
-    ]);
-    await started;
-    const coldLookups = lookups;
-    releaseRole();
-
-    for (const response of await responses) expect(response.status).toBe(200);
-    expect(coldLookups).toBe(1);
-    expect(lookups).toBe(1);
-    store.close();
-  });
+      for (const [index, response] of responses.entries()) {
+        expect(response.status, `${paths[index]}: ${JSON.stringify(response.body)}`).toBe(200);
+      }
+      expect(requestsEntered).toBe(4);
+      expect(coldLookups).toBe(1);
+      expect(lookups).toBe(1);
+    } finally {
+      if (readinessTimer !== undefined) clearTimeout(readinessTimer);
+      releaseRole();
+      const closeSettlement = new Promise<void>((resolve, reject) => {
+        server.close((error) => error ? reject(error) : resolve());
+      }).then(
+        () => ({ error: undefined }),
+        (error: unknown) => ({ error }),
+      );
+      server.closeAllConnections();
+      try {
+        await Promise.allSettled(responsePromises);
+        const { error } = await closeSettlement;
+        if (error) throw error;
+      } finally {
+        store.close();
+      }
+    }
+  }, 20_000);
 
   it("does not recreate a session when uninstall erases the workspace during role verification", async () => {
     const keys = await testKeys();
