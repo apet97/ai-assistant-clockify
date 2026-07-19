@@ -8,6 +8,7 @@ import {
   type DurableMutationContract,
   type SafeWriteActionDefinition,
   type SafeWritePreparationResult,
+  type SemanticLiteralAlias,
   isPreparedSafeWrite,
   isSafeWriteClarification,
   mutationPlanContractError,
@@ -39,6 +40,7 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
   schema: S;
   stepName: string;
   argumentAliases?: readonly string[];
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   argumentOpenPaths?: readonly string[];
   mutationContract: DurableMutationContract;
   prepare(
@@ -124,6 +126,7 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
     risks: ["safe_write"],
     schema: def.schema,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     mutationWorkflow: "durable",
     mutationContract: def.mutationContract,

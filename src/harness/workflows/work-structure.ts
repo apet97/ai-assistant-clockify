@@ -7,6 +7,7 @@ import {
   type ConfirmableOperation,
   type BoundedPreparedSafeWrite,
   type SafeWritePreparationResult,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import type { EntitySummary } from "../../clockify/client.js";
@@ -560,6 +561,12 @@ const createWorkPackage = defineAction({
     strategies: ["create"],
   }),
   argumentAliases: ["tagName", "projectName", "taskName"],
+  semanticLiteralAliases: Object.freeze([
+    { path: "startTimer", value: false, authoredPhrases: Object.freeze(["do not start timer", "do not start a timer"]) },
+    { path: "startTimer", value: true, authoredPhrases: Object.freeze(["start timer", "start a timer"]) },
+    { path: "startTimer.billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
+    { path: "startTimer.billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.preprocess(
     normalizeWorkPackageArgs,
     z

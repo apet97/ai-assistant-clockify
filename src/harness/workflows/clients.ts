@@ -7,6 +7,7 @@ import {
   defineReadAction,
   defineRiskyAction,
   type ActionDefinition,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
@@ -329,6 +330,10 @@ const updateClient = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
+    { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   argumentOpenPaths: ["fields"],
   schema: z
     .object({

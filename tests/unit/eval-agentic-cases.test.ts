@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { AGENTIC_CASES, type AgenticOutcome } from "../../scripts/eval/agentic-cases.js";
+import {
+  AGENTIC_CASES,
+  RELEASE_INTENT_PATH_ACTION,
+  RELEASE_INTENT_PATH_CASE_ID,
+  RELEASE_INTENT_PATH_MESSAGE,
+  RELEASE_INTENT_PATH_PROJECT_NAME,
+  type AgenticOutcome,
+} from "../../scripts/eval/agentic-cases.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 
 /**
@@ -41,20 +48,40 @@ describe("AGENTIC_CASES corpus", () => {
     expect(headline!.message.toLowerCase()).toContain("qwen");
   });
 
+  it("pins the exact live public-project regression as a full intent-capability safe write", () => {
+    const regression = AGENTIC_CASES.find((c) => c.id === RELEASE_INTENT_PATH_CASE_ID);
+    expect(regression).toMatchObject({
+      area: "safe_write",
+      message: RELEASE_INTENT_PATH_MESSAGE,
+      intentCapabilityAction: RELEASE_INTENT_PATH_ACTION,
+    });
+  });
+
   it("includes the STEP-1b multi-step / cross-area / multi-read cases", () => {
     const want = [
       "agentic.count_projects_and_clients", // multi-independent-read
       "agentic.list_categories_and_tags", // cross-group recall + verbatim listing
-      "agentic.tag_per_client", // multi-step read-then-act (one read → many writes)
+      "agentic.approve_all_pending", // server-resolved read-then-act batch with one bound preview
       "agentic.rename_client_and_tag", // cross-entity multi-risky updates
     ];
     const ids = new Set(AGENTIC_CASES.map((c) => c.id));
     for (const id of want) expect(ids.has(id), id).toBe(true);
     // The corpus must keep at least one case per area the flip is certified against.
     const areas = new Set(AGENTIC_CASES.map((c) => c.area));
-    for (const a of ["read_answer", "read_then_act", "single_risky", "multi_risky", "clarify"] as const) {
+    for (const a of ["read_answer", "read_then_act", "safe_write", "single_risky", "multi_risky", "clarify"] as const) {
       expect(areas.has(a), a).toBe(true);
     }
+  });
+
+  it("uses distinct action grants for the bounded multi-risky delete/archive case", () => {
+    expect(AGENTIC_CASES).toHaveLength(12);
+    expect(AGENTIC_CASES.some((c) => c.id === "agentic.delete_two_tags")).toBe(false);
+    const multi = AGENTIC_CASES.find((c) => c.id === "agentic.delete_tag_and_archive_project");
+    expect(multi).toMatchObject({ area: "multi_risky" });
+    expect(multi?.intentAllowedActions).toEqual(expect.arrayContaining([
+      "clockify_tags_delete",
+      "clockify_projects_archive",
+    ]));
   });
 });
 
@@ -100,22 +127,24 @@ describe("AGENTIC_CASES new-case checks accept a correct outcome", () => {
     expect(c.check({ ...base, finalText: "Categories: Travel, Software." })).not.toEqual([]); // tag omitted
   });
 
-  it("tag_per_client: a tag per client created passes; a missing one fails", () => {
-    const c = caseById("agentic.tag_per_client");
+  it("approve_all_pending: one bound batch approval passes; a remaining pending item fails", () => {
+    const c = caseById("agentic.approve_all_pending");
     const fake = createFakeWorkspace(c.seed);
-    fake.state.tags = [{ id: "t-1", name: "Globex" }, { id: "t-2", name: "Initech" }];
+    fake.state.approvals = fake.state.approvals.map((approval) => ({ ...approval, state: "APPROVED" }));
+    fake.counts.setApprovalStateAtomic = 2;
     const base: AgenticOutcome = {
       kind: "final",
-      finalText: "Created tags Globex and Initech.",
-      executed: ["clockify_list_entities", "clockify_tags_create", "clockify_tags_create"],
-      committed: [],
-      interrupts: 0,
+      finalText: "The two pending timesheets were approved from the button-bound preview.",
+      executed: [],
+      committed: ["clockify_approvals_approve_pending"],
+      interrupts: 1,
       fake,
     };
     expect(c.check(base)).toEqual([]);
     const partial = createFakeWorkspace(c.seed);
-    partial.state.tags = [{ id: "t-1", name: "Globex" }];
-    expect(c.check({ ...base, fake: partial })).not.toEqual([]); // Initech missing
+    partial.state.approvals[0]!.state = "APPROVED";
+    partial.counts.setApprovalStateAtomic = 1;
+    expect(c.check({ ...base, fake: partial })).not.toEqual([]);
   });
 
   it("rename_client_and_tag: both renames committed pass; a leftover old name fails", () => {
@@ -137,5 +166,33 @@ describe("AGENTIC_CASES new-case checks accept a correct outcome", () => {
     stale.state.clients = [{ id: "cl1", name: "Globex" }]; // rename never applied
     stale.state.tags = [{ id: "t1", name: "critical" }, { id: "t2", name: "keep" }];
     expect(c.check({ ...base, fake: stale })).not.toEqual([]);
+  });
+
+  it("exact public project: one full-path safe write passes; missing dispatch, duplicate, or previewed output fails", () => {
+    const c = caseById(RELEASE_INTENT_PATH_CASE_ID);
+    const fake = createFakeWorkspace(c.seed);
+    fake.state.projects = [{
+      id: "project-1",
+      name: RELEASE_INTENT_PATH_PROJECT_NAME,
+      isPublic: true,
+    }];
+    fake.counts.createProjectAtomic = 1;
+    const base: AgenticOutcome = {
+      kind: "final",
+      finalText: "Project created.",
+      executed: [RELEASE_INTENT_PATH_ACTION],
+      committed: [],
+      interrupts: 0,
+      fake,
+    };
+    expect(c.check(base)).toEqual([]);
+    expect(c.check({ ...base, interrupts: 1 })).not.toEqual([]);
+    const noDispatch = createFakeWorkspace(c.seed);
+    noDispatch.state.projects = [{ id: "project-1", name: RELEASE_INTENT_PATH_PROJECT_NAME }];
+    expect(c.check({ ...base, fake: noDispatch })).not.toEqual([]);
+    const duplicated = createFakeWorkspace(c.seed);
+    duplicated.state.projects = [fake.state.projects[0]!, { ...fake.state.projects[0]!, id: "project-2" }];
+    duplicated.counts.createProjectAtomic = 1;
+    expect(c.check({ ...base, fake: duplicated })).not.toEqual([]);
   });
 });

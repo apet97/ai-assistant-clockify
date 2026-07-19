@@ -7,6 +7,7 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { nowDate } from "../../durations.js";
@@ -20,6 +21,11 @@ import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./
 import type { CreateTimeOffPolicyInput, CreateTimeOffRequestInput, TimeOffPolicySummary, TimeOffRequestSummary } from "../../clockify/ports/time-off.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { TIME_OFF_BALANCE_USER_BATCH_MAX } from "../safety-limits.js";
+
+const REQUIRES_APPROVAL_LITERAL_ALIASES = Object.freeze([
+  { path: "requiresApproval", value: false, authoredPhrases: Object.freeze(["does not require approval", "no approval required", "without approval"]) },
+  { path: "requiresApproval", value: true, authoredPhrases: Object.freeze(["requires approval", "require approval", "approval required"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 
 /** Step a YYYY-MM-DD day forward by n calendar days. */
 function addCalendarDays(day: string, n: number): string {
@@ -179,6 +185,11 @@ const createPolicy = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: timeOffCreateContract,
+  semanticLiteralAliases: Object.freeze([
+    { path: "negativeBalance", value: false, authoredPhrases: Object.freeze(["do not allow negative balance", "no negative balance", "negative balance not allowed"]) },
+    { path: "negativeBalance", value: true, authoredPhrases: Object.freeze(["allow negative balance", "negative balance allowed"]) },
+    ...REQUIRES_APPROVAL_LITERAL_ALIASES,
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     name: z.string().min(1),
     requiresApproval: z.boolean().optional(),
@@ -267,6 +278,7 @@ const updatePolicy = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: timeOffSnapshotContract(["target"], "update"),
+  semanticLiteralAliases: REQUIRES_APPROVAL_LITERAL_ALIASES,
   schema: z
     .object({
       id: z.string().min(1),
@@ -343,6 +355,10 @@ const archivePolicy = defineRiskyAction({
   risks: ["destructive"],
   mutationWorkflow: "durable",
   mutationContract: timeOffSnapshotContract(["target"], "state-command"),
+  semanticLiteralAliases: Object.freeze([
+    { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
+    { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({ id: z.string().min(1), name: z.string().optional(), archived: z.boolean().default(true) }),
   async preview(ctx, args) {
     const target = await policySnapshot(ctx, args.id);
@@ -431,6 +447,10 @@ const createRequest = defineRiskyAction({
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
   mutationContract: timeOffSnapshotContract(["parent"], "create"),
+  semanticLiteralAliases: Object.freeze([
+    { path: "halfDay", value: false, authoredPhrases: Object.freeze(["full day", "full-day"]) },
+    { path: "halfDay", value: true, authoredPhrases: Object.freeze(["half day", "half-day"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z
     .object({
       policyId: z.string().min(1).optional(),

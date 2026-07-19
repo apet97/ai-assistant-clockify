@@ -94,8 +94,9 @@ export async function executeAction(input: ExecuteActionInput): Promise<ActionRe
     };
   }
 
-  const externalWrite = action.name.startsWith("clockify_") && action.kind !== "read";
-  if (externalWrite && input.context.authorizeWriteArguments) {
+  const writeAction = action.kind !== "read";
+  const externalWrite = action.name.startsWith("clockify_") && writeAction;
+  if (writeAction && input.context.authorizeWriteArguments) {
     if (!action.writeAuthority) {
       return {
         kind: "receipt",

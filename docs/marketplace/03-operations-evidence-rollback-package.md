@@ -291,6 +291,20 @@ BASE_URL="$(npm run --silent release:validate-base-url -- "$BASE_URL")"
 export BASE_URL
 test -z "$(git status --porcelain --untracked-files=all)"
 DEEPSEEK_BINDING_PATH="${DEEPSEEK_BINDING_PATH:-evidence/performance/deepseek-release-binding.json}"
+EXPECTED_MODEL_CONFIGURATION="$(node -e '
+  const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(JSON.stringify(binding.modelConfiguration));
+' "$DEEPSEEK_BINDING_PATH")"
+SELECTED_LLM_MODEL="$(node -e 'process.stdout.write(JSON.parse(process.argv[1]).model)' "$EXPECTED_MODEL_CONFIGURATION")"
+SELECTED_REASONING_EFFORT="$(node -e '
+  const value = JSON.parse(process.argv[1]).reasoningEffort;
+  process.stdout.write(value === null ? "unset" : value);
+' "$EXPECTED_MODEL_CONFIGURATION")"
+SELECTED_THINKING_MODE="$(node -e '
+  const value = JSON.parse(process.argv[1]).thinkingMode;
+  process.stdout.write(value === "disabled" ? "disabled" : "unset");
+' "$EXPECTED_MODEL_CONFIGURATION")"
+export EXPECTED_MODEL_CONFIGURATION SELECTED_LLM_MODEL SELECTED_REASONING_EFFORT SELECTED_THINKING_MODE
 RELEASE_SHA="$(node -e '
   const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(binding.candidate.testedSha);
@@ -307,27 +321,33 @@ RELEASE_SOURCE_BINDING_SHA256="$(npx tsx scripts/release-source-binding.ts --wri
 export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
 
-railway --version                         # required release tool: Railway CLI 5.27.0
-railway variable set -s ai-assistant -e production --skip-deploys \
-  "RELEASE_SHA=$RELEASE_SHA" "RELEASE_BUILD_HASH=$RELEASE_BUILD_HASH" \
-  "RELEASE_SOURCE_BINDING_SHA256=$RELEASE_SOURCE_BINDING_SHA256"
-# Re-run in this same shell so the checked backup cannot be a stale prior step.
-# STOP: do not run Railway upload when this command fails.
-npm run --silent gate:predeploy-backup
-railway up "$RELEASE_STAGING" --path-as-root \
-  -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304 -s ai-assistant -e production --ci \
-  --message "marketplace-1.0.0 $RELEASE_SHA"
+export RELEASE_STAGING
+# This checked transaction runs gate:predeploy-backup before any variable
+# mutation, snapshots only allowlisted nonsecret release/model settings, and
+# restores their prior presence/value if Railway upload fails.
+# STOP: do not run Railway upload if the checked transaction's backup/restore gate fails.
+npm run --silent deploy:private-production
 
 VERSION_JSON="$(curl --fail --silent --show-error "$BASE_URL/version")"
 node -e '
   const value = JSON.parse(process.argv[1]);
+  const expectedModel = JSON.parse(process.env.EXPECTED_MODEL_CONFIGURATION);
+  const modelKeys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
+  const actualModel = value.modelConfiguration;
   if (value.version !== "1.0.0" || value.releaseSha !== process.env.RELEASE_SHA ||
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
-      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256) process.exit(1);
+      value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256 ||
+      !actualModel || Object.keys(actualModel).length !== modelKeys.length ||
+      modelKeys.some((key) => actualModel[key] !== expectedModel[key])) process.exit(1);
 ' "$VERSION_JSON"
 ```
+
+If a selected reasoning or thinking setting is `unset`, the corresponding Railway
+variable must already be absent. Remove it in the protected Variables UI, repeat the
+backup gate if that change deployed anything, and rerun the complete checked transaction.
+Do not hand-run `railway variable set` before the gate.
 
 The pre-upload binding is computed independently from the candidate's Git blob IDs,
 executable modes, paths, and archive. The Git-less Railway prebuild recomputes the

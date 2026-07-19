@@ -4,6 +4,7 @@ import {
   defineReadAction,
   defineRiskyAction,
   type ActionDefinition,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
@@ -142,6 +143,10 @@ const updateTag = defineRiskyAction({
     targeting: { mode: "snapshots", relations: ["target"] },
     strategies: ["update"],
   }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
+    { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z
     .object({
       id: z.string().min(1).optional(),

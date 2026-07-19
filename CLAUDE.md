@@ -25,7 +25,7 @@ release evidence.
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 139 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 140 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
@@ -41,9 +41,9 @@ release evidence.
 - **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
   an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
   **default ON**, `=0` rolls back) shows the model only the message-relevant actions
-  (+ an always-on core) instead of all 139, on BOTH the chat turn and its confirm
-  resume — deterministic, `src/harness/tool-select.ts`. The agentic eval flipped it
-  (11 cases × 5, OFF vs ON): **DeepSeek** 100% pass / 0 safety both, ~61% fewer prompt
+  (+ an always-on core) instead of all 140, on BOTH the chat turn and its confirm
+  resume — deterministic, `src/harness/tool-select.ts`. A historical selector benchmark
+  flipped it (11 cases × 5, OFF vs ON): **DeepSeek** 100% pass / 0 safety both, ~61% fewer prompt
   tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; **both Gemini
   tiers** (flash-latest + flash-lite-3.1 no-think) 100% / 0 safety both, ~65% fewer tokens
   (17.6K→6.1K/round-trip — same tokenizer) with latency down 18–50% (flash p95
@@ -57,7 +57,10 @@ release evidence.
   `unknown_action` errors carry a "did you mean"
   (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
   pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
-  (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate).
+  (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate). The 1.0.0
+  release gate is separate: 12 cases × 5 ordered cohorts per candidate setting,
+  including the provider-facing declaration-to-capability-to-authority path for
+  a real safe write, with exactly one expected fake mutation.
 - **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, liveness
   `/live`, committed-write readiness `/health`). Redeploy = `railway up` from this dir. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
@@ -93,8 +96,14 @@ confirmation, undo, and external dispatch is uncached.
 - Before the main planner receives Clockify results, an isolated declaration pass
   receives only current and unresolved prior admin-authored text as untrusted
   natural-language input; its trusted envelope also supplies exact write-action
-  names and the catalog hash. It persists the exact write authority for that
-  request. Invalid declarations deny writes but do not remove read access.
+  names, literal-controlled paths, reviewed semantic aliases, and the catalog
+  hash. The provider cites an exact quote, its authored segment, and its
+  zero-based occurrence; the server computes and verifies UTF-8 byte spans. It persists the
+  exact write authority for that request. Invalid or ambiguous citations,
+  unreviewed aliases, polarity inversions, and provider-returned tools that were
+  not offered all fail closed. A terminal authority denial uses deterministic
+  server copy and never asks the provider to reinterpret it; reads remain
+  available.
 - Declaration literals may be bounded structured JSON, using the one shared
   depth/node/byte/array limit contract in `src/harness/safety-limits.ts`. The same
   contract governs declaration decoding, persistence, raw authority matching,
@@ -201,7 +210,7 @@ bug was found against the REAL API, not by reading the code.
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`
   (immutable `IntentCapabilityV1`), `intent-authority.ts` (pre-Zod raw-argument
   matcher), `write-authority.ts` (explicit authority and exact-plan metadata for
-  all 81 external writes), `mutation-workflow.ts`
+  all 82 Clockify writes plus the local permission write), `mutation-workflow.ts`
   (durable one-dispatch steps + partial/unknown classification),
   `durable-risky-write.ts` (confirmed one-dispatch adapter), the focused
   `invoice-create-workflow.ts`/`invoice-update-workflow.ts`/
@@ -302,15 +311,19 @@ bug was found against the REAL API, not by reading the code.
 - **Admin-authored intent capability:** before any main-planner turn can receive
   Clockify results, the constrained declaration pass receives only the exact
   current and unresolved prior admin-authored text as untrusted natural-language
-  input; its trusted envelope also supplies exact write-action names and the
-  catalog hash. It persists an immutable
-  `IntentCapabilityV1` with exact write action names, verified UTF-8 byte spans,
-  normalized literal constraints, maximum executions (one by default), and
-  request/catalog hashes. Provider failure, malformed spans, or invented values
-  produce a durable `deny_all_writes` capability; reads remain available. The
+  input; its trusted envelope also supplies exact write-action names,
+  literal-controlled paths, action/path/value-scoped reviewed semantic aliases,
+  and the catalog hash. The provider returns exact quote references with a
+  zero-based occurrence into named authored segments; the server rejects absent,
+  out-of-range, cross-segment, polarity-inverted, or otherwise ambiguous evidence
+  and computes the verified UTF-8 byte spans itself. It persists an immutable `IntentCapabilityV1` with
+  exact write action names, verified UTF-8 byte spans, normalized literal
+  constraints, maximum executions (one by default), and request/catalog hashes.
+  Provider failure, malformed evidence, or invented values produce a durable
+  `deny_all_writes` capability; reads remain available. The
   harness matches the model's raw arguments before Zod preprocessing and before
-  server-side id/date resolution against explicit authority metadata for all 81
-  writes. Server-derived ids, permitted defaults, and exact authoritative
+  server-side id/date resolution against explicit authority metadata for all 83
+  writes (82 Clockify actions plus the local permission action). Server-derived ids, permitted defaults, and exact authoritative
   preserved-state paths can only narrow authority.
   Each safe or confirmed operation binds the capability and atomically consumes
   one execution; replay of that same bound operation consumes none. Confirmation
@@ -365,9 +378,10 @@ bug was found against the REAL API, not by reading the code.
   THAT. The stored boilerplate is rewritten to a neutral note in the
   MODEL-VISIBLE history (`sanitizeStoredReplyForModel`) so the model can't learn
   to parrot it.
-- **Typed consent guard:** a bare "yes"/"confirm"/"do it" while the session has
-  live pending previews never reaches the planner — deterministic reply points at
-  the button (`TYPED_CONSENT` + `store.countPendingConfirmations`).
+- **Typed consent guard:** a bare "yes"/"confirm"/"do it" never reaches the
+  planner. With a live preview, deterministic copy points at its button; without
+  one, it reports that no new action was taken (`TYPED_CONSENT` +
+  `store.countPendingConfirmations`).
 - **Editing existing data previews + confirms:** every `*_update` action — and
   `clockify_fix_entry` (edit an existing time entry: description/project/task/tags/
   billable) — is `high_risk_write`. An update overwrites live data (and has no

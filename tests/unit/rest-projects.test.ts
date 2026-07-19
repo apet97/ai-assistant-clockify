@@ -67,7 +67,7 @@ describe("project rest", () => {
   });
 
   it("createProject POSTs only the provided fields", async () => {
-    const f = vi.fn(async () => jsonResponse({ id: "p9", name: "New", clientId: "c1" }));
+    const f = vi.fn(async () => jsonResponse({ id: "p9", name: "New", clientId: "c1", isPublic: false }));
     const p = await rest(f as unknown as typeof fetch).createProject({
       name: "New",
       clientId: "c1",
@@ -75,7 +75,7 @@ describe("project rest", () => {
       color: "#abcdef",
       isPublic: false,
     });
-    expect(p).toEqual({ id: "p9", name: "New", clientId: "c1", archived: undefined });
+    expect(p).toMatchObject({ id: "p9", name: "New", clientId: "c1", isPublic: false });
     const [url, init] = (f as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects");
     expect(init.method).toBe("POST");

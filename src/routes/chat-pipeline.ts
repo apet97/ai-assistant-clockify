@@ -50,7 +50,7 @@ import {
   hashOperation,
   rotatePendingNonce,
 } from "../harness/confirmations.js";
-import { errorReceipt, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
+import { errorReceipt, hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import { runAgentTurn, type AgentStep, type AgentTurnResult } from "../assistant/agent-loop.js";
 import { parseAgentState, resumeMessages, type AgentState } from "../assistant/agent-state.js";
 import {
@@ -58,9 +58,14 @@ import {
   declareIntentCapability,
   filterCatalogByIntentCapability,
 } from "../assistant/intent-declaration.js";
-import type { ModelMessage, ToolCall } from "../assistant/model-client.js";
+import {
+  ProviderProtocolError,
+  type ModelMessage,
+  type ToolCall,
+} from "../assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../assistant/planner.js";
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
+import { hasExplicitWriteRequest } from "../assistant/text-safety.js";
 import { toolsForModel } from "../harness/tools.js";
 import { selectActionsForMessage } from "../harness/tool-select.js";
 import type { Installation, IntentCapabilityRecord } from "../db/store.js";
@@ -739,6 +744,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     results: unknown[],
     resultLinks: DurableResultLink[],
     clarificationContext?: string,
+    failureCode?: "provider_protocol_error",
   ): void {
     // Persisting the assistant reply is post-execution bookkeeping: it runs AFTER
     // the turn's action(s) executed (a safe write already hit the host; a risky one
@@ -760,6 +766,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
           ...(replyKind === "clarify" && clarificationContext
             ? { clarificationContext }
             : {}),
+          ...(failureCode ? { code: failureCode } : {}),
         },
         resultLinks,
       });
@@ -928,7 +935,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // the resume turn's own results. Only the CHECK sees it; persistence/streaming
     // keep using m.results so the committed receipt is never double-counted.
     const resultsForTruthfulness = receipt.ok ? [{ kind: "receipt" as const, receipt }, ...m.results] : m.results;
-    const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind);
+    const replyText = truthfulReplyText(resultsForTruthfulness, baseText, replyKind, {
+      writeIntentDeclared: intentCapability?.capability.mode === "allow" &&
+        intentCapability.capability.writeActions.length > 0,
+      writeAuthorityUnresolved: intentCapability?.capability.mode === "deny_all_writes" &&
+        (intentCapability.capability.reason !== "no_write_intent" ||
+          hasExplicitWriteRequest(resumeSelectionContext)),
+    });
     if (!turnAuthorityCurrent(claims, installation, turnSignal)) {
       return { replyKind: "aborted", replyText: "", results: m.results };
     }
@@ -1285,23 +1298,33 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return deterministicAnswer(claims, "I didn't catch a message there — what would you like me to do?");
     }
 
-    // SAFETY (live item 157): a bare typed consent while a preview is pending
-    // must never reach the planner — live, "yes" made the model plan a NEW
-    // operation instead of pointing at the button. Deterministic reply; only
-    // the button nonce can execute the pending change.
-    if (TYPED_CONSENT.test(message) && deps.store.countPendingConfirmations(claims.sessionId, now().toISOString()) > 0) {
+    // SAFETY (live item 157): bare typed consent must never reach the planner —
+    // live, "yes" made the model plan a NEW operation instead of pointing at the
+    // button. Deterministic reply; only a button nonce can execute a pending
+    // change, and without one no action is taken.
+    if (TYPED_CONSENT.test(message)) {
+      if (deps.store.countPendingConfirmations(claims.sessionId, now().toISOString()) > 0) {
+        return deterministicAnswer(
+          claims,
+          "No action was taken from this message. Use the button on the pending preview, or Cancel to discard it.",
+        );
+      }
+      const prior = deps.store.getRecentMessages(claims.sessionId, 2, true);
+      const lastAssistant = [...prior].reverse().find((msg) => msg.role === "assistant");
+      const lastResults = (lastAssistant?.payload as { results?: unknown[] } | undefined)?.results ?? [];
       return deterministicAnswer(
         claims,
-        "Typed approval can't apply a pending change — only the Confirm button on its preview card can. The change is still waiting: click Confirm to apply it, or Cancel to discard it.",
+        lastTurnCompletedAWrite(lastResults)
+          ? "No new action was taken. The previous completed change is recorded above."
+          : "No action was taken. State the change you want in one fresh message.",
       );
     }
 
     // SAFETY (finding new-2-affirmative-after-completed-safe): a bare affirmative
-    // ("yes please go ahead", "do it") right after a safe write ALREADY completed
-    // — with nothing pending — must not re-plan another write. Live, that
-    // affirmative logged a DUPLICATE time entry. The prior turn left no pending
-    // confirmation (a safe write executes immediately), so the guard above can't
-    // catch it; here we detect the just-finished write from that turn's persisted
+    // ("great", "perfect") right after a safe write ALREADY completed — with
+    // nothing pending — must not re-plan another write. These acknowledgment-only
+    // phrases do not match the typed-consent guard above; here we detect the
+    // just-finished write from that turn's persisted
     // receipts and answer deterministically that it's already done. The model
     // never sees the affirmative, so it can't duplicate the action.
     if (BARE_AFFIRMATIVE.test(message)) {
@@ -1311,7 +1334,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       if (lastTurnCompletedAWrite(lastResults)) {
         return deterministicAnswer(
           claims,
-          "That's already done — the previous change was applied when you asked, so there's nothing left to confirm. Let me know if you'd like another change.",
+          "No new action was taken. The previous completed change is recorded above.",
         );
       }
     }
@@ -1396,7 +1419,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     fullIntentTools: ReturnType<typeof toolsForModel>;
     fullIntentCatalog: ReturnType<typeof catalogForModel>;
     signal?: AbortSignal;
-  }): Promise<{ replyKind: string; baseText: string } | { failed: true }> {
+  }): Promise<
+    | { replyKind: string; baseText: string }
+    | { failed: true; code: "model_unavailable" | "provider_protocol_error" }
+  > {
     const {
       m,
       messages,
@@ -1444,8 +1470,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         if (subsetNarrowed && m.results.length === 0 && (turn.kind === "final" || turn.kind === "exhausted")) {
           turn = await runAgentic(fullIntentTools);
         }
-      } catch {
-        return { failed: true };
+      } catch (error) {
+        return {
+          failed: true,
+          code: error instanceof ProviderProtocolError
+            ? "provider_protocol_error"
+            : "model_unavailable",
+        };
       }
       return settleAgentTurn(m, turn);
     }
@@ -1477,10 +1508,15 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         plan = await runPlan(fullIntentCatalog, fullIntentTools);
         if (signal?.aborted) return { replyKind: "aborted", baseText: "" };
       }
-    } catch {
+    } catch (error) {
       return signal?.aborted
         ? { replyKind: "aborted", baseText: "" }
-        : { failed: true };
+        : {
+            failed: true,
+            code: error instanceof ProviderProtocolError
+              ? "provider_protocol_error"
+              : "model_unavailable",
+          };
     }
 
     let emittedClarify = false;
@@ -1667,6 +1703,60 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       return { ok: false, code: "model_unavailable", message: errorText };
     };
 
+    const providerProtocolFailure = (): ChatTurnOutcome => {
+      recordTurn();
+      const errorText = "The model provider returned an invalid tool response. No change was made. Please try again.";
+      deps.store.addMessage({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        role: "assistant",
+        content: errorText,
+        payload: { kind: "error", code: "provider_protocol_error" },
+      });
+      return { ok: false, code: "provider_protocol_error", message: errorText };
+    };
+
+    // A provider failure after one or more settled actions is not a failed turn:
+    // those receipts are already canonical and a safe write may already exist on
+    // Clockify. Preserve them, avoid a duplicate-inviting retry response, and use
+    // deterministic server copy instead of any incomplete provider narration.
+    const settledModelFailure = (
+      failureCode: "model_unavailable" | "provider_protocol_error",
+    ): ChatTurnOutcome => {
+      recordTurn();
+      const appliedMutation = m.results.some((result) => {
+        if (!result || typeof result !== "object" || Array.isArray(result)) return false;
+        const receipt = (result as { kind?: unknown; receipt?: SuccessReceipt | ErrorReceipt }).receipt;
+        return (result as { kind?: unknown }).kind === "receipt" &&
+          receipt?.ok === true && hasChanges(receipt.changed);
+      });
+      const protocolFailure = failureCode === "provider_protocol_error";
+      const replyText = protocolFailure
+        ? appliedMutation
+          ? "The completed change is recorded above. The response then ended with provider_protocol_error (an invalid model-provider tool response). Review the receipt before requesting any unfinished work."
+          : "The completed results are shown above. The response then ended with provider_protocol_error (an invalid model-provider tool response)."
+        : appliedMutation
+          ? "The completed change is recorded above, but the assistant could not finish the rest of the response. Review the receipt before requesting any unfinished work."
+          : "The completed results are shown above, but the assistant could not finish the response.";
+      persistAssistantReply(
+        claims,
+        "partial",
+        replyText,
+        m.results,
+        m.resultLinks,
+        selectionContext,
+        protocolFailure ? "provider_protocol_error" : undefined,
+      );
+      return {
+        ok: true,
+        replyKind: "partial",
+        replyText,
+        results: m.results,
+        resultLinks: m.resultLinks,
+      };
+    };
+
     const turn = await runModelTurn({
       m,
       messages,
@@ -1687,7 +1777,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     if (!turnAuthorityCurrent(claims, installation, turnSignal)) {
       return aborted(m.results, m.resultLinks);
     }
-    if ("failed" in turn) return modelUnavailable();
+    if ("failed" in turn) {
+      if (m.results.length > 0) return settledModelFailure(turn.code);
+      return turn.code === "provider_protocol_error"
+        ? providerProtocolFailure()
+        : modelUnavailable();
+    }
     const { replyKind, baseText } = turn;
 
     // Client disconnected mid-turn (settleAgentTurn → "aborted"): the socket is gone.
@@ -1701,7 +1796,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // The truthful-preview override (see truthfulReplyText): a pending preview
     // replaces the model's text. The streaming route emits this replyText AFTER
     // the results — the truthful text isn't known until execution finishes.
-    const replyText = truthfulReplyText(m.results, baseText, replyKind);
+    const replyText = truthfulReplyText(m.results, baseText, replyKind, {
+      writeIntentDeclared: intentCapability?.capability.mode === "allow" &&
+        intentCapability.capability.writeActions.length > 0,
+      writeAuthorityUnresolved: intentCapability?.capability.mode === "deny_all_writes" &&
+        (intentCapability.capability.reason !== "no_write_intent" ||
+          hasExplicitWriteRequest(selectionContext)),
+    });
     persistAssistantReply(
       claims,
       replyKind,

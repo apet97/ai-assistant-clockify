@@ -2,7 +2,10 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { AGENTIC_CASES } from "../../scripts/eval/agentic-cases.js";
+import {
+  AGENTIC_CASES,
+  RELEASE_INTENT_PATH_CASE_ID,
+} from "../../scripts/eval/agentic-cases.js";
 
 const CANDIDATE_SHA = "b".repeat(40);
 const BASELINE_SHA = CANDIDATE_SHA;
@@ -14,6 +17,9 @@ const ENDPOINT_HASH = "1".repeat(64);
 const NOW = new Date("2026-07-19T00:10:00.000Z");
 const FOCUSED_READ_CASE_ID = "agentic.count_projects";
 const FOCUSED_PREVIEW_CASE_ID = "agentic.delete_tag_by_name";
+const CORPUS_REPEAT = 5;
+const CORPUS_TOTAL_RUNS = AGENTIC_CASES.length * CORPUS_REPEAT;
+const CORPUS_FAILED_RUNS = CORPUS_TOTAL_RUNS - 1;
 
 function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -39,27 +45,45 @@ function runtimeConfiguration(thinkingMode: null | "disabled", concurrency = 4) 
 
 function rawEval(sha: string, thinkingMode: null | "disabled", modelMs: number): string {
   const baseline = thinkingMode === null;
-  const runTelemetry = Array.from({ length: 55 }, (_, index) => ({
-    cohortIndex: Math.floor(index / AGENTIC_CASES.length) + 1,
-    caseIndex: index % AGENTIC_CASES.length,
-    caseId: AGENTIC_CASES[index % AGENTIC_CASES.length]!.id,
-    area: "read_answer",
-    pass: true,
-    safetyViolations: 0,
-    outcomeKind: "final",
-    previewCount: 0,
-    commitCount: 0,
-    writeActionCount: 0,
-    modelCalls: 2,
-    modelMs,
-    promptTokens: 1_000,
-    completionTokens: 25,
-    cachedPromptTokens: 900,
-    usageReported: true,
-    cachedPromptReported: true,
-    narrowed: true,
-    escapeHatchFired: false,
-  }));
+  const runTelemetry = Array.from({ length: CORPUS_TOTAL_RUNS }, (_, index) => {
+    const c = AGENTIC_CASES[index % AGENTIC_CASES.length]!;
+    const intentPath = c.id === RELEASE_INTENT_PATH_CASE_ID;
+    const expectsWriteCapability = c.area !== "read_answer" && c.area !== "clarify";
+    const writeActionCount = intentPath ? 1 : 0;
+    return {
+      cohortIndex: Math.floor(index / AGENTIC_CASES.length) + 1,
+      caseIndex: index % AGENTIC_CASES.length,
+      caseId: c.id,
+      area: c.area,
+      pass: true,
+      safetyViolations: 0,
+      outcomeKind: "final",
+      previewCount: 0,
+      commitCount: 0,
+      writeActionCount,
+      modelCalls: 2,
+      modelMs,
+      promptTokens: 1_000,
+      completionTokens: 25,
+      cachedPromptTokens: 900,
+      usageReported: true,
+      cachedPromptReported: true,
+      narrowed: true,
+      escapeHatchFired: false,
+      intentDeclarationCalls: 1,
+      intentDeclarationContract: "quote_refs_v1",
+      intentCapabilityMode: expectsWriteCapability ? "allow" : "deny_all_writes",
+      intentCapabilityActionBound: true,
+      intentCapabilityLiteralsExact: intentPath,
+      intentWriteArgumentsExact: intentPath,
+      intentHostMutationCount: intentPath ? 1 : 0,
+      intentAuthorityChecks: writeActionCount,
+      intentAuthorityDenials: 0,
+      intentCapabilityBindCount: writeActionCount,
+      intentCapabilityConsumeCount: writeActionCount,
+      intentCapabilityConsumeDenials: 0,
+    };
+  });
   return JSON.stringify({
     startedAt: baseline ? "2026-07-19T00:02:00.000Z" : "2026-07-19T00:04:00.000Z",
     completedAt: baseline ? "2026-07-19T00:03:00.000Z" : "2026-07-19T00:05:00.000Z",
@@ -72,23 +96,23 @@ function rawEval(sha: string, thinkingMode: null | "disabled", modelMs: number):
     source: { gitCommitSha: sha, workingTreeClean: true },
     runtimeConfiguration: runtimeConfiguration(thinkingMode),
     summary: {
-      totalRuns: 55,
-      passRuns: 55,
+      totalRuns: CORPUS_TOTAL_RUNS,
+      passRuns: CORPUS_TOTAL_RUNS,
       passRate: 1,
       safetyViolations: 0,
       meanRoundTrips: 2,
       latencyP50Ms: modelMs,
       latencyP95Ms: modelMs,
       tokensReported: true,
-      totalPromptTokens: 55_000,
-      totalCachedPromptTokens: 49_500,
+      totalPromptTokens: CORPUS_TOTAL_RUNS * 1_000,
+      totalCachedPromptTokens: CORPUS_TOTAL_RUNS * 900,
       meanPromptTokens: 1_000,
       meanPromptTokensPerRoundTrip: 500,
       meanCompletionTokens: 25,
       meanCachedPromptTokens: 900,
       cachedPromptReported: true,
       cacheHitRate: 0.9,
-      narrowedRuns: 55,
+      narrowedRuns: CORPUS_TOTAL_RUNS,
       escapeHatchFires: 0,
       escapeHatchFireRate: 0,
     },
@@ -104,8 +128,8 @@ function failedCandidateRaw(modelMs = 800): string {
   if (!failed) throw new Error("missing invoice fixture case");
   failed.pass = false;
   const summary = raw.summary as Record<string, unknown>;
-  summary.passRuns = 54;
-  summary.passRate = 54 / 55;
+  summary.passRuns = CORPUS_FAILED_RUNS;
+  summary.passRate = CORPUS_FAILED_RUNS / CORPUS_TOTAL_RUNS;
   const report = (raw.reports as Array<Record<string, unknown>>)
     .find((candidate) => candidate.id === "agentic.invoice_for_named_client");
   if (!report) throw new Error("missing invoice fixture report");
@@ -158,6 +182,18 @@ function focusedRaw(
     cachedPromptReported: true,
     narrowed: true,
     escapeHatchFired: false,
+    intentDeclarationCalls: 1,
+    intentDeclarationContract: "quote_refs_v1",
+    intentCapabilityMode: preview ? "allow" : "deny_all_writes",
+    intentCapabilityActionBound: true,
+    intentCapabilityLiteralsExact: false,
+    intentWriteArgumentsExact: false,
+    intentHostMutationCount: 0,
+    intentAuthorityChecks: preview ? 1 : 0,
+    intentAuthorityDenials: 0,
+    intentCapabilityBindCount: writeActionCount,
+    intentCapabilityConsumeCount: writeActionCount - previewCount + commitCount,
+    intentCapabilityConsumeDenials: 0,
   }));
   return JSON.stringify({
     startedAt: preview ? "2026-07-19T00:08:00.000Z" : "2026-07-19T00:06:00.000Z",
@@ -376,7 +412,7 @@ describe("DeepSeek release evidence", () => {
     const result = validateDeepSeekReleaseEvidence({ ...input, binding } as never) as Record<string, unknown>;
     expect(result).toHaveProperty("modelConfiguration.thinkingMode", null);
     expect(result).toHaveProperty("selection.selectedSetting", "production-default");
-    expect(result).toHaveProperty("selection.lowerEffortPassRuns", 54);
+    expect(result).toHaveProperty("selection.lowerEffortPassRuns", CORPUS_FAILED_RUNS);
     expect(result).toHaveProperty("selection.lowerEffortFailedCases", [{
       caseId: "agentic.invoice_for_named_client",
       passCount: 4,
@@ -396,7 +432,7 @@ describe("DeepSeek release evidence", () => {
     ) as Record<string, unknown>;
     expect(selected).toMatchObject({
       selectedSetting: "production-default",
-      lowerEffortPassRuns: 54,
+      lowerEffortPassRuns: CORPUS_FAILED_RUNS,
       lowerEffortPerfect: false,
       reason: "lower_effort_failed_corpus",
     });
@@ -440,7 +476,7 @@ describe("DeepSeek release evidence", () => {
       testedCandidateSha: CANDIDATE_SHA,
       evidenceCommitSha: EVIDENCE_SHA,
       consecutivePasses: 5,
-      totalRunsPerSetting: 55,
+      totalRunsPerSetting: CORPUS_TOTAL_RUNS,
       safetyViolations: 0,
       deployedConfigurationVerified: true,
     });
@@ -455,7 +491,19 @@ describe("DeepSeek release evidence", () => {
       "rawAggregates.focusedRiskyPreviewSha256",
       fixture().binding.focusedRiskyPreview.rawAggregateSha256,
     );
-    expect(result).toHaveProperty("cache.candidateCachedPromptTokens", 49_500);
+    expect(result).toHaveProperty("cache.candidateCachedPromptTokens", CORPUS_TOTAL_RUNS * 900);
+    expect(result).toHaveProperty("intentCapabilityPath", {
+      caseId: RELEASE_INTENT_PATH_CASE_ID,
+      evaluatedRunsPerSetting: 5,
+      productionDefaultPasses: 5,
+      lowerEffortPasses: 5,
+      selectedPasses: 5,
+      selectedExactLiteralBindings: 5,
+      selectedExactRawArguments: 5,
+      selectedExactHostMutations: 5,
+      selectedRawAuthorityChecks: 5,
+      selectedRawAuthorityDenials: 0,
+    });
     expect(result).toHaveProperty("focused.readOnly", {
       caseId: FOCUSED_READ_CASE_ID,
       samples: 20,
@@ -507,6 +555,18 @@ describe("DeepSeek release evidence", () => {
     expect(() => validateDeepSeekReleaseEvidence(wrote as never)).toThrow(/focused read.*write action/i);
   });
 
+  it("rejects the obsolete shortened deny capability mode in read evidence", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+    const obsolete = fixture();
+    const raw = JSON.parse(obsolete.focusedReadRawJson) as Record<string, unknown>;
+    const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+    telemetry[0]!.intentCapabilityMode = "deny";
+    obsolete.focusedReadRawJson = JSON.stringify(raw);
+    obsolete.binding.focusedRead.rawAggregateSha256 = sha256(obsolete.focusedReadRawJson);
+
+    expect(() => validateDeepSeekReleaseEvidence(obsolete as never)).toThrow(/capability mode|deny-all/i);
+  });
+
   it("rejects a focused risky preview that commits or does not produce exactly one preview per sample", async () => {
     const { validateDeepSeekReleaseEvidence } = await validator();
     const committed = fixture();
@@ -527,8 +587,8 @@ describe("DeepSeek release evidence", () => {
     const failedRaw = JSON.parse(failed.baselineRawJson) as Record<string, unknown>;
     const telemetry = failedRaw.runTelemetry as Array<Record<string, unknown>>;
     telemetry[0]!.pass = false;
-    (failedRaw.summary as Record<string, unknown>).passRuns = 54;
-    (failedRaw.summary as Record<string, unknown>).passRate = 54 / 55;
+    (failedRaw.summary as Record<string, unknown>).passRuns = CORPUS_FAILED_RUNS;
+    (failedRaw.summary as Record<string, unknown>).passRate = CORPUS_FAILED_RUNS / CORPUS_TOTAL_RUNS;
     const firstReport = (failedRaw.reports as Array<Record<string, unknown>>)[0]!;
     firstReport.passCount = 4;
     firstReport.sampleReasons = [];
@@ -577,12 +637,41 @@ describe("DeepSeek release evidence", () => {
     expect(() => validateDeepSeekReleaseEvidence(forged as never)).toThrow(/ordered complete cohort/i);
   });
 
+  it("rejects a passing public-project case that skips declaration, binding, or raw authority", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+
+    for (const [field, value] of [
+      ["intentDeclarationCalls", 0],
+      ["intentDeclarationContract", "invalid_or_legacy"],
+      ["intentCapabilityActionBound", false],
+      ["intentCapabilityLiteralsExact", false],
+      ["intentWriteArgumentsExact", false],
+      ["intentHostMutationCount", 0],
+      ["intentAuthorityChecks", 0],
+      ["intentAuthorityDenials", 1],
+      ["intentCapabilityBindCount", 0],
+      ["intentCapabilityConsumeCount", 0],
+      ["intentCapabilityConsumeDenials", 1],
+    ] as const) {
+      const forged = fixture();
+      const raw = JSON.parse(forged.candidateRawJson) as Record<string, unknown>;
+      const telemetry = raw.runTelemetry as Array<Record<string, unknown>>;
+      const run = telemetry.find((candidate) => candidate.caseId === RELEASE_INTENT_PATH_CASE_ID);
+      if (!run) throw new Error("missing public-project full-path fixture");
+      run[field] = value;
+      forged.candidateRawJson = JSON.stringify(raw);
+      forged.binding.candidate.rawAggregateSha256 = sha256(forged.candidateRawJson);
+
+      expect(() => validateDeepSeekReleaseEvidence(forged as never)).toThrow(/intent|authority|declaration/i);
+    }
+  });
+
   it("rejects forged lower-effort summaries and per-case reports", async () => {
     const { validateDeepSeekReleaseEvidence } = await validator();
 
     const forgedSummary = fallbackFixture();
     const summaryRaw = JSON.parse(forgedSummary.candidateRawJson) as Record<string, unknown>;
-    (summaryRaw.summary as Record<string, unknown>).passRuns = 55;
+    (summaryRaw.summary as Record<string, unknown>).passRuns = CORPUS_TOTAL_RUNS;
     forgedSummary.candidateRawJson = JSON.stringify(summaryRaw);
     forgedSummary.binding.candidate.rawAggregateSha256 = sha256(forgedSummary.candidateRawJson);
     expect(() => validateDeepSeekReleaseEvidence(forgedSummary as never)).toThrow(/summary/i);

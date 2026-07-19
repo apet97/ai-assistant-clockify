@@ -5,6 +5,7 @@ import {
   defineRiskyAction,
   defineReadAction,
   type ActionDefinition,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
@@ -167,6 +168,10 @@ const markInvoiced = defineRiskyAction({
   risks: ["bulk", "billing"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "invoiced", value: false, authoredPhrases: Object.freeze(["not invoiced", "uninvoiced", "unmark as invoiced"]) },
+    { path: "invoiced", value: true, authoredPhrases: Object.freeze(["invoiced", "mark as invoiced"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     ids: z.array(z.string().min(1)).min(1).max(MARK_INVOICED_ENTRY_BATCH_MAX),
     invoiced: z.boolean(),

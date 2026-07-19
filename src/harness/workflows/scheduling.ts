@@ -7,6 +7,7 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
@@ -453,6 +454,10 @@ const publish = defineRiskyAction({
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
   mutationContract: schedulingTargetContract("state-command"),
+  semanticLiteralAliases: Object.freeze([
+    { path: "notifyUsers", value: false, authoredPhrases: Object.freeze(["do not notify users", "don't notify users", "without notifications"]) },
+    { path: "notifyUsers", value: true, authoredPhrases: Object.freeze(["notify users", "send notifications"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     start: z.string().min(1),
     end: z.string().min(1),

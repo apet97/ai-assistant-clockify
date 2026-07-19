@@ -1,16 +1,17 @@
 /**
  * Typed-consent guard (extracted from api.ts — plan 005 Phase 1). Pure regex
  * vocabulary + one pure predicate, closing over no router or `deps` state. The
- * route uses these to keep a bare "yes"/"confirm" from ever reaching the planner
- * while a preview is pending — typed consent never executes anything; only the
- * button nonce does.
- */
+ * route uses these to keep a bare "yes"/"confirm" from ever reaching the planner.
+ * Typed consent never executes anything; only the button nonce does when a
+ * preview is pending.
+*/
+import { hasChanges } from "../harness/receipts.js";
 
 /**
  * A bare typed consent ("yes", "confirm", "do it", …) OR a consent-adjacent
  * "apply the pending change" imperative ("just do it already", "execute it
  * now", "apply the change", "run it", "please go ahead and apply the pending
- * change"). While a preview is pending this must never reach the planner (live
+ * change"). This must never reach the planner (live
  * item 157: "yes" planned a NEW operation; finding new-5: the narrow whitelist
  * let consent-adjacent phrases through, re-running the risky action and
  * stacking a SECOND duplicate preview) — typed consent never executes anything;
@@ -65,12 +66,12 @@ export const TYPED_CONSENT = new RegExp(
 );
 
 /**
- * A bare standalone affirmative ("yes", "yes please go ahead", "do it", "sounds
- * good", …) used ONLY by the post-completed-write guard
+ * A bare standalone affirmative ("great", "perfect", "sounds good", …) used
+ * ONLY by the post-completed-write guard
  * (finding new-2-affirmative-after-completed-safe). It is intentionally broader
- * than TYPED_CONSENT — the live duplicate-time-entry came from "yes please go
- * ahead", which TYPED_CONSENT's single-phrase alternation does not match — but
- * still affirmation-shaped: a leading affirmation word optionally followed by
+ * than TYPED_CONSENT: it includes acknowledgment-only phrases such as "great"
+ * that are not typed approval. It remains affirmation-shaped: a leading word
+ * optionally followed by
  * polite/consent filler ("please", "go ahead", "proceed", "thanks", …) and
  * nothing else. Anything carrying a NEW instruction falls through to the
  * planner. The guard that uses it also requires a just-finished write, so a
@@ -82,9 +83,9 @@ export const BARE_AFFIRMATIVE =
 /**
  * finding new-2-affirmative-after-completed-safe: did the MOST RECENT assistant
  * turn already complete a write? A safe write executes immediately and leaves no
- * pending confirmation, so the TYPED_CONSENT pending guard can't catch a bare
- * "yes please go ahead" on the next turn — and live, that affirmative re-planned
- * a SECOND identical write (a duplicate time entry). We detect the finished
+ * pending confirmation, so a broader affirmative not covered by TYPED_CONSENT
+ * still cannot re-plan a SECOND identical write (live, that duplicated a time
+ * entry). We detect the finished
  * write from the prior assistant turn's persisted results: at least one
  * successful receipt and NO pending preview (a preview is the awaiting-confirm
  * path, handled by the TYPED_CONSENT guard). `results` is the redacted payload
@@ -93,9 +94,11 @@ export const BARE_AFFIRMATIVE =
 export function lastTurnCompletedAWrite(results: unknown[]): boolean {
   let sawSuccessfulReceipt = false;
   for (const r of results) {
-    const item = r as { kind?: string; receipt?: { ok?: boolean } };
+    const item = r as { kind?: string; receipt?: { ok?: boolean; changed?: Parameters<typeof hasChanges>[0] } };
     if (item.kind === "preview") return false;
-    if (item.kind === "receipt" && item.receipt?.ok === true) sawSuccessfulReceipt = true;
+    if (item.kind === "receipt" && item.receipt?.ok === true && hasChanges(item.receipt.changed)) {
+      sawSuccessfulReceipt = true;
+    }
   }
   return sawSuccessfulReceipt;
 }

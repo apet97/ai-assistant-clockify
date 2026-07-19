@@ -1,14 +1,16 @@
 import { z } from "zod";
-import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type CommitResult, type TargetSnapshot } from "../action.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
-import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
-import { listReceipt, successReceipt } from "../receipts.js";
-import { captureTargetSnapshot } from "../target-snapshots.js";
+import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { errorReceipt, listReceipt, successReceipt } from "../receipts.js";
+import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { sanitizedFingerprint } from "../safe-json.js";
 import { nowDate } from "../../durations.js";
 import { resolveInstant, resolvePeriod } from "./resolve.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { APPROVAL_PENDING_BATCH_MAX } from "../safety-limits.js";
+import { isJournalDegradedStep } from "../mutation-workflow.js";
 
 /**
  * Typed approval workflows (goclmcp §2.11). Reads (list/get) execute
@@ -224,6 +226,246 @@ function stateAction(name: string, label: string, state: string): ActionDefiniti
 const approve = stateAction("clockify_approvals_approve", "Approve", "APPROVED");
 const reject = stateAction("clockify_approvals_reject", "Reject", "REJECTED");
 
+interface PendingApprovalOperation {
+  approvals: Array<{ id: string; previousState: string }>;
+}
+
+function approvePendingPartial(
+  ctx: ActionContext,
+  completedIds: readonly string[],
+  total: number,
+  message: string,
+  outcomeUnknown = false,
+): Extract<CommitResult, { kind: "partial" }> {
+  return {
+    kind: "partial",
+    receipt: successReceipt({
+      action: "clockify_approvals_approve_pending",
+      entity: "approval",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: completedIds.map((id) => ({ type: "approval", id, name: "APPROVED" })) },
+      warnings: outcomeUnknown
+        ? [{ code: "outcome_unknown", message: "A later approval result is unknown." }]
+        : undefined,
+    }),
+    message: `${completedIds.length} of ${total} pending timesheets are known to be approved. ${message}`,
+    recovery: {
+      hint: "Refresh pending approvals before creating a preview for anything still unfinished.",
+      retryable: false,
+    },
+  };
+}
+
+function approvePendingPreDispatchStopped(detail: unknown): boolean {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return false;
+  const record = detail as Record<string, unknown>;
+  if (typeof record.code === "string" && [
+    "mutation_dispatch_denied",
+    "mutation_plan_violation",
+    "host_call_budget_exceeded",
+    "host_request_cancelled",
+  ].includes(record.code)) return true;
+  return approvePendingPreDispatchStopped(record.dispatch);
+}
+
+const approvePending = defineRiskyAction({
+  name: "clockify_approvals_approve_pending",
+  description:
+    "Approve ALL currently pending timesheets. Takes no ids: the harness lists the complete pending set server-side, binds every exact approval to one preview, and only the preview button can execute it. Never ask for typed confirmation and never call the single-id approval action for an approve-all request.",
+  group: AP,
+  risks: ["bulk", "external_side_effect"],
+  mutationWorkflow: "durable",
+  mutationContract: approvalStateContract,
+  schema: z.object({}).strict(),
+  async preview(ctx) {
+    const listed = await ctx.clockify.listApprovals({ status: "PENDING" });
+    if (listed.truncated) {
+      return { clarify: "Clockify returned an incomplete pending-timesheet list, so I cannot bind a truthful approve-all preview." };
+    }
+    const pending = listed.rows
+      .filter((approval) => approval.state === "PENDING")
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (pending.length === 0) return { clarify: "There are no pending timesheets to approve." };
+    if (pending.length > APPROVAL_PENDING_BATCH_MAX) {
+      return {
+        clarify:
+          `There are ${pending.length} pending timesheets, above the safe one-operation limit of ${APPROVAL_PENDING_BATCH_MAX}. Narrow the request before approving.`,
+      };
+    }
+
+    const targetSnapshots = pending.map((approval) =>
+      captureTargetSnapshot(
+        "target",
+        { type: "approval", id: approval.id, ...(approval.userName ? { name: approval.userName } : {}) },
+        approvalProjection(approval),
+      ));
+    return {
+      actionLabel: `Approve ${pending.length} pending timesheet${pending.length === 1 ? "" : "s"}`,
+      targets: pending.map((approval) => ({
+        type: "approval",
+        id: approval.id,
+        ...(approval.userName ? { name: approval.userName } : {}),
+      })),
+      expectedChanges: pending.map((approval) =>
+        `Approve ${approval.userName ?? approval.id}${approval.periodStart ? ` (${approval.periodStart.slice(0, 10)})` : ""}`),
+      reversibility: "Approval decisions notify each timesheet owner and may be hard to reverse.",
+      warnings: ["This approves every timesheet shown in this exact preview and notifies its owner."],
+      payload: {
+        approvals: pending.map((approval) => ({ id: approval.id, previousState: "PENDING" })),
+      },
+      targetSnapshots,
+      mutationPlan: {
+        mode: "batch",
+        steps: targetSnapshots.map((snapshot, index) => ({
+          id: `approve-pending-${index}`,
+          kind: "primary" as const,
+          targetFingerprint: snapshot.fingerprint,
+          reconciliationStrategy: "state-command" as const,
+        })),
+      },
+    };
+  },
+  async commit(ctx, payload, operation) {
+    const { approvals } = payload as unknown as PendingApprovalOperation;
+    const snapshots = operation.targetSnapshots ?? [];
+    if (approvals.length === 0 || approvals.length !== snapshots.length ||
+      approvals.length !== operation.mutationPlan?.steps.length || approvals.length > APPROVAL_PENDING_BATCH_MAX) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "invalid_mutation_plan",
+        message: "The stored approve-all batch is incomplete or exceeds its safe bound.",
+        recovery: { hint: "Create a fresh preview from the current pending-timesheet list.", retryable: false },
+      });
+    }
+
+    const completedIds: string[] = [];
+    for (const [index, approval] of approvals.entries()) {
+      const snapshot = snapshots[index] as TargetSnapshot | undefined;
+      const planStepId = `approve-pending-${index}`;
+      if (!snapshot || snapshot.ref.id !== approval.id || operation.mutationPlan.steps[index]?.id !== planStepId) {
+        return completedIds.length > 0
+          ? approvePendingPartial(ctx, completedIds, approvals.length, "The stored next target was invalid, so no later approval was sent.")
+          : errorReceipt({
+              action: operation.actionName,
+              code: "invalid_mutation_plan",
+              message: "The stored approve-all target does not match its exact plan.",
+              recovery: { hint: "Create a fresh preview.", retryable: false },
+            });
+      }
+
+      let verificationFailure: "stale_target" | "stale_parent" | undefined;
+      let reconciled = false;
+      const step = await executeDurableRiskyStep({
+        ctx,
+        operation,
+        planStepId,
+        index,
+        name: `Approve pending timesheet ${approval.id}`,
+        preparedDetail: { targetSnapshots: [snapshot] },
+        async dispatch() {
+          const verified = await verifyTargetSnapshots([snapshot], async () => {
+            const current = await ctx.clockify.getApproval(approval.id);
+            return current
+              ? { ref: { type: "approval", id: approval.id }, projection: approvalProjection(current) }
+              : undefined;
+          });
+          if (!verified.ok) {
+            verificationFailure = verified.code;
+            throw new DefinitiveWriteFailure("VERIFY", planStepId, verified.code);
+          }
+          const dispatched = await dispatchWithReconciliation({
+            dispatch: () => ctx.clockify.setApprovalStateAtomic(approval.id, "APPROVED"),
+            reconcile: async () => {
+              const current = await ctx.clockify.getApproval(approval.id);
+              return current?.state === "APPROVED" ? { id: current.id, name: "APPROVED" } : undefined;
+            },
+          });
+          reconciled = dispatched.reconciled;
+          return {
+            externalId: dispatched.value.id,
+            effect: { previousState: approval.previousState, state: "APPROVED" },
+            detail: { reconciled: dispatched.reconciled },
+          };
+        },
+      });
+
+      if (step.status === "succeeded") {
+        completedIds.push(step.externalId ?? approval.id);
+        if (isJournalDegradedStep(step)) {
+          return approvePendingPartial(
+            ctx,
+            completedIds,
+            approvals.length,
+            "The latest approval succeeded, but its full local journal settlement degraded; no later approval was sent.",
+          );
+        }
+        if (reconciled && index < approvals.length - 1) {
+          return approvePendingPartial(
+            ctx,
+            completedIds,
+            approvals.length,
+            "The latest approval was proven successful after an ambiguous response, so no later approval was sent.",
+          );
+        }
+        continue;
+      }
+
+      if (completedIds.length > 0) {
+        const preDispatchStopped = approvePendingPreDispatchStopped(step.detail);
+        return approvePendingPartial(
+          ctx,
+          completedIds,
+          approvals.length,
+          verificationFailure
+            ? "The next timesheet changed after preview, so it and all later approvals were not sent."
+            : preDispatchStopped
+              ? "A fresh authorization or execution gate stopped the next approval before dispatch; it and all later approvals were not sent."
+            : step.status === "outcome_unknown"
+              ? "The next approval may or may not have applied; no later approval was sent."
+              : "Clockify definitively rejected the next approval; no later approval was sent.",
+          step.status === "outcome_unknown",
+        );
+      }
+      if (verificationFailure) {
+        return errorReceipt({
+          action: operation.actionName,
+          code: verificationFailure,
+          message: "A pending timesheet changed after preview. No approval mutation was sent.",
+          recovery: { hint: "Refresh pending approvals and create a fresh preview.", retryable: true },
+        });
+      }
+      if (approvePendingPreDispatchStopped(step.detail)) {
+        return errorReceipt({
+          action: operation.actionName,
+          code: "write_blocked_before_dispatch",
+          message: "A fresh authorization or execution gate stopped the first approval before dispatch. No approval mutation was sent.",
+          recovery: { hint: "Restore authorization and create a fresh preview.", retryable: true },
+        });
+      }
+      return errorReceipt({
+        action: operation.actionName,
+        code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+        message: step.status === "outcome_unknown"
+          ? "Clockify did not provide a definitive result for the first approval. No later approval was sent."
+          : "Clockify definitively rejected the first approval. No later approval was sent.",
+        recovery: {
+          hint: step.status === "outcome_unknown"
+            ? "Verify that exact timesheet in Clockify before deciding what remains."
+            : "Refresh pending approvals before retrying.",
+          retryable: step.status !== "outcome_unknown",
+        },
+      });
+    }
+
+    return successReceipt({
+      action: operation.actionName,
+      entity: "approval",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: completedIds.map((id) => ({ type: "approval", id, name: "APPROVED" })) },
+    });
+  },
+});
+
 const withdraw = defineRiskyAction({
   name: "clockify_approvals_withdraw",
   description: "Withdraw a submitted or approved approval request. External side effect — previews and requires confirmation.",
@@ -345,12 +587,13 @@ const resubmit = defineRiskyAction({
   },
 });
 
-export const APPROVAL_ACTIONS: ActionDefinition[] = [listApprovals, getApproval, submitApproval, approve, reject, withdraw, resubmit];
+export const APPROVAL_ACTIONS: ActionDefinition[] = [listApprovals, getApproval, submitApproval, approve, approvePending, reject, withdraw, resubmit];
 
 /** Read-only startup dispatcher metadata; it grants no mutation capability. */
 export const APPROVAL_STARTUP_RECONCILIATION = Object.freeze({
   clockify_approvals_submit: { "submit-approval": "create" },
   clockify_approvals_approve: { "set-approval-state": "state-command" },
+  clockify_approvals_approve_pending: { "approve-pending-*": "state-command" },
   clockify_approvals_reject: { "set-approval-state": "state-command" },
   clockify_approvals_withdraw: { "withdraw-approval": "state-command" },
   clockify_approvals_resubmit: { "resubmit-approval": "state-command" },

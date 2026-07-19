@@ -1,10 +1,13 @@
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type {
   ActionDefinition,
+  AuthoredIntentMetadata,
   ExternalMutationPlan,
+  SemanticLiteralAlias,
   WriteAuthorityMetadata,
 } from "./action.js";
 import {
+  APPROVAL_PENDING_BATCH_MAX,
   GROUP_MEMBER_BATCH_MAX,
   INVOICE_CREATE_MUTATION_STEP_MAX,
   INVOICE_IMPORT_PROJECT_BATCH_MAX,
@@ -22,7 +25,10 @@ import {
 
 interface JsonSchemaNode {
   type?: string | readonly string[];
+  const?: unknown;
+  enum?: readonly unknown[];
   properties?: Record<string, JsonSchemaNode>;
+  required?: readonly string[];
   items?: JsonSchemaNode;
   anyOf?: JsonSchemaNode[];
   oneOf?: JsonSchemaNode[];
@@ -78,6 +84,10 @@ const repeated = (
   cardinality: { mode: "argument", maxExecutions, maxArgumentItems, argumentPath },
   mutationPlans,
 });
+const local = (): ActionAuthoritySemantics => ({
+  cardinality: { mode: "single", maxExecutions: 1 },
+  mutationPlans: [],
+});
 
 /**
  * Action semantics are deliberately named here. Schema arrays describe values,
@@ -85,6 +95,7 @@ const repeated = (
  * request, while curated workflows can dispatch multiple exact plan steps.
  */
 const ACTION_SEMANTICS = Object.freeze({
+  assistant_update_permissions: local(),
   clockify_start_timer: single("start-timer", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]", "operation.body.userId"], defaults: ["operation.body.start"] }),
   clockify_stop_timer: single("stop-timer", { derivedIds: ["operation.entryId", "operation.userId"] }),
   clockify_log_work: single("log-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
@@ -165,6 +176,9 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_scheduling_publish: single("publish-schedule", { derivedIds: ["operation.userId", "operation.userFilter.userIds[]"] }),
   clockify_approvals_submit: single("submit-approval", { derivedIds: ["operation.userId"], defaults: ["operation.period"] }),
   clockify_approvals_approve: single("set-approval-state", { derivedIds: ["operation.approvalId", "operation.id"], defaults: ["operation.state"] }),
+  clockify_approvals_approve_pending: fixed(APPROVAL_PENDING_BATCH_MAX, [
+    plan("batch", step("approve-pending-*", "primary", 1, APPROVAL_PENDING_BATCH_MAX)),
+  ], { derivedIds: ["operation.approvals[].id"], defaults: ["operation.approvals[].previousState"] }),
   clockify_approvals_reject: single("set-approval-state", { derivedIds: ["operation.approvalId", "operation.id"], defaults: ["operation.state"] }),
   clockify_approvals_withdraw: single("withdraw-approval", { derivedIds: ["operation.approvalId", "operation.id"], defaults: ["operation.state"] }),
   clockify_approvals_resubmit: single("resubmit-approval", { derivedIds: ["operation.approvalId", "operation.id"], defaults: ["operation.period"] }),
@@ -201,6 +215,213 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_setup_task: repeated(2, "assignees[]", [plan("single", step("create-task")), plan("curated", step("create-task"), step("set-task-rate"))], { derivedIds: ["operation.projectId", "operation.assigneeIds[]"], defaults: ["operation.rate.kind", "operation.rateUnit"] }, SETUP_TASK_ASSIGNEE_BATCH_MAX),
 } satisfies Readonly<Record<string, ActionAuthoritySemantics>>);
 
+type LiteralObligation = AuthoredIntentMetadata["literalObligations"][number];
+
+const obligation = (
+  anyOfPaths: readonly string[],
+  ...cuePatterns: string[]
+): LiteralObligation => ({ anyOfPaths, cuePatterns });
+
+const boundObligation = (
+  anyOfPaths: readonly string[],
+  sourceRolePatterns: readonly string[],
+  cuePatterns: readonly string[] = sourceRolePatterns,
+): LiteralObligation => ({ anyOfPaths, cuePatterns, sourceRolePatterns });
+
+const ROLE_TOKEN = "(?<value>(?:[\"'][^\"'\\n]{1,80}[\"']|[\\p{L}\\p{N}][\\p{L}\\p{M}\\p{N}_.’'-]{0,79}))";
+const ROLE_PHRASE = "(?<value>(?:[\"'][^\"'\\n]{1,120}[\"']|[\\p{L}\\p{N}][\\p{L}\\p{M}\\p{N}_.’' -]{0,119}?))";
+const ROLE_LIST = "(?<value>(?:\\[[^\\]\\n]{0,480}\\]|[\"'][^\"'\\n]{1,160}[\"']|[\\p{L}\\p{N}][\\p{L}\\p{M}\\p{N}_.@+’'\\s,-]{0,159}))";
+
+const authoredIntent = (
+  commandPatterns: readonly string[],
+  literalObligations: readonly LiteralObligation[] = [],
+  forbiddenPatterns: readonly string[] = [],
+  safeOmissionPaths: readonly string[] = [],
+  commandGerundPatterns: readonly string[] = [],
+): AuthoredIntentMetadata => ({
+  commandPatterns,
+  commandGerundPatterns,
+  forbiddenPatterns,
+  literalObligations,
+  safeOmissionPaths,
+});
+
+/** The exact safe-write set has action-specific positive command grounding and
+ * optional-literal presence decisions. These regex source strings are trusted,
+ * catalog-fingerprinted data; the declaration pass never accepts provider-made
+ * patterns. Semantic literal aliases are presence obligations automatically and
+ * therefore are intentionally not duplicated below. */
+const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
+  clockify_start_timer: authoredIntent([
+    "\\b(?:start|begin)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclock\\s+(?:me\\s+)?in\\b",
+  ], [
+    boundObligation(
+      ["description"],
+      [
+        `\\b(?:description|note)(?:\\s+is|\\s*:)?\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+        `\\btimer\\s+(?:called|named)\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+      ],
+      ["\\b(?:timer\\s+)?(?:description|note)\\b", "\\btimer\\s+(?:called|named)\\b"],
+    ),
+    boundObligation(
+      ["projectId", "projectName"],
+      [
+        `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+        `\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+      ],
+      [
+        "\\bproject\\b",
+        "\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?[\"'\\p{L}\\p{N}]",
+      ],
+    ),
+    boundObligation(
+      ["taskId", "taskName"],
+      [`\\btask(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|tagged)\\b|[,.;!?]|$)`],
+      ["\\btask\\b"],
+    ),
+    boundObligation(
+      ["tagIds[]", "tagNames[]"],
+      [
+        `\\btagged\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+        `\\btags?(?:\\s+(?:named|called|are|is|:))?\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+      ],
+      ["\\b(?:tags?|tagged)\\b"],
+    ),
+  ], ["\\b(?:create|make|add|set\\s+up)\\b[^.!?;\\n]{0,160}\\b(?:project|client|task|tag)\\b"], [], [
+    "\\b(?:starting|beginning)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclocking\\s+(?:me\\s+)?in\\b",
+  ]),
+
+  clockify_stop_timer: authoredIntent([
+    "\\b(?:stop|end)(?:\\s+(?:the|my|a|running))?\\s+(?:work\\s+)?timer\\b",
+    "\\bclock\\s+(?:me\\s+)?out\\b",
+  ], [], [], [], ["\\b(?:stopping|ending)(?:\\s+(?:the|my|a|running))?\\s+(?:work\\s+)?timer\\b", "\\bclocking\\s+(?:me\\s+)?out\\b"]),
+
+  clockify_log_work: authoredIntent([
+    "\\b(?:log|record|add|enter|track)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b",
+  ], [
+    obligation(["description"], "\\b(?:description|note)\\b"),
+    obligation(["start"], "\\b(?:from|starting(?:\\s+at)?|at)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["end"], "\\b(?:to|until|ending(?:\\s+at)?)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["date"], "\\b(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:on\\s+)?\\d{4}-\\d{2}-\\d{2})\\b"),
+    obligation(["dayOffset"], "\\bday\\s+offset\\b"),
+    obligation(["durationMinutes"], "\\b\\d+(?:\\.\\d+)?\\s*(?:m|min|mins|minute|minutes)\\b"),
+    obligation(["durationHours"], "\\b\\d+(?:\\.\\d+)?\\s*(?:h|hr|hrs|hour|hours)\\b"),
+    obligation(
+      ["projectId", "projectName"],
+      "\\bproject\\b",
+      "\\b(?:on|to)\\s+(?!(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{1,4}(?::\\d{2})?\\s*(?:am|pm)?|\\d{4}-\\d{2}-\\d{2})\\b)(?:project\\s+)?[\"'\\p{L}]",
+    ),
+    obligation(["taskId", "taskName"], "\\btask\\b"),
+    obligation(["tagIds[]", "tagNames[]"], "\\b(?:tags?|tagged)\\b"),
+  ], [], [], ["\\b(?:logging|recording|adding|entering|tracking)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b"]),
+
+  clockify_create_work_package: authoredIntent([
+    "\\b(?:create|make|add|set\\s+up)(?:\\s+(?:a|the|new))?\\s+work\\s+package\\b",
+    "\\b(?:create|make|add|set\\s+up)\\b[^.!?;\\n]{0,180}\\b(?:project|client|task|tag)\\b[^.!?;\\n]{0,180}\\b(?:and|with|then)\\b[^.!?;\\n]{0,180}\\b(?:project|client|task|tag|start(?:\\s+a)?\\s+timer)\\b",
+  ], [
+    obligation(["tag.name", "tagName"], "\\btag\\b"),
+    obligation(["client.name"], "\\b(?:create|make|add)(?:\\s+(?:a|the|new))?\\s+client\\b"),
+    obligation(["project.clientName"], "\\bproject\\b[^.!?;\\n]{0,100}\\b(?:for|under)\\s+(?:client\\s+)?[\"'\\p{L}\\p{N}]"),
+    obligation(["project.name", "projectName"], "\\bproject\\b"),
+    obligation(["task.name", "taskName"], "\\btask\\b"),
+    obligation(["startTimer.description"], "\\b(?:timer\\s+)?(?:description|note)\\b"),
+  ], [], [], ["\\b(?:creating|making|adding|setting\\s+up)\\b[^.!?;\\n]{0,180}\\b(?:work\\s+package|(?:project|client|task|tag)\\b[^.!?;\\n]{0,180}\\b(?:and|with|then)\\b[^.!?;\\n]{0,180}\\b(?:project|client|task|tag|starting(?:\\s+a)?\\s+timer))\\b"]),
+
+  clockify_projects_create: authoredIntent([
+    "\\b(?:create(?:\\s+(?:a\\s+new|a|the|new|one))?|(?:make|add)\\s+(?:a\\s+new|a|new|one))\\s+(?:public\\s+|private\\s+|non[- ]public\\s+|not\\s+public\\s+|not\\s+private\\s+)?project\\b",
+    "\\bnapravi(?:te)?\\b[^.!?;\\n]{0,80}\\bprojekat\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:for|under|with|and|from|using|based\\s+on)\\b|[,.;!?]|$)`,
+      `\\bprojekat(?:\\s+(?:nazvan|imenovan))?\\s+${ROLE_PHRASE}(?=\\s+(?:za|sa|iz)\\b|[,.;!?]|$)`,
+    ]),
+    obligation(["clientId", "clientName"], "\\bclient\\b", "\\b(?:for|under)\\s+(?:client\\s+)?[\"'\\p{L}\\p{N}]"),
+    obligation(["color"], "\\bcolou?r\\b|#[0-9a-f]{3,8}\\b"),
+    obligation(["hourlyRate"], "\\b(?:hourly|billable)\\s+rate\\b"),
+    obligation(["costRate"], "\\bcost\\s+rate\\b"),
+    obligation(["rateUnit"], "\\b(?:major|minor)\\s+(?:currency\\s+)?units?\\b"),
+  ], [
+    "\\btemplate\\b",
+    "\\bwork\\s+package\\b",
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:task|tag|start(?:\\s+a)?\\s+timer)\\b",
+  ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a\\s+new|a|the|new|one))?\\s+(?:public\\s+|private\\s+)?project\\b"]),
+
+  clockify_projects_from_template: authoredIntent([
+    "\\b(?:create|make)(?:\\s+(?:a|the|new))?\\s+project\\b[^.!?;\\n]{0,160}\\b(?:from|using|based\\s+on)\\b[^.!?;\\n]{0,80}\\btemplate\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:from|using|based\\s+on)\\b)`,
+    ]),
+    boundObligation(["templateId", "templateName"], [
+      `\\btemplate(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=[,.;!?]|$)`,
+    ], ["\\btemplate\\b"]),
+  ], [], [], ["\\b(?:creating|making)(?:\\s+(?:a|the|new))?\\s+project\\b[^.!?;\\n]{0,160}\\b(?:from|using|based\\s+on)\\b[^.!?;\\n]{0,80}\\btemplate\\b"]),
+
+  clockify_tasks_create: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new|one))?\\s+task\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\btask(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:in|under|for|assigned|with)\\b|[,.;!?]|$)`,
+    ]),
+    boundObligation(["projectId"], [
+      `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:for|assigned|with)\\b|[,.;!?]|$)`,
+    ], ["\\bproject\\b"]),
+    boundObligation(["assigneeIds[]"], [
+      `\\b(?:assigned\\s+to|assign(?:ee|ees)?(?:\\s*:)?|for)\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+    ], ["\\b(?:assign(?:ed|ment)?|assignee)\\b", "\\bfor\\s+(?!(?:project|task)\\b)[\"'\\p{L}]"]),
+  ], [
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|client|tag|start(?:\\s+a)?\\s+timer)\\b",
+    "\\b(?:hourly|billable|cost)\\s+rate\\b",
+  ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+task\\b"]),
+
+  clockify_clients_create: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\b(?:client|customer)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|using)\\b|[,.;!?]|$)`,
+    ]),
+    boundObligation(["ccEmails[]"], [
+      `\\b(?:cc|billing)\\s*(?:e-?mails?|recipients?)(?:\\s*:|\\s+are|\\s+is)?\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+      "(?<value>[\\w.+-]+@[\\w.-]+\\.[a-z]{2,})",
+    ], ["\\b(?:cc|billing)\\s*(?:e-?mails?|recipients?)\\b|[\\w.+-]+@[\\w.-]+\\.[a-z]{2,}\\b"]),
+    boundObligation(["currency"], [
+      `\\bcurrency(?:\\s*:|\\s+is)?\\s+${ROLE_TOKEN}(?=[,.;!?]|$)`,
+      "(?<value>\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b)",
+    ], ["\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b"]),
+  ], ["\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b"], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
+
+  clockify_tags_create: authoredIntent([
+    "\\b(?:(?:create|make)(?:\\s+(?:a\\s+new|a|the|new|one))?|add\\s+(?:a\\s+new|a|the|new|one))\\s+(?:tag|label)\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\b(?:tag|label)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:for|to|with)\\b|[,.;!?]|$)`,
+    ]),
+  ], [
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|client|task|start(?:\\s+a)?\\s+timer)\\b",
+    "\\bto\\s+(?:this|the|an?)\\s+(?:entry|project|task|timer)\\b",
+  ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a\\s+new|a|the|new|one))?\\s+(?:tag|label)\\b"]),
+
+  clockify_holidays_create: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new|one|workspace))?\\s+holiday\\b",
+  ], [
+    obligation(["endDate"], "\\b(?:through|until|ending|ends|to)\\b"),
+    obligation(["userIds[]"], "\\b(?:user|member|admin|me)\\b", "\\bfor\\s+(?!(?:(?:a|the)\\s+)?(?:team|group)\\b)[\"'\\p{L}]"),
+    obligation(["userGroupIds[]"], "\\b(?:user\\s+)?group\\b|\\bteam\\b"),
+  ], [], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one|workspace))?\\s+holiday\\b"]),
+
+  clockify_scheduling_assignments_create: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new))?\\s+(?:scheduling\\s+)?(?:assignment|shift)\\b",
+    "\\b(?:schedule|assign)\\b[^.!?;\\n]{0,100}\\b(?:admin|user|member|me|[\\p{L}][\\p{L}.'’-]+)\\b[^.!?;\\n]{0,160}\\b(?:project|shift|schedule|assignment|for|from|on)\\b",
+  ], [
+    obligation(["note"], "\\bnote\\b"),
+  ], [], [], [
+    "\\b(?:creating|making|adding)(?:\\s+(?:a|the|new))?\\s+(?:scheduling\\s+)?(?:assignment|shift)\\b",
+    "\\b(?:scheduling|assigning)\\b[^.!?;\\n]{0,100}\\b(?:admin|user|member|me|[\\p{L}][\\p{L}.'’-]+)\\b[^.!?;\\n]{0,160}\\b(?:project|shift|schedule|assignment|for|from|on)\\b",
+  ]),
+} satisfies Readonly<Record<string, AuthoredIntentMetadata>>);
+
 function collectPaths(node: JsonSchemaNode, prefix = ""): string[] {
   const branches = node.anyOf ?? node.oneOf;
   if (branches) return [...new Set(branches.flatMap((branch) => collectPaths(branch, prefix)))];
@@ -215,6 +436,281 @@ function collectPaths(node: JsonSchemaNode, prefix = ""): string[] {
       collectPaths(child, prefix ? `${prefix}.${key}` : key));
   }
   return prefix ? [prefix] : [];
+}
+
+/** Optionality is inherited through an optional parent object/union. This is
+ * derived from public JSON Schema output, never Zod's private `_def` shape. */
+function collectOptionalLeafPaths(
+  node: JsonSchemaNode,
+  prefix = "",
+  inheritedOptional = false,
+): string[] {
+  const branches = node.anyOf ?? node.oneOf;
+  if (branches) {
+    const branchLeaves = branches.map((branch) => new Set(collectPaths(branch, prefix)));
+    const unionLeaves = new Set(branchLeaves.flatMap((paths) => [...paths]));
+    const absentFromAnyBranch = [...unionLeaves].filter((path) =>
+      branchLeaves.some((paths) => !paths.has(path)));
+    return [...new Set([
+      ...branches.flatMap((branch) => collectOptionalLeafPaths(branch, prefix, inheritedOptional)),
+      ...absentFromAnyBranch,
+    ])];
+  }
+  if (node.type === "array" || node.items) {
+    const arrayPath = `${prefix}[]`;
+    const nested = node.items
+      ? collectOptionalLeafPaths(node.items, arrayPath, inheritedOptional)
+      : [];
+    return nested.length > 0 ? nested : inheritedOptional && prefix ? [arrayPath] : [];
+  }
+  const properties = node.properties;
+  if (properties) {
+    const required = new Set(node.required ?? []);
+    return Object.entries(properties).flatMap(([key, child]) => {
+      const path = prefix ? `${prefix}.${key}` : key;
+      return collectOptionalLeafPaths(child, path, inheritedOptional || !required.has(key));
+    });
+  }
+  return inheritedOptional && prefix ? [prefix] : [];
+}
+
+/** Public-schema adapter used by the authority builder and topology tests. It
+ * deliberately accepts JSON Schema data instead of inspecting Zod internals. */
+export function optionalLiteralPathsFromJsonSchema(schema: unknown): readonly string[] {
+  if (!schema || typeof schema !== "object") return Object.freeze([]);
+  return Object.freeze([...new Set(collectOptionalLeafPaths(schema as JsonSchemaNode))].sort());
+}
+
+const AUTHORED_PATTERN_MAX_BYTES = 1_024;
+
+function validateAuthoredPattern(actionName: string, pattern: string): string {
+  if (!pattern || Buffer.byteLength(pattern, "utf8") > AUTHORED_PATTERN_MAX_BYTES ||
+    hasControlCharacter(pattern)) {
+    throw new Error(`invalid_authored_intent_pattern:${actionName}`);
+  }
+  try {
+    void new RegExp(pattern, "iu");
+  } catch {
+    throw new Error(`invalid_authored_intent_pattern:${actionName}`);
+  }
+  return pattern;
+}
+
+function authoredIntentFor(
+  action: ActionDefinition,
+  schema: JsonSchemaNode,
+  literalControlledPaths: readonly string[],
+  semanticLiteralAliases: readonly SemanticLiteralAlias[],
+): AuthoredIntentMetadata | undefined {
+  const source = SAFE_WRITE_AUTHORED_INTENT[
+    action.name as keyof typeof SAFE_WRITE_AUTHORED_INTENT
+  ];
+  if (action.kind === "safe_write" && !source) {
+    throw new Error(`missing_safe_write_authored_intent:${action.name}`);
+  }
+  if (action.kind !== "safe_write" && source) {
+    throw new Error(`unexpected_safe_write_authored_intent:${action.name}`);
+  }
+  if (!source) return undefined;
+
+  const commandPatterns = [...new Set(source.commandPatterns.map((pattern) =>
+    validateAuthoredPattern(action.name, pattern)))].sort();
+  if (commandPatterns.length === 0) {
+    throw new Error(`missing_authored_intent_command:${action.name}`);
+  }
+  const forbiddenPatterns = [...new Set(source.forbiddenPatterns.map((pattern) =>
+    validateAuthoredPattern(action.name, pattern)))].sort();
+  const commandGerundPatterns = [...new Set(source.commandGerundPatterns.map((pattern) =>
+    validateAuthoredPattern(action.name, pattern)))].sort();
+  const controlled = new Set(literalControlledPaths);
+  const optional = new Set([
+    ...optionalLiteralPathsFromJsonSchema(schema),
+    ...(action.argumentAliases ?? []),
+  ]);
+  const decisions = new Map<string, number>();
+  const decide = (path: string, kind: string): void => {
+    if (!controlled.has(path)) {
+      throw new Error(`invalid_authored_intent_${kind}_path:${action.name}:${path}`);
+    }
+    if (optional.has(path)) decisions.set(path, (decisions.get(path) ?? 0) + 1);
+  };
+
+  const literalObligations = source.literalObligations.map((entry) => {
+    const anyOfPaths = [...new Set(entry.anyOfPaths)].sort();
+    const cuePatterns = [...new Set(entry.cuePatterns.map((pattern) =>
+      validateAuthoredPattern(action.name, pattern)))].sort();
+    const sourceRolePatterns = entry.sourceRolePatterns === undefined
+      ? undefined
+      : [...new Set(entry.sourceRolePatterns.map((pattern) => {
+        const validated = validateAuthoredPattern(action.name, pattern);
+        if (!validated.includes("(?<value>")) {
+          throw new Error(`invalid_authored_intent_role_pattern:${action.name}`);
+        }
+        try {
+          void new RegExp(validated, "diu");
+        } catch {
+          throw new Error(`invalid_authored_intent_role_pattern:${action.name}`);
+        }
+        return validated;
+      }))].sort();
+    if (anyOfPaths.length === 0 || cuePatterns.length === 0) {
+      throw new Error(`invalid_authored_intent_obligation:${action.name}`);
+    }
+    for (const path of anyOfPaths) decide(path, "obligation");
+    return Object.freeze({
+      anyOfPaths: Object.freeze(anyOfPaths),
+      cuePatterns: Object.freeze(cuePatterns),
+      ...(sourceRolePatterns ? { sourceRolePatterns: Object.freeze(sourceRolePatterns) } : {}),
+    });
+  }).sort((left, right) => left.anyOfPaths.join("\0").localeCompare(right.anyOfPaths.join("\0")));
+
+  // A reviewed semantic alias is also a presence cue: when its authored phrase
+  // occurs outside another literal span, the declaration must bind this path.
+  for (const path of new Set(semanticLiteralAliases.map((alias) => alias.path))) {
+    decide(path, "semantic_alias");
+  }
+  const safeOmissionPaths = [...new Set(source.safeOmissionPaths)].sort();
+  for (const path of safeOmissionPaths) decide(path, "safe_omission");
+
+  const uncovered = [...optional].filter((path) => (decisions.get(path) ?? 0) === 0).sort();
+  const multiplyCovered = [...decisions].filter(([, count]) => count !== 1).map(([path]) => path).sort();
+  if (uncovered.length > 0 || multiplyCovered.length > 0) {
+    throw new Error(
+      `safe_write_authored_intent_coverage:${action.name}:uncovered=${uncovered.join(",")};multiple=${multiplyCovered.join(",")}`,
+    );
+  }
+
+  return Object.freeze({
+    commandPatterns: Object.freeze(commandPatterns),
+    commandGerundPatterns: Object.freeze(commandGerundPatterns),
+    forbiddenPatterns: Object.freeze(forbiddenPatterns),
+    literalObligations: Object.freeze(literalObligations),
+    safeOmissionPaths: Object.freeze(safeOmissionPaths),
+  });
+}
+
+const SEMANTIC_LITERAL_ALIAS_MAX_BYTES = 256;
+
+/** Apply the exact same Unicode normalization used for reviewed semantic
+ * literal aliases. Deliberately does not trim, unquote, case-fold, or collapse
+ * spacing: padded/quoted/rewritten text needs its own explicit reviewed alias. */
+export function normalizeSemanticLiteralAliasPhrase(text: string): string {
+  return text.normalize("NFC");
+}
+
+function schemaNodesAtPath(
+  node: JsonSchemaNode,
+  segments: readonly string[],
+  index = 0,
+): JsonSchemaNode[] {
+  const branches = node.anyOf ?? node.oneOf;
+  if (branches) return branches.flatMap((branch) => schemaNodesAtPath(branch, segments, index));
+  if (index === segments.length) return [node];
+  const segment = segments[index]!;
+  const isArrayItem = segment.endsWith("[]");
+  const propertyName = isArrayItem ? segment.slice(0, -2) : segment;
+  if (!propertyName || !node.properties?.[propertyName]) return [];
+  const child = node.properties[propertyName]!;
+  if (isArrayItem) {
+    const arrayBranches = child.anyOf ?? child.oneOf ?? [child];
+    return arrayBranches.flatMap((branch) => branch.items
+      ? schemaNodesAtPath(branch.items, segments, index + 1)
+      : []);
+  }
+  return schemaNodesAtPath(child, segments, index + 1);
+}
+
+function sameScalar(left: unknown, right: unknown): boolean {
+  return typeof left === "number" && typeof right === "number"
+    ? Object.is(left, right)
+    : left === right;
+}
+
+function schemaAcceptsScalar(node: JsonSchemaNode, value: SemanticLiteralAlias["value"]): boolean {
+  const branches = node.anyOf ?? node.oneOf;
+  if (branches) return branches.some((branch) => schemaAcceptsScalar(branch, value));
+  if (node.const !== undefined && !sameScalar(node.const, value)) return false;
+  if (node.enum && !node.enum.some((candidate) => sameScalar(candidate, value))) return false;
+  const types = typeof node.type === "string" ? [node.type] : node.type;
+  if (!types || types.length === 0) return node.const !== undefined || node.enum !== undefined;
+  if (value === null) return types.includes("null");
+  if (typeof value === "string") return types.includes("string");
+  if (typeof value === "boolean") return types.includes("boolean");
+  if (!Number.isFinite(value)) return false;
+  return types.includes("number") || (types.includes("integer") && Number.isInteger(value));
+}
+
+function scalarKey(value: SemanticLiteralAlias["value"]): string {
+  return `${value === null ? "null" : typeof value}:${JSON.stringify(value)}`;
+}
+
+function hasControlCharacter(text: string): boolean {
+  return [...text].some((character) => {
+    const codePoint = character.codePointAt(0)!;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+}
+
+function semanticLiteralAliasesFor(
+  action: ActionDefinition,
+  schema: JsonSchemaNode,
+  literalControlledPaths: readonly string[],
+): readonly SemanticLiteralAlias[] {
+  const aliases = action.semanticLiteralAliases ?? [];
+  const controlled = new Set(literalControlledPaths);
+  const seenValues = new Set<string>();
+  const seenPhrases = new Map<string, string>();
+  const validated: SemanticLiteralAlias[] = [];
+
+  for (const alias of aliases) {
+    if (!alias || typeof alias.path !== "string" || !controlled.has(alias.path) ||
+      alias.path.endsWith(".*") || alias.path.includes(".*")) {
+      throw new Error(`invalid_semantic_literal_alias_path:${action.name}:${alias?.path ?? ""}`);
+    }
+    if (typeof alias.value !== "boolean") {
+      throw new Error(`invalid_semantic_literal_alias_value:${action.name}:${alias.path}`);
+    }
+    const schemaNodes = schemaNodesAtPath(schema, alias.path.split("."));
+    if (schemaNodes.length === 0 || !schemaNodes.some((node) => schemaAcceptsScalar(node, alias.value))) {
+      throw new Error(`invalid_semantic_literal_alias_value:${action.name}:${alias.path}`);
+    }
+    if (!Array.isArray(alias.authoredPhrases) || alias.authoredPhrases.length === 0) {
+      throw new Error(`invalid_semantic_literal_alias_phrase:${action.name}:${alias.path}`);
+    }
+
+    const valueKey = `${alias.path}\0${scalarKey(alias.value)}`;
+    if (seenValues.has(valueKey)) {
+      throw new Error(`duplicate_semantic_literal_alias_value:${action.name}:${alias.path}`);
+    }
+    seenValues.add(valueKey);
+    const phrases: string[] = [];
+    for (const phrase of alias.authoredPhrases) {
+      const normalized = typeof phrase === "string" ? normalizeSemanticLiteralAliasPhrase(phrase) : "";
+      if (!normalized || normalized !== phrase || phrase.trim() !== phrase || hasControlCharacter(normalized) ||
+        Buffer.byteLength(normalized, "utf8") > SEMANTIC_LITERAL_ALIAS_MAX_BYTES) {
+        throw new Error(`invalid_semantic_literal_alias_phrase:${action.name}:${alias.path}`);
+      }
+      const phraseKey = `${alias.path}\0${normalized}`;
+      const priorValue = seenPhrases.get(phraseKey);
+      if (priorValue !== undefined) {
+        throw new Error(priorValue === scalarKey(alias.value)
+          ? `duplicate_semantic_literal_alias:${action.name}:${alias.path}:${normalized}`
+          : `ambiguous_semantic_literal_alias:${action.name}:${alias.path}:${normalized}`);
+      }
+      seenPhrases.set(phraseKey, scalarKey(alias.value));
+      phrases.push(normalized);
+    }
+    validated.push(Object.freeze({
+      path: alias.path,
+      value: alias.value,
+      authoredPhrases: Object.freeze([...phrases].sort()),
+    }));
+  }
+
+  return Object.freeze(validated.sort((left, right) =>
+    left.path.localeCompare(right.path) ||
+    scalarKey(left.value).localeCompare(scalarKey(right.value)) ||
+    left.authoredPhrases.join("\0").localeCompare(right.authoredPhrases.join("\0"))));
 }
 
 /** Build the explicit catalog declaration from the action's closed model-visible
@@ -237,6 +733,13 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     ...(action.argumentAliases ?? []),
     ...openRecordPaths,
   ])].sort();
+  const semanticLiteralAliases = semanticLiteralAliasesFor(action, schema, literalControlledPaths);
+  const authoredIntent = authoredIntentFor(
+    action,
+    schema,
+    literalControlledPaths,
+    semanticLiteralAliases,
+  );
   const semantics = ACTION_SEMANTICS[action.name as keyof typeof ACTION_SEMANTICS];
   if (!semantics) throw new Error(`missing_write_authority_semantics:${action.name}`);
   const serverDerivedIdPaths = [...new Set([
@@ -250,6 +753,8 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
   return Object.freeze({
     literalConstraintLimits: INTENT_LITERAL_LIMITS,
     literalControlledPaths: Object.freeze(literalControlledPaths),
+    semanticLiteralAliases,
+    ...(authoredIntent ? { authoredIntent } : {}),
     serverDerivedIdPaths: Object.freeze(serverDerivedIdPaths),
     permittedServerDefaultPaths: Object.freeze(permittedServerDefaultPaths),
     preservedStatePaths: Object.freeze(preservedStatePaths),

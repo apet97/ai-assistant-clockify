@@ -5,6 +5,7 @@ import {
   type ActionDefinition,
   type CommitResult,
   type RiskyPreviewResult,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { canWrite } from "../permissions.js";
@@ -82,6 +83,12 @@ const setupProject = defineRiskyAction({
     targeting: { mode: "snapshots", relations: ["parent"] },
     strategies: ["create", "update"],
   }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "isPublic", value: false, authoredPhrases: Object.freeze(["private", "not public", "non-public"]) },
+    { path: "isPublic", value: true, authoredPhrases: Object.freeze(["public", "not private"]) },
+    { path: "private", value: false, authoredPhrases: Object.freeze(["public", "not private"]) },
+    { path: "private", value: true, authoredPhrases: Object.freeze(["private", "not public", "non-public"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     name: z.string().min(1),
     isPublic: z.boolean().optional(),

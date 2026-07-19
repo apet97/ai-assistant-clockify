@@ -8,6 +8,7 @@ import {
   type ActionContext,
   type ActionDefinition,
   type RiskyClarifyResult,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
@@ -19,6 +20,11 @@ import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { captureTargetSnapshot } from "../target-snapshots.js";
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateHolidayInput, HolidaySummary, PreparedHolidayUpdateInput } from "../../clockify/ports/holidays.js";
+
+const HOLIDAY_RECURRENCE_LITERAL_ALIASES = Object.freeze([
+  { path: "occursAnnually", value: false, authoredPhrases: Object.freeze(["one-time", "one time", "does not repeat"]) },
+  { path: "occursAnnually", value: true, authoredPhrases: Object.freeze(["annually", "annual", "yearly", "every year"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 
 /**
  * Resolve a holiday's `startDate`/`endDate` server-side (CLAUDE.md "dates
@@ -189,6 +195,7 @@ const createHoliday = defineDurableSafeWriteAction({
   group: TOA,
   stepName: "Create holiday",
   mutationContract: holidayCreateContract,
+  semanticLiteralAliases: HOLIDAY_RECURRENCE_LITERAL_ALIASES,
   schema: z
     .object({
       name: z.string().min(1),
@@ -278,6 +285,7 @@ const updateHoliday = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: holidayTargetContract("update"),
+  semanticLiteralAliases: HOLIDAY_RECURRENCE_LITERAL_ALIASES,
   schema: z
     .object({
       id: z.string().min(1),

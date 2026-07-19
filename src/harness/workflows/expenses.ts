@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
-import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type CommitResult, type ConfirmableOperation, type TargetSnapshot } from "../action.js";
+import { defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type CommitResult, type ConfirmableOperation, type SemanticLiteralAlias, type TargetSnapshot } from "../action.js";
 import { nowDate } from "../../durations.js";
 import { errorReceipt, listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
@@ -35,6 +35,10 @@ const DATE_CLARIFY = (raw: string) =>
  */
 
 const EXP = "expenses" as const;
+const EXPENSE_BILLABLE_LITERAL_ALIASES = Object.freeze([
+  { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
+  { path: "billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const expenseCreateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent"] }, strategies: ["create"] });
 const targetContract = (strategies: ["update" | "delete" | "state-command" | "composed", ...Array<"update" | "delete" | "state-command" | "composed">]) =>
@@ -291,6 +295,7 @@ const createExpense = defineRiskyAction({
   risks: ["billing"],
   mutationWorkflow: "durable",
   mutationContract: expenseCreateContract,
+  semanticLiteralAliases: EXPENSE_BILLABLE_LITERAL_ALIASES,
   schema: z
     .object({
       amount: zNumberLike(z.number().positive()),
@@ -461,6 +466,7 @@ const updateExpense = defineRiskyAction({
   risks: ["billing"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target", "parent"] }, strategies: ["update"] }),
+  semanticLiteralAliases: EXPENSE_BILLABLE_LITERAL_ALIASES,
   schema: z
     .object({
       id: z.string().min(1),
@@ -690,6 +696,10 @@ const updateExpenseCategory = defineRiskyAction({
   risks: ["billing"],
   mutationWorkflow: "durable",
   mutationContract: targetContract(["update", "state-command"]),
+  semanticLiteralAliases: Object.freeze([
+    { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
+    { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z
     .object({
       id: z.string().min(1).optional(),

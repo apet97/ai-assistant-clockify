@@ -56,7 +56,7 @@ export interface AppConfig {
    *  live acceptance proof; set LLM_AGENTIC=0 to roll back to single-turn. */
   llmAgentic: boolean;
   /** Tool subsetting: when true, each chat turn (and its resume) shows the model only
-   *  the actions relevant to the message (+ an always-on core) instead of all 139, for
+   *  the actions relevant to the message (+ an always-on core) instead of all 140, for
    *  weak-model consistency. Default ON after the agentic eval proved it (DeepSeek 100%
    *  held, ~61% fewer prompt tokens/turn, 0 safety); LLM_TOOL_SELECT=0 is the rollback.
    *  No-match/non-ASCII/>3-area inputs fail open to the full catalog. The harness still

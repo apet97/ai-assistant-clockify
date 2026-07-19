@@ -10,12 +10,30 @@ describe("release operations contract", () => {
       const runbook = read(path);
       const canonical = runbook.indexOf("## Canonical production release order");
       const gate = runbook.indexOf("npm run --silent gate:predeploy-backup", canonical);
-      const upload = runbook.indexOf('railway up "$RELEASE_STAGING"', canonical);
+      const stop = runbook.indexOf("STOP: do not run Railway upload", gate);
+      const checkedDeploy = runbook.indexOf("npm run --silent deploy:private-production", canonical);
       expect(canonical, `${path} canonical release order`).toBeGreaterThanOrEqual(0);
       expect(gate, `${path} encrypted-backup gate`).toBeGreaterThan(canonical);
-      expect(upload, `${path} production upload`).toBeGreaterThan(gate);
-      expect(runbook.slice(gate, upload)).toContain("STOP: do not run Railway upload");
+      expect(stop, `${path} hard stop`).toBeGreaterThan(gate);
+      expect(checkedDeploy, `${path} checked production deploy`).toBeGreaterThan(stop);
     }
+
+    const transaction = read("scripts/deploy-private-production.ts");
+    const gate = transaction.indexOf(
+      'commandRunner("npm", ["run", "--silent", "gate:predeploy-backup"])',
+    );
+    const rollbackBoundary = transaction.indexOf("try {", gate);
+    const variableSet = transaction.indexOf('...variableArgs("set")', rollbackBoundary);
+    const upload = transaction.indexOf('commandRunner("railway", ["up"', variableSet);
+    const failureBoundary = transaction.indexOf("catch (releaseError)", upload);
+    const rollback = transaction.indexOf("rollbackVariables(snapshot, Object.keys(desired), commandRunner)", failureBoundary);
+    expect(gate, "checked transaction backup gate").toBeGreaterThanOrEqual(0);
+    expect(rollbackBoundary, "rollback boundary starts before variable mutation").toBeGreaterThan(gate);
+    expect(variableSet, "no-deploy variable mutation").toBeGreaterThan(rollbackBoundary);
+    expect(upload, "production upload").toBeGreaterThan(variableSet);
+    expect(failureBoundary, "shared mutation/upload failure boundary").toBeGreaterThan(upload);
+    expect(rollback, "rollback after either mutation or upload failure").toBeGreaterThan(failureBoundary);
+    expect(transaction.slice(variableSet, upload)).toContain('"--skip-deploys"');
   });
 
   it("documents the one executable import into every canonical workflow evidence filename", () => {

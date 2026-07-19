@@ -477,7 +477,13 @@ function approvalState(expectedState: (payload: Record<string, unknown>) => stri
   return async (input) => {
     const payload = payloadOf(input.candidate);
     if (!payload) return invalidInput(input);
-    const id = typeof payload.id === "string"
+    const pendingIndex = input.step.planStepId.match(/^approve-pending-(\d+)$/)?.[1];
+    const pending = pendingIndex === undefined || !Array.isArray(payload.approvals)
+      ? undefined
+      : payload.approvals[Number(pendingIndex)] as { id?: unknown } | undefined;
+    const id = typeof pending?.id === "string"
+      ? pending.id
+      : typeof payload.id === "string"
       ? payload.id
       : typeof payload.approvalId === "string" ? payload.approvalId : undefined;
     const state = expectedState(payload);
@@ -503,6 +509,7 @@ function approvalState(expectedState: (payload: Record<string, unknown>) => stri
 const handlers = new Map<string, Handler>([
   ["clockify_approvals_submit\0submit-approval", submitApproval],
   ["clockify_approvals_approve\0set-approval-state", approvalState(() => "APPROVED")],
+  ["clockify_approvals_approve_pending\0approve-pending-*", approvalState(() => "APPROVED")],
   ["clockify_approvals_reject\0set-approval-state", approvalState(() => "REJECTED")],
   ["clockify_approvals_withdraw\0withdraw-approval", approvalState((payload) => typeof payload.state === "string" ? payload.state : undefined)],
   ["clockify_approvals_resubmit\0resubmit-approval", approvalState(() => "PENDING")],
@@ -552,6 +559,7 @@ for (const [actionName, steps] of Object.entries(compositeMetadata)) {
 
 export function hasProductionStartupReconciliationHandler(actionName: string, planStepId: string): boolean {
   return handlers.has(`${actionName}\0${planStepId}`) ||
+    (planStepId.startsWith("approve-pending-") && handlers.has(`${actionName}\0approve-pending-*`)) ||
     (planStepId.startsWith("add-user-to-group-") && handlers.has(`${actionName}\0add-user-to-group-*`)) ||
     hasStructureStartupReconciliationHandler(actionName, planStepId) ||
     hasLeaveBillingStartupReconciliationHandler(actionName, planStepId);
@@ -579,7 +587,9 @@ export async function reconcileWithProductionRegistry(input: {
   clockify: StartupReconciliationReadClient;
 }): Promise<ReconciliationResult> {
   const handler = handlers.get(`${input.candidate.actionName}\0${input.step.planStepId}`) ??
-    (input.step.planStepId.startsWith("add-user-to-group-")
+    (input.step.planStepId.startsWith("approve-pending-")
+      ? handlers.get(`${input.candidate.actionName}\0approve-pending-*`)
+      : input.step.planStepId.startsWith("add-user-to-group-")
       ? handlers.get(`${input.candidate.actionName}\0add-user-to-group-*`)
       : undefined);
   if (handler) return handler(input);

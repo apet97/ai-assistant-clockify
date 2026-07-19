@@ -90,6 +90,18 @@ export interface ToolCompletion {
   usage?: TokenUsage;
 }
 
+export type ProviderProtocolErrorReason = "unoffered_tool" | "malformed_tool";
+
+/** A provider returned a native-tool response outside the exact request contract. */
+export class ProviderProtocolError extends Error {
+  readonly code = "provider_protocol_error";
+
+  constructor(readonly reason: ProviderProtocolErrorReason) {
+    super(`Model provider protocol error: ${reason}`);
+    this.name = "ProviderProtocolError";
+  }
+}
+
 export interface ModelClient {
   /**
    * JSON-mode completion. Returns the raw text (the planner owns validation).
@@ -206,21 +218,35 @@ function parseUsage(usage: ChatCompletionResponse["usage"]): TokenUsage | undefi
  * every step, yielding duplicate, ambiguous keys. Providers that supply ids are
  * untouched (the allocator never advances for them).
  */
-function parseToolCalls(rawCalls: RawToolCall[], nextSyntheticSeq: () => number): ToolCall[] {
+function parseToolCalls(
+  rawCalls: RawToolCall[],
+  offeredToolNames: ReadonlySet<string>,
+  nextSyntheticSeq: () => number,
+): ToolCall[] {
+  for (const call of rawCalls) {
+    const name = call?.function?.name;
+    if (typeof name !== "string" || name.length === 0) throw new ProviderProtocolError("malformed_tool");
+    if (!offeredToolNames.has(name)) throw new ProviderProtocolError("unoffered_tool");
+  }
   const calls: ToolCall[] = [];
   rawCalls.forEach((call) => {
     const name = call?.function?.name;
-    if (!name) return;
-    let args: Record<string, unknown> = {};
+    // Prevalidation above guarantees every call has one exact offered name.
+    if (!name) throw new ProviderProtocolError("malformed_tool");
     const raw = call?.function?.arguments;
-    if (typeof raw === "string" && raw.trim()) {
-      try {
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
-      } catch {
-        args = {};
-      }
+    if (typeof raw !== "string" || raw.trim().length === 0) {
+      throw new ProviderProtocolError("malformed_tool");
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      throw new ProviderProtocolError("malformed_tool");
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new ProviderProtocolError("malformed_tool");
+    }
+    const args = parsed as Record<string, unknown>;
     // Most OpenAI-compatible providers return an id; synthesize a transcript-unique
     // one if not, so the loop can always correlate a tool result back to its call.
     const id = typeof call.id === "string" && call.id ? call.id : `call_${nextSyntheticSeq()}`;
@@ -399,6 +425,9 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
     },
 
     async completeWithTools(messages: ModelMessage[], tools: ToolDefinition[], signal?: AbortSignal): Promise<ToolCompletion> {
+      // Snapshot the exact names bound into this request before awaiting the
+      // provider. Response validation must not consult a later/mutated catalog.
+      const offeredToolNames = new Set(tools.map((tool) => tool.name));
       const data = await postChat({
         messages: messages.map(toWireMessage),
         tools: tools.map((tool) => ({
@@ -411,7 +440,7 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
       const usage = parseUsage(data.usage);
       return {
         text: message?.content ?? "",
-        toolCalls: parseToolCalls(message?.tool_calls ?? [], nextSyntheticSeq),
+        toolCalls: parseToolCalls(message?.tool_calls ?? [], offeredToolNames, nextSyntheticSeq),
         ...(message?.reasoning_content ? { reasoningContent: message.reasoning_content } : {}),
         ...(usage ? { usage } : {}),
       };

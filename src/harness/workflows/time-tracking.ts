@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
-import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption } from "../action.js";
+import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption, type SemanticLiteralAlias } from "../action.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
@@ -24,6 +24,11 @@ import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispat
  * it previews + requires confirmation like every other update action (editing
  * existing data has no undo). Ambiguous project/task identity stops and asks.
  */
+
+const BILLABLE_LITERAL_ALIASES = Object.freeze([
+  { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
+  { path: "billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 
 /**
  * Merge `tagIds` + `tagNames` and resolve every entry (id, short id, or NAME —
@@ -100,6 +105,7 @@ const startTimer = defineDurableSafeWriteAction({
     targeting: { mode: "snapshots", relations: ["parent"] },
     strategies: ["create"],
   }),
+  semanticLiteralAliases: BILLABLE_LITERAL_ALIASES,
   schema: z.object({
     description: z.string().optional(),
     projectId: z.string().optional(),
@@ -336,6 +342,7 @@ const logWork = defineStructureDurableSafeWriteAction({
   group: "time_tracking",
   stepName: "Log time entry",
   mutationContract: durableMutationContract({ source: "safe", targeting: { mode: "snapshots", relations: ["parent"] }, strategies: ["create"] }),
+  semanticLiteralAliases: BILLABLE_LITERAL_ALIASES,
   schema: z.object({
     /** Optional — omitted entries are honest blanks; never ask for or invent one. */
     description: z.string().optional(),
@@ -553,6 +560,7 @@ const fixEntry = defineRiskyAction({
     targeting: { mode: "snapshots", relations: ["target", "parent"] },
     strategies: ["update"],
   }),
+  semanticLiteralAliases: BILLABLE_LITERAL_ALIASES,
   schema: z
     .object({
       id: z.string().min(1),

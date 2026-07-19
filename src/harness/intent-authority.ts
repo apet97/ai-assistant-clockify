@@ -55,7 +55,7 @@ function equalLiteral(actual: unknown, expected: IntentLiteralValue): boolean {
 
 function rawLeaves(value: unknown, concretePath = "", schemaPath = ""): RawLeaf[] {
   if (Array.isArray(value)) {
-    if (value.length === 0) return [{ concretePath, schemaPath: `${schemaPath}[]` }];
+    if (value.length === 0) return [{ concretePath: `${concretePath}[]`, schemaPath: `${schemaPath}[]` }];
     return value.flatMap((child, index) => rawLeaves(
       child,
       `${concretePath}[${index}]`,
@@ -117,11 +117,44 @@ function valuesAtPath(root: unknown, path: string): unknown[] | undefined {
   return current;
 }
 
+/** Distinguish an explicitly authored empty collection from an omitted field.
+ * `valuesAtPath` intentionally flattens wildcard arrays, so both `{ tags: [] }`
+ * and `{}` otherwise produce zero values for `tags[]`. Authority is exact about
+ * presence too: a reviewed `[]` may clear a list, while omission means "leave it
+ * unspecified" and must not satisfy that constraint. */
+function pathIsPresent(root: unknown, path: string): boolean {
+  const parts = parsePath(path);
+  if (!parts) return false;
+  const visit = (value: unknown, index: number): boolean => {
+    if (index === parts.length) return true;
+    const part = parts[index]!;
+    if (part.kind === "key") {
+      return isRecord(value) && Object.hasOwn(value, part.value) &&
+        visit(value[part.value], index + 1);
+    }
+    if (!Array.isArray(value)) return false;
+    if (part.value !== undefined) {
+      return part.value < value.length && visit(value[part.value], index + 1);
+    }
+    // The wildcard itself is present on an explicit empty array when it is the
+    // terminal path component. A deeper descendant must be present on every
+    // traversed item: one explicit sibling must never mask an omitted value on
+    // another sibling in the same constrained collection.
+    return index === parts.length - 1 ||
+      (value.length > 0 && value.every((child) => visit(child, index + 1)));
+  };
+  return visit(root, 0);
+}
+
 function normalizedPath(path: string): string {
   return path.replace(/\[\d+\]/g, "[]");
 }
 
-function pathIsLiteralControlled(path: string, authority: WriteAuthorityMetadata): boolean {
+/** Shared path check for declaration-time and raw-argument authority. */
+export function pathIsLiteralControlled(
+  path: string,
+  authority: Pick<WriteAuthorityMetadata, "literalControlledPaths">,
+): boolean {
   const normalized = normalizedPath(path);
   return authority.literalControlledPaths.some((allowed) => {
     if (allowed.endsWith(".*")) {
@@ -141,7 +174,8 @@ function constraintMatchesRaw(
 ): boolean {
   const values = valuesAtPath(rawArgs, constraint.path);
   if (values === undefined || values.length === 0) {
-    return Array.isArray(constraint.value) && constraint.value.length === 0;
+    return pathIsPresent(rawArgs, constraint.path) &&
+      Array.isArray(constraint.value) && constraint.value.length === 0;
   }
   if (constraint.path.includes("[]") && Array.isArray(constraint.value)) {
     return equalLiteral(values, constraint.value);

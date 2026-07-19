@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { zodToJsonSchema } from "zod-to-json-schema";
 import {
   INTENT_LITERAL_LIMITS,
   INVOICE_CREATE_MUTATION_STEP_MAX,
@@ -14,6 +15,7 @@ import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { errorReceipt, type ErrorReceipt } from "../../src/harness/receipts.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
 import {
+  optionalLiteralPathsFromJsonSchema,
   validateWriteAuthorityOperation,
   writeAuthorityActionNames,
 } from "../../src/harness/write-authority.js";
@@ -21,6 +23,7 @@ import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 
 interface WriteAuthorityMetadata {
   literalControlledPaths: readonly string[];
+  semanticLiteralAliases: ReadonlyArray<{ path: string }>;
   serverDerivedIdPaths: readonly string[];
   permittedServerDefaultPaths: readonly string[];
   preservedStatePaths: readonly string[];
@@ -31,11 +34,26 @@ interface WriteAuthorityMetadata {
     argumentPath?: string;
   };
   mutationPlans: readonly unknown[];
+  authoredIntent?: {
+    commandPatterns: readonly string[];
+    commandGerundPatterns: readonly string[];
+    forbiddenPatterns: readonly string[];
+    literalObligations: ReadonlyArray<{
+      anyOfPaths: readonly string[];
+      cuePatterns: readonly string[];
+      sourceRolePatterns?: readonly string[];
+    }>;
+    safeOmissionPaths: readonly string[];
+  };
 }
 
 function externalWrites(): ActionDefinition[] {
   return ACTION_CATALOG.filter((action) =>
     action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read"));
+}
+
+function modelVisibleWrites(): ActionDefinition[] {
+  return ACTION_CATALOG.filter((action) => action.kind !== "read");
 }
 
 describe("Phase 6 write authority enforcement", () => {
@@ -85,8 +103,75 @@ describe("Phase 6 write authority enforcement", () => {
     expect(invalid).toEqual([]);
   });
 
-  it("has one reviewed semantics entry for every external write and no extras", () => {
-    expect([...writeAuthorityActionNames()].sort()).toEqual(externalWrites().map((action) => action.name).sort());
+  it("has one reviewed semantics entry for every model-visible write and no extras", () => {
+    expect([...writeAuthorityActionNames()].sort()).toEqual(modelVisibleWrites().map((action) => action.name).sort());
+  });
+
+  it("catalog-fingerprints authored command and literal authority for exactly all 11 safe writes", () => {
+    const expected = [
+      "clockify_start_timer",
+      "clockify_stop_timer",
+      "clockify_log_work",
+      "clockify_create_work_package",
+      "clockify_projects_create",
+      "clockify_projects_from_template",
+      "clockify_tasks_create",
+      "clockify_clients_create",
+      "clockify_tags_create",
+      "clockify_holidays_create",
+      "clockify_scheduling_assignments_create",
+    ].sort();
+    const safeWrites = ACTION_CATALOG.filter((action) => action.kind === "safe_write");
+    expect(safeWrites.map((action) => action.name).sort()).toEqual(expected);
+
+    const withAuthoredIntent = ACTION_CATALOG.filter((action) =>
+      (action.writeAuthority as WriteAuthorityMetadata | undefined)?.authoredIntent !== undefined);
+    expect(withAuthoredIntent.map((action) => action.name).sort()).toEqual(expected);
+    for (const action of safeWrites) {
+      const authority = action.writeAuthority as WriteAuthorityMetadata;
+      const authored = authority.authoredIntent!;
+      expect(authored.commandPatterns.length).toBeGreaterThan(0);
+      expect(authored.commandPatterns.every((pattern) => typeof pattern === "string" && pattern.length > 0)).toBe(true);
+      expect(authored.literalObligations.flatMap((obligation) => obligation.anyOfPaths)
+        .every((path) => authority.literalControlledPaths.includes(path))).toBe(true);
+      expect(authored.literalObligations.every((obligation) =>
+        obligation.anyOfPaths.length > 0 && obligation.cuePatterns.length > 0)).toBe(true);
+
+      const optional = new Set([
+        ...optionalLiteralPathsFromJsonSchema(zodToJsonSchema(action.schema, {
+          $refStrategy: "none",
+          target: "jsonSchema7",
+        })),
+        ...(action.argumentAliases ?? []),
+      ]);
+      const decisions = new Map<string, number>();
+      const decide = (path: string) => decisions.set(path, (decisions.get(path) ?? 0) + 1);
+      for (const obligation of authored.literalObligations) {
+        for (const path of obligation.anyOfPaths) if (optional.has(path)) decide(path);
+      }
+      for (const path of new Set(authority.semanticLiteralAliases.map((alias) => alias.path))) {
+        if (optional.has(path)) decide(path);
+      }
+      for (const path of authored.safeOmissionPaths) decide(path);
+      expect([...optional].filter((path) => decisions.get(path) !== 1)).toEqual([]);
+    }
+  });
+
+  it("treats branch-specific required leaves as optional across a union", () => {
+    expect(optionalLiteralPathsFromJsonSchema({
+      oneOf: [
+        {
+          type: "object",
+          properties: { left: { type: "string" }, shared: { type: "string" } },
+          required: ["left", "shared"],
+        },
+        {
+          type: "object",
+          properties: { right: { type: "string" }, shared: { type: "string" } },
+          required: ["right", "shared"],
+        },
+      ],
+    })).toEqual(["left", "right"]);
   });
 
   it("matches exact ordered mutation plans, including delete compensation", () => {
@@ -168,6 +253,7 @@ describe("Phase 6 write authority enforcement", () => {
       risks: action.risks,
       argumentAliases: action.argumentAliases ?? [],
       argumentOpenPaths: action.argumentOpenPaths ?? [],
+      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
       mutationWorkflow: action.mutationWorkflow,
       mutationContract: action.mutationContract,
       writeAuthority: action.writeAuthority,
@@ -314,6 +400,40 @@ describe("Phase 6 write authority enforcement", () => {
     expect(result).toEqual({ kind: "receipt", receipt: denied });
     expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
     expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0);
+  });
+
+  it("checks local permission-write raw arguments before preprocessing", async () => {
+    const fake = createFakeWorkspace();
+    const rawArgs = { group: "reports", level: "read" };
+    const observed: unknown[] = [];
+    const denied = errorReceipt({
+      action: "assistant_update_permissions",
+      code: "intent_capability_denied",
+      message: "The model arguments exceed the admin-authored intent.",
+    });
+    const context = {
+      workspaceId: "ws",
+      adminUserId: "admin",
+      policy: defaultAdminPolicy(),
+      clockify: fake.client,
+      authorizeWriteArguments(input: { actionName: string; rawArgs: unknown }): ErrorReceipt | undefined {
+        observed.push(input);
+        return denied;
+      },
+    } as ActionContext;
+
+    const result = await executeAction({
+      actionName: "assistant_update_permissions",
+      args: rawArgs,
+      context,
+    });
+
+    expect(observed).toEqual([expect.objectContaining({
+      actionName: "assistant_update_permissions",
+      rawArgs,
+      authority: expect.objectContaining({ literalControlledPaths: expect.arrayContaining(["groups.*"]) }),
+    })]);
+    expect(result).toEqual({ kind: "receipt", receipt: denied });
   });
 
 });

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createModelClient, type ModelMessage, type ToolDefinition } from "../../src/assistant/model-client.js";
+import {
+  createModelClient,
+  ProviderProtocolError,
+  type ModelMessage,
+  type ToolDefinition,
+} from "../../src/assistant/model-client.js";
 
-const tools: ToolDefinition[] = [
-  { name: "clockify_status", description: "timer status", parameters: { type: "object", properties: {} } },
-];
+function tool(name: string): ToolDefinition {
+  return { name, description: `${name} test tool`, parameters: { type: "object", properties: {} } };
+}
+
+const tools: ToolDefinition[] = [tool("clockify_status")];
 
 function fakeFetch(payload: unknown, ok = true, captured?: { body?: string }): typeof fetch {
   return vi.fn(async (_url: unknown, init?: { body?: string }) => {
@@ -57,7 +64,7 @@ describe("createModelClient.completeWithTools", () => {
     expect(captured.redirect).toBe("error");
   });
 
-  it("maps tool_calls to parsed ToolCall objects", async () => {
+  it("rejects a provider tool call that was not offered in that exact request", async () => {
     const payload = {
       choices: [
         {
@@ -70,12 +77,56 @@ describe("createModelClient.completeWithTools", () => {
         },
       ],
     };
-    const result = await client(payload).completeWithTools!([{ role: "user", content: "start a timer" }], tools);
+
+    const error = await client(payload)
+      .completeWithTools!([{ role: "user", content: "start a timer" }], tools)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderProtocolError);
+    expect(error).toMatchObject({
+      name: "ProviderProtocolError",
+      code: "provider_protocol_error",
+      reason: "unoffered_tool",
+    });
+  });
+
+  it.each([undefined, ""])("rejects a provider tool call with malformed name %j", async (name) => {
+    const payload = {
+      choices: [{
+        message: {
+          content: null,
+          tool_calls: [{ id: "call_1", function: { ...(name === undefined ? {} : { name }), arguments: "{}" } }],
+        },
+      }],
+    };
+
+    const error = await client(payload)
+      .completeWithTools!([{ role: "user", content: "show status" }], tools)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderProtocolError);
+    expect(error).toMatchObject({ reason: "malformed_tool" });
+  });
+
+  it("maps a tool call offered in that exact request to a parsed ToolCall", async () => {
+    const payload = {
+      choices: [
+        {
+          message: {
+            content: null,
+            tool_calls: [
+              { id: "call_1", function: { name: "clockify_status", arguments: '{"includeDetails":true}' } },
+            ],
+          },
+        },
+      ],
+    };
+    const result = await client(payload).completeWithTools!([{ role: "user", content: "show status" }], tools);
     expect(result.toolCalls).toHaveLength(1);
     expect(result.toolCalls[0]).toEqual({
       id: "call_1",
-      name: "clockify_start_timer",
-      arguments: { description: "Deep Work" },
+      name: "clockify_status",
+      arguments: { includeDetails: true },
     });
     expect(result.text).toBe("");
   });
@@ -87,12 +138,33 @@ describe("createModelClient.completeWithTools", () => {
     expect(result.text).toBe("It is sunny.");
   });
 
-  it("tolerates malformed tool-call arguments (returns empty args, never throws)", async () => {
+  it.each([
+    ["missing", undefined],
+    ["blank", ""],
+    ["malformed JSON", "{bad json"],
+    ["array", "[]"],
+    ["null", "null"],
+    ["string scalar", '"value"'],
+    ["number scalar", "1"],
+    ["boolean scalar", "true"],
+  ])("rejects %s tool-call arguments instead of coercing them to an empty object", async (_label, args) => {
     const payload = {
-      choices: [{ message: { tool_calls: [{ function: { name: "clockify_status", arguments: "{bad json" } }] } }],
+      choices: [{
+        message: {
+          tool_calls: [{ function: { name: "clockify_status", ...(args === undefined ? {} : { arguments: args }) } }],
+        },
+      }],
     };
-    const result = await client(payload).completeWithTools!([{ role: "user", content: "x" }], tools);
-    expect(result.toolCalls[0]).toEqual({ id: "call_0", name: "clockify_status", arguments: {} });
+    const error = await client(payload)
+      .completeWithTools!([{ role: "user", content: "x" }], tools)
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ProviderProtocolError);
+    expect(error).toMatchObject({
+      name: "ProviderProtocolError",
+      code: "provider_protocol_error",
+      reason: "malformed_tool",
+    });
   });
 
   it("sends tools + tool_choice and does NOT force json_object response_format", async () => {
@@ -126,7 +198,10 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
         },
       ],
     };
-    const result = await client(payload).completeWithTools!([{ role: "user", content: "list clients" }], tools);
+    const result = await client(payload).completeWithTools!(
+      [{ role: "user", content: "list clients" }],
+      [tool("clockify_clients_list")],
+    );
     expect(result.toolCalls[0]).toEqual({ id: "call_abc", name: "clockify_clients_list", arguments: {} });
   });
 
@@ -189,7 +264,10 @@ describe("createModelClient — multi-turn tool messages (the agentic-loop found
         },
       ],
     };
-    const result = await client(payload).completeWithTools!([{ role: "user", content: "delete both tags" }], tools);
+    const result = await client(payload).completeWithTools!(
+      [{ role: "user", content: "delete both tags" }],
+      [tool("clockify_tags_delete")],
+    );
     expect(result.reasoningContent).toBe("I should delete urgent first.");
 
     // The provider 400s a thinking-mode continuation that DROPS reasoning_content,

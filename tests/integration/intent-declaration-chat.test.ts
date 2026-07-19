@@ -65,6 +65,48 @@ function allowTagDeclaration(source: string) {
   };
 }
 
+function allowPublicProjectDeclaration(source: string) {
+  const action = byteSpan(source, "Create a public project");
+  const visibility = byteSpan(source, "public");
+  const name = byteSpan(source, "RC-086C25A-LIVE-20260719-1012");
+  return {
+    writeActions: [{
+      actionName: "clockify_projects_create",
+      sourceSpans: [action, visibility, name],
+      literalConstraints: [
+        { path: "name", value: name.text, sourceSpan: name },
+        { path: "isPublic", value: true, sourceSpan: visibility },
+      ],
+      maxExecutions: 1,
+    }],
+  };
+}
+
+function allowNamedProjectDeclaration(source: string, name: string) {
+  const action = byteSpan(source, `Create project ${name}`);
+  const projectName = byteSpan(source, name);
+  return {
+    writeActions: [{
+      actionName: "clockify_projects_create",
+      sourceSpans: [action, projectName],
+      literalConstraints: [{ path: "name", value: name, sourceSpan: projectName }],
+      maxExecutions: 1,
+    }],
+  };
+}
+
+function allowApprovePendingDeclaration(source: string) {
+  const action = byteSpan(source, "approve all pending timesheets");
+  return {
+    writeActions: [{
+      actionName: "clockify_approvals_approve_pending",
+      sourceSpans: [action],
+      literalConstraints: [],
+      maxExecutions: 1,
+    }],
+  };
+}
+
 function allowDeleteAndTagDeclaration(source: string) {
   return {
     writeActions: [
@@ -126,6 +168,7 @@ function setup(
   modelClient: ModelClient,
   configOverrides: Partial<AppConfig> = {},
   projects: Array<{ id: string; name: string }> = [{ id: "p1", name: "Acme" }],
+  approvals: Array<{ id: string; userId?: string; userName?: string; state?: string; periodStart?: string }> = [],
 ): {
   app: Express;
   store: Store;
@@ -140,7 +183,7 @@ function setup(
     addonUserId: "addon-user-1",
     addonToken: "addon-token",
   });
-  const fake = createFakeWorkspace({ projects });
+  const fake = createFakeWorkspace({ projects, approvals });
   const mutationCoordinator = createWorkspaceMutationCoordinator();
   const app = createApp({
     config: makeTestConfig({
@@ -457,6 +500,249 @@ describe("chat intent declaration integration", () => {
     expect(fake.counts.createTag).toBe(1);
   });
 
+  it("executes the exact live public-project request after grounding its reviewed visibility alias", async () => {
+    const authoredSource = "Create a public project named RC-086C25A-LIVE-20260719-1012. Do not create anything else.";
+    const model = jsonModel({
+      declaration: allowPublicProjectDeclaration,
+      main: {
+        kind: "actions",
+        text: "Project created.",
+        actions: [{
+          name: "clockify_projects_create",
+          arguments: { name: "RC-086C25A-LIVE-20260719-1012", isPublic: true },
+        }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: true, action: "clockify_projects_create" }),
+      }),
+    ]));
+    expect(fake.counts.createProjectAtomic).toBe(1);
+  });
+
+  it.each([
+    "Create project Atlas, never mind.",
+    "Create project Atlas, please cancel that.",
+    "Create project Atlas. Never mind.",
+    "Create project Atlas; cancel that.",
+    "Create project Atlas? No.",
+  ])("does not dispatch a safe write revoked later in the same turn: %s", async (authoredSource) => {
+    const model = jsonModel({
+      declaration: (source) => allowNamedProjectDeclaration(source, "Atlas"),
+      main: {
+        kind: "actions",
+        text: "Project created.",
+        actions: [{ name: "clockify_projects_create", arguments: { name: "Atlas" } }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: false, code: "intent_capability_denied" }),
+      }),
+    ]));
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+    expect(fake.state.projects.some((project) => project.name === "Atlas")).toBe(false);
+  });
+
+  it("binds approve-all to the server-resolved pending set; typed YES never executes it", async () => {
+    const authoredSource = "approve all pending timesheets";
+    const model = jsonModel({
+      declaration: allowApprovePendingDeclaration,
+      main: {
+        kind: "actions",
+        text: "Approve them.",
+        actions: [{ name: "clockify_approvals_approve_pending", arguments: {} }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client, {}, [{ id: "p1", name: "Acme" }], [
+      { id: "ap-1", userId: "u-1", userName: "Ada", state: "PENDING", periodStart: "2026-06-01" },
+      { id: "ap-2", userId: "u-2", userName: "Grace", state: "PENDING", periodStart: "2026-06-08" },
+      { id: "ap-3", userId: "u-3", userName: "Linus", state: "APPROVED", periodStart: "2026-06-08" },
+    ]);
+    openStores.push(store);
+
+    const chat = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+    expect(chat.status).toBe(200);
+    const preview = chat.body.results.find((result: { kind?: string }) => result.kind === "preview");
+    expect(preview).toMatchObject({
+      preview: expect.objectContaining({
+        targets: expect.arrayContaining([
+          expect.objectContaining({ id: "ap-1" }),
+          expect.objectContaining({ id: "ap-2" }),
+        ]),
+      }),
+    });
+    expect(fake.counts.setApprovalState ?? 0).toBe(0);
+
+    const typed = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "YES" });
+    expect(typed.status).toBe(200);
+    expect(typed.body.results).toEqual([]);
+    expect(String(typed.body.reply?.text ?? "")).toMatch(/button.*pending preview|pending preview.*button/i);
+    expect(fake.counts.setApprovalState ?? 0).toBe(0);
+
+    const confirmed = await request(app)
+      .post(`/api/confirmations/${preview.previewId as string}/confirm`)
+      .set("Cookie", cookie)
+      .send({ nonce: preview.nonce });
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body.receipt).toMatchObject({ ok: true, action: "clockify_approvals_approve_pending" });
+    expect(fake.counts.setApprovalState).toBe(2);
+    expect(fake.state.approvals.map((approval) => [approval.id, approval.state])).toEqual([
+      ["ap-1", "APPROVED"],
+      ["ap-2", "APPROVED"],
+      ["ap-3", "APPROVED"],
+    ]);
+  });
+
+  it("terminates an under-declared named timer request before the model can retry without its target", async () => {
+    const authoredSource = "start a timer at project Apollo";
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (messages, tools) => {
+        if (tools.length === 1 && tools[0]?.name === "declare_intent_capability") {
+          const action = byteSpan(authoredSource, "start a timer");
+          return {
+            text: "",
+            toolCalls: [{
+              id: "declaration",
+              name: "declare_intent_capability",
+              arguments: {
+                writeActions: [{
+                  actionName: "clockify_start_timer",
+                  sourceSpans: [action],
+                  literalConstraints: [],
+                  maxExecutions: 1,
+                }],
+              },
+            }],
+          };
+        }
+        mainCalls += 1;
+        return mainCalls === 1
+          ? {
+              text: "",
+              toolCalls: [{ id: "named", name: "clockify_start_timer", arguments: { projectName: "Apollo" } }],
+            }
+          : {
+              text: "Timer started without a project.",
+              toolCalls: [{ id: "untied", name: "clockify_start_timer", arguments: {} }],
+            };
+      }),
+    };
+    const { app, store, cookie, fake } = setup(
+      modelClient,
+      { llmMode: "tool", llmAgentic: true },
+      [{ id: "p-apollo", name: "Apollo" }],
+    );
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+
+    expect(response.status).toBe(200);
+    expect(mainCalls).toBe(1);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({
+          ok: false,
+          action: "clockify_start_timer",
+          code: "intent_capability_denied",
+        }),
+      }),
+    ]));
+    expect(fake.counts.startTimerAtomic ?? 0).toBe(0);
+    expect(fake.state.running).toBeNull();
+  });
+
+  it("rejects an under-declared named timer even when the first and only main call omits the target", async () => {
+    const authoredSource = "start a timer at project Apollo";
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi.fn(async (_messages, tools) => {
+        if (tools.length === 1 && tools[0]?.name === "declare_intent_capability") {
+          return {
+            text: "",
+            toolCalls: [{
+              id: "declaration",
+              name: "declare_intent_capability",
+              arguments: {
+                writeActions: [{
+                  actionName: "clockify_start_timer",
+                  sourceRefs: [{ segment: "current", quote: "start a timer", occurrence: 0 }],
+                  literalConstraints: [],
+                  maxExecutions: 1,
+                }],
+              },
+            }],
+          };
+        }
+        mainCalls += 1;
+        return {
+          text: "Timer started without a project.",
+          toolCalls: [{ id: "untied", name: "clockify_start_timer", arguments: {} }],
+        };
+      }),
+    };
+    const { app, store, cookie, fake } = setup(
+      modelClient,
+      { llmMode: "tool", llmAgentic: true },
+      [{ id: "p-apollo", name: "Apollo" }],
+    );
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: authoredSource });
+
+    expect(response.status).toBe(200);
+    expect(mainCalls).toBe(1);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({
+          ok: false,
+          action: "clockify_start_timer",
+          code: "intent_capability_denied",
+        }),
+      }),
+    ]));
+    expect(fake.counts.startTimerAtomic ?? 0).toBe(0);
+    expect(fake.state.running).toBeNull();
+  });
+
   it.each([
     ["target", { invoiceId: "inv-invented", amount: 125.5, paymentDate: "2026-08-01" }],
     ["amount", { invoiceId: "inv-1", amount: 999, paymentDate: "2026-08-01" }],
@@ -549,6 +835,202 @@ describe("chat intent declaration integration", () => {
     expect(fake.counts.deleteProjectAtomic ?? 0).toBe(0);
   });
 
+  it("replaces provider advice to type a confirmation after capability denial", async () => {
+    const model = jsonModel({
+      declaration: () => ({}),
+      failDeclaration: true,
+      main: {
+        kind: "actions",
+        text: "Please type yes to confirm the project creation.",
+        actions: [{
+          name: "clockify_projects_create",
+          arguments: { name: "RC-LIVE", isPublic: true },
+        }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create a public project named RC-LIVE." });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ code: "intent_capability_denied" }),
+      }),
+    ]));
+    expect(String(response.body.reply?.text ?? "")).toMatch(/could not validate|couldn't validate/i);
+    expect(String(response.body.reply?.text ?? "")).not.toMatch(/type yes|confirm/i);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+  });
+
+  it.each([
+    "The public project RC-LIVE was created successfully.",
+    "Project creation is unavailable in this chat.",
+    "Please reply YES so I can create the project.",
+  ])("replaces arbitrary provider prose when an explicit write declaration fails: %s", async (providerText) => {
+    const model = jsonModel({
+      declaration: () => ({}),
+      failDeclaration: true,
+      main: { kind: "answer", text: providerText },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create a public project named RC-LIVE." });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([]);
+    expect(response.body.reply?.text).toBe(
+      "I could not validate write authority for this request, so no change was made. Please restate the requested change in one fresh message.",
+    );
+    expect(response.body.reply?.text).not.toBe(providerText);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+  });
+
+  it.each([
+    "Begin a timer.",
+    "End the timer.",
+    "Schedule admin-1 on project p1 tomorrow for 8 hours.",
+    "Please, create a project named Atlas.",
+    "I would like you to create a project named Atlas.",
+    "Would you mind creating a project named Atlas?",
+  ])("structurally suppresses tool-absence prose when no_write_intent contradicts a command: %s", async (message) => {
+    const providerText = "No compatible operation surface was exposed for that request.";
+    const model = jsonModel({
+      declaration: () => ({ writeActions: [] }),
+      main: { kind: "answer", text: providerText },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([]);
+    expect(response.body.reply?.text).toBe(
+      "I could not validate write authority for this request, so no change was made. Please restate the requested change in one fresh message.",
+    );
+    expect(response.body.reply?.text).not.toBe(providerText);
+    expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0);
+    expect(fake.counts.stopTimeEntryAtomic ?? 0).toBe(0);
+    expect(fake.counts.createAssignmentAtomic ?? 0).toBe(0);
+  });
+
+  it("suppresses unsupported-tool prose even when the request is outside the command fallback grammar", async () => {
+    const providerText = "The project bootstrap operation is absent from my interface.";
+    const model = jsonModel({
+      declaration: () => ({ writeActions: [] }),
+      main: { kind: "answer", text: providerText },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Get project Atlas ready for time tracking." });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([]);
+    expect(response.body.reply?.text).toBe(
+      "I could not produce a verified Clockify result for that request. Please restate it in one fresh message.",
+    );
+    expect(response.body.reply?.text).not.toBe(providerText);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+  });
+
+  it("preserves a genuine read-only answer after a valid empty write declaration", async () => {
+    const providerText = "Your timesheet is currently empty.";
+    const model = jsonModel({
+      declaration: () => ({ writeActions: [] }),
+      main: { kind: "answer", text: providerText },
+    });
+    const { app, store, cookie } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "What did I track today?" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([]);
+    expect(response.body.reply?.text).toBe(providerText);
+  });
+
+  it("suppresses provider prose for an explicit supported write after a valid empty declaration", async () => {
+    const providerText = "Project creation is unavailable in this chat.";
+    const model = jsonModel({
+      declaration: () => ({ writeActions: [] }),
+      main: { kind: "answer", text: providerText },
+    });
+    const { app, store, cookie, fake } = setup(model.client);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create a public project named RC-LIVE." });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual([]);
+    expect(response.body.reply?.text).toBe(
+      "I could not validate write authority for this request, so no change was made. Please restate the requested change in one fresh message.",
+    );
+    expect(response.body.reply?.text).not.toBe(providerText);
+    expect(fake.counts.createProjectAtomic ?? 0).toBe(0);
+  });
+
+  it.each([
+    "All pending timesheets were approved successfully.",
+    "The approval action is unavailable in this chat.",
+    "Reply YES and I will approve all pending timesheets.",
+  ])("keeps mixed-turn read evidence but suppresses unresolved-write prose: %s", async (providerText) => {
+    const model = jsonModel({
+      declaration: () => ({}),
+      failDeclaration: true,
+      main: {
+        kind: "actions",
+        text: providerText,
+        actions: [{ name: "clockify_approvals_list", arguments: { status: "PENDING" } }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client, {}, [{ id: "p1", name: "Acme" }], [
+      { id: "ap1", userId: "u1", userName: "John Owner", state: "PENDING", periodStart: "2026-06-08" },
+    ]);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "List pending timesheets and approve all." });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: true, action: "clockify_approvals_list" }),
+      }),
+    ]));
+    expect(response.body.reply?.text).toBe(
+      "The requested read results are shown above. I could not validate write authority, so no change was made. Please restate the requested change in one fresh message.",
+    );
+    expect(response.body.reply?.text).not.toBe(providerText);
+    expect(fake.counts.setApprovalStateAtomic ?? 0).toBe(0);
+    expect(fake.state.approvals[0]?.state).toBe("PENDING");
+  });
+
   it("denies a second safe write when the exact action capability has maxExecutions one", async () => {
     const authoredSource = "create tag Billing";
     const model = jsonModel({
@@ -578,6 +1060,48 @@ describe("chat intent declaration integration", () => {
         receipt: expect.objectContaining({ ok: false, action: "clockify_tags_create" }),
       }),
     ]));
+  });
+
+  it("grounds and executes a write whose literal appears twice using its explicit occurrence", async () => {
+    const model = jsonModel({
+      declaration: () => ({
+        writeActions: [{
+          actionName: "clockify_tags_create",
+          sourceRefs: [{ segment: "current", quote: "create one tag named Globex", occurrence: 0 }],
+          literalConstraints: [{
+            path: "name",
+            value: "Globex",
+            sourceRef: { segment: "current", quote: "Globex", occurrence: 1 },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      main: {
+        kind: "actions",
+        text: "",
+        actions: [{ name: "clockify_tags_create", arguments: { name: "Globex" } }],
+      },
+    });
+    const { app, store, cookie, fake } = setup(model.client, {}, [], []);
+    openStores.push(store);
+
+    const response = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({
+        requestId: randomUUID(),
+        message: "Check that our only client is named Globex, then create one tag named Globex.",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: true, action: "clockify_tags_create" }),
+      }),
+    ]));
+    expect(fake.counts.createTag).toBe(1);
+    expect(fake.state.tags).toEqual(expect.arrayContaining([expect.objectContaining({ name: "Globex" })]));
   });
 
   it("replays a duplicate requestId without a second declaration, consumption, or dispatch", async () => {
@@ -716,7 +1240,7 @@ describe("chat intent declaration integration", () => {
     expect(mainCalls[1]?.tools.some((tool) => tool.name === "clockify_invoice_create")).toBe(false);
   });
 
-  it("journals and consumes resumed safe writes without re-consuming the confirmed operation", async () => {
+  it("journals a resumed safe write and terminates at the immutable capability execution limit", async () => {
     const authoredSource = "delete project Acme with id p1, then create tag Billing";
     const requestId = randomUUID();
     const declarationCalls: ModelMessage[][] = [];
@@ -751,24 +1275,13 @@ describe("chat intent declaration integration", () => {
           return {
             text: "",
             toolCalls: [{
-              id: "tag-invented",
-              name: "clockify_tags_create",
-              arguments: { name: 123 },
-            }],
-          };
-        }
-        if (mainCall === 3) {
-          expect(fakeForAssertions?.counts.getCalendarContext).toBe(1);
-          return {
-            text: "",
-            toolCalls: [{
               id: "tag-authorized",
               name: "clockify_tags_create",
               arguments: { name: "Billing" },
             }],
           };
         }
-        if (mainCall === 4) {
+        if (mainCall === 3) {
           return {
             text: "",
             toolCalls: [{
@@ -802,18 +1315,11 @@ describe("chat intent declaration integration", () => {
 
     expect(confirmed.status).toBe(200);
     expect(declarationCalls).toHaveLength(1);
-    expect(mainCall).toBe(5);
+    expect(mainCall).toBe(4);
     expect(fake.counts.deleteProjectAtomic).toBe(1);
     expect(fake.counts.createTag).toBe(1);
     expect(fake.counts.getCalendarContext).toBe(2);
     expect(confirmed.body.resume?.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        kind: "receipt",
-        receipt: expect.objectContaining({
-          action: "clockify_tags_create",
-          code: "intent_capability_argument_mismatch",
-        }),
-      }),
       expect.objectContaining({
         kind: "receipt",
         receipt: expect.objectContaining({
@@ -906,7 +1412,7 @@ describe("chat intent declaration integration", () => {
       code: "not_pending",
       message: "This preview is no longer pending.",
     });
-    expect(mainCall).toBe(5);
+    expect(mainCall).toBe(4);
     expect(consume).toHaveBeenCalledTimes(3);
     expect(fake.counts.deleteProjectAtomic).toBe(1);
     expect(fake.counts.createTag).toBe(1);

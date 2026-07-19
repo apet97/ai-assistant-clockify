@@ -62,6 +62,14 @@ function estimateInvoiceCreateHostCalls(itemCount: number, hasEnrichment: boolea
   return 3 + (hasEnrichment ? 3 : 0) + 2 * itemCount;
 }
 
+function estimateApprovePendingBatchHostCalls(approvalCount: number): number {
+  // Every approval rechecks its exact target, rechecks the admin role, and
+  // dispatches one PATCH. Only the terminal step can spend one additional read
+  // to reconcile an ambiguous PATCH because a reconciled ambiguity stops later
+  // dispatches.
+  return 3 * approvalCount + 1;
+}
+
 /** Worst case from commit entry through terminal result, including role checks,
  * authoritative snapshot/baseline reads, mutations, and one terminal ambiguous
  * reconciliation. These functions are also used by the model-visible schemas. */
@@ -124,6 +132,10 @@ export const TIME_OFF_BALANCE_USER_BATCH_MAX = deriveMaximumBatchSize(
   (count) => 2 * count + 3,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
+export const APPROVAL_PENDING_BATCH_MAX = deriveMaximumBatchSize(
+  estimateApprovePendingBatchHostCalls,
+  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+);
 
 /** Plan-step maxima are distinct from raw argument item maxima. */
 export const INVOICE_CREATE_MUTATION_STEP_MAX = INVOICE_ITEM_BATCH_MAX + 2;
@@ -140,6 +152,9 @@ export function estimateMutationPlanHostCalls(
   operation: unknown,
   plan: ExternalMutationPlanDraft,
 ): number {
+  if (actionName === "clockify_approvals_approve_pending") {
+    return estimateApprovePendingBatchHostCalls(plan.steps.length);
+  }
   if (actionName === "clockify_groups_add_user") return estimateGroupMemberBatchHostCalls(plan.steps.length);
   if (actionName === "clockify_onboard_user") {
     return estimateOnboardGroupBatchHostCalls(countSteps(plan, "add-user-to-group-"));

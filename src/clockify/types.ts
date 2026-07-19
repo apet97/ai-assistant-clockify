@@ -39,6 +39,8 @@ export interface EntitySummary {
 
 export interface ProjectSummary extends EntitySummary {
   clientId?: string;
+  /** Clockify project visibility returned by create/get/list responses. */
+  isPublic?: boolean;
   /** The spec's ProjectDtoV1.billable — the REST map used to DROP it (live item 069). */
   billable?: boolean;
   /** Project default hourly rate (minor units) from the project body, when read. */

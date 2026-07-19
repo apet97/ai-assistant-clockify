@@ -207,6 +207,35 @@ export interface DurableMutationContract {
   };
 }
 
+/** Catalog-fingerprinted, action-specific grounding rules for the isolated
+ * admin-intent declaration pass. Regex values are reviewed source strings and
+ * are compiled only by trusted server code with Unicode/case-insensitive flags. */
+export interface AuthoredIntentMetadata {
+  /** Positive action phrases. The declaration validator additionally requires
+   * one of its closed command forms (imperative, direct modal, or explicit
+   * first-person request), so a matching phrase in a read question is inert. */
+  commandPatterns: readonly string[];
+  /** Gerund forms are separate so they are accepted only by the closed
+   * "would you mind ..." command form, never as a declarative sentence. */
+  commandGerundPatterns: readonly string[];
+  /** Phrases that make this otherwise-matching action the wrong surface (for
+   * example a project created "from a template" is not a bare project create). */
+  forbiddenPatterns: readonly string[];
+  /** Optional model-visible literals that become mandatory authority whenever
+   * an authored cue occurs in the grounded command/clarification context. */
+  literalObligations: readonly {
+    anyOfPaths: readonly string[];
+    cuePatterns: readonly string[];
+    /** Optional named-capture patterns. Each declares a `value` group; any
+     * constraint on these paths must cite bytes inside that role-specific group. */
+    sourceRolePatterns?: readonly string[];
+  }[];
+  /** Explicitly reviewed optional leaves whose omission cannot discard a
+   * material authored value. Every optional leaf must have exactly one catalog
+   * decision: obligation, semantic-alias cue, or this list. */
+  safeOmissionPaths: readonly string[];
+}
+
 /** Static authority surface for a Clockify write. Every path class is explicit:
  * raw model literals, server-derived identifiers, and permitted host defaults
  * can never silently substitute for one another. */
@@ -218,6 +247,13 @@ export interface WriteAuthorityMetadata {
     maxBytes: number;
   };
   literalControlledPaths: readonly string[];
+  /** Reviewed natural-language spellings for one exact raw argument path and
+   * canonical scalar value. Callers must select this metadata from the exact
+   * action being declared; aliases never apply across actions or paths. */
+  semanticLiteralAliases: readonly SemanticLiteralAlias[];
+  /** Present on every and only safe-write action. Because this object is part of
+   * writeAuthority, action/catalog hashes bind the exact authored-intent rules. */
+  authoredIntent?: AuthoredIntentMetadata;
   serverDerivedIdPaths: readonly string[];
   permittedServerDefaultPaths: readonly string[];
   /** Exact fields copied unchanged from an authoritative pre-dispatch read. */
@@ -244,6 +280,15 @@ export interface WriteAuthorityMetadata {
       max: number;
     }[];
   }[];
+}
+
+/** A deliberately narrow authored phrase -> scalar mapping. Structured JSON
+ * remains grounded by exact JSON text; semantic aliases cannot synthesize or
+ * widen object/array authority. */
+export interface SemanticLiteralAlias {
+  path: string;
+  value: boolean;
+  authoredPhrases: readonly string[];
 }
 
 /** Validate that an exact persisted plan is fully covered by the action's
@@ -328,6 +373,10 @@ interface ActionDefinitionBase {
   schema: z.ZodTypeAny;
   /** Deliberate top-level compatibility aliases accepted before preprocessing. */
   argumentAliases?: readonly string[];
+  /** Action/path/value-scoped authored phrases accepted by the isolated intent
+   * declaration pass. `writeAuthorityFor` validates and freezes these against
+   * the model-visible schema before they enter the catalog. */
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   /** Deliberate object/map paths whose keys are dynamic (for example `groups`
    *  or an array item map such as `memberships[]`). Every other object path is
    *  closed before Zod preprocessing can strip unknown keys. */
@@ -400,6 +449,7 @@ interface DefineActionCommon<S extends z.ZodTypeAny> {
   risks: RiskLabel[];
   schema: S;
   argumentAliases?: readonly string[];
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   argumentOpenPaths?: readonly string[];
   resolveFeatureGroup?(args: z.infer<S>): FeatureGroup;
   mutationWorkflow?: "durable";
@@ -581,6 +631,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
   risks: RiskLabel[];
   schema: S;
   argumentAliases?: readonly string[];
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   argumentOpenPaths?: readonly string[];
   mutationWorkflow?: "durable";
   mutationContract?: DurableMutationContract;
@@ -607,6 +658,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     risks: def.risks,
     schema: def.schema,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     ...(def.mutationWorkflow ? { mutationWorkflow: def.mutationWorkflow } : {}),
     ...(def.mutationContract ? { mutationContract: def.mutationContract } : {}),
@@ -688,6 +740,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
   group: FeatureGroup;
   schema: S;
   argumentAliases?: readonly string[];
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   argumentOpenPaths?: readonly string[];
   prepare(
     ctx: ActionContext,
@@ -702,6 +755,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     risks: ["safe_write"],
     schema: def.schema,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     prepareSafeWrite: async (ctx, args) => def.prepare(ctx, args),
     executeSafeWrite: (ctx, prepared) => def.execute(ctx, prepared.operation),

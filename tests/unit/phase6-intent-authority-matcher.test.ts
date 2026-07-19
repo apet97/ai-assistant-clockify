@@ -7,11 +7,13 @@ import {
   type Utf8SourceSpan,
 } from "../../src/harness/intent-capability.js";
 import { authorizeIntentWriteArguments } from "../../src/harness/intent-authority.js";
+import { ACTION_CATALOG } from "../../src/harness/catalog.js";
 import { INTENT_LITERAL_LIMITS } from "../../src/harness/safety-limits.js";
 
 const authority: WriteAuthorityMetadata = {
   literalConstraintLimits: INTENT_LITERAL_LIMITS,
   literalControlledPaths: ["name", "amount", "members[]"],
+  semanticLiteralAliases: [],
   serverDerivedIdPaths: ["clientId"],
   permittedServerDefaultPaths: ["currencyId"],
   preservedStatePaths: [],
@@ -187,6 +189,100 @@ describe("raw intent authority matcher", () => {
     })).toBeUndefined();
   });
 
+  it("authorizes an exact empty tag list for the real clockify_fix_entry action only at the empty boundary", () => {
+    const source = "Update entry entry-1 tags to []";
+    const idSpan = spanFor(source, "entry-1");
+    const tagsSpan = spanFor(source, "[]");
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-current",
+      writeActions: [{
+        actionName: "clockify_fix_entry",
+        sourceSpans: [idSpan, tagsSpan],
+        literalConstraints: [
+          { path: "id", value: "entry-1", sourceSpan: idSpan },
+          { path: "tagIds[]", value: [], sourceSpan: tagsSpan },
+        ],
+      }],
+    });
+    const fixEntryAuthority = ACTION_CATALOG.find(
+      (action) => action.name === "clockify_fix_entry",
+    )?.writeAuthority;
+    expect(fixEntryAuthority).toBeDefined();
+    const check = (tagIds: string[]) => authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_fix_entry",
+      rawArgs: { id: "entry-1", tagIds },
+      authority: fixEntryAuthority!,
+      catalogHash: "catalog-current",
+    });
+
+    expect(check([])).toBeUndefined();
+    expect(authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_fix_entry",
+      rawArgs: { id: "entry-1" },
+      authority: fixEntryAuthority!,
+      catalogHash: "catalog-current",
+    })).toMatchObject({
+      code: "intent_capability_argument_mismatch",
+    });
+    expect(check(["invented-tag-id"])).toMatchObject({
+      code: "intent_capability_argument_mismatch",
+    });
+  });
+
+  it.each([
+    ["top-level present empty", "members[]", { members: [] }, true],
+    ["top-level missing", "members[]", {}, false],
+    ["nested absent ancestor", "filter.tags[]", {}, false],
+    ["nested present ancestor without child", "filter.tags[]", { filter: {} }, false],
+    ["nested explicit empty", "filter.tags[]", { filter: { tags: [] } }, true],
+    ["array-object absent ancestor", "groups[].memberIds[]", {}, false],
+    ["array-object outer empty", "groups[].memberIds[]", { groups: [] }, false],
+    ["array-object child missing", "groups[].memberIds[]", { groups: [{}] }, false],
+    [
+      "array-object mixed explicit and missing siblings",
+      "groups[].memberIds[]",
+      { groups: [{ memberIds: [] }, {}] },
+      false,
+    ],
+    [
+      "mixed membership siblings cannot mask an omitted nested tag list",
+      "memberships[].tags[]",
+      { memberships: [{ id: "m1", tags: [] }, { id: "m2" }] },
+      false,
+    ],
+    ["array-object explicit nested empty", "groups[].memberIds[]", { groups: [{ memberIds: [] }] }, true],
+  ] as const)("keeps empty-array presence exact across topology: %s", (_label, path, rawArgs, allowed) => {
+    const source = "Set the exact list to []";
+    const sourceSpan = spanFor(source, "[]");
+    const capability = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-current",
+      writeActions: [{
+        actionName: "clockify_clients_create",
+        sourceSpans: [sourceSpan],
+        literalConstraints: [{ path, value: [], sourceSpan }],
+      }],
+    });
+    const topologyAuthority: WriteAuthorityMetadata = {
+      ...authority,
+      literalControlledPaths: [path],
+      cardinality: { mode: "single", maxExecutions: 1 },
+    };
+
+    const result = authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_clients_create",
+      rawArgs,
+      authority: topologyAuthority,
+      catalogHash: "catalog-current",
+    });
+    if (allowed) expect(result).toBeUndefined();
+    else expect(result).toMatchObject({ code: "intent_capability_argument_mismatch" });
+  });
+
   it("fails closed for deny-all, catalog drift, and undeclared actions", () => {
     const source = "Create Acme";
     const denied = buildDenyAllWritesIntentCapabilityV1({
@@ -242,6 +338,7 @@ describe("raw intent authority matcher", () => {
     const aliasAuthority: WriteAuthorityMetadata = {
       literalConstraintLimits: INTENT_LITERAL_LIMITS,
       literalControlledPaths: ["clientName", "projectName", "amount", "dueDate"],
+      semanticLiteralAliases: [],
       serverDerivedIdPaths: ["operation.clientId", "operation.projectId"],
       permittedServerDefaultPaths: ["operation.currency"],
       preservedStatePaths: [],

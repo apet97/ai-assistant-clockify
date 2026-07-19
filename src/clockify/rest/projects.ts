@@ -16,6 +16,7 @@ type ProjectRow = {
   clientId?: string;
   archived?: boolean;
   billable?: boolean;
+  isPublic?: boolean;
 };
 
 export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPort {
@@ -26,6 +27,7 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     clientId: p.clientId,
     archived: p.archived,
     billable: p.billable,
+    isPublic: p.isPublic,
   });
 
   const createProjectAtomic: ProjectPort["createProjectAtomic"] = async (input) => map((await core.mutate("api", "POST", `${ws}/projects`, {

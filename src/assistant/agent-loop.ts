@@ -16,7 +16,7 @@
  * risky write can NEVER auto-execute inside the loop.
  */
 import type { ActionResult, ClarifyOption, ConfirmableOperation, PreviewCard } from "../harness/action.js";
-import type { SuccessReceipt, ErrorReceipt } from "../harness/receipts.js";
+import { hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import type { ModelClient, ModelMessage, ToolCall, ToolCompletion, ToolDefinition } from "./model-client.js";
 
 /** Max model round-trips per turn before we stop and answer truthfully. */
@@ -138,6 +138,30 @@ function toolResultTurn(toolCallId: string, receipt: SuccessReceipt | ErrorRecei
   return { role: "tool", toolCallId, content: capToolResultForModel(receipt) };
 }
 
+/** Denials at these boundaries cannot be repaired by another provider turn.
+ * Continuing would spend latency/tokens and lets model prose misrepresent a
+ * fresh-request or policy requirement as typed confirmation. */
+function isTerminalSafetyDenial(receipt: SuccessReceipt | ErrorReceipt): receipt is ErrorReceipt {
+  if (receipt.ok !== false) return false;
+  if (receipt.code === "policy_denied") return true;
+  return receipt.code.startsWith("intent_capability_");
+}
+
+function canonicalToolArguments(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalToolArguments).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalToolArguments(child)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? "undefined";
+}
+
+function toolCallSignature(call: ToolCall): string {
+  return `${call.name}\0${canonicalToolArguments(call.arguments)}`;
+}
+
 /**
  * Run the agentic loop until the model answers, asks to clarify, hits the first
  * risky write (interrupt), or exhausts the step budget. Returns the running
@@ -150,6 +174,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
   const maxSteps = input.maxSteps ?? DEFAULT_MAX_STEPS;
   const maxCalls = input.maxToolCallsPerStep ?? DEFAULT_MAX_TOOL_CALLS_PER_STEP;
   const transcript: ModelMessage[] = [...input.messages];
+  const completedReadSignatures = new Set<string>();
 
   for (let step = 0; step < maxSteps; step += 1) {
     // Client gone → stop BEFORE the next (paid) model call.
@@ -177,6 +202,15 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
     for (const call of calls) {
       // Client gone → stop BEFORE running another action (e.g. a safe write).
       if (input.signal?.aborted) return { kind: "aborted", transcript };
+      const signature = toolCallSignature(call);
+      if (completedReadSignatures.has(signature)) {
+        if (honored.length > 0) transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
+        return {
+          kind: "final",
+          text: "The requested information is already recorded in the result above.",
+          transcript,
+        };
+      }
       const result = await input.runAction(call);
       honored.push(call);
 
@@ -203,6 +237,12 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<AgentTurnR
 
       // receipt (read or safe write; success or error) → feed back to the model.
       toolResults.push(toolResultTurn(call.id, result.receipt));
+      if (result.receipt.ok && !hasChanges(result.receipt.changed)) completedReadSignatures.add(signature);
+      else if (result.receipt.ok) completedReadSignatures.clear();
+      if (isTerminalSafetyDenial(result.receipt)) {
+        transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);
+        return { kind: "final", text: "", transcript };
+      }
     }
 
     transcript.push(assistantToolCallTurn(completion, honored), ...toolResults);

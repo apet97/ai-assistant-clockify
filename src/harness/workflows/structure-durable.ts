@@ -14,6 +14,7 @@ import {
   type ExternalMutationPlanDraft,
   type SafeWriteActionDefinition,
   type SafeWritePreparationResult,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { executeStep, isJournalDegradedStep, withJournalDegradedWarning, type MutationDispatchResult } from "../mutation-workflow.js";
@@ -37,6 +38,7 @@ export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, St
   stepName: string;
   mutationContract: DurableMutationContract;
   argumentAliases?: readonly string[];
+  semanticLiteralAliases?: readonly SemanticLiteralAlias[];
   argumentOpenPaths?: readonly string[];
   prepare(ctx: ActionContext, args: z.infer<S>): Promise<SafeWritePreparationResult> | SafeWritePreparationResult;
   prepareDispatch(ctx: ActionContext, operation: unknown): Promise<{ preparedDetail: unknown; state: State }>;
@@ -103,6 +105,7 @@ export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, St
     mutationWorkflow: "durable",
     mutationContract: def.mutationContract,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
+    ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     prepareSafeWrite: async (ctx, args) => {
       const prepared = await def.prepare(ctx, args);

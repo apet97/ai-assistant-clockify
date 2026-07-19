@@ -41,6 +41,7 @@
     "probe:member-denial": "tsx scripts/live-member-denial-probe.ts",
     "manifest:hash": "tsx scripts/manifest-hash.ts",
     "release:validate-base-url": "tsx scripts/validate-release-base-url.ts",
+    "deploy:private-production": "tsx scripts/deploy-private-production.ts",
     "verify": "npm run type-check && npm run type-check:scripts && npm run check:scope-contract && npm run lint && npm run cycles && npm run dup && npm test",
     "eval:smoke": "vitest run tests/integration/eval-smoke.test.ts",
     "audit:prod": "tsx scripts/dependency-gates/audit-prod.ts",

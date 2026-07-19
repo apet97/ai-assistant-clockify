@@ -15,7 +15,7 @@ import { mintAdminCookie } from "../helpers/session.js";
 
 /**
  * Wiring proof for LLM_TOOL_SELECT (Phase 1): the chat turn shows the model the
- * relevant SUBSET of tools (not all 139) when the flag is on, gated off otherwise,
+ * relevant SUBSET of tools (not the full catalog) when the flag is on, gated off otherwise,
  * and the recall escape hatch retries with the full catalog when a narrowed turn
  * did nothing. We capture the `tools` array handed to completeWithTools.
  */

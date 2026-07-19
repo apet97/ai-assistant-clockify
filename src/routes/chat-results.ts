@@ -14,6 +14,12 @@ import { hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/r
 import type { AgentStep, AgentTurnResult } from "../assistant/agent-loop.js";
 import { capAgentState, type AgentState } from "../assistant/agent-state.js";
 import type { ToolCall } from "../assistant/model-client.js";
+import {
+  claimsUnsupportedToolAbsence,
+  NO_TEXT_APPROVAL_REPLY,
+  NO_VERIFIED_TOOL_RESULT_REPLY,
+  requestsTextApproval,
+} from "../assistant/text-safety.js";
 import type { DurableResultLink } from "../db/store.js";
 import {
   pruneHistoryResult,
@@ -102,10 +108,49 @@ export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { repl
 // the turn produced previews we REPLACE the model's text with a truthful,
 // not-yet-applied instruction — and store THAT (not the false claim) so the
 // model's own history can't convince it the action already happened.
-export function truthfulReplyText(results: unknown[], baseText: string, replyKind: string): string {
+export function truthfulReplyText(
+  results: unknown[],
+  baseText: string,
+  replyKind: string,
+  options: { writeIntentDeclared?: boolean; writeAuthorityUnresolved?: boolean } = {},
+): string {
   const partial = results.find(isPartialResult);
   if (partial) {
     return partial.message?.trim() || "The request stopped part-way through. Review the recorded changes before continuing.";
+  }
+  const appliedAnyChange = results.some(
+    (r) => isReceiptResult(r) && r.receipt.ok === true && hasChanges((r.receipt as SuccessReceipt).changed),
+  );
+  const successfulRead = results.some(
+    (result) => isReceiptResult(result) && result.receipt.ok === true &&
+      !hasChanges((result.receipt as SuccessReceipt).changed),
+  );
+  const authorityFailureReply =
+    "I could not validate write authority for this request, so no change was made. Please restate the requested change in one fresh message.";
+  const mixedReadAuthorityFailureReply =
+    "The requested read results are shown above. I could not validate write authority, so no change was made. Please restate the requested change in one fresh message.";
+  // A malformed/unavailable declaration leaves no trusted write classification.
+  // Arbitrary main-model prose cannot establish that an explicit write
+  // succeeded, is unavailable, or needs text approval. A successful read stays
+  // in results, but never grants authority to narrate the unresolved write.
+  // This is driven only by persisted capability/result structure; provider
+  // wording is irrelevant. Valid `no_write_intent` turns never set this option.
+  if (options.writeAuthorityUnresolved && !appliedAnyChange) {
+    return successfulRead ? mixedReadAuthorityFailureReply : authorityFailureReply;
+  }
+  // A declaration/authority denial is terminal for this authored request. The
+  // provider has no authority to turn it into a typed-confirmation flow: only a
+  // fresh admin-authored request can create a new capability, and risky writes
+  // are confirmed by buttons against an already-valid stored preview. Replace
+  // any provider narration so an otherwise-safe denial cannot train the admin
+  // to bypass the capability boundary with "yes" or similar prose.
+  const capabilityDenied = results.some(
+    (result) => isReceiptResult(result) &&
+      result.receipt.ok === false &&
+      result.receipt.code === "intent_capability_denied",
+  );
+  if (capabilityDenied && !appliedAnyChange) {
+    return authorityFailureReply;
   }
   const pendingPreviews = results.filter(isPreviewResult).length;
   if (pendingPreviews > 0) {
@@ -122,6 +167,66 @@ export function truthfulReplyText(results: unknown[], baseText: string, replyKin
     return failedReceipts > 0
       ? `${previewReplyText(pendingPreviews)}${failedAttemptNote(failedReceipts)}`
       : previewReplyText(pendingPreviews);
+  }
+  // A failed raw-authority check may be corrected within the same immutable
+  // capability. Preserve a later successful mutation, but if the turn ends with
+  // only capability failures, server copy replaces all provider narration.
+  const unresolvedCapabilityFailure = !appliedAnyChange && results.some(
+    (result) => isReceiptResult(result) &&
+      result.receipt.ok === false &&
+      result.receipt.code.startsWith("intent_capability_"),
+  );
+  if (unresolvedCapabilityFailure) {
+    return authorityFailureReply;
+  }
+  const correctedCapabilityFailure = appliedAnyChange && results.some(
+    (result) => isReceiptResult(result) &&
+      result.receipt.ok === false &&
+      result.receipt.code.startsWith("intent_capability_"),
+  );
+  if (correctedCapabilityFailure) {
+    return "The completed change is recorded above. No other change was made.";
+  }
+  const unresolvedPolicyFailure = !appliedAnyChange && results.some(
+    (result) => isReceiptResult(result) &&
+      result.receipt.ok === false &&
+      result.receipt.code === "policy_denied",
+  );
+  if (unresolvedPolicyFailure) {
+    return "Your saved assistant permissions do not allow this request. No change was made.";
+  }
+  const failedReceiptCount = results.filter(
+    (result) => isReceiptResult(result) && result.receipt.ok === false,
+  ).length;
+  if (appliedAnyChange && failedReceiptCount > 0) {
+    const receiptCount = results.filter(isReceiptResult).length;
+    return `${partialOutcomeReplyText(receiptCount - failedReceiptCount, receiptCount, failedReceiptCount)} The completed change is recorded above.`;
+  }
+  // Production knows whether the immutable declaration authorized a write. In
+  // that case provider prose is never the control or truth surface: previews,
+  // receipts, and harness failures already render deterministic UI. A plain
+  // model sentence after a declared write could otherwise invent an unlimited
+  // family of text-approval or false-completion phrasings. Keep it out entirely.
+  if (options.writeIntentDeclared) {
+    return appliedAnyChange
+      ? "The completed change is recorded above. No additional change was made."
+      : NO_TEXT_APPROVAL_REPLY;
+  }
+  // The catalog is the source of truth for supported surfaces. Provider prose
+  // may not claim that one disappeared. Even an `unknown_action` receipt proves
+  // only its exact attempted name; it cannot authorize unrelated provider prose.
+  // Canonical receipts remain rendered independently of this text fallback.
+  if (claimsUnsupportedToolAbsence(baseText)) {
+    return appliedAnyChange
+      ? "The completed change is recorded above. No additional change was made."
+      : NO_VERIFIED_TOOL_RESULT_REPLY;
+  }
+  // Provider prose is never allowed to create a parallel text-approval UX. With
+  // no stored preview there is no approval step at all; discard the prose.
+  if (requestsTextApproval(baseText)) {
+    return appliedAnyChange
+      ? "The completed change is recorded above. No additional change was prepared."
+      : NO_TEXT_APPROVAL_REPLY;
   }
   // truthfulness-02: in the single-turn `actions` path `baseText` is the model's
   // narration written BEFORE any action ran, so an optimistic "Done!/I created…"
@@ -152,9 +257,6 @@ export function truthfulReplyText(results: unknown[], baseText: string, replyKin
   // produced: reads (and failed writes) no longer suppress the guard, while a
   // genuine safe-write completion still narrates normally. The replacement is
   // stored too, so it can't re-enter history as if it had happened.
-  const appliedAnyChange = results.some(
-    (r) => isReceiptResult(r) && r.receipt.ok === true && hasChanges((r.receipt as SuccessReceipt).changed),
-  );
   // A FAILED receipt means the model is (truthfully) reporting an attempt that
   // didn't apply — e.g. "That tool isn't available; nothing was changed." Don't
   // second-guess that honest report (claimsCompletedMutation mis-reads the

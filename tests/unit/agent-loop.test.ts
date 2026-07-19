@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAgentTurn, TOOL_RESULT_MAX_BYTES, type AgentTurnResult } from "../../src/assistant/agent-loop.js";
 import type { ActionResult } from "../../src/harness/action.js";
-import { successReceipt } from "../../src/harness/receipts.js";
+import { errorReceipt, successReceipt } from "../../src/harness/receipts.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 import type { ModelMessage } from "../../src/assistant/model-client.js";
 
@@ -153,7 +153,7 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
     expect(assistant?.reasoningContent).toBe("urgent first, then stale");
   });
 
-  it("respects maxSteps and returns a truthful exhausted result", async () => {
+  it("executes an identical successful read once and settles from the recorded result", async () => {
     const model = scriptedToolModel([
       { text: "", toolCalls: [{ id: "x", name: "clockify_clients_list", arguments: {} }] },
     ]);
@@ -170,9 +170,10 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
       maxSteps: 3,
     });
 
-    expect(result.kind).toBe("exhausted");
-    expect(model.completeWithTools).toHaveBeenCalledTimes(3);
-    expect(runAction).toHaveBeenCalledTimes(3);
+    expect(result.kind).toBe("final");
+    expect(model.completeWithTools).toHaveBeenCalledTimes(2);
+    expect(runAction).toHaveBeenCalledTimes(1);
+    expect((result as Extract<AgentTurnResult, { kind: "final" }>).text).toMatch(/recorded.*result/i);
   });
 
   it("ends the loop on a clarify result", async () => {
@@ -191,6 +192,53 @@ describe("runAgentTurn — the durable agentic tool-loop", () => {
     expect((result as Extract<AgentTurnResult, { kind: "clarify" }>).message).toBe("Which client did you mean?");
     expect(model.completeWithTools).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    "intent_capability_denied",
+    "intent_capability_action_denied",
+    "intent_capability_argument_undeclared",
+    "intent_capability_argument_mismatch",
+    "policy_denied",
+  ])(
+    "terminates immediately after the non-retryable safety denial %s",
+    async (code) => {
+      const model = scriptedToolModel([
+        {
+          text: "Type yes to confirm.",
+          toolCalls: [
+            { id: "denied", name: "clockify_projects_create", arguments: { name: "RC-LIVE" } },
+            { id: "must-not-run", name: "clockify_tags_create", arguments: { name: "extra" } },
+          ],
+        },
+        { text: "Type yes to confirm.", toolCalls: [] },
+      ]);
+      const runAction = vi.fn(async (call: { name: string }): Promise<ActionResult> => ({
+        kind: "receipt",
+        receipt: errorReceipt({
+          action: call.name,
+          code,
+          message: "Denied.",
+          recovery: { hint: "Use a fresh authorized request.", retryable: false },
+        }),
+      }));
+      const steps: string[] = [];
+
+      const result = await runAgentTurn({
+        modelClient: model,
+        messages: userTurn("create it"),
+        tools: NO_TOOLS,
+        runAction,
+        onStep: ({ call }) => steps.push(call.id),
+      });
+
+      expect(result).toMatchObject({ kind: "final", text: "" });
+      expect(model.completeWithTools).toHaveBeenCalledTimes(1);
+      expect(runAction).toHaveBeenCalledTimes(1);
+      expect(steps).toEqual(["denied"]);
+      expect(result.transcript.some((message) => message.role === "tool" && message.toolCallId === "denied")).toBe(true);
+      expect(result.transcript.some((message) => message.toolCallId === "must-not-run")).toBe(false);
+    },
+  );
 
   it("streams each receipt step via onStep but never the terminal interrupt", async () => {
     const model = scriptedToolModel([

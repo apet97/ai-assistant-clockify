@@ -7,8 +7,8 @@ import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 /**
  * Pins the two fail-closed tripwires in `executeAction` (src/harness/actions.ts)
- * that no catalog action exercises (all 136 well-behaved actions return previews
- * for risky writes and carry a real risk label):
+ * that no catalog action exercises (catalog actions return previews for risky
+ * writes and carry a real risk label):
  *
  *  1. `risky_without_confirmation` — the last-line guard of the core invariant
  *     "a risky action must never execute on first proposal". A misbehaving

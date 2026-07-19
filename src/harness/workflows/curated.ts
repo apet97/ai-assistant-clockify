@@ -5,6 +5,7 @@ import {
   defineRiskyAction,
   type CommitResult,
   type ActionDefinition,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { successReceipt, errorReceipt } from "../receipts.js";
 import { matchByName, REPORT_PERIODS, resolvePeriod } from "./resolve.js";
@@ -96,6 +97,10 @@ const onboardUser = defineRiskyAction({
     targeting: { mode: "snapshots", relations: ["parent"] },
     strategies: ["create", "update"],
   }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "sendEmail", value: false, authoredPhrases: Object.freeze(["do not send email", "don't send email", "without email", "no email"]) },
+    { path: "sendEmail", value: true, authoredPhrases: Object.freeze(["send email", "send an email"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     email: z.string().min(1),
     groups: zStringList(z.array(z.string().min(1)).max(ONBOARD_GROUP_BATCH_MAX)).optional(),

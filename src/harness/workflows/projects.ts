@@ -7,6 +7,7 @@ import {
   defineRiskyAction,
   type ActionDefinition,
   type CommitResult,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
@@ -39,6 +40,18 @@ import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.
  */
 
 const PROJECT_GROUP = "work_structure" as const;
+const PROJECT_BILLABLE_LITERAL_ALIASES = Object.freeze([
+  { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
+  { path: "billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
+] satisfies readonly SemanticLiteralAlias[]);
+const PROJECT_VISIBILITY_LITERAL_ALIASES = Object.freeze([
+  { path: "isPublic", value: false, authoredPhrases: Object.freeze(["private", "not public", "non-public"]) },
+  { path: "isPublic", value: true, authoredPhrases: Object.freeze(["public", "not private"]) },
+] satisfies readonly SemanticLiteralAlias[]);
+const PROJECT_ARCHIVED_LITERAL_ALIASES = Object.freeze([
+  { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
+  { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 
 async function reconcileCreatedProject(
   ctx: Parameters<NonNullable<ActionDefinition["handler"]>>[0],
@@ -128,6 +141,10 @@ const createProject = defineStructureDurableSafeWriteAction({
     targeting: { mode: "snapshots", relations: ["parent"] },
     strategies: ["create"],
   }),
+  semanticLiteralAliases: Object.freeze([
+    ...PROJECT_BILLABLE_LITERAL_ALIASES,
+    ...PROJECT_VISIBILITY_LITERAL_ALIASES,
+  ]),
   schema: z.object({
     name: z.string().min(1),
     clientId: z.string().optional(),
@@ -304,6 +321,11 @@ const updateProject = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target", "parent"] }, strategies: ["update"] }),
+  semanticLiteralAliases: Object.freeze([
+    ...PROJECT_ARCHIVED_LITERAL_ALIASES,
+    ...PROJECT_BILLABLE_LITERAL_ALIASES,
+    ...PROJECT_VISIBILITY_LITERAL_ALIASES,
+  ]),
   schema: z
     .object({
       id: z.string().min(1).optional(),

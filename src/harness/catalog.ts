@@ -64,21 +64,21 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...SETUP_TASK_ACTIONS,
 ];
 
-const externalWriteNames = ASSEMBLED_ACTIONS
-  .filter((action) => action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read"))
+const writeActionNames = ASSEMBLED_ACTIONS
+  .filter((action) => action.kind !== "read")
   .map((action) => action.name)
   .sort();
 const authorityNames = [...writeAuthorityActionNames()].sort();
-if (JSON.stringify(externalWriteNames) !== JSON.stringify(authorityNames)) {
-  const external = new Set(externalWriteNames);
+if (JSON.stringify(writeActionNames) !== JSON.stringify(authorityNames)) {
+  const writes = new Set(writeActionNames);
   const authority = new Set(authorityNames);
-  const missing = externalWriteNames.filter((name) => !authority.has(name));
-  const extra = authorityNames.filter((name) => !external.has(name));
+  const missing = writeActionNames.filter((name) => !authority.has(name));
+  const extra = authorityNames.filter((name) => !writes.has(name));
   throw new Error(`write_authority_catalog_mismatch:missing=${missing.join(",")};extra=${extra.join(",")}`);
 }
 
 export const ACTION_CATALOG: ReadonlyArray<ActionDefinition> = ASSEMBLED_ACTIONS.map((action) =>
-  action.name.startsWith("clockify_") && action.risks.some((risk) => risk !== "read")
+  action.kind !== "read"
     ? { ...action, writeAuthority: writeAuthorityFor(action) }
     : action);
 
@@ -133,6 +133,7 @@ export function actionFingerprint(name: string): string | undefined {
         risks: action.risks,
         argumentAliases: action.argumentAliases ?? [],
         argumentOpenPaths: action.argumentOpenPaths ?? [],
+        semanticLiteralAliases: action.semanticLiteralAliases ?? [],
         mutationWorkflow: action.mutationWorkflow,
         mutationContract: action.mutationContract,
         writeAuthority: action.writeAuthority,
@@ -151,6 +152,7 @@ export function catalogHash(): string {
       risks: action.risks,
       argumentAliases: action.argumentAliases ?? [],
       argumentOpenPaths: action.argumentOpenPaths ?? [],
+      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
       mutationWorkflow: action.mutationWorkflow,
       mutationContract: action.mutationContract,
       writeAuthority: action.writeAuthority,

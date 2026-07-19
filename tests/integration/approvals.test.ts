@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
-import type { ActionContext } from "../../src/harness/action.js";
+import { isPartialCommitResult, type ActionContext } from "../../src/harness/action.js";
+import { createStore } from "../../src/db/store.js";
+import { actionFingerprint, catalogHash } from "../../src/harness/catalog.js";
+import { hashOperation } from "../../src/harness/confirmations.js";
+import { errorReceipt } from "../../src/harness/receipts.js";
+import { APPROVAL_PENDING_BATCH_MAX, TURN_HOST_CALL_LIMIT } from "../../src/harness/safety-limits.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPolicy()): ActionContext {
@@ -11,6 +16,187 @@ function makeContext(fake: FakeWorkspace, policy: AdminPolicy = defaultAdminPoli
 const seed = () => ({ approvals: [{ id: "ap1", userId: "u1", state: "PENDING", periodStart: "2026-06-01" }] });
 
 describe("approval actions", () => {
+  it("previews every pending timesheet as one button-bound batch and applies exactly that batch", async () => {
+    const fake = createFakeWorkspace({ approvals: [
+      { id: "ap1", userId: "u1", userName: "Ada", state: "PENDING", periodStart: "2026-06-01" },
+      { id: "ap2", userId: "u2", userName: "Grace", state: "APPROVED", periodStart: "2026-06-01" },
+      { id: "ap3", userId: "u3", userName: "Linus", state: "PENDING", periodStart: "2026-06-08" },
+    ] });
+
+    const result = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "preview") throw new Error(`expected a preview, got ${result.kind}`);
+
+    expect(fake.counts.setApprovalState ?? 0).toBe(0);
+    expect(result.operation.risks).toEqual(expect.arrayContaining(["bulk", "external_side_effect"]));
+    expect(result.operation.payload).toMatchObject({
+      approvals: [
+        { id: "ap1", previousState: "PENDING" },
+        { id: "ap3", previousState: "PENDING" },
+      ],
+    });
+    expect(result.operation.mutationPlan?.mode).toBe("batch");
+    expect(result.operation.mutationPlan?.steps.map((step) => step.id)).toEqual([
+      "approve-pending-0",
+      "approve-pending-1",
+    ]);
+
+    const committed = await commitConfirmedOperation(makeContext(fake), result.operation);
+    expect(committed.ok).toBe(true);
+    expect(fake.counts.setApprovalState).toBe(2);
+    expect(fake.state.approvals.map((approval) => [approval.id, approval.state])).toEqual([
+      ["ap1", "APPROVED"],
+      ["ap2", "APPROVED"],
+      ["ap3", "APPROVED"],
+    ]);
+  });
+
+  it("does not offer an empty or incomplete approve-all preview", async () => {
+    const empty = createFakeWorkspace({ approvals: [{ id: "ap1", state: "APPROVED" }] });
+    const none = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(empty),
+    });
+    expect(none.kind).toBe("clarify");
+
+    const truncated = createFakeWorkspace({
+      approvals: [{ id: "ap1", state: "PENDING" }],
+      listTruncated: { listApprovals: true },
+    });
+    const incomplete = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(truncated),
+    });
+    expect(incomplete.kind).toBe("clarify");
+    expect(truncated.counts.setApprovalState ?? 0).toBe(0);
+  });
+
+  it("stops an approve-all batch truthfully when fresh authorization is lost before the second dispatch", async () => {
+    const fake = createFakeWorkspace({ approvals: [
+      { id: "ap1", userId: "u1", state: "PENDING", periodStart: "2026-06-01" },
+      { id: "ap2", userId: "u2", state: "PENDING", periodStart: "2026-06-08" },
+      { id: "ap3", userId: "u3", state: "PENDING", periodStart: "2026-06-15" },
+    ] });
+    const preview = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+
+    const store = createStore(":memory:");
+    store.prepareOperationRun({
+      id: preview.operation.operationId,
+      confirmationId: `confirmation-${preview.operation.operationId}`,
+      sessionId: "session-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      actionName: preview.operation.actionName,
+      actionFingerprint: actionFingerprint(preview.operation.actionName)!,
+      catalogHash: catalogHash(),
+      operationHash: hashOperation(preview.operation),
+      operation: preview.operation,
+      mutationPlan: preview.operation.mutationPlan,
+    });
+    store.markOperationExecuting(preview.operation.operationId);
+    let authorizationChecks = 0;
+    const result = await commitConfirmedOperation({
+      ...makeContext(fake),
+      mutationJournal: store.mutationStepJournal(preview.operation.operationId),
+      authorizeWrite: async () => {
+        authorizationChecks += 1;
+        return authorizationChecks >= 3
+          ? errorReceipt({
+              action: preview.operation.actionName,
+              code: "role_denied",
+              message: "Admin authorization was lost.",
+              recovery: { hint: "Restore admin access.", retryable: true },
+            })
+          : undefined;
+      },
+    }, preview.operation);
+
+    expect(result).toMatchObject({ kind: "partial" });
+    if (!isPartialCommitResult(result)) throw new Error("expected partial result");
+    const partialResult = result;
+    expect(partialResult.message).toMatch(/authorization.*before dispatch/i);
+    expect(partialResult.message).not.toMatch(/Clockify definitively rejected/i);
+    expect(fake.counts.setApprovalStateAtomic).toBe(1);
+    expect(fake.state.approvals.map((approval) => approval.state)).toEqual([
+      "APPROVED",
+      "PENDING",
+      "PENDING",
+    ]);
+    expect(store.listOperationSteps(preview.operation.operationId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ planStepId: "approve-pending-0", status: "succeeded" }),
+      expect.objectContaining({ planStepId: "approve-pending-1", status: "definitive_failed" }),
+    ]));
+    store.close();
+  });
+
+  it("accepts the exact approve-all boundary and rejects boundary plus one before preview", async () => {
+    const pending = (count: number) => Array.from({ length: count }, (_, index) => ({
+      id: `ap-${String(index).padStart(2, "0")}`,
+      userId: `u-${index}`,
+      state: "PENDING",
+      periodStart: "2026-06-01",
+    }));
+    const maximum = createFakeWorkspace({ approvals: pending(APPROVAL_PENDING_BATCH_MAX) });
+    const preview = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(maximum),
+    });
+    if (preview.kind !== "preview") throw new Error("expected maximum-boundary preview");
+    expect(preview.operation.mutationPlan?.steps).toHaveLength(APPROVAL_PENDING_BATCH_MAX);
+    expect(preview.operation.mutationPlan?.maxHostCalls).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
+    const committed = await commitConfirmedOperation(makeContext(maximum), preview.operation);
+    expect(committed.ok).toBe(true);
+    expect(maximum.counts.setApprovalStateAtomic).toBe(APPROVAL_PENDING_BATCH_MAX);
+
+    const over = createFakeWorkspace({ approvals: pending(APPROVAL_PENDING_BATCH_MAX + 1) });
+    const refused = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(over),
+    });
+    expect(refused.kind).toBe("clarify");
+    expect(over.counts.setApprovalStateAtomic ?? 0).toBe(0);
+  });
+
+  it("records only the first approval when the second target drifts and never dispatches later items", async () => {
+    const fake = createFakeWorkspace({ approvals: [
+      { id: "ap1", userId: "u1", state: "PENDING", periodStart: "2026-06-01" },
+      { id: "ap2", userId: "u2", state: "PENDING", periodStart: "2026-06-08" },
+      { id: "ap3", userId: "u3", state: "PENDING", periodStart: "2026-06-15" },
+    ] });
+    const preview = await executeAction({
+      actionName: "clockify_approvals_approve_pending",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    fake.state.approvals[1]!.state = "APPROVED";
+
+    const result = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(result).toMatchObject({ kind: "partial" });
+    if (!isPartialCommitResult(result)) throw new Error("expected partial");
+    const partialResult = result;
+    expect(partialResult.message).toMatch(/1 of 3/);
+    expect(partialResult.message).toMatch(/changed after preview/i);
+    expect(fake.counts.setApprovalStateAtomic).toBe(1);
+    expect(fake.state.approvals.map((approval) => approval.state)).toEqual([
+      "APPROVED",
+      "APPROVED",
+      "PENDING",
+    ]);
+  });
+
   it("approvals_list is read-gated", async () => {
     const fake = createFakeWorkspace(seed());
     const ok = await executeAction({ actionName: "clockify_approvals_list", args: {}, context: makeContext(fake) });

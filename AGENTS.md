@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 139 typed
+the full test/build suite, and circular-dependency/duplication gates. 140 typed
 actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite at
 `/data`; redeploy = `railway up`; see `DEPLOYMENT.md`). Data handling/retention:
 `PRIVACY.md`.
@@ -37,19 +37,28 @@ actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite a
   auto-retried.
 - Before the main planner can see Clockify results, a constrained declaration
   pass receives only current and unresolved prior admin-authored text as
-  untrusted natural-language input; its trusted envelope also supplies the exact
-  write-action names and catalog hash. It persists an immutable
-  `IntentCapabilityV1`: exact write actions, UTF-8 byte spans, literal constraints,
-  cardinality, and request/catalog hashes. Provider failure, malformed spans, or
-  invented values durably deny all writes while reads remain available.
+  untrusted natural-language input; its trusted envelope also supplies exact
+  write-action names, literal-controlled paths, reviewed semantic aliases, and
+  the catalog hash. The provider cites an exact quote, its authored segment, and
+  its zero-based occurrence; the server rejects absent, out-of-range,
+  cross-segment, or polarity-inverted evidence and computes verified UTF-8 byte
+  spans. It persists an immutable
+  `IntentCapabilityV1`: exact write actions, structured literal constraints,
+  cardinality, and request/catalog hashes. Provider failure, malformed evidence,
+  invented values, or a provider-returned tool that was not offered durably deny
+  writes while reads remain available. Terminal authority denials use
+  deterministic server copy rather than another provider turn.
 - Literal constraints may contain bounded structured JSON under the one shared
   limit contract in `src/harness/safety-limits.ts`; declaration, persistence,
   authority matching, schemas, and catalog metadata must not diverge.
+- Semantic literal aliases are exact, catalog-hashed, and scoped to one
+  action/path/value. Every model-controlled boolean path has reviewed aliases or
+  an explicit exact-literal exclusion; opposite-polarity containment fails closed.
 - Advertised batch limits come from the deterministic worst-case host-call
   estimator; group-member additions cap at 14. Prepared operations bind and hash
   `maxHostCalls` and reserve the full remaining call cost before first dispatch.
 - Raw model arguments are matched against that capability before Zod
-  preprocessing or server-side id/date resolution. Every one of the 81 write
+  preprocessing or server-side id/date resolution. Every one of the 82 Clockify write
   actions has explicit authority metadata; server-derived ids, permitted
   defaults, and exact authoritative preserved-state paths may narrow execution
   but never expand it. Safe and confirmed writes bind and atomically consume the
@@ -170,7 +179,9 @@ npm run dev           # tsx src/server.ts (needs env)
   concurrency, write, and per-turn host-call bounds).
 - `src/assistant/` — model client (OpenAI-compatible HTTP or `gemini-cli`), prompt
   builder, planner (native tool-calling default, JSON fallback), the isolated
-  admin-text + trusted catalog-metadata declaration pass (`intent-declaration.ts`),
+  admin-text + trusted catalog-metadata declaration pass (`intent-declaration.ts`;
+  provider quote references, server-computed UTF-8 spans, reviewed semantic
+  aliases),
   `agent-loop.ts`/`agent-state.ts` (durable agentic loop; provider cancellation and
   bounded selection context survive clarification/confirm resume).
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
@@ -179,8 +190,8 @@ npm run dev           # tsx src/server.ts (needs env)
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
   `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
   declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),
-  `write-authority.ts` (explicit metadata + exact-plan validation for all 81
-  writes), `tool-select.ts` (deterministic
+  `write-authority.ts` (explicit metadata + exact-plan validation for all 83
+  writes: 82 Clockify actions plus the local permission action), `tool-select.ts` (deterministic
   tool subsetting on chat + resume; no match/non-ASCII/>3 areas fail open to the
   full catalog; **default ON** via `LLM_TOOL_SELECT`, `=0` rolls back),
   `mutation-workflow.ts` (operation-scoped prepared→executing→terminal primary

@@ -6,8 +6,11 @@ import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import { makeTestConfig } from "../helpers/config.js";
-import type { ModelClient, ToolCompletion } from "../../src/assistant/model-client.js";
-import { DEFAULT_MAX_STEPS, EXHAUSTED_TEXT } from "../../src/assistant/agent-loop.js";
+import {
+  ProviderProtocolError,
+  type ModelClient,
+  type ToolCompletion,
+} from "../../src/assistant/model-client.js";
 import { HISTORY_WINDOW_MESSAGES } from "../../src/routes/chat-constants.js";
 import { previewReplyText, sanitizeStoredReplyForModel } from "../../src/routes/history-sanitizer.js";
 import { verifySessionCookie } from "../../src/auth/sessions.js";
@@ -103,6 +106,50 @@ async function makeApp(
 }
 
 describe("agentic chat turn (LLM_AGENTIC=1)", () => {
+  it.each([true, false])(
+    "returns and persists a sanitized provider protocol failure (agentic=%s)",
+    async (agentic) => {
+      const fake = createFakeWorkspace();
+      const malformed: ModelClient = {
+        complete: vi.fn(async () => {
+          throw new ProviderProtocolError("malformed_tool");
+        }),
+        completeWithTools: vi.fn(async () => {
+          const error = new ProviderProtocolError("malformed_tool");
+          Object.defineProperty(error, "message", {
+            value: "secret raw provider payload must not escape",
+          });
+          throw error;
+        }),
+      };
+      const { app, cookie, store } = await makeApp([], fake, { agentic, modelClient: malformed });
+
+      const res = await request(app)
+        .post("/api/chat/messages")
+        .set("Cookie", cookie)
+        .send({ message: "show workspace status" });
+
+      expect(res.status).toBe(502);
+      expect(res.body).toEqual({
+        ok: false,
+        code: "provider_protocol_error",
+        message: "The model provider returned an invalid tool response. No change was made. Please try again.",
+      });
+      expect(JSON.stringify(res.body)).not.toContain("secret raw provider payload");
+      expect(fake.counts).toEqual({ getWorkspaceMemberRole: 1 });
+
+      const session = store.listSessions("ws-1", "admin-1", new Date().toISOString())[0];
+      expect(session).toBeDefined();
+      const history = store.getRecentMessages(session!.id, 10, true);
+      expect(history.at(-1)).toMatchObject({
+        role: "assistant",
+        content: res.body.message,
+        payload: { kind: "error", code: "provider_protocol_error" },
+      });
+      expect(JSON.stringify(history)).not.toContain("secret raw provider payload");
+    },
+  );
+
   it("replays a duplicate requestId without rerunning the model or host write and rejects conflicting reuse", async () => {
     const fake = createFakeWorkspace();
     const { app, model, cookie } = await makeApp(
@@ -429,21 +476,73 @@ describe("agentic chat turn (LLM_AGENTIC=1)", () => {
     expect(fake.counts.deleteTagAtomic ?? 0).toBe(0);
   });
 
-  it("surfaces a calm model_unavailable error when the model fails mid-loop", async () => {
+  it("preserves a settled read receipt when the model fails mid-loop", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const failing: ModelClient = {
       complete: vi.fn(async () => "{}"),
       completeWithTools: vi
         .fn()
         .mockResolvedValueOnce({ text: "", toolCalls: [{ id: "c1", name: "clockify_tags_list", arguments: {} }] })
-        .mockRejectedValueOnce(new Error("model down")),
+        .mockRejectedValueOnce(new ProviderProtocolError("malformed_tool")),
     };
-    const { app, cookie } = await makeApp([], fake, { modelClient: failing });
+    const { app, cookie, store } = await makeApp([], fake, { modelClient: failing });
 
     const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "hello" });
 
-    expect(res.status).toBe(502);
-    expect(res.body.code).toBe("model_unavailable");
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.reply.kind).toBe("partial");
+    expect(res.body.reply.text).toContain("provider_protocol_error");
+    expect(res.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: true, action: "clockify_tags_list" }),
+      }),
+    ]));
+    const session = store.listSessions("ws-1", "admin-1", new Date().toISOString())[0]!;
+    expect(store.getRecentMessages(session.id, 10, true).at(-1)?.payload).toMatchObject({
+      kind: "partial",
+      code: "provider_protocol_error",
+    });
+  });
+
+  it("preserves a completed safe write when a later provider protocol error stops the loop", async () => {
+    const fake = createFakeWorkspace();
+    const failing: ModelClient = {
+      complete: vi.fn(async () => "{}"),
+      completeWithTools: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: "",
+          toolCalls: [{ id: "c1", name: "clockify_tags_create", arguments: { name: "RC-safe-write" } }],
+        })
+        .mockRejectedValueOnce(new ProviderProtocolError("unoffered_tool")),
+    };
+    const { app, cookie, store } = await makeApp([], fake, { modelClient: failing });
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "create tag RC-safe-write" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.reply.kind).toBe("partial");
+    expect(res.body.reply.text).toContain("provider_protocol_error");
+    expect(res.body.reply.text).toMatch(/change.*recorded/i);
+    expect(res.body.reply.text).not.toMatch(/try again/i);
+    expect(res.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "receipt",
+        receipt: expect.objectContaining({ ok: true, action: "clockify_tags_create" }),
+      }),
+    ]));
+    expect(fake.counts.createTag).toBe(1);
+    const session = store.listSessions("ws-1", "admin-1", new Date().toISOString())[0]!;
+    expect(store.getRecentMessages(session.id, 10, true).at(-1)?.payload).toMatchObject({
+      kind: "partial",
+      code: "provider_protocol_error",
+    });
   });
 
   it("stays single-turn when LLM_AGENTIC is off (default behavior unchanged)", async () => {
@@ -734,7 +833,7 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
     expect(replyText).toMatch(/fail|couldn't|could not|didn't work/i);
   });
 
-  it("answers truthfully when the step budget is exhausted", async () => {
+  it("settles a repeated identical read from its first recorded result", async () => {
     const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "urgent" }] });
     const { app, model, cookie } = await makeApp(
       [{ text: "", toolCalls: [{ id: "x", name: "clockify_tags_list", arguments: {} }] }],
@@ -745,8 +844,9 @@ describe("agentic loop bounds + streaming + mid-loop failures (Phase 4)", () => 
 
     expect(res.status).toBe(200);
     expect(res.body.reply.kind).toBe("answer");
-    expect(res.body.reply.text).toBe(EXHAUSTED_TEXT);
-    expect(model.completeWithTools).toHaveBeenCalledTimes(DEFAULT_MAX_STEPS);
+    expect(res.body.reply.text).toMatch(/recorded.*result/i);
+    expect(model.completeWithTools).toHaveBeenCalledTimes(2);
+    expect(res.body.results).toHaveLength(1);
     expect((res.body.results as ResultItem[]).every((r) => r.kind === "receipt")).toBe(true);
   });
 
@@ -1318,7 +1418,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(yes.status).toBe(200);
     expect(model.calls.length).toBe(callsAfterPreview); // the model never saw "yes"
     expect(yes.body.results).toEqual([]); // no new previews, no receipts
-    expect(String(yes.body.reply?.text ?? "")).toMatch(/confirm button/i);
+    expect(String(yes.body.reply?.text ?? "")).toMatch(/button.*pending preview|pending preview.*button/i);
     expect(fake.counts.deleteTagAtomic ?? 0).toBe(0); // and nothing executed
   });
 
@@ -1380,7 +1480,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(consent.status).toBe(200);
     expect(model.calls.length).toBe(callsAfterPreview); // the model never saw the consent phrase
     expect(consent.body.results).toEqual([]); // no SECOND preview, no receipts
-    expect(String(consent.body.reply?.text ?? "")).toMatch(/confirm button/i);
+    expect(String(consent.body.reply?.text ?? "")).toMatch(/button.*pending preview|pending preview.*button/i);
     expect(fake.counts.deleteTagAtomic ?? 0).toBe(0); // and nothing executed
   });
 
@@ -1411,20 +1511,20 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     expect(model.calls.length).toBe(callsAfterPreview + 1); // guard did NOT intercept
   });
 
-  it("a bare 'yes' with NOTHING pending still reaches the model (the guard is scoped to pending previews)", async () => {
+  it("a bare 'yes' with nothing pending never reaches the model or implies an action", async () => {
     const fake = createFakeWorkspace();
     const { app, model, cookie } = await makeApp([{ text: "Could you say more?", toolCalls: [] }], fake);
     const res = await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "yes" });
     expect(res.status).toBe(200);
-    expect(model.calls.length).toBe(1);
+    expect(model.calls.length).toBe(0);
+    expect(res.body.reply.text).toBe("No action was taken. State the change you want in one fresh message.");
   });
 
   // finding new-2-affirmative-after-completed-safe: a safe write executes
-  // immediately and leaves NO pending confirmation, so the TYPED_CONSENT pending
-  // guard (which keys on countPendingConfirmations) does not fire. A bare
-  // affirmative on the next turn ("yes please go ahead") must NOT re-plan another
-  // write — the prior turn already finished. The deterministic reply says it is
-  // already done; the model never sees the affirmative, so it cannot duplicate.
+  // immediately and leaves NO pending confirmation. "great" is intentionally a
+  // BARE_AFFIRMATIVE-only phrase (not TYPED_CONSENT), so this specifically proves
+  // the completed-write guard prevents a second plan after the prior turn already
+  // finished. The model never sees the acknowledgment, so it cannot duplicate.
   it("a bare affirmative right after a completed safe write does not log a duplicate entry", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" } as never] });
     const { app, model, cookie } = await makeApp(
@@ -1451,7 +1551,7 @@ describe("typed consent guard (live item 157: typing 'yes' at a pending preview 
     const yes = await request(app)
       .post("/api/chat/messages")
       .set("Cookie", cookie)
-      .send({ message: "yes please go ahead" });
+      .send({ message: "great" });
     expect(yes.status).toBe(200);
     // The model never saw the affirmative, so it could not plan a duplicate.
     expect(model.calls.length).toBe(callsAfterFirst);

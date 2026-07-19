@@ -4,6 +4,18 @@ import { ACTION_CATALOG, actionFingerprint, catalogHash, getAction } from "../..
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
 
 describe("action compatibility fingerprints", () => {
+  it("gives every model-visible write, including local permission changes, raw argument authority", () => {
+    const missing = ACTION_CATALOG
+      .filter((action) => action.kind !== "read" && !action.writeAuthority)
+      .map((action) => action.name);
+    expect(missing).toEqual([]);
+    expect(getAction("assistant_update_permissions")?.writeAuthority).toMatchObject({
+      literalControlledPaths: expect.arrayContaining(["groups.*"]),
+      cardinality: { mode: "single", maxExecutions: 1 },
+      mutationPlans: [],
+    });
+  });
+
   it("binds aliases and explicitly open argument paths", () => {
     const action = getAction("assistant_update_permissions");
     expect(action).toBeDefined();
@@ -15,6 +27,7 @@ describe("action compatibility fingerprints", () => {
         risks: action!.risks,
         argumentAliases: action!.argumentAliases ?? [],
         argumentOpenPaths: ["groups"],
+        semanticLiteralAliases: action!.semanticLiteralAliases ?? [],
         mutationWorkflow: action!.mutationWorkflow,
         mutationContract: action!.mutationContract,
         writeAuthority: action!.writeAuthority,
@@ -33,6 +46,7 @@ describe("action compatibility fingerprints", () => {
       risks: action.risks,
       argumentAliases: action.argumentAliases ?? [],
       argumentOpenPaths: action.argumentOpenPaths ?? [],
+      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
       mutationWorkflow: action.mutationWorkflow,
       mutationContract: action.mutationContract,
       writeAuthority: action.writeAuthority,

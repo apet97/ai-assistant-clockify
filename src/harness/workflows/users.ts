@@ -8,6 +8,7 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
@@ -153,6 +154,10 @@ const inviteUser = defineRiskyAction({
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
   mutationContract: createContract,
+  semanticLiteralAliases: Object.freeze([
+    { path: "sendEmail", value: false, authoredPhrases: Object.freeze(["do not send email", "don't send email", "without email", "no email"]) },
+    { path: "sendEmail", value: true, authoredPhrases: Object.freeze(["send email", "send an email"]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({ email: z.string().email(), sendEmail: z.boolean().default(false) }),
   async preview(ctx, args) {
     const baseline = await ctx.clockify.listUsers();

@@ -8,6 +8,7 @@ import {
   withReservedHostCallBudget,
 } from "../../src/clockify/request-governor.js";
 import {
+  APPROVAL_PENDING_BATCH_MAX,
   bindMutationPlanHostCalls,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
   estimateMutationPlanHostCalls,
@@ -26,6 +27,13 @@ import {
 } from "../../src/harness/safety-limits.js";
 
 describe("deterministic mutation host-call bounds", () => {
+  it("derives the approve-all ceiling from the worst-case confirmation call budget", () => {
+    expect(CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS + 3 * APPROVAL_PENDING_BATCH_MAX + 1)
+      .toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
+    expect(CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS + 3 * (APPROVAL_PENDING_BATCH_MAX + 1) + 1)
+      .toBeGreaterThan(TURN_HOST_CALL_LIMIT);
+  });
+
   it("pins exact maximum and maximum + 1 arithmetic under the 60-call turn budget", () => {
     const steps = (count: number, prefix: string) => Array.from({ length: count }, (_, index) => ({
       id: `${prefix}${index}`,

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type TargetSnapshot } from "../action.js";
+import { clarifyResult, defineAction, defineReadAction, defineRiskyAction, type ActionContext, type ActionDefinition, type SemanticLiteralAlias, type TargetSnapshot } from "../action.js";
 import { errorReceipt, listReceipt, successReceipt } from "../receipts.js";
 import { describePatch, resolveEntityRef } from "./resolve.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
@@ -20,6 +20,10 @@ import type { CustomFieldSummary, CreateCustomFieldInput, PreparedCustomFieldUpd
  */
 
 const CF = "custom_fields" as const;
+const REQUIRED_LITERAL_ALIASES = Object.freeze([
+  { path: "required", value: false, authoredPhrases: Object.freeze(["optional", "not required"]) },
+  { path: "required", value: true, authoredPhrases: Object.freeze(["required"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const targetContract = (relations: ["target" | "parent", ...Array<"target" | "parent">], strategy: "update" | "delete") =>
   durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations }, strategies: [strategy] });
@@ -117,6 +121,7 @@ const createCustomField = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: createContract,
+  semanticLiteralAliases: REQUIRED_LITERAL_ALIASES,
   // `fieldType` is OPTIONAL in the schema so an add-on session refuses up front
   // (the platform restriction below) without first being forced to ask the user
   // which type — the dev/api_key path still clarifies for the type after that.
@@ -236,6 +241,7 @@ const updateCustomField = defineRiskyAction({
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: targetContract(["target"], "update"),
+  semanticLiteralAliases: REQUIRED_LITERAL_ALIASES,
   schema: z
     .object({
       id: z.string().min(1),

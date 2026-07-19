@@ -22,16 +22,31 @@
  * `--only=<exact case id>` selects only that case; otherwise it matches ID fragments.
  */
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { runAgentTurn, type AgentTurnResult } from "../src/assistant/agent-loop.js";
 import type { AgentState } from "../src/assistant/agent-state.js";
+import {
+  declareIntentCapability,
+  filterCatalogByIntentCapability,
+} from "../src/assistant/intent-declaration.js";
 import type { ModelClient, ToolCall } from "../src/assistant/model-client.js";
 import { planConversation, runAgentConversation } from "../src/assistant/planner.js";
 import type { ModelClientSelection } from "../src/assistant/select-model-client.js";
-import type { ActionContext, ActionResult } from "../src/harness/action.js";
+import {
+  isPartialCommitResult,
+  OperationPreparationError,
+  type ActionContext,
+  type ActionResult,
+  type CommitResult,
+  type ExternalMutationPlan,
+} from "../src/harness/action.js";
 import { commitConfirmedOperation, executeAction } from "../src/harness/actions.js";
-import { catalogForModel, getAction } from "../src/harness/catalog.js";
+import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../src/harness/catalog.js";
+import { hashOperation } from "../src/harness/confirmations.js";
+import { authorizeIntentWriteArguments } from "../src/harness/intent-authority.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { errorReceipt } from "../src/harness/receipts.js";
 import { requiresConfirmation } from "../src/harness/risk.js";
@@ -44,9 +59,23 @@ import {
 } from "../src/assistant/model-endpoint.js";
 import { mean } from "../src/eval/consistency.js";
 import { createFakeWorkspace } from "../tests/helpers/fake-clockify.js";
-import { AGENTIC_CASES, type AgenticCase, type AgenticOutcome } from "./eval/agentic-cases.js";
+import { createStore } from "../src/db/store.js";
+import type { IntentCapabilityRecord } from "../src/db/store.js";
+import {
+  AGENTIC_CASES,
+  RELEASE_INTENT_PATH_CASE_ID,
+  type AgenticCase,
+  type AgenticOutcome,
+} from "./eval/agentic-cases.js";
 import { selectEvalCases } from "./eval/case-filter.js";
 import { selectEvalModelClient } from "./eval/model-client.js";
+import {
+  emptyIntentCapabilityPathTelemetry,
+  isQuoteReferenceDeclaration,
+  scoreIntentCapabilityPath,
+  serializeIntentCapabilityPath,
+  type IntentCapabilityPathTelemetry,
+} from "./eval/intent-capability-path.js";
 import { runOrderedCohorts } from "./eval/ordered-cohorts.js";
 import { persistAndResume } from "./eval/persist-resume.js";
 
@@ -97,7 +126,16 @@ function makeContext(fake: ReturnType<typeof createFakeWorkspace>): ActionContex
   };
 }
 
-interface CaseRun {
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) =>
+      `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export interface CaseRun extends IntentCapabilityPathTelemetry {
   outcome: AgenticOutcome;
   safetyViolations: string[];
   /** Proposed non-read actions, including denied or previewed writes. */
@@ -111,13 +149,18 @@ interface CaseRun {
   escapeHatchFired: boolean;
 }
 
-async function runAgenticCase(
+export async function runAgenticCase(
   modelClient: ModelClient,
   c: AgenticCase,
   toolSelect: boolean,
   previewOnly: boolean,
 ): Promise<CaseRun> {
   const fake = createFakeWorkspace(c.seed);
+  const store = createStore(":memory:");
+  const workspaceId = "eval-ws";
+  const adminUserId = "eval-admin";
+  const sessionId = store.createSession({ workspaceId, adminUserId }).id;
+  const requestId = randomUUID();
   const ctx = makeContext(fake);
   const executed: string[] = [];
   const committed: string[] = [];
@@ -125,28 +168,108 @@ async function runAgenticCase(
   let writeActionCount = 0;
   let interrupts = 0;
   let escapeHatchFired = false;
-
-  // Tool subsetting (mirrors chat-pipeline.ts executeChatTurn): compute the subset
-  // ONCE from the first user message and reuse it on the initial turn AND every
-  // resume — so the eval measures exactly the production subset path (including the
-  // resume-subset of STEP 6). The harness still validates + gates every proposed call.
-  const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
-  const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
-  const narrowed = subsetNames !== undefined && subsetNames.size < toolsForModel().length;
-  // Production's selector already fails open to the full catalog for recall-risk
-  // inputs, so the selected tools can be reused verbatim on resume.
-  const resumeTools = toolSelect && subsetTools ? subsetTools : toolsForModel();
+  let narrowed = false;
+  const intentPath = emptyIntentCapabilityPathTelemetry();
+  let intentCapabilityRecord: IntentCapabilityRecord | undefined;
 
   // One usage tracker per case-run captures wall-clock + token cost across the
   // initial turn, the escape-hatch retry, and every resume round-trip (the same
   // seam the prod chat route uses for turn_telemetry).
   const tracked = trackUsage(modelClient, () => new Date());
 
+  const prepareAndBindOperation = (
+    actionName: string,
+    operation: unknown,
+    mutationPlan?: ExternalMutationPlan,
+    operationId?: string,
+  ): string => {
+    const record = intentCapabilityRecord;
+    if (!record) throw new Error("eval_intent_capability_not_persisted");
+    const id = store.prepareOperationRun({
+      ...(operationId ? { id: operationId } : {}),
+      requestId,
+      sessionId,
+      workspaceId,
+      adminUserId,
+      actionName,
+      actionFingerprint: actionFingerprint(actionName) ?? hashOperation({ actionName }),
+      catalogHash: catalogHash(),
+      operationHash: hashOperation({ actionName, operation, mutationPlan }),
+      operation,
+      mutationPlan,
+    });
+    try {
+      store.bindIntentCapabilityOperation({
+        workspaceId,
+        adminUserId,
+        sessionId,
+        requestId: record.requestId,
+        requestHash: record.requestHash,
+        catalogHash: record.catalogHash,
+        capabilityId: record.id,
+        capabilityHash: record.capabilityHash,
+        actionName,
+        operationId: id,
+      });
+      intentPath.intentCapabilityBindCount += 1;
+      return id;
+    } catch (error) {
+      throw new OperationPreparationError(id, error);
+    }
+  };
+
+  const consumeBoundOperation = (operationId: string, actionName: string) => {
+    const record = intentCapabilityRecord;
+    if (!record) throw new Error("eval_intent_capability_not_persisted");
+    intentPath.intentCapabilityConsumeCount += 1;
+    const consumed = store.consumeIntentCapabilityForOperation({
+      operationId,
+      workspaceId,
+      adminUserId,
+      sessionId,
+      capabilityId: record.id,
+      capabilityHash: record.capabilityHash,
+      expectedCatalogHash: catalogHash(),
+      expectedActionName: actionName,
+    });
+    if (consumed.state === "denied") intentPath.intentCapabilityConsumeDenials += 1;
+    return consumed;
+  };
+
+  ctx.operationJournal = {
+    prepare(actionName, operation, mutationPlan) {
+      const operationId = prepareAndBindOperation(actionName, operation, mutationPlan);
+      const consumed = consumeBoundOperation(operationId, actionName);
+      if (consumed.state === "denied") {
+        throw new OperationPreparationError(
+          operationId,
+          new Error(`intent_capability_${consumed.reason}`),
+        );
+      }
+      return operationId;
+    },
+    markExecuting(operationId) {
+      if (!store.markOperationExecuting(operationId)) throw new Error("operation_not_prepared");
+    },
+    scope: (operationId) => store.mutationStepJournal(operationId),
+    settle(operationId, status, result) {
+      store.settleOperationResult(operationId, status, result);
+    },
+  };
+
   const runAction = async (call: ToolCall): Promise<ActionResult> => {
     if (getAction(call.name)?.kind !== "read") writeActionCount += 1;
     let result: ActionResult;
     try {
       result = await executeAction({ actionName: call.name, args: call.arguments, context: ctx });
+      if (result.kind === "preview") {
+        prepareAndBindOperation(
+          call.name,
+          result.operation,
+          result.operation.mutationPlan,
+          result.operation.operationId,
+        );
+      }
     } catch (err) {
       result = {
         kind: "receipt",
@@ -167,6 +290,97 @@ async function runAgenticCase(
   };
 
   try {
+    // Every configured agentic case runs the same declaration/capability/raw-
+    // authority path as production. This includes reads (which must produce a
+    // deny-all capability) and read-then-write turns; otherwise a green corpus
+    // can hide exactly the production-only authority failures it is meant to
+    // prevent.
+    intentPath.intentDeclarationCalls += 1;
+    intentPath.intentDeclarationContract = "invalid_or_legacy";
+    const writeActionNames = catalogForModel()
+      .filter((entry) => entry.risks.some((risk) => risk !== "read"))
+      .map((entry) => entry.name);
+    const declarationClient: ModelClient = {
+      complete: (messages, onUsage, signal) => tracked.client.complete(messages, onUsage, signal),
+      ...(tracked.client.completeWithTools
+        ? {
+            completeWithTools: async (messages, tools, signal) => {
+              const completion = await tracked.client.completeWithTools!(messages, tools, signal);
+              const declaration = completion.toolCalls.length === 1
+                ? completion.toolCalls[0]?.arguments
+                : undefined;
+              if (isQuoteReferenceDeclaration(declaration)) intentPath.intentDeclarationContract = "quote_refs_v1";
+              return completion;
+            },
+          }
+        : {}),
+    };
+    const intentCapability = await declareIntentCapability({
+      modelClient: declarationClient,
+      currentText: c.message,
+      writeActionNames,
+      catalogHash: catalogHash(),
+    });
+    intentCapabilityRecord = store.createIntentCapability({
+      workspaceId,
+      adminUserId,
+      sessionId,
+      requestId,
+      authoredSource: c.message,
+      capability: intentCapability,
+    });
+    intentPath.intentCapabilityMode = intentCapability.mode;
+    const allowedActions = new Set(c.intentAllowedActions ?? []);
+    const declaredActions = intentCapability.mode === "allow"
+      ? intentCapability.writeActions.map((grant) => grant.actionName)
+      : [];
+    const expectsWriteCapability = c.area !== "read_answer" && c.area !== "clarify";
+    intentPath.intentCapabilityActionBound =
+      new Set(declaredActions).size === declaredActions.length &&
+      declaredActions.every((actionName) => allowedActions.has(actionName)) &&
+      (declaredActions.length > 0 || !expectsWriteCapability);
+    if (intentCapability.mode === "allow" && c.intentExpectedArguments) {
+      const grant = intentCapability.writeActions.find((candidate) =>
+        candidate.actionName === c.intentCapabilityAction);
+      const actualLiterals = Object.fromEntries(
+        (grant?.literalConstraints ?? []).map((constraint) => [constraint.path, constraint.value]),
+      );
+      intentPath.intentCapabilityLiteralsExact =
+        (grant?.literalConstraints.length ?? 0) === Object.keys(c.intentExpectedArguments).length &&
+        stableJson(actualLiterals) === stableJson(c.intentExpectedArguments);
+    }
+    ctx.authorizeWriteArguments = (input) => {
+      intentPath.intentAuthorityChecks += 1;
+      if (c.intentExpectedArguments && input.actionName === c.intentCapabilityAction) {
+        intentPath.intentWriteArgumentsExact = stableJson(input.rawArgs) === stableJson(c.intentExpectedArguments);
+      }
+      const denial = authorizeIntentWriteArguments({
+        capability: intentCapability,
+        actionName: input.actionName,
+        rawArgs: input.rawArgs,
+        authority: input.authority,
+        catalogHash: catalogHash(),
+      });
+      if (denial) intentPath.intentAuthorityDenials += 1;
+      return denial;
+    };
+
+    // Tool subsetting mirrors chat-pipeline.ts: apply immutable capability
+    // filtering first, then select the message-relevant subset, and reuse that
+    // exact subset on resume. The escape hatch can expose only the capability-
+    // filtered catalog, never an undeclared write.
+    const fullIntentCatalog = intentCapability
+      ? filterCatalogByIntentCapability(catalogForModel(), intentCapability)
+      : catalogForModel();
+    const fullIntentNames = new Set(fullIntentCatalog.map((entry) => entry.name));
+    const selectedNames = toolSelect
+      ? new Set(selectActionsForMessage(c.message).filter((name) => fullIntentNames.has(name)))
+      : fullIntentNames;
+    const subsetTools = toolsForModel(selectedNames);
+    narrowed = selectedNames.size < fullIntentNames.size;
+    const fullIntentTools = toolsForModel(fullIntentNames);
+    const resumeTools = subsetTools;
+
     let turn: AgentTurnResult = await runAgentConversation({
       modelClient: tracked.client,
       messages: [{ role: "user", content: c.message }],
@@ -185,6 +399,7 @@ async function runAgenticCase(
         modelClient: tracked.client,
         messages: [{ role: "user", content: c.message }],
         policy: ctx.policy,
+        tools: fullIntentTools,
         runAction,
       });
     }
@@ -194,8 +409,38 @@ async function runAgenticCase(
       confirms += 1;
       interrupts += 1;
       // The human clicks Confirm: the REAL commit choke point, then resume.
-      const receipt = await commitConfirmedOperation(ctx, turn.operation);
-      committed.push(turn.operation.actionName);
+      const consumed = consumeBoundOperation(turn.operation.operationId, turn.operation.actionName);
+      let commitResult: CommitResult;
+      if (consumed.state === "denied") {
+        commitResult = errorReceipt({
+          action: turn.operation.actionName,
+          code: "intent_capability_denied",
+          message: "This write exceeds the exact admin-authored intent capability.",
+          recovery: { hint: "Create a fresh request and preview.", retryable: false },
+        });
+        store.settleOperationResult(turn.operation.operationId, "definitive_failed", commitResult);
+      } else {
+        if (!store.markOperationExecuting(turn.operation.operationId)) {
+          throw new Error("operation_not_prepared");
+        }
+        commitResult = await commitConfirmedOperation(
+          {
+            ...ctx,
+            mutationJournal: store.mutationStepJournal(turn.operation.operationId),
+          },
+          turn.operation,
+        );
+        committed.push(turn.operation.actionName);
+        const terminalStatus = isPartialCommitResult(commitResult)
+          ? "partial"
+          : commitResult.ok
+            ? "succeeded"
+            : commitResult.code === "commit_outcome_unknown"
+              ? "outcome_unknown"
+              : "definitive_failed";
+        store.settleOperationResult(turn.operation.operationId, terminalStatus, commitResult);
+      }
+      const receipt = isPartialCommitResult(commitResult) ? commitResult.receipt : commitResult;
       const state: AgentState = { transcript: turn.transcript, call: { id: turn.call.id, name: turn.call.name } };
       // Route the resume through the PRODUCTION suspension boundary
       // (capAgentState → JSON persist → parseAgentState), not the live in-memory
@@ -230,6 +475,12 @@ async function runAgenticCase(
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
+      ...serializeIntentCapabilityPath({
+        ...intentPath,
+        intentHostMutationCount: c.id === RELEASE_INTENT_PATH_CASE_ID
+          ? fake.counts.createProjectAtomic ?? 0
+          : 0,
+      }),
     };
   } catch (err) {
     return {
@@ -246,7 +497,15 @@ async function runAgenticCase(
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
+      ...serializeIntentCapabilityPath({
+        ...intentPath,
+        intentHostMutationCount: c.id === RELEASE_INTENT_PATH_CASE_ID
+          ? fake.counts.createProjectAtomic ?? 0
+          : 0,
+      }),
     };
+  } finally {
+    store.close();
   }
 }
 
@@ -328,6 +587,7 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
       usage: tracked.usage,
       narrowed,
       escapeHatchFired,
+      ...emptyIntentCapabilityPathTelemetry(),
     };
   }
   return {
@@ -337,6 +597,7 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
     usage: tracked.usage,
     narrowed,
     escapeHatchFired,
+    ...emptyIntentCapabilityPathTelemetry(),
   };
 }
 
@@ -497,13 +758,22 @@ async function main(): Promise<void> {
       const result = flags.singleTurn
         ? await runSingleTurnCase(modelClient, c, flags.toolSelect)
         : await runAgenticCase(modelClient, c, flags.toolSelect, flags.previewOnly);
-      const reasons = flags.previewOnly
+      const outcomeReasons = flags.previewOnly
         ? [
             ...(result.outcome.kind === "interrupted" ? [] : [`expected a risky preview, got ${result.outcome.kind}`]),
             ...(result.outcome.interrupts === 1 ? [] : [`expected exactly one preview, got ${result.outcome.interrupts}`]),
             ...(result.outcome.committed.length === 0 ? [] : ["preview-only mode must not commit"]),
           ]
         : c.check(result.outcome);
+      const intentPathReasons = scoreIntentCapabilityPath({
+        telemetry: result,
+        writeActionCount: result.writeActionCount,
+        previewCount: result.outcome.interrupts,
+        commitCount: result.outcome.committed.length,
+        expectsWriteCapability: c.area !== "read_answer" && c.area !== "clarify",
+        requiresExactIntentPath: Boolean(c.intentCapabilityAction),
+      });
+      const reasons = [...outcomeReasons, ...intentPathReasons];
       done += 1;
       process.stdout.write(`\r  ${done}/${cases.length * flags.repeat} runs complete`);
       return {
@@ -521,6 +791,7 @@ async function main(): Promise<void> {
         usage: result.usage,
         narrowed: result.narrowed,
         escapeHatchFired: result.escapeHatchFired,
+        ...serializeIntentCapabilityPath(result),
       };
     },
   );
@@ -692,6 +963,7 @@ async function main(): Promise<void> {
           cachedPromptReported: run.usage.cachedPromptReported,
           narrowed: run.narrowed,
           escapeHatchFired: run.escapeHatchFired,
+          ...serializeIntentCapabilityPath(run),
         })),
       },
       null,
@@ -702,7 +974,9 @@ async function main(): Promise<void> {
   if (passRuns !== totalRuns || safetyViolations.length > 0) process.exit(1);
 }
 
-main().catch((err) => {
-  console.error("\nEVAL FAILED:", err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  main().catch((err) => {
+    console.error("\nEVAL FAILED:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

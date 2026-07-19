@@ -62,7 +62,15 @@ stays a thin, replaceable translator:
   provider validates against a JSON Schema generated from the same Zod schema the
   harness validates with — so the model stops inventing argument shapes. Unknown
   nested fields are rejected unless that exact dynamic-record path is declared open.
-  The Zod + risk/policy gate is still the trust boundary (provider validation is convenience).
+  The intent, Zod, risk, and policy gates remain the server-side trust boundary
+  (provider validation is only a convenience).
+  Returned tool names are also checked against the exact tools offered in that
+  request; an unoffered tool is a terminal provider-protocol error.
+- **Server-verified write intent**: before Clockify results reach the main planner,
+  an isolated declaration pass cites an exact quote, named admin-authored
+  segment, and zero-based occurrence. The server computes UTF-8 spans and binds structured
+  literals to catalog-hashed action/path/value aliases. Missing, ambiguous,
+  invented, or opposite-polarity evidence denies writes without removing reads.
 - **A durable, approval-gated agentic loop** (default on): reads and safe writes
   auto-chain with their receipts fed back to the model; the first risky write
   interrupts into the preview → button-confirm flow, and the confirmed receipt
@@ -84,7 +92,7 @@ stays a thin, replaceable translator:
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
-  reaches for instead of scrambling 137 primitives.
+  reaches for instead of scrambling 138 primitives.
 - **Operational metrics** (`GET /api/metrics`, including per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy, write safety, latency,
@@ -98,6 +106,11 @@ stays a thin, replaceable translator:
   elsewhere. Backend configurability remains available to self-hosters, but version
   1.0.0 includes no provider migration and requires fresh safety evidence after any
   provider change.
+- **Full-path DeepSeek release gate** — each candidate reasoning setting must pass
+  12 cases across five ordered cohorts (60 runs), including a provider-facing
+  declaration → immutable capability → filtered tools → raw authority match →
+  exactly-one fake mutation path. Release evidence also records cache-hit tokens
+  and fails closed on any missing cohort or write-safety regression.
 - **Streaming** — `POST /api/chat/stream` streams the harness's results as they execute
   (never the model's narration, which would conflict with the safety override).
 

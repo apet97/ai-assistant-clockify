@@ -1,10 +1,10 @@
 /**
  * Deterministic tool subsetting (Phase 1 — the centerpiece for weak-model
- * consistency). A weak model handed all 139 tools (~66 KB of schema) every turn
+ * consistency). A weak model handed all 140 tools every turn
  * scatters across plausible-but-wrong choices. This module shrinks that menu to
  * the handful of RELEVANT tools for the message — by lexical relevance over the
  * 13 feature groups, plus a small always-on CORE — so the model decides among
- * ~15–30 tools, not 139.
+ * ~15–30 tools, not 140.
  *
  * Properties that matter:
  *   - DETERMINISTIC: same message → same tool set (no model call, no embeddings,

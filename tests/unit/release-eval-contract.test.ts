@@ -42,4 +42,21 @@ describe("DeepSeek release evaluator contract", () => {
     expect(evaluator).not.toContain("result.outcome.finalText.slice");
     expect(evaluator).not.toContain('sample.join("; ")');
   });
+
+  it("binds the exact live regression to declaration, capability filtering, and raw authority telemetry", () => {
+    const evaluator = read("scripts/eval-agentic.ts");
+    const intentPath = read("scripts/eval/intent-capability-path.ts");
+    const corpus = read("scripts/eval/agentic-cases.ts");
+
+    expect(corpus).toContain('RELEASE_INTENT_PATH_PROJECT_NAME = "RC-086C25A-LIVE-20260719-1012"');
+    expect(corpus).toContain("Create a public project named ${RELEASE_INTENT_PATH_PROJECT_NAME}. Do not create anything else.");
+    expect(evaluator).toContain("declareIntentCapability");
+    expect(evaluator).toContain("filterCatalogByIntentCapability");
+    expect(evaluator).toContain("authorizeIntentWriteArguments");
+    expect(evaluator).toContain('intentPath.intentDeclarationContract = "quote_refs_v1"');
+    expect(evaluator).toContain("isQuoteReferenceDeclaration");
+    expect(evaluator).toContain('import {\n  emptyIntentCapabilityPathTelemetry,');
+    expect(intentPath).toContain("scoreIntentCapabilityPath");
+    expect(intentPath).toContain("serializeIntentCapabilityPath");
+  });
 });
