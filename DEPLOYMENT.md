@@ -95,19 +95,62 @@ set -euo pipefail
 : "${RECOVERY_EVIDENCE_DIR:?absolute off-worktree evidence directory is required}"
 test "$RELEASE_SHA" = "$(git rev-parse HEAD)"
 test -z "$(git status --porcelain --untracked-files=all)"
-CHECKOUT_ROOT="$(pwd -P)"
-mkdir -p "$RECOVERY_EVIDENCE_DIR"
-RECOVERY_EVIDENCE_DIR="$(cd "$RECOVERY_EVIDENCE_DIR" && pwd -P)"
-export RECOVERY_EVIDENCE_DIR
+CHECKOUT_ROOT="$(git rev-parse --show-toplevel)"
+CHECKOUT_ROOT="$(cd "$CHECKOUT_ROOT" && pwd -P)"
+case "$RECOVERY_EVIDENCE_DIR" in
+  /*) ;;
+  *) echo "RECOVERY_EVIDENCE_DIR must be absolute" >&2; exit 1 ;;
+esac
+RECOVERY_EVIDENCE_NAME="$(basename -- "$RECOVERY_EVIDENCE_DIR")"
+case "$RECOVERY_EVIDENCE_NAME" in
+  ""|.|..) echo "RECOVERY_EVIDENCE_DIR must name a new directory" >&2; exit 1 ;;
+esac
+RECOVERY_EVIDENCE_PARENT="$(dirname -- "$RECOVERY_EVIDENCE_DIR")"
+RECOVERY_EVIDENCE_PARENT="$(cd "$RECOVERY_EVIDENCE_PARENT" && pwd -P)"
+case "$RECOVERY_EVIDENCE_PARENT" in
+  /) RECOVERY_EVIDENCE_DIR="/$RECOVERY_EVIDENCE_NAME" ;;
+  *) RECOVERY_EVIDENCE_DIR="$RECOVERY_EVIDENCE_PARENT/$RECOVERY_EVIDENCE_NAME" ;;
+esac
 case "$RECOVERY_EVIDENCE_DIR" in
   "$CHECKOUT_ROOT"|"$CHECKOUT_ROOT"/*) echo "RECOVERY_EVIDENCE_DIR must be outside the checkout" >&2; exit 1 ;;
 esac
+test ! -e "$RECOVERY_EVIDENCE_DIR"
+test ! -L "$RECOVERY_EVIDENCE_DIR"
+mkdir -m 700 -- "$RECOVERY_EVIDENCE_DIR"
+test -d "$RECOVERY_EVIDENCE_DIR"
+test ! -L "$RECOVERY_EVIDENCE_DIR"
+test "$(cd "$RECOVERY_EVIDENCE_DIR" && pwd -P)" = "$RECOVERY_EVIDENCE_DIR"
+node -e '
+  const mode = require("node:fs").statSync(process.argv[1]).mode & 0o777;
+  if (mode !== 0o700) process.exit(1);
+' "$RECOVERY_EVIDENCE_DIR"
+export RECOVERY_EVIDENCE_DIR
 RAILWAY_TARGET=(
   --project fb1fa3c6-cc28-40d8-b985-2a7ee7051304
   --service 2656670e-39a5-40f3-af5c-56dfc637552f
   --environment 45300bdc-788b-4f63-8749-5a8f7e46b774
   --no-local
 )
+RAILWAY_STATUS_JSON="$(railway status \
+  --project fb1fa3c6-cc28-40d8-b985-2a7ee7051304 \
+  --environment 45300bdc-788b-4f63-8749-5a8f7e46b774 --json)"
+node -e '
+  const value = JSON.parse(process.argv[1]);
+  const environments = value.environments?.edges;
+  const services = value.services?.edges;
+  const environment = Array.isArray(environments)
+    ? environments.find(({ node }) => node?.id === "45300bdc-788b-4f63-8749-5a8f7e46b774" && node?.name === "production")
+    : undefined;
+  const service = Array.isArray(services)
+    ? services.find(({ node }) => node?.id === "2656670e-39a5-40f3-af5c-56dfc637552f" && node?.name === "ai-assistant")
+    : undefined;
+  const instance = environment?.node?.serviceInstances?.edges?.find(
+    ({ node }) => node?.serviceId === "2656670e-39a5-40f3-af5c-56dfc637552f" && node?.serviceName === "ai-assistant",
+  );
+  if (value.id !== "fb1fa3c6-cc28-40d8-b985-2a7ee7051304" ||
+      value.name !== "ai-assistant-clockify" || !environment || !service || !instance) process.exit(1);
+' "$RAILWAY_STATUS_JSON"
+unset RAILWAY_STATUS_JSON
 export RELEASE_SOURCE_CANDIDATE_SHA="$RELEASE_SHA"
 export RELEASE_EVIDENCE_COMMIT_SHA="$RELEASE_SOURCE_CANDIDATE_SHA"
 export EVAL_RELEASE_CANDIDATE_SHA="$RELEASE_SHA"
@@ -180,18 +223,75 @@ their six canonical tracked paths. Stage exactly those paths, require no other t
 untracked change, and create an evidence-only descendant of the tested source candidate:
 
 ```bash
-install -m 0644 "$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH" \
+DEEPSEEK_EXTERNAL_INPUTS=(
+  "$DEEPSEEK_CAPABILITY_PROBE_RAW_PATH"
+  "$DEEPSEEK_BASELINE_RAW_PATH"
+  "$DEEPSEEK_CANDIDATE_RAW_PATH"
+  "$DEEPSEEK_FOCUSED_READ_RAW_PATH"
+  "$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH"
+  "$DEEPSEEK_BINDING_PATH"
+)
+DEEPSEEK_CANONICAL_PATHS=(
   evidence/performance/deepseek-capability-probe.raw.json
-install -m 0644 "$DEEPSEEK_BASELINE_RAW_PATH" \
   evidence/performance/deepseek-baseline.raw.json
-install -m 0644 "$DEEPSEEK_CANDIDATE_RAW_PATH" \
   evidence/performance/deepseek-candidate.raw.json
-install -m 0644 "$DEEPSEEK_FOCUSED_READ_RAW_PATH" \
   evidence/performance/deepseek-focused-read.raw.json
-install -m 0644 "$DEEPSEEK_FOCUSED_RISKY_PREVIEW_RAW_PATH" \
   evidence/performance/deepseek-focused-risky-preview.raw.json
-install -m 0644 "$DEEPSEEK_BINDING_PATH" \
   evidence/performance/deepseek-release-binding.json
+)
+DEEPSEEK_INPUT_SHA256=()
+for source_path in "${DEEPSEEK_EXTERNAL_INPUTS[@]}"; do
+  test -f "$source_path"
+  test ! -L "$source_path"
+  node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$source_path"
+  source_sha256="$(shasum -a 256 "$source_path" | awk '{print $1}')"
+  printf '%s' "$source_sha256" | grep -Eq '^[0-9a-f]{64}$'
+  DEEPSEEK_INPUT_SHA256+=("$source_sha256")
+done
+
+DEEPSEEK_IMPORT_TEMP_PATHS=()
+cleanup_deepseek_import() {
+  if ((${#DEEPSEEK_IMPORT_TEMP_PATHS[@]} > 0)); then
+    rm -f -- "${DEEPSEEK_IMPORT_TEMP_PATHS[@]}"
+  fi
+}
+abort_deepseek_import() {
+  cleanup_deepseek_import
+  trap - EXIT HUP INT TERM
+  exit 1
+}
+trap cleanup_deepseek_import EXIT
+trap abort_deepseek_import HUP INT TERM
+for index in "${!DEEPSEEK_EXTERNAL_INPUTS[@]}"; do
+  source_path="${DEEPSEEK_EXTERNAL_INPUTS[$index]}"
+  target_path="${DEEPSEEK_CANONICAL_PATHS[$index]}"
+  temp_path="$(mktemp "${target_path}.import.XXXXXX")"
+  DEEPSEEK_IMPORT_TEMP_PATHS+=("$temp_path")
+  cp -- "$source_path" "$temp_path"
+  chmod 0644 "$temp_path"
+  test -f "$temp_path"
+  test ! -L "$temp_path"
+  node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$temp_path"
+  temp_sha256="$(shasum -a 256 "$temp_path" | awk '{print $1}')"
+  test "$temp_sha256" = "${DEEPSEEK_INPUT_SHA256[$index]}"
+  cmp -s -- "$source_path" "$temp_path"
+done
+for index in "${!DEEPSEEK_CANONICAL_PATHS[@]}"; do
+  mv -f -- "${DEEPSEEK_IMPORT_TEMP_PATHS[$index]}" "${DEEPSEEK_CANONICAL_PATHS[$index]}"
+done
+DEEPSEEK_IMPORT_TEMP_PATHS=()
+trap - EXIT HUP INT TERM
+
+for index in "${!DEEPSEEK_EXTERNAL_INPUTS[@]}"; do
+  source_path="${DEEPSEEK_EXTERNAL_INPUTS[$index]}"
+  target_path="${DEEPSEEK_CANONICAL_PATHS[$index]}"
+  test -f "$target_path"
+  test ! -L "$target_path"
+  node -e 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"))' "$target_path"
+  target_sha256="$(shasum -a 256 "$target_path" | awk '{print $1}')"
+  test "$target_sha256" = "${DEEPSEEK_INPUT_SHA256[$index]}"
+  cmp -s -- "$source_path" "$target_path"
+done
 
 git add -- \
   evidence/performance/deepseek-capability-probe.raw.json \
