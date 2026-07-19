@@ -7,6 +7,28 @@ import {
   type DeployCommandRunner,
 } from "../../scripts/deploy-private-production.js";
 
+const RAILWAY_PROJECT_ID = "fb1fa3c6-cc28-40d8-b985-2a7ee7051304";
+const RAILWAY_SERVICE_ID = "2656670e-39a5-40f3-af5c-56dfc637552f";
+const RAILWAY_ENVIRONMENT_ID = "45300bdc-788b-4f63-8749-5a8f7e46b774";
+
+function expectExactRailwayTarget(args: string[]): void {
+  for (const [flag, id] of [
+    ["-p", RAILWAY_PROJECT_ID],
+    ["-s", RAILWAY_SERVICE_ID],
+    ["-e", RAILWAY_ENVIRONMENT_ID],
+  ] as const) {
+    const indexes = args.flatMap((value, index) => value === flag ? [index] : []);
+    expect(indexes, `${flag} must occur exactly once`).toHaveLength(1);
+    expect(args[indexes[0]! + 1], `${flag} must target the exact id`).toBe(id);
+  }
+  for (const duplicate of ["--project", "--service", "--environment"]) {
+    expect(args).not.toContain(duplicate);
+  }
+  expect(args).not.toContain("ai-assistant");
+  expect(args).not.toContain("production");
+  expect(args).not.toContain("--no-local");
+}
+
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({
   RELEASE_STAGING: process.cwd(),
   RELEASE_SHA: "a".repeat(40),
@@ -106,6 +128,25 @@ describe("private production deployment transaction", () => {
       command === "railway" && args[0] === "variable" && args[1] === "set")).toHaveLength(1);
   });
 
+  it("pins every Railway variable and upload command to the exact production ids", () => {
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const runner: DeployCommandRunner = (command, args) => {
+      calls.push({ command, args });
+      if (command === "railway" && args[0] === "--version") return "railway 5.27.0";
+      if (command === "railway" && args[0] === "variable" && args[1] === "list") {
+        return JSON.stringify(priorVariables);
+      }
+      return "";
+    };
+
+    deployPrivateProduction(releaseEnvironment(), runner);
+
+    const targetedCalls = calls.filter(({ command, args }) =>
+      command === "railway" && (args[0] === "variable" || args[0] === "up"));
+    expect(targetedCalls).toHaveLength(3);
+    for (const { args } of targetedCalls) expectExactRailwayTarget(args);
+  });
+
   it.each(["set", "up"] as const)(
     "restores every prior value when Railway %s fails after mutation begins",
     (failurePoint) => {
@@ -145,6 +186,9 @@ describe("private production deployment transaction", () => {
       if (failurePoint === "set") {
         expect(calls.some(({ command, args }) => command === "railway" && args[0] === "up")).toBe(false);
       }
+      const targetedCalls = calls.filter(({ command, args }) =>
+        command === "railway" && (args[0] === "variable" || args[0] === "up"));
+      for (const { args } of targetedCalls) expectExactRailwayTarget(args);
     },
   );
 });

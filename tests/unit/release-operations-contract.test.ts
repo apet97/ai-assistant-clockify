@@ -36,6 +36,30 @@ describe("release operations contract", () => {
     expect(transaction.slice(variableSet, upload)).toContain('"--skip-deploys"');
   });
 
+  it("pins deploy commands to exact Railway ids without weakening DeepSeek run isolation", () => {
+    const runbook = read("DEPLOYMENT.md");
+    const projectId = "fb1fa3c6-cc28-40d8-b985-2a7ee7051304";
+    const serviceId = "2656670e-39a5-40f3-af5c-56dfc637552f";
+    const environmentId = "45300bdc-788b-4f63-8749-5a8f7e46b774";
+    const deepSeekTarget = runbook.slice(
+      runbook.indexOf("RAILWAY_TARGET=("),
+      runbook.indexOf("RAILWAY_STATUS_JSON="),
+    );
+    const deployTransaction = runbook.slice(
+      runbook.indexOf("For a release-candidate upload"),
+      runbook.indexOf("Set `BASE_URL`"),
+    );
+
+    for (const id of [projectId, serviceId, environmentId]) {
+      expect(deepSeekTarget).toContain(id);
+      expect(deployTransaction).toContain(id);
+    }
+    expect(deepSeekTarget).toContain("--no-local");
+    expect(deployTransaction).toContain("does not rely on a linked or local Railway target");
+    expect(deployTransaction).toContain("do not accept `--no-local`");
+    expect(deployTransaction).not.toMatch(/railway (?:up|variable)[^\n]*--no-local/u);
+  });
+
   it("documents the one executable import into every canonical workflow evidence filename", () => {
     const runbook = read("docs/marketplace/03-operations-evidence-rollback-package.md");
     const pkg = JSON.parse(read("package.json")) as { scripts: Record<string, string> };
@@ -112,6 +136,11 @@ describe("release operations contract", () => {
       expect(runbook).toContain("StrictHostKeyChecking=no");
       expect(runbook).toContain("ssh-keyscan");
       expect(runbook).toContain("railway service files");
+      expect(runbook).toMatch(
+        /railway service files -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304\s+\\?\s*-s 2656670e-39a5-40f3-af5c-56dfc637552f\s+\\?\s*-e 45300bdc-788b-4f63-8749-5a8f7e46b774/u,
+      );
+      expect(runbook).not.toMatch(/railway service files[^\n]*-s ai-assistant/u);
+      expect(runbook).not.toMatch(/railway service files[^\n]*-e production/u);
       expect(runbook).toContain('download "${REMOTE_BACKUP}${suffix}" "$partial_path"');
       expect(runbook).toContain("rm -f -- /data/backups/ai-assistant-<DRILL_ID>.sqlite");
       expect(runbook).not.toContain('delete "${REMOTE_BACKUP}${suffix}" --yes');
@@ -120,6 +149,22 @@ describe("release operations contract", () => {
       expect(runbook).not.toMatch(/railway ssh[^\n]*sh -lc/u);
       expect(runbook).not.toContain("| /usr/bin/base64 -D");
     }
+  });
+
+  it("binds application rollback to the exact dashboard target and prior deployment", () => {
+    const runbook = read("docs/marketplace/03-operations-evidence-rollback-package.md");
+    const rollback = runbook.slice(
+      runbook.indexOf("## Application rollback"),
+      runbook.indexOf("## Database restore and disaster recovery"),
+    );
+    for (const id of [
+      "fb1fa3c6-cc28-40d8-b985-2a7ee7051304",
+      "2656670e-39a5-40f3-af5c-56dfc637552f",
+      "45300bdc-788b-4f63-8749-5a8f7e46b774",
+    ]) expect(rollback).toContain(id);
+    expect(rollback).toContain("exact deployment id and commit");
+    expect(rollback).toContain("Railway CLI 5.27.0 cannot select an arbitrary prior");
+    expect(rollback).toContain("exact dashboard target");
   });
 
   it("requires both encryption keys when the release drill proves a production key rotation", () => {

@@ -431,7 +431,10 @@ source-candidate versus evidence-only-descendant relationship, and the SHA-256 o
 complete generated `dist/server` + `dist/ui` trees. A dirty/non-evidence checkout or stale/tampered artifact is
 not valid release or recovery evidence.
 
-Railway CLI 5.27.0 equivalent: `railway variable set -s ai-assistant -e production
+Railway CLI 5.27.0 equivalent: `railway variable set
+-p fb1fa3c6-cc28-40d8-b985-2a7ee7051304
+-s 2656670e-39a5-40f3-af5c-56dfc637552f
+-e 45300bdc-788b-4f63-8749-5a8f7e46b774
 "BASE_URL=https://…" "DATABASE_PATH=/data/ai-assistant.sqlite"
 "SESSION_SECRET=…"` (etc.). Do not place this secret-bearing command in shell history;
 prefer the protected Variables tab or `railway variable set --stdin` one secret at a time.
@@ -522,7 +525,13 @@ window; a developer-test token is not acceptable.
 
 For a release-candidate upload, Railway CLI 5.27.0 must receive identity variables from
 the same clean commit before `railway up`. This service is not Git-linked, so a successful
-deployment alone does not prove what source was uploaded:
+deployment alone does not prove what source was uploaded. The checked transaction pins
+project `fb1fa3c6-cc28-40d8-b985-2a7ee7051304`, service
+`2656670e-39a5-40f3-af5c-56dfc637552f`, and environment
+`45300bdc-788b-4f63-8749-5a8f7e46b774` on every variable list/set/rollback and upload; it
+does not rely on a linked or local Railway target. `railway up` and `railway variable`
+do not accept `--no-local`; that flag remains required only on the earlier DeepSeek
+`railway run` target:
 
 ```bash
 set -euo pipefail
@@ -858,12 +867,13 @@ fingerprint/comment; remove that key from both Railway and the agent after clean
 registration is broader than one project:
 
 ```bash
-RAILWAY_PROJECT=fb1fa3c6-cc28-40d8-b985-2a7ee7051304
 LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
 for suffix in "" ".sha256" ".json"; do
   target_path="${LOCAL_BACKUP}${suffix}"
   partial_path="${target_path}.partial"
-  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  railway service files -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304 \
+    -s 2656670e-39a5-40f3-af5c-56dfc637552f \
+    -e 45300bdc-788b-4f63-8749-5a8f7e46b774 \
     download "${REMOTE_BACKUP}${suffix}" "$partial_path" --json >/dev/null
   chmod 600 "$partial_path"
   mv "$partial_path" "$target_path"

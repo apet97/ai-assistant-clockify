@@ -4,8 +4,8 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const PROJECT_ID = "fb1fa3c6-cc28-40d8-b985-2a7ee7051304";
-const SERVICE = "ai-assistant";
-const ENVIRONMENT = "production";
+const SERVICE_ID = "2656670e-39a5-40f3-af5c-56dfc637552f";
+const ENVIRONMENT_ID = "45300bdc-788b-4f63-8749-5a8f7e46b774";
 const ROLLBACK_KEYS = [
   "RELEASE_SHA",
   "RELEASE_BUILD_HASH",
@@ -88,7 +88,7 @@ export function assertRollbackCoverage(
 }
 
 function variableArgs(command: "list" | "set"): string[] {
-  return ["variable", command, "-p", PROJECT_ID, "-s", SERVICE, "-e", ENVIRONMENT];
+  return ["variable", command, "-p", PROJECT_ID, "-s", SERVICE_ID, "-e", ENVIRONMENT_ID];
 }
 
 export type DeployCommandRunner = (command: string, args: string[], capture?: boolean) => string;
@@ -154,8 +154,8 @@ export function deployPrivateProduction(
       "--skip-deploys",
       ...Object.entries(desired).map(([key, value]) => `${key}=${value}`),
     ]);
-    commandRunner("railway", ["up", staging, "--path-as-root", "-p", PROJECT_ID, "-s", SERVICE,
-      "-e", ENVIRONMENT, "--ci", "--message", `marketplace-1.0.0 ${desired.RELEASE_SHA}`]);
+    commandRunner("railway", ["up", staging, "--path-as-root", "-p", PROJECT_ID, "-s", SERVICE_ID,
+      "-e", ENVIRONMENT_ID, "--ci", "--message", `marketplace-1.0.0 ${desired.RELEASE_SHA}`]);
   } catch (releaseError) {
     try {
       rollbackVariables(snapshot, Object.keys(desired), commandRunner);

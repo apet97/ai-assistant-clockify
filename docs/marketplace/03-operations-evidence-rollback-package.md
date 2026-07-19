@@ -75,7 +75,6 @@ cloud-sync folder. Keep the production app online for the SQLite online backup:
 ```bash
 set -euo pipefail
 railway --version                         # required release tool: Railway CLI 5.27.0
-RAILWAY_PROJECT=fb1fa3c6-cc28-40d8-b985-2a7ee7051304
 : "${RELEASE_SHA:?exact release SHA is required}"
 : "${RELEASE_BUILD_HASH:?exact release build hash is required}"
 export RELEASE_SHA RELEASE_BUILD_HASH
@@ -129,7 +128,9 @@ LOCAL_BACKUP="$LOCAL_DIR/$REMOTE_NAME"
 for suffix in "" ".sha256" ".json"; do
   target_path="${LOCAL_BACKUP}${suffix}"
   partial_path="${target_path}.partial"
-  railway service files -p "$RAILWAY_PROJECT" -s ai-assistant -e production \
+  railway service files -p fb1fa3c6-cc28-40d8-b985-2a7ee7051304 \
+    -s 2656670e-39a5-40f3-af5c-56dfc637552f \
+    -e 45300bdc-788b-4f63-8749-5a8f7e46b774 \
     download "${REMOTE_BACKUP}${suffix}" "$partial_path" --json >/dev/null
   chmod 600 "$partial_path"
   mv "$partial_path" "$target_path"
@@ -565,8 +566,13 @@ reconciliation evidence, not payload equality.
 
 1. Prefer a forward fix when the previous build is not proven compatible with the current
    SQLite schema and durable operation format.
-2. If code rollback is safe, select a previously verified Railway deployment by exact id
-   and commit. Keep the same persistent volume and encryption keys.
+2. If code rollback is safe, open the Railway dashboard for project
+   `fb1fa3c6-cc28-40d8-b985-2a7ee7051304`, environment
+   `45300bdc-788b-4f63-8749-5a8f7e46b774`, and service
+   `2656670e-39a5-40f3-af5c-56dfc637552f`; select the previously verified deployment by
+   exact deployment id and commit. Railway CLI 5.27.0 cannot select an arbitrary prior
+   deployment by id, so perform and record this rollback in that exact dashboard target.
+   Keep the same persistent volume and encryption keys.
 3. Do not rotate `SESSION_SECRET` during an unrelated rollback; that invalidates all
    sessions and pending confirmations. Do not rotate encryption keys unless following the
    documented two-key procedure in `DEPLOYMENT.md`.
