@@ -352,7 +352,17 @@ describe("Phase 6 write authority enforcement", () => {
       "operation.projectId",
       "operation.clientId",
     ]));
+    expect(projectUpdate.preservedStatePaths).toEqual([]);
     expect(projectUpdate.cardinality).toEqual({ mode: "single", maxExecutions: 1 });
+    expect(validateWriteAuthorityOperation(
+      ACTION_CATALOG.find((action) => action.name === "clockify_projects_update")!,
+      {
+        id: "project-1",
+        patch: { isPublic: false },
+        body: { name: "Apollo", isPublic: false, hourlyRate: { amount: 7_500, currency: "USD" } },
+      },
+      { mode: "single", maxHostCalls: 60, steps: [{ id: "update-project", kind: "primary" }] },
+    )).toBe("undeclared_server_default_path:operation.body.hourlyRate.currency");
   });
 
   it("pins the reviewed nested id/default paths used by prepared replacement workflows", () => {

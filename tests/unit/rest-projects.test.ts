@@ -88,19 +88,96 @@ describe("project rest", () => {
     });
   });
 
-  it("updateProject GET-then-merge-PUTs (preserves unchanged fields, requires name)", async () => {
+  it("updateProject GET-then-PUTs only the exact UpdateProjectRequest fields", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
-        ? jsonResponse({ id: "p1", name: "Old", color: "#fff", archived: false })
-        : jsonResponse({ id: "p1", name: "New", color: "#fff", archived: false }),
+        ? jsonResponse({
+            id: "p1",
+            workspaceId: "ws-1",
+            name: "Old",
+            color: "#ffffff",
+            archived: false,
+            billable: true,
+            clientId: "c1",
+            note: "keep",
+            public: true,
+            memberships: [{ userId: "u1" }],
+            hourlyRate: { amount: 7_500, since: "2026-01-01T00:00:00.000Z", currency: "USD" },
+            costRate: { amount: 4_500, currency: "EUR" },
+          })
+        : jsonResponse({ id: "p1", name: "New", color: "#ffffff", archived: false, public: false }),
     );
-    const updated = await rest(f as unknown as typeof fetch).updateProject("p1", { name: "New" });
-    expect(updated).toEqual({ id: "p1", name: "New", clientId: undefined, archived: false });
+    const updated = await rest(f as unknown as typeof fetch).updateProject("p1", {
+      name: "New",
+      isPublic: false,
+      workspaceId: "must-not-escape",
+    });
+    expect(updated).toMatchObject({ id: "p1", name: "New", archived: false, isPublic: false });
     const calls = (f as any).mock.calls;
     expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
-    const putBody = JSON.parse(calls[1][1].body);
-    expect(putBody.name).toBe("New");
-    expect(putBody.color).toBe("#fff"); // preserved
+    expect(JSON.parse(calls[1][1].body)).toEqual({
+      archived: false,
+      billable: true,
+      clientId: "c1",
+      color: "#ffffff",
+      costRate: { amount: 4_500 },
+      hourlyRate: { amount: 7_500 },
+      isPublic: false,
+      name: "New",
+      note: "keep",
+    });
+  });
+
+  it("updateProject fails closed on malformed or contradictory fetched replacement state", async () => {
+    const update = async (row: Record<string, unknown>) => {
+      const f = vi.fn(async (_url: string, init: any) =>
+        init.method === "GET" ? jsonResponse(row) : jsonResponse({ id: "p1", name: "Site" }),
+      );
+      await rest(f as unknown as typeof fetch).updateProject("p1", { billable: false });
+    };
+
+    await expect(update({ id: "p1", public: true, isPublic: false, name: "Site" }))
+      .rejects.toThrow("public/isPublic");
+    await expect(update({ id: "p1", public: true, name: 123 }))
+      .rejects.toThrow("name");
+    await expect(update({ id: "p1", public: true, name: "Site", color: "#fff" }))
+      .rejects.toThrow("color");
+    await expect(update({ id: "p1", public: true, name: "Site", archived: null }))
+      .rejects.toThrow("archived");
+    await expect(update({ id: "p1", public: true, name: "Site", billable: null }))
+      .rejects.toThrow("billable");
+    await expect(update({ id: "p1", public: null, name: "Site" }))
+      .rejects.toThrow("public");
+    await expect(update({ id: "p1", isPublic: null, name: "Site" }))
+      .rejects.toThrow("isPublic");
+    await expect(update({ id: "p1", public: true, name: "Site", hourlyRate: { amount: 2_147_483_648 } }))
+      .rejects.toThrow("hourlyRate.amount");
+    await expect(update({ id: "p1", public: true, name: "Site", costRate: { amount: 2_147_483_648 } }))
+      .rejects.toThrow("costRate.amount");
+    await expect(update({ id: "p1", public: true }))
+      .rejects.toThrow("name");
+  });
+
+  it("preserves the exact rate int32 boundaries and strips response-only rate fields", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "GET"
+        ? jsonResponse({
+            id: "p1",
+            name: "Site",
+            hourlyRate: { amount: 0, currency: "USD", since: "2026-01-01T00:00:00Z" },
+            costRate: { amount: 2_147_483_647, currency: "EUR", since: "2026-01-01T00:00:00Z" },
+          })
+        : jsonResponse({ id: "p1", name: "Site" }),
+    );
+
+    await rest(f as unknown as typeof fetch).updateProject("p1", { billable: false });
+
+    expect(JSON.parse((f as any).mock.calls[1][1].body)).toEqual({
+      billable: false,
+      costRate: { amount: 2_147_483_647 },
+      hourlyRate: { amount: 0 },
+      name: "Site",
+    });
   });
 
   it("archiveProject GET-then-PUTs archived:true", async () => {

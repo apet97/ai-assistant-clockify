@@ -272,7 +272,7 @@ describe("rest workspace client", () => {
   it("updateEntity GET-then-merge-PUTs for project", async () => {
     const f = vi.fn(async (_url: string, init: any) =>
       init.method === "GET"
-        ? jsonResponse({ id: "p1", name: "Old", color: "#fff", archived: false })
+        ? jsonResponse({ id: "p1", name: "Old", color: "#ffffff", archived: false })
         : jsonResponse({ id: "p1", name: "New Site" }),
     );
     const updated = await client(f as any).updateEntity!({
@@ -285,7 +285,7 @@ describe("rest workspace client", () => {
     expect(calls.map((c: any) => c[1].method)).toEqual(["GET", "PUT"]);
     const putBody = JSON.parse(calls[1][1].body);
     expect(putBody.name).toBe("New Site"); // caller override
-    expect(putBody.color).toBe("#fff"); // preserved from GET
+    expect(putBody.color).toBe("#ffffff"); // preserved from GET
   });
 
   it("updateEntity throws a clear error for task (needs projectId) and other unsupported types", async () => {

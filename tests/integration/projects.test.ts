@@ -3,6 +3,10 @@ import { commitConfirmedOperation, executeAction } from "../../src/harness/actio
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import type { ActionContext } from "../../src/harness/action.js";
+import { getAction } from "../../src/harness/catalog.js";
+import { validateWriteAuthorityOperation } from "../../src/harness/write-authority.js";
+import { createRestCore } from "../../src/clockify/rest/core.js";
+import { makeProjectRest } from "../../src/clockify/rest/projects.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 
@@ -169,6 +173,85 @@ describe("project actions — safe writes", () => {
 });
 
 describe("project actions — risky writes (preview → commit)", () => {
+  it("sanitizes a production-shaped project replacement through preview and confirm", async () => {
+    const productionRow = {
+      id: "p1",
+      workspaceId: "ws-1",
+      name: "Website",
+      note: "Keep this note",
+      color: "#112233",
+      archived: false,
+      billable: true,
+      clientId: "c1",
+      public: true,
+      memberships: [{ userId: "u1", hourlyRate: { amount: 8_000, currency: "USD" } }],
+      hourlyRate: { amount: 7_500, since: "2026-01-01T00:00:00.000Z", currency: "USD" },
+      costRate: { amount: 4_500, currency: "EUR" },
+    };
+    const fake = createFakeWorkspace({
+      projects: [productionRow as never],
+    });
+    let committedBody: Record<string, unknown> | undefined;
+    const projectRest = makeProjectRest(createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { apiKey: "test" },
+      fetchImpl: async (_url, init) => {
+        if (init?.method === "PUT") {
+          committedBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+          return new Response(JSON.stringify({ id: "p1", name: "Website", isPublic: false }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify(productionRow), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    }), "ws-1");
+    const clockify = new Proxy(fake.client, {
+      get(target, property, receiver) {
+        if (property === "prepareProjectUpdate") return projectRest.prepareProjectUpdate;
+        if (property === "updateProjectAtomic") return projectRest.updateProjectAtomic;
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const context = { ...makeContext(fake), clockify };
+
+    const result = await executeAction({
+      actionName: "clockify_projects_update",
+      args: { currentName: "Website", isPublic: false },
+      context,
+    });
+
+    expect(result.kind).toBe("preview");
+    if (result.kind !== "preview") throw new Error(`expected preview, got ${result.kind}`);
+    const expectedBody = {
+      archived: false,
+      billable: true,
+      clientId: "c1",
+      color: "#112233",
+      costRate: { amount: 4_500 },
+      hourlyRate: { amount: 7_500 },
+      isPublic: false,
+      name: "Website",
+      note: "Keep this note",
+    };
+    expect(result.operation.payload).toMatchObject({
+      body: expectedBody,
+    });
+    expect((result.operation.payload as { body: Record<string, unknown> }).body).toEqual(expectedBody);
+    expect(validateWriteAuthorityOperation(
+      getAction("clockify_projects_update")!,
+      result.operation.payload,
+      result.operation.mutationPlan,
+    )).toBeUndefined();
+
+    const receipt = await commitConfirmedOperation(context, result.operation);
+    expect(receipt.ok).toBe(true);
+    expect(committedBody).toEqual(expectedBody);
+  });
+
   it("clockify_projects_update previews without mutating, then mutates once on commit", async () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({

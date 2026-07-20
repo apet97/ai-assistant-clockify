@@ -17,7 +17,79 @@ type ProjectRow = {
   archived?: boolean;
   billable?: boolean;
   isPublic?: boolean;
+  public?: boolean;
 };
+
+type ProjectRateRequest = { amount: number };
+type ProjectUpdateRequest = {
+  archived?: boolean;
+  billable?: boolean;
+  clientId?: string;
+  color?: string;
+  costRate?: ProjectRateRequest;
+  hourlyRate?: ProjectRateRequest;
+  isPublic?: boolean;
+  name?: string;
+  note?: string;
+};
+
+const PROJECT_UPDATE_TEXT_FIELDS = ["clientId", "color", "name", "note"] as const;
+const PROJECT_UPDATE_BOOLEAN_FIELDS = ["archived", "billable"] as const;
+
+function malformedProjectField(field: string): TypeError {
+  return new TypeError(`Clockify returned a malformed project field: ${field}.`);
+}
+
+function sanitizeProjectRate(value: unknown, field: string): ProjectRateRequest | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw malformedProjectField(field);
+  const row = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(row.amount) || (row.amount as number) < 0 || (row.amount as number) > 2_147_483_647) {
+    throw malformedProjectField(`${field}.amount`);
+  }
+  return { amount: row.amount as number };
+}
+
+function sanitizeProjectUpdateSource(
+  source: Record<string, unknown>,
+  options: { allowPublicAlias: boolean },
+): ProjectUpdateRequest {
+  const body: ProjectUpdateRequest = {};
+  for (const field of PROJECT_UPDATE_TEXT_FIELDS) {
+    const value = source[field];
+    if (value === undefined || value === null) continue;
+    if (typeof value !== "string") throw malformedProjectField(field);
+    if (field === "color" && !/^#[0-9a-fA-F]{6}$/.test(value)) throw malformedProjectField(field);
+    if (field === "name" && (value.length < 2 || value.length > 250)) throw malformedProjectField(field);
+    if (field === "note" && value.length > 16_384) throw malformedProjectField(field);
+    body[field] = value;
+  }
+  for (const field of PROJECT_UPDATE_BOOLEAN_FIELDS) {
+    const value = source[field];
+    if (value === undefined) continue;
+    if (typeof value !== "boolean") throw malformedProjectField(field);
+    body[field] = value;
+  }
+  const isPublic = source.isPublic;
+  const legacyPublic = options.allowPublicAlias ? source.public : undefined;
+  if (isPublic !== undefined && typeof isPublic !== "boolean") {
+    throw malformedProjectField("isPublic");
+  }
+  if (legacyPublic !== undefined && typeof legacyPublic !== "boolean") {
+    throw malformedProjectField("public");
+  }
+  if (typeof isPublic === "boolean" && typeof legacyPublic === "boolean" && isPublic !== legacyPublic) {
+    throw malformedProjectField("public/isPublic");
+  }
+  if (typeof isPublic === "boolean" || typeof legacyPublic === "boolean") {
+    body.isPublic = typeof isPublic === "boolean" ? isPublic : legacyPublic as boolean;
+  }
+  const hourlyRate = sanitizeProjectRate(source.hourlyRate, "hourlyRate");
+  const costRate = sanitizeProjectRate(source.costRate, "costRate");
+  if (hourlyRate) body.hourlyRate = hourlyRate;
+  if (costRate) body.costRate = costRate;
+  return body;
+}
 
 export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPort {
   const ws = `/workspaces/${workspaceId}`;
@@ -27,7 +99,7 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     clientId: p.clientId,
     archived: p.archived,
     billable: p.billable,
-    isPublic: p.isPublic,
+    isPublic: p.isPublic ?? p.public,
   });
 
   const createProjectAtomic: ProjectPort["createProjectAtomic"] = async (input) => map((await core.mutate("api", "POST", `${ws}/projects`, {
@@ -39,10 +111,17 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     ...(input.hourlyRate ? { hourlyRate: input.hourlyRate } : {}),
     ...(input.costRate ? { costRate: input.costRate } : {}),
   })) as ProjectRow);
-  const prepareProjectUpdate: ProjectPort["prepareProjectUpdate"] = async (id, patch) => ({
-    ...((await core.call("api", "GET", `${ws}/projects/${id}`)) as Record<string, unknown>),
-    ...patch,
-  });
+  const prepareProjectUpdate: ProjectPort["prepareProjectUpdate"] = async (id, patch) => {
+    const body: ProjectUpdateRequest = {
+      ...sanitizeProjectUpdateSource(
+        (await core.call("api", "GET", `${ws}/projects/${id}`)) as Record<string, unknown>,
+        { allowPublicAlias: true },
+      ),
+      ...sanitizeProjectUpdateSource(patch, { allowPublicAlias: false }),
+    };
+    if (typeof body.name !== "string") throw malformedProjectField("name");
+    return body;
+  };
   const updateProjectAtomic: ProjectPort["updateProjectAtomic"] = async (id, body) =>
     map((await core.mutate("api", "PUT", `${ws}/projects/${id}`, body)) as ProjectRow);
   const archiveProjectAtomic: ProjectPort["archiveProjectAtomic"] = updateProjectAtomic;
