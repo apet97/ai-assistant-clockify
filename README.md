@@ -9,6 +9,12 @@ The model never executes anything itself and never sees a secret. It can only
 *suggest* named actions from a fixed catalog — the backend decides what (if
 anything) runs.
 
+Version 1.0.0 targets the private-production, pre-Marketplace release-candidate
+state; Marketplace submission has not occurred. Treat only the exact-run record in
+[`docs/marketplace/evidence/release-candidate.md`](./docs/marketplace/evidence/release-candidate.md)
+as current status, using [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md)
+for the acceptance criteria.
+
 ## Highlights
 
 - **Admin/owner only.** Non-admins are rejected before a session is ever created.
@@ -92,7 +98,7 @@ stays a thin, replaceable translator:
   item type) are shown *in the preview*, so a surprising outcome never happens after
   confirm; clarifications offer concrete options, never "give me the ID".
 - **Curated intent actions** — high-level jobs (`period_report`, `onboard_user`) the model
-  reaches for instead of scrambling 138 primitives.
+  reaches for instead of scrambling across the 140-action catalog.
 - **Operational metrics** (`GET /api/metrics`, including per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy, write safety, latency,
@@ -157,19 +163,22 @@ npm run type-check       # tsc --noEmit
 npm test                 # build exact server + served UI artifact, then Vitest; no unmocked network
 npm run build            # -> dist/server, dist/ui
 npm run lint             # eslint src (typed async-safety rules)
-npm run verify           # type-check + lint + cycles + test + build (the gate)
+npm run verify           # both type-checks + lint + cycles + duplication + test/build
+npm run test:e2e         # Chromium + Firefox + WebKit product/browser matrix
 npm run dev              # tsx src/server.ts (needs .env)
 ```
 
-CI runs `npm run verify` + a circular-dependency check (madge) on every push and
-PR (`.github/workflows/ci.yml`). Production deploys to Railway with the SQLite
-database on a persistent volume — see [`DEPLOYMENT.md`](./DEPLOYMENT.md).
+CI runs the production audit/license policy, `npm run verify`, browser E2E,
+dependency review, secret scan, and CodeQL. Production deploys to Railway with
+SQLite on a persistent volume. Deployment is deliberately not a one-line quick
+start: follow the backup/restore and exact-source checked transaction in
+[`DEPLOYMENT.md`](./DEPLOYMENT.md); never run a bare `railway up` from a mutable
+working tree.
 
 `GET /manifest` serves the admin-only Clockify add-on manifest - a **sidebar**
-component (`/component/assistant`) plus an add-on icon at `/icon.svg`. The current
-private deployment and live Clockify flow are recorded in
-[`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md); an older dev run is not
-release evidence.
+component (`/component/assistant`) plus an add-on icon at `/icon.svg`. Current
+private-deployment and live-flow status belongs in the exact-run evidence record;
+an older dev run or a prose claim is not release evidence.
 
 ### Environment
 

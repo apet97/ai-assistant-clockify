@@ -4,6 +4,19 @@ The engineering source of truth for this repo. Read it before changing code.
 Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.md`,
 `PRIVACY.md`.
 
+## Start here
+
+- Product behavior and local setup: `README.md`.
+- Code changes: read "Safety & planner invariants", then the relevant entry in
+  "Architecture". Do not infer authorization rules from UI or prompt text.
+- Clockify wire changes: verify the official OpenAPI shape and a sacrificial live
+  probe, update the adapter test, then regenerate/check the endpoint-scope contract.
+- Release or deployment work: follow `DEPLOYMENT.md` literally. Production deploys
+  use the checked `npm run deploy:private-production` transaction; never run a bare
+  `railway up` from the working tree.
+- Release status and exact evidence: `MARKETPLACE_READINESS.md`. Checked-in
+  templates, old deployments, and prose claims are not evidence.
+
 ## What this is
 
 An **admin-only** AI assistant embedded inside Clockify: a chat where workspace
@@ -13,10 +26,10 @@ fixed catalog; a deterministic harness validates every proposal against per-admi
 permissions and a risk policy and is the only thing that touches Clockify. The
 model never executes anything itself and never sees a secret.
 
-**State:** version 1.0.0 is the pre-Marketplace release candidate. Engineering
-completion is established only by the exact-commit evidence set described in
-`MARKETPLACE_READINESS.md`; checked-in templates or an older deployment are not
-release evidence.
+**Target state:** version 1.0.0 is the private-production, pre-Marketplace release
+candidate; Marketplace submission has not occurred. Current completion and
+deployment status come only from the exact-run evidence referenced by
+`MARKETPLACE_READINESS.md`.
 
 - **Gate:** `npm run verify` runs both TypeScript projects, the full test/build
   suite, a zero-warning typed **ESLint** gate, madge circular-dependency analysis,
@@ -38,31 +51,17 @@ release evidence.
   absent. The release gate fail-closes on any write-safety or latency regression.
   The client remains backend-configurable for development, but provider migration
   is not part of this release.
-- **Weak-model consistency knobs** (for cheap tiers like Flash Lite 3.1, reached via
-  an OpenAI-compatible HTTP endpoint so they get tool-mode): `LLM_TOOL_SELECT` (now
-  **default ON**, `=0` rolls back) shows the model only the message-relevant actions
-  (+ an always-on core) instead of all 140, on BOTH the chat turn and its confirm
-  resume — deterministic, `src/harness/tool-select.ts`. A historical selector benchmark
-  flipped it (11 cases × 5, OFF vs ON): **DeepSeek** 100% pass / 0 safety both, ~61% fewer prompt
-  tokens/turn (18.7K→7.1K per round-trip), latency down, no case regressed; **both Gemini
-  tiers** (flash-latest + flash-lite-3.1 no-think) 100% / 0 safety both, ~65% fewer tokens
-  (17.6K→6.1K/round-trip — same tokenizer) with latency down 18–50% (flash p95
-  6604→3195ms; flash-lite p50 2560→1704ms). A recall escape hatch retries the full catalog
-  when a narrowed CHAT turn does nothing (DeepSeek fired 9.1% of narrowed runs, BOTH Gemini
-  tiers 0%; net still −61/−65%). The RESUME has no escape hatch, so a request spanning more areas than
-  the 3-group clamp, any non-ASCII request, or a request with no lexical match
-  fails open to the full catalog immediately. Unresolved admin-authored clarification
-  context is persisted and reused for the terse follow-up and confirm resume, so the
-  original domain is not lost. `LLM_SEED` adds a sampling seed for reproducibility.
-  `unknown_action` errors carry a "did you mean"
-  (`src/harness/action-suggest.ts`). Measure with `scripts/eval-matrix.ts` (per-model
-  pass-rate + consistency + spread) and `scripts/eval-agentic.ts --tool-select`
-  (per-turn prompt tokens + p50/p95 latency + escape-hatch fire-rate). The 1.0.0
-  release gate is separate: 12 cases × 5 ordered cohorts per candidate setting,
-  including the provider-facing declaration-to-capability-to-authority path for
-  a real safe write, with exactly one expected fake mutation.
-- **Deployed on Railway** (Nixpacks → `npm run build` → `npm start`, liveness
-  `/live`, committed-write readiness `/health`). Redeploy = `railway up` from this dir. The SDK
+- **Tool selection:** `LLM_TOOL_SELECT` is default-on (`=0` rolls back) and applies
+  on chat and confirmation resume. Focused ASCII requests receive a relevant subset
+  plus the always-on core; no lexical match, non-ASCII input, or more than three
+  areas fails open to the full catalog. Chat may use one full-catalog recall retry;
+  resume may not. Unresolved admin-authored clarification context survives terse
+  follow-ups and resume. Implementation: `src/harness/tool-select.ts`; measurements:
+  `scripts/eval-matrix.ts`, `scripts/eval-agentic.ts`, and the exact-source evidence
+  under `evidence/performance/`.
+- **Private-production target: Railway** (Nixpacks → `npm run build` → `npm start`, liveness
+  `/live`, committed-write readiness `/health`). Use the candidate-bound checked
+  transaction in `DEPLOYMENT.md`; never deploy the mutable checkout directly. The SDK
   (`@apet97/clockify-addon-sdk`, on the request path) is vendored as an in-repo
   tarball at `vendor/` so `npm ci` is self-contained; a Railway **volume at
   `/data`** backs the SQLite DB (`DATABASE_PATH=/data/…`) so installs survive
@@ -613,6 +612,7 @@ npm run media:marketplace # deterministic icon/banner/screenshots/demo package
 npm run audit:prod     # fail-closed production advisory gate
 npm run license:prod   # production license gate + deterministic JSON report
 npm run eval:smoke     # offline scripted safety corpus; no network/credentials
+npm run deploy:private-production # guarded exact-source Railway transaction; DEPLOYMENT.md prerequisites required
 npm run db:capture-backup-boundary -- BOUNDARY # create-only pre-snapshot RPO timestamp
 npm run db:bind-legacy-backup-metadata -- BACKUP SHA256 V1_JSON BOUNDARY V2_JSON # non-overwriting v7 release sidecar
 npm run db:verify-restore -- RESTORED SHA256 METADATA # private-clone RTO/RPO + built-start proof
@@ -658,8 +658,8 @@ evidence, or Marketplace approval; no workflow deploys or submits the add-on.
 tunnel + the local server as one unit (writes `BASE_URL`, restarts the server).
 `up` is idempotent; **prefer `sync`** (keeps the URL) — `restart` ROTATES the URL,
 which means you must re-register `<url>/manifest` in the Clockify dev console
-(uninstall → Insert link → INSTALL). Prod runs on Railway and does NOT depend on
-the tunnel.
+(uninstall → Insert link → INSTALL). The private-production target is Railway
+and does not depend on the tunnel.
 
 ## Live testing (opt-in, sacrificial workspace only; gitignored `.env*`)
 

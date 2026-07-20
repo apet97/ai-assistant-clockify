@@ -11,9 +11,14 @@ MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
 the full test/build suite, and circular-dependency/duplication gates. 140 typed
-actions, 16 areas, 3 Clockify hosts. Deployed on Railway (volume-backed SQLite at
-`/data`; redeploy = `railway up`; see `DEPLOYMENT.md`). Data handling/retention:
-`PRIVACY.md`.
+actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
+(volume-backed SQLite at `/data`); deploy only through the checked transaction in
+`DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
+
+Fast path: use `README.md` for product/setup, `CLAUDE.md` for invariants and API
+facts, `DEPLOYMENT.md` for recovery/release operations, and
+`MARKETPLACE_READINESS.md` for exact evidence. Do not duplicate those documents
+here; this file is the execution map.
 
 ## Non-negotiable invariants
 
@@ -129,6 +134,8 @@ npm run media:marketplace # deterministic listing asset package
 npm run audit:prod    # fail-closed production advisory policy
 npm run license:prod  # production license policy + deterministic JSON evidence
 npm run eval:smoke    # offline scripted-model safety corpus (no credentials)
+npm run check:scope-contract # generated endpoint/scope contract must be current
+npm run deploy:private-production # guarded release transaction; prerequisites in DEPLOYMENT.md
 npm run dev           # tsx src/server.ts (needs env)
 ```
 
