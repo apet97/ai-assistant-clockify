@@ -11,6 +11,7 @@ function hasDurableMutationPath(action: ActionDefinition): boolean {
 function invalidContract(action: ActionDefinition): string | undefined {
   const authority = action.writeAuthority;
   if (!authority || !Array.isArray(authority.literalControlledPaths) ||
+    !Array.isArray(authority.authenticatedSelfLiteralPaths) ||
     !Array.isArray(authority.serverDerivedIdPaths) || !Array.isArray(authority.permittedServerDefaultPaths) ||
     !authority.cardinality || !["single", "fixed", "argument"].includes(authority.cardinality.mode) ||
     !Number.isInteger(authority.cardinality.maxExecutions) || authority.cardinality.maxExecutions < 1 ||

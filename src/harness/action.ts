@@ -253,6 +253,9 @@ export interface WriteAuthorityMetadata {
    * canonical scalar value. Callers must select this metadata from the exact
    * action being declared; aliases never apply across actions or paths. */
   semanticLiteralAliases: readonly SemanticLiteralAlias[];
+  /** Raw literal paths where an exact authored `me` may be represented by the
+   * exact authenticated admin id. Catalog hashing binds these reviewed seams. */
+  authenticatedSelfLiteralPaths: readonly string[];
   /** Present on every and only safe-write action. Because this object is part of
    * writeAuthority, action/catalog hashes bind the exact authored-intent rules. */
   authoredIntent?: AuthoredIntentMetadata;

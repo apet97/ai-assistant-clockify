@@ -323,7 +323,11 @@ bug was found against the REAL API, not by reading the code.
   harness matches the model's raw arguments before Zod preprocessing and before
   server-side id/date resolution against explicit authority metadata for all 83
   writes (82 Clockify actions plus the local permission action). Server-derived ids, permitted defaults, and exact authoritative
-  preserved-state paths can only narrow authority.
+  preserved-state paths can only narrow authority. The sole symbolic-self
+  equivalence is explicit, catalog-hashed metadata: exact authored `me` may match
+  exactly one raw value equal to the authenticated admin id only on project
+  membership `addUserIds[]` and project member-rate `userId`; all other ids,
+  paths, values, and actions remain exact-match only.
   Each safe or confirmed operation binds the capability and atomically consumes
   one execution; replay of that same bound operation consumes none. Confirmation
   and resume reload the original persisted capability, reject capability/catalog

@@ -4,6 +4,8 @@ import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { requireSessionCookie, requireSessionSetCookie } from "../helpers/session.js";
 
+const LOCAL_ONLY_SCRIPT_PATHS = new Set(["scripts/user-sim.ts"]);
+
 function typescriptFiles(root: string): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -79,7 +81,8 @@ describe("deterministic integration-test session bootstrap", () => {
   it("forbids silent empty-cookie fallbacks in integration tests and operational scripts", () => {
     const roots = [join(process.cwd(), "tests", "integration"), join(process.cwd(), "scripts")];
     const offenders: string[] = [];
-    for (const path of roots.flatMap(typescriptFiles)) {
+    for (const path of roots.flatMap(typescriptFiles)
+      .filter((path) => !LOCAL_ONLY_SCRIPT_PATHS.has(repositoryPath(path)))) {
       const source = readFileSync(path, "utf8");
       offenders.push(...findSilentEmptyCookieFallbacks(path, source));
     }

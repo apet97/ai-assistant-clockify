@@ -1,5 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "include": ["scripts/**/*.ts", "tests/helpers/**/*.ts", "src/**/*.ts", "types/**/*.d.ts"],
+  "exclude": ["scripts/user-sim.ts"],
   "compilerOptions": { "noEmit": true }
 }

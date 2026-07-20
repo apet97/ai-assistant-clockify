@@ -15,6 +15,7 @@ const authority: WriteAuthorityMetadata = {
   literalControlledPaths: ["name", "amount", "members[]"],
   numericLiteralPaths: ["amount"],
   semanticLiteralAliases: [],
+  authenticatedSelfLiteralPaths: [],
   serverDerivedIdPaths: ["clientId"],
   permittedServerDefaultPaths: ["currencyId"],
   preservedStatePaths: [],
@@ -166,6 +167,111 @@ describe("raw intent authority matcher", () => {
     expect(authorize(capability, { name: "Acme", currencyId: "invented" })).toMatchObject({
       code: "intent_capability_argument_undeclared",
     });
+  });
+
+  it("binds authored me only to the exact authenticated admin on reviewed project-member paths", () => {
+    const capabilityFor = (
+      actionName: "clockify_projects_memberships_update" | "clockify_projects_rate_update",
+      path: "addUserIds[]" | "userId",
+      value: IntentLiteralValue = "me",
+    ) => {
+      const source = "add me";
+      const sourceSpan = spanFor(source, "me");
+      return buildAllowIntentCapabilityV1({
+        authoredSource: source,
+        catalogHash: "catalog-current",
+        writeActions: [{
+          actionName,
+          sourceSpans: [sourceSpan],
+          literalConstraints: [{ path, value, sourceSpan }],
+        }],
+      });
+    };
+    const check = (
+      actionName: "clockify_projects_memberships_update" | "clockify_projects_rate_update",
+      capability: ReturnType<typeof capabilityFor>,
+      rawArgs: unknown,
+    ) => authorizeIntentWriteArguments({
+      capability,
+      actionName,
+      rawArgs,
+      authority: ACTION_CATALOG.find((action) => action.name === actionName)!.writeAuthority!,
+      catalogHash: "catalog-current",
+      authenticatedAdminUserId: "admin-1",
+    });
+
+    const membership = capabilityFor("clockify_projects_memberships_update", "addUserIds[]", ["me"]);
+    expect(check("clockify_projects_memberships_update", membership, { addUserIds: ["me"] }))
+      .toBeUndefined();
+    expect(check("clockify_projects_memberships_update", membership, { addUserIds: ["admin-1"] }))
+      .toBeUndefined();
+    for (const addUserIds of [
+      ["other-1"],
+      ["admin-2"],
+      ["admin-1", "other-1"],
+      ["admin-1", "admin-1"],
+      [" admin-1"],
+      ["ADMIN-1"],
+      ["admin-1-extra"],
+    ]) {
+      expect(check("clockify_projects_memberships_update", membership, { addUserIds }))
+        .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    }
+    for (const declaration of [["Ada"], ["me", "me"], [" me"], ["ME"], ["myself"]]) {
+      const nonMe = capabilityFor("clockify_projects_memberships_update", "addUserIds[]", declaration);
+      expect(check("clockify_projects_memberships_update", nonMe, { addUserIds: ["admin-1"] }))
+        .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    }
+    const authoredId = capabilityFor("clockify_projects_memberships_update", "addUserIds[]", ["admin-1"]);
+    expect(check("clockify_projects_memberships_update", authoredId, { addUserIds: ["me"] }))
+      .toMatchObject({ code: "intent_capability_argument_mismatch" });
+
+    const rate = capabilityFor("clockify_projects_rate_update", "userId");
+    expect(check("clockify_projects_rate_update", rate, { userId: "me" })).toBeUndefined();
+    expect(check("clockify_projects_rate_update", rate, { userId: "admin-1" })).toBeUndefined();
+    for (const userId of ["other-1", "admin-2", " admin-1", "ADMIN-1", "admin-1-extra"]) {
+      expect(check("clockify_projects_rate_update", rate, { userId }))
+        .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    }
+    const reverseRate = capabilityFor("clockify_projects_rate_update", "userId", "admin-1");
+    expect(check("clockify_projects_rate_update", reverseRate, { userId: "me" }))
+      .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    expect(authorizeIntentWriteArguments({
+      capability: rate,
+      actionName: "clockify_projects_rate_update",
+      rawArgs: { userId: "admin-1" },
+      authority: ACTION_CATALOG.find((action) => action.name === "clockify_projects_rate_update")!.writeAuthority!,
+      catalogHash: "catalog-current",
+    })).toMatchObject({ code: "intent_capability_argument_mismatch" });
+
+    const unreviewedPath = capabilityFor("clockify_projects_rate_update", "addUserIds[]");
+    expect(check("clockify_projects_rate_update", unreviewedPath, { addUserIds: ["admin-1"] }))
+      .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    const source = "Create me";
+    const sourceSpan = spanFor(source, "me");
+    const unreviewedAction = buildAllowIntentCapabilityV1({
+      authoredSource: source,
+      catalogHash: "catalog-current",
+      writeActions: [{
+        actionName: "clockify_clients_create",
+        sourceSpans: [sourceSpan],
+        literalConstraints: [{ path: "name", value: "me", sourceSpan }],
+      }],
+    });
+    expect(authorizeIntentWriteArguments({
+      capability: unreviewedAction,
+      actionName: "clockify_clients_create",
+      rawArgs: { name: "admin-1" },
+      authority: ACTION_CATALOG.find((action) => action.name === "clockify_clients_create")!.writeAuthority!,
+      catalogHash: "catalog-current",
+      authenticatedAdminUserId: "admin-1",
+    })).toMatchObject({ code: "intent_capability_argument_mismatch" });
+
+    expect(ACTION_CATALOG.flatMap((action) =>
+      action.writeAuthority?.authenticatedSelfLiteralPaths.map((path) => `${action.name}:${path}`) ?? [])).toEqual([
+      "clockify_projects_rate_update:userId",
+      "clockify_projects_memberships_update:addUserIds[]",
+    ]);
   });
 
   it("enforces array literals and the action cardinality ceiling", () => {
@@ -341,6 +447,7 @@ describe("raw intent authority matcher", () => {
       literalControlledPaths: ["clientName", "projectName", "amount", "dueDate"],
       numericLiteralPaths: ["amount"],
       semanticLiteralAliases: [],
+      authenticatedSelfLiteralPaths: [],
       serverDerivedIdPaths: ["operation.clientId", "operation.projectId"],
       permittedServerDefaultPaths: ["operation.currency"],
       preservedStatePaths: [],

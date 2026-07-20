@@ -342,6 +342,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
                 rawArgs: input.rawArgs,
                 authority: input.authority,
                 catalogHash: catalogHash(),
+                authenticatedAdminUserId: claims.adminUserId,
               });
               if (denial) return denial;
               await ensureCalendar();

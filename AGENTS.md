@@ -66,7 +66,10 @@ here; this file is the execution map.
   preprocessing or server-side id/date resolution. Every one of the 82 Clockify write
   actions has explicit authority metadata; server-derived ids, permitted
   defaults, and exact authoritative preserved-state paths may narrow execution
-  but never expand it. Safe and confirmed writes bind and atomically consume the
+  but never expand it. The only symbolic-self equivalence is catalog-hashed:
+  exact authored `me` may equal the exact authenticated admin id on the two
+  reviewed project-member paths, with one raw value and no cross-user matching.
+  Safe and confirmed writes bind and atomically consume the
   capability; exact operation replay consumes no additional execution, and
   resume reloads the original capability.
 - Full action outcomes live only in `action_results`; turns, chat history, audit,

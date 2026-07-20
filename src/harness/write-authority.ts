@@ -43,6 +43,8 @@ interface ActionAuthoritySemantics {
   defaults?: readonly string[];
   /** Normalized operation paths copied unchanged from an authoritative host read. */
   preservedState?: readonly string[];
+  /** Exact raw literal paths where `me` may become the authenticated admin id. */
+  authenticatedSelfLiterals?: readonly string[];
   /** Maximum external mutation shape for one intent execution. */
   cardinality: Cardinality;
   mutationPlans: WriteAuthorityMetadata["mutationPlans"];
@@ -114,9 +116,9 @@ const ACTION_SEMANTICS = Object.freeze({
     plan("single", step("delete-project")),
     plan("curated", step("archive-project-for-delete"), step("delete-project"), step("restore-project", "compensation")),
   ], { derivedIds: ["operation.id", "operation.projectId"] }),
-  clockify_projects_rate_update: single("update-project-rate", { derivedIds: ["operation.projectId", "operation.userId"] }),
+  clockify_projects_rate_update: single("update-project-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
   clockify_projects_estimate_update: single("update-project-estimate", { derivedIds: ["operation.projectId"] }),
-  clockify_projects_memberships_update: single("update-project-memberships", { derivedIds: ["operation.projectId", "operation.userIds[]", "operation.memberships[].userId"] }),
+  clockify_projects_memberships_update: single("update-project-memberships", { derivedIds: ["operation.projectId", "operation.userIds[]", "operation.memberships[].userId"], authenticatedSelfLiterals: ["addUserIds[]"] }),
   clockify_tasks_create: single("create-task", { derivedIds: ["operation.projectId", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]"] }),
   clockify_tasks_update: single("update-task", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]", "operation.patch.assigneeIds[]"] }),
   clockify_tasks_delete: fixed(3, [
@@ -769,6 +771,10 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
   );
   const semantics = ACTION_SEMANTICS[action.name as keyof typeof ACTION_SEMANTICS];
   if (!semantics) throw new Error(`missing_write_authority_semantics:${action.name}`);
+  const authenticatedSelfLiteralPaths = [...new Set(semantics.authenticatedSelfLiterals ?? [])].sort();
+  if (authenticatedSelfLiteralPaths.some((path) => !literalControlledPaths.includes(path))) {
+    throw new Error(`invalid_authenticated_self_literal_path:${action.name}`);
+  }
   const serverDerivedIdPaths = [...new Set([
     "operation.operationId",
     "operation.workspaceId",
@@ -782,6 +788,7 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     literalControlledPaths: Object.freeze(literalControlledPaths),
     numericLiteralPaths,
     semanticLiteralAliases,
+    authenticatedSelfLiteralPaths: Object.freeze(authenticatedSelfLiteralPaths),
     ...(authoredIntent ? { authoredIntent } : {}),
     serverDerivedIdPaths: Object.freeze(serverDerivedIdPaths),
     permittedServerDefaultPaths: Object.freeze(permittedServerDefaultPaths),

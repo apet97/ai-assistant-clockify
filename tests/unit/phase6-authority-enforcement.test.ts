@@ -25,6 +25,7 @@ interface WriteAuthorityMetadata {
   literalControlledPaths: readonly string[];
   numericLiteralPaths: readonly string[];
   semanticLiteralAliases: ReadonlyArray<{ path: string }>;
+  authenticatedSelfLiteralPaths: readonly string[];
   serverDerivedIdPaths: readonly string[];
   permittedServerDefaultPaths: readonly string[];
   preservedStatePaths: readonly string[];
@@ -103,6 +104,7 @@ describe("Phase 6 write authority enforcement", () => {
       if (!authority || !Array.isArray(authority.literalControlledPaths) ||
         !hasValidNumericLiteralTopology(authority) ||
         authority.literalConstraintLimits !== INTENT_LITERAL_LIMITS ||
+        !Array.isArray(authority.authenticatedSelfLiteralPaths) ||
         !Array.isArray(authority.serverDerivedIdPaths) || !Array.isArray(authority.permittedServerDefaultPaths) ||
         !Array.isArray(authority.preservedStatePaths) ||
         !authority.cardinality || !["single", "fixed", "argument"].includes(authority.cardinality.mode) ||

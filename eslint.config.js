@@ -3,7 +3,10 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "node_modules/**", "vendor/**"] },
+  // `scripts/user-sim.ts` is an intentionally gitignored local scratch tool;
+  // release lint must cover the checked-in operational scripts deterministically
+  // regardless of whether a developer happens to have that file present.
+  { ignores: ["dist/**", "node_modules/**", "vendor/**", "scripts/user-sim.ts"] },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {

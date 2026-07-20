@@ -13,6 +13,8 @@ export interface AuthorizeIntentWriteArgumentsInput {
   rawArgs: unknown;
   authority: WriteAuthorityMetadata;
   catalogHash: string;
+  /** Verified session subject. Omission fails closed for reviewed `me` substitutions. */
+  authenticatedAdminUserId?: string;
 }
 
 interface RawLeaf {
@@ -183,6 +185,24 @@ function constraintMatchesRaw(
   return values.length === 1 && equalLiteral(values[0], constraint.value);
 }
 
+/** The planner may canonicalize authored `me` to the verified session subject.
+ * Keep this exception action/path scoped and exact: one `me` may become only
+ * one occurrence of that same authenticated admin id. */
+function matchesAuthenticatedMeSubstitution(
+  input: AuthorizeIntentWriteArgumentsInput,
+  constraint: IntentLiteralConstraintV1,
+): boolean {
+  const adminUserId = input.authenticatedAdminUserId;
+  if (!adminUserId) return false;
+  if (!input.authority.authenticatedSelfLiteralPaths.includes(constraint.path)) return false;
+  const declared = constraint.value;
+  const declaresOnlyMe = declared === "me" ||
+    (Array.isArray(declared) && declared.length === 1 && declared[0] === "me");
+  if (!declaresOnlyMe) return false;
+  const actual = valuesAtPath(input.rawArgs, constraint.path);
+  return actual?.length === 1 && actual[0] === adminUserId;
+}
+
 function constraintCoversLeaf(constraintPath: string, leafPath: string): boolean {
   const constraint = parsePath(constraintPath);
   const leaf = parsePath(leafPath);
@@ -246,7 +266,8 @@ export function authorizeIntentWriteArguments(
 
   for (const constraint of grant.literalConstraints) {
     if (!pathIsLiteralControlled(constraint.path, input.authority) ||
-      !constraintMatchesRaw(constraint, input.rawArgs)) {
+      (!constraintMatchesRaw(constraint, input.rawArgs) &&
+       !matchesAuthenticatedMeSubstitution(input, constraint))) {
       return denied(input.actionName, "intent_capability_argument_mismatch",
         `Raw argument ${constraint.path} does not match the admin-authored literal.`);
     }
