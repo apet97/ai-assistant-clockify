@@ -1004,6 +1004,351 @@ describe("declareIntentCapability", () => {
     expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
   });
 
+  it("allows an adjacent project name only as the risky update selector", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_update",
+          sourceRefs: [
+            { segment: "current", quote: "rename that project" },
+            { segment: "unresolved_prior", quote: "Atlas" },
+            { segment: "current", quote: "Vega" },
+          ],
+          literalConstraints: [
+            { path: "currentName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "name", value: "Vega", sourceRef: { segment: "current", quote: "Vega" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "rename that project to Vega",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({
+      mode: "allow",
+      writeActions: [expect.objectContaining({
+        actionName: "clockify_projects_update",
+        literalConstraints: expect.arrayContaining([
+          expect.objectContaining({ path: "currentName", value: "Atlas" }),
+          expect.objectContaining({ path: "name", value: "Vega" }),
+        ]),
+      })],
+    });
+  });
+
+  it("binds the exact adjacent-project privacy, membership, and member-rate request", async () => {
+    const writeActions = [
+      {
+        actionName: "clockify_projects_update",
+        sourceRefs: [
+          { segment: "current", quote: "make the project private" },
+          { segment: "unresolved_prior", quote: "Atlas" },
+          { segment: "current", quote: "private" },
+        ],
+        literalConstraints: [
+          { path: "currentName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "isPublic", value: false, sourceRef: { segment: "current", quote: "private" } },
+        ],
+        maxExecutions: 1,
+      },
+      {
+        actionName: "clockify_projects_memberships_update",
+        sourceRefs: [
+          { segment: "current", quote: "add me to it" },
+          { segment: "unresolved_prior", quote: "Atlas" },
+          { segment: "current", quote: "me", occurrence: 0 },
+        ],
+        literalConstraints: [
+          { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "addUserIds[]", value: "me", sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
+        ],
+        maxExecutions: 1,
+      },
+      {
+        actionName: "clockify_projects_rate_update",
+        sourceRefs: [
+          { segment: "current", quote: "make my project member rate to be 15" },
+          { segment: "unresolved_prior", quote: "Atlas" },
+          { segment: "current", quote: "my" },
+          { segment: "current", quote: "project member rate" },
+          { segment: "current", quote: "15" },
+        ],
+        literalConstraints: [
+          { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "userId", value: "me", sourceRef: { segment: "current", quote: "my" } },
+          { path: "rateKind", value: "HOURLY", sourceRef: { segment: "current", quote: "project member rate" } },
+          { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+        ],
+        maxExecutions: 1,
+      },
+    ];
+    for (const writeAction of writeActions) {
+      const single = await declareIntentCapability({
+        modelClient: nativeModel({ writeActions: [writeAction] }),
+        currentText: "make the project private, add me to it, and make my project member rate to be 15",
+        unresolvedPriorText: "create a project named Atlas",
+        requireCurrentActionSpan: true,
+        writeActionNames: [writeAction.actionName],
+        catalogHash,
+      });
+      expect(single.mode, writeAction.actionName).toBe("allow");
+    }
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({ writeActions }),
+      currentText: "make the project private, add me to it, and make my project member rate to be 15",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: [
+        "clockify_projects_update",
+        "clockify_projects_memberships_update",
+        "clockify_projects_rate_update",
+      ],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({
+      mode: "allow",
+      writeActions: [
+        expect.objectContaining({ actionName: "clockify_projects_update" }),
+        expect.objectContaining({ actionName: "clockify_projects_memberships_update" }),
+        expect.objectContaining({ actionName: "clockify_projects_rate_update" }),
+      ],
+    });
+  });
+
+  it.each([
+    ["don't update that project", "update that project", []],
+    [
+      "archive that project, never mind",
+      "archive that project",
+      [{ path: "archived", value: true, sourceRef: { segment: "current", quote: "archive" } }],
+    ],
+  ])("rejects a negated or cancelled adjacent-project update: %s", async (
+    currentText,
+    actionQuote,
+    extraConstraints,
+  ) => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_update",
+          sourceRefs: [
+            { segment: "current", quote: actionQuote },
+            { segment: "unresolved_prior", quote: "Atlas" },
+            ...extraConstraints.map(({ sourceRef }) => sourceRef),
+          ],
+          literalConstraints: [
+            { path: "currentName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            ...extraConstraints,
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("does not bind a rate command to a project cue in a separate sentence", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [
+            { segment: "current", quote: "Set member rate to 15" },
+            { segment: "unresolved_prior", quote: "Atlas" },
+            { segment: "current", quote: "15" },
+          ],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "Set member rate to 15. Show that project.",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("rejects an explicit carried cost-rate command when rateKind is undeclared", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [{ segment: "current", quote: "set cost rate to 15 for me on that project" }],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "userId", value: "me", sourceRef: { segment: "current", quote: "me" } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "set cost rate to 15 for me on that project",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it.each([
+    ["HOURLY", "hourly rate"],
+    ["COST", "cost rate"],
+  ])("rejects a negated carried %s rate canonicalization", async (rateKind, phrase) => {
+    const currentText = `set not ${phrase} to 15 for me on that project`;
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [{ segment: "current", quote: currentText }],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "userId", value: "me", sourceRef: { segment: "current", quote: "me" } },
+            { path: "rateKind", value: rateKind, sourceRef: { segment: "current", quote: phrase } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it.each(["not cost rate", "non-cost rate", "no cost rate"])(
+    "rejects the negated carried cost phrase %s",
+    async (authoredRate) => {
+      const currentText = `set ${authoredRate} to 15 for me on that project`;
+      const capability = await declareIntentCapability({
+        modelClient: nativeModel({
+          writeActions: [{
+            actionName: "clockify_projects_rate_update",
+            sourceRefs: [{ segment: "current", quote: currentText }],
+            literalConstraints: [
+              { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+              { path: "userId", value: "me", sourceRef: { segment: "current", quote: "me" } },
+              { path: "rateKind", value: "COST", sourceRef: { segment: "current", quote: "cost rate" } },
+              { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+            ],
+            maxExecutions: 1,
+          }],
+        }),
+        currentText,
+        unresolvedPriorText: "create a project named Atlas",
+        requireCurrentActionSpan: true,
+        writeActionNames: ["clockify_projects_rate_update"],
+        catalogHash,
+      });
+
+      expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+    },
+  );
+
+  it("does not canonicalize 'my' from inside a carried member name", async () => {
+    const currentText = "set project member rate to 15 for Myrtle on that project";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [{ segment: "current", quote: currentText }],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "userId", value: "me", sourceRef: { segment: "current", quote: "My" } },
+            { path: "rateKind", value: "HOURLY", sourceRef: { segment: "current", quote: "project member rate" } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("does not let a carried rate action borrow its member from another command", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [
+            { segment: "current", quote: "make my project member rate to be 15" },
+            { segment: "unresolved_prior", quote: "Atlas" },
+            { segment: "current", quote: "Alice" },
+            { segment: "current", quote: "15" },
+          ],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "userName", value: "Alice", sourceRef: { segment: "current", quote: "Alice" } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "add Alice to that project, then make my project member rate to be 15",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("rejects reversing a carried project selector into the risky update value", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_update",
+          sourceRefs: [
+            { segment: "current", quote: "rename that project" },
+            { segment: "unresolved_prior", quote: "Atlas" },
+            { segment: "current", quote: "Vega" },
+          ],
+          literalConstraints: [
+            { path: "currentName", value: "Vega", sourceRef: { segment: "current", quote: "Vega" } },
+            { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "rename that project to Vega",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
   it("does not let a create-shaped continuation authorize a carried delete command", async () => {
     const capability = await declareIntentCapability({
       modelClient: nativeModel({

@@ -1389,6 +1389,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return /^(?:create|make)\s+(?:it|that)[.!?\s]*$/iu.test(message);
   }
 
+  function containsStandaloneExact(source: string, literal: string): boolean {
+    const escaped = literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(
+      `(?:^|[^\\p{L}\\p{M}\\p{N}_])${escaped}(?=$|[^\\p{L}\\p{M}\\p{N}_])`,
+      "u",
+    ).test(source);
+  }
+
   /** Resolve only an explicit, type-matched demonstrative from the directly
    * adjacent successful create turn. The model receives the prior admin's exact
    * text, never assistant prose, receipt data, or the created id. */
@@ -1422,7 +1430,46 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       || ref.name.length === 0
       || typeof ref.id !== "string"
       || priorUser.content.includes(ref.id)
-      || !priorUser.content.includes(ref.name)
+      || !containsStandaloneExact(priorUser.content, ref.name)
+    ) return undefined;
+    return priorUser.content;
+  }
+
+  /** Resolve an explicit project referent only from the directly adjacent,
+   * successful single-project create. As with clients, the only carried text is
+   * the prior admin's authored request; receipt ids and assistant prose remain
+   * outside the model's authority input. */
+  function adjacentCreatedProjectContext(sessionId: string, message: string): string | undefined {
+    if (!/\b(?:the|that|this)\s+project\b/iu.test(message)) return undefined;
+    const recent = deps.store.getRecentMessages(sessionId, 2, true);
+    const [priorUser, priorAssistant] = recent;
+    if (recent.length !== 2 || priorUser?.role !== "user" || priorAssistant?.role !== "assistant") return undefined;
+    const results = (priorAssistant.payload as { results?: unknown[] } | undefined)?.results;
+    if (!Array.isArray(results) || results.length !== 1) return undefined;
+    const result = results[0] as {
+      kind?: unknown;
+      receipt?: {
+        ok?: unknown;
+        action?: unknown;
+        changed?: { created?: Array<{ type?: unknown; id?: unknown; name?: unknown }> };
+      };
+    };
+    const changed = result.receipt?.changed;
+    const created = changed?.created;
+    const ref = created?.[0];
+    if (
+      result.kind !== "receipt"
+      || result.receipt?.ok !== true
+      || result.receipt.action !== "clockify_projects_create"
+      || !changed
+      || Object.keys(changed).some((bucket) => bucket !== "created")
+      || created?.length !== 1
+      || ref?.type !== "project"
+      || typeof ref.name !== "string"
+      || ref.name.length === 0
+      || typeof ref.id !== "string"
+      || priorUser.content.includes(ref.id)
+      || !containsStandaloneExact(priorUser.content, ref.name)
     ) return undefined;
     return priorUser.content;
   }
@@ -1651,7 +1698,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       : undefined;
     const adjacentReferentContext = priorClarificationContext || priorFailedRequestContext
       ? undefined
-      : adjacentCreatedClientContext(claims.sessionId, message);
+      : adjacentCreatedClientContext(claims.sessionId, message)
+        ?? adjacentCreatedProjectContext(claims.sessionId, message);
     const priorAuthoredContext = priorClarificationContext ?? priorFailedRequestContext ?? adjacentReferentContext;
     const requireCurrentActionSpan = !priorClarificationContext && priorAuthoredContext !== undefined;
     const selectionContext = combineSelectionContext(priorAuthoredContext, message);

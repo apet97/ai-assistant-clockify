@@ -125,6 +125,36 @@ function allowNamedProjectDeclaration(source: string, name: string) {
   };
 }
 
+function allowCreatedProjectDeclaration(source: string, name: string) {
+  const action = byteSpan(source, `create a project named ${name}`);
+  const projectName = byteSpan(source, name);
+  return {
+    writeActions: [{
+      actionName: "clockify_projects_create",
+      sourceSpans: [action, projectName],
+      literalConstraints: [{ path: "name", value: name, sourceSpan: projectName }],
+      maxExecutions: 1,
+    }],
+  };
+}
+
+function allowAdjacentProjectPrivacyDeclaration(source: string, name: string) {
+  const action = byteSpan(source, "make the project private");
+  const visibility = byteSpan(source, "private");
+  const projectName = byteSpan(source, name);
+  return {
+    writeActions: [{
+      actionName: "clockify_projects_update",
+      sourceSpans: [action, visibility, projectName],
+      literalConstraints: [
+        { path: "currentName", value: name, sourceSpan: projectName },
+        { path: "isPublic", value: false, sourceSpan: visibility },
+      ],
+      maxExecutions: 1,
+    }],
+  };
+}
+
 function allowApprovePendingDeclaration(source: string) {
   const action = byteSpan(source, "approve all pending timesheets");
   return {
@@ -243,6 +273,93 @@ afterEach(() => {
 });
 
 describe("chat intent declaration integration", () => {
+  it("binds 'the project' to the exact immediately preceding successful project creation", async () => {
+    const projectName = "sdasdasdas";
+    let mainTurn = 0;
+    const declarationPayloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          declarationPayloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(mainTurn === 0
+            ? allowCreatedProjectDeclaration(source, projectName)
+            : source.includes(projectName)
+              ? allowAdjacentProjectPrivacyDeclaration(source, projectName)
+              : { writeActions: [] });
+        }
+        mainTurn += 1;
+        return JSON.stringify(mainTurn === 1
+          ? {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_projects_create", arguments: { name: projectName } }],
+            }
+          : {
+              kind: "actions",
+              text: "",
+              actions: [{
+                name: "clockify_projects_update",
+                arguments: { currentName: projectName, isPublic: false },
+              }],
+            });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+    const persistedCapabilities: IntentCapabilityRecord[] = [];
+    const createCapability = store.createIntentCapability.bind(store);
+    vi.spyOn(store, "createIntentCapability").mockImplementation((input) => {
+      const record = createCapability(input);
+      persistedCapabilities.push(record);
+      return record;
+    });
+
+    const createdProject = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: `create a project named ${projectName}` });
+    expect(createdProject.status).toBe(200);
+    expect(fake.counts.createProjectAtomic).toBe(1);
+
+    const updatedProject = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({
+        requestId: randomUUID(),
+        message: "make the project private",
+      });
+
+    expect(updatedProject.status).toBe(200);
+    expect(declarationPayloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "unresolved_prior", text: `create a project named ${projectName}` }),
+      expect.objectContaining({
+        source: "current",
+        text: "make the project private",
+      }),
+    ]);
+    expect(persistedCapabilities[1]?.capability).toMatchObject({
+      mode: "allow",
+      writeActions: [expect.objectContaining({
+        actionName: "clockify_projects_update",
+        literalConstraints: expect.arrayContaining([
+          expect.objectContaining({ path: "currentName", value: projectName }),
+          expect.objectContaining({ path: "isPublic", value: false }),
+        ]),
+      })],
+    });
+    expect(updatedProject.body.results).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "preview",
+        preview: expect.objectContaining({ actionLabel: "Update project" }),
+      }),
+    ]));
+    expect(JSON.stringify(declarationPayloads[1])).not.toContain(fake.state.projects[0]?.id);
+  });
+
   it("binds 'that client' to the exact immediately preceding successful client creation", async () => {
     let mainTurn = 0;
     const declarationPayloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];

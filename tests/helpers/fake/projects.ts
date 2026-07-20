@@ -136,11 +136,19 @@ export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pi
     createProjectFromTemplateAtomic: fromTemplateAtomic,
     async updateProjectRate(input) {
       bump("updateProjectRate");
-      void input;
+      const key = input.rateKind === "COST" ? "costRate" : "hourlyRate";
+      state.projectMemberships[input.projectId] = (state.projectMemberships[input.projectId] ?? []).map((row) =>
+        String(row.userId) === input.userId
+          ? { ...row, [key]: { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) } }
+          : row);
     },
     async updateProjectRateAtomic(input) {
       bump("updateProjectRateAtomic");
-      void input;
+      const key = input.rateKind === "COST" ? "costRate" : "hourlyRate";
+      state.projectMemberships[input.projectId] = (state.projectMemberships[input.projectId] ?? []).map((row) =>
+        String(row.userId) === input.userId
+          ? { ...row, [key]: { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) } }
+          : row);
     },
     async updateProjectEstimate(id, patch) {
       bump("updateProjectEstimate");

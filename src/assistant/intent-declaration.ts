@@ -468,6 +468,42 @@ function semanticAliasHasWholeTokenBoundaries(
   return !continuesWord(previous) && !continuesWord(next);
 }
 
+function sourceSpanHasNearbyNegation(sourceSpan: SourceSpan, segments: AuthoredSegment[]): boolean {
+  const segment = segmentForSpan(sourceSpan, segments);
+  if (!segment) return true;
+  const localStart = sourceSpan.startByte - segment.startByte;
+  const prefix = Buffer.from(segment.text, "utf8").subarray(0, localStart).toString("utf8");
+  const nearby = Array.from(prefix).slice(-64).join("");
+  return /(?:\bnot|\bno|\bnon[-\s]*|\bdo\s+not|\bdon't|\bnever|\bisn't|\bis\s+not|\bwasn't|\bwas\s+not|\bshouldn't|\bshould\s+not|\bcannot|\bcan't)\s*(?:[\p{L}\p{M}]+\s+){0,4}$/iu.test(nearby);
+}
+
+/** Exact, reviewed natural-language canonicalization for the carried project
+ * member-rate action. This is deliberately action/path scoped: it does not
+ * broaden general semantic aliases or any other write. */
+function reviewedCarriedProjectLiteral(input: {
+  actionName: string;
+  path: string;
+  sourceText: string;
+  sourceSpan: SourceSpan;
+  declared: unknown;
+  segments: AuthoredSegment[];
+}): ReturnType<typeof parseIntentLiteralValue> | undefined {
+  if (input.actionName !== "clockify_projects_rate_update" ||
+    sourceSpanHasNearbyNegation(input.sourceSpan, input.segments) ||
+    !semanticAliasHasWholeTokenBoundaries(input.sourceSpan, input.segments)) return undefined;
+  const source = normalizeString(input.sourceText).toLocaleLowerCase("en-US");
+  if (input.path === "userId" && input.declared === "me" && ["my", "myself"].includes(source)) {
+    return "me";
+  }
+  if (input.path === "rateKind") {
+    const hourly = ["project member rate", "member rate", "hourly rate"];
+    const cost = ["project member cost rate", "member cost rate", "cost rate"];
+    if (input.declared === "HOURLY" && hourly.includes(source)) return "HOURLY";
+    if (input.declared === "COST" && cost.includes(source)) return "COST";
+  }
+  return undefined;
+}
+
 function normalizedLiteral(
   spanText: string,
   declared: unknown,
@@ -711,6 +747,74 @@ function constraintIsBoundToRole(
     constraint.sourceSpan.endByte <= range.endByte);
 }
 
+const CARRIED_PROJECT_COMMAND_PATTERNS = Object.freeze({
+  clockify_projects_update: [
+    "\\b(?:make|set|change|update|rename|archive|unarchive)\\b[^,.!?;\\n]{0,200}\\b(?:the|that|this)\\s+project\\b[^,.!?;\\n]{0,160}",
+    "\\b(?:the|that|this)\\s+project\\b[^,.!?;\\n]{0,200}\\b(?:private|public|billable|non[- ]billable|archived|unarchived)\\b",
+  ],
+  clockify_projects_memberships_update: [
+    "\\b(?:add|remove)\\b[^.!?\\n]{0,120}\\b(?:me|member(?:s)?|user(?:s)?|them|him|her)\\b[^.!?\\n]{0,80}\\b(?:the|that|this)\\s+project\\b",
+    "\\b(?:add|remove)\\b[^,.!?;\\n]{0,120}\\b(?:me|member(?:s)?|user(?:s)?|them|him|her)\\b[^,.!?;\\n]{0,80}\\bit\\b",
+  ],
+  clockify_projects_rate_update: [
+    "\\b(?:make|set|change|update)\\b[^,.!?;\\n]{0,160}\\b(?:my\\s+)?project\\s+member(?:'s)?\\s+(?:billable\\s+|cost\\s+)?rate\\b[^,.!?;\\n]{0,80}",
+    "\\b(?:make|set|change|update)\\b[^,.!?;\\n]{0,160}\\b(?:hourly|cost)\\s+rate\\b[^,.!?;\\n]{0,160}\\b(?:the|that|this)\\s+project\\b[^,.!?;\\n]{0,80}",
+  ],
+} satisfies Readonly<Record<string, readonly string[]>>);
+
+const CARRIED_PRIOR_LITERAL_PATHS = Object.freeze({
+  clockify_projects_create: ["name", "clientName"],
+  clockify_projects_update: ["currentName"],
+  clockify_projects_memberships_update: ["name"],
+  clockify_projects_rate_update: ["projectName"],
+} satisfies Readonly<Record<string, readonly string[]>>);
+
+/** Risky writes normally rely on preview + button confirmation rather than the
+ * safe-write command grammar. The only cross-turn risky continuation supported
+ * here is the tightly scoped, adjacent created-project referent. Require a
+ * reviewed project command in the current admin segment, and require the
+ * provider's cited action span to overlap that command. */
+function carriedProjectCommandMatches(
+  actionName: string,
+  current: AuthoredSegment | undefined,
+  actionSpans: readonly SourceSpan[],
+  constraints: readonly IntentWriteActionDraftV1["literalConstraints"][number][],
+  segments: readonly AuthoredSegment[],
+): boolean {
+  const patterns = CARRIED_PROJECT_COMMAND_PATTERNS[actionName as keyof typeof CARRIED_PROJECT_COMMAND_PATTERNS];
+  if (!current || !patterns || currentTurnCancelsPriorWrite(segments)) return false;
+  if (actionName === "clockify_projects_rate_update" &&
+    !constraints.some((constraint) => constraint.path === "rateKind")) return false;
+  const cancellationStarts = currentTurnCancellationStarts(segments);
+  for (const clause of authoredClauses(current)) {
+    if (!/\b(?:the|that|this)\s+project\b/iu.test(clause.text) ||
+      isProhibitedCommandClause(clause.text) ||
+      cancellationStarts.some((start) => start > clause.startByte)) continue;
+    for (const source of patterns) {
+      const pattern = new RegExp(source, "giu");
+      for (const match of clause.text.matchAll(pattern)) {
+        if (match.index === undefined || !match[0]) continue;
+        const startByte = clause.startByte + Buffer.byteLength(clause.text.slice(0, match.index), "utf8");
+        const window = {
+          source: "current" as const,
+          text: match[0],
+          startByte,
+          endByte: startByte + Buffer.byteLength(match[0], "utf8"),
+        };
+        const currentConstraintsBound = constraints.every((constraint) => {
+          const segment = segmentForSpan(constraint.sourceSpan, [...segments]);
+          return segment?.source !== "current" || (
+            constraint.sourceSpan.startByte >= window.startByte &&
+            constraint.sourceSpan.endByte <= window.endByte
+          );
+        });
+        if (currentConstraintsBound && actionSpans.some((span) => spansOverlap(span, window))) return true;
+      }
+    }
+  }
+  return false;
+}
+
 function satisfiesAuthoredIntent(
   actionName: string,
   metadata: AuthoredIntentMetadata | undefined,
@@ -720,9 +824,17 @@ function satisfiesAuthoredIntent(
   segments: readonly AuthoredSegment[],
   requireCurrentActionSpan = false,
 ): boolean {
-  if (!metadata) return !requireCurrentActionSpan;
-  const commands = commandWindows(metadata, segments);
   const current = segments.find((segment) => segment.source === "current");
+  if (!metadata) {
+    return !requireCurrentActionSpan || carriedProjectCommandMatches(
+      actionName,
+      current,
+      actionSpans,
+      constraints,
+      segments,
+    );
+  }
+  const commands = commandWindows(metadata, segments);
   const currentCommands = commands.filter((command) => command.source === "current");
   const currentCommand = currentCommands.some((command) =>
     actionSpans.some((span) => spansOverlap(span, command)));
@@ -838,15 +950,32 @@ function validateDeclaration(
       if (!sourceSpan) return undefined;
       const sourceText = sourceTextForSpan(sourceSpan, request.segments);
       if (sourceText === undefined) return undefined;
+      const constraintSegment = segmentForSpan(sourceSpan, request.segments);
+      if (request.requireCurrentActionSpan && constraintSegment?.source === "unresolved_prior") {
+        const allowedPriorPaths = CARRIED_PRIOR_LITERAL_PATHS[
+          write.actionName as keyof typeof CARRIED_PRIOR_LITERAL_PATHS
+        ];
+        if (!allowedPriorPaths?.includes(constraint.path)) return undefined;
+      }
       const aliases = contract.semanticLiteralAliases.filter((alias) => alias.path === constraint.path);
-      const value = normalizedLiteral(
-        sourceText,
-        constraint.value,
-        aliases,
-        sourceSpan,
-        request.segments,
-        contract.numericLiteralPaths.includes(normalizedConstraintPath(constraint.path)),
-      );
+      const reviewedValue = request.requireCurrentActionSpan && constraintSegment?.source === "current"
+        ? reviewedCarriedProjectLiteral({
+            actionName: write.actionName,
+            path: constraint.path,
+            sourceText,
+            sourceSpan,
+            declared: constraint.value,
+            segments: request.segments,
+          })
+        : undefined;
+      const value = reviewedValue ?? normalizedLiteral(
+          sourceText,
+          constraint.value,
+          aliases,
+          sourceSpan,
+          request.segments,
+          contract.numericLiteralPaths.includes(normalizedConstraintPath(constraint.path)),
+        );
       if (value === undefined) return undefined;
       if (literalConstraints.some((prior) =>
         prior.sourceSpan.startByte < sourceSpan.endByte && sourceSpan.startByte < prior.sourceSpan.endByte)) {

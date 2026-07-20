@@ -612,7 +612,7 @@ const deleteProject = defineRiskyAction({
 const rateUpdate = defineRiskyAction({
   name: "clockify_projects_rate_update",
   description:
-    'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, and the member by `userId`/`userName` (or "me"). The member must already be on the project. Billing action — previews and requires confirmation.',
+    'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, the member by `userId`/`userName` (use "me" for the requesting admin), and `rateKind` as HOURLY or COST. The member must already be on the project. Billing action — previews and requires confirmation.',
   group: "invoices",
   risks: ["billing"],
   mutationWorkflow: "durable",
@@ -676,7 +676,7 @@ const rateUpdate = defineRiskyAction({
         userId,
         rateKind: args.rateKind,
         amountMinor,
-        since: args.since,
+        ...(args.since !== undefined ? { since: args.since } : {}),
       },
       targetSnapshots: [targetSnapshot],
       mutationPlan: mutationPlan([{ id: "update-project-rate", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
