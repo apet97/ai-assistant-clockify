@@ -13,7 +13,7 @@ function reportBody(range: ReportRange, extra: Record<string, unknown>): Record<
 
 /**
  * Typed report REST module (goclmcp §2.14). I/O only. Reports run on the REPORTS
- * host (`core.call("reports", …)` routes there); all are `POST` searches with a
+ * host (`core.postQuery("reports", …)` routes there); all are `POST` searches with a
  * JSON export body. The reports host accepts the production X-Addon-Token (same
  * host routing + auth header as the api host); the dev API key also works.
  */
@@ -22,13 +22,13 @@ export function makeReportRest(core: RestCore, workspaceId: string): ReportPort 
 
   return {
     async summaryReport(range, groups) {
-      return core.call("reports", "POST", `${ws}/reports/summary`, reportBody(range, { summaryFilter: { groups: groups ?? ["PROJECT"] } }));
+      return core.postQuery("reports", `${ws}/reports/summary`, reportBody(range, { summaryFilter: { groups: groups ?? ["PROJECT"] } }));
     },
     async detailedReport(range) {
-      return core.call("reports", "POST", `${ws}/reports/detailed`, reportBody(range, { detailedFilter: { page: 1, pageSize: 50 } }));
+      return core.postQuery("reports", `${ws}/reports/detailed`, reportBody(range, { detailedFilter: { page: 1, pageSize: 50 } }));
     },
     async weeklyReport(range) {
-      return core.call("reports", "POST", `${ws}/reports/weekly`, reportBody(range, { weeklyFilter: { group: "PROJECT", subgroup: "TIME" } }));
+      return core.postQuery("reports", `${ws}/reports/weekly`, reportBody(range, { weeklyFilter: { group: "PROJECT", subgroup: "TIME" } }));
     },
   };
 }

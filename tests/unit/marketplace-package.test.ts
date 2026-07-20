@@ -74,5 +74,7 @@ describe("marketplace submission package", () => {
       .toThrow();
     expect(() => execFileSync(tsx, [script, "http://assistant.example"], { stdio: "pipe" }))
       .toThrow();
-  });
+  // Four synchronous tsx subprocesses can exceed Vitest's 5s default while the
+  // full verify suite saturates its worker ceiling; keep the allowance local.
+  }, 15_000);
 });

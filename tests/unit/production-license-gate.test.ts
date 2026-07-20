@@ -83,7 +83,9 @@ describe("production license gate", () => {
       writeFileSync(reportPath, originalReport, "utf8");
       rmSync(tempRoot, { recursive: true, force: true });
     }
-  });
+  // Two synchronous tsx subprocesses can exceed Vitest's 5s default while the
+  // full verify suite saturates its worker ceiling; keep the allowance local.
+  }, 15_000);
 
   it.each([
     [undefined, "UNKNOWN"],

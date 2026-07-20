@@ -746,6 +746,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     resultLinks: DurableResultLink[],
     clarificationContext?: string,
     failureCode?: "provider_protocol_error",
+    unresolvedRequestContext?: { actionName: "clockify_projects_create"; text: string },
   ): void {
     // Persisting the assistant reply is post-execution bookkeeping: it runs AFTER
     // the turn's action(s) executed (a safe write already hit the host; a risky one
@@ -768,6 +769,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
             ? { clarificationContext }
             : {}),
           ...(failureCode ? { code: failureCode } : {}),
+          ...(unresolvedRequestContext ? { unresolvedRequestContext } : {}),
         },
         resultLinks,
       });
@@ -1370,6 +1372,61 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       : undefined;
   }
 
+  function unresolvedRequestContext(
+    sessionId: string,
+  ): { actionName: "clockify_projects_create"; text: string } | undefined {
+    const latest = deps.store.getRecentMessages(sessionId, 1, true)[0];
+    if (latest?.role !== "assistant" || !latest.payload || typeof latest.payload !== "object") return undefined;
+    const context = (latest.payload as { unresolvedRequestContext?: unknown }).unresolvedRequestContext;
+    if (!context || typeof context !== "object" || Array.isArray(context)) return undefined;
+    const row = context as { actionName?: unknown; text?: unknown };
+    return Object.keys(row).length === 2 && row.actionName === "clockify_projects_create" && typeof row.text === "string"
+      ? { actionName: row.actionName, text: row.text }
+      : undefined;
+  }
+
+  function explicitProjectCreateContinuation(message: string): boolean {
+    return /^(?:create|make)\s+(?:it|that)[.!?\s]*$/iu.test(message);
+  }
+
+  /** Resolve only an explicit, type-matched demonstrative from the directly
+   * adjacent successful create turn. The model receives the prior admin's exact
+   * text, never assistant prose, receipt data, or the created id. */
+  function adjacentCreatedClientContext(sessionId: string, message: string): string | undefined {
+    if (!/\b(?:that|this)\s+client\b/iu.test(message)) return undefined;
+    const recent = deps.store.getRecentMessages(sessionId, 2, true);
+    const [priorUser, priorAssistant] = recent;
+    if (recent.length !== 2 || priorUser?.role !== "user" || priorAssistant?.role !== "assistant") return undefined;
+    const results = (priorAssistant.payload as { results?: unknown[] } | undefined)?.results;
+    if (!Array.isArray(results) || results.length !== 1) return undefined;
+    const result = results[0] as {
+      kind?: unknown;
+      receipt?: {
+        ok?: unknown;
+        action?: unknown;
+        changed?: { created?: Array<{ type?: unknown; id?: unknown; name?: unknown }> };
+      };
+    };
+    const changed = result.receipt?.changed;
+    const created = changed?.created;
+    const ref = created?.[0];
+    if (
+      result.kind !== "receipt"
+      || result.receipt?.ok !== true
+      || result.receipt.action !== "clockify_clients_create"
+      || !changed
+      || Object.keys(changed).some((bucket) => bucket !== "created")
+      || created?.length !== 1
+      || ref?.type !== "client"
+      || typeof ref.name !== "string"
+      || ref.name.length === 0
+      || typeof ref.id !== "string"
+      || priorUser.content.includes(ref.id)
+      || !priorUser.content.includes(ref.name)
+    ) return undefined;
+    return priorUser.content;
+  }
+
   /**
    * Tool subsetting (LLM_TOOL_SELECT=1): show the model only the actions relevant
    * to THIS message (+ the always-on core), for weak-model consistency. OFF ⇒
@@ -1586,7 +1643,18 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     }
     if (!turnAuthorityCurrent(claims, installation, turnSignal)) return aborted();
     const priorClarificationContext = unresolvedClarificationContext(claims.sessionId);
-    const selectionContext = combineSelectionContext(priorClarificationContext, message);
+    const failedRequestCandidate = priorClarificationContext ? undefined : unresolvedRequestContext(claims.sessionId);
+    const priorFailedRequestContext = failedRequestCandidate &&
+      failedRequestCandidate.actionName === "clockify_projects_create" &&
+      explicitProjectCreateContinuation(message)
+      ? failedRequestCandidate.text
+      : undefined;
+    const adjacentReferentContext = priorClarificationContext || priorFailedRequestContext
+      ? undefined
+      : adjacentCreatedClientContext(claims.sessionId, message);
+    const priorAuthoredContext = priorClarificationContext ?? priorFailedRequestContext ?? adjacentReferentContext;
+    const requireCurrentActionSpan = !priorClarificationContext && priorAuthoredContext !== undefined;
+    const selectionContext = combineSelectionContext(priorAuthoredContext, message);
     // The user message is persisted BEFORE the deterministic guards so even a
     // short-circuited turn keeps a faithful transcript record.
     deps.store.addMessage({
@@ -1619,7 +1687,8 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         declaredCapability = await declareIntentCapability({
           modelClient: tracked.client,
           currentText: message,
-          ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
+          ...(priorAuthoredContext ? { unresolvedPriorText: priorAuthoredContext } : {}),
+          ...(requireCurrentActionSpan ? { requireCurrentActionSpan: true } : {}),
           writeActionNames,
           candidateWriteActionNames,
           catalogHash: catalogHash(),
@@ -1649,7 +1718,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         requestId: effectiveRequestId,
         authoredSource: canonicalIntentAuthoredSource({
           currentText: message,
-          ...(priorClarificationContext ? { unresolvedPriorText: priorClarificationContext } : {}),
+          ...(priorAuthoredContext ? { unresolvedPriorText: priorAuthoredContext } : {}),
         }),
         capability: declaredCapability,
       });
@@ -1799,12 +1868,22 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // The truthful-preview override (see truthfulReplyText): a pending preview
     // replaces the model's text. The streaming route emits this replyText AFTER
     // the results — the truthful text isn't known until execution finishes.
+    const writeAuthorityUnresolved = intentCapability?.capability.mode === "deny_all_writes" &&
+      (intentCapability.capability.reason !== "no_write_intent" || hasExplicitWriteRequest(selectionContext));
+    const capabilityAuthorityFailures = m.results.flatMap((result) => {
+      const receipt = (result as { kind?: unknown; receipt?: { ok?: unknown; code?: unknown } } | undefined)?.receipt;
+      return receipt?.ok === false && typeof receipt.code === "string" && receipt.code.startsWith("intent_capability_")
+        ? [receipt as { ok: false; code: string; action?: unknown }]
+        : [];
+    });
+    const projectCreateGrant = intentCapability?.capability.mode === "allow"
+      ? intentCapability.capability.writeActions.find((grant) =>
+          grant.actionName === "clockify_projects_create" && grant.sourceSpans.length > 0)
+      : undefined;
     const replyText = truthfulReplyText(m.results, baseText, replyKind, {
       writeIntentDeclared: intentCapability?.capability.mode === "allow" &&
         intentCapability.capability.writeActions.length > 0,
-      writeAuthorityUnresolved: intentCapability?.capability.mode === "deny_all_writes" &&
-        (intentCapability.capability.reason !== "no_write_intent" ||
-          hasExplicitWriteRequest(selectionContext)),
+      writeAuthorityUnresolved,
     });
     persistAssistantReply(
       claims,
@@ -1813,6 +1892,11 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       m.results,
       m.resultLinks,
       selectionContext,
+      undefined,
+      !priorAuthoredContext && capabilityAuthorityFailures.length === 1 &&
+        capabilityAuthorityFailures[0]?.action === "clockify_projects_create" && projectCreateGrant
+        ? { actionName: "clockify_projects_create", text: selectionContext }
+        : undefined,
     );
     recordTurn();
     return { ok: true, replyKind, replyText, results: m.results, resultLinks: m.resultLinks };

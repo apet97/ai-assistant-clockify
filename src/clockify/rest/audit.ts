@@ -6,7 +6,7 @@ const AUDIT_PAGE_SIZE = 50;
 
 /**
  * Typed audit REST module (goclmcp §2.15). I/O only. The audit-log search runs on
- * the AUDIT host (`core.call("audit", …)` → auditlog-api.api.clockify.me/v1); the
+ * the AUDIT host (`core.postQuery("audit", …)` → auditlog-api.api.clockify.me/v1); the
  * experimental entity-changes feed runs on the primary API host. Both return bare
  * arrays (tolerated defensively). The add-on-token clearance for the audit host is
  * unverified (no LIVE_ADDON_TOKEN); the API-key dev path is spike-confirmed.
@@ -24,7 +24,7 @@ export function makeAuditRest(core: RestCore, workspaceId: string): AuditPort {
           page,
           "page-size": AUDIT_PAGE_SIZE,
         };
-        const rows = (await core.call("audit", "POST", `${ws}/audit-log`, body)) as unknown[] | null;
+        const rows = (await core.postQuery("audit", `${ws}/audit-log`, body)) as unknown[] | null;
         return Array.isArray(rows) ? rows : [];
       };
       if (input.page !== undefined) {

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { AmbiguousWriteOutcome, DefinitiveWriteFailure } from "../../src/clockify/write-outcome.js";
+import { HostRequestCancelledError, type WorkspaceRequestGovernor } from "../../src/clockify/request-governor.js";
 
 function res(body: unknown, status = 200): Response {
   return new Response(status === 204 ? null : JSON.stringify(body), {
@@ -10,6 +11,95 @@ function res(body: unknown, status = 200): Response {
 }
 
 describe("rest core host routing + auth", () => {
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "rejects unsafe generic call method %s before network dispatch",
+    async (method) => {
+      const fetchImpl = vi.fn(async () => res({ ok: true }));
+      const core = createRestCore({
+        apiBase: "https://api.clockify.me/api/v1",
+        auth: { addonToken: "tok" },
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        enforceMutationScope: true,
+      });
+
+      await expect(core.call("api", method, "/workspaces/ws-1/query", {}))
+        .rejects.toThrow(/safe read method/i);
+      expect(fetchImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects an unrecognized POST query route before network dispatch", async () => {
+    const fetchImpl = vi.fn(async () => res({ ok: true }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      enforceMutationScope: true,
+    });
+
+    await expect(core.postQuery("api", "/workspaces/ws-1/tags", {}))
+      .rejects.toThrow(/recognized read-only POST query/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["reports", "/workspaces/ws-1/reports/summary"],
+    ["reports", "/workspaces/ws-1/reports/detailed"],
+    ["reports", "/workspaces/ws-1/reports/weekly"],
+    ["audit", "/workspaces/ws-1/audit-log"],
+    ["api", "/workspaces/ws-1/scheduling/assignments/projects/totals"],
+    ["api", "/workspaces/ws-1/time-off/requests"],
+    ["api", "/workspaces/ws-1/webhooks/webhook-1/logs?page=1"],
+  ] as const)("dispatches recognized read-only POST query %s %s as a governed read", async (host, path) => {
+    const kinds: string[] = [];
+    const governor = {
+      async run<T>(kind: "read" | "mutation", operation: () => Promise<T>): Promise<T> {
+        kinds.push(kind);
+        return operation();
+      },
+      noteRateLimited: vi.fn(),
+    } satisfies WorkspaceRequestGovernor;
+    const fetchImpl = vi.fn(async () => res({ ok: true }));
+    const core = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      requestGovernor: governor,
+      enforceMutationScope: true,
+    });
+
+    await expect(core.postQuery(host, path, {})).resolves.toEqual({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(kinds).toEqual(["read"]);
+  });
+
+  it("keeps POST-query failures and cancellation in the read taxonomy", async () => {
+    const failed = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: (async () => res({ message: "unavailable" }, 503)) as unknown as typeof fetch,
+      enforceMutationScope: true,
+    });
+    const error = await failed.postQuery("reports", "/workspaces/ws-1/reports/summary", {}).catch((reason) => reason);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).not.toBeInstanceOf(AmbiguousWriteOutcome);
+    expect(error).not.toBeInstanceOf(DefinitiveWriteFailure);
+
+    const controller = new AbortController();
+    controller.abort();
+    const cancelledFetch = vi.fn(async () => res({ ok: true }));
+    const cancelled = createRestCore({
+      apiBase: "https://api.clockify.me/api/v1",
+      auth: { addonToken: "tok" },
+      fetchImpl: cancelledFetch as unknown as typeof fetch,
+      signal: controller.signal,
+      enforceMutationScope: true,
+    });
+    await expect(cancelled.postQuery("reports", "/workspaces/ws-1/reports/summary", {}))
+      .rejects.toBeInstanceOf(HostRequestCancelledError);
+    expect(cancelledFetch).not.toHaveBeenCalled();
+  });
+
   it("exposes a one-dispatch mutation primitive and rejects reads before I/O", async () => {
     const fetchImpl = vi.fn(async () => res({ id: "tag-1" }));
     const core = createRestCore({
@@ -34,7 +124,7 @@ describe("rest core host routing + auth", () => {
       auth: { addonToken: "tok" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await core.call("reports", "POST", "/workspaces/ws-1/reports/summary", { a: 1 });
+    await core.postQuery("reports", "/workspaces/ws-1/reports/summary", { a: 1 });
     const [url, init] = (fetchImpl as any).mock.calls[0];
     expect(url).toBe("https://reports.api.clockify.me/v1/workspaces/ws-1/reports/summary");
     expect(init.headers["X-Addon-Token"]).toBe("tok");
@@ -49,7 +139,7 @@ describe("rest core host routing + auth", () => {
       auth: { addonToken: "tok" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toThrow(/302/);
+    await expect(core.postQuery("reports", "/workspaces/ws-1/reports/summary", { groups: [] })).rejects.toThrow(/302/);
     expect((fetchImpl as any).mock.calls[0][1].redirect).toBe("error");
   });
 
@@ -71,7 +161,7 @@ describe("rest core host routing + auth", () => {
       auth: { apiKey: "k" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await core.call("audit", "POST", "/workspaces/ws-1/audit-log", {});
+    await core.postQuery("audit", "/workspaces/ws-1/audit-log", {});
     const [url, init] = (fetchImpl as any).mock.calls[0];
     expect(url).toBe("https://auditlog-api.api.clockify.me/v1/workspaces/ws-1/audit-log");
     expect(init.headers["X-Api-Key"]).toBe("k");
@@ -85,7 +175,7 @@ describe("rest core host routing + auth", () => {
       auth: { addonToken: "tok" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await expect(core.call("audit", "POST", "/workspaces/ws-1/audit-log", {})).rejects.toThrow(
+    await expect(core.postQuery("audit", "/workspaces/ws-1/audit-log", {})).rejects.toThrow(
       /audit log is not available/i,
     );
     expect(fetchImpl).not.toHaveBeenCalled(); // a guessed host must never be hit (no "fetch failed")
@@ -99,7 +189,7 @@ describe("rest core host routing + auth", () => {
       auth: { addonToken: "tok" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await core.call("audit", "POST", "/workspaces/ws-1/audit-log", {});
+    await core.postQuery("audit", "/workspaces/ws-1/audit-log", {});
     const [url] = (fetchImpl as any).mock.calls[0];
     expect(url).toBe("https://auditlog-api.api.clockify.me/v1/workspaces/ws-1/audit-log");
   });
@@ -122,7 +212,7 @@ describe("rest core host routing + auth", () => {
       auth: { apiKey: "k" },
       fetchImpl: (async () => res(null, 204)) as unknown as typeof fetch,
     });
-    expect(await core.call("api", "DELETE", "/x")).toBeNull();
+    expect(await core.mutate("api", "DELETE", "/x")).toBeNull();
     const bad = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",
       auth: { apiKey: "k" },
@@ -191,7 +281,7 @@ describe("rest core host routing + auth", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
+    await expect(core.mutate("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
       .rejects.toBeInstanceOf(AmbiguousWriteOutcome);
   });
 
@@ -202,7 +292,7 @@ describe("rest core host routing + auth", () => {
       fetchImpl: (async () => res({ message: "bad input" }, 400)) as unknown as typeof fetch,
     });
 
-    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
+    await expect(core.mutate("api", "POST", "/workspaces/ws-1/tags", { name: "QA" }))
       .rejects.toBeInstanceOf(DefinitiveWriteFailure);
   });
 
@@ -505,14 +595,14 @@ describe("rest core host routing + auth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
-  it("NEVER retries a non-GET (a POST 503 throws immediately — writes are not safe to replay)", async () => {
+  it("does not retry a POST query after a returned 503", async () => {
     const fetchImpl = vi.fn(async () => res({ message: "unavailable" }, 503));
     const core = createRestCore({
       apiBase: "https://api.clockify.me/api/v1",
       auth: { addonToken: "tok" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toThrow(/503/);
+    await expect(core.postQuery("reports", "/workspaces/ws-1/reports/summary", { groups: [] })).rejects.toThrow(/503/);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -527,7 +617,7 @@ describe("rest core host routing + auth", () => {
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
-    await expect(core.call("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toMatchObject({
+    await expect(core.mutate("api", "POST", "/workspaces/ws-1/tags", { name: "QA" })).rejects.toMatchObject({
       outcome: "definitive_failure",
       method: "POST",
       path: "/workspaces/ws-1/tags",

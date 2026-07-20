@@ -326,6 +326,8 @@ export interface RestCore {
     body?: unknown,
     allow404?: boolean,
   ): Promise<unknown>;
+  /** Dispatch a read-only Clockify search whose wire contract requires POST. */
+  postQuery(host: ClockifyHost, path: string, body?: unknown): Promise<unknown>;
   /** Dispatch exactly one external mutation. Composite compatibility wrappers
    *  must be split into workflow steps before using this primitive. */
   mutate(
@@ -439,8 +441,14 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // <reason>` — so the receipt/model/admin can tell WHICH call broke instead of a
   // context-free "fetch failed" (r1-error-handling-03). Only method/path are added;
   // no secrets (the url/header are never put in the message).
-  async function doFetch(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
-    const mutation = isMutationMethod(method);
+  async function doFetch(
+    operation: "read" | "mutation",
+    method: string,
+    path: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    const mutation = operation === "mutation";
     try {
       const externalOperation = async () => {
         if (mutation && opts.enforceMutationScope) commitScopedMutationDispatch(opts.signal);
@@ -524,7 +532,13 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   // break out on the first response (writes are never replayed); a thrown
   // timeout/transport error from doFetch propagates without retry (latency stays
   // bounded). GETs carry no body, so there is no body-reuse concern across attempts.
-  async function fetchWithRetry(method: string, path: string, url: string, init: RequestInit): Promise<Response> {
+  async function fetchWithRetry(
+    operation: "read" | "mutation",
+    method: string,
+    path: string,
+    url: string,
+    init: RequestInit,
+  ): Promise<Response> {
     let res: Response;
     // A prepared mutation has an exact, pre-reserved physical call ceiling.
     // Retrying a GET inside that scope would make the persisted estimator lie
@@ -532,7 +546,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     // retain the existing bounded retry behavior.
     const maxRetries = mutationPlanStorage.getStore() ? 0 : MAX_GET_RETRIES;
     for (let attempt = 0; ; attempt++) {
-      res = await doFetch(method, path, url, init);
+      res = await doFetch(operation, method, path, url, init);
       if (res.status === 429) opts.requestGovernor?.noteRateLimited(retryDelayMs(res, attempt));
       const willRetry = method === "GET" && RETRYABLE_STATUS.has(res.status) && attempt < maxRetries;
       if (!willRetry) break;
@@ -542,7 +556,8 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return res;
   }
 
-  async function call(
+  async function request(
+    operation: "read" | "mutation",
     host: ClockifyHost,
     method: string,
     path: string,
@@ -553,7 +568,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     // multipart/form-data bodies must NOT carry a JSON content-type — fetch/undici
     // sets the multipart boundary itself when the body is a FormData.
     const isForm = typeof FormData !== "undefined" && body instanceof FormData;
-    const res = await fetchWithRetry(method, path, `${baseHost}${path}`, {
+    const res = await fetchWithRetry(operation, method, path, `${baseHost}${path}`, {
       method,
       headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
@@ -563,7 +578,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       const text = await res.text();
       mapAddonRestriction(res.status, method, path, text);
       const message = `Clockify ${method} ${path} -> ${res.status}: ${text.slice(0, 200)}`;
-      if (isMutationMethod(method)) {
+      if (operation === "mutation") {
         if (res.status === 408 || res.status >= 500 || res.status < 400) {
           throw new AmbiguousWriteOutcome(method, path, message, res.status);
         }
@@ -582,11 +597,45 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       return JSON.parse(text);
     } catch {
       const message = `Clockify ${method} ${path} returned non-JSON (status ${res.status}): ${text.slice(0, 200)}`;
-      if (isMutationMethod(method)) {
+      if (operation === "mutation") {
         throw new AmbiguousWriteOutcome(method, path, message, res.status);
       }
       throw new Error(message);
     }
+  }
+
+  async function call(
+    host: ClockifyHost,
+    method: string,
+    path: string,
+    body?: unknown,
+    allow404 = false,
+  ): Promise<unknown> {
+    if (!["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase())) {
+      throw new Error(`RestCore.call requires a safe read method, received ${method}.`);
+    }
+    return request("read", host, method, path, body, allow404);
+  }
+
+  function recognizedPostQuery(host: ClockifyHost, path: string): boolean {
+    const workspace = "\\/workspaces\\/[^/?]+";
+    const patterns: Partial<Record<ClockifyHost, readonly RegExp[]>> = {
+      reports: [new RegExp(`^${workspace}\\/reports\\/(?:summary|detailed|weekly)$`, "u")],
+      audit: [new RegExp(`^${workspace}\\/audit-log$`, "u")],
+      api: [
+        new RegExp(`^${workspace}\\/scheduling\\/assignments\\/projects\\/totals$`, "u"),
+        new RegExp(`^${workspace}\\/time-off\\/requests$`, "u"),
+        new RegExp(`^${workspace}\\/webhooks\\/[^/?]+\\/logs(?:\\?[^#]*)?$`, "u"),
+      ],
+    };
+    return patterns[host]?.some((pattern) => pattern.test(path)) === true;
+  }
+
+  async function postQuery(host: ClockifyHost, path: string, body?: unknown): Promise<unknown> {
+    if (!recognizedPostQuery(host, path)) {
+      throw new Error(`RestCore.postQuery requires a recognized read-only POST query route (${host} ${path}).`);
+    }
+    return request("read", host, "POST", path, body);
   }
 
   // Loop list endpoints up to the MAX_PAGES backstop and report whether the
@@ -633,7 +682,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     if (!isMutationMethod(method)) {
       throw new Error(`RestCore.mutate requires a mutation method, received ${method}.`);
     }
-    return call(host, method, path, body);
+    return request("mutation", host, method, path, body);
   }
 
   async function paginateEnvelope(
@@ -691,7 +740,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   ): Promise<unknown> {
     const current = ((await call(host, "GET", path)) ?? {}) as Record<string, unknown>;
     const merged = { ...current, ...patch };
-    return call(host, "PUT", path, merged);
+    return request("mutation", host, "PUT", path, merged);
   }
 
   async function postForm(
@@ -701,7 +750,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
   ): Promise<unknown> {
     const form = new FormData();
     for (const [key, value] of Object.entries(fields)) form.append(key, value);
-    return call(host, "POST", path, form);
+    return request("mutation", host, "POST", path, form);
   }
 
   async function getBinary(
@@ -709,7 +758,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     path: string,
     maxBytes = 1_000_000,
   ): Promise<{ contentType: string; bytes: Uint8Array }> {
-    const res = await fetchWithRetry("GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
+    const res = await fetchWithRetry("read", "GET", path, `${resolveHost(host)}${path}`, { method: "GET", headers: { ...authHeader } });
     if (!res.ok) {
       const text = await res.text();
       mapAddonRestriction(res.status, "GET", path, text);
@@ -750,5 +799,5 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
     return { contentType: res.headers.get("content-type") ?? "application/octet-stream", bytes };
   }
 
-  return { call, mutate, paginate, paginateEnvelope, getThenPut, postForm, getBinary };
+  return { call, postQuery, mutate, paginate, paginateEnvelope, getThenPut, postForm, getBinary };
 }

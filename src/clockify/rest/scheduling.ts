@@ -159,7 +159,7 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
         label: `${ws}/scheduling/assignments/projects/totals`,
         pageSize: PAGE_SIZE,
         async load(page, pageSize) {
-          const out = (await core.call("api", "POST", `${ws}/scheduling/assignments/projects/totals`, {
+          const out = (await core.postQuery("api", `${ws}/scheduling/assignments/projects/totals`, {
             start: input.start,
             end: input.end,
             page,

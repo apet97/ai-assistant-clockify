@@ -30,7 +30,7 @@ describe("rest core commit timeout", () => {
       fetchImpl: hangingFetch(),
       commitTimeoutMs: 40,
     });
-    await expect(core.call("api", "POST", "/workspaces/ws-1/invoices", { a: 1 })).rejects.toThrow(
+    await expect(core.mutate("api", "POST", "/workspaces/ws-1/invoices", { a: 1 })).rejects.toThrow(
       /timed out/i,
     );
   });

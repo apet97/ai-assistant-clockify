@@ -957,6 +957,12 @@ describe("declareIntentCapability", () => {
     });
     expect(capture.messages?.map((message) => message.content).join("\n")).not.toContain("Clockify result");
     expect(capture.messages?.[0]?.content).toContain("absence is not a denial");
+    expect(capture.messages?.[0]?.content).toContain(
+      "When requireCurrentActionSpan is true, every declared write must include an exact current sourceRef that expresses that action",
+    );
+    expect(capture.messages?.[0]?.content).toContain(
+      "unresolved_prior may bind literal constraints only and cannot supply the action command",
+    );
     expect(capture.tools).toHaveLength(1);
     expect(capture.retryTransient).toBe(false);
     expect(capture.tools?.[0]?.name).toBe(DECLARE_INTENT_TOOL_NAME);
@@ -968,6 +974,60 @@ describe("declareIntentCapability", () => {
     });
     expect(writeItems.properties.literalConstraints.items.properties.sourceRef.properties.quote.description)
       .toContain("shortest exact authored substring");
+  });
+
+  it("does not let a carried prior command plus unrelated current filler authorize the action", async () => {
+    const unresolvedPriorText = "Rename project Atlas.";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_update",
+          sourceRefs: [
+            { segment: "unresolved_prior", quote: "Rename project Atlas" },
+            { segment: "current", quote: "hello" },
+          ],
+          literalConstraints: [{
+            path: "name",
+            value: "Atlas",
+            sourceRef: { segment: "unresolved_prior", quote: "Atlas" },
+          }],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "hello",
+      unresolvedPriorText,
+      requireCurrentActionSpan: true,
+      writeActionNames,
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("does not let a create-shaped continuation authorize a carried delete command", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_delete_entity",
+          sourceRefs: [
+            { segment: "unresolved_prior", quote: "Delete project Atlas" },
+            { segment: "current", quote: "Create it" },
+          ],
+          literalConstraints: [
+            { path: "entityType", value: "project", sourceRef: { segment: "unresolved_prior", quote: "project" } },
+            { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText: "Create it",
+      unresolvedPriorText: "Delete project Atlas.",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_delete_entity"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
   });
 
   it("supplies exact catalog-derived literal paths and reviewed aliases for a real write action", async () => {

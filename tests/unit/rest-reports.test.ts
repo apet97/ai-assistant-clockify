@@ -5,11 +5,24 @@ import { makeReportRest } from "../../src/clockify/rest/reports.js";
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
-const rest = (fetchImpl: typeof fetch) =>
-  makeReportRest(createRestCore({ apiBase: "https://api.clockify.me/api/v1", auth: { apiKey: "k" }, fetchImpl }), "ws-1");
+const rest = (fetchImpl: typeof fetch, enforceMutationScope = false) =>
+  makeReportRest(createRestCore({
+    apiBase: "https://api.clockify.me/api/v1",
+    auth: { apiKey: "k" },
+    fetchImpl,
+    enforceMutationScope,
+  }), "ws-1");
 const range = { dateRangeStart: "2026-06-01T00:00:00Z", dateRangeEnd: "2026-06-30T23:59:59Z" };
 
 describe("report rest (multi-host: reports host)", () => {
+  it("treats POST report searches as reads when production mutation-scope enforcement is enabled", async () => {
+    const f = vi.fn(async () => jsonResponse({ totals: [] }));
+
+    await expect(rest(f as unknown as typeof fetch, true).summaryReport(range, ["PROJECT"]))
+      .resolves.toEqual({ totals: [] });
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
   it("summaryReport POSTs to the REPORTS host with the JSON export + summaryFilter groups", async () => {
     const f = vi.fn(async () => jsonResponse({ totals: [] }));
     await rest(f as unknown as typeof fetch).summaryReport(range, ["PROJECT"]);

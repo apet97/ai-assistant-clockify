@@ -117,7 +117,7 @@ export function makeTimeOffRest(core: RestCore, workspaceId: string): TimeOffPor
         const body: Record<string, unknown> = { page, pageSize };
         if (filterArg?.status) body.statuses = [filterArg.status];
         if (filterArg?.userId) body.users = [filterArg.userId];
-        const env = (await core.call("api", "POST", `${ws}/time-off/requests`, body)) as
+        const env = (await core.postQuery("api", `${ws}/time-off/requests`, body)) as
           | { count?: number; requests?: RequestRow[] }
           | RequestRow[]
           | null;

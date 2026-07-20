@@ -130,7 +130,7 @@ export function makeWebhookRest(core: RestCore, workspaceId: string): WebhookPor
         pageSize: PAGE_SIZE,
         async load(page, pageSize) {
           const qs = new URLSearchParams({ page: String(page), "page-size": String(pageSize) });
-          const rows = (await core.call("api", "POST", `${ws}/webhooks/${id}/logs?${qs.toString()}`, {
+          const rows = (await core.postQuery("api", `${ws}/webhooks/${id}/logs?${qs.toString()}`, {
             status: "ALL",
             sortByNewest: true,
           })) as unknown[] | null;

@@ -243,7 +243,13 @@ if (missing.length || extra.length || probes.length !== expectedScopes.size) {
 
 async function runProbe(probe: ProbeSpec): Promise<SecretFreeProbeResult> {
   try {
-    await core.call(probe.host, probe.method, probe.path, probe.body);
+    if (probe.method === "POST" && (probe.scope.endsWith("_READ") || probe.key === "workspace_read_audit_host")) {
+      await core.postQuery(probe.host, probe.path, probe.body);
+    } else if (["GET", "HEAD", "OPTIONS"].includes(probe.method)) {
+      await core.call(probe.host, probe.method, probe.path, probe.body);
+    } else {
+      await core.mutate(probe.host, probe.method, probe.path, probe.body);
+    }
     return toSecretFreeProbeResult({
       key: probe.key ?? probe.scope.toLowerCase(), scope: probe.scope, host: probe.host,
       method: probe.method, status: "2xx", expected4xx: probe.expected4xx ?? [],

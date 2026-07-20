@@ -94,7 +94,13 @@ async function probe(
   expected4xx: readonly number[] = [],
 ): Promise<SecretFreeProbeResult> {
   try {
-    await core.call(host, method, path, body);
+    if (method === "POST" && (host === "reports" || host === "audit")) {
+      await core.postQuery(host, path, body);
+    } else if (["GET", "HEAD", "OPTIONS"].includes(method)) {
+      await core.call(host, method, path, body);
+    } else {
+      await core.mutate(host, method, path, body);
+    }
     return toSecretFreeProbeResult({ key: label, host, method, status: "2xx", expected4xx, workspaceId: WS, path });
   } catch (error) {
     return toSecretFreeProbeResult({

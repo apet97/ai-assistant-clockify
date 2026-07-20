@@ -65,6 +65,36 @@ function allowTagDeclaration(source: string) {
   };
 }
 
+function allowClientDeclaration(source: string) {
+  const action = byteSpan(source, "Create client");
+  const name = byteSpan(source, "Acme");
+  return {
+    writeActions: [{
+      actionName: "clockify_clients_create",
+      sourceSpans: [action, name],
+      literalConstraints: [{ path: "name", value: "Acme", sourceSpan: name }],
+      maxExecutions: 1,
+    }],
+  };
+}
+
+function allowProjectForClientDeclaration(source: string, includeClient: boolean) {
+  const action = byteSpan(source, "Create project Apollo");
+  const name = byteSpan(source, "Apollo");
+  const constraints = [{ path: "name", value: "Apollo", sourceSpan: name }];
+  if (includeClient) {
+    constraints.push({ path: "clientName", value: "Acme", sourceSpan: byteSpan(source, "Acme") });
+  }
+  return {
+    writeActions: [{
+      actionName: "clockify_projects_create",
+      sourceSpans: [action, ...constraints.map(({ sourceSpan }) => sourceSpan)],
+      literalConstraints: constraints,
+      maxExecutions: 1,
+    }],
+  };
+}
+
 function allowPublicProjectDeclaration(source: string) {
   const action = byteSpan(source, "Create a public project");
   const visibility = byteSpan(source, "public");
@@ -213,6 +243,342 @@ afterEach(() => {
 });
 
 describe("chat intent declaration integration", () => {
+  it("binds 'that client' to the exact immediately preceding successful client creation", async () => {
+    let mainTurn = 0;
+    const declarationPayloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          declarationPayloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(source.includes("Create project Apollo")
+            ? allowProjectForClientDeclaration(
+                source,
+                payload.segments?.some(({ source: segment }) => segment === "unresolved_prior") === true,
+              )
+            : allowClientDeclaration(source));
+        }
+        mainTurn += 1;
+        return JSON.stringify(mainTurn === 1
+          ? {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_clients_create", arguments: { name: "Acme" } }],
+            }
+          : {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_projects_create", arguments: { name: "Apollo", clientName: "Acme" } }],
+            });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+
+    const createdClient = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create client Acme" });
+    expect(createdClient.status).toBe(200);
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
+
+    const createdProject = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create project Apollo for that client" });
+
+    expect(createdProject.status).toBe(200);
+    expect(fake.counts.createProjectAtomic).toBe(1);
+    expect(fake.state.projects).toEqual([
+      expect.objectContaining({ name: "Apollo", clientId: fake.state.clients[0]?.id }),
+    ]);
+    expect(declarationPayloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "unresolved_prior", text: "Create client Acme" }),
+      expect.objectContaining({ source: "current", text: "Create project Apollo for that client" }),
+    ]);
+    expect(JSON.stringify(declarationPayloads[1])).not.toContain(fake.state.clients[0]?.id);
+  });
+
+  it("does not carry a created client into a mismatched 'that project' reference", async () => {
+    let mainTurn = 0;
+    const declarationPayloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          declarationPayloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(mainTurn === 0 ? allowClientDeclaration(source) : { writeActions: [] });
+        }
+        mainTurn += 1;
+        return JSON.stringify(mainTurn === 1
+          ? {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_clients_create", arguments: { name: "Acme" } }],
+            }
+          : { kind: "answer", text: "No action." });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+
+    await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create client Acme" });
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
+    await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create a task for that project" });
+
+    expect(declarationPayloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "current", text: "Create a task for that project" }),
+    ]);
+    expect(JSON.stringify(declarationPayloads[1])).not.toContain("Acme");
+    expect(JSON.stringify(declarationPayloads[1])).not.toContain(fake.state.clients[0]?.id);
+  });
+
+  it("keeps typed YES short-circuited immediately after a successful client creation", async () => {
+    let declarationCalls = 0;
+    let mainCalls = 0;
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          declarationCalls += 1;
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as { segments?: Array<{ text: string }> };
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(allowClientDeclaration(source));
+        }
+        mainCalls += 1;
+        return JSON.stringify({
+          kind: "actions",
+          text: "",
+          actions: [{ name: "clockify_clients_create", arguments: { name: "Acme" } }],
+        });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+
+    await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create client Acme" });
+    const yes = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "YES" });
+
+    expect(yes.status).toBe(200);
+    expect(yes.body.reply.text).toContain("No new action was taken");
+    expect(declarationCalls).toBe(1);
+    expect(mainCalls).toBe(1);
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
+  });
+
+  it("carries an authority-failed authored request into the next explicit 'Create it' turn", async () => {
+    let mainTurn = 0;
+    const declarationPayloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          declarationPayloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          if ((payload.segments?.length ?? 0) === 1 && source.includes("Create project Apollo")) {
+            return JSON.stringify(allowProjectForClientDeclaration(source, true));
+          }
+          if ((payload.segments?.length ?? 0) === 1) return JSON.stringify({ writeActions: [] });
+          const action = byteSpan(source, "Create it");
+          const project = byteSpan(source, "Apollo");
+          const client = byteSpan(source, "Acme");
+          return JSON.stringify({ writeActions: [{
+            actionName: "clockify_projects_create",
+            sourceSpans: [action, project, client],
+            literalConstraints: [
+              { path: "name", value: "Apollo", sourceSpan: project },
+              { path: "clientName", value: "Acme", sourceSpan: client },
+            ],
+            maxExecutions: 1,
+          }] });
+        }
+        mainTurn += 1;
+        return JSON.stringify({
+          kind: "actions",
+          text: "",
+          actions: [{
+            name: "clockify_projects_create",
+            arguments: { name: "Apollo", clientName: mainTurn === 1 ? "Other" : "Acme" },
+          }],
+        });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    fake.state.clients.push({ id: "client-existing", name: "Acme" });
+    openStores.push(store);
+
+    const denied = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create project Apollo for client Acme" });
+    expect(denied.status).toBe(200);
+    expect(fake.counts.createProjectAtomic).toBeUndefined();
+
+    const retried = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create it" });
+
+    expect(retried.status).toBe(200);
+    expect(fake.counts.createProjectAtomic).toBe(1);
+    expect(declarationPayloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "unresolved_prior", text: "Create project Apollo for client Acme" }),
+      expect.objectContaining({ source: "current", text: "Create it" }),
+    ]);
+
+    await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create it" });
+    expect(fake.counts.createProjectAtomic).toBe(1);
+    expect(declarationPayloads[2]?.segments).toEqual([
+      expect.objectContaining({ source: "current", text: "Create it" }),
+    ]);
+  });
+
+  it("does not carry an authority-failed project request into a fresh named project command", async () => {
+    let mainTurn = 0;
+    const payloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          payloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(source.includes("Apollo")
+            ? allowProjectForClientDeclaration(source, false)
+            : { writeActions: [] });
+        }
+        mainTurn += 1;
+        return JSON.stringify(mainTurn === 1
+          ? {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_projects_create", arguments: { name: "Apollo", clientName: "Acme" } }],
+            }
+          : { kind: "answer", text: "No action." });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    fake.state.clients.push({ id: "client-existing", name: "Acme" });
+    openStores.push(store);
+
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create project Apollo for client Acme" });
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create project Vega" });
+
+    expect(payloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "current", text: "Create project Vega" }),
+    ]);
+    expect(JSON.stringify(payloads[1])).not.toContain("Apollo");
+    expect(fake.counts.createProjectAtomic).toBeUndefined();
+  });
+
+  it("does not carry a failed client action into a project-shaped continuation", async () => {
+    let mainTurn = 0;
+    const payloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          payloads.push(payload);
+          const source = (payload.segments ?? []).map(({ text }) => text).join("\n");
+          return JSON.stringify(source.includes("Create client Acme")
+            ? allowClientDeclaration(source)
+            : { writeActions: [] });
+        }
+        mainTurn += 1;
+        return JSON.stringify(mainTurn === 1
+          ? {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_clients_create", arguments: { name: "Other" } }],
+            }
+          : {
+              kind: "actions",
+              text: "",
+              actions: [{ name: "clockify_projects_create", arguments: { name: "Acme" } }],
+            });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create client Acme" });
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create it" });
+
+    expect(payloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "current", text: "Create it" }),
+    ]);
+    expect(JSON.stringify(payloads[1])).not.toContain("Create client Acme");
+    expect(fake.counts.createClientBaseAtomic).toBeUndefined();
+    expect(fake.counts.createProjectAtomic).toBeUndefined();
+  });
+
+  it("does not carry a model-invented project failure without a project capability grant", async () => {
+    let mainTurn = 0;
+    const payloads: Array<{ segments?: Array<{ source: string; text: string }> }> = [];
+    const modelClient: ModelClient = {
+      complete: vi.fn(async (messages) => {
+        if (isDeclarationCall(messages)) {
+          const payload = JSON.parse(messages[1]?.content ?? "{}") as {
+            segments?: Array<{ source: string; text: string }>;
+          };
+          payloads.push(payload);
+          return JSON.stringify({ writeActions: [] });
+        }
+        mainTurn += 1;
+        return JSON.stringify({
+          kind: "actions",
+          text: "",
+          actions: [{
+            name: "clockify_projects_create",
+            arguments: { name: mainTurn === 1 ? "Invented" : "Retried" },
+          }],
+        });
+      }),
+    };
+    const { app, store, cookie, fake } = setup(modelClient, {}, []);
+    openStores.push(store);
+
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Tell me about clients" });
+    await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ requestId: randomUUID(), message: "Create it" });
+
+    expect(payloads[1]?.segments).toEqual([
+      expect.objectContaining({ source: "current", text: "Create it" }),
+    ]);
+    expect(JSON.stringify(payloads[1])).not.toContain("Tell me about clients");
+    expect(fake.counts.createProjectAtomic).toBeUndefined();
+  });
+
   it("cancels a turn revoked during intent declaration without recreating erased workspace data", async () => {
     let declarationStarted!: () => void;
     const started = new Promise<void>((resolve) => { declarationStarted = resolve; });

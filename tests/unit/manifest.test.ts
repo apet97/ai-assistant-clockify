@@ -83,8 +83,9 @@ describe("manifest", () => {
     const workspaceAdapter = readFileSync(workspaceAdapterPath, "utf8");
 
     expect(generator).toContain("RestCore callsite outside scanned adapter root");
-    expect(generator).toContain("core.call cannot carry a mutation method");
-    expect(workspaceAdapter).not.toMatch(/\bcore\.(?:call|mutate|paginate|paginateEnvelope|getBinary)\s*\(/u);
+    expect(generator).toContain("core.call requires a safe read method");
+    expect(generator).toContain('operation === "postQuery"');
+    expect(workspaceAdapter).not.toMatch(/\bcore\.(?:call|postQuery|mutate|paginate|paginateEnvelope|getBinary)\s*\(/u);
     expect(workspaceAdapter).toContain("timeEntryRest.deleteTimeEntryAtomic(i)");
   });
 

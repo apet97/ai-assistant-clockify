@@ -120,6 +120,7 @@ interface DeclarationRequest {
   /** Deterministic recall hint only. Validation still accepts solely the full
    * trusted writeActionNames allowlist and exact authored evidence. */
   candidateWriteActionNames?: string[];
+  requireCurrentActionSpan?: true;
   segments: AuthoredSegment[];
 }
 
@@ -129,6 +130,8 @@ export interface DeclareIntentCapabilityInput {
   currentText: string;
   /** Exact unresolved admin-authored context carried from a prior clarification. */
   unresolvedPriorText?: string;
+  /** Carried text may bind literals but cannot itself authorize the action. */
+  requireCurrentActionSpan?: boolean;
   /** Exact names of model-visible write actions. Reads are never declared. */
   writeActionNames: readonly string[];
   /** Small deterministic candidate subset; never an authority boundary. */
@@ -246,6 +249,7 @@ const declarationSystemMessage: ModelMessage = {
     "Use only paths in the exact action's writeActionContracts entry. A semantic scalar mapping is valid only when that same action/path/value lists the exact authored phrase.",
     "For paths listed in numericLiteralPaths, emit a JSON number rather than a quoted numeric string.",
     "Check candidateWriteActionNames first as a recall hint, but declare an action only when the authored segments explicitly request it; the full writeActionNames list remains the only name allowlist.",
+    "When requireCurrentActionSpan is true, every declared write must include an exact current sourceRef that expresses that action; unresolved_prior may bind literal constraints only and cannot supply the action command.",
     "When an action contract includes authoredIntent, sourceRefs must overlap its authored command and every matching literal cue must bind the listed path. authoredIntent is present only for extra safe-write grounding; for a contract without authoredIntent, its absence is not a denial—declare it when the authored segment explicitly commands that action and bind every exact authored literal path.",
     "Use only action names from writeActionNames. Set maxExecutions to 1. Return no prose.",
   ].join(" "),
@@ -303,6 +307,7 @@ function buildRequest(input: DeclareIntentCapabilityInput): DeclarationRequest |
     writeActionNames,
     writeActionContracts,
     candidateWriteActionNames,
+    ...(input.requireCurrentActionSpan ? { requireCurrentActionSpan: true as const } : {}),
     segments,
   };
 }
@@ -707,21 +712,34 @@ function constraintIsBoundToRole(
 }
 
 function satisfiesAuthoredIntent(
+  actionName: string,
   metadata: AuthoredIntentMetadata | undefined,
   actionSpans: readonly SourceSpan[],
   constraints: readonly IntentWriteActionDraftV1["literalConstraints"][number][],
   semanticLiteralAliases: readonly SemanticLiteralAlias[],
   segments: readonly AuthoredSegment[],
+  requireCurrentActionSpan = false,
 ): boolean {
-  if (!metadata) return true;
+  if (!metadata) return !requireCurrentActionSpan;
   const commands = commandWindows(metadata, segments);
-  if (commands.length === 0 || !actionSpans.some((span) =>
-    commands.some((command) => spansOverlap(span, command)))) return false;
+  const current = segments.find((segment) => segment.source === "current");
+  const currentCommands = commands.filter((command) => command.source === "current");
+  const currentCommand = currentCommands.some((command) =>
+    actionSpans.some((span) => spansOverlap(span, command)));
+  const explicitContinuation = requireCurrentActionSpan && actionName === "clockify_projects_create" && current !== undefined &&
+    /^(?:create|make)\s+(?:it|that)[.!?\s]*$/iu.test(current.text) &&
+    commands.some((command) => command.source === "unresolved_prior") &&
+    actionSpans.some((span) => span.startByte < current.endByte && current.startByte < span.endByte);
+  if (commands.length === 0) return false;
+  if (requireCurrentActionSpan) {
+    if (!currentCommand && !explicitContinuation) return false;
+  } else if (!actionSpans.some((span) => commands.some((command) => spansOverlap(span, command)))) {
+    return false;
+  }
 
   // A terse current clarification may supply a literal for a command retained
   // in unresolved_prior. Otherwise cues are scoped to the matched command
   // clauses so an unrelated sentence cannot add authority requirements.
-  const current = segments.find((segment) => segment.source === "current");
   if (current && commands.every((command) => command.source !== "current") &&
     Buffer.byteLength(current.text, "utf8") > MAX_AUTHORED_COMMAND_CLAUSE_BYTES) return false;
   const windows = commands.some((command) => command.source === "current") || !current
@@ -802,6 +820,11 @@ function validateDeclaration(
       ? write.sourceRefs.map((ref) => sourceSpanForQuote(ref, request.segments))
       : write.sourceSpans.map((span) => sourceTextForSpan(span, request.segments) === undefined ? undefined : span);
     if (actionSpans.some((span) => span === undefined)) return undefined;
+    if (request.requireCurrentActionSpan) {
+      const current = request.segments.find((segment) => segment.source === "current");
+      if (!current || !actionSpans.some((span) => span !== undefined &&
+        span.startByte < current.endByte && current.startByte < span.endByte)) return undefined;
+    }
 
     const literalConstraints: Array<IntentWriteActionDraftV1["literalConstraints"][number]> = [];
     const constraintPaths = new Set<string>();
@@ -836,11 +859,13 @@ function validateDeclaration(
       }
     }
     if (!satisfiesAuthoredIntent(
+      write.actionName,
       contract.authoredIntent,
       actionSpans as SourceSpan[],
       literalConstraints,
       contract.semanticLiteralAliases,
       request.segments,
+      request.requireCurrentActionSpan === true,
     )) {
       return undefined;
     }
