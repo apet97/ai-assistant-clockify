@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
   "kind": "deepseek-capability-probe",
-  "startedAt": "2026-07-20T21:05:49.765Z",
-  "completedAt": "2026-07-20T21:05:56.597Z",
+  "startedAt": "2026-07-20T22:09:41.378Z",
+  "completedAt": "2026-07-20T22:09:49.162Z",
   "source": {
-    "gitCommitSha": "aadf7bcef19150edf8d1ab8683695f062478b069",
+    "gitCommitSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
     "workingTreeClean": true
   },
   "runtimeConfiguration": {
