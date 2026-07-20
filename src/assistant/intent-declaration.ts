@@ -480,26 +480,82 @@ function sourceSpanHasNearbyNegation(sourceSpan: SourceSpan, segments: AuthoredS
 /** Exact, reviewed natural-language canonicalization for the carried project
  * member-rate action. This is deliberately action/path scoped: it does not
  * broaden general semantic aliases or any other write. */
+const CARRIED_LITERAL_REJECT = Symbol("carried_literal_reject");
+
 function reviewedCarriedProjectLiteral(input: {
   actionName: string;
   path: string;
   sourceText: string;
   sourceSpan: SourceSpan;
   declared: unknown;
+  aliases: readonly SemanticLiteralAlias[];
   segments: AuthoredSegment[];
-}): ReturnType<typeof parseIntentLiteralValue> | undefined {
-  if (input.actionName !== "clockify_projects_rate_update" ||
-    sourceSpanHasNearbyNegation(input.sourceSpan, input.segments) ||
+}): ReturnType<typeof parseIntentLiteralValue> | typeof CARRIED_LITERAL_REJECT | undefined {
+  if (sourceSpanHasNearbyNegation(input.sourceSpan, input.segments) ||
     !semanticAliasHasWholeTokenBoundaries(input.sourceSpan, input.segments)) return undefined;
   const source = normalizeString(input.sourceText).toLocaleLowerCase("en-US");
-  if (input.path === "userId" && input.declared === "me" && ["my", "myself"].includes(source)) {
+  if (input.actionName === "clockify_projects_memberships_update" &&
+    input.path === "addUserIds[]" && source === "me" &&
+    Array.isArray(input.declared) && input.declared.length === 1 && input.declared[0] === "me") {
+    const segment = segmentForSpan(input.sourceSpan, input.segments);
+    if (segment?.source !== "current") return undefined;
+    const localStart = input.sourceSpan.startByte - segment.startByte;
+    const prefix = Buffer.from(segment.text, "utf8").subarray(0, localStart).toString("utf8");
+    const membershipVerbs = [...prefix.matchAll(/\b(add|remove)\b/giu)];
+    if (membershipVerbs.at(-1)?.[1]?.toLocaleLowerCase("en-US") !== "add") return undefined;
     return "me";
   }
-  if (input.path === "rateKind") {
-    const hourly = ["project member rate", "member rate", "hourly rate"];
-    const cost = ["project member cost rate", "member cost rate", "cost rate"];
-    if (input.declared === "HOURLY" && hourly.includes(source)) return "HOURLY";
-    if (input.declared === "COST" && cost.includes(source)) return "COST";
+  if (input.actionName === "clockify_projects_rate_update" &&
+    (input.path === "rateKind" || input.path === "userId")) {
+    const normalizedDeclared = typeof input.declared === "string"
+      ? normalizeString(input.declared).toLocaleLowerCase("en-US")
+      : undefined;
+    const reviewed = input.aliases.find((alias) => alias.authoredPhrases.some((phrase) =>
+      normalizeString(phrase).toLocaleLowerCase("en-US") === source));
+    if (reviewed && (input.declared === reviewed.value || normalizedDeclared === source)) {
+      if (semanticAliasShadowedByOpposite(
+        input.sourceSpan,
+        reviewed.value,
+        input.aliases,
+        input.segments,
+      )) return CARRIED_LITERAL_REJECT;
+      return parseIntentLiteralValue(reviewed.value);
+    }
+  }
+  return undefined;
+}
+
+function reviewedCarriedConstraintPath(input: {
+  actionName: string;
+  path: string;
+  segment: AuthoredSegment | undefined;
+}): string {
+  return input.actionName === "clockify_projects_update" && input.path === "name" &&
+    input.segment?.source === "unresolved_prior"
+    ? "currentName"
+    : input.path;
+}
+
+function synthesizedCarriedRateUserSpan(
+  actionSpans: readonly SourceSpan[],
+  segments: readonly AuthoredSegment[],
+): SourceSpan | undefined {
+  const current = segments.find((segment) => segment.source === "current");
+  if (!current) return undefined;
+  const patterns = CARRIED_PROJECT_COMMAND_PATTERNS.clockify_projects_rate_update;
+  for (const source of patterns) {
+    const pattern = new RegExp(source, "giu");
+    for (const match of current.text.matchAll(pattern)) {
+      if (match.index === undefined || !match[0]) continue;
+      const matchStart = current.startByte + Buffer.byteLength(current.text.slice(0, match.index), "utf8");
+      const matchEnd = matchStart + Buffer.byteLength(match[0], "utf8");
+      if (!actionSpans.some((span) => span.startByte < matchEnd && matchStart < span.endByte)) continue;
+      const my = /(?<![\p{L}\p{M}\p{N}\p{Pc}])my(?![\p{L}\p{M}\p{N}\p{Pc}])/iu.exec(match[0]);
+      if (my?.index === undefined) continue;
+      const startByte = matchStart + Buffer.byteLength(match[0].slice(0, my.index), "utf8");
+      const span = { startByte, endByte: startByte + Buffer.byteLength(my[0], "utf8"), text: my[0] };
+      if (!sourceSpanHasNearbyNegation(span, [...segments])) return span;
+    }
   }
   return undefined;
 }
@@ -779,6 +835,7 @@ function carriedProjectCommandMatches(
   current: AuthoredSegment | undefined,
   actionSpans: readonly SourceSpan[],
   constraints: readonly IntentWriteActionDraftV1["literalConstraints"][number][],
+  semanticLiteralAliases: readonly SemanticLiteralAlias[],
   segments: readonly AuthoredSegment[],
 ): boolean {
   const patterns = CARRIED_PROJECT_COMMAND_PATTERNS[actionName as keyof typeof CARRIED_PROJECT_COMMAND_PATTERNS];
@@ -808,7 +865,40 @@ function carriedProjectCommandMatches(
             constraint.sourceSpan.endByte <= window.endByte
           );
         });
-        if (currentConstraintsBound && actionSpans.some((span) => spansOverlap(span, window))) return true;
+        if (!currentConstraintsBound || !actionSpans.some((span) => spansOverlap(span, window))) continue;
+        if (actionName === "clockify_projects_memberships_update" && constraints.some((constraint) => {
+          if (constraint.path !== "addUserIds[]") return false;
+          const segment = segmentForSpan(constraint.sourceSpan, [...segments]);
+          if (segment?.source !== "current") return true;
+          const beforeTarget = Buffer.from(window.text, "utf8")
+            .subarray(0, constraint.sourceSpan.startByte - window.startByte)
+            .toString("utf8");
+          const verbs = [...beforeTarget.matchAll(/\b(add|remove)\b/giu)];
+          return verbs.at(-1)?.[1]?.toLocaleLowerCase("en-US") !== "add";
+        })) continue;
+        if (actionName === "clockify_projects_rate_update") {
+          const canonicalRateKinds = new Set<string>();
+          for (const alias of semanticLiteralAliases.filter((item) => item.path === "rateKind")) {
+            for (const phrase of alias.authoredPhrases) {
+              const phrasePattern = semanticPhrasePattern(phrase);
+              if (!phrasePattern) continue;
+              for (const aliasMatch of window.text.matchAll(new RegExp(phrasePattern.source, "giu"))) {
+                if (aliasMatch.index === undefined || !aliasMatch[0]) continue;
+                const aliasStart = window.startByte + Buffer.byteLength(window.text.slice(0, aliasMatch.index), "utf8");
+                const aliasSpan = {
+                  startByte: aliasStart,
+                  endByte: aliasStart + Buffer.byteLength(aliasMatch[0], "utf8"),
+                  text: aliasMatch[0],
+                };
+                if (!sourceSpanHasNearbyNegation(aliasSpan, [...segments])) {
+                  canonicalRateKinds.add(String(alias.value));
+                }
+              }
+            }
+          }
+          if (canonicalRateKinds.size > 1) continue;
+        }
+        return true;
       }
     }
   }
@@ -831,6 +921,7 @@ function satisfiesAuthoredIntent(
       current,
       actionSpans,
       constraints,
+      semanticLiteralAliases,
       segments,
     );
   }
@@ -941,9 +1032,6 @@ function validateDeclaration(
     const literalConstraints: Array<IntentWriteActionDraftV1["literalConstraints"][number]> = [];
     const constraintPaths = new Set<string>();
     for (const constraint of write.literalConstraints) {
-      if (constraintPaths.has(constraint.path)) return undefined;
-      constraintPaths.add(constraint.path);
-      if (!pathIsLiteralControlled(constraint.path, contract)) return undefined;
       const sourceSpan = quoted
         ? sourceSpanForQuote((constraint as z.infer<typeof quotedConstraintSchema>).sourceRef, request.segments)
         : (constraint as z.infer<typeof legacyConstraintSchema>).sourceSpan;
@@ -951,40 +1039,64 @@ function validateDeclaration(
       const sourceText = sourceTextForSpan(sourceSpan, request.segments);
       if (sourceText === undefined) return undefined;
       const constraintSegment = segmentForSpan(sourceSpan, request.segments);
+      const constraintPath = request.requireCurrentActionSpan
+        ? reviewedCarriedConstraintPath({
+            actionName: write.actionName,
+            path: constraint.path,
+            segment: constraintSegment,
+          })
+        : constraint.path;
+      if (constraintPaths.has(constraintPath)) return undefined;
+      constraintPaths.add(constraintPath);
+      if (!pathIsLiteralControlled(constraintPath, contract)) return undefined;
       if (request.requireCurrentActionSpan && constraintSegment?.source === "unresolved_prior") {
         const allowedPriorPaths = CARRIED_PRIOR_LITERAL_PATHS[
           write.actionName as keyof typeof CARRIED_PRIOR_LITERAL_PATHS
         ];
-        if (!allowedPriorPaths?.includes(constraint.path)) return undefined;
+        if (!allowedPriorPaths?.includes(constraintPath)) return undefined;
       }
-      const aliases = contract.semanticLiteralAliases.filter((alias) => alias.path === constraint.path);
+      const aliases = contract.semanticLiteralAliases.filter((alias) => alias.path === constraintPath);
       const reviewedValue = request.requireCurrentActionSpan && constraintSegment?.source === "current"
         ? reviewedCarriedProjectLiteral({
             actionName: write.actionName,
-            path: constraint.path,
+            path: constraintPath,
             sourceText,
             sourceSpan,
             declared: constraint.value,
+            aliases,
             segments: request.segments,
           })
         : undefined;
+      if (reviewedValue === CARRIED_LITERAL_REJECT) return undefined;
       const value = reviewedValue ?? normalizedLiteral(
           sourceText,
           constraint.value,
           aliases,
           sourceSpan,
           request.segments,
-          contract.numericLiteralPaths.includes(normalizedConstraintPath(constraint.path)),
-        );
+        contract.numericLiteralPaths.includes(normalizedConstraintPath(constraintPath)),
+      );
       if (value === undefined) return undefined;
       if (literalConstraints.some((prior) =>
         prior.sourceSpan.startByte < sourceSpan.endByte && sourceSpan.startByte < prior.sourceSpan.endByte)) {
         return undefined;
       }
-      literalConstraints.push({ path: constraint.path, value, sourceSpan });
+      literalConstraints.push({ path: constraintPath, value, sourceSpan });
       if (quoted && !actionSpans.some((span) => span?.startByte === sourceSpan.startByte &&
         span.endByte === sourceSpan.endByte && span.text === sourceSpan.text)) {
         actionSpans.push(sourceSpan);
+      }
+    }
+    if (request.requireCurrentActionSpan && write.actionName === "clockify_projects_rate_update" &&
+      !literalConstraints.some((constraint) => constraint.path === "userId" || constraint.path === "userName")) {
+      const userAlias = contract.semanticLiteralAliases.some((alias) =>
+        alias.path === "userId" && alias.value === "me" && alias.authoredPhrases.includes("my"));
+      const currentMy = userAlias
+        ? synthesizedCarriedRateUserSpan(actionSpans as SourceSpan[], request.segments)
+        : undefined;
+      if (currentMy) {
+        literalConstraints.push({ path: "userId", value: "me", sourceSpan: currentMy });
+        actionSpans.push(currentMy);
       }
     }
     if (!satisfiesAuthoredIntent(

@@ -101,7 +101,7 @@ function scriptedTranscriptModel(): ModelClient {
           actionName: "clockify_projects_update",
           sourceRefs: [{ segment: "current", quote: "make the project private", occurrence: 0 }],
           literalConstraints: [
-            { path: "currentName", value: PROJECT_NAME, sourceRef: { segment: "unresolved_prior", quote: PROJECT_NAME, occurrence: 0 } },
+            { path: "name", value: PROJECT_NAME, sourceRef: { segment: "unresolved_prior", quote: PROJECT_NAME, occurrence: 0 } },
             { path: "isPublic", value: false, sourceRef: { segment: "current", quote: "private", occurrence: 0 } },
           ],
           maxExecutions: 1,
@@ -111,7 +111,7 @@ function scriptedTranscriptModel(): ModelClient {
           sourceRefs: [{ segment: "current", quote: "add me to it", occurrence: 0 }],
           literalConstraints: [
             { path: "name", value: PROJECT_NAME, sourceRef: { segment: "unresolved_prior", quote: PROJECT_NAME, occurrence: 0 } },
-            { path: "addUserIds[]", value: "me", sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
+            { path: "addUserIds[]", value: ["me"], sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
           ],
           maxExecutions: 1,
         },
@@ -120,8 +120,7 @@ function scriptedTranscriptModel(): ModelClient {
           sourceRefs: [{ segment: "current", quote: "make my project member rate to be 15", occurrence: 0 }],
           literalConstraints: [
             { path: "projectName", value: PROJECT_NAME, sourceRef: { segment: "unresolved_prior", quote: PROJECT_NAME, occurrence: 0 } },
-            { path: "userId", value: "me", sourceRef: { segment: "current", quote: "my", occurrence: 0 } },
-            { path: "rateKind", value: "HOURLY", sourceRef: { segment: "current", quote: "project member rate", occurrence: 0 } },
+            { path: "rateKind", value: "project member", sourceRef: { segment: "current", quote: "project member", occurrence: 0 } },
             { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15", occurrence: 0 } },
           ],
           maxExecutions: 1,

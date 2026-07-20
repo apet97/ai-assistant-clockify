@@ -617,6 +617,15 @@ const rateUpdate = defineRiskyAction({
   risks: ["billing"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
+  semanticLiteralAliases: Object.freeze([
+    { path: "userId", value: "me", authoredPhrases: Object.freeze(["my", "myself"]) },
+    { path: "rateKind", value: "HOURLY", authoredPhrases: Object.freeze([
+      "project member", "project member rate", "member rate", "hourly rate",
+    ]) },
+    { path: "rateKind", value: "COST", authoredPhrases: Object.freeze([
+      "project member cost rate", "member cost rate", "cost rate",
+    ]) },
+  ] satisfies readonly SemanticLiteralAlias[]),
   schema: z
     .object({
       projectId: z.string().min(1).optional(),

@@ -174,6 +174,23 @@ function projectCreateWithAliases(semanticLiteralAliases: readonly AliasDefiniti
 }
 
 describe("action-scoped semantic literal alias metadata", () => {
+  it("advertises the reviewed project-member identity and rate aliases from the catalog contract", () => {
+    const action = getAction("clockify_projects_rate_update");
+    expect(action?.writeAuthority?.semanticLiteralAliases).toEqual(canonicalAliases([
+      { path: "userId", value: "me", authoredPhrases: ["my", "myself"] },
+      {
+        path: "rateKind",
+        value: "HOURLY",
+        authoredPhrases: ["project member", "project member rate", "member rate", "hourly rate"],
+      },
+      {
+        path: "rateKind",
+        value: "COST",
+        authoredPhrases: ["project member cost rate", "member cost rate", "cost rate"],
+      },
+    ]));
+  });
+
   it("advertises only reviewed public/private aliases on the exact project visibility path", () => {
     for (const actionName of [
       "clockify_projects_create",

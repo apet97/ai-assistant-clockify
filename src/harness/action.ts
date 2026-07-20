@@ -289,7 +289,7 @@ export interface WriteAuthorityMetadata {
  * widen object/array authority. */
 export interface SemanticLiteralAlias {
   path: string;
-  value: boolean;
+  value: boolean | string;
   authoredPhrases: readonly string[];
 }
 

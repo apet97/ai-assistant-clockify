@@ -693,7 +693,7 @@ function semanticLiteralAliasesFor(
       alias.path.endsWith(".*") || alias.path.includes(".*")) {
       throw new Error(`invalid_semantic_literal_alias_path:${action.name}:${alias?.path ?? ""}`);
     }
-    if (typeof alias.value !== "boolean") {
+    if (typeof alias.value !== "boolean" && typeof alias.value !== "string") {
       throw new Error(`invalid_semantic_literal_alias_value:${action.name}:${alias.path}`);
     }
     const schemaNodes = schemaNodesAtPath(schema, alias.path.split("."));

@@ -104,6 +104,49 @@ describe("declareIntentCapability", () => {
     });
   });
 
+  it("rejects mapping a carried cost-rate phrase to HOURLY", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [{
+        actionName: "clockify_projects_rate_update",
+        sourceRefs: [{ segment: "current", quote: "make my project member cost rate to be 15" }],
+        literalConstraints: [
+          { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "rateKind", value: "project member", sourceRef: { segment: "current", quote: "project member" } },
+          { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+        ],
+        maxExecutions: 1,
+      }] }),
+      currentText: "make my project member cost rate to be 15 on that project",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("rejects mapping a carried remove-membership command to addUserIds", async () => {
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [{
+        actionName: "clockify_projects_memberships_update",
+        sourceRefs: [{ segment: "current", quote: "remove me from that project" }],
+        literalConstraints: [
+          { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "addUserIds[]", value: ["me"], sourceRef: { segment: "current", quote: "me" } },
+        ],
+        maxExecutions: 1,
+      }] }),
+      currentText: "remove me from that project",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_memberships_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
   it.each([
     ["clockify_start_timer", "Start a timer.", []],
     ["clockify_stop_timer", "Stop the timer.", []],
@@ -1046,11 +1089,9 @@ describe("declareIntentCapability", () => {
         actionName: "clockify_projects_update",
         sourceRefs: [
           { segment: "current", quote: "make the project private" },
-          { segment: "unresolved_prior", quote: "Atlas" },
-          { segment: "current", quote: "private" },
         ],
         literalConstraints: [
-          { path: "currentName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+          { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
           { path: "isPublic", value: false, sourceRef: { segment: "current", quote: "private" } },
         ],
         maxExecutions: 1,
@@ -1059,12 +1100,10 @@ describe("declareIntentCapability", () => {
         actionName: "clockify_projects_memberships_update",
         sourceRefs: [
           { segment: "current", quote: "add me to it" },
-          { segment: "unresolved_prior", quote: "Atlas" },
-          { segment: "current", quote: "me", occurrence: 0 },
         ],
         literalConstraints: [
           { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
-          { path: "addUserIds[]", value: "me", sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
+          { path: "addUserIds[]", value: ["me"], sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
         ],
         maxExecutions: 1,
       },
@@ -1072,15 +1111,11 @@ describe("declareIntentCapability", () => {
         actionName: "clockify_projects_rate_update",
         sourceRefs: [
           { segment: "current", quote: "make my project member rate to be 15" },
-          { segment: "unresolved_prior", quote: "Atlas" },
-          { segment: "current", quote: "my" },
-          { segment: "current", quote: "project member rate" },
-          { segment: "current", quote: "15" },
         ],
         literalConstraints: [
           { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
-          { path: "userId", value: "me", sourceRef: { segment: "current", quote: "my" } },
           { path: "rateKind", value: "HOURLY", sourceRef: { segment: "current", quote: "project member rate" } },
+          { path: "userId", value: "me", sourceRef: { segment: "current", quote: "my" } },
           { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
         ],
         maxExecutions: 1,
@@ -1113,9 +1148,25 @@ describe("declareIntentCapability", () => {
     expect(capability).toMatchObject({
       mode: "allow",
       writeActions: [
-        expect.objectContaining({ actionName: "clockify_projects_update" }),
-        expect.objectContaining({ actionName: "clockify_projects_memberships_update" }),
-        expect.objectContaining({ actionName: "clockify_projects_rate_update" }),
+        expect.objectContaining({
+          actionName: "clockify_projects_update",
+          literalConstraints: expect.arrayContaining([
+            expect.objectContaining({ path: "currentName", value: "Atlas" }),
+          ]),
+        }),
+        expect.objectContaining({
+          actionName: "clockify_projects_memberships_update",
+          literalConstraints: expect.arrayContaining([
+            expect.objectContaining({ path: "addUserIds[]", value: "me" }),
+          ]),
+        }),
+        expect.objectContaining({
+          actionName: "clockify_projects_rate_update",
+          literalConstraints: expect.arrayContaining([
+            expect.objectContaining({ path: "rateKind", value: "HOURLY" }),
+            expect.objectContaining({ path: "userId", value: "me" }),
+          ]),
+        }),
       ],
     });
   });
@@ -1313,6 +1364,56 @@ describe("declareIntentCapability", () => {
         }],
       }),
       currentText: "add Alice to that project, then make my project member rate to be 15",
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_rate_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("denies a carried membership declaration when the nearest verb removes me", async () => {
+    const currentText = "add Bob then remove me from that project";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_memberships_update",
+          sourceRefs: [{ segment: "current", quote: currentText }],
+          literalConstraints: [
+            { path: "name", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "addUserIds[]", value: "me", sourceRef: { segment: "current", quote: "me" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
+      unresolvedPriorText: "create a project named Atlas",
+      requireCurrentActionSpan: true,
+      writeActionNames: ["clockify_projects_memberships_update"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
+  });
+
+  it("denies a carried project rate with conflicting hourly and cost cues", async () => {
+    const currentText = "set hourly rate and cost rate to 15 for me on that project";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({
+        writeActions: [{
+          actionName: "clockify_projects_rate_update",
+          sourceRefs: [{ segment: "current", quote: currentText }],
+          literalConstraints: [
+            { path: "projectName", value: "Atlas", sourceRef: { segment: "unresolved_prior", quote: "Atlas" } },
+            { path: "userId", value: "me", sourceRef: { segment: "current", quote: "me" } },
+            { path: "rateKind", value: "HOURLY", sourceRef: { segment: "current", quote: "hourly rate" } },
+            { path: "amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+          ],
+          maxExecutions: 1,
+        }],
+      }),
+      currentText,
       unresolvedPriorText: "create a project named Atlas",
       requireCurrentActionSpan: true,
       writeActionNames: ["clockify_projects_rate_update"],
