@@ -233,6 +233,15 @@ describe("raw intent authority matcher", () => {
     expect(check("clockify_projects_rate_update", rate, { userId: "my" })).toBeUndefined();
     expect(check("clockify_projects_rate_update", rate, { userId: "myself" })).toBeUndefined();
     expect(check("clockify_projects_rate_update", rate, { userId: "admin-1" })).toBeUndefined();
+    for (const userName of ["me", "my", "myself"]) {
+      expect(check("clockify_projects_rate_update", rate, { userName })).toBeUndefined();
+    }
+    for (const userName of ["other-1", "ME", " me", "self"]) {
+      expect(check("clockify_projects_rate_update", rate, { userName }))
+        .toMatchObject({ code: "intent_capability_argument_mismatch" });
+    }
+    expect(check("clockify_projects_rate_update", rate, { userId: "other-1", userName: "me" }))
+      .toMatchObject({ code: "intent_capability_argument_mismatch" });
     for (const userId of ["other-1", "admin-2", " admin-1", "ADMIN-1", "admin-1-extra", "MY", " my"]) {
       expect(check("clockify_projects_rate_update", rate, { userId }))
         .toMatchObject({ code: "intent_capability_argument_mismatch" });

@@ -647,11 +647,10 @@ const rateUpdate = defineRiskyAction({
     if (!project.ok) return project.clarify;
     // Resolve the member ("me" -> the admin; a name -> a user id). Clockify's rate
     // endpoint wants a 24-hex user id in the path, not "me".
+    const rateSelfAlias = args.userId === "my" || args.userId === "myself" ||
+      (args.userId === undefined && (args.userName === "me" || args.userName === "my" || args.userName === "myself"));
     const member = await resolveUserRef(
-      {
-        id: args.userId === "my" || args.userId === "myself" ? "me" : args.userId,
-        name: args.userName,
-      },
+      rateSelfAlias ? { id: "me" } : { id: args.userId, name: args.userName },
       { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
     );
     if (!member.ok) return member.clarify;

@@ -200,14 +200,23 @@ function matchesAuthenticatedMeSubstitution(
     (Array.isArray(declared) && declared.length === 1 && declared[0] === "me");
   if (!declaresOnlyMe) return false;
   const actual = valuesAtPath(input.rawArgs, constraint.path);
-  if (actual?.length !== 1) return false;
-  if (actual[0] === adminUserId) return true;
+  if (actual?.length === 1 && actual[0] === adminUserId) return true;
   // `my` / `myself` are reviewed semantic aliases only for the project-member
   // rate's authenticated-self selector. They still resolve server-side to the
   // session subject; no arbitrary model-supplied id gains authority.
-  return input.actionName === "clockify_projects_rate_update"
+  if (actual?.length === 1 && input.actionName === "clockify_projects_rate_update"
     && constraint.path === "userId"
-    && (actual[0] === "my" || actual[0] === "myself");
+    && (actual[0] === "my" || actual[0] === "myself")) return true;
+  // The rate tool exposes both an id- and name-shaped selector. DeepSeek may
+  // place the exact self sentinel in `userName`; accept only that reviewed
+  // cross-selector spelling when `userId` is absent. Preview still resolves it
+  // exclusively to the authenticated session subject.
+  return actual?.length === 0
+    && input.actionName === "clockify_projects_rate_update"
+    && constraint.path === "userId"
+    && isRecord(input.rawArgs)
+    && !Object.hasOwn(input.rawArgs, "userId")
+    && (input.rawArgs.userName === "me" || input.rawArgs.userName === "my" || input.rawArgs.userName === "myself");
 }
 
 function constraintCoversLeaf(constraintPath: string, leafPath: string): boolean {
@@ -282,8 +291,11 @@ export function authorizeIntentWriteArguments(
 
   const leaves = rawLeaves(input.rawArgs);
   for (const leaf of leaves) {
+    const coveredByAuthenticatedRateSelfName = leaf.schemaPath === "userName" &&
+      grant.literalConstraints.some((constraint) => matchesAuthenticatedMeSubstitution(input, constraint));
     if (!pathIsLiteralControlled(leaf.schemaPath, input.authority) ||
-      !grant.literalConstraints.some((constraint) => constraintCoversLeaf(constraint.path, leaf.concretePath))) {
+      (!coveredByAuthenticatedRateSelfName &&
+       !grant.literalConstraints.some((constraint) => constraintCoversLeaf(constraint.path, leaf.concretePath)))) {
       return denied(input.actionName, "intent_capability_argument_undeclared",
         `Raw argument ${leaf.concretePath || "<root>"} was not authorized by the admin-authored request.`);
     }
