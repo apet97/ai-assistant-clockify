@@ -2,8 +2,8 @@
   "schemaVersion": 2,
   "kind": "deepseek-release-binding",
   "capabilityProbe": {
-    "testedSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
-    "rawAggregateSha256": "3200f0d6e4745bdd2ca051ddf5c8e9ae7b333af6acb88e7f558bf20a4d914d13",
+    "testedSha": "0b1c6794a6038ca465e812294df824b2fc694ee7",
+    "rawAggregateSha256": "1ac3c15a862fe0f7da56e695fb4022e1ad929bb60d4c1adfc960b0430ec6eb53",
     "endpointSha256": "548c8dadbba3d19dad29eda388fd7d70f46354eca72ba6012e414b559b68996d",
     "distinctPassingSettings": [
       "production-default",
@@ -11,24 +11,24 @@
     ]
   },
   "baseline": {
-    "testedSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
-    "rawAggregateSha256": "43e86ef5652e471d3f5e66f6311a968e4e3c61154594fdd12661d00583cd03b5",
+    "testedSha": "0b1c6794a6038ca465e812294df824b2fc694ee7",
+    "rawAggregateSha256": "c8d500155b2f71148ceeb4f3256ef50c9e978639246000f94c43cbbf2f250997",
     "thinkingMode": null
   },
   "candidate": {
-    "testedSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
-    "rawAggregateSha256": "df09ac43a409afd4267d166e56bab0892f72b3288d0782f58b145b85aaa96c56",
+    "testedSha": "0b1c6794a6038ca465e812294df824b2fc694ee7",
+    "rawAggregateSha256": "bd47b9953d8ca7d7612151062680bb06ff4ceb438352ca5aac2f17d3a87850af",
     "thinkingMode": "disabled"
   },
   "focusedRead": {
-    "testedSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
-    "rawAggregateSha256": "c1b12a77236c0822dd0c44dd946ef402d556c839ca74a428f9c5a7eb7429ee2f",
+    "testedSha": "0b1c6794a6038ca465e812294df824b2fc694ee7",
+    "rawAggregateSha256": "711c108e4b36f1f5d04df289660692a29b9562f8bb9e3e71fdef935e6d5aed4c",
     "thinkingMode": "disabled",
     "caseId": "agentic.count_projects"
   },
   "focusedRiskyPreview": {
-    "testedSha": "590c0e1d022f1119708ae5e61d072d6b93185a5b",
-    "rawAggregateSha256": "31e5921f316741a53ffd960a63f4712d6ddee876856f4309a4dded1b929948a2",
+    "testedSha": "0b1c6794a6038ca465e812294df824b2fc694ee7",
+    "rawAggregateSha256": "157d4939415a102f1fea2a433d31f2432064755f301418f8a5c34ee526682552",
     "thinkingMode": "disabled",
     "caseId": "agentic.delete_tag_by_name"
   },
