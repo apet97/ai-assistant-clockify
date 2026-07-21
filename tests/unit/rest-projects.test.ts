@@ -16,6 +16,59 @@ const rest = (fetchImpl: typeof fetch) =>
   );
 
 describe("project rest", () => {
+  it("decodes live project membership DTOs to a stable PATCH-safe projection", async () => {
+    const f = vi.fn(async () => jsonResponse({
+      memberships: [
+        {
+          userId: "u2",
+          targetId: "p1",
+          membershipType: "PROJECT",
+          membershipStatus: "ACTIVE",
+          hourlyRate: { amount: 8_000, currency: "USD" },
+          unknownUserId: "must-not-escape",
+        },
+        { userId: "u1", costRate: { amount: 4_000, currency: "EUR" } },
+      ],
+    }));
+
+    await expect(rest(f as unknown as typeof fetch).getProjectMemberships("p1")).resolves.toEqual({
+      rows: [
+        { userId: "u1", costRate: { amount: 4_000 } },
+        { userId: "u2", membershipStatus: "ACTIVE", membershipType: "PROJECT", hourlyRate: { amount: 8_000 } },
+      ],
+      truncated: false,
+    });
+  });
+
+  it.each([
+    [{ userId: "u1", membershipStatus: "ALL" }, "membershipStatus"],
+    [{ userId: "u1", membershipStatus: 1 }, "membershipStatus"],
+    [{ userId: "u1", membershipType: "UNKNOWN" }, "membershipType"],
+    [{ userId: "u1", membershipType: false }, "membershipType"],
+    [{ userId: "u1", hourlyRate: { amount: 100, since: "tomorrow" } }, "hourlyRate.since"],
+  ])("fails closed for a present malformed membership field %#", async (membership, field) => {
+    const f = vi.fn(async () => jsonResponse({ memberships: [membership] }));
+    await expect(rest(f as unknown as typeof fetch).getProjectMemberships("p1"))
+      .rejects.toThrow(field);
+  });
+
+  it.each([null, {}, { memberships: null }])(
+    "fails closed when a project response does not contain an actual memberships array %#",
+    async (body) => {
+      const f = vi.fn(async () => jsonResponse(body));
+      await expect(rest(f as unknown as typeof fetch).getProjectMemberships("p1"))
+        .rejects.toThrow("memberships");
+    },
+  );
+
+  it("fails closed when the current membership baseline repeats a user", async () => {
+    const f = vi.fn(async () => jsonResponse({
+      memberships: [{ userId: "u1" }, { userId: "u1" }],
+    }));
+    await expect(rest(f as unknown as typeof fetch).getProjectMemberships("p1"))
+      .rejects.toThrow("memberships[].userId");
+  });
+
   it("paginates projects until a short page and maps summaries", async () => {
     const page1 = Array.from({ length: 200 }, (_, i) => ({ id: `p${i}`, name: `P${i}` }));
     const f = vi

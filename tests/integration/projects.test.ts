@@ -7,6 +7,7 @@ import { getAction } from "../../src/harness/catalog.js";
 import { validateWriteAuthorityOperation } from "../../src/harness/write-authority.js";
 import { createRestCore } from "../../src/clockify/rest/core.js";
 import { makeProjectRest } from "../../src/clockify/rest/projects.js";
+import { AmbiguousWriteOutcome } from "../../src/clockify/write-outcome.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
 
@@ -518,6 +519,155 @@ describe("project actions — risky writes (preview → commit)", () => {
       "admin-1",
       "u-existing",
     ]);
+  });
+
+  it("normalizes live membership DTOs to the exact PATCH request shape before adding me", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      projectMemberships: {
+        p1: [{
+          userId: "u-existing",
+          targetId: "p1",
+          membershipType: "PROJECT",
+          membershipStatus: "ACTIVE",
+          hourlyRate: { amount: 8_000, currency: "USD" },
+          costRate: { amount: 4_000, currency: "USD" },
+        }],
+      },
+    });
+    const originalGetMemberships = fake.client.getProjectMemberships;
+    const originalUpdateMemberships = fake.client.updateProjectMembershipsAtomic;
+    let membershipReads = 0;
+    let dispatchedPatch: Record<string, unknown> | undefined;
+    fake.client.getProjectMemberships = async (projectId) => {
+      const current = await originalGetMemberships(projectId);
+      membershipReads += 1;
+      if (membershipReads === 1) return current;
+      return {
+        ...current,
+        rows: [...current.rows].reverse().map((row) => ({
+          ...row,
+          ...(row.userId === "admin-1" ? { hourlyRate: { amount: 10_000 } } : {}),
+        })),
+      };
+    };
+    fake.client.updateProjectMembershipsAtomic = async (id, patch) => {
+      dispatchedPatch = patch;
+      await originalUpdateMemberships(id, patch);
+      throw new AmbiguousWriteOutcome("PATCH", `/projects/${id}/memberships`, "socket closed after apply");
+    };
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { name: "Website", addUserIds: ["me"] },
+      context: makeContext(fake),
+    });
+
+    if (preview.kind !== "preview") throw new Error(`expected a preview, got ${JSON.stringify(preview)}`);
+    expect(preview.operation.payload).toMatchObject({
+      id: "p1",
+      memberships: [
+        { userId: "admin-1" },
+        {
+          userId: "u-existing",
+          membershipStatus: "ACTIVE",
+          membershipType: "PROJECT",
+          hourlyRate: { amount: 8_000 },
+          costRate: { amount: 4_000 },
+        },
+      ],
+    });
+    expect(JSON.stringify(preview.operation.payload)).not.toContain("targetId");
+    expect(JSON.stringify(preview.operation.payload)).not.toContain("currency");
+
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(dispatchedPatch).toEqual({
+      memberships: [
+        { userId: "admin-1" },
+        {
+          userId: "u-existing",
+          membershipStatus: "ACTIVE",
+          membershipType: "PROJECT",
+          hourlyRate: { amount: 8_000 },
+          costRate: { amount: 4_000 },
+        },
+      ],
+    });
+  });
+
+  it("fails closed without a membership baseline and never prepares or dispatches replacement", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    fake.client.getProjectMemberships = async () => {
+      throw new TypeError("Clockify returned a malformed project field: memberships.");
+    };
+
+    await expect(executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { name: "Website", addUserIds: ["me"] },
+      context: makeContext(fake),
+    })).rejects.toThrow("memberships");
+    expect(fake.counts.updateProjectMembershipsAtomic ?? 0).toBe(0);
+  });
+
+  it("canonicalizes explicit replacement ordering while preserving supported status and type", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: {
+        id: "p1",
+        memberships: [
+          { userId: "u2", membershipStatus: "ACTIVE", targetId: "p1" },
+          { userId: "u1", membershipType: "PROJECT" },
+        ],
+      },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected preview, got ${JSON.stringify(preview)}`);
+    expect(preview.operation.payload).toMatchObject({
+      memberships: [
+        { userId: "u1", membershipType: "PROJECT" },
+        { userId: "u2", membershipStatus: "ACTIVE" },
+      ],
+    });
+  });
+
+  it("rejects duplicate user ids in an explicit membership replacement", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
+    await expect(executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { id: "p1", memberships: [{ userId: "u1" }, { userId: "u1" }] },
+      context: makeContext(fake),
+    })).rejects.toThrow("duplicate_membership_user_id");
+    expect(fake.counts.updateProjectMembershipsAtomic ?? 0).toBe(0);
+  });
+
+  it("keeps an ambiguous membership PATCH unknown when requested rate readback mismatches", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      projectMemberships: { p1: [{ userId: "u1", hourlyRate: { amount: 8_000 } }] },
+    });
+    const originalGet = fake.client.getProjectMemberships;
+    const originalUpdate = fake.client.updateProjectMembershipsAtomic;
+    let reads = 0;
+    fake.client.getProjectMemberships = async (id) => {
+      const current = await originalGet(id);
+      reads += 1;
+      return reads === 1
+        ? current
+        : { ...current, rows: current.rows.map((row) => row.userId === "u1" ? { ...row, hourlyRate: { amount: 8_001 } } : row) };
+    };
+    fake.client.updateProjectMembershipsAtomic = async (id, patch) => {
+      await originalUpdate(id, patch);
+      throw new AmbiguousWriteOutcome("PATCH", `/projects/${id}/memberships`, "socket closed after apply");
+    };
+    const preview = await executeAction({
+      actionName: "clockify_projects_memberships_update",
+      args: { id: "p1", addUserIds: ["me"] },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error(`expected preview, got ${JSON.stringify(preview)}`);
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt).toMatchObject({ ok: false, code: "commit_outcome_unknown" });
   });
 
   it("memberships_update addUserIds is idempotent for an already-member user", async () => {

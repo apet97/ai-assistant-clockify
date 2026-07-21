@@ -1,4 +1,5 @@
 import type { ProjectSummary, WorkspaceClient } from "../../../src/clockify/client.js";
+import { decodeProjectMembershipRows } from "../../../src/clockify/rest/projects.js";
 import { fakeListResult, type FakeContext } from "./state.js";
 
 export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pick<
@@ -172,7 +173,7 @@ export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pi
     },
     async getProjectMemberships(projectId) {
       bump("getProjectMemberships");
-      return fakeListResult(seed, "getProjectMemberships", [...(state.projectMemberships[projectId] ?? [])]);
+      return fakeListResult(seed, "getProjectMemberships", decodeProjectMembershipRows(state.projectMemberships[projectId] ?? []));
     },
   };
 }

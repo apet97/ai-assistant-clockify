@@ -21,6 +21,58 @@ type ProjectRow = {
 };
 
 type ProjectRateRequest = { amount: number };
+const MEMBERSHIP_STATUSES = new Set(["PENDING", "ACTIVE", "DECLINED", "INACTIVE"]);
+const MEMBERSHIP_TYPES = new Set(["WORKSPACE", "PROJECT", "USERGROUP"]);
+
+function decodeMembershipRate(value: unknown, field: string): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) throw malformedProjectField(field);
+  const row = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(row.amount) || (row.amount as number) < 0 || (row.amount as number) > 2_147_483_647) {
+    throw malformedProjectField(`${field}.amount`);
+  }
+  if (row.since !== undefined && (
+    typeof row.since !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(row.since)
+    || Number.isNaN(Date.parse(row.since))
+  )) throw malformedProjectField(`${field}.since`);
+  return {
+    amount: row.amount,
+    ...(typeof row.since === "string" ? { since: row.since } : {}),
+  };
+}
+
+/** Decode response DTOs into the closed request shape accepted by PATCH
+ * /projects/{id}/memberships. Response-only targetId and unknown fields never
+ * enter a prepared mutation. Stable ordering also makes reconciliation immune
+ * to Clockify returning the same set in a different order. */
+export function decodeProjectMembershipRows(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) throw malformedProjectField("memberships");
+  const normalized = value.map((item, index) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) throw malformedProjectField(`memberships[${index}]`);
+    const row = item as Record<string, unknown>;
+    if (typeof row.userId !== "string" || row.userId.length === 0) throw malformedProjectField(`memberships[${index}].userId`);
+    const hourlyRate = decodeMembershipRate(row.hourlyRate, `memberships[${index}].hourlyRate`);
+    const costRate = decodeMembershipRate(row.costRate, `memberships[${index}].costRate`);
+    if (row.membershipStatus !== undefined && (
+      typeof row.membershipStatus !== "string" || !MEMBERSHIP_STATUSES.has(row.membershipStatus)
+    )) throw malformedProjectField(`memberships[${index}].membershipStatus`);
+    if (row.membershipType !== undefined && (
+      typeof row.membershipType !== "string" || !MEMBERSHIP_TYPES.has(row.membershipType)
+    )) throw malformedProjectField(`memberships[${index}].membershipType`);
+    return {
+      userId: row.userId,
+      ...(typeof row.membershipStatus === "string" ? { membershipStatus: row.membershipStatus } : {}),
+      ...(typeof row.membershipType === "string" ? { membershipType: row.membershipType } : {}),
+      ...(hourlyRate ? { hourlyRate } : {}),
+      ...(costRate ? { costRate } : {}),
+    };
+  }).sort((left, right) => String(left.userId).localeCompare(String(right.userId)));
+  if (new Set(normalized.map((row) => row.userId)).size !== normalized.length) {
+    throw malformedProjectField("memberships[].userId");
+  }
+  return normalized;
+}
 type ProjectUpdateRequest = {
   archived?: boolean;
   billable?: boolean;
@@ -197,10 +249,15 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
     },
     updateProjectMembershipsAtomic,
     async getProjectMemberships(projectId) {
-      const p = (await core.call("api", "GET", `${ws}/projects/${projectId}`, undefined, true)) as
-        | { memberships?: Array<Record<string, unknown>> }
-        | null;
-      return { rows: p?.memberships ?? [], truncated: false };
+      const p = await core.call("api", "GET", `${ws}/projects/${projectId}`, undefined, true) as unknown;
+      if (!p || typeof p !== "object" || Array.isArray(p) ||
+          !Object.prototype.hasOwnProperty.call(p, "memberships")) {
+        throw malformedProjectField("memberships");
+      }
+      return {
+        rows: decodeProjectMembershipRows((p as { memberships: unknown }).memberships),
+        truncated: false,
+      };
     },
   };
 }

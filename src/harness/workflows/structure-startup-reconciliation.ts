@@ -9,6 +9,7 @@ import type {
 import { reconcileExternalMutation } from "../reconciliation.js";
 import { sanitizedFingerprint } from "../safe-json.js";
 import type { StartupReconciliationCandidate } from "../startup-reconciliation.js";
+import { projectMembershipsEquivalent } from "./membership-canonical.js";
 
 type StartupStep = StartupReconciliationCandidate["steps"][number];
 
@@ -468,7 +469,10 @@ const updateProjectMemberships: Handler = async (input) => {
         rows: [candidate("project", id, listed.rows)],
       };
     },
-    matches: (item) => JSON.stringify(item.projection) === JSON.stringify(payload.memberships),
+    matches: (item) => Array.isArray(item.projection) && projectMembershipsEquivalent(
+      payload.memberships as Array<Record<string, unknown>>,
+      item.projection as Array<Record<string, unknown>>,
+    ),
   });
 };
 

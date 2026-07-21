@@ -30,6 +30,7 @@ import {
   snapshot,
 } from "./structure-durable.js";
 import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
+import { projectMembershipsEquivalent } from "./membership-canonical.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -768,6 +769,50 @@ const estimateUpdate = defineRiskyAction({
   },
 });
 
+function membershipRequestRate(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid_membership_rate");
+  const rate = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(rate.amount) || (rate.amount as number) < 0 || (rate.amount as number) > 2_147_483_647) {
+    throw new TypeError("invalid_membership_rate_amount");
+  }
+  if (rate.since !== undefined && (
+    typeof rate.since !== "string"
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(rate.since)
+    || Number.isNaN(Date.parse(rate.since))
+  )) throw new TypeError("invalid_membership_rate_since");
+  return { amount: rate.amount, ...(typeof rate.since === "string" ? { since: rate.since } : {}) };
+}
+
+function membershipRequestRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const statuses = new Set(["PENDING", "ACTIVE", "DECLINED", "INACTIVE"]);
+  const types = new Set(["WORKSPACE", "PROJECT", "USERGROUP"]);
+  const normalized = rows.map((row) => {
+    if (typeof row.userId !== "string" || row.userId.length === 0) throw new TypeError("invalid_membership_user_id");
+    const hourlyRate = membershipRequestRate(row.hourlyRate);
+    const costRate = membershipRequestRate(row.costRate);
+    if (row.membershipStatus !== undefined &&
+        (typeof row.membershipStatus !== "string" || !statuses.has(row.membershipStatus))) {
+      throw new TypeError("invalid_membership_status");
+    }
+    if (row.membershipType !== undefined &&
+        (typeof row.membershipType !== "string" || !types.has(row.membershipType))) {
+      throw new TypeError("invalid_membership_type");
+    }
+    return {
+      userId: row.userId,
+      ...(typeof row.membershipStatus === "string" ? { membershipStatus: row.membershipStatus } : {}),
+      ...(typeof row.membershipType === "string" ? { membershipType: row.membershipType } : {}),
+      ...(hourlyRate ? { hourlyRate } : {}),
+      ...(costRate ? { costRate } : {}),
+    };
+  }).sort((left, right) => String(left.userId).localeCompare(String(right.userId)));
+  if (new Set(normalized.map((row) => row.userId)).size !== normalized.length) {
+    throw new TypeError("duplicate_membership_user_id");
+  }
+  return normalized;
+}
+
 const membershipsUpdate = defineRiskyAction({
   name: "clockify_projects_memberships_update",
   description:
@@ -817,9 +862,11 @@ const membershipsUpdate = defineRiskyAction({
       const requested = args.addUserIds.map((u) => (u.trim().toLowerCase() === "me" ? ctx.adminUserId : u));
       const have = new Set(current.rows.map((m) => String(m.userId)));
       const additions = [...new Set(requested)].filter((u) => !have.has(u));
-      memberships = [...current.rows, ...additions.map((userId) => ({ userId }))];
+      memberships = [...current.rows, ...additions.map((userId) => ({ userId }))]
+        .sort((left, right) => String(left.userId).localeCompare(String(right.userId)));
       change = `Add ${additions.length} member(s) (${current.rows.length} existing kept)`;
     } else {
+      memberships = membershipRequestRows(memberships);
       change = `Replace membership set (${memberships.length} member(s))`;
     }
     const currentProject = await ctx.clockify.getProject(resolved.id);
@@ -849,7 +896,9 @@ const membershipsUpdate = defineRiskyAction({
           dispatch: async () => { await ctx.clockify.updateProjectMembershipsAtomic(id, { memberships }); return true as const; },
           reconcile: async () => {
             const current = await ctx.clockify.getProjectMemberships(id);
-            return !current.truncated && JSON.stringify(current.rows) === JSON.stringify(memberships) ? true as const : undefined;
+            return !current.truncated && projectMembershipsEquivalent(memberships, current.rows)
+              ? true as const
+              : undefined;
           },
         });
         return { effect: { memberships: memberships.length, projectId: id }, detail: { reconciled: result.reconciled } };

@@ -222,6 +222,59 @@ describe("structure startup reconciliation", () => {
     expect(deleted).toMatchObject({ authoritative: true, reason: "authoritative_match" });
   });
 
+  it("reconciles membership readback canonically and rejects a requested-rate mismatch", async () => {
+    const operation = {
+      payload: {
+        id: "project",
+        memberships: [
+          { userId: "u1", hourlyRate: { amount: 8_000, since: "2026-01-01T00:00:00Z" } },
+          { userId: "u2" },
+        ],
+      },
+    };
+    const matched = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_memberships_update",
+      planStepId: "update-project-memberships",
+      strategy: "update",
+      operation,
+      clockify: {
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [
+            { userId: "u2", membershipStatus: "ACTIVE", membershipType: "PROJECT", costRate: { amount: 2_000 } },
+            { userId: "u1", hourlyRate: { amount: 8_000, since: "2026-01-01T00:00:00Z" } },
+          ],
+        })),
+      } as never,
+    }));
+    expect(matched).toMatchObject({ authoritative: true, reason: "authoritative_match" });
+
+    const mismatched = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_memberships_update",
+      planStepId: "update-project-memberships",
+      strategy: "update",
+      operation,
+      clockify: {
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [{ userId: "u1", hourlyRate: { amount: 8_001, since: "2026-01-01T00:00:00Z" } }, { userId: "u2" }],
+        })),
+      } as never,
+    }));
+    expect(mismatched).toMatchObject({ authoritative: false });
+
+    const duplicateExpected = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_memberships_update",
+      planStepId: "update-project-memberships",
+      strategy: "update",
+      operation: { payload: { id: "project", memberships: [{ userId: "u1" }, { userId: "u1" }] } },
+      clockify: {
+        getProjectMemberships: vi.fn(async () => ({ truncated: false, rows: [{ userId: "u1" }, { userId: "u2" }] })),
+      } as never,
+    }));
+    expect(duplicateExpected).toMatchObject({ authoritative: false });
+  });
+
   it.each([
     ["clockify_log_work", { description: "Focus", start: "2026-07-14T09:00:00.000Z", end: "2026-07-14T10:00:00.000Z" }, undefined, "createTimeEntryAtomic"],
     ["clockify_projects_create", { name: "Project" }, undefined, "createProjectAtomic"],
