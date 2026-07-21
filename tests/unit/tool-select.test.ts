@@ -104,6 +104,39 @@ describe("selectActionsForMessage — matrix regression guards", () => {
     expect(selectActionsForMessage("create a project called Zenith")).toContain("clockify_projects_create");
   });
 
+  it("routes a compound new-project setup exclusively through the setup composite", () => {
+    const selected = selectActionsForMessage(
+      "creaate a project named adjaslkdjadjkasda add me to it make the project private and assign men project member rate 15",
+    );
+
+    expect(selected).toContain("clockify_setup_project");
+    expect(selected).not.toContain("clockify_projects_list");
+    expect(selected).not.toContain("clockify_projects_get");
+    expect(selected).not.toContain("clockify_projects_create");
+    expect(selected).not.toContain("clockify_projects_memberships_update");
+    expect(selected).not.toContain("clockify_projects_rate_update");
+    expect(selected).not.toContain("clockify_create_work_package");
+
+    expect(selectActionsForMessage(
+      "reaate a project named Atlas, make the project private, add me, and set my member rate to 15",
+    )).toEqual(["clockify_setup_project"]);
+    expect(selectActionsForMessage(
+      "creeeaate a project named Atlas, make the project private, add me, and set my member rate to 15",
+    )).not.toEqual(["clockify_setup_project"]);
+    expect(selectActionsForMessage(
+      "create a project named Atlas\nmake the project private, add me, and set my member rate to 15",
+    )).not.toEqual(["clockify_setup_project"]);
+  });
+
+  it.each([
+    ["existing-project edit", "make the existing project Apollo private and add me"],
+    ["negated creation", "do not create a project named Apollo or make it private"],
+    ["hypothetical", "if I create a project and make it private, what happens?"],
+    ["task creation", "create a task named Apollo and make it private"],
+  ])("does not force the setup-project composite for a %s", (_label, message) => {
+    expect(selectActionsForMessage(message)).not.toEqual(["clockify_setup_project"]);
+  });
+
   it("gives a bare proper-noun command a generic entity tool (core safety net)", () => {
     // "delete Beacon" has no lexical area signal → full fail-open catalog, which
     // necessarily retains the generic delete safety net.

@@ -193,6 +193,33 @@ function isAscii(value: string): boolean {
 }
 
 /**
+ * A compound request to create and configure one new project must be handled by
+ * the single-preview setup action. Exposing the existing-project lookup/update
+ * primitives beside it lets weak models search for the not-yet-created project
+ * and strand the turn in a false "not found" clarification.
+ */
+export function isNewProjectSetupRequest(message: string): boolean {
+  // Selection context may concatenate an unresolved prior turn with the current
+  // one. Never synthesize a create+configure command across that boundary.
+  if (message.includes("\n")) return false;
+  const normalized = message.toLowerCase();
+  const createVerb = "(?:create|creaate|reaate)";
+  if (new RegExp(`\\b(?:do\\s+not|don't|dont|never)\\s+${createVerb}\\b`, "u").test(normalized)) return false;
+  if (/^\s*(?:if|what\s+if|suppose|assuming|when|how\s+would|would)\b/u.test(normalized)) return false;
+  const createsProject =
+    new RegExp(`\\b${createVerb}\\b\\s+(?:an?\\s+)?project\\b`, "u").test(normalized) ||
+    /\b(?:make|set\s+up)\b\s+(?:an?\s+)?new\s+project\b/u.test(normalized);
+  if (!createsProject) return false;
+
+  return (
+    /\b(?:private|public)\b/u.test(normalized) ||
+    /\badd\s+(?:me|myself|a\s+member|members?)\b/u.test(normalized) ||
+    /\b(?:project\s+)?member(?:\s+\w+){0,2}\s+rate\b/u.test(normalized) ||
+    /\bproject\s+(?:hourly|cost|billable)\s+rate\b/u.test(normalized)
+  );
+}
+
+/**
  * Select the relevant action NAMES for a message: the always-on core plus the
  * actions of the top {@link SelectOptions.maxGroups} feature groups by lexical
  * relevance. Returns names in CATALOG ORDER (deterministic). Recall-risk inputs
@@ -209,6 +236,15 @@ export function selectActionsForMessage(message: string, opts: SelectOptions = {
   // language/script the curated vocabulary cannot safely classify, so fail open
   // to the full catalog rather than hiding a requested tool.
   if (!isAscii(message)) return catalog.map((action) => action.name);
+
+  // This is a curated, single-operation intent. Keep only its action and
+  // non-mutating assistant context tools so the planner cannot decompose it into
+  // operations against an existing project. Custom/injected catalogs retain the
+  // generic selector behavior.
+  if (catalog === DEFAULT_CATALOG && isNewProjectSetupRequest(message)) {
+    const setupNames = new Set(["clockify_setup_project"]);
+    return catalog.filter((action) => setupNames.has(action.name)).map((action) => action.name);
+  }
 
   const messageTokens = tokenize(message);
   // Score each group by message tokens hitting its TRIGGER words (name + synonyms)

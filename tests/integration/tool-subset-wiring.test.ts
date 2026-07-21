@@ -99,6 +99,23 @@ describe("tool subsetting wiring (LLM_TOOL_SELECT)", () => {
     b.store.close();
   });
 
+  it("ON: a compound new-project request reaches the planner with only the setup composite", async () => {
+    const b = build(true);
+    const cookie = cookieFor(b.store);
+    const res = await request(b.app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({
+        message:
+          "creaate a project named adjaslkdjadjkasda add me to it make the project private and assign men project member rate 15",
+      });
+
+    expect(res.status).toBe(200);
+    expect(b.captured[0]).toEqual(["clockify_setup_project"]);
+    expect(b.captured).toHaveLength(1);
+    b.store.close();
+  });
+
   it("ON + smalltalk: fails open to the full catalog and does NOT retry", async () => {
     const b = build(true);
     const cookie = cookieFor(b.store);

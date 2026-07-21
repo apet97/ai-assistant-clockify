@@ -68,7 +68,7 @@ import { planConversation, runAgentConversation } from "../assistant/planner.js"
 import { trackUsage, type TurnUsage } from "../assistant/usage.js";
 import { hasExplicitWriteRequest } from "../assistant/text-safety.js";
 import { toolsForModel } from "../harness/tools.js";
-import { selectActionsForMessage } from "../harness/tool-select.js";
+import { isNewProjectSetupRequest, selectActionsForMessage } from "../harness/tool-select.js";
 import type { Installation, IntentCapabilityRecord } from "../db/store.js";
 import type { ActionResultKind, ActionResultRef, DurableResultLink } from "../db/store.js";
 import type { CalendarContext } from "../clockify/ports/users.js";
@@ -1602,7 +1602,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     return {
       subsetTools: toolsForModel(selectedNames),
       subsetCatalog: catalogForModel(selectedNames),
-      subsetNarrowed: selectedNames.size < fullIntentNames.size,
+      // A focused composite is intentionally closed over one action. Widening
+      // after a text-only provider turn would reintroduce the exact competing
+      // existing-project reads this route removes.
+      subsetNarrowed: selectedNames.size < fullIntentNames.size && !isNewProjectSetupRequest(message),
       fullIntentTools: toolsForModel(fullIntentNames),
       fullIntentCatalog,
     };
@@ -1830,9 +1833,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     const effectiveRequestId = requestId ?? randomUUID();
     let intentCapability: IntentCapabilityRecord | undefined;
     if (intentCapabilitiesEnforced) {
-      const writeActionNames = catalogForModel()
+      const allWriteActionNames = catalogForModel()
         .filter((entry) => entry.risks.some((risk) => risk !== "read"))
         .map((entry) => entry.name);
+      const writeActionNames = isNewProjectSetupRequest(selectionContext)
+        ? allWriteActionNames.filter((name) => name === "clockify_setup_project")
+        : allWriteActionNames;
       const candidateWriteActionNames = buildCandidateWriteActionNames(selectionContext, writeActionNames);
       let declaredCapability;
       try {
