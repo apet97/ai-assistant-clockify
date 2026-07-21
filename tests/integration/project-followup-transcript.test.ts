@@ -130,7 +130,7 @@ function scriptedTranscriptModel(options: {
       toolCalls: [{
         id: "rate",
         name: "clockify_projects_rate_update",
-        arguments: { projectName: PROJECT_NAME, userId: "admin-1", rateKind: "HOURLY", amount: 15 },
+        arguments: { projectName: PROJECT_NAME, userId: "my", rateKind: "HOURLY", amount: 15 },
       }],
     },
     { text: "The project is private, you are a member, and your member rate is 15.", toolCalls: [] },

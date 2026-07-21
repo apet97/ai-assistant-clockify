@@ -200,7 +200,14 @@ function matchesAuthenticatedMeSubstitution(
     (Array.isArray(declared) && declared.length === 1 && declared[0] === "me");
   if (!declaresOnlyMe) return false;
   const actual = valuesAtPath(input.rawArgs, constraint.path);
-  return actual?.length === 1 && actual[0] === adminUserId;
+  if (actual?.length !== 1) return false;
+  if (actual[0] === adminUserId) return true;
+  // `my` / `myself` are reviewed semantic aliases only for the project-member
+  // rate's authenticated-self selector. They still resolve server-side to the
+  // session subject; no arbitrary model-supplied id gains authority.
+  return input.actionName === "clockify_projects_rate_update"
+    && constraint.path === "userId"
+    && (actual[0] === "my" || actual[0] === "myself");
 }
 
 function constraintCoversLeaf(constraintPath: string, leafPath: string): boolean {

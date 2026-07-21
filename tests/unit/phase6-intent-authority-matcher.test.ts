@@ -205,6 +205,8 @@ describe("raw intent authority matcher", () => {
       .toBeUndefined();
     expect(check("clockify_projects_memberships_update", membership, { addUserIds: ["admin-1"] }))
       .toBeUndefined();
+    expect(check("clockify_projects_memberships_update", membership, { addUserIds: ["my"] }))
+      .toMatchObject({ code: "intent_capability_argument_mismatch" });
     for (const addUserIds of [
       ["other-1"],
       ["admin-2"],
@@ -228,8 +230,10 @@ describe("raw intent authority matcher", () => {
 
     const rate = capabilityFor("clockify_projects_rate_update", "userId");
     expect(check("clockify_projects_rate_update", rate, { userId: "me" })).toBeUndefined();
+    expect(check("clockify_projects_rate_update", rate, { userId: "my" })).toBeUndefined();
+    expect(check("clockify_projects_rate_update", rate, { userId: "myself" })).toBeUndefined();
     expect(check("clockify_projects_rate_update", rate, { userId: "admin-1" })).toBeUndefined();
-    for (const userId of ["other-1", "admin-2", " admin-1", "ADMIN-1", "admin-1-extra"]) {
+    for (const userId of ["other-1", "admin-2", " admin-1", "ADMIN-1", "admin-1-extra", "MY", " my"]) {
       expect(check("clockify_projects_rate_update", rate, { userId }))
         .toMatchObject({ code: "intent_capability_argument_mismatch" });
     }
