@@ -89,6 +89,11 @@ const setupProject = defineRiskyAction({
     { path: "private", value: false, authoredPhrases: Object.freeze(["public", "not private"]) },
     { path: "private", value: true, authoredPhrases: Object.freeze(["private", "not public", "non-public"]) },
     {
+      path: "memberRates[].member",
+      value: "me",
+      authoredPhrases: Object.freeze(["my", "myself", "men"]),
+    },
+    {
       path: "memberRates[].kind",
       value: "hourly",
       authoredPhrases: Object.freeze(["project member", "project member rate", "member rate", "hourly rate"]),

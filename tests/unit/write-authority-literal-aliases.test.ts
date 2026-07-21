@@ -213,6 +213,11 @@ describe("action-scoped semantic literal alias metadata", () => {
     const action = getAction("clockify_setup_project");
     expect(action?.writeAuthority?.semanticLiteralAliases).toEqual(expect.arrayContaining(canonicalAliases([
       {
+        path: "memberRates[].member",
+        value: "me",
+        authoredPhrases: ["my", "myself", "men"],
+      },
+      {
         path: "memberRates[].kind",
         value: "hourly",
         authoredPhrases: ["project member", "project member rate", "member rate", "hourly rate"],

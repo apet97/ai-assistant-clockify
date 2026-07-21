@@ -98,7 +98,7 @@ describe("declareIntentCapability", () => {
         literalConstraints: [
           { path: "name", value: "adjaslkdjadjkasda", sourceRef: { segment: "current", quote: "adjaslkdjadjkasda" } },
           { path: "private", value: true, sourceRef: { segment: "current", quote: "private" } },
-          { path: "memberRates[].member", value: "me", sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
+          { path: "memberRates[].member", value: "men", sourceRef: { segment: "current", quote: "men" } },
           { path: "memberRates[].kind", value: "project member rate", sourceRef: { segment: "current", quote: "project member rate" } },
           { path: "memberRates[].amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
         ],
@@ -130,6 +130,25 @@ describe("declareIntentCapability", () => {
       catalogHash,
       authenticatedAdminUserId: "admin-1",
     })).toBeUndefined();
+
+    const withoutAuthoredSelf = "create a project named Atlas and assign men project member rate 15";
+    const denied = await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [{
+        actionName: "clockify_setup_project",
+        sourceRefs: [{ segment: "current", quote: withoutAuthoredSelf }],
+        literalConstraints: [
+          { path: "name", value: "Atlas", sourceRef: { segment: "current", quote: "Atlas" } },
+          { path: "memberRates[].member", value: "men", sourceRef: { segment: "current", quote: "men" } },
+          { path: "memberRates[].kind", value: "project member rate", sourceRef: { segment: "current", quote: "project member rate" } },
+          { path: "memberRates[].amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+        ],
+        maxExecutions: 1,
+      }] }),
+      currentText: withoutAuthoredSelf,
+      writeActionNames: ["clockify_setup_project"],
+      catalogHash,
+    });
+    expect(denied).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
   });
 
   it("distinguishes a valid read-only declaration from a malformed write declaration", async () => {

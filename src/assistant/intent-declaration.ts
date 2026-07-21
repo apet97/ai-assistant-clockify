@@ -507,12 +507,18 @@ function reviewedCarriedProjectLiteral(input: {
   }
   if ((input.actionName === "clockify_projects_rate_update" &&
       (input.path === "rateKind" || input.path === "userId")) ||
-    (input.actionName === "clockify_setup_project" && input.path === "memberRates[].kind")) {
+    (input.actionName === "clockify_setup_project" &&
+      (input.path === "memberRates[].kind" || input.path === "memberRates[].member"))) {
     const normalizedDeclared = typeof input.declared === "string"
       ? normalizeString(input.declared).toLocaleLowerCase("en-US")
       : undefined;
     const reviewed = input.aliases.find((alias) => alias.authoredPhrases.some((phrase) =>
       normalizeString(phrase).toLocaleLowerCase("en-US") === source));
+    if (input.actionName === "clockify_setup_project" && input.path === "memberRates[].member" &&
+      source === "men") {
+      const segment = segmentForSpan(input.sourceSpan, input.segments);
+      if (segment?.source !== "current" || !/\badd\s+me\b/iu.test(segment.text)) return CARRIED_LITERAL_REJECT;
+    }
     if (reviewed && (input.declared === reviewed.value || normalizedDeclared === source)) {
       if (semanticAliasShadowedByOpposite(
         input.sourceSpan,
