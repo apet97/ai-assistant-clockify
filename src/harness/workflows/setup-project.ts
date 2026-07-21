@@ -88,6 +88,16 @@ const setupProject = defineRiskyAction({
     { path: "isPublic", value: true, authoredPhrases: Object.freeze(["public", "not private"]) },
     { path: "private", value: false, authoredPhrases: Object.freeze(["public", "not private"]) },
     { path: "private", value: true, authoredPhrases: Object.freeze(["private", "not public", "non-public"]) },
+    {
+      path: "memberRates[].kind",
+      value: "hourly",
+      authoredPhrases: Object.freeze(["project member", "project member rate", "member rate", "hourly rate"]),
+    },
+    {
+      path: "memberRates[].kind",
+      value: "cost",
+      authoredPhrases: Object.freeze(["project member cost rate", "member cost rate", "cost rate"]),
+    },
   ] satisfies readonly SemanticLiteralAlias[]),
   schema: z.object({
     name: z.string().min(1),

@@ -209,6 +209,22 @@ describe("action-scoped semantic literal alias metadata", () => {
     }
   });
 
+  it("advertises reviewed member-rate aliases for the combined project setup action", () => {
+    const action = getAction("clockify_setup_project");
+    expect(action?.writeAuthority?.semanticLiteralAliases).toEqual(expect.arrayContaining(canonicalAliases([
+      {
+        path: "memberRates[].kind",
+        value: "hourly",
+        authoredPhrases: ["project member", "project member rate", "member rate", "hourly rate"],
+      },
+      {
+        path: "memberRates[].kind",
+        value: "cost",
+        authoredPhrases: ["project member cost rate", "member cost rate", "cost rate"],
+      },
+    ])));
+  });
+
   it("catalogues every model-controlled boolean write path or documents its exact-literal exclusion", async () => {
     const { zodToJsonSchema } = await import("zod-to-json-schema");
     const discovered: string[] = [];

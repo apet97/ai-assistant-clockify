@@ -89,6 +89,49 @@ function quotedSafeWrite(
 }
 
 describe("declareIntentCapability", () => {
+  it("canonicalizes a combined setup project's member-rate phrase before raw authority", async () => {
+    const currentText = "reaate a project named adjaslkdjadjkasda add me to it make the project private and assign men project member rate 15";
+    const capability = await declareIntentCapability({
+      modelClient: nativeModel({ writeActions: [{
+        actionName: "clockify_setup_project",
+        sourceRefs: [{ segment: "current", quote: currentText }],
+        literalConstraints: [
+          { path: "name", value: "adjaslkdjadjkasda", sourceRef: { segment: "current", quote: "adjaslkdjadjkasda" } },
+          { path: "private", value: true, sourceRef: { segment: "current", quote: "private" } },
+          { path: "memberRates[].member", value: "me", sourceRef: { segment: "current", quote: "me", occurrence: 0 } },
+          { path: "memberRates[].kind", value: "project member rate", sourceRef: { segment: "current", quote: "project member rate" } },
+          { path: "memberRates[].amount", value: 15, sourceRef: { segment: "current", quote: "15" } },
+        ],
+        maxExecutions: 1,
+      }] }),
+      currentText,
+      writeActionNames: ["clockify_setup_project"],
+      catalogHash,
+    });
+
+    expect(capability).toMatchObject({
+      mode: "allow",
+      writeActions: [expect.objectContaining({
+        actionName: "clockify_setup_project",
+        literalConstraints: expect.arrayContaining([
+          expect.objectContaining({ path: "memberRates[].kind", value: "hourly" }),
+        ]),
+      })],
+    });
+    expect(authorizeIntentWriteArguments({
+      capability,
+      actionName: "clockify_setup_project",
+      rawArgs: {
+        name: "adjaslkdjadjkasda",
+        private: true,
+        memberRates: [{ member: "me", amount: 15, kind: "hourly" }],
+      },
+      authority: getAction("clockify_setup_project")!.writeAuthority!,
+      catalogHash,
+      authenticatedAdminUserId: "admin-1",
+    })).toBeUndefined();
+  });
+
   it("distinguishes a valid read-only declaration from a malformed write declaration", async () => {
     const capability = await declareIntentCapability({
       modelClient: nativeModel({ writeActions: [] }),

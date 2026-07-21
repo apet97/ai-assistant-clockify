@@ -505,8 +505,9 @@ function reviewedCarriedProjectLiteral(input: {
     if (membershipVerbs.at(-1)?.[1]?.toLocaleLowerCase("en-US") !== "add") return undefined;
     return "me";
   }
-  if (input.actionName === "clockify_projects_rate_update" &&
-    (input.path === "rateKind" || input.path === "userId")) {
+  if ((input.actionName === "clockify_projects_rate_update" &&
+      (input.path === "rateKind" || input.path === "userId")) ||
+    (input.actionName === "clockify_setup_project" && input.path === "memberRates[].kind")) {
     const normalizedDeclared = typeof input.declared === "string"
       ? normalizeString(input.declared).toLocaleLowerCase("en-US")
       : undefined;
@@ -1056,7 +1057,8 @@ function validateDeclaration(
         if (!allowedPriorPaths?.includes(constraintPath)) return undefined;
       }
       const aliases = contract.semanticLiteralAliases.filter((alias) => alias.path === constraintPath);
-      const reviewedValue = request.requireCurrentActionSpan && constraintSegment?.source === "current"
+      const reviewedValue = constraintSegment?.source === "current" &&
+        (request.requireCurrentActionSpan || write.actionName === "clockify_setup_project")
         ? reviewedCarriedProjectLiteral({
             actionName: write.actionName,
             path: constraintPath,
