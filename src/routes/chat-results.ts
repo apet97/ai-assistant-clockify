@@ -57,6 +57,8 @@ export interface TurnMachinery {
   emitPreviewFor: (preview: PreviewCard, operation: ConfirmableOperation, agentState?: AgentState) => void;
   runAction: (call: ToolCall) => Promise<ActionResult>;
   onStep: (step: AgentStep) => void;
+  /** True only while the model owes one exact, non-mutating argument correction. */
+  internalCorrectionPending?: () => boolean;
 }
 
 // ARCH-05: narrow result objects through named guards once, instead of repeated
@@ -74,6 +76,12 @@ const isPartialResult = (r: unknown): r is { kind: "partial"; message?: string }
 
 /** Map a finished agent turn onto the result stream: an interrupt becomes a pending preview. */
 export function settleAgentTurn(m: TurnMachinery, turn: AgentTurnResult): { replyKind: string; baseText: string } {
+  if (m.internalCorrectionPending?.() === true) {
+    return {
+      replyKind: "answer",
+      baseText: "I could not apply the project update because the corrected project name was not provided. No change was made.",
+    };
+  }
   if (turn.kind === "interrupt") {
     // capAgentState drops (never truncates) an oversized suspension — the
     // confirm still commits, it just won't resume (the pre-agentic behavior).

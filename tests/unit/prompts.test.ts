@@ -97,6 +97,12 @@ describe("buildToolSystemPrompt (Phase 2 — tool-calling)", () => {
     expect(lower).toContain("every unfinished requested clause");
   });
 
+  it("keeps adjacent created-project follow-ups on the exact authored name without a lookup", () => {
+    expect(prompt).toContain("reuse the exact prior admin-authored project name");
+    expect(prompt).toContain("Do NOT call projects_get/list first");
+    expect(prompt).toContain("do not put a returned id in a name-shaped field");
+  });
+
   it("requires listed data to be reported VERBATIM — names are data, never filtered (live item 280: a hostile-looking tag name was silently omitted)", () => {
     expect(prompt).toContain("verbatim");
     expect(prompt.toLowerCase()).toContain("never omit");

@@ -304,6 +304,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     selectionContext?: string,
     intentCapability?: IntentCapabilityRecord,
     signal?: AbortSignal,
+    adjacentCreatedProject?: { id: string; name: string },
   ): TurnMachinery {
     const results: unknown[] = [];
     const resultLinks: DurableResultLink[] = [];
@@ -422,6 +423,19 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     // settled/emitted. Key by the concrete result object so both the agentic and
     // single-turn settlement paths release exactly the lease that produced it.
     const resultLeases = new WeakMap<object, WorkspaceMutationLease>();
+    const internalCorrectionReceipts = new WeakSet<object>();
+    let adjacentProjectResolvedInLoop = false;
+    let adjacentProjectCorrectionIssued = false;
+    let adjacentProjectCorrectionPending = false;
+
+    const capabilityLiteralBound = (actionName: string, path: string, value: string | boolean): boolean => {
+      const grant = intentCapability?.capability.mode === "allow"
+        ? intentCapability.capability.writeActions.find((candidate) => candidate.actionName === actionName)
+        : undefined;
+      return grant?.literalConstraints.some((constraint) =>
+        constraint.path === path && constraint.value === value,
+      ) === true;
+    };
     const releaseResultLease = (result: object): void => {
       const lease = resultLeases.get(result);
       if (!lease) return;
@@ -649,6 +663,24 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       onStatus?.({ action: call.name, label: actionStatusLabel(call.name) });
       let lease: WorkspaceMutationLease | undefined;
       try {
+        if (adjacentProjectCorrectionPending) {
+          const satisfiesCorrection = call.name === "clockify_projects_update"
+            && call.arguments.currentName === adjacentCreatedProject?.name
+            && call.arguments.isPublic === false
+            && Object.keys(call.arguments).sort().join(",") === "currentName,isPublic";
+          if (!satisfiesCorrection) {
+            return {
+              kind: "receipt",
+              receipt: errorReceipt({
+                action: call.name,
+                code: "intent_capability_argument_mismatch",
+                message: "The pending project-name correction was not satisfied. No change was made.",
+                recovery: { hint: "Restate the intended project update in a fresh request.", retryable: false },
+              }),
+            };
+          }
+          adjacentProjectCorrectionPending = false;
+        }
         const action = getAction(call.name);
         const isWrite = !!action && action.risks.some((risk) => risk !== "read");
         const writeDeclared = intentCapability?.capability.mode === "allow" &&
@@ -663,6 +695,28 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
               recovery: { hint: "Ask for the write explicitly in a fresh request.", retryable: false },
             }),
           };
+        }
+        if (
+          call.name === "clockify_projects_update"
+          && adjacentCreatedProject
+          && adjacentProjectResolvedInLoop
+          && !adjacentProjectCorrectionIssued
+          && call.arguments.currentName === adjacentCreatedProject.id
+          && call.arguments.isPublic === false
+          && Object.keys(call.arguments).sort().join(",") === "currentName,isPublic"
+          && capabilityLiteralBound(call.name, "currentName", adjacentCreatedProject.name)
+          && capabilityLiteralBound(call.name, "isPublic", false)
+        ) {
+          adjacentProjectCorrectionIssued = true;
+          adjacentProjectCorrectionPending = true;
+          const receipt = errorReceipt({
+            action: call.name,
+            code: "internal_argument_correction",
+            message: `Use the exact admin-authored project name ${JSON.stringify(adjacentCreatedProject.name)} as currentName. Do not use the project id in a name-shaped field. Call clockify_projects_update again with that exact currentName.`,
+            recovery: { hint: "Retry once with the exact capability-bound project name.", retryable: true },
+          });
+          internalCorrectionReceipts.add(receipt);
+          return { kind: "receipt", receipt };
         }
         if (action && (!isWrite || !intentCapabilitiesEnforced)) await ensureCalendar();
         let executionContext = ctx;
@@ -679,7 +733,27 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
             clockify: deps.clockifyForWorkspace(installation, { signal: lease.signal }),
           };
         }
-        const result = await executeAction({ actionName: call.name, args: call.arguments, context: executionContext });
+        const result = await executeAction({
+          actionName: call.name,
+          args: call.arguments,
+          context: executionContext,
+        });
+        if (
+          call.name === "clockify_projects_get"
+          && result.kind === "receipt"
+          && result.receipt.ok
+          && adjacentCreatedProject
+          && result.receipt.data
+          && typeof result.receipt.data === "object"
+          && !Array.isArray(result.receipt.data)
+        ) {
+          const entity = (result.receipt.data as { entity?: unknown }).entity;
+          adjacentProjectResolvedInLoop = !!entity
+            && typeof entity === "object"
+            && !Array.isArray(entity)
+            && (entity as { id?: unknown }).id === adjacentCreatedProject.id
+            && (entity as { name?: unknown }).name === adjacentCreatedProject.name;
+        }
         if (lease) {
           if (result.kind === "receipt") resultLeases.set(result.receipt, lease);
           else if (result.kind === "partial") resultLeases.set(result, lease);
@@ -717,7 +791,11 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     };
 
     const onStep = ({ call, result }: AgentStep): void => {
-      if (result.kind === "receipt") auditAndEmitReceipt(call.name, result.receipt, result.operationId);
+      if (result.kind === "receipt" && internalCorrectionReceipts.has(result.receipt)) {
+        // Internal protocol guidance is fed only to the model transcript. It is
+        // neither a Clockify attempt nor a user-visible result/audit failure.
+        return;
+      } else if (result.kind === "receipt") auditAndEmitReceipt(call.name, result.receipt, result.operationId);
       else if (result.kind === "partial") auditAndEmitPartial(call.name, result, result.operationId);
       else if (result.kind === "clarify") {
         const descriptor = { kind: "clarify", message: result.message, options: result.options };
@@ -736,6 +814,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       emitPreviewFor,
       runAction,
       onStep,
+      internalCorrectionPending: () => adjacentProjectCorrectionPending,
     };
   }
 
@@ -1440,7 +1519,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
    * successful single-project create. As with clients, the only carried text is
    * the prior admin's authored request; receipt ids and assistant prose remain
    * outside the model's authority input. */
-  function adjacentCreatedProjectContext(sessionId: string, message: string): string | undefined {
+  function adjacentCreatedProjectContext(
+    sessionId: string,
+    message: string,
+  ): { text: string; project: { id: string; name: string } } | undefined {
     if (!/\b(?:the|that|this)\s+project\b/iu.test(message)) return undefined;
     const recent = deps.store.getRecentMessages(sessionId, 2, true);
     const [priorUser, priorAssistant] = recent;
@@ -1472,7 +1554,26 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       || priorUser.content.includes(ref.id)
       || !containsStandaloneExact(priorUser.content, ref.name)
     ) return undefined;
-    return priorUser.content;
+    return { text: priorUser.content, project: { id: ref.id, name: ref.name } };
+  }
+
+  function capabilityBindsAdjacentProjectSelectors(
+    capability: IntentCapabilityRecord["capability"],
+    projectName: string,
+  ): boolean {
+    if (capability.mode !== "allow") return true;
+    const selectorPaths = new Map([
+      ["clockify_projects_update", "currentName"],
+      ["clockify_projects_memberships_update", "name"],
+      ["clockify_projects_rate_update", "projectName"],
+    ]);
+    return capability.writeActions.every((grant) => {
+      const selectorPath = selectorPaths.get(grant.actionName);
+      if (!selectorPath) return true;
+      return grant.literalConstraints.some((constraint) =>
+        constraint.path === selectorPath && constraint.value === projectName,
+      );
+    });
   }
 
   /**
@@ -1697,10 +1798,12 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       explicitProjectCreateContinuation(message)
       ? failedRequestCandidate.text
       : undefined;
+    const adjacentProject = priorClarificationContext || priorFailedRequestContext
+      ? undefined
+      : adjacentCreatedProjectContext(claims.sessionId, message);
     const adjacentReferentContext = priorClarificationContext || priorFailedRequestContext
       ? undefined
-      : adjacentCreatedClientContext(claims.sessionId, message)
-        ?? adjacentCreatedProjectContext(claims.sessionId, message);
+      : adjacentCreatedClientContext(claims.sessionId, message) ?? adjacentProject?.text;
     const priorAuthoredContext = priorClarificationContext ?? priorFailedRequestContext ?? adjacentReferentContext;
     const requireCurrentActionSpan = !priorClarificationContext && priorAuthoredContext !== undefined;
     const selectionContext = combineSelectionContext(priorAuthoredContext, message);
@@ -1757,6 +1860,19 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
         }
         throw new Error("intent_declaration_failed");
       }
+      if (
+        adjacentProject
+        && !capabilityBindsAdjacentProjectSelectors(declaredCapability, adjacentProject.project.name)
+      ) {
+        declaredCapability = {
+          version: 1 as const,
+          mode: "deny_all_writes" as const,
+          reason: "adjacent_project_selector_mismatch",
+          requestHash: declaredCapability.requestHash,
+          catalogHash: declaredCapability.catalogHash,
+          writeActions: [] as [],
+        };
+      }
       // The provider may ignore AbortSignal. Reload durable authority after the
       // await and immediately before the non-FK capability insert.
       if (!turnAuthorityCurrent(claims, installation, turnSignal)) return aborted();
@@ -1793,6 +1909,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       selectionContext,
       intentCapability,
       turnSignal,
+      adjacentProject?.project,
     );
 
     // Cost/latency telemetry: every model-touching turn records one row (the

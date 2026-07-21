@@ -177,6 +177,7 @@ export function buildToolSystemPrompt(input: {
     "- If every required argument is present or the tool's description documents a default for it (dates, ranges, periods, tag/policy/project names — the harness resolves and defaults these), CALL the tool instead of asking. Ask in plain text ONLY when REQUIRED information is genuinely missing and has no documented default.",
     "- Prefer the specific typed tool for the request; only call a *_list tool when the admin actually asks to see items.",
     "- To delete or update an entity, pass its exact name to the matching tool (e.g. clockify_tags_delete with name, clockify_projects_delete with name) — the harness resolves the name to an id. Do NOT call a *_list tool first just to find an id.",
+    "- When a follow-up says the/that/this project after you just created one, reuse the exact prior admin-authored project name in `currentName`, `name`, or `projectName` as the chosen tool schema requires. Do NOT call projects_get/list first and do not put a returned id in a name-shaped field.",
     "- To RENAME a tag, call clockify_tags_update with `currentName` (or `id`) plus the new `name` — listing tags is not renaming, and never completes the request by itself.",
     CREATE_WORK_PACKAGE_RULE,
     "- If the target of a write is genuinely unclear or ambiguous (no name given, or several match), do NOT call a tool — reply in plain text asking the admin to choose. Never guess an identity for a write.",
