@@ -2,6 +2,10 @@ import { z } from "zod";
 import { defineAction, type ActionDefinition } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveEntityRef } from "./resolve.js";
+import type {
+  ApiActionMetadataCarrier,
+  AvailabilityByAuthClass,
+} from "../api-operation.js";
 
 /**
  * Typed workspace & project-template workflows (goclmcp §2.16–2.17). All reads.
@@ -10,8 +14,75 @@ import { resolveEntityRef } from "./resolve.js";
  * with isTemplate — not a new write here.
  */
 
+type WorkspaceActionName =
+  | "clockify_workspace_get"
+  | "clockify_templates_list"
+  | "clockify_templates_get";
+
+const WORKSPACE_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function workspaceEndpointKey(path: string): string {
+  return ["read", "api", "GET", path, "workspace.ts"].join("\0");
+}
+
+function workspaceApiMetadata(input: {
+  actionName: WorkspaceActionName;
+  operationId: string;
+  path: string;
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: "GET",
+      path: input.path,
+      access: "read",
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([workspaceEndpointKey(input.path)]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: WORKSPACE_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+const TEMPLATE_LIST_ENDPOINT = workspaceEndpointKey(
+  "/workspaces/{workspaceId}/projects",
+);
+
+const WORKSPACE_API_METADATA = Object.freeze({
+  clockify_workspace_get: workspaceApiMetadata({
+    actionName: "clockify_workspace_get",
+    operationId: "getWorkspaceOfUser",
+    path: "/workspaces/{workspaceId}",
+    support: [],
+  }),
+  clockify_templates_list: workspaceApiMetadata({
+    actionName: "clockify_templates_list",
+    operationId: "getProjects",
+    path: "/workspaces/{workspaceId}/projects",
+    support: [],
+  }),
+  clockify_templates_get: workspaceApiMetadata({
+    actionName: "clockify_templates_get",
+    operationId: "getProject",
+    path: "/workspaces/{workspaceId}/projects/{id}",
+    support: [TEMPLATE_LIST_ENDPOINT],
+  }),
+} satisfies Readonly<Record<WorkspaceActionName, ApiActionMetadataCarrier>>);
+
 const getWorkspace = defineAction({
   name: "clockify_workspace_get",
+  ...WORKSPACE_API_METADATA.clockify_workspace_get,
   description: "Get the current workspace's settings and info.",
   featureGroup: "workspace_settings",
   risks: ["read"],
@@ -24,6 +95,7 @@ const getWorkspace = defineAction({
 
 const listTemplates = defineAction({
   name: "clockify_templates_list",
+  ...WORKSPACE_API_METADATA.clockify_templates_list,
   description: "List project templates in the workspace.",
   featureGroup: "work_structure",
   risks: ["read"],
@@ -36,6 +108,7 @@ const listTemplates = defineAction({
 
 const getTemplate = defineAction({
   name: "clockify_templates_get",
+  ...WORKSPACE_API_METADATA.clockify_templates_get,
   description: "Fetch a single project template by id, or by its exact `name` (resolved server-side).",
   featureGroup: "work_structure",
   risks: ["read"],

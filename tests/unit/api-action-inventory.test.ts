@@ -161,6 +161,13 @@ type ExpectedActionAnnotation =
       reason: string;
       endpoints: ExpectedEndpoints;
       availability: ExpectedAvailability;
+    }
+  | {
+      name: string;
+      exposure: "local";
+      reason: string;
+      endpoints: undefined;
+      availability: ExpectedAvailability;
     };
 
 const AVAILABLE_TO_BOTH_AUTH_CLASSES = {
@@ -173,13 +180,28 @@ const API_KEY_ONLY = {
   api_key: { available: true },
 } satisfies ExpectedAvailability;
 
+const OFFICIAL_OPERATION_ID_MISSING = {
+  addon: { available: false, reason: "official_operation_id_missing" },
+  api_key: { available: false, reason: "official_operation_id_missing" },
+} satisfies ExpectedAvailability;
+
+function adapterEndpointKey(
+  access: TestApiOperation["access"],
+  host: TestApiOperation["host"],
+  method: TestApiOperation["method"],
+  path: string,
+  sourceModule: string,
+): string {
+  return [access, host, method, path, sourceModule].join("\0");
+}
+
 function structureEndpointKey(
   access: TestApiOperation["access"],
   method: TestApiOperation["method"],
   path: string,
   sourceModule: string,
 ): string {
-  return [access, "api", method, path, sourceModule].join("\0");
+  return adapterEndpointKey(access, "api", method, path, sourceModule);
 }
 
 const STRUCTURE_ENDPOINT = {
@@ -242,6 +264,31 @@ const STRUCTURE_ENDPOINT = {
   },
 } as const;
 
+const ADMINISTRATION_ENDPOINT = {
+  audit: {
+    search: adapterEndpointKey("read", "audit", "POST", "/workspaces/{workspaceId}/audit-log", "audit.ts"),
+    entityChanges: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/entities/{changeType}", "audit.ts"),
+  },
+  workspace: {
+    templatesList: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "workspace.ts"),
+  },
+  holidays: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/holidays", "holidays.ts"),
+    create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/holidays", "holidays.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/holidays/{id}", "holidays.ts"),
+  },
+  users: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+    groups: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+  },
+  webhooks: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/webhooks", "webhooks.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+    create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/webhooks", "webhooks.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+  },
+} as const;
+
 function materialField(
   path: string,
   label: string,
@@ -261,6 +308,7 @@ function materialField(
 function apiAnnotation(input: {
   name: string;
   operationId: string;
+  host?: TestApiOperation["host"];
   method: TestApiOperation["method"];
   path: string;
   access: TestApiOperation["access"];
@@ -271,7 +319,7 @@ function apiAnnotation(input: {
 }): ExpectedActionAnnotation {
   const operation: TestApiOperation = {
     operationId: input.operationId,
-    host: "api",
+    host: input.host ?? "api",
     method: input.method,
     path: input.path,
     access: input.access,
@@ -817,6 +865,232 @@ const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   }),
 ];
 
+const ADMINISTRATION_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  apiAnnotation({
+    name: "clockify_reports_summary",
+    operationId: "generateSummaryReport",
+    host: "reports",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/reports/summary",
+    access: "read",
+    sourceModule: "reports.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_reports_detailed",
+    operationId: "generateDetailedReport",
+    host: "reports",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/reports/detailed",
+    access: "read",
+    sourceModule: "reports.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_reports_weekly",
+    operationId: "generateWeeklyReport",
+    host: "reports",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/reports/weekly",
+    access: "read",
+    sourceModule: "reports.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_audit_logs_search",
+    exposure: "generic",
+    reason: "The official Clockify OpenAPI description contains audit-log schemas but no path or operation ID, so this adapter workflow stays internal until official operation identity exists.",
+    primary: [ADMINISTRATION_ENDPOINT.audit.search],
+    support: [],
+    availability: OFFICIAL_OPERATION_ID_MISSING,
+  }),
+  internalAnnotation({
+    name: "clockify_entity_changes_list",
+    exposure: "generic",
+    reason: "Selects the created, updated, or deleted entity-change endpoint from changeType, so one action cannot bind one official operation ID; Task 6 must split the three reads.",
+    primary: [ADMINISTRATION_ENDPOINT.audit.entityChanges],
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_workspace_get",
+    operationId: "getWorkspaceOfUser",
+    method: "GET",
+    path: "/workspaces/{workspaceId}",
+    access: "read",
+    sourceModule: "workspace.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_templates_list",
+    operationId: "getProjects",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/projects",
+    access: "read",
+    sourceModule: "workspace.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_templates_get",
+    operationId: "getProject",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/projects/{id}",
+    access: "read",
+    sourceModule: "workspace.ts",
+    support: [ADMINISTRATION_ENDPOINT.workspace.templatesList],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_holidays_list",
+    operationId: "getHolidays",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/holidays",
+    access: "read",
+    sourceModule: "holidays.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_holidays_get",
+    exposure: "composite",
+    reason: "Finds one holiday by scanning the holidays list because Clockify exposes no GET /holidays/{id}; it is not a fabricated get-one operation.",
+    primary: [ADMINISTRATION_ENDPOINT.holidays.list],
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_holidays_in_period",
+    operationId: "getHolidaysInPeriod",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/holidays/in-period",
+    access: "read",
+    sourceModule: "holidays.ts",
+    support: [ADMINISTRATION_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_holidays_create",
+    exposure: "generic",
+    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
+    primary: [ADMINISTRATION_ENDPOINT.holidays.create],
+    support: [
+      ADMINISTRATION_ENDPOINT.holidays.list,
+      ADMINISTRATION_ENDPOINT.users.list,
+      ADMINISTRATION_ENDPOINT.users.groups,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  internalAnnotation({
+    name: "clockify_holidays_update",
+    exposure: "generic",
+    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
+    primary: [ADMINISTRATION_ENDPOINT.holidays.update],
+    support: [
+      ADMINISTRATION_ENDPOINT.holidays.list,
+      ADMINISTRATION_ENDPOINT.users.list,
+      ADMINISTRATION_ENDPOINT.users.groups,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_holidays_delete",
+    operationId: "deleteHoliday",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/holidays/{id}",
+    access: "write",
+    sourceModule: "holidays.ts",
+    support: [ADMINISTRATION_ENDPOINT.holidays.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Holiday", "entity", true),
+      materialField("/name", "Holiday name", "text", false),
+    ],
+  }),
+  apiAnnotation({
+    name: "clockify_webhooks_list",
+    operationId: "getWebhooks",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/webhooks",
+    access: "read",
+    sourceModule: "webhooks.ts",
+    support: [],
+    availability: API_KEY_ONLY,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_webhooks_get",
+    operationId: "getWebhook",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "read",
+    sourceModule: "webhooks.ts",
+    support: [],
+    availability: API_KEY_ONLY,
+    materialFields: [],
+  }),
+  {
+    name: "clockify_webhooks_events",
+    exposure: "local",
+    reason: "Returns a static reviewed event list because the attempted events routes fail; it performs no Clockify request.",
+    endpoints: undefined,
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  },
+  apiAnnotation({
+    name: "clockify_webhooks_logs",
+    operationId: "getLogsForWebhook",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/webhooks/{id}/logs",
+    access: "read",
+    sourceModule: "webhooks.ts",
+    support: [],
+    availability: API_KEY_ONLY,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_webhooks_create",
+    exposure: "generic",
+    reason: "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
+    primary: [ADMINISTRATION_ENDPOINT.webhooks.create],
+    support: [ADMINISTRATION_ENDPOINT.webhooks.list],
+    availability: API_KEY_ONLY,
+  }),
+  internalAnnotation({
+    name: "clockify_webhooks_update",
+    exposure: "generic",
+    reason: "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
+    primary: [ADMINISTRATION_ENDPOINT.webhooks.update],
+    support: [ADMINISTRATION_ENDPOINT.webhooks.get],
+    availability: API_KEY_ONLY,
+  }),
+  apiAnnotation({
+    name: "clockify_webhooks_delete",
+    operationId: "deleteWebhook",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "write",
+    sourceModule: "webhooks.ts",
+    support: [ADMINISTRATION_ENDPOINT.webhooks.get, ADMINISTRATION_ENDPOINT.webhooks.list],
+    availability: API_KEY_ONLY,
+    materialFields: [
+      materialField("/id", "Webhook", "entity", true),
+      materialField("/name", "Webhook name", "text", false),
+    ],
+  }),
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -856,7 +1130,11 @@ describe("API action inventory normalization", () => {
       .toThrowError("missing_api_exposure:clockify_tags_create");
   });
 
-  it.each([...STRUCTURE_ANNOTATIONS, ...TIME_ENTRY_ANNOTATIONS])(
+  it.each([
+    ...STRUCTURE_ANNOTATIONS,
+    ...TIME_ENTRY_ANNOTATIONS,
+    ...ADMINISTRATION_ANNOTATIONS,
+  ])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {
       const registry = await loadRegistryModule();
@@ -885,7 +1163,11 @@ describe("API action inventory normalization", () => {
 
       expect(() => registry.normalizeRegistryAction(
         definition,
-        expected.exposure === "api" ? "v2-api" : "v1-internal",
+        expected.exposure === "api"
+          ? "v2-api"
+          : expected.exposure === "local"
+            ? "v2-local"
+            : "v1-internal",
       )).not.toThrow();
       expect(actionFingerprintForDefinition(definition)).not.toBe(
         actionFingerprintForDefinition(withoutApiMetadata(definition)),

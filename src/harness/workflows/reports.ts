@@ -3,6 +3,10 @@ import { defineAction, type ActionContext, type ActionDefinition } from "../acti
 import { successReceipt } from "../receipts.js";
 import { resolveDateRange } from "./resolve.js";
 import { nowDate, SEVEN_DAYS_MS } from "../../durations.js";
+import type {
+  ApiActionMetadataCarrier,
+  AvailabilityByAuthClass,
+} from "../api-operation.js";
 
 /**
  * Typed report workflows (goclmcp §2.14). All reads on the REPORTS host. Reports
@@ -14,6 +18,62 @@ import { nowDate, SEVEN_DAYS_MS } from "../../durations.js";
  */
 
 const REP = "reports" as const;
+
+type ReportActionName =
+  | "clockify_reports_summary"
+  | "clockify_reports_detailed"
+  | "clockify_reports_weekly";
+
+const REPORT_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function reportApiMetadata(
+  actionName: ReportActionName,
+  operationId: string,
+  path: string,
+): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId,
+      host: "reports",
+      method: "POST",
+      path,
+      access: "read",
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([
+        ["read", "reports", "POST", path, "reports.ts"].join("\0"),
+      ]),
+      support: Object.freeze([]),
+    }),
+    availabilityByAuthClass: REPORT_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([]),
+    presentation: Object.freeze({ presenterId: actionName, version: 1 }),
+  });
+}
+
+const REPORT_API_METADATA = Object.freeze({
+  clockify_reports_summary: reportApiMetadata(
+    "clockify_reports_summary",
+    "generateSummaryReport",
+    "/workspaces/{workspaceId}/reports/summary",
+  ),
+  clockify_reports_detailed: reportApiMetadata(
+    "clockify_reports_detailed",
+    "generateDetailedReport",
+    "/workspaces/{workspaceId}/reports/detailed",
+  ),
+  clockify_reports_weekly: reportApiMetadata(
+    "clockify_reports_weekly",
+    "generateWeeklyReport",
+    "/workspaces/{workspaceId}/reports/weekly",
+  ),
+} satisfies Readonly<Record<ReportActionName, ApiActionMetadataCarrier>>);
 
 /** Largest report carried inline in a receipt (serialized JSON bytes). */
 const REPORT_MAX_BYTES = 200_000;
@@ -80,6 +140,7 @@ function reportReceipt(action: string, workspaceId: string, data: unknown) {
 
 const summary = defineAction({
   name: "clockify_reports_summary",
+  ...REPORT_API_METADATA.clockify_reports_summary,
   description: "Run a summary report (grouped, defaults to PROJECT). The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],
@@ -94,6 +155,7 @@ const summary = defineAction({
 
 const detailed = defineAction({
   name: "clockify_reports_detailed",
+  ...REPORT_API_METADATA.clockify_reports_detailed,
   description: "Run a detailed (entry-level) report. The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],
@@ -108,6 +170,7 @@ const detailed = defineAction({
 
 const weekly = defineAction({
   name: "clockify_reports_weekly",
+  ...REPORT_API_METADATA.clockify_reports_weekly,
   description: "Run a weekly report. The date range is OPTIONAL — omitted = the last 7 days; call directly, never ask for dates.",
   featureGroup: REP,
   risks: ["read"],

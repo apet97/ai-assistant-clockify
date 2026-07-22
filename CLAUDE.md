@@ -8,13 +8,14 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
-- T04-C classifies 11 time actions as 5 `api` (3 reads, 2 writes), 2 `composite`, and 4 `generic`; cumulatively 42/140 are classified as 20 `api`, 9 `composite`, and 13 `generic`, with 98 remaining.
-- Exact time APIs are status/list (`getTimeEntries`), entry get (`getTimeEntry`), timer stop (`stopRunningTimeEntry`), and entry delete (`deleteTimeEntry`); their raw endpoint/auth evidence is bound and stop/delete carry complete material/presenter metadata.
-- Start/log (`createTimeEntry`) and fix (`updateTimeEntry`) remain generic because their tag arrays are unbounded; invoiced state (`updateInvoicedStatus`) remains generic because its 27-entry batch exceeds 22 material facts.
-- Day/week reviews remain composite aggregations, and the previously classified work-package flow remains composite; Task 6 must add narrowed atomic create/update/invoiced surfaces without changing these v1 handlers.
+- T04-D classifies 21 reporting/administration actions as 13 `api`, 1 `composite`, 6 `generic`, and 1 `local`; cumulatively 63/140 are classified as 33 `api`, 10 `composite`, 19 `generic`, and 1 `local`, with 77 remaining.
+- Reports bind both auth classes to POST summary/detailed/weekly operations on the reports host; workspace and template reads bind GET workspace/projects/project-by-id operations on the API host.
+- Holiday list/in-period reads and delete bind exact API-host operations for both auth classes; get remains composite list-and-find, while create/update remain generic because assignment arrays are unbounded.
+- Webhook list/get GETs, logs POST, and delete bind API-key-only operations; static events are local, while create/update remain generic because `triggerSource` is unbounded.
+- Audit search remains generic and unavailable for API exposure because the official description has no path/operation ID; entity changes remain generic because `changeType` selects among three endpoints.
 - The raw carrier remains optional only through T04-J; `normalizeRegistryAction` supplies no defaults or incomplete registry entries, and T04-K removes the temporary optionality.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: time focus 122 tests, adjacent time regression 137 tests, authority regression 16 tests, type-check, and `npm run verify` (272 files/3,284 tests). No generated, live, deployment, or external action. Next: T04-D.
+- Node 22 proof passed: administration focus 175 tests, adjacent regression 43 tests, type-check, and `npm run verify` (272 files/3,305 tests). No generated, live, deployment, or external action. Next: T04-E.
 
 ## Start here
 
@@ -243,7 +244,10 @@ bug was found against the REAL API, not by reading the code.
   `workflows/structure-api-metadata.ts` (the reviewed T04-B operation IDs,
   endpoint bindings, auth availability, exposure, material facts, and presenters
   for 31 structure definitions), `workflows/time-tracking.ts` and
-  `workflows/entries.ts` (the equivalent T04-C evidence for 11 time definitions), `permissions.ts`,
+  `workflows/entries.ts` (the equivalent T04-C evidence for 11 time definitions),
+  and `workflows/reports.ts`, `workflows/audit.ts`, `workflows/workspace.ts`,
+  `workflows/holidays.ts`, and `workflows/webhooks.ts` (the equivalent T04-D
+  evidence for 21 reporting/administration definitions), `permissions.ts`,
   `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`
