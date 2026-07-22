@@ -122,42 +122,57 @@ function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+function actionFingerprintContract(action: ActionDefinition) {
+  const hasApiMetadata = action.apiExposure !== undefined
+    || action.apiExposureReason !== undefined
+    || action.apiOperation !== undefined
+    || action.adapterEndpoints !== undefined
+    || action.availabilityByAuthClass !== undefined
+    || action.boundedArgumentDictionaries !== undefined
+    || action.materialFields !== undefined
+    || action.presentation !== undefined;
+  return {
+    name: action.name,
+    args: summarizeArgs(action.schema),
+    featureGroup: action.featureGroup,
+    risks: action.risks,
+    argumentAliases: action.argumentAliases ?? [],
+    argumentOpenPaths: action.argumentOpenPaths ?? [],
+    semanticLiteralAliases: action.semanticLiteralAliases ?? [],
+    mutationWorkflow: action.mutationWorkflow,
+    mutationContract: action.mutationContract,
+    writeAuthority: action.writeAuthority,
+    preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
+    ...(hasApiMetadata
+      ? {
+          apiExposure: action.apiExposure ?? null,
+          apiExposureReason: action.apiExposureReason ?? null,
+          apiOperation: action.apiOperation ?? null,
+          adapterEndpoints: action.adapterEndpoints ?? null,
+          availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+          boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
+          materialFields: action.materialFields ?? [],
+          presentation: action.presentation ?? null,
+        }
+      : {}),
+  };
+}
+
+/** Stable compatibility fingerprint for a raw or normalized definition. */
+export function actionFingerprintForDefinition(action: ActionDefinition): string {
+  return fingerprint(actionFingerprintContract(action));
+}
+
 /** Stable confirmation compatibility hash over name/schema summary/group/risk metadata. */
 export function actionFingerprint(name: string): string | undefined {
   const action = getAction(name);
-  return action
-    ? fingerprint({
-        name: action.name,
-        args: summarizeArgs(action.schema),
-        featureGroup: action.featureGroup,
-        risks: action.risks,
-        argumentAliases: action.argumentAliases ?? [],
-        argumentOpenPaths: action.argumentOpenPaths ?? [],
-        semanticLiteralAliases: action.semanticLiteralAliases ?? [],
-        mutationWorkflow: action.mutationWorkflow,
-        mutationContract: action.mutationContract,
-        writeAuthority: action.writeAuthority,
-        preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
-      })
-    : undefined;
+  return action ? actionFingerprintForDefinition(action) : undefined;
 }
 
 let cachedCatalogHash: string | undefined;
 export function catalogHash(): string {
   cachedCatalogHash ??= fingerprint(
-    ACTION_CATALOG.map((action) => ({
-      name: action.name,
-      args: summarizeArgs(action.schema),
-      featureGroup: action.featureGroup,
-      risks: action.risks,
-      argumentAliases: action.argumentAliases ?? [],
-      argumentOpenPaths: action.argumentOpenPaths ?? [],
-      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
-      mutationWorkflow: action.mutationWorkflow,
-      mutationContract: action.mutationContract,
-      writeAuthority: action.writeAuthority,
-      preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
-    })),
+    ACTION_CATALOG.map(actionFingerprintContract),
   );
   return cachedCatalogHash;
 }

@@ -7,13 +7,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
-- Task 3 (`T03-A`-`T03-B`) is complete: `scripts/lib/adapter-endpoints.ts` owns fail-closed raw `RestCore` scanning, normalization, stable call-site identity/order, source location, and pagination metadata.
-- All 142 raw call sites are scope-assigned independently; the separate legacy shape key preserves the byte-identical checked inventory at 118 distinct request shapes.
-- Scope classification/Markdown rendering remain in the generator; the pure correlation seam remains unused, with no OpenAPI correlation, action metadata, or classification change.
+- Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
+- T04-A defines the exact API metadata carrier and the sole fail-closed `normalizeRegistryAction` boundary, which recomputes reviewed write authority and accepts no classification defaults.
+- Normalization rejects incomplete exposure/availability/endpoint contracts, open model-write schemas, unmatched material dictionaries, more than 22 material facts, and non-atomic primary mutation plans.
+- Fingerprints bind every supplied metadata field while unannotated v1 definitions retain their prior bytes and hashes; no registry consumes incomplete definitions.
+- The raw carrier is optional only for T04-A through T04-J: 0/140 actions are annotated by design, and T04-K removes the optionality after the domain slices classify all definitions.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: extractor/live-script focus 19 tests, scope check, generated-byte diff, script type-check, and `npm run verify` (270 files/3,198 tests).
-- No model call, deployment, live proof, generated artifact edit, or external action occurred. Next: T04-A.
+- Node 22 proof passed: metadata focus 64 tests, adjacent regression 47 tests, type-check, and `npm run verify` (272 files/3,242 tests). No generated, live, deployment, or external action. Next: T04-B.
 
 ## Start here
 
@@ -119,6 +119,16 @@ confirmation, undo, and external dispatch is uncached.
   depth/node/byte/array limit contract in `src/harness/safety-limits.ts`. The same
   contract governs declaration decoding, persistence, raw authority matching,
   action schemas, and catalog metadata; it does not change the capability version.
+- During T04-A through T04-J, only raw action definitions may omit the v2 API
+  metadata carrier. `normalizeRegistryAction` is the sole raw-to-registry boundary:
+  it supplies no classification defaults, validates exposure, per-auth availability,
+  reviewed endpoint keys, closed model-write schemas, bounded dictionaries,
+  material facts, presenter identity/version, and one primary mutation, and
+  recomputes `writeAuthorityFor()` before returning an immutable definition. No
+  incomplete definition may enter a model registry. T04-K makes the carrier
+  required after every domain is annotated. Once metadata is present, all of its
+  fields participate in action fingerprints and registry/catalog hashes; absent
+  metadata preserves the unchanged v1 fingerprint during coexistence.
 - Every advertised batch limit is derived from the deterministic worst-case host
   call estimator. Group-member additions are capped at 14. A prepared external
   mutation binds and hashes `maxHostCalls`, reserves its complete remaining cost
@@ -221,12 +231,15 @@ bug was found against the REAL API, not by reading the code.
   pagination metadata. Duplicate method/path call sites remain distinct through
   scope assignment; the generator uses the separate legacy request-shape key only
   for its 118-shape inventory count and retains classification/Markdown rendering.
-  The pure correlation seam remains unused pending T04-A.
+  The pure correlation seam remains unused pending the T04-B domain annotations.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
-  `catalog.ts`, `permissions.ts`, `risk.ts`, `receipts.ts` (`listReceipt` always
+  `api-operation.ts` (the typed metadata carrier), `action-registry.ts` (the sole
+  fail-closed raw-definition normalizer plus duplicate-safe migration inventory),
+  `catalog.ts` (v1-preserving conditional metadata fingerprints), `permissions.ts`,
+  `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`
   (immutable `IntentCapabilityV1`), `intent-authority.ts` (pre-Zod raw-argument

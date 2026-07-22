@@ -23,12 +23,12 @@ here; this file is the execution map.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
-- Task 3 (`T03-A`-`T03-B`) is complete: the fail-closed raw extractor owns normalization, stable call-site identity/order, source location, and pagination metadata.
-- All 142 raw call sites are scope-assigned separately; the generator's legacy shape key keeps the checked Markdown byte-identical at 118 distinct request shapes.
-- The generator still owns classification/rendering; the pure correlation seam remains unused and no OpenAPI correlation, action metadata, or classification changed.
-- V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: focus 19 tests, scope/byte/script-type gates, and `npm run verify` (270 files/3,198 tests). No live/external action. Next: T04-A.
+- Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
+- T04-A defines the exact API metadata carrier and sole fail-closed `normalizeRegistryAction` boundary; it supplies no defaults and recomputes reviewed write authority.
+- Metadata fingerprints cover exposure, operation/endpoints, per-auth availability, dictionaries, material formatters, and presenter identity while absent metadata preserves v1 hashes.
+- The carrier is optional only on raw definitions through T04-J: 0/140 actions are annotated by design, no incomplete definition may enter a model registry, and T04-K makes it required.
+- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof passed: focus 64, adjacent 47, type-check, and `npm run verify` (272 files/3,242 tests).
+- No generated, live, deployment, or external action. Next: T04-B.
 
 ## Non-negotiable invariants
 
@@ -70,6 +70,11 @@ here; this file is the execution map.
 - Literal constraints may contain bounded structured JSON under the one shared
   limit contract in `src/harness/safety-limits.ts`; declaration, persistence,
   authority matching, schemas, and catalog metadata must not diverge.
+- Through T04-J, API metadata may be absent only from raw action definitions.
+  `normalizeRegistryAction` is the sole raw-to-registry boundary: it supplies no
+  classification defaults, validates complete metadata/closed model-write schemas,
+  recomputes reviewed write authority, and rejects non-atomic primary mutation
+  plans. T04-K removes this temporary optionality after all domains are annotated.
 - Semantic literal aliases are exact, catalog-hashed, and scoped to one
   action/path/value. Every model-controlled boolean path has reviewed aliases or
   an explicit exact-literal exclusion; opposite-polarity containment fails closed.
@@ -214,7 +219,9 @@ npm run dev           # tsx src/server.ts (needs env)
   bounded selection context survive clarification/confirm resume).
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
-  `commitConfirmedOperation`), `catalog.ts`, `permissions.ts`, `risk.ts`,
+  `commitConfirmedOperation`), `api-operation.ts` (typed API metadata carrier),
+  `action-registry.ts` (fail-closed normalization and raw migration inventory),
+  `catalog.ts` (v1-preserving conditional metadata fingerprints), `permissions.ts`, `risk.ts`,
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
   `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
   declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),

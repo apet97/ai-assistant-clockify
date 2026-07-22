@@ -21,6 +21,10 @@ import {
   type MutationDispatchResult,
 } from "./mutation-workflow.js";
 import { errorReceipt } from "./receipts.js";
+import {
+  apiActionMetadataFields,
+  type ApiActionMetadataCarrier,
+} from "./api-operation.js";
 
 export interface DurableSafeWriteDispatch extends MutationDispatchResult {
   result: CommitResult;
@@ -33,7 +37,7 @@ export interface DurableSafeWriteDispatch extends MutationDispatchResult {
  * use the compatibility branch, but catalog durability is granted only by this
  * builder's journal-enforcing production path.
  */
-export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
+export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -125,6 +129,7 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: ["safe_write"],
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
