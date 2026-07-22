@@ -862,6 +862,67 @@ printf '%s\n' '--full-auto' '--sandbox <MODE> read-only workspace-write'
         self.assertNotIn("VENDOR_ACCESS_TOKEN", environment)
         self.assertTrue(environment["PATH"].startswith(node_parent))
 
+    def test_efficient_reviewer_profile_denies_repo_writes_and_findings_reads(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repo"
+            repository.mkdir()
+            protected = repository / "FINDINGS.md"
+            protected.write_text("private\n", encoding="utf-8")
+            profile = root / "reviewer.sb"
+            supervisor._write_read_only_reviewer_profile(profile, repository)
+            profile_text = profile.read_text(encoding="utf-8")
+
+            self.assertIn("file-write*", profile_text)
+            self.assertIn("FINDINGS.md", profile_text)
+            if Path("/usr/bin/sandbox-exec").is_file():
+                write_attempt = subprocess.run(
+                    (
+                        "/usr/bin/sandbox-exec",
+                        "-f",
+                        str(profile),
+                        "/bin/sh",
+                        "-c",
+                        f"touch {repository / 'new.txt'}",
+                    ),
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                read_attempt = subprocess.run(
+                    (
+                        "/usr/bin/sandbox-exec",
+                        "-f",
+                        str(profile),
+                        "/bin/cat",
+                        str(protected),
+                    ),
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.assertNotEqual(write_attempt.returncode, 0)
+                self.assertNotEqual(read_attempt.returncode, 0)
+
+    def test_external_reviewer_sandbox_changes_only_efficient_command_mode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = RepositoryFixture(Path(directory))
+            capabilities = supervisor.detect_codex_capabilities(str(fixture.codex))
+            review = supervisor.Supervisor(fixture.config)
+            strict_command = review._reviewer_command(capabilities)
+            efficient_command = review._reviewer_command(
+                capabilities, externally_sandboxed=True
+            )
+
+        self.assertIn("--ask-for-approval", strict_command)
+        self.assertIn("read-only", strict_command)
+        self.assertIn("--dangerously-bypass-approvals-and-sandbox", efficient_command)
+        self.assertNotIn("--sandbox", efficient_command)
+
 
 class SupervisorLockTests(unittest.TestCase):
     def test_second_supervisor_process_is_refused(self) -> None:

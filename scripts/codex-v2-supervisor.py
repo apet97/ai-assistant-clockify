@@ -3807,18 +3807,29 @@ class Supervisor:
         return environment
 
     def _guarded_command(
-        self, command: tuple[str, ...], run_id: str
+        self,
+        command: tuple[str, ...],
+        run_id: str,
+        *,
+        read_only: bool = False,
     ) -> tuple[str, ...]:
         if not self.config.protect_findings:
             return command
         profile_path = (
             self.config.state_dir
             / "supervisor-checkpoints"
-            / f"{run_id}-findings-deny.sb"
+            / (
+                f"{run_id}-review-readonly.sb"
+                if read_only
+                else f"{run_id}-findings-deny.sb"
+            )
         )
-        _write_findings_profile(
-            profile_path, self.config.repository_path / "FINDINGS.md"
-        )
+        if read_only:
+            _write_read_only_reviewer_profile(profile_path, self.config.repository_path)
+        else:
+            _write_findings_profile(
+                profile_path, self.config.repository_path / "FINDINGS.md"
+            )
         return ("/usr/bin/sandbox-exec", "-f", str(profile_path), *command)
 
     def _run_paths(self, run_id: str) -> dict[str, Path]:
@@ -3907,9 +3918,12 @@ class Supervisor:
             _atomic_write_bytes(
                 paths["prompt"], reviewer_prompt.encode("utf-8"), mode=0o600
             )
-            command = self._reviewer_command(capabilities)
+            externally_sandboxed = self.config.execution_profile == "efficient"
+            command = self._reviewer_command(
+                capabilities, externally_sandboxed=externally_sandboxed
+            )
             launches[reviewer_id] = (
-                self._guarded_command(command, run_id),
+                self._guarded_command(command, run_id, read_only=externally_sandboxed),
                 reviewer_prompt,
                 paths,
             )
@@ -4026,12 +4040,27 @@ class Supervisor:
         self._write_state(state)
         return state
 
-    def _reviewer_command(self, capabilities: CodexCapabilities) -> tuple[str, ...]:
+    def _reviewer_command(
+        self,
+        capabilities: CodexCapabilities,
+        *,
+        externally_sandboxed: bool = False,
+    ) -> tuple[str, ...]:
+        prefix_flags = (
+            capabilities.full_autonomy_prefix_flags
+            if externally_sandboxed
+            else capabilities.reviewer_prefix_flags
+        )
+        exec_flags = (
+            capabilities.full_autonomy_exec_flags
+            if externally_sandboxed
+            else capabilities.reviewer_exec_flags
+        )
         return (
             self.config.codex_executable,
-            *capabilities.reviewer_prefix_flags,
+            *prefix_flags,
             "exec",
-            *capabilities.reviewer_exec_flags,
+            *exec_flags,
             "--model",
             self.config.model,
             "--config",
@@ -4213,6 +4242,20 @@ def _write_findings_profile(path: Path, findings_path: Path) -> None:
         "(version 1)\n"
         "(allow default)\n"
         f'(deny file-read-data file-write* (literal "{escaped}"))\n'
+    )
+    _atomic_write_bytes(path, profile.encode("utf-8"), mode=0o600)
+
+
+def _write_read_only_reviewer_profile(path: Path, repository: Path) -> None:
+    canonical_repository = str(repository.resolve())
+    canonical_findings = str((repository / "FINDINGS.md").resolve())
+    escaped_repository = canonical_repository.replace("\\", "\\\\").replace('"', '\\"')
+    escaped_findings = canonical_findings.replace("\\", "\\\\").replace('"', '\\"')
+    profile = (
+        "(version 1)\n"
+        "(allow default)\n"
+        f'(deny file-write* (subpath "{escaped_repository}"))\n'
+        f'(deny file-read-data file-write* (literal "{escaped_findings}"))\n'
     )
     _atomic_write_bytes(path, profile.encode("utf-8"), mode=0o600)
 
