@@ -74,6 +74,14 @@ DEFAULT_EFFICIENT_CRITICAL_GATE_PATTERNS: tuple[str, ...] = (
     "T12-H",
 )
 
+TASK4_METADATA_CARRIER_FIXTURE_TESTS = frozenset(
+    {
+        "tests/unit/define-builders.test.ts",
+        "tests/unit/executor-fail-closed.test.ts",
+        "tests/unit/safe-write-clarification.test.ts",
+    }
+)
+
 
 class SupervisorError(RuntimeError):
     """A fail-closed validation or execution error."""
@@ -1014,6 +1022,8 @@ def derive_allowed_path_specs(
         re.IGNORECASE,
     ):
         plan_exact.update(path for path in plan.exact if path.startswith("tests/"))
+        if "metadata carrier types/builders" in primary_source.lower():
+            plan_exact.update(TASK4_METADATA_CARRIER_FIXTURE_TESTS)
     if "eval/release/live workflows" in primary_source.lower():
         plan_exact.update(
             path

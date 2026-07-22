@@ -985,6 +985,43 @@ class GitBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
             supervisor.validate_frozen_paths(("tests/unit/unrelated.test.ts",), allowed)
 
+    def test_task_4_closure_includes_required_metadata_carrier_fixtures(self) -> None:
+        prompt = supervisor.Prompt(
+            "T04-K",
+            "Close metadata migration",
+            """## Prompt T04-K: Close metadata migration
+
+**Frozen files:** Modify metadata carrier types/builders, all Task 4 tests, and only annotation files needed to fix a generator-detected omission.
+""",
+            "COMPLETE T04-J",
+            "feat: generate the complete API action inventory",
+            (),
+        )
+        plan_context = """## Task 4: API action metadata
+
+- `tests/unit/api-action-inventory.test.ts`
+"""
+        allowed = supervisor.derive_allowed_path_specs(prompt, (), plan_context)
+
+        supervisor.validate_frozen_paths(
+            (
+                "tests/unit/define-builders.test.ts",
+                "tests/unit/executor-fail-closed.test.ts",
+                "tests/unit/safe-write-clarification.test.ts",
+            ),
+            allowed,
+        )
+        self.assertIsNone(
+            supervisor.audit_git_staging(
+                "git add -- tests/unit/define-builders.test.ts "
+                "tests/unit/executor-fail-closed.test.ts "
+                "tests/unit/safe-write-clarification.test.ts",
+                allowed,
+            )
+        )
+        with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
+            supervisor.validate_frozen_paths(("tests/unit/unrelated.test.ts",), allowed)
+
     def test_named_unit_tests_resolve_from_the_focused_gate_only(self) -> None:
         prompt = supervisor.Prompt(
             "T01-D",
