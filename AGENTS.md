@@ -23,10 +23,9 @@ here; this file is the execution map.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- Baseline: Node `v22.23.1` (ABI 127); `npm run verify` passed 266 files / 3,171 tests.
 - T01-A records the architecture-only contract in `docs/adr/001-api-agent-v2.md`.
-- Gates: focused ADR contract, `git diff --check`, type-check, and docs closeout passed.
-- V1 remains default; no v2 runtime/live/external proof exists; next is T01-B.
+- T01-B adds the atomic `ASSISTANT_ENGINE=v1|v2` config and secret-free `/version` engine metadata; Node 22 focused tests (48), type-check, and lint passed.
+- V1 remains default; no v2 runner, runtime, release evidence, deployment, live proof, or external action exists. Next: T01-C.
 
 ## Non-negotiable invariants
 

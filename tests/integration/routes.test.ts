@@ -178,6 +178,7 @@ describe("routes", () => {
         mode: "tool",
         agentic: true,
         toolSelect: true,
+        assistantEngine: "v1",
         reasoningEffort: null,
         thinkingMode: null,
       },

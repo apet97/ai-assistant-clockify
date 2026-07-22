@@ -100,6 +100,7 @@ export function createApp(deps: AppDeps): Express {
         provider: runtimeDeps.config.llmProvider,
         model: runtimeDeps.config.llmModel ?? null,
         endpointSha256: runtimeDeps.config.llmEndpointSha256 ?? null,
+        assistantEngine: runtimeDeps.config.assistantEngine,
         mode: runtimeDeps.config.llmMode,
         agentic: runtimeDeps.config.llmAgentic,
         toolSelect: runtimeDeps.config.llmToolSelect,
