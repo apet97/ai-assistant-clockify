@@ -3906,6 +3906,18 @@ class Supervisor:
             previous_handoff = previous_path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as error:
             raise SupervisorError(f"cannot read T04-K handoff: {error}") from error
+        tooling_boundary = state.get("last_tooling_boundary")
+        base_handoff_sha = (
+            str(tooling_boundary.get("base_commit"))
+            if isinstance(tooling_boundary, dict)
+            else ""
+        )
+        if base_handoff_sha and immutable_sha != base_handoff_sha:
+            previous_handoff += (
+                "\nSupervisor tooling boundary: the implementation boundary remains "
+                f"T04-K at {base_handoff_sha}; supervisor-only tooling "
+                f"commits advance the immutable review SHA to {immutable_sha}.\n"
+            )
 
         launches: dict[str, tuple[tuple[str, ...], str, dict[str, Path]]] = {}
         for reviewer_id in expected_reviewers:
