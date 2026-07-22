@@ -29,10 +29,6 @@ describe("relativeTime (pure)", () => {
     expect(relativeTime("not-a-date", now)).toBe("");
   });
 
-  it("uses Intl.RelativeTimeFormat for Serbian history labels", () => {
-    expect(relativeTime(new Date(now - 5 * 60_000).toISOString(), now, "sr")).toBe("pre 5 minuta");
-    expect(relativeTime(new Date(now - 24 * 60 * 60_000).toISOString(), now, "sr")).toBe("juče");
-  });
 });
 
 // --- DOM-coupled: a minimal StubNode (same convention as ui-preview-card) ----
@@ -115,14 +111,21 @@ class StubNode {
 
 const originalDocument = (globalThis as Record<string, unknown>).document;
 const originalWindow = (globalThis as Record<string, unknown>).window;
+let createdNodes: StubNode[] = [];
 
 beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+  createdNodes = [];
+  const createNode = (tag: string): StubNode => {
+    const node = new StubNode(tag);
+    createdNodes.push(node);
+    return node;
+  };
   const doc = {
-    createElement: (tag: string) => new StubNode(tag),
-    createElementNS: (_ns: string, tag: string) => new StubNode(tag),
+    createElement: (tag: string) => createNode(tag),
+    createElementNS: (_ns: string, tag: string) => createNode(tag),
     createTextNode: (text: string) => {
-      const n = new StubNode("#text");
+      const n = createNode("#text");
       n.textContent = text;
       return n;
     },
@@ -283,5 +286,36 @@ describe("renderPreview — countdown a11y", () => {
     const countdown = card.all().find((n) => n.className === "countdown");
     expect(countdown).toBeDefined();
     expect(countdown!.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("preserves arbitrary Unicode project, client, and description data in text nodes", () => {
+    const value = "Čukarica 東京 — račun № 7";
+    const deps: PreviewDeps = {
+      controller: controller(),
+      showError: vi.fn(),
+      appendMessage: vi.fn(),
+      renderResults: vi.fn(),
+    };
+    const preview: PreviewResult = {
+      kind: "preview",
+      previewId: "p-unicode",
+      nonce: "n-unicode",
+      preview: {
+        actionLabel: "Update project",
+        expectedChanges: [value],
+        reversibility: "Preview only",
+        warnings: [],
+        targets: [
+          { type: "project", id: "project-1", name: value },
+          { type: "client", id: "client-1", name: value },
+        ],
+      },
+    };
+
+    renderPreview([preview], deps);
+    const descriptionNode = createdNodes.find((node) => node.tagName === "li");
+    expect(descriptionNode?.textContent).toBe(value);
+    expect(Buffer.from(descriptionNode?.textContent ?? "", "utf8")).toEqual(Buffer.from(value, "utf8"));
+    expect(createdNodes.map((node) => node.textContent)).toContain(`Target: ${value}, ${value}`);
   });
 });

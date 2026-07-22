@@ -11,7 +11,7 @@
  */
 
 import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
-import { formatLocalDateTime, intlLocale, promptsForPolicy, welcomeCopyForPolicy, type UiLanguage } from "./product.js";
+import { EN_US_LOCALE, formatLocalDateTime, promptsForPolicy, welcomeCopyForPolicy } from "./product.js";
 import {
   cancelOutcome,
   featureGroupRows,
@@ -150,7 +150,6 @@ export interface ChatSessionSummary {
 export interface ChatsMenuDeps {
   /** Switch to the picked conversation (never called for the CURRENT one). */
   onSelect: (id: string) => void;
-  language?: UiLanguage;
 }
 
 const TITLE_MAX = 48;
@@ -162,11 +161,11 @@ function truncateTitle(title: string): string {
 }
 
 /** A coarse "5m ago" / "2h ago" / "3d ago" label for the last-activity time. */
-export function relativeTime(iso: string, nowMs: number, language: UiLanguage = "en"): string {
+export function relativeTime(iso: string, nowMs: number): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
   const sec = Math.max(0, Math.round((nowMs - then) / 1000));
-  const formatter = new Intl.RelativeTimeFormat(intlLocale(language), { numeric: "auto" });
+  const formatter = new Intl.RelativeTimeFormat(EN_US_LOCALE, { numeric: "auto" });
   if (sec < 60) return formatter.format(0, "second");
   const min = Math.round(sec / 60);
   if (min < 60) return formatter.format(-min, "minute");
@@ -279,7 +278,7 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
       }
       // Title and time are untrusted/data — textContent only, never innerHTML.
       item.appendChild(el("span", "chats-title", truncateTitle(s.title)));
-      const when = relativeTime(s.lastMessageAt, now, deps.language);
+      const when = relativeTime(s.lastMessageAt, now);
       if (when) item.appendChild(el("span", "chats-time", when));
 
       const select = (): void => {
@@ -363,7 +362,7 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
 export const EXAMPLE_PROMPTS = promptsForPolicy();
 
 /** The empty-chat welcome card. Lives OUTSIDE the message log (never announced as a turn). */
-export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape; language?: UiLanguage }): HTMLElement {
+export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape }): HTMLElement {
   const box = el("div", "welcome");
   box.appendChild(el("h2", undefined, "What can I do for you?"));
   box.appendChild(
@@ -374,7 +373,7 @@ export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape; langua
     ),
   );
   const row = el("div", "chip-row");
-  for (const prompt of promptsForPolicy(deps.policy, deps.language)) {
+  for (const prompt of promptsForPolicy(deps.policy)) {
     const chip = el("button", "chip", prompt);
     chip.type = "button";
     chip.addEventListener("click", () => deps.sendText(prompt));
@@ -437,9 +436,8 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
     download.setAttribute("download", artifact.filename);
     download.setAttribute("aria-label", `Download invoice PDF: ${artifact.filename}`);
     card.appendChild(download);
-    const language = document.documentElement?.lang === "sr" ? "sr" : "en";
     const timeZone = document.documentElement?.dataset.timeZone;
-    card.appendChild(el("p", "artifact-meta", `${artifact.filename} · Expires ${formatLocalDateTime(artifact.expiresAt, language, timeZone)}`));
+    card.appendChild(el("p", "artifact-meta", `${artifact.filename} · Expires ${formatLocalDateTime(artifact.expiresAt, timeZone)}`));
   }
   // One-click undo for a reversible creation (deletes what was just created).
   if (result.receipt.ok && result.undo) {

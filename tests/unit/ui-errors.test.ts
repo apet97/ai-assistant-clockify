@@ -8,7 +8,7 @@ import {
   type StreamEvent,
 } from "../../src/ui/main.js";
 
-function meBody(preferences: { theme: "system" | "light" | "dark"; language: "en" | "sr" } = { theme: "system", language: "en" }) {
+function meBody(preferences: { theme: "system" | "light" | "dark"; timeZone?: string } = { theme: "system" }) {
   return {
     ok: true,
     workspaceId: "workspace-1",
@@ -225,12 +225,15 @@ describe("createFetchApi CSRF fallback", () => {
         status: 200,
         body: null,
         json: async () => path === "/api/me"
-          ? meBody({ theme: "dark", language: "sr" })
+          ? meBody({ theme: "dark", timeZone: "Europe/Belgrade" })
           : { ok: true, status: "cancelled" },
       };
     }));
     const api = createFetchApi();
-    expect((await api.getMe?.() as { preferences: unknown }).preferences).toEqual({ theme: "dark", language: "sr" });
+    expect((await api.getMe?.() as { preferences: unknown }).preferences).toEqual({
+      theme: "dark",
+      timeZone: "Europe/Belgrade",
+    });
     await api.cancelPreview("p1");
     expect(calls).toEqual(["/api/me", "/api/confirmations/p1/cancel"]);
   });

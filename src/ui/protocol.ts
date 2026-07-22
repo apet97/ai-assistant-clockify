@@ -191,17 +191,15 @@ function preferencesFrom(value: unknown, name: string): UiPreferences {
   if (theme !== "system" && theme !== "light" && theme !== "dark") {
     throw new ProtocolError(`${name}.theme is unknown`);
   }
-  const language = string(preferences.language, `${name}.language`);
-  if (language !== "en" && language !== "sr") throw new ProtocolError(`${name}.language is unknown`);
   const timeZone = optionalString(preferences.timeZone, `${name}.timeZone`);
   if (timeZone) {
     try {
-      new Intl.DateTimeFormat("en", { timeZone }).format(0);
+      new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
     } catch {
       throw new ProtocolError(`${name}.timeZone is invalid`);
     }
   }
-  return { theme, language, ...(timeZone ? { timeZone } : {}) };
+  return { theme, ...(timeZone ? { timeZone } : {}) };
 }
 
 function httpsUrl(value: unknown, name: string): string {

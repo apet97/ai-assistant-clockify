@@ -1,26 +1,27 @@
 /** User-owned presentation preferences and policy-aware onboarding copy. */
 import type { PolicyShape } from "./shared.js";
-import type { UiLanguage, UiPreferences } from "../shared/contracts.js";
+import type { UiPreferences } from "../shared/contracts.js";
 
-export type { UiLanguage, UiPreferences, UiTheme } from "../shared/contracts.js";
+export type { UiPreferences, UiTheme } from "../shared/contracts.js";
 
-export const DEFAULT_UI_PREFERENCES: UiPreferences = { theme: "system", language: "en" };
+export const DEFAULT_UI_PREFERENCES: UiPreferences = { theme: "system" };
 export const UI_PREFERENCES_KEY = "clockify-ai-assistant.preferences.v1";
-
-export function intlLocale(language: UiLanguage): string {
-  return language === "sr" ? "sr-Latn-RS" : "en-US";
-}
+export const EN_US_LOCALE = "en-US";
 
 export function normalizeUiPreferences(value: unknown): UiPreferences {
   if (!value || typeof value !== "object") return DEFAULT_UI_PREFERENCES;
-  const source = value as Partial<UiPreferences>;
-  if ((source.theme !== "system" && source.theme !== "light" && source.theme !== "dark") || (source.language !== "en" && source.language !== "sr")) {
+  const theme = "theme" in value ? value.theme : undefined;
+  const legacyLanguage = "language" in value ? value.language : undefined;
+  if (
+    (theme !== "system" && theme !== "light" && theme !== "dark")
+    || (legacyLanguage !== undefined && legacyLanguage !== "en" && legacyLanguage !== "sr")
+  ) {
     return DEFAULT_UI_PREFERENCES;
   }
+  const timeZone = "timeZone" in value ? value.timeZone : undefined;
   return {
-    theme: source.theme,
-    language: source.language,
-    ...(typeof source.timeZone === "string" && source.timeZone ? { timeZone: source.timeZone } : {}),
+    theme,
+    ...(typeof timeZone === "string" && timeZone ? { timeZone } : {}),
   };
 }
 
@@ -37,26 +38,29 @@ export function saveUiPreferences(storage: Pick<Storage, "setItem">, preferences
   storage.setItem(UI_PREFERENCES_KEY, JSON.stringify(normalizeUiPreferences(preferences)));
 }
 
-export function applyUiPreferences(root: HTMLElement, preferences: UiPreferences): void {
-  root.lang = preferences.language;
+export function applyUiPreferences(
+  root: { lang: string; dataset: { theme?: string; timeZone?: string } },
+  preferences: UiPreferences,
+): void {
+  root.lang = "en";
   root.dataset.theme = preferences.theme;
   if (preferences.timeZone) root.dataset.timeZone = preferences.timeZone;
   else delete root.dataset.timeZone;
 }
 
-export function formatLocalDateTime(value: string, language: UiLanguage, timeZone?: string): string {
+export function formatLocalDateTime(value: string, timeZone?: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return new Intl.DateTimeFormat(intlLocale(language), {
+  return new Intl.DateTimeFormat(EN_US_LOCALE, {
     dateStyle: "medium",
     timeStyle: "short",
     ...(timeZone ? { timeZone } : {}),
   }).format(date);
 }
 
-export function formatLocalCurrency(amount: number, currency: string, language: UiLanguage): string {
+export function formatLocalCurrency(amount: number, currency: string): string {
   if (!Number.isFinite(amount) || !/^[A-Z]{3}$/.test(currency)) return `${amount} ${currency}`;
-  return new Intl.NumberFormat(intlLocale(language), {
+  return new Intl.NumberFormat(EN_US_LOCALE, {
     style: "currency",
     currency,
   }).format(amount);
@@ -67,11 +71,10 @@ export function formatLocalCurrency(amount: number, currency: string, language: 
  * daylight-saving transitions. */
 export function formatTimeZoneName(
   timeZone: string,
-  language: UiLanguage,
   at: Date = new Date(),
 ): string {
   try {
-    const name = new Intl.DateTimeFormat(intlLocale(language), {
+    const name = new Intl.DateTimeFormat(EN_US_LOCALE, {
       timeZone,
       timeZoneName: "long",
     }).formatToParts(at).find((part) => part.type === "timeZoneName")?.value;
@@ -81,24 +84,24 @@ export function formatTimeZoneName(
   }
 }
 
-const PROMPTS: Array<{ group: string; access: "read" | "read_write"; text: string | ((language: UiLanguage) => string) }> = [
+const PROMPTS: Array<{ group: string; access: "read" | "read_write"; text: string }> = [
   { group: "time_tracking", access: "read", text: "What did I track today?" },
   { group: "reports", access: "read", text: "Show this week's summary report" },
   { group: "time_tracking", access: "read_write", text: "Start a timer for deep work" },
   { group: "time_tracking", access: "read_write", text: "Log 2 hours on a project with a tag for yesterday" },
-  { group: "expenses", access: "read_write", text: (language) => `Log a ${formatLocalCurrency(50, "USD", language)} travel expense on a project` },
+  { group: "expenses", access: "read_write", text: `Log a ${formatLocalCurrency(50, "USD")} travel expense on a project` },
   { group: "invoices", access: "read_write", text: "Invoice a client, due next month" },
   { group: "time_off_approvals", access: "read_write", text: "Request 2 days off next week" },
   { group: "workspace_settings", access: "read", text: "What did you change recently?" },
 ];
 
 /** Only suggest a capability when the admin's current policy allows it. */
-export function promptsForPolicy(policy?: PolicyShape, language: UiLanguage = "en"): string[] {
+export function promptsForPolicy(policy?: PolicyShape): string[] {
   const available = PROMPTS.filter(({ group, access }) => {
     if (!policy) return true;
     const level = policy.groups[group] ?? "off";
     return access === "read" ? level === "read" || level === "read_write" : level === "read_write";
-  }).map(({ text }) => typeof text === "function" ? text(language) : text);
+  }).map(({ text }) => text);
   return available.length > 0 ? available : ["How do assistant permissions work?"];
 }
 

@@ -1,11 +1,9 @@
 /** Cross-boundary product contracts shared by the server and framework-free UI. */
 
 export type UiTheme = "system" | "light" | "dark";
-export type UiLanguage = "en" | "sr";
 
 export interface UiPreferences {
   theme: UiTheme;
-  language: UiLanguage;
   /** Verified Clockify timezone when available; omitted rather than guessed. */
   timeZone?: string;
 }

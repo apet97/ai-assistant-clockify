@@ -8,10 +8,12 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, the single construction-time seam, and historical-v1 evidence quarantine.
+- T02-A is complete: `UiPreferences` is exactly `{theme,timeZone?}`; theme and verified Clockify timezone survive while the Clockify language claim is ignored.
+- The existing localStorage key and signed-cookie payload accept then drop valid legacy `language`; unrelated nested cookie fields remain rejected.
+- The compiled UI has no language control/plumbing, sets document language to English, formats through fixed `en-US`, and preserves arbitrary Unicode as `textContent` data.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Existing evidence inputs and hashes remain unchanged; derived conclusions are `assistantEngine=v1`, `evidenceStatus=historical`, `validForV2=false`, and a v2 target fails closed.
-- Node 22 gates passed: evidence focus 60 tests; config/env/routes 52 tests; type-check; lint; `verify` 268 files/3,183 tests; diff checks.
-- No evidence generation, model call, deployment, live proof, or external action occurred. Next: T02-A.
+- Node 22 gates passed: preference/routes focus 84 tests; type-check; lint; diff checks.
+- No model call, deployment, live proof, or external action occurred. Next: T02-B.
 
 ## Start here
 
@@ -285,8 +287,13 @@ bug was found against the REAL API, not by reading the code.
   composer/stream flows (`composer-flow.ts`), product copy/preferences
   (`product.ts`), and rendering (`render.ts`/`shared.ts`); `main.ts` keeps
   `mount()` + a re-export barrel. The shell renders before parallel initialization,
-  emits local understanding feedback before provider work, localizes through
-  `Intl`, and remains usable without horizontal overflow at 280px.
+  emits local understanding feedback before provider work, and remains usable
+  without horizontal overflow at 280px. Its exact preference contract is
+  `{theme,timeZone?}`: the existing localStorage key and strict nested session
+  schema accept then drop valid legacy `language`, Clockify language claims are
+  ignored, and verified theme/timezone remain. The UI sets `lang="en"`, formats
+  through one fixed `EN_US_LOCALE`, and keeps arbitrary Unicode workspace data in
+  `textContent` without transformation.
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 - `src/public-documents.ts` renders script-free public Privacy, Support, and

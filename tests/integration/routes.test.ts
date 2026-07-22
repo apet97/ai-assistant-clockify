@@ -259,7 +259,7 @@ describe("routes", () => {
     expect(setCookie).toContain("SameSite=None");
   });
 
-  it("propagates verified Clockify theme/language into sanitized UI preferences and public links", async () => {
+  it("ignores Clockify language while preserving verified theme/timezone preferences and public links", async () => {
     const token = await testing.signTestToken(keys.privateKey, ADDON_KEY, {
       workspaceId: "ws-1",
       user: "admin-1",
@@ -273,7 +273,7 @@ describe("routes", () => {
     const me = await request(app).get("/api/me").set("Cookie", cookie);
 
     expect(me.status).toBe(200);
-    expect(me.body.preferences).toMatchObject({ theme: "dark", language: "sr", timeZone: "UTC" });
+    expect(me.body.preferences).toEqual({ theme: "dark", timeZone: "UTC" });
     expect(me.body.links).toEqual({
       privacy: "https://example.com/privacy",
       support: "https://example.com/support",

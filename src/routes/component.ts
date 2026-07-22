@@ -190,7 +190,7 @@ export function componentRouter(deps: AppDeps): Router {
         workspaceId,
         adminUserId,
         workspaceRole: String(claims.workspaceRole),
-        uiPreferences: clockifyUiPreferences(claims.theme, claims.language, calendarContext?.timeZone),
+        uiPreferences: clockifyUiPreferences(claims.theme, calendarContext?.timeZone),
         expiresAt: session.expiresAt,
       };
       const cookie = signSessionCookie(sessionClaims, deps.config.sessionSecret);

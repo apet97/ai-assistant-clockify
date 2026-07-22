@@ -281,7 +281,7 @@ export function apiRouter(
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
       workspaceRole: claims.workspaceRole,
-      preferences: claims.uiPreferences ?? { theme: "system", language: "en" },
+      preferences: claims.uiPreferences ?? { theme: "system" },
       links: {
         privacy: new URL("/privacy", deps.config.baseUrl).toString(),
         support: new URL("/support", deps.config.baseUrl).toString(),

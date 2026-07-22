@@ -86,7 +86,7 @@ export {
   normalizeUiPreferences,
   promptsForPolicy,
 } from "./product.js";
-export type { UiPreferences, UiTheme, UiLanguage } from "./product.js";
+export type { UiPreferences, UiTheme } from "./product.js";
 export {
   ProtocolError,
   decodeApiEnvelope,
@@ -187,21 +187,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
     theme.appendChild(option);
   }
   themeLabel.appendChild(theme);
-  const languageLabel = el("label", undefined, "Language");
-  const language = document.createElement("select");
-  language.setAttribute("aria-label", "Language");
-  for (const [value, label] of [["en", "English"], ["sr", "Srpski"]] as const) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    option.selected = preferences.language === value;
-    language.appendChild(option);
-  }
-  languageLabel.appendChild(language);
   const timeZoneSummary = el("p", "display-time-zone");
   const refreshTimeZoneSummary = (): void => {
     timeZoneSummary.textContent = preferences.timeZone
-      ? `Clockify time zone: ${formatTimeZoneName(preferences.timeZone, preferences.language)}`
+      ? `Clockify time zone: ${formatTimeZoneName(preferences.timeZone)}`
       : "Clockify time zone is unavailable.";
   };
   refreshTimeZoneSummary();
@@ -211,17 +200,16 @@ function mount(root: HTMLElement, api: ChatApi): void {
     preferences = {
       ...preferences,
       theme: theme.value as UiPreferences["theme"],
-      language: language.value as UiPreferences["language"],
     };
     saveUiPreferences(window.localStorage, preferences);
     applyUiPreferences(document.documentElement, preferences);
     refreshTimeZoneSummary();
-    refreshLocalizedUi();
+    refreshDisplayUi();
     displayPanel.classList.add("hidden");
     displayButton.setAttribute("aria-expanded", "false");
     displayButton.focus();
   });
-  displayPanel.append(themeLabel, languageLabel, timeZoneSummary, saveDisplay);
+  displayPanel.append(themeLabel, timeZoneSummary, saveDisplay);
   root.appendChild(displayPanel);
   displayButton.addEventListener("click", () => {
     const open = displayPanel.classList.toggle("hidden");
@@ -339,7 +327,6 @@ function mount(root: HTMLElement, api: ChatApi): void {
     chat.insertBefore(
       renderWelcome({
         policy: activePolicy,
-        language: preferences.language,
         sendText: (text) => runUiTask(sendText(text), "Message failed to send."),
       }),
       messages,
@@ -350,14 +337,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
     cachedSessions = sessions;
     chatsSlot.replaceChildren(
       renderChatsMenu(sessions, {
-        language: preferences.language,
         onSelect: (id) => runUiTask(selectSession(id), "Could not open that conversation. Please try again."),
       }),
     );
   }
 
-  /** Re-render only locale/policy-derived empty-state chrome; never touch turns. */
-  function refreshLocalizedUi(): void {
+  /** Re-render only display/policy-derived empty-state chrome; never touch turns. */
+  function refreshDisplayUi(): void {
     refreshTimeZoneSummary();
     if (chat.querySelector(".composer") && messages.childElementCount === 0) showWelcome();
     if (cachedSessions) renderSessionMenu(cachedSessions);
@@ -546,7 +532,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
             if (firstRun) {
               setup.classList.add("hidden");
               renderChat();
-            } else refreshLocalizedUi();
+            } else refreshDisplayUi();
             return true; // reopen: stay open so the inline "Saved" is visible
           } catch {
             showError("Could not save permissions.");
@@ -720,12 +706,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
         saveUiPreferences(window.localStorage, preferences);
         applyUiPreferences(document.documentElement, preferences);
         theme.value = preferences.theme;
-        language.value = preferences.language;
         refreshTimeZoneSummary();
         for (const key of ["privacy", "support", "security"] as const) {
           footerLinks.get(key)!.href = value.links[key];
         }
-        refreshLocalizedUi();
+        refreshDisplayUi();
       }).catch((error: unknown) => {
         showError(error instanceof ApiError ? error.message : "Could not load this session.");
       });
