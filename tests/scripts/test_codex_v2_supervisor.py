@@ -828,6 +828,36 @@ class ManagedProcessTests(unittest.TestCase):
 
         self.assertIsNone(supervisor.audit_structured_event(event))
 
+    def test_structured_event_audit_allows_path_only_staging_check(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": (
+                    "if git diff --cached --name-only | rg -qx 'FINDINGS.md'; "
+                    "then echo staged; else echo not-staged; fi"
+                ),
+            }
+        }
+
+        self.assertIsNone(supervisor.audit_structured_event(event))
+
+    def test_path_only_staging_check_does_not_mask_a_content_read(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": (
+                    "if git diff --cached --name-only | rg -qx 'FINDINGS.md'; "
+                    "then echo staged; else echo not-staged; fi\n"
+                    "sed -n '1,20p' FINDINGS.md"
+                ),
+            }
+        }
+
+        self.assertEqual(
+            supervisor.audit_structured_event(event),
+            "attempted FINDINGS.md access",
+        )
+
     def test_structured_event_audit_allows_gh_token_pattern_as_rg_argument(
         self,
     ) -> None:

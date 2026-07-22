@@ -1624,9 +1624,29 @@ FORBIDDEN_COMMAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
 )
 
+SAFE_FINDINGS_REFERENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"(?m)^(?P<prefix>\s*(?:if\s+)?git\s+diff\s+--cached\s+--name-only"
+        r"\s*\|\s*rg\s+-qx\s+)(?P<quote>['\"])FINDINGS\.md(?P=quote)"
+    ),
+)
+
+
+def _mask_safe_findings_references(command: str) -> str:
+    for pattern in SAFE_FINDINGS_REFERENCE_PATTERNS:
+        command = pattern.sub(
+            lambda match: (
+                f"{match.group('prefix')}{match.group('quote')}"
+                f"!FINDINGS.md{match.group('quote')}"
+            ),
+            command,
+        )
+    return command
+
 
 def audit_structured_event(event: Any) -> str | None:
     for command in _event_command_strings(event):
+        command = _mask_safe_findings_references(command)
         for pattern, reason in FORBIDDEN_COMMAND_PATTERNS:
             if pattern.search(command):
                 return reason
