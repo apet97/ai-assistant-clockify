@@ -7,14 +7,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, the single construction-time seam, and historical-v1 evidence quarantine.
-- Task 2 (`T02-A`-`T02-D`) is complete: preferences and rendering are fixed-English, runtime sources contain no Serbian interface/router branch, and release/media/E2E surfaces reject obsolete language query knobs.
-- `UiPreferences` remains exactly `{theme,timeZone?}`; retained localStorage/cookies accept then drop valid legacy `language`, and Clockify language claims remain ignored.
-- Generic non-ASCII selector input still fails open; English-prose Latin/Cyrillic fixtures retain UTF-8 byte-span, authority, and retention coverage.
-- Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
+- Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
+- T03-A is complete: `scripts/lib/adapter-endpoints.ts` owns reusable fail-closed raw `RestCore` scanning, normalization, source location, and pagination metadata.
+- Scope classification and Markdown rendering remain in the generator; the pure correlation-path seam is separate and unused pending reviewed placeholder/literal work.
+- The checked contract remains byte-for-byte unchanged at 118 distinct adapter request shapes; no OpenAPI correlation, action metadata, or classification changed.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: media focus 9 tests; complete Task 2 focus 313 tests; 42 E2E tests across Chromium, Firefox, and WebKit; the canonical no-match source scan; and diff checks. Deterministic media fixtures retained Unicode sample data; no generated marketplace asset was edited or published.
-- No model call, deployment, live proof, or external action occurred. Next: T03-A.
+- Node 22 proof passed: `npm run verify` (270 files/3,196 tests), extractor/live-script focus 17 tests, manifest adjacency 10 tests, generated-byte diff, and diff checks.
+- No model call, deployment, live proof, generated artifact edit, or external action occurred. Next: T03-B.
 
 ## Start here
 
@@ -217,6 +216,11 @@ bug was found against the REAL API, not by reading the code.
   while cancellation after the external fetch starts waits for truthful
   settlement. `workspace-mutation-coordinator.ts` provides the generation-aware
   workspace settlement barrier used by lifecycle and mutation routes.
+- `scripts/lib/adapter-endpoints.ts` owns the fail-closed raw `RestCore` scanner,
+  path normalization, source location, request-shape identity, and pagination
+  metadata. `scripts/generate-endpoint-scope-contract.ts` consumes that inventory
+  but retains scope classification and Markdown rendering. Its pure correlation
+  path seam is deliberately unused until the reviewed T03-B correlation slice.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`

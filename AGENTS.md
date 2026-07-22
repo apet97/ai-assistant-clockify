@@ -23,13 +23,12 @@ here; this file is the execution map.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, one construction-time seam, and historical-v1 evidence quarantine.
-- Task 2 (`T02-A`-`T02-D`) is complete: preferences and rendering are fixed-English, runtime sources contain no Serbian interface/router branch, and release/media/E2E surfaces reject obsolete language query knobs.
-- Preferences remain exactly `{theme,timeZone?}`; legacy localStorage/cookies drop valid `language`, and Clockify language claims remain ignored.
-- Generic non-ASCII selector input still fails open; English-prose Latin/Cyrillic fixtures retain UTF-8 byte-span, authority, and retention coverage.
-- Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
+- Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
+- T03-A is complete: one reusable fail-closed raw adapter extractor owns normalization, source location, pagination metadata, and request-shape identity.
+- The generator still owns scope classification/rendering; its separate pure correlation seam remains unused until T03-B.
+- The checked Markdown stays byte-for-byte unchanged at 118 distinct adapter request shapes; no OpenAPI correlation or classification changed.
 - V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: media focus 9 tests; complete Task 2 focus 313 tests; 42 E2E tests across Chromium, Firefox, and WebKit; canonical no-match scan; and diff checks. Unicode media data remains deterministic; no generated asset was edited or published. No live/external action. Next: T03-A.
+- Node 22 proof passed: `npm run verify` (270 files/3,196 tests), extractor/live-script focus 17 tests, manifest adjacency 10 tests, generated-byte diff, and diff checks. No live/external action. Next: T03-B.
 
 ## Non-negotiable invariants
 
@@ -276,6 +275,9 @@ npm run dev           # tsx src/server.ts (needs env)
   metadata binder, plus the caller-read-only, secret-free `verify-restored-db.ts`
   RTO/RPO gate (source-schema read/token proof, private mode-0600 v8 migration clone,
   exact built server identity, and post-shutdown schema/integrity/writer-lock proof).
+  `scripts/lib/adapter-endpoints.ts` owns raw fail-closed `RestCore` extraction;
+  the scope generator retains classification/rendering and does not yet call the
+  separate future correlation seam.
 
 ## Live request-shape gotchas (encoded in the adapter + unit tests)
 
