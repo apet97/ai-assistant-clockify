@@ -17,6 +17,13 @@ import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable
 import { dynamicMutationPlan, fetchCompositeSnapshot, groupProjection } from "./composite-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { ONBOARD_GROUP_BATCH_MAX } from "../safety-limits.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiHost,
+  ApiMethod,
+  AvailabilityByAuthClass,
+} from "../api-operation.js";
 
 /**
  * Curated, intent-shaped actions (Phase 6). High-level "jobs to be done" that
@@ -30,7 +37,65 @@ import { ONBOARD_GROUP_BATCH_MAX } from "../safety-limits.js";
  * group adds best-effort).
  */
 
+type CuratedActionName = "clockify_period_report" | "clockify_onboard_user";
+
+const CURATED_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function curatedEndpointKey(
+  access: ApiAccess,
+  host: ApiHost,
+  method: ApiMethod,
+  path: string,
+  sourceModule: string,
+): string {
+  return [access, host, method, path, sourceModule].join("\0");
+}
+
+function curatedCompositeMetadata(input: {
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "composite",
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: CURATED_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const curatedEndpoint = Object.freeze({
+  reportSummary: curatedEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/summary", "reports.ts"),
+  reportDetailed: curatedEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/detailed", "reports.ts"),
+  reportWeekly: curatedEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/weekly", "reports.ts"),
+  usersList: curatedEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  usersInvite: curatedEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users", "users.ts"),
+  groupsList: curatedEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+  groupsAddUser: curatedEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/user-groups/{groupId}/users", "users.ts"),
+});
+
+const CURATED_API_METADATA = Object.freeze({
+  clockify_period_report: curatedCompositeMetadata({
+    reason: "Resolves a named period and selects summary, detailed, or weekly report execution; the exact report operations remain the API surface.",
+    primary: [curatedEndpoint.reportSummary, curatedEndpoint.reportDetailed, curatedEndpoint.reportWeekly],
+    support: [],
+  }),
+  clockify_onboard_user: curatedCompositeMetadata({
+    reason: "Invites one user and may add them to up to 13 groups through independent membership POSTs; the atomic invite and single-membership operations remain the API surface.",
+    primary: [curatedEndpoint.usersInvite, curatedEndpoint.groupsAddUser],
+    support: [curatedEndpoint.usersList, curatedEndpoint.groupsList],
+  }),
+} satisfies Readonly<Record<CuratedActionName, ApiActionMetadataCarrier>>);
+
 const periodReport = defineAction({
+  ...CURATED_API_METADATA.clockify_period_report,
   name: "clockify_period_report",
   description:
     'Run a time report for a named PERIOD (today/yesterday/this_week/last_week/this_month/last_month/last_7_days/last_30_days/this_quarter/last_quarter/this_year/last_year) — the harness resolves the calendar dates, so you never need to know or compute them. Use this for "report for last month", "what did the team do this week". type defaults to summary.',
@@ -86,6 +151,7 @@ const periodReport = defineAction({
 });
 
 const onboardUser = defineRiskyAction({
+  ...CURATED_API_METADATA.clockify_onboard_user,
   name: "clockify_onboard_user",
   description:
     'Onboard a teammate: invite them by email AND add them to one or more groups (by name) in one step. Use this for "invite ada@acme.com and add her to Engineering". Sends a real invitation email — previews and requires confirmation.',

@@ -418,6 +418,58 @@ const SCHEDULING_ENDPOINT = {
   },
 } as const;
 
+const NON_API_ENDPOINT = {
+  projects: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  },
+  clients: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/clients", "clients.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+  },
+  tags: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/tags", "tags.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+  },
+  timeEntries: {
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+  },
+  invoices: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices", "invoices.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  },
+  expenses: {
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/expenses/{id}", "expenses.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/expenses/{id}", "expenses.ts"),
+  },
+  webhooks: {
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+  },
+  users: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+    invite: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users", "users.ts"),
+  },
+  groups: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+    addUser: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/user-groups/{groupId}/users", "users.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/user-groups/{id}", "users.ts"),
+  },
+  reports: {
+    summary: adapterEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/summary", "reports.ts"),
+    detailed: adapterEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/detailed", "reports.ts"),
+    weekly: adapterEndpointKey("read", "reports", "POST", "/workspaces/{workspaceId}/reports/weekly", "reports.ts"),
+  },
+} as const;
+
 function materialField(
   path: string,
   label: string,
@@ -2268,6 +2320,113 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   }),
 ];
 
+const NON_API_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  {
+    ...internalAnnotation({
+      name: "clockify_delete_entity",
+      exposure: "generic",
+      reason: "Selects unrelated entity delete endpoints and may archive a project or client before deletion with compensation; Task 6 must use the typed atomic operations.",
+      primary: [
+        NON_API_ENDPOINT.projects.update,
+        NON_API_ENDPOINT.projects.delete,
+        NON_API_ENDPOINT.clients.update,
+        NON_API_ENDPOINT.clients.delete,
+        NON_API_ENDPOINT.tags.delete,
+        NON_API_ENDPOINT.timeEntries.delete,
+        NON_API_ENDPOINT.invoices.delete,
+        NON_API_ENDPOINT.expenses.delete,
+        NON_API_ENDPOINT.webhooks.delete,
+        NON_API_ENDPOINT.groups.delete,
+      ],
+      support: [
+        NON_API_ENDPOINT.projects.list,
+        NON_API_ENDPOINT.projects.get,
+        NON_API_ENDPOINT.clients.list,
+        NON_API_ENDPOINT.clients.get,
+        NON_API_ENDPOINT.tags.list,
+        NON_API_ENDPOINT.tags.get,
+        NON_API_ENDPOINT.timeEntries.get,
+        NON_API_ENDPOINT.invoices.list,
+        NON_API_ENDPOINT.invoices.get,
+        NON_API_ENDPOINT.expenses.get,
+        NON_API_ENDPOINT.webhooks.get,
+        NON_API_ENDPOINT.groups.list,
+      ],
+      availability: API_KEY_ONLY,
+    }),
+    primaryMutationCount: 2,
+    compensationCount: 1,
+  },
+  {
+    name: "assistant_update_permissions",
+    exposure: "local",
+    reason: "Updates only the caller's persisted assistant policy and performs no Clockify request.",
+    endpoints: undefined,
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  },
+  {
+    ...internalAnnotation({
+      name: "clockify_update_entity",
+      exposure: "generic",
+      reason: "Selects the project, client, or tag update endpoint from entityType and accepts an open fields record; Task 6 must use operation-specific closed updates.",
+      primary: [
+        NON_API_ENDPOINT.projects.update,
+        NON_API_ENDPOINT.clients.update,
+        NON_API_ENDPOINT.tags.update,
+      ],
+      support: [
+        NON_API_ENDPOINT.projects.list,
+        NON_API_ENDPOINT.projects.get,
+        NON_API_ENDPOINT.clients.list,
+        NON_API_ENDPOINT.clients.get,
+        NON_API_ENDPOINT.tags.list,
+        NON_API_ENDPOINT.tags.get,
+      ],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    name: "assistant_show_permissions",
+    exposure: "local",
+    reason: "Reads only the caller's in-process assistant policy and performs no Clockify request.",
+    endpoints: undefined,
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  },
+  {
+    name: "assistant_recent_outcomes",
+    exposure: "local",
+    reason: "Reads only locally audited assistant outcomes and performs no Clockify request.",
+    endpoints: undefined,
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  },
+  internalAnnotation({
+    name: "clockify_period_report",
+    exposure: "composite",
+    reason: "Resolves a named period and selects summary, detailed, or weekly report execution; the exact report operations remain the API surface.",
+    primary: [
+      NON_API_ENDPOINT.reports.summary,
+      NON_API_ENDPOINT.reports.detailed,
+      NON_API_ENDPOINT.reports.weekly,
+    ],
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  {
+    ...internalAnnotation({
+      name: "clockify_onboard_user",
+      exposure: "composite",
+      reason: "Invites one user and may add them to up to 13 groups through independent membership POSTs; the atomic invite and single-membership operations remain the API surface.",
+      primary: [NON_API_ENDPOINT.users.invite, NON_API_ENDPOINT.groups.addUser],
+      support: [NON_API_ENDPOINT.users.list, NON_API_ENDPOINT.groups.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 14,
+    compensationCount: 0,
+  },
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -2289,6 +2448,11 @@ function withoutApiMetadata(definition: ActionDefinition): ActionDefinition {
 }
 
 describe("API action inventory normalization", () => {
+  it("keeps undo as a local service outside the action-definition inventory", () => {
+    expect(getAction("undo")).toBeUndefined();
+    expect(ACTION_CATALOG.some((definition) => definition.name === "undo")).toBe(false);
+  });
+
   it("keeps the current catalog in a duplicate-safe raw inventory without normalizing it", async () => {
     const registry = await loadRegistryModule();
     const inventory = registry.inventoryActionDefinitions();
@@ -2316,6 +2480,7 @@ describe("API action inventory normalization", () => {
     ...USER_GROUP_ANNOTATIONS,
     ...TIME_OFF_APPROVAL_ANNOTATIONS,
     ...SCHEDULING_ANNOTATIONS,
+    ...NON_API_ANNOTATIONS,
   ])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {

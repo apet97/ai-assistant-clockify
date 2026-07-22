@@ -8,14 +8,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
-- T04-D classifies 21 reporting/administration actions as 13 `api`, 1 `composite`, 6 `generic`, and 1 `local`; cumulatively 63/140 are classified as 33 `api`, 10 `composite`, 19 `generic`, and 1 `local`, with 77 remaining.
-- Reports bind both auth classes to POST summary/detailed/weekly operations on the reports host; workspace and template reads bind GET workspace/projects/project-by-id operations on the API host.
-- Holiday list/in-period reads and delete bind exact API-host operations for both auth classes; get remains composite list-and-find, while create/update remain generic because assignment arrays are unbounded.
-- Webhook list/get GETs, logs POST, and delete bind API-key-only operations; static events are local, while create/update remain generic because `triggerSource` is unbounded.
-- Audit search remains generic and unavailable for API exposure because the official description has no path/operation ID; entity changes remain generic because `changeType` selects among three endpoints.
-- The raw carrier remains optional only through T04-J; `normalizeRegistryAction` supplies no defaults or incomplete registry entries, and T04-K removes the temporary optionality.
+- T04-J completes annotation of all 140 definitions: 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; none remain unclassified.
+- Atomic expense/category, user/group, leave/approval, and scheduling operations bind literal official method/path/operation IDs; API-key-only custom-field creation is the only new auth restriction in T04-F through T04-I.
+- Custom-field array writes, dynamic rate/project-total selectors, unbounded policy scopes, the 27-user balance update, list-and-find reads, group/approval loops, and multi-primary category wrappers remain internal with exact reasons.
+- Local permission/show/recent-outcome actions have no Clockify endpoint, and undo remains a local service outside the 140 definitions; generic cross-entity update/delete and curated period-report/onboarding workflows receive no invented operation ID.
+- Raw metadata remains temporarily optional only until T04-K; normalization still supplies no defaults and rejects every incomplete registry entry.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: administration focus 175 tests, adjacent regression 43 tests, type-check, and `npm run verify` (272 files/3,305 tests). No generated, live, deployment, or external action. Next: T04-E.
+- Node 22 proof: T04-J focus, F-J domain regression, type-check, and lint passed. No generated, live, deployment, or external action. Next: T04-K.
 
 ## Start here
 
@@ -247,7 +246,10 @@ bug was found against the REAL API, not by reading the code.
   `workflows/entries.ts` (the equivalent T04-C evidence for 11 time definitions),
   and `workflows/reports.ts`, `workflows/audit.ts`, `workflows/workspace.ts`,
   `workflows/holidays.ts`, and `workflows/webhooks.ts` (the equivalent T04-D
-  evidence for 21 reporting/administration definitions), `permissions.ts`,
+  evidence for 21 reporting/administration definitions); `workflows/invoices.ts`,
+  `expenses.ts`, `custom-fields.ts`, `users.ts`, `time-off.ts`, `approvals.ts`,
+  `scheduling.ts`, `admin.ts`, and `curated.ts` own the remaining T04-E through
+  T04-J evidence, completing all 140 definitions, `permissions.ts`,
   `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`
@@ -269,7 +271,7 @@ bug was found against the REAL API, not by reading the code.
   canonical partial replay; invoice replay and duplicate suppression instead use
   the persisted durable operation ID, exact step journal, and reconciliation
   evidence — never a semantic payload hash or second payload-level id),
-  `undo.ts` (reverse creations), `money.ts` (the one major↔minor amount mapping,
+  `undo.ts` (the local reverse-creation service, not an API action definition), `money.ts` (the one major↔minor amount mapping,
   BOTH directions — `toMinor` for the wire, `fromMinor` for major-unit previews),
   `workflows/<area>.ts`. Name→id + date resolution is split across
   `workflows/resolve.ts` (entities), `workflows/resolve-dates.ts` (the calendar

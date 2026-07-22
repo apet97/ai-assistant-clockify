@@ -24,12 +24,11 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
-- T04-D classifies 21 reporting/administration actions as 13 `api`, 1 `composite`, 6 `generic`, and 1 `local`; cumulatively 63/140 are classified as 33 `api`, 10 `composite`, 19 `generic`, and 1 `local`, with 77 remaining.
-- Exact APIs cover report POSTs, workspace/template GETs, holiday list/in-period/delete, and webhook list/get/logs/delete; all support both auth classes except API-key-only webhooks.
-- Audit search lacks an official operation ID, entity changes select endpoints dynamically, holiday get is list-and-find, unbounded holiday/webhook writes remain generic, and static webhook events are local.
-- Raw metadata remains optional only through T04-J; normalization supplies no defaults or incomplete registry entries, and T04-K makes the carrier required.
-- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof: focus 175, adjacent 43, type-check, and `npm run verify` (272 files/3,305 tests).
-- No generated, live, deployment, or external action. Next: T04-E.
+- T04-J completes all 140 annotations: 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; none remain unclassified.
+- Atomic expense, user/group, leave/approval, and scheduling operations bind exact official evidence; dynamic selectors, list-and-find reads, bounded loops, unbounded arrays, and multi-primary wrappers remain internal.
+- Permission/show/recent-outcome operations are local and undo remains a local service outside the 140 definitions; cross-entity update/delete and curated report/onboarding workflows have exact non-API reasons and no invented operation ID.
+- Raw metadata stays optional only until T04-K; normalization supplies no defaults or incomplete entries. V1 remains default and v2 remains `not_ready` with no runner or cutover.
+- Node 22 proof: T04-J focus, F-J regression, type-check, and lint passed. No generated, live, deployment, or external action. Next: T04-K.
 
 ## Non-negotiable invariants
 
@@ -228,7 +227,10 @@ npm run dev           # tsx src/server.ts (needs env)
   and `workflows/entries.ts` (equivalent evidence for 11 time definitions), plus
   `workflows/reports.ts`, `workflows/audit.ts`, `workflows/workspace.ts`,
   `workflows/holidays.ts`, and `workflows/webhooks.ts` (equivalent evidence for
-  21 reporting/administration definitions), `permissions.ts`, `risk.ts`,
+  21 reporting/administration definitions); `workflows/invoices.ts`, `expenses.ts`,
+  `custom-fields.ts`, `users.ts`, `time-off.ts`, `approvals.ts`, `scheduling.ts`,
+  `admin.ts`, and `curated.ts` complete the remaining T04-E through T04-J
+  evidence for all 140 definitions, `permissions.ts`, `risk.ts`,
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
   `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
   declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),
@@ -252,7 +254,7 @@ npm run dev           # tsx src/server.ts (needs env)
   dedupe for `clockify_setup_project` and `clockify_setup_task`, including partial
   replay; invoice safety is instead anchored to the persisted durable operation
   ID, exact step journal, and reconciliation evidence — never a semantic payload
-  hash or second payload-level id), `undo.ts`,
+  hash or second payload-level id), `undo.ts` (local service, not an API action definition),
   `money.ts` (the one major↔minor mapping, both ways —
   `toMinor`/`fromMinor`), `workflows/*` — name→id/date resolution split across
   `resolve.ts` (entities), `resolve-dates.ts` (calendar + `resolveDateRange`),
