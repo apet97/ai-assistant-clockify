@@ -25,7 +25,8 @@ here; this file is the execution map.
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - T01-A records the architecture-only contract in `docs/adr/001-api-agent-v2.md`.
 - T01-B adds the atomic `ASSISTANT_ENGINE=v1|v2` config and secret-free `/version` engine metadata; Node 22 focused tests (48), type-check, and lint passed.
-- V1 remains default; no v2 runner, runtime, release evidence, deployment, live proof, or external action exists. Next: T01-C.
+- T01-C adds the single construction-time v1/v2 pipeline seam. V1 remains the unchanged default; v2 returns deterministic `not_ready` for new turns and disables model resume while preserving confirmation execution.
+- Node 22 focused route tests (25), type-check, cycles, and lint passed. No v2 runner, release evidence, deployment, live proof, or external action exists. Next: T01-D.
 
 ## Non-negotiable invariants
 

@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import request from "supertest";
 import { testing } from "@apet97/clockify-addon-sdk";
 import { testKeys } from "../helpers/test-keys.js";
@@ -11,6 +11,8 @@ import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockif
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { Express } from "express";
 import { mintAdminCookie, requireSessionCookie, requireSessionSetCookie } from "../helpers/session.js";
+import { createChatPipeline, type ChatPipeline } from "../../src/routes/chat-pipeline.js";
+import type { AppDeps } from "../../src/routes/deps.js";
 
 const ADDON_KEY = "ai-assistant";
 
@@ -100,6 +102,43 @@ const modelClient: ModelClient = {
 
 function adminCookie(): string {
   return mintAdminCookie(store, "test-session-secret");
+}
+
+function isolatedRouteApp(
+  assistantEngine: "v1" | "v2",
+  isolatedModelClient: ModelClient,
+  pipelineFactories?: {
+    v1: (deps: AppDeps) => ChatPipeline;
+    v2: (deps: AppDeps) => ChatPipeline;
+  },
+  existingStore?: Store,
+): { app: Express; store: Store; fake: FakeWorkspace } {
+  const isolatedStore = existingStore ?? createStore(":memory:", { encryptionKey: "test-key" });
+  if (!existingStore) {
+    isolatedStore.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "addon-token",
+    });
+  }
+  const isolatedFake = createFakeWorkspace({ projects: [{ id: "p1", name: "Acme" }] });
+  const deps: AppDeps = {
+    config: makeTestConfig({
+      assistantEngine,
+      clockifyAddonPublicKeyPem: keys.pem,
+      clockifyAddonKey: ADDON_KEY,
+    }),
+    store: isolatedStore,
+    parser: createSignatureParser(ADDON_KEY, keys.pem),
+    modelClient: isolatedModelClient,
+    clockifyForWorkspace: () => isolatedFake.client,
+  };
+  return {
+    app: createApp(deps, pipelineFactories),
+    store: isolatedStore,
+    fake: isolatedFake,
+  };
 }
 
 beforeAll(async () => {
@@ -284,6 +323,133 @@ describe("routes", () => {
   it("chat route requires a session", async () => {
     const res = await request(app).post("/api/chat/messages").send({ message: "hi" });
     expect(res.status).toBe(401);
+  });
+
+  it.each([
+    { engine: "v1" as const, selected: "v1" },
+    { engine: "v2" as const, selected: "v2" },
+  ])("constructs and runs only the $selected assistant pipeline", async ({ engine, selected }) => {
+    const v1Run = vi.fn<ChatPipeline["executeChatTurn"]>(async () => ({
+      ok: true,
+      replyKind: "answer",
+      replyText: "selected-v1",
+      results: [],
+      resultLinks: [],
+    }));
+    const v2Run = vi.fn<ChatPipeline["executeChatTurn"]>(async () => ({
+      ok: false,
+      code: "selected-v2",
+      message: "selected-v2",
+    }));
+    const v1Factory = vi.fn((deps: AppDeps): ChatPipeline => ({
+      ...createChatPipeline(deps),
+      executeChatTurn: v1Run,
+    }));
+    const v2Factory = vi.fn((deps: AppDeps): ChatPipeline => ({
+      ...createChatPipeline(deps),
+      executeChatTurn: v2Run,
+    }));
+    const isolated = isolatedRouteApp(engine, modelClient, {
+      v1: v1Factory,
+      v2: v2Factory,
+    });
+    expect(v1Factory).toHaveBeenCalledTimes(engine === "v1" ? 1 : 0);
+    expect(v2Factory).toHaveBeenCalledTimes(engine === "v2" ? 1 : 0);
+    expect(v1Run).not.toHaveBeenCalled();
+    expect(v2Run).not.toHaveBeenCalled();
+
+    try {
+      const cookie = mintAdminCookie(isolated.store, "test-session-secret");
+      const response = await request(isolated.app)
+        .post("/api/chat/messages")
+        .set("Cookie", cookie)
+        .send({ message: "route this turn" });
+
+      expect(v1Factory).toHaveBeenCalledTimes(engine === "v1" ? 1 : 0);
+      expect(v2Factory).toHaveBeenCalledTimes(engine === "v2" ? 1 : 0);
+      expect(v1Run).toHaveBeenCalledTimes(engine === "v1" ? 1 : 0);
+      expect(v2Run).toHaveBeenCalledTimes(engine === "v2" ? 1 : 0);
+      expect(response.body).toMatchObject(
+        engine === "v1"
+          ? { ok: true, reply: { kind: "answer", text: "selected-v1" } }
+          : { ok: false, code: "selected-v2", message: "selected-v2" },
+      );
+    } finally {
+      isolated.store.close();
+    }
+  });
+
+  it("returns the deterministic v2 not_ready result without calling the v1 model runner", async () => {
+    const complete = vi.fn<ModelClient["complete"]>(async () => {
+      throw new Error("v1 assistant runner was called");
+    });
+    const isolated = isolatedRouteApp("v2", { complete });
+
+    try {
+      const cookie = mintAdminCookie(isolated.store, "test-session-secret");
+      const response = await request(isolated.app)
+        .post("/api/chat/messages")
+        .set("Cookie", cookie)
+        .send({ message: "route this turn" });
+
+      expect(response.status).toBe(502);
+      expect(response.body).toEqual({
+        ok: false,
+        code: "not_ready",
+        message: "Assistant engine v2 is not ready.",
+      });
+      expect(complete).not.toHaveBeenCalled();
+    } finally {
+      isolated.store.close();
+    }
+  });
+
+  it("commits a pre-v2 preview without running the v1 model resume", async () => {
+    let modelCallCount = 0;
+    const completeWithTools = vi.fn<NonNullable<ModelClient["completeWithTools"]>>(async () => {
+      modelCallCount += 1;
+      return {
+        text: "v1 resume ran",
+        toolCalls: modelCallCount === 1
+        ? [{
+            id: "delete-call",
+            name: "clockify_delete_entity",
+            arguments: { entityType: "project", id: "p1", name: "Acme" },
+          }]
+        : [],
+      };
+    });
+    const resumableModel: ModelClient = {
+      complete: modelClient.complete,
+      completeWithTools,
+    };
+    const v1 = isolatedRouteApp("v1", resumableModel);
+
+    try {
+      const cookie = mintAdminCookie(v1.store, "test-session-secret");
+      const chat = await request(v1.app)
+        .post("/api/chat/messages")
+        .set("Cookie", cookie)
+        .send({ message: "delete project Acme with id p1" });
+      const preview = chat.body.results.find((result: { kind: string }) => result.kind === "preview");
+      expect(preview?.previewId).toBeTruthy();
+      expect(completeWithTools).toHaveBeenCalledTimes(1);
+
+      const v2 = isolatedRouteApp("v2", resumableModel, undefined, v1.store);
+      const confirmed = await request(v2.app)
+        .post(`/api/confirmations/${preview.previewId}/confirm`)
+        .set("Cookie", cookie)
+        .send({ nonce: preview.nonce });
+
+      expect(confirmed.status).toBe(200);
+      expect(confirmed.body.ok).toBe(true);
+      expect(v2.fake.counts.archiveProjectAtomic).toBe(1);
+      expect(v2.fake.counts.deleteProjectAtomic).toBe(1);
+      expect(confirmed.body.resume).toBeUndefined();
+      expect(completeWithTools).toHaveBeenCalledTimes(1);
+    } finally {
+      v1.store.close();
+    }
   });
 
   it("permissions route returns the default policy on first run", async () => {

@@ -15,7 +15,11 @@ import {
   resolveClockifyReportsBase,
 } from "./clockify/api-base.js";
 import { selectModelClient } from "./assistant/select-model-client.js";
-import { apiRouter } from "./routes/api.js";
+import {
+  apiRouter,
+  defaultAssistantPipelineFactories,
+  type AssistantPipelineFactories,
+} from "./routes/api.js";
 import { componentRouter } from "./routes/component.js";
 import { lifecycleRouter } from "./routes/lifecycle.js";
 import { installAttestationRouter } from "./routes/install-attestation.js";
@@ -31,7 +35,10 @@ import { verifyRuntimeReleaseArtifact } from "./release-artifact.js";
  * tests drive it via Supertest with fakes). server.start() builds the real
  * dependencies from config and listens.
  */
-export function createApp(deps: AppDeps): Express {
+export function createApp(
+  deps: AppDeps,
+  pipelineFactories: AssistantPipelineFactories = defaultAssistantPipelineFactories,
+): Express {
   const runtimeDeps: AppDeps = deps.mutationCoordinator
     ? deps
     : { ...deps, mutationCoordinator: createWorkspaceMutationCoordinator() };
@@ -144,7 +151,7 @@ export function createApp(deps: AppDeps): Express {
     res.setHeader("Cache-Control", "private, no-store");
     next();
   });
-  app.use("/api", apiRouter(runtimeDeps));
+  app.use("/api", apiRouter(runtimeDeps, pipelineFactories));
 
   // Built UI assets (present after `npm run build`); harmless if absent.
   app.use("/ui", express.static(resolve("dist/ui")));

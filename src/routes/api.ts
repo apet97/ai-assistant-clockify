@@ -22,7 +22,11 @@ import { asyncHandler, fifoAsyncHandler } from "./async-handler.js";
 import { bestEffort } from "./best-effort.js";
 import { openNdjsonStream } from "./ndjson.js";
 import { sanitizeResultsForHistory } from "./chat-results.js";
-import { createChatPipeline } from "./chat-pipeline.js";
+import {
+  createChatPipeline,
+  type ChatPipeline,
+  type ChatTurnOutcome,
+} from "./chat-pipeline.js";
 import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
 import { KeyedFifo } from "./fifo-lock.js";
@@ -55,6 +59,48 @@ import {
  */
 export const CHAT_HISTORY_RESTORE_LIMIT = 50;
 
+export type ChatPipelineFactory = (deps: AppDeps) => ChatPipeline;
+
+/** The sole top-level assistant-engine seam. Each arm constructs one complete
+ * pipeline so selection happens once, before any route handles a request. */
+export interface AssistantPipelineFactories {
+  v1: ChatPipelineFactory;
+  v2: ChatPipelineFactory;
+}
+
+const V2_NOT_READY: ChatTurnOutcome = {
+  ok: false,
+  code: "not_ready",
+  message: "Assistant engine v2 is not ready.",
+};
+
+function createV2NotReadyPipeline(deps: AppDeps): ChatPipeline {
+  const sharedControlPlane = createChatPipeline(deps);
+  return {
+    ...sharedControlPlane,
+    runResume: async () => undefined,
+    executeChatTurn: async () => V2_NOT_READY,
+  };
+}
+
+export const defaultAssistantPipelineFactories: AssistantPipelineFactories = {
+  v1: createChatPipeline,
+  v2: createV2NotReadyPipeline,
+};
+
+function createSelectedAssistantPipeline(
+  engine: AppDeps["config"]["assistantEngine"],
+  deps: AppDeps,
+  factories: AssistantPipelineFactories,
+): ChatPipeline {
+  switch (engine) {
+    case "v1":
+      return factories.v1(deps);
+    case "v2":
+      return factories.v2(deps);
+  }
+}
+
 /** Abort not-yet-dispatched route work when the HTTP client disappears. The
  * REST/governor boundary deliberately stops observing this signal once a host
  * mutation dispatches, so its outcome is still settled truthfully. */
@@ -80,15 +126,21 @@ function requestAbortScope(req: Request, res: Response): {
   };
 }
 
-export function apiRouter(deps: AppDeps): Router {
+export function apiRouter(
+  deps: AppDeps,
+  pipelineFactories: AssistantPipelineFactories,
+): Router {
   const router = Router();
   const now = deps.now ?? (() => new Date());
   const mutationCoordinator = deps.mutationCoordinator ?? createWorkspaceMutationCoordinator();
+  const pipelineDeps = deps.mutationCoordinator ? deps : { ...deps, mutationCoordinator };
   // The deps-capturing turn/confirm/commit pipeline (plan 007 Phase B). It
   // owns the per-instance chat rate limiter and a derived clock; the route
   // handlers below call its methods.
-  const pipeline = createChatPipeline(
-    deps.mutationCoordinator ? deps : { ...deps, mutationCoordinator },
+  const pipeline = createSelectedAssistantPipeline(
+    deps.config.assistantEngine,
+    pipelineDeps,
+    pipelineFactories,
   );
   const { loadPolicy, requireSession, verifyWriteAuthority, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
