@@ -8,12 +8,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
-- T04-A defines the exact API metadata carrier and the sole fail-closed `normalizeRegistryAction` boundary, which recomputes reviewed write authority and accepts no classification defaults.
-- Normalization rejects incomplete exposure/availability/endpoint contracts, open model-write schemas, unmatched material dictionaries, more than 22 material facts, and non-atomic primary mutation plans.
-- Fingerprints bind every supplied metadata field while unannotated v1 definitions retain their prior bytes and hashes; no registry consumes incomplete definitions.
-- The raw carrier is optional only for T04-A through T04-J: 0/140 actions are annotated by design, and T04-K removes the optionality after the domain slices classify all definitions.
+- T04-B classifies 31/140 structure actions: 15 `api` (8 reads, 7 writes), 7 `composite`, and 9 `generic`; 109 definitions remain for later domain slices.
+- The API subset binds official operation IDs, duplicate-safe raw primary/support endpoint keys, and per-auth availability; its seven writes also bind closed material dictionaries, normalized-operation pointers, formatter identities, and presenters.
+- Preconditions and compensation keep structure deletes composite; multi-primary client create, setup/work-package flows, and task delete also remain composite.
+- Open fields/membership rows, dynamic rate paths, unbounded task-create `assigneeIds`, and generic entity dispatch remain internal as `generic`; Task 6 must narrow or split them before model exposure.
+- The raw carrier remains optional only through T04-J; `normalizeRegistryAction` supplies no defaults or incomplete registry entries, and T04-K removes the temporary optionality.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: metadata focus 64 tests, adjacent regression 47 tests, type-check, and `npm run verify` (272 files/3,242 tests). No generated, live, deployment, or external action. Next: T04-B.
+- Node 22 proof passed: structure focus 149 tests, adjacent durable regression 57 tests, type-check, and `npm run verify` (272 files/3,273 tests). No generated, live, deployment, or external action. Next: T04-C.
 
 ## Start here
 
@@ -238,7 +239,10 @@ bug was found against the REAL API, not by reading the code.
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
   `api-operation.ts` (the typed metadata carrier), `action-registry.ts` (the sole
   fail-closed raw-definition normalizer plus duplicate-safe migration inventory),
-  `catalog.ts` (v1-preserving conditional metadata fingerprints), `permissions.ts`,
+  `catalog.ts` (v1-preserving conditional metadata fingerprints),
+  `workflows/structure-api-metadata.ts` (the reviewed T04-B operation IDs,
+  endpoint bindings, auth availability, exposure, material facts, and presenters
+  for 31 structure definitions), `permissions.ts`,
   `risk.ts`, `receipts.ts` (`listReceipt` always
   emits `truncated` and adds `list_truncated` for incomplete results), `confirmations.ts`,
   `tools.ts` (Zod→JSON-schema tools), `arg-summary.ts`, `intent-capability.ts`

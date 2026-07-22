@@ -22,6 +22,7 @@ import { errorReceipt } from "../receipts.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileCreate, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import { sanitizedFingerprint } from "../safe-json.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -69,6 +70,7 @@ async function resolveTaskRef(
 
 const listTasks = defineReadAction({
   name: "clockify_tasks_list",
+  ...STRUCTURE_API_METADATA.clockify_tasks_list,
   description: "List tasks under a project (optional name filter).",
   group: WORK,
   schema: z.object({ projectId: z.string().min(1), name: z.string().optional() }),
@@ -86,6 +88,7 @@ const listTasks = defineReadAction({
 
 const getTask = defineAction({
   name: "clockify_tasks_get",
+  ...STRUCTURE_API_METADATA.clockify_tasks_get,
   description:
     "Fetch a single task within a project — by id or exact `name`, in a project given by `projectId` or `projectName` (resolved server-side).",
   featureGroup: WORK,
@@ -121,7 +124,7 @@ const getTask = defineAction({
   },
 });
 
-const createTask = defineStructureDurableSafeWriteAction({
+const createTaskDefinition = defineStructureDurableSafeWriteAction({
   name: "clockify_tasks_create",
   description:
     "Create a task under a project, optionally assigning members inline with `assigneeIds` — each entry is a user id, an exact name, or 'me'; the harness resolves names server-side (clarifies on an unknown name). Safe write — executes immediately when policy allows.",
@@ -206,8 +209,14 @@ const createTask = defineStructureDurableSafeWriteAction({
   },
 });
 
+const createTask = Object.freeze({
+  ...createTaskDefinition,
+  ...STRUCTURE_API_METADATA.clockify_tasks_create,
+});
+
 const updateTask = defineRiskyAction({
   name: "clockify_tasks_update",
+  ...STRUCTURE_API_METADATA.clockify_tasks_update,
   description:
     "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. `assigneeIds` entries may be user ids, exact names, or 'me' (resolved server-side, clarifies on an unknown name). Elevated write — previews and requires confirmation.",
   group: WORK,
@@ -306,6 +315,7 @@ const updateTask = defineRiskyAction({
 
 const deleteTask = defineRiskyAction({
   name: "clockify_tasks_delete",
+  ...STRUCTURE_API_METADATA.clockify_tasks_delete,
   description:
     "Delete a task (marks it DONE first, then deletes). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `name`) — the harness resolves names server-side. Previews and requires confirmation.",
   group: WORK,
@@ -451,6 +461,7 @@ const deleteTask = defineRiskyAction({
 
 const rateUpdate = defineRiskyAction({
   name: "clockify_tasks_rate_update",
+  ...STRUCTURE_API_METADATA.clockify_tasks_rate_update,
   description:
     "Set a task's billable hourly or cost rate. Pass the project by `projectId` or exact `projectName`, and the task by `taskId` or exact `taskName` — the harness resolves names and verifies the task exists server-side. `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
   group: "invoices",

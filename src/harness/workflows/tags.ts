@@ -14,6 +14,7 @@ import { describePatch, resolveEntityRef } from "./resolve.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { sanitizedFingerprint } from "../safe-json.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * Typed tag workflows (goclmcp §2.5). Reads + create execute immediately;
@@ -24,6 +25,7 @@ const WORK = "work_structure" as const;
 
 const listTags = defineReadAction({
   name: "clockify_tags_list",
+  ...STRUCTURE_API_METADATA.clockify_tags_list,
   description: "List tags (optional name / archived filter).",
   group: WORK,
   schema: z.object({ name: z.string().optional(), archived: z.boolean().optional() }),
@@ -41,6 +43,7 @@ const listTags = defineReadAction({
 
 const getTag = defineAction({
   name: "clockify_tags_get",
+  ...STRUCTURE_API_METADATA.clockify_tags_get,
   description: "Fetch a single tag by id, or by its exact `name` (resolved server-side).",
   featureGroup: WORK,
   risks: ["read"],
@@ -73,6 +76,7 @@ const getTag = defineAction({
 
 const createTag = defineDurableSafeWriteAction({
   name: "clockify_tags_create",
+  ...STRUCTURE_API_METADATA.clockify_tags_create,
   description: "Create a tag. Safe write — executes immediately when policy allows.",
   group: WORK,
   stepName: "Create tag",
@@ -133,6 +137,7 @@ const createTag = defineDurableSafeWriteAction({
 
 const updateTag = defineRiskyAction({
   name: "clockify_tags_update",
+  ...STRUCTURE_API_METADATA.clockify_tags_update,
   description:
     "Update a tag (rename, archived). Pass the tag's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: WORK,
@@ -231,6 +236,7 @@ const updateTag = defineRiskyAction({
 
 const deleteTag = defineRiskyAction({
   name: "clockify_tags_delete",
+  ...STRUCTURE_API_METADATA.clockify_tags_delete,
   description:
     "Delete a tag. Pass the tag's id (preferred — list tags first to get it), or its exact name and the harness resolves it to an id. Previews and requires confirmation.",
   group: WORK,

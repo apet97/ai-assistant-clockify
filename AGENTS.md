@@ -24,11 +24,12 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
-- T04-A defines the exact API metadata carrier and sole fail-closed `normalizeRegistryAction` boundary; it supplies no defaults and recomputes reviewed write authority.
-- Metadata fingerprints cover exposure, operation/endpoints, per-auth availability, dictionaries, material formatters, and presenter identity while absent metadata preserves v1 hashes.
-- The carrier is optional only on raw definitions through T04-J: 0/140 actions are annotated by design, no incomplete definition may enter a model registry, and T04-K makes it required.
-- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof passed: focus 64, adjacent 47, type-check, and `npm run verify` (272 files/3,242 tests).
-- No generated, live, deployment, or external action. Next: T04-B.
+- T04-B classifies 31/140 structure actions: 15 `api` (8 reads, 7 writes), 7 `composite`, and 9 `generic`; 109 remain.
+- API definitions bind official operation IDs, raw endpoint keys, per-auth availability, and complete write material/presenter contracts.
+- Deletes with preconditions/compensation, client create, setup/work-package flows, and task delete remain composite; open, dynamic, unbounded, and generic dispatch shapes remain internal for Task 6 splits.
+- Raw metadata remains optional only through T04-J; normalization supplies no defaults or incomplete registry entries, and T04-K makes the carrier required.
+- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof: focus 149, adjacent 57, type-check, and `npm run verify` (272 files/3,273 tests).
+- No generated, live, deployment, or external action. Next: T04-C.
 
 ## Non-negotiable invariants
 
@@ -221,7 +222,9 @@ npm run dev           # tsx src/server.ts (needs env)
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
   `commitConfirmedOperation`), `api-operation.ts` (typed API metadata carrier),
   `action-registry.ts` (fail-closed normalization and raw migration inventory),
-  `catalog.ts` (v1-preserving conditional metadata fingerprints), `permissions.ts`, `risk.ts`,
+  `catalog.ts` (v1-preserving conditional metadata fingerprints),
+  `workflows/structure-api-metadata.ts` (reviewed operation/endpoint/auth/exposure
+  and material/presenter evidence for 31 structure definitions), `permissions.ts`, `risk.ts`,
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
   `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
   declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),

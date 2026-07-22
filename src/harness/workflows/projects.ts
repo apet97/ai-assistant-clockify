@@ -31,6 +31,7 @@ import {
 } from "./structure-durable.js";
 import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
 import { projectMembershipsEquivalent } from "./membership-canonical.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -78,6 +79,7 @@ async function reconcileCreatedProject(
 
 const listProjects = defineReadAction({
   name: "clockify_projects_list",
+  ...STRUCTURE_API_METADATA.clockify_projects_list,
   description: "List projects, optionally filtered by name, archived state, or client ids.",
   group: PROJECT_GROUP,
   schema: z.object({
@@ -99,6 +101,7 @@ const listProjects = defineReadAction({
 
 const getProject = defineAction({
   name: "clockify_projects_get",
+  ...STRUCTURE_API_METADATA.clockify_projects_get,
   description: "Fetch a single project by id, or by its exact `name` (resolved server-side).",
   featureGroup: PROJECT_GROUP,
   risks: ["read"],
@@ -131,7 +134,7 @@ const getProject = defineAction({
 
 // ── Safe writes ──────────────────────────────────────────────────────────────
 
-const createProject = defineStructureDurableSafeWriteAction({
+const createProjectDefinition = defineStructureDurableSafeWriteAction({
   name: "clockify_projects_create",
   description:
     "Create a project. Assign a client by `clientId` or its exact `clientName` (resolved server-side — an unknown client clarifies). Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
@@ -233,7 +236,12 @@ const createProject = defineStructureDurableSafeWriteAction({
   },
 });
 
-const createFromTemplate = defineStructureDurableSafeWriteAction({
+const createProject = Object.freeze({
+  ...createProjectDefinition,
+  ...STRUCTURE_API_METADATA.clockify_projects_create,
+});
+
+const createFromTemplateDefinition = defineStructureDurableSafeWriteAction({
   name: "clockify_projects_from_template",
   description:
     "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list), plus the new project's `name` (required by the API).",
@@ -312,10 +320,16 @@ const createFromTemplate = defineStructureDurableSafeWriteAction({
   },
 });
 
+const createFromTemplate = Object.freeze({
+  ...createFromTemplateDefinition,
+  ...STRUCTURE_API_METADATA.clockify_projects_from_template,
+});
+
 // ── Risky writes (preview → commit) ──────────────────────────────────────────
 
 const updateProject = defineRiskyAction({
   name: "clockify_projects_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_update,
   description:
     "Update a project's fields (rename, reassign client, billing, color, visibility). Pass the project's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -447,6 +461,7 @@ const updateProject = defineRiskyAction({
 
 const archiveProject = defineRiskyAction({
   name: "clockify_projects_archive",
+  ...STRUCTURE_API_METADATA.clockify_projects_archive,
   description:
     "Archive a project (hides it from active lists). Pass the project id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -504,6 +519,7 @@ const archiveProject = defineRiskyAction({
 
 const deleteProject = defineRiskyAction({
   name: "clockify_projects_delete",
+  ...STRUCTURE_API_METADATA.clockify_projects_delete,
   description:
     "Delete a project (archives first, then deletes — Clockify rejects deleting an active project). Pass the project id (preferred — list projects first to get it), or its exact name and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -612,6 +628,7 @@ const deleteProject = defineRiskyAction({
 
 const rateUpdate = defineRiskyAction({
   name: "clockify_projects_rate_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_rate_update,
   description:
     'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, the member by `userId`/`userName` (use "me" for the requesting admin), and `rateKind` as HOURLY or COST. The member must already be on the project. Billing action — previews and requires confirmation.',
   group: "invoices",
@@ -723,6 +740,7 @@ const rateUpdate = defineRiskyAction({
 
 const estimateUpdate = defineRiskyAction({
   name: "clockify_projects_estimate_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_estimate_update,
   description:
     "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -817,6 +835,7 @@ function membershipRequestRows(rows: Array<Record<string, unknown>>): Array<Reco
 
 const membershipsUpdate = defineRiskyAction({
   name: "clockify_projects_memberships_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_memberships_update,
   description:
     'Update who can access/track a project. To ADD members, pass `addUserIds` — use "me" for the requesting admin (the harness knows who is asking; never ask the admin who they are) — and the harness merges them into the current membership set. Passing `memberships` REPLACES the whole set. Pass the project `id` or its exact `name`. Elevated write — previews and requires confirmation.',
   group: "users_groups",

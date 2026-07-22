@@ -19,6 +19,7 @@ import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import { sanitizedFingerprint } from "../safe-json.js";
 import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /** Resolve a currency code or exact id to its workspace currencyId, or clarify. */
 async function resolveCurrencyId(
@@ -257,6 +258,7 @@ async function executeClientCreate(
 
 const listClients = defineReadAction({
   name: "clockify_clients_list",
+  ...STRUCTURE_API_METADATA.clockify_clients_list,
   description: "List clients (optional name / archived filter).",
   group: WORK,
   schema: z.object({ name: z.string().optional(), archived: z.boolean().optional() }),
@@ -274,6 +276,7 @@ const listClients = defineReadAction({
 
 const getClient = defineAction({
   name: "clockify_clients_get",
+  ...STRUCTURE_API_METADATA.clockify_clients_get,
   description: "Fetch a single client by id, or by its exact `name` (resolved server-side).",
   featureGroup: WORK,
   risks: ["read"],
@@ -306,6 +309,7 @@ const getClient = defineAction({
 
 const createClient = defineAction({
   name: "clockify_clients_create",
+  ...STRUCTURE_API_METADATA.clockify_clients_create,
   description:
     'Create a client (optional billing `ccEmails` + `currency` by code, e.g. "EUR", or exact currency id). Safe write — executes immediately when policy allows.',
   featureGroup: WORK,
@@ -324,6 +328,7 @@ const createClient = defineAction({
 
 const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
+  ...STRUCTURE_API_METADATA.clockify_clients_update,
   description:
     'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR" or exact id). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
   group: WORK,
@@ -427,6 +432,7 @@ const updateClient = defineRiskyAction({
 
 const deleteClient = defineRiskyAction({
   name: "clockify_clients_delete",
+  ...STRUCTURE_API_METADATA.clockify_clients_delete,
   description:
     "Delete a client (archives first, then deletes). Pass the client id, or its exact `name` and the harness resolves it. Fails if the client still has active projects. Previews and requires confirmation.",
   group: WORK,

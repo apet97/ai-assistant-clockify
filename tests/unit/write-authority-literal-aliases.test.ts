@@ -173,6 +173,42 @@ function projectCreateWithAliases(semanticLiteralAliases: readonly AliasDefiniti
   return { ...action, semanticLiteralAliases } as ActionDefinition;
 }
 
+function fingerprintContract(action: ActionDefinition) {
+  const hasApiMetadata = action.apiExposure !== undefined
+    || action.apiExposureReason !== undefined
+    || action.apiOperation !== undefined
+    || action.adapterEndpoints !== undefined
+    || action.availabilityByAuthClass !== undefined
+    || action.boundedArgumentDictionaries !== undefined
+    || action.materialFields !== undefined
+    || action.presentation !== undefined;
+  return {
+    name: action.name,
+    args: summarizeArgs(action.schema),
+    featureGroup: action.featureGroup,
+    risks: action.risks,
+    argumentAliases: action.argumentAliases ?? [],
+    argumentOpenPaths: action.argumentOpenPaths ?? [],
+    semanticLiteralAliases: action.semanticLiteralAliases ?? [],
+    mutationWorkflow: action.mutationWorkflow,
+    mutationContract: action.mutationContract,
+    writeAuthority: action.writeAuthority,
+    preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
+    ...(hasApiMetadata
+      ? {
+          apiExposure: action.apiExposure ?? null,
+          apiExposureReason: action.apiExposureReason ?? null,
+          apiOperation: action.apiOperation ?? null,
+          adapterEndpoints: action.adapterEndpoints ?? null,
+          availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+          boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
+          materialFields: action.materialFields ?? [],
+          presentation: action.presentation ?? null,
+        }
+      : {}),
+  };
+}
+
 describe("action-scoped semantic literal alias metadata", () => {
   it("advertises the reviewed project-member identity and rate aliases from the catalog contract", () => {
     const action = getAction("clockify_projects_rate_update");
@@ -288,36 +324,12 @@ describe("action-scoped semantic literal alias metadata", () => {
   it("binds alias metadata into action and ordered-catalog compatibility hashes", () => {
     const action = getAction("clockify_projects_create");
     if (!action) throw new Error("missing_project_create_action");
-    const contract = {
-      name: action.name,
-      args: summarizeArgs(action.schema),
-      featureGroup: action.featureGroup,
-      risks: action.risks,
-      argumentAliases: action.argumentAliases ?? [],
-      argumentOpenPaths: action.argumentOpenPaths ?? [],
-      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
-      mutationWorkflow: action.mutationWorkflow,
-      mutationContract: action.mutationContract,
-      writeAuthority: action.writeAuthority,
-      preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
-    };
+    const contract = fingerprintContract(action);
     expect(actionFingerprint(action.name)).toBe(
       createHash("sha256").update(JSON.stringify(contract)).digest("hex"),
     );
 
-    const contracts = ACTION_CATALOG.map((catalogAction) => ({
-      name: catalogAction.name,
-      args: summarizeArgs(catalogAction.schema),
-      featureGroup: catalogAction.featureGroup,
-      risks: catalogAction.risks,
-      argumentAliases: catalogAction.argumentAliases ?? [],
-      argumentOpenPaths: catalogAction.argumentOpenPaths ?? [],
-      semanticLiteralAliases: catalogAction.semanticLiteralAliases ?? [],
-      mutationWorkflow: catalogAction.mutationWorkflow,
-      mutationContract: catalogAction.mutationContract,
-      writeAuthority: catalogAction.writeAuthority,
-      preparedSafeWrite: !!catalogAction.prepareSafeWrite && !!catalogAction.executeSafeWrite,
-    }));
+    const contracts = ACTION_CATALOG.map(fingerprintContract);
     const expectedCatalogHash = createHash("sha256")
       .update(JSON.stringify(contracts))
       .digest("hex");

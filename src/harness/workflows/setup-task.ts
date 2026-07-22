@@ -18,6 +18,7 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { sanitizedFingerprint } from "../safe-json.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { SETUP_TASK_ASSIGNEE_BATCH_MAX } from "../safety-limits.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * `clockify_setup_task` — the task analog of `clockify_setup_project`. "Create a
@@ -51,6 +52,7 @@ type SetupTaskPayload = z.infer<typeof setupTaskPayloadSchema>;
 
 const setupTask = defineRiskyAction({
   name: "clockify_setup_task",
+  ...STRUCTURE_API_METADATA.clockify_setup_task,
   description:
     'Create a NEW task in an existing project AND set it up in one step — assign members (names or "me") and set the task\'s billable/cost rate — as ONE preview and ONE Confirm. Use this for "create a task in <project> and set its rate". For just creating or assigning a task with no rate, use clockify_tasks_create.',
   group: "work_structure",
