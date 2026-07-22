@@ -692,6 +692,7 @@ class ManagedProcessTests(unittest.TestCase):
         cases = {
             "findings": "sed -n '1,20p' FINDINGS.md",
             "push": "git push origin main",
+            "merge": "git merge feature-branch",
             "broad staging": "git add -A",
             "deployment": "npm run deploy:private-production",
             "live write": "LIVE_CLOCKIFY=1 npm run live:v2-full",
@@ -700,6 +701,19 @@ class ManagedProcessTests(unittest.TestCase):
             with self.subTest(name=name):
                 event = {"item": {"type": "command_execution", "command": command}}
                 self.assertIsNotNone(supervisor.audit_structured_event(event))
+
+    def test_structured_event_audit_allows_read_only_merge_base(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": (
+                    "git merge-base --is-ancestor "
+                    "d0f29bc90c28e42d052db441a414abcb37865681 HEAD"
+                ),
+            }
+        }
+
+        self.assertIsNone(supervisor.audit_structured_event(event))
 
     def test_findings_guard_denies_file_content_reads(self) -> None:
         supervisor.validate_findings_guard_support()

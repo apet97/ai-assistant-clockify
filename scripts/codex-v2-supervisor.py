@@ -1570,7 +1570,7 @@ def _agent_message_from_event(event: Any) -> str | None:
 FORBIDDEN_COMMAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bFINDINGS\.md\b"), "attempted FINDINGS.md access"),
     (
-        re.compile(r"\bgit\s+(?:push|pull|fetch|merge|tag)\b"),
+        re.compile(r"\bgit\s+(?:(?:push|pull|fetch|tag)\b|merge(?!-base(?=\s|$))\b)"),
         "forbidden remote or integration Git action",
     ),
     (
