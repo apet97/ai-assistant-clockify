@@ -1633,7 +1633,44 @@ def audit_structured_event(event: Any) -> str | None:
     return None
 
 
+def _unwrap_shell_script(command: str) -> str:
+    current = command
+    for _ in range(4):
+        try:
+            arguments = shlex.split(current)
+        except ValueError:
+            return current
+        if not arguments or PurePosixPath(arguments[0]).name not in {
+            "bash",
+            "dash",
+            "sh",
+            "zsh",
+        }:
+            return current
+        nested: str | None = None
+        option_index = 1
+        while option_index < len(arguments):
+            option = arguments[option_index]
+            if not option.startswith("-") or option == "--":
+                break
+            is_command_option = (
+                option.startswith("-")
+                and not option.startswith("--")
+                and "c" in option[1:]
+            ) or option == "--command"
+            if is_command_option:
+                if option_index + 1 < len(arguments):
+                    nested = arguments[option_index + 1]
+                break
+            option_index += 1
+        if nested is None:
+            return current
+        current = nested
+    return current
+
+
 def audit_git_staging(command: str, allowed: AllowedPathSpecs) -> str | None:
+    command = _unwrap_shell_script(command)
     for match in re.finditer(r"\bgit\s+add\s+([^;&|\n]+)", command):
         try:
             arguments = shlex.split(match.group(1))

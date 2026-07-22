@@ -537,6 +537,42 @@ class GitBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
             supervisor.validate_frozen_paths(("src/unrelated.ts",), allowed)
 
+    def test_git_staging_audit_parses_shell_wrapped_explicit_paths(self) -> None:
+        pack = supervisor.PromptPack.parse(PACK_TEXT)
+        allowed = supervisor.derive_allowed_path_specs(
+            pack.prompt("T01-D"), pack.required_contracts_for("T01-D"), ""
+        )
+
+        self.assertIsNone(
+            supervisor.audit_git_staging(
+                "/bin/zsh -lc 'git add -- AGENTS.md CLAUDE.md "
+                "scripts/evidence/release-evidence.ts "
+                "tests/unit/release-evidence.test.ts'",
+                allowed,
+            )
+        )
+        self.assertEqual(
+            supervisor.audit_git_staging(
+                "/bin/zsh -lc 'git add -- AGENTS.md src/unrelated.ts'",
+                allowed,
+            ),
+            "Git staging command exceeds frozen scope",
+        )
+        self.assertEqual(
+            supervisor.audit_git_staging(
+                "/bin/zsh --no-rcs -lc 'git add -- src/unrelated.ts'",
+                allowed,
+            ),
+            "Git staging command exceeds frozen scope",
+        )
+        self.assertEqual(
+            supervisor.audit_git_staging(
+                "git add -- src/unrelated.ts; /bin/zsh -lc 'echo reviewed'",
+                allowed,
+            ),
+            "Git staging command exceeds frozen scope",
+        )
+
     def test_named_unit_tests_resolve_from_the_focused_gate_only(self) -> None:
         prompt = supervisor.Prompt(
             "T01-D",
