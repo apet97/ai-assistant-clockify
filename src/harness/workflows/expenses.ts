@@ -12,6 +12,13 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { ExpenseCategorySummary, ExpenseSummary, PreparedExpenseUpdateInput } from "../../clockify/ports/expenses.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /** The harness owns calendar math — the model sends "today"/"yesterday", never a guessed date.
  *  `undefined` = unparseable; the caller must clarify (never send it to the wire). */
@@ -35,6 +42,236 @@ const DATE_CLARIFY = (raw: string) =>
  */
 
 const EXP = "expenses" as const;
+
+type ExpenseActionName =
+  | "clockify_expenses_list"
+  | "clockify_expenses_get"
+  | "clockify_expenses_categories_list"
+  | "clockify_expenses_create"
+  | "clockify_expenses_update"
+  | "clockify_expenses_delete"
+  | "clockify_expenses_categories_create"
+  | "clockify_expenses_categories_update"
+  | "clockify_expenses_categories_delete";
+
+const EXPENSE_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function expenseEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "expenses.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function expenseMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function expenseApiMetadata(input: {
+  actionName: ExpenseActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: EXPENSE_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function expenseInternalMetadata(input: {
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "composite",
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: EXPENSE_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const expenseEndpoint = Object.freeze({
+  list: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/expenses"),
+  get: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/expenses/{id}"),
+  create: expenseEndpointKey("write", "POST", "/workspaces/{workspaceId}/expenses"),
+  update: expenseEndpointKey("write", "PUT", "/workspaces/{workspaceId}/expenses/{id}"),
+  delete: expenseEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/expenses/{id}"),
+  categoriesList: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/expenses/categories"),
+  categoriesCreate: expenseEndpointKey("write", "POST", "/workspaces/{workspaceId}/expenses/categories"),
+  categoriesUpdate: expenseEndpointKey("write", "PUT", "/workspaces/{workspaceId}/expenses/categories/{id}"),
+  categoriesStatus: expenseEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/expenses/categories/{id}/status"),
+  categoriesDelete: expenseEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/expenses/categories/{id}"),
+  usersList: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  projectsList: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+  projectsGet: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  tasksList: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}/tasks", "tasks.ts"),
+  tasksGet: expenseEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}", "tasks.ts"),
+});
+
+const EXPENSE_API_METADATA = Object.freeze({
+  clockify_expenses_list: expenseApiMetadata({
+    actionName: "clockify_expenses_list",
+    operationId: "getExpenses",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/expenses",
+    access: "read",
+    primary: expenseEndpoint.list,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_expenses_get: expenseApiMetadata({
+    actionName: "clockify_expenses_get",
+    operationId: "getExpense",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/expenses/{id}",
+    access: "read",
+    primary: expenseEndpoint.get,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_expenses_categories_list: expenseApiMetadata({
+    actionName: "clockify_expenses_categories_list",
+    operationId: "getCategories",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/expenses/categories",
+    access: "read",
+    primary: expenseEndpoint.categoriesList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_expenses_create: expenseApiMetadata({
+    actionName: "clockify_expenses_create",
+    operationId: "createExpense",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/expenses",
+    access: "write",
+    primary: expenseEndpoint.create,
+    support: [
+      expenseEndpoint.categoriesList,
+      expenseEndpoint.usersList,
+      expenseEndpoint.projectsList,
+      expenseEndpoint.projectsGet,
+      expenseEndpoint.tasksList,
+      expenseEndpoint.tasksGet,
+      expenseEndpoint.list,
+    ],
+    materialFields: [
+      expenseMaterialField("/input/amountMinor", "Amount", "money-minor", true),
+      expenseMaterialField("/input/date", "Date", "text", true),
+      expenseMaterialField("/input/categoryId", "Category", "entity", true),
+      expenseMaterialField("/input/userId", "User", "entity", true),
+      expenseMaterialField("/input/notes", "Notes", "text", false),
+      expenseMaterialField("/input/billable", "Billable", "boolean", false),
+      expenseMaterialField("/input/projectId", "Project", "entity", false),
+      expenseMaterialField("/input/taskId", "Task", "entity", false),
+    ],
+  }),
+  clockify_expenses_update: expenseApiMetadata({
+    actionName: "clockify_expenses_update",
+    operationId: "updateExpense",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/expenses/{id}",
+    access: "write",
+    primary: expenseEndpoint.update,
+    support: [
+      expenseEndpoint.get,
+      expenseEndpoint.categoriesList,
+      expenseEndpoint.usersList,
+      expenseEndpoint.projectsList,
+      expenseEndpoint.projectsGet,
+      expenseEndpoint.tasksList,
+      expenseEndpoint.tasksGet,
+    ],
+    materialFields: [
+      expenseMaterialField("/id", "Expense", "entity", true),
+      expenseMaterialField("/values/amountMinor", "Amount", "money-minor", false),
+      expenseMaterialField("/values/date", "Date", "text", false),
+      expenseMaterialField("/values/categoryId", "Category", "entity", false),
+      expenseMaterialField("/values/notes", "Notes", "text", false),
+      expenseMaterialField("/values/billable", "Billable", "boolean", false),
+      expenseMaterialField("/values/projectId", "Project", "entity", false),
+      expenseMaterialField("/values/taskId", "Task", "entity", false),
+    ],
+  }),
+  clockify_expenses_delete: expenseApiMetadata({
+    actionName: "clockify_expenses_delete",
+    operationId: "deleteExpense",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/expenses/{id}",
+    access: "write",
+    primary: expenseEndpoint.delete,
+    support: [expenseEndpoint.get],
+    materialFields: [
+      expenseMaterialField("/id", "Expense", "entity", true),
+      expenseMaterialField("/notes", "Notes", "text", false),
+    ],
+  }),
+  clockify_expenses_categories_create: expenseApiMetadata({
+    actionName: "clockify_expenses_categories_create",
+    operationId: "createExpenseCategory",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/expenses/categories",
+    access: "write",
+    primary: expenseEndpoint.categoriesCreate,
+    support: [expenseEndpoint.categoriesList],
+    materialFields: [
+      expenseMaterialField("/name", "Category name", "text", true),
+    ],
+  }),
+  clockify_expenses_categories_update: expenseInternalMetadata({
+    reason: "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; Task 6 must expose the atomic operations separately.",
+    primary: [expenseEndpoint.categoriesUpdate, expenseEndpoint.categoriesStatus],
+    support: [expenseEndpoint.categoriesList],
+  }),
+  clockify_expenses_categories_delete: expenseInternalMetadata({
+    reason: "Archives an active category before deletion, so one invocation can contain two primary mutations; Task 6 must expose delete of an already archived category separately.",
+    primary: [expenseEndpoint.categoriesStatus, expenseEndpoint.categoriesDelete],
+    support: [expenseEndpoint.categoriesList],
+  }),
+} satisfies Readonly<Record<ExpenseActionName, ApiActionMetadataCarrier>>);
+
 const EXPENSE_BILLABLE_LITERAL_ALIASES = Object.freeze([
   { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
   { path: "billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
@@ -218,6 +455,7 @@ function sameExpense(row: ExpenseSummary, input: StoredExpense | PreparedExpense
 
 const listExpenses = defineAction({
   name: "clockify_expenses_list",
+  ...EXPENSE_API_METADATA.clockify_expenses_list,
   description:
     "List expenses. `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day/period (today, yesterday, last month — resolved server-side; never guess a calendar date).",
   featureGroup: EXP,
@@ -256,6 +494,7 @@ const listExpenses = defineAction({
 
 const getExpense = defineReadAction({
   name: "clockify_expenses_get",
+  ...EXPENSE_API_METADATA.clockify_expenses_get,
   description: "Fetch a single expense by id.",
   group: EXP,
   schema: z.object({ id: z.string().min(1) }),
@@ -272,6 +511,7 @@ const getExpense = defineReadAction({
 
 const listExpenseCategories = defineReadAction({
   name: "clockify_expenses_categories_list",
+  ...EXPENSE_API_METADATA.clockify_expenses_categories_list,
   description: "List expense categories.",
   group: EXP,
   schema: z.object({}),
@@ -289,6 +529,7 @@ const listExpenseCategories = defineReadAction({
 
 const createExpense = defineRiskyAction({
   name: "clockify_expenses_create",
+  ...EXPENSE_API_METADATA.clockify_expenses_create,
   description:
     "Create an expense. `date` accepts YYYY-MM-DD or a relative 'today'/'yesterday' (resolved server-side; defaults to today — never guess a calendar date). Pass `categoryId`, or the exact `categoryName` and the harness resolves it. Link a project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — also resolved server-side. Defaults to YOUR expense; to log it for another user pass their `userId` or exact `userName` (or 'me' for yourself). Billing action — previews and requires confirmation.",
   group: EXP,
@@ -460,6 +701,7 @@ const createExpense = defineRiskyAction({
 
 const updateExpense = defineRiskyAction({
   name: "clockify_expenses_update",
+  ...EXPENSE_API_METADATA.clockify_expenses_update,
   description:
     "Update an expense. Category/project/task accept an id or the exact name (`categoryName`/`projectName`/`taskName`) — resolved server-side. Billing action — previews and requires confirmation.",
   group: EXP,
@@ -585,6 +827,7 @@ const updateExpense = defineRiskyAction({
 
 const deleteExpense = defineRiskyAction({
   name: "clockify_expenses_delete",
+  ...EXPENSE_API_METADATA.clockify_expenses_delete,
   description: "Delete an expense. Destructive billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["destructive", "billing"],
@@ -621,6 +864,7 @@ const deleteExpense = defineRiskyAction({
 
 const createExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_create",
+  ...EXPENSE_API_METADATA.clockify_expenses_categories_create,
   description: "Create an expense category. Billing action — previews and requires confirmation.",
   group: EXP,
   risks: ["billing"],
@@ -690,6 +934,7 @@ const createExpenseCategory = defineRiskyAction({
 
 const updateExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_update",
+  ...EXPENSE_API_METADATA.clockify_expenses_categories_update,
   description:
     "Rename and/or archive/unarchive an expense category. Pass the category `id` or its exact `currentName` (the harness resolves it); `name` sets a new name, `archived` archives (true) or restores (false). Billing action — previews and requires confirmation.",
   group: EXP,
@@ -794,6 +1039,7 @@ const updateExpenseCategory = defineRiskyAction({
 
 const deleteExpenseCategory = defineRiskyAction({
   name: "clockify_expenses_categories_delete",
+  ...EXPENSE_API_METADATA.clockify_expenses_categories_delete,
   description:
     "Delete an expense category. Pass the category id, or its exact `name` and the harness resolves it. Destructive billing action — previews and requires confirmation.",
   group: EXP,
