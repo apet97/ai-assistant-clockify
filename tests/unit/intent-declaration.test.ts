@@ -892,12 +892,12 @@ describe("declareIntentCapability", () => {
   });
 
   it("computes immutable UTF-8 capability spans from unambiguous model source quotes", async () => {
-    const currentText = "Napravi public projekat Žetva.";
+    const currentText = "Create public project Žetva.";
     const capability = await declareIntentCapability({
       modelClient: nativeModel({
         writeActions: [{
           actionName: "clockify_projects_create",
-          sourceRefs: [{ segment: "current", quote: "Napravi public projekat Žetva" }],
+          sourceRefs: [{ segment: "current", quote: "Create public project Žetva" }],
           literalConstraints: [
             { path: "name", value: "Žetva", sourceRef: { segment: "current", quote: "Žetva" } },
             { path: "isPublic", value: true, sourceRef: { segment: "current", quote: "public" } },
@@ -985,11 +985,11 @@ describe("declareIntentCapability", () => {
     expect(capability).toMatchObject({ mode: "deny_all_writes", reason: "declaration_invalid" });
   });
 
-  it("uses UTF-8 byte offsets and validates Serbian Latin, diacritics, and Cyrillic exactly", async () => {
-    const currentText = "Preimenuj projekat u Žetva za тим Београд.";
+  it("uses UTF-8 byte offsets and validates Latin diacritics and Cyrillic data exactly", async () => {
+    const currentText = "Rename project to Žetva for team Београд.";
     const span = byteSpan(currentText, "Žetva");
     const cyrillicSpan = byteSpan(currentText, "Београд");
-    const actionSpan = byteSpan(currentText, "Preimenuj");
+    const actionSpan = byteSpan(currentText, "Rename");
     const payload = {
       writeActions: [{
         actionName: "clockify_projects_update",
@@ -1629,7 +1629,7 @@ describe("declareIntentCapability", () => {
     const allNames = ACTION_CATALOG.map((action) => action.name);
     const inputs = [
       "xqz pllk nnnn",
-      "обриши пројекат Чукрица",
+      "delete project Београд",
       "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme",
     ];
     for (const currentText of inputs) {
@@ -1666,7 +1666,7 @@ describe("declareIntentCapability", () => {
 
     for (const currentText of [
       "xqz pllk nnnn",
-      "обриши пројекат Чукрица",
+      "delete project Београд",
       "deactivate John, log a travel expense of 200, schedule Mary next week, and create an invoice for Acme",
     ]) {
       const payload = await capturePayload(currentText);

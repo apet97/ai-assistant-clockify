@@ -103,7 +103,7 @@ const SYNONYMS: Record<string, string[]> = {
   time_tracking: "timer time track tracking log hours hour clock stopwatch start stop running entry entries duration billable".split(
     " ",
   ),
-  work_structure: "project projects task tasks subtask client clients tag tags label milestone projekat projekti zadatak zadaci klijent klijenti oznaka oznake".split(" "),
+  work_structure: "project projects task tasks subtask client clients tag tags label milestone".split(" "),
   reports: "report reports summary total totals breakdown weekly monthly analytics dashboard export".split(" "),
   invoices: "invoice invoices bill billing charge payment paid due receivable".split(" "),
   expenses: "expense expenses cost costs spend spending receipt reimburse reimbursement".split(" "),

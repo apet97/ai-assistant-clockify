@@ -8,12 +8,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, the single construction-time seam, and historical-v1 evidence quarantine.
-- T02-B is complete: an independent source/runtime contract pins no language UI/branch, `lang="en"`, one fixed `EN_US_LOCALE`, verified timezone retention, and Unicode `textContent` rendering.
+- T02-C is complete: Task 2 runtime sources contain no Serbian interface/router branch, and the eight Serbian v1 selector tokens are removed.
 - `UiPreferences` remains exactly `{theme,timeZone?}`; retained localStorage/cookies accept then drop valid legacy `language`, and Clockify language claims remain ignored.
+- Generic non-ASCII selector input still fails open; English-prose Latin/Cyrillic fixtures retain UTF-8 byte-span, authority, and retention coverage.
 - Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 gates passed: T02-B focus 78 tests; type-check; lint; documentation/diff checks.
-- No model call, deployment, live proof, or external action occurred. Next: T02-C.
+- Node 22 gates passed: T02-C focus 221 tests; type-check; lint; documentation/diff checks.
+- No model call, deployment, live proof, or external action occurred. Next: T02-D.
 
 ## Start here
 
@@ -65,9 +66,10 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
 - **Tool selection:** `LLM_TOOL_SELECT` is default-on (`=0` rolls back) and applies
   on chat and confirmation resume. Focused ASCII requests receive a relevant subset
   plus the always-on core; no lexical match, non-ASCII input, or more than three
-  areas fails open to the full catalog. Chat may use one full-catalog recall retry;
-  resume may not. Unresolved admin-authored clarification context survives terse
-  follow-ups and resume. Implementation: `src/harness/tool-select.ts`; measurements:
+  areas fails open to the full catalog. Its curated vocabulary has no Serbian-specific
+  router tokens; generic non-ASCII fail-open remains until v1 removal. Chat may use
+  one full-catalog recall retry; resume may not. Unresolved admin-authored clarification
+  context survives terse follow-ups and resume. Implementation: `src/harness/tool-select.ts`; measurements:
   `scripts/eval-matrix.ts`, `scripts/eval-agentic.ts`, and the exact-source evidence
   under `evidence/performance/`.
 - **Private-production target: Railway** (Nixpacks → `npm run build` → `npm start`, liveness
@@ -294,8 +296,9 @@ bug was found against the REAL API, not by reading the code.
   ignored, and verified theme/timezone remain. The UI sets `lang="en"`, formats
   through one fixed `EN_US_LOCALE`, and keeps arbitrary Unicode workspace data in
   `textContent` without transformation. `tests/unit/english-interface-contract.test.ts`
-  independently pins that source/runtime boundary; protocol timezone validation
-  is locale-neutral because its formatted value is discarded.
+  independently pins that source/runtime boundary, including the absent Serbian
+  locale/router branches; protocol timezone validation is locale-neutral because
+  its formatted value is discarded.
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 - `src/public-documents.ts` renders script-free public Privacy, Support, and

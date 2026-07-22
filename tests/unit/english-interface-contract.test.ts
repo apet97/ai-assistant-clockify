@@ -17,18 +17,32 @@ const protocolSource = source("../../src/ui/protocol.ts");
 const apiSource = source("../../src/routes/api.ts");
 const contractsSource = source("../../src/shared/contracts.ts");
 const preferencesSource = source("../../src/ui-preferences.ts");
+const sessionsSource = source("../../src/auth/sessions.ts");
 const componentSource = source("../../src/routes/component.ts");
+const toolSelectSource = source("../../src/harness/tool-select.ts");
 const uiRuntimeSource = [productSource, mainSource, renderSource, protocolSource, apiSource].join("\n");
 const languageFreeRuntimeSource = [mainSource, renderSource, protocolSource, apiSource].join("\n");
+const task2RuntimeSource = [
+  contractsSource,
+  preferencesSource,
+  sessionsSource,
+  componentSource,
+  uiRuntimeSource,
+  toolSelectSource,
+].join("\n");
 const forbiddenLocaleRuntimePatterns = [
-  /\bUiLanguage\b/u,
-  /sr-Latn-RS/u,
   /\bintlLocale\b/u,
   /[(,][\t\n\r ]*language[\t\n\r ]*:/u,
   /\blanguage\s*={2,3}\s*["']sr["']/u,
   /case\s+["']sr["']/u,
   /documentElement\??\.lang\s*={2,3}\s*["']sr["']/u,
   /\b(?:preferences|deps)\.language\b/u,
+];
+const forbiddenTask2RuntimePatterns = [
+  /\bUiLanguage\b/u,
+  /sr-Latn-RS/u,
+  /\blanguage=(?:en|sr)\b/u,
+  /\b(?:projekat|projekti|zadatak|zadaci|klijent|klijenti|oznaka|oznake)\b/u,
 ];
 
 describe("English interface source/runtime contract", () => {
@@ -37,6 +51,7 @@ describe("English interface source/runtime contract", () => {
     expect(productSource).toContain('export const EN_US_LOCALE = "en-US";');
     expect(uiRuntimeSource.match(/["']en-US["']/gu)).toEqual(['"en-US"']);
     for (const forbidden of forbiddenLocaleRuntimePatterns) expect(uiRuntimeSource).not.toMatch(forbidden);
+    for (const forbidden of forbiddenTask2RuntimePatterns) expect(task2RuntimeSource).not.toMatch(forbidden);
     expect(productSource).toContain("new Intl.DateTimeFormat(EN_US_LOCALE");
     expect(productSource).toContain("new Intl.NumberFormat(EN_US_LOCALE");
     expect(renderSource).toContain("new Intl.RelativeTimeFormat(EN_US_LOCALE");
