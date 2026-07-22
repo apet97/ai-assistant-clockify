@@ -103,6 +103,27 @@ function validReleaseAttachments(): Pick<
 }
 
 describe("release evidence", () => {
+  it("classifies existing conclusions as historical v1 evidence and rejects v2 reuse without changing hashes", () => {
+    const attachments = validReleaseAttachments();
+    const input = {
+      sourceCandidateSha: CANDIDATE_SHA,
+      evidenceCommitSha: EVIDENCE_SHA,
+      machineConclusions: {},
+      ...attachments,
+    };
+    const reportHashes = attachments.coldVerifies.passes.map(({ reportSha256 }) => reportSha256);
+
+    expect(buildReleaseEvidence(input, "v1")).toMatchObject({
+      assistantEngine: "v1",
+      evidenceStatus: "historical",
+      validForV2: false,
+    });
+    expect(() => buildReleaseEvidence(input, "v2")).toThrow(
+      /historical v1 evidence is not valid for v2/iu,
+    );
+    expect(attachments.coldVerifies.passes.map(({ reportSha256 }) => reportSha256)).toEqual(reportHashes);
+  });
+
   it("records machine conclusions while keeping every human gate unevaluated", () => {
     const evidence = buildReleaseEvidence({
       sourceCandidateSha: CANDIDATE_SHA,

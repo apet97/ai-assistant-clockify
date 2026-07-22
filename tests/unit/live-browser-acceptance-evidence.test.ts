@@ -123,6 +123,30 @@ function sanitizedTrace() {
 }
 
 describe("production browser acceptance evidence", () => {
+  it("classifies existing conclusions as historical v1 evidence and rejects v2 reuse without changing hashes", () => {
+    const member = memberDenialEvidence();
+    const artifact = browserEvidence(member);
+    const artifactHash = hashCanonicalJson(artifact);
+
+    expect(validateLiveBrowserAcceptanceEvidence({
+      evidence: artifact,
+      memberDenialEvidence: member,
+      deployedVersion: deployedVersion(),
+      expectedCandidateSha: SHA.candidate,
+    }, "v1")).toMatchObject({
+      assistantEngine: "v1",
+      evidenceStatus: "historical",
+      validForV2: false,
+    });
+    expect(() => validateLiveBrowserAcceptanceEvidence({
+      evidence: artifact,
+      memberDenialEvidence: member,
+      deployedVersion: deployedVersion(),
+      expectedCandidateSha: SHA.candidate,
+    }, "v2")).toThrow(/historical v1 evidence is not valid for v2/iu);
+    expect(hashCanonicalJson(artifact)).toBe(artifactHash);
+  });
+
   it("records final evidence from one strict sanitized automation result without hand-authored source binding", () => {
     const member = memberDenialEvidence();
     const recorded = recordLiveBrowserAcceptanceEvidence({

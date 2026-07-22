@@ -17,16 +17,16 @@ actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 
 Fast path: use `README.md` for product/setup, `CLAUDE.md` for invariants and API
 facts, `DEPLOYMENT.md` for recovery/release operations, and
-`MARKETPLACE_READINESS.md` for exact evidence. Do not duplicate those documents
+`MARKETPLACE_READINESS.md` for historical v1 evidence. Do not duplicate those documents
 here; this file is the execution map.
 
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- T01-A records the architecture-only contract in `docs/adr/001-api-agent-v2.md`.
-- T01-B adds the atomic `ASSISTANT_ENGINE=v1|v2` config and secret-free `/version` engine metadata; Node 22 focused tests (48), type-check, and lint passed.
-- T01-C adds the single construction-time v1/v2 pipeline seam. V1 remains the unchanged default; v2 returns deterministic `not_ready` for new turns and disables model resume while preserving confirmation execution.
-- Node 22 focused route tests (25), type-check, cycles, and lint passed. No v2 runner, release evidence, deployment, live proof, or external action exists. Next: T01-D.
+- Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, one construction-time seam, and historical-v1 evidence quarantine.
+- V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
+- Existing evidence hashes stay unchanged; conclusions identify historical v1 and reject a v2 target before parsing.
+- Node 22 gates passed: evidence 60; config/env/routes 52; type-check; lint; `verify` 268 files/3,183 tests; diff checks. No live/external action. Next: T02-A.
 
 ## Non-negotiable invariants
 
@@ -156,6 +156,10 @@ npm run dev           # tsx src/server.ts (needs env)
 
 ## Release evidence boundaries
 
+- All currently accepted DeepSeek, private-production, live-browser, and aggregate
+  release artifacts are historical v1 evidence only. Validators preserve their
+  input schemas/hashes, classify derived conclusions as historical v1, and reject
+  any v2 target before parsing; none can establish a v2 conclusion.
 - Push/PR CI runs `audit:prod`, `license:prod`, and `verify`, and retains the
   CycloneDX SBOM plus production-license report. Dependency review, gitleaks, and
   CodeQL remain separate automated checks.

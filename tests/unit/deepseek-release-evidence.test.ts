@@ -404,6 +404,34 @@ describe("DeepSeek release evidence", () => {
     expect(binding).toEqual(input.binding);
   });
 
+  it("classifies existing conclusions as historical v1 evidence and rejects v2 reuse without changing hashes", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+    const input = fixture();
+    const hashes = {
+      capabilityProbe: sha256(input.capabilityProbeRawJson),
+      baseline: sha256(input.baselineRawJson),
+      candidate: sha256(input.candidateRawJson),
+      focusedRead: sha256(input.focusedReadRawJson),
+      focusedRiskyPreview: sha256(input.focusedRiskyPreviewRawJson),
+    };
+
+    expect(validateDeepSeekReleaseEvidence(input, "v1")).toMatchObject({
+      assistantEngine: "v1",
+      evidenceStatus: "historical",
+      validForV2: false,
+    });
+    expect(() => validateDeepSeekReleaseEvidence(input, "v2")).toThrow(
+      /historical v1 evidence is not valid for v2/iu,
+    );
+    expect({
+      capabilityProbe: sha256(input.capabilityProbeRawJson),
+      baseline: sha256(input.baselineRawJson),
+      candidate: sha256(input.candidateRawJson),
+      focusedRead: sha256(input.focusedReadRawJson),
+      focusedRiskyPreview: sha256(input.focusedRiskyPreviewRawJson),
+    }).toEqual(hashes);
+  });
+
   it("records a complete rejected lower-effort cohort and selects production-default", async () => {
     const { buildDeepSeekBinding, validateDeepSeekReleaseEvidence } = await validator();
     const input = fallbackFixture();

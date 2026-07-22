@@ -8,6 +8,27 @@ import type { ReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
 export { buildColdVerifyEvidence } from "./cold-verify-evidence.js";
 export { validateReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
 
+export type EvidenceTargetAssistantEngine = "v1" | "v2";
+
+export interface HistoricalV1EvidenceClassification {
+  assistantEngine: "v1";
+  evidenceStatus: "historical";
+  validForV2: false;
+}
+
+export function classifyHistoricalV1Evidence(
+  targetAssistantEngine: EvidenceTargetAssistantEngine,
+): HistoricalV1EvidenceClassification {
+  if (targetAssistantEngine !== "v1") {
+    throw new Error("historical v1 evidence is not valid for v2");
+  }
+  return {
+    assistantEngine: "v1",
+    evidenceStatus: "historical",
+    validForV2: false,
+  };
+}
+
 const MACHINE_GATE_KEYS = [
   "verify",
   "reviewedPullRequest",
@@ -51,7 +72,7 @@ interface ReleaseEvidenceInput {
   coldVerifies: ColdVerifyEvidence;
 }
 
-export interface ReleaseEvidence {
+export interface ReleaseEvidence extends HistoricalV1EvidenceClassification {
   sourceCandidateSha: string;
   evidenceCommitSha: string;
   machineGates: Record<MachineGate, MachineStatus>;
@@ -70,7 +91,11 @@ function machineStatus(value: unknown): MachineStatus {
   }
 }
 
-export function buildReleaseEvidence(input: ReleaseEvidenceInput): ReleaseEvidence {
+export function buildReleaseEvidence(
+  input: ReleaseEvidenceInput,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
+): ReleaseEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(input.sourceCandidateSha)) {
     throw new Error("release evidence requires a full lowercase source candidate SHA");
   }
@@ -127,6 +152,7 @@ export function buildReleaseEvidence(input: ReleaseEvidenceInput): ReleaseEviden
   ])) as ReleaseEvidence["humanGates"];
 
   return {
+    ...classification,
     sourceCandidateSha: input.sourceCandidateSha,
     evidenceCommitSha: input.evidenceCommitSha,
     machineGates,
@@ -170,7 +196,7 @@ function main(): void {
       liveBrowserAcceptance: process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE,
       productionAuditHostClearance: process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE,
     },
-  });
+  }, "v1");
   writeDeterministicJson(outputPath, evidence);
 }
 

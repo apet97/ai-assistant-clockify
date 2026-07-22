@@ -1,9 +1,11 @@
-# Marketplace readiness - version 1.0.0
+# Marketplace readiness - historical v1 version 1.0.0
 
-This repository is being completed through the private-production release candidate
-and stopped immediately before the Marketplace **Submit for Review** action. A checked
-box or workflow definition is not evidence by itself. The release is pre-Marketplace
-complete only when every engineering row in
+This document preserves the v1 private-production release-candidate criteria and
+the stop immediately before the Marketplace **Submit for Review** action. Every
+artifact and conclusion referenced here is historical v1 evidence and is invalid
+for v2; no v2 release evidence or readiness conclusion exists. A checked box or
+workflow definition is not evidence by itself. The historical v1 release is
+pre-Marketplace complete only when every engineering row in
 [`docs/marketplace/evidence/release-candidate.md`](./docs/marketplace/evidence/release-candidate.md)
 is backed by evidence for the exact tested and deployed source candidate. A pull-request
 head may be a descendant only when the checked-in validator proves every intervening
@@ -113,5 +115,8 @@ engineering evidence and must be complete before this handoff.
   conclusions through GitHub's API. Its immutable record also embeds the three cold-pass
   test counts and report hashes. It intentionally leaves the three administrative
   decisions unevaluated; it does not deploy, approve, or submit the add-on.
+- The current evidence validators classify every derived conclusion as historical
+  v1 and reject a v2 target before parsing. Existing report bytes and hashes were
+  not regenerated; fresh v2 evidence must be produced by later authorized work.
 - Tokens, prompts, headers, customer data, raw model responses, and contractual or
   personal contact material must not be pasted into this checklist or committed.

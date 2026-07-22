@@ -1,13 +1,16 @@
-# Release-candidate evidence - version 1.0.0
+# Historical v1 release-candidate evidence - version 1.0.0
 
-Status: **IN PROGRESS - NO ROW IN THIS TEMPLATE IMPLIES A PASS**
+Status: **HISTORICAL V1 TEMPLATE - NO ROW IMPLIES A PASS; NOT VALID FOR V2**
 
-This checked-in document is the release-evidence schema/index. The final values belong
-in the immutable GitHub Actions `release-evidence` artifact or PR attachment; committing
-the final SHA into this file would create a self-reference and change the SHA. Replace
-`PENDING CURRENT RUN` only in that external copy, backed by the exact evidence reference.
+This checked-in document preserves the historical v1 release-evidence schema/index.
+In that v1 process, final values belonged in the immutable GitHub Actions
+`release-evidence` artifact or PR attachment; committing the final SHA here would
+have created a self-reference and changed the SHA. `PENDING CURRENT RUN` was to be
+replaced only in that external v1 copy, backed by the exact evidence reference.
 Do not paste secrets, prompts, customer data, raw responses, contact details, or contract
-text. The Marketplace **Submit for Review** action must remain unperformed.
+text. All referenced artifacts and conclusions are historical v1 evidence; their
+bytes/hashes remain untouched for rollback, and none can support a v2 conclusion.
+The Marketplace **Submit for Review** action must remain unperformed.
 
 ## Candidate identity
 
@@ -135,7 +138,7 @@ raw provider response.
 | Known P1/P2 correctness, safety, accessibility, performance, or release defects | PENDING CURRENT RUN |
 | Worktree contains only intentional release changes; `FINDINGS.md` untouched | PENDING CURRENT RUN |
 | Tested source-candidate SHA and archive hash exposed by `/version` and deployed; any different reviewed head is validated evidence-only | PENDING CURRENT RUN |
-| Engineering status | PENDING CURRENT RUN - may become `ENGINEERING COMPLETE` only when every engineering row above is `PASSED` |
+| Engineering status | HISTORICAL V1 ONLY - the external v1 record may say `ENGINEERING COMPLETE` only when every engineering row above is `PASSED`; never valid for v2 |
 | Marketplace submission | NOT PERFORMED - required stop point |
 
 ## Three-package admin handoff

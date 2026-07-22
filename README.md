@@ -9,11 +9,13 @@ The model never executes anything itself and never sees a secret. It can only
 *suggest* named actions from a fixed catalog — the backend decides what (if
 anything) runs.
 
-Version 1.0.0 targets the private-production, pre-Marketplace release-candidate
-state; Marketplace submission has not occurred. Treat only the exact-run record in
+Version 1.0.0 materials describe the historical v1 private-production,
+pre-Marketplace release candidate; Marketplace submission did not occur. The
+exact-run record in
 [`docs/marketplace/evidence/release-candidate.md`](./docs/marketplace/evidence/release-candidate.md)
-as current status, using [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md)
-for the acceptance criteria.
+is v1 rollback/history context only, using
+[`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) for its historical
+acceptance criteria. It cannot establish a v2 conclusion.
 
 The accepted architecture for the future atomic API agent is
 [`ADR 001`](./docs/adr/001-api-agent-v2.md). It is an architecture contract, not
@@ -108,11 +110,11 @@ stays a thin, replaceable translator:
 - **Operational metrics** (`GET /api/metrics`, including per-turn token/latency
   telemetry) and **eval harnesses** (`scripts/eval-planner.ts`,
   `scripts/eval-agentic.ts`) that score planner accuracy, write safety, latency,
-  cache-hit tokens, and run-to-run consistency. The release evidence binds the
-  configured DeepSeek result to the exact candidate; historical claims are not a
-  substitute for that run.
-- **DeepSeek release configuration on an OpenAI-compatible client** — the 1.0.0
-  release keeps DeepSeek through `LLM_BASE_URL`/`LLM_MODEL`; provider quirks
+  cache-hit tokens, and run-to-run consistency. Historical v1 release evidence
+  binds the configured DeepSeek result to its exact v1 candidate; it is not valid
+  for a v2 conclusion or a substitute for fresh v2 evidence.
+- **Historical v1 DeepSeek release configuration on an OpenAI-compatible client** —
+  the version 1.0.0 v1 release kept DeepSeek through `LLM_BASE_URL`/`LLM_MODEL`; provider quirks
   (DeepSeek `reasoning_content` and optional `thinking`, Gemini 3.x
   `thought_signature`, and `reasoning_effort`) are handled in one place and inert
   elsewhere. Backend configurability remains available to self-hosters, but version
@@ -192,12 +194,12 @@ See [`.env.example`](./.env.example) for the full list. Key variables: `PORT`,
 `BASE_URL`, `CLOCKIFY_ADDON_KEY`, `SESSION_SECRET`, `DATA_ENCRYPTION_KEY`
 (32-byte key for token encryption), `DATABASE_PATH`, and `LLM_BASE_URL` /
 `LLM_API_KEY` / `LLM_MODEL` for the OpenAI-compatible model endpoint.
-DeepSeek V4 production keeps HTTP tool mode with `LLM_AGENTIC=1`,
-`LLM_TOOL_SELECT=1`, and the thinking setting selected by the fresh final-source
+The v1 DeepSeek V4 runtime keeps HTTP tool mode with `LLM_AGENTIC=1`,
+`LLM_TOOL_SELECT=1`, and the thinking setting selected by the historical final-source
 `deepseek-release-binding.json`. Set `LLM_THINKING_MODE=disabled` exactly when
 that binding reports `modelConfiguration.thinkingMode: "disabled"`; otherwise
 leave it absent. The five-run safety, latency, and cache comparison is
-machine-bound and fail-closed; historical context is in
+machine-bound and fail-closed for v1 only; historical context is in
 [`evidence/performance/deepseek-v4-pro-2026-07-18.md`](./evidence/performance/deepseek-v4-pro-2026-07-18.md).
 `CLOCKIFY_ADDON_PUBLIC_KEY_PEM` is **optional** — Clockify's fixed platform
 token-signing key is built in; only set it to target a non-production Clockify

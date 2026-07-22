@@ -7,10 +7,11 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 ## Current v2 implementation checkpoint
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
-- T01-A records the architecture-only contract in `docs/adr/001-api-agent-v2.md`.
-- T01-B adds the atomic `ASSISTANT_ENGINE=v1|v2` config and secret-free `/version` engine metadata; Node 22 focused tests (48), type-check, and lint passed.
-- T01-C adds the single construction-time v1/v2 pipeline seam. V1 remains the unchanged default; v2 returns deterministic `not_ready` for new turns and disables model resume while preserving confirmation execution.
-- Node 22 focused route tests (25), type-check, cycles, and lint passed. No v2 runner, release evidence, deployment, live proof, or external action exists. Next: T01-D.
+- Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, the single construction-time seam, and historical-v1 evidence quarantine.
+- V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
+- Existing evidence inputs and hashes remain unchanged; derived conclusions are `assistantEngine=v1`, `evidenceStatus=historical`, `validForV2=false`, and a v2 target fails closed.
+- Node 22 gates passed: evidence focus 60 tests; config/env/routes 52 tests; type-check; lint; `verify` 268 files/3,183 tests; diff checks.
+- No evidence generation, model call, deployment, live proof, or external action occurred. Next: T02-A.
 
 ## Start here
 
@@ -34,10 +35,10 @@ fixed catalog; a deterministic harness validates every proposal against per-admi
 permissions and a risk policy and is the only thing that touches Clockify. The
 model never executes anything itself and never sees a secret.
 
-**Target state:** version 1.0.0 is the private-production, pre-Marketplace release
-candidate; Marketplace submission has not occurred. Current completion and
-deployment status come only from the exact-run evidence referenced by
-`MARKETPLACE_READINESS.md`.
+**Historical release state:** version 1.0.0 materials describe the v1
+private-production, pre-Marketplace release candidate; Marketplace submission did
+not occur. They are rollback/history context, not current v2 completion or
+deployment evidence. V2 requires fresh evidence after its authorized cutover work.
 
 - **Gate:** `npm run verify` runs both TypeScript projects, the full test/build
   suite, a zero-warning typed **ESLint** gate, madge circular-dependency analysis,
@@ -50,10 +51,10 @@ deployment status come only from the exact-run evidence referenced by
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).
-- **Model:** the production release keeps DeepSeek V4 Pro through the existing
-  OpenAI-compatible HTTP client, native tool mode, `LLM_AGENTIC=1`, and
-  `LLM_TOOL_SELECT=1`. The selected 1.0.0 thinking setting comes only from the
-  fresh final-source `deepseek-release-binding.json`: configure
+- **Historical v1 model evidence:** the version 1.0.0 release kept DeepSeek V4 Pro
+  through the existing OpenAI-compatible HTTP client, native tool mode,
+  `LLM_AGENTIC=1`, and `LLM_TOOL_SELECT=1`. The selected 1.0.0 thinking setting
+  came only from the then-final-source `deepseek-release-binding.json`: configure
   `LLM_THINKING_MODE=disabled` exactly when its
   `modelConfiguration.thinkingMode` is `disabled`, otherwise leave the variable
   absent. The release gate fail-closes on any write-safety or latency regression.
@@ -657,6 +658,12 @@ production audit/license, CodeQL, gitleaks,
 production AUDIT-host clearance. Only the three admin packages named above are
 human `not_evaluated` gates. Workflow presence is not sign-off, deployment
 evidence, or Marketplace approval; no workflow deploys or submits the add-on.
+
+All artifacts accepted by the current DeepSeek, private-production, live-browser,
+and aggregate release validators are historical v1 evidence. Their derived
+conclusions carry `assistantEngine: "v1"`, `evidenceStatus: "historical"`, and
+`validForV2: false`; requesting a v2 conclusion is rejected before artifact
+parsing. Legacy input schemas and recorded hashes remain unchanged for v1 rollback.
 
 ## Runtime constraints
 

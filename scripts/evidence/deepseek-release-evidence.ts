@@ -8,6 +8,11 @@ import {
   AGENTIC_CASES,
   RELEASE_INTENT_PATH_CASE_ID,
 } from "../eval/agentic-cases.js";
+import {
+  classifyHistoricalV1Evidence,
+  type EvidenceTargetAssistantEngine,
+  type HistoricalV1EvidenceClassification,
+} from "./release-evidence.js";
 import { writeDeterministicJson } from "./write-json.js";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -140,7 +145,7 @@ export interface DeepSeekEvidenceInput {
   now?: Date;
 }
 
-export interface DeepSeekReleaseEvidence {
+export interface DeepSeekReleaseEvidence extends HistoricalV1EvidenceClassification {
   schemaVersion: 2;
   kind: "deepseek-release-validation";
   conclusion: "passed";
@@ -1476,6 +1481,7 @@ function benchmarkEvidence(
   focusedRiskyPreviewRawJson: string,
   evidenceCommitShaValue: string,
   now: Date | undefined,
+  classification: HistoricalV1EvidenceClassification,
   requireFresh: boolean,
 ): DeepSeekBenchmarkEvidence {
   const binding = parseBinding(bindingValue);
@@ -1528,6 +1534,7 @@ function benchmarkEvidence(
   const medianRegressionPercent = regressionPercent(candidate.p50Ms, baseline.p50Ms);
   const p95RegressionPercent = regressionPercent(candidate.p95Ms, baseline.p95Ms);
   return {
+    ...classification,
     schemaVersion: 2,
     kind: "deepseek-release-validation",
     conclusion: "passed",
@@ -1666,7 +1673,9 @@ function verifyDeployedVersion(
 
 export function validateDeepSeekBenchmarkEvidence(
   input: Omit<DeepSeekEvidenceInput, "deployedVersion">,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
 ): DeepSeekBenchmarkEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   return benchmarkEvidence(
     input.binding,
     input.capabilityProbeRawJson,
@@ -1676,11 +1685,16 @@ export function validateDeepSeekBenchmarkEvidence(
     input.focusedRiskyPreviewRawJson,
     input.evidenceCommitSha,
     input.now,
+    classification,
     false,
   );
 }
 
-export function validateDeepSeekReleaseEvidence(input: DeepSeekEvidenceInput): DeepSeekReleaseEvidence {
+export function validateDeepSeekReleaseEvidence(
+  input: DeepSeekEvidenceInput,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
+): DeepSeekReleaseEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   const benchmark = benchmarkEvidence(
     input.binding,
     input.capabilityProbeRawJson,
@@ -1690,6 +1704,7 @@ export function validateDeepSeekReleaseEvidence(input: DeepSeekEvidenceInput): D
     input.focusedRiskyPreviewRawJson,
     input.evidenceCommitSha,
     input.now,
+    classification,
     true,
   );
   verifyDeployedVersion(input.deployedVersion, benchmark.testedCandidateSha, benchmark.modelConfiguration);
@@ -1786,11 +1801,11 @@ function main(): void {
   };
   const benchmarkOnly = process.argv.includes("--benchmark-only");
   const evidence = benchmarkOnly
-    ? validateDeepSeekBenchmarkEvidence(common)
+    ? validateDeepSeekBenchmarkEvidence(common, "v1")
     : validateDeepSeekReleaseEvidence({
         ...common,
         deployedVersion: JSON.parse(readFileSync(requiredEnvironment("DEEPSEEK_DEPLOYED_VERSION_PATH"), "utf8")) as unknown,
-      });
+      }, "v1");
   const expectedCandidateSha = process.env.DEEPSEEK_EXPECTED_CANDIDATE_SHA?.trim();
   if (expectedCandidateSha !== undefined && expectedCandidateSha !== evidence.testedCandidateSha) {
     throw new Error("workflow candidate SHA does not match the tested DeepSeek candidate");
