@@ -8,12 +8,12 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, the single construction-time seam, and historical-v1 evidence quarantine.
-- T02-A is complete: `UiPreferences` is exactly `{theme,timeZone?}`; theme and verified Clockify timezone survive while the Clockify language claim is ignored.
-- The existing localStorage key and signed-cookie payload accept then drop valid legacy `language`; unrelated nested cookie fields remain rejected.
-- The compiled UI has no language control/plumbing, sets document language to English, formats through fixed `en-US`, and preserves arbitrary Unicode as `textContent` data.
+- T02-B is complete: an independent source/runtime contract pins no language UI/branch, `lang="en"`, one fixed `EN_US_LOCALE`, verified timezone retention, and Unicode `textContent` rendering.
+- `UiPreferences` remains exactly `{theme,timeZone?}`; retained localStorage/cookies accept then drop valid legacy `language`, and Clockify language claims remain ignored.
+- Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 gates passed: preference/routes focus 84 tests; type-check; lint; diff checks.
-- No model call, deployment, live proof, or external action occurred. Next: T02-B.
+- Node 22 gates passed: T02-B focus 78 tests; type-check; lint; documentation/diff checks.
+- No model call, deployment, live proof, or external action occurred. Next: T02-C.
 
 ## Start here
 
@@ -293,7 +293,9 @@ bug was found against the REAL API, not by reading the code.
   schema accept then drop valid legacy `language`, Clockify language claims are
   ignored, and verified theme/timezone remain. The UI sets `lang="en"`, formats
   through one fixed `EN_US_LOCALE`, and keeps arbitrary Unicode workspace data in
-  `textContent` without transformation.
+  `textContent` without transformation. `tests/unit/english-interface-contract.test.ts`
+  independently pins that source/runtime boundary; protocol timezone validation
+  is locale-neutral because its formatted value is discarded.
 - `src/metrics/metrics.ts` pure `buildMetrics` → `GET /api/metrics` and the
   `assistant_recent_outcomes` action. `src/eval/score.ts` pure planner scorer.
 - `src/public-documents.ts` renders script-free public Privacy, Support, and

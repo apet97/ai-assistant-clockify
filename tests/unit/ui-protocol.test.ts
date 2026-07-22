@@ -184,6 +184,10 @@ describe("UI runtime protocol contracts", () => {
       },
     };
     expect(decodeMeResponse(valid)).toMatchObject({ preferences: { theme: "dark", timeZone: "Europe/Belgrade" } });
+    expect(() => decodeMeResponse({
+      ...valid,
+      preferences: { theme: "dark", timeZone: "Mars/Olympus" },
+    })).toThrow(/timeZone/u);
     expect(() => decodeMeResponse({ ...valid, links: { ...valid.links, support: "javascript:alert(1)" } })).toThrow(
       /links\.support/,
     );

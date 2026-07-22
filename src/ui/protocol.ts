@@ -194,7 +194,7 @@ function preferencesFrom(value: unknown, name: string): UiPreferences {
   const timeZone = optionalString(preferences.timeZone, `${name}.timeZone`);
   if (timeZone) {
     try {
-      new Intl.DateTimeFormat("en-US", { timeZone }).format(0);
+      new Intl.DateTimeFormat(undefined, { timeZone }).format(0);
     } catch {
       throw new ProtocolError(`${name}.timeZone is invalid`);
     }

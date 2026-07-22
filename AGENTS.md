@@ -24,10 +24,11 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, one construction-time seam, and historical-v1 evidence quarantine.
-- T02-A is complete: preferences are exactly `{theme,timeZone?}`; legacy localStorage/cookies drop valid `language` without weakening nested cookie strictness.
-- The UI ignores Clockify language, preserves theme/verified timezone, uses fixed English `Intl`, has no language control, and preserves Unicode text data.
+- T02-B is complete: an independent contract pins no language UI/branch, `lang="en"`, one fixed `EN_US_LOCALE`, verified timezone retention, and Unicode `textContent` rendering.
+- Preferences remain exactly `{theme,timeZone?}`; legacy localStorage/cookies drop valid `language`, and Clockify language claims remain ignored.
+- Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
 - V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 gates passed: preference/routes focus 84 tests; type-check; lint; diff checks. No live/external action. Next: T02-B.
+- Node 22 gates passed: T02-B focus 78 tests; type-check; lint; documentation/diff checks. No live/external action. Next: T02-C.
 
 ## Non-negotiable invariants
 
@@ -264,7 +265,8 @@ npm run dev           # tsx src/server.ts (needs env)
   `mount()` + a re-export barrel. Preferences are exactly `{theme,timeZone?}`;
   valid legacy `language` is dropped from the retained storage/cookie formats,
   the interface is fixed English through `EN_US_LOCALE`, and Unicode Clockify
-  data remains unmodified `textContent`.
+  data remains unmodified `textContent`; the dedicated English-interface contract
+  pins the locale seam and absence of runtime language wiring.
   `tests/` — unit + integration (fakes via `tests/helpers/fake-clockify.ts`;
   `tests/helpers/session.ts` mints an admin cookie in-process). `scripts/` — opt-in
   live exercisers (sacrificial workspace only) plus checksum-verified

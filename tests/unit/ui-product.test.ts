@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import * as product from "../../src/ui/product.js";
 import type { UiPreferences, UiTheme } from "../../src/shared/contracts.js";
@@ -16,10 +15,6 @@ type ExactUiPreferencesShape =
     : false;
 
 const exactUiPreferencesShape: ExactUiPreferencesShape = true;
-
-function source(relativePath: string): string {
-  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
-}
 
 describe("UI product preferences", () => {
   it("has exactly the language-free public/runtime shape", () => {
@@ -70,30 +65,6 @@ describe("UI product preferences", () => {
       .toMatch(/Europe\/Belgrade/u);
   });
 
-  it("removes language controls and dependencies from the compiled preference graph", () => {
-    const contracts = source("../../src/shared/contracts.ts");
-    const preferenceSource = source("../../src/ui-preferences.ts");
-    const component = source("../../src/routes/component.ts");
-    const productSource = source("../../src/ui/product.ts");
-    const main = source("../../src/ui/main.ts");
-    const render = source("../../src/ui/render.ts");
-    const protocol = source("../../src/ui/protocol.ts");
-    const api = source("../../src/routes/api.ts");
-
-    expect(contracts).not.toMatch(/\bUiLanguage\b/u);
-    expect(preferenceSource).not.toMatch(/normalizedLanguage|\blanguage:/u);
-    expect(component).not.toContain("claims.language");
-    expect(productSource).not.toMatch(/\bintlLocale\b|sr-Latn-RS|\bUiLanguage\b/u);
-    expect(productSource).toContain('export const EN_US_LOCALE = "en-US";');
-    expect(productSource).toContain("new Intl.DateTimeFormat(EN_US_LOCALE");
-    expect(productSource).toContain("new Intl.NumberFormat(EN_US_LOCALE");
-    expect(main).toContain("applyUiPreferences(document.documentElement, preferences);");
-    expect(main).not.toMatch(/languageLabel|preferences\.language|language\.value|aria-label", "Language"|refreshLocalizedUi/u);
-    expect(render).not.toMatch(/\bUiLanguage\b|deps\.language|documentElement\?\.lang === "sr"/u);
-    expect(render).toContain("new Intl.RelativeTimeFormat(EN_US_LOCALE");
-    expect(protocol).not.toMatch(/preferences\.language|\.language is unknown/u);
-    expect(api).not.toContain('language: "en"');
-  });
 });
 
 describe("policy-aware entry", () => {
