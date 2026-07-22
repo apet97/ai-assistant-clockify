@@ -1721,6 +1721,7 @@ def run_managed_process(
     read_only: bool = False,
     subagents_allowed: bool = True,
     full_verify_allowed: bool = True,
+    group_prompt_ids: tuple[str, ...] = (),
 ) -> ChildProcessResult:
     for path in (events_path, stderr_path, final_path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1799,11 +1800,14 @@ def run_managed_process(
                                 command_text, allowed_paths
                             )
                             violation = violation or staging_violation
-                    if violation and not violation_box:
-                        violation_box.append(violation)
                     message = _agent_message_from_event(event)
                     if message is not None:
+                        violation = violation or audit_group_checkpoint_message(
+                            message, expected_prompt_ids=group_prompt_ids
+                        )
                         final_messages.append(message)
+                    if violation and not violation_box:
+                        violation_box.append(violation)
         except OSError as error:
             stream_error.append(f"structured-event capture failed: {error}")
 
@@ -2002,6 +2006,7 @@ def _validate_saved_events(
     *,
     subagents_allowed: bool = True,
     full_verify_allowed: bool = True,
+    group_prompt_ids: tuple[str, ...] = (),
 ) -> None:
     if path_value is None:
         return
@@ -2021,6 +2026,11 @@ def _validate_saved_events(
                 violation = violation or audit_full_verify_event(
                     event, allowed=full_verify_allowed
                 )
+                message = _agent_message_from_event(event)
+                if message is not None:
+                    violation = violation or audit_group_checkpoint_message(
+                        message, expected_prompt_ids=group_prompt_ids
+                    )
                 if violation:
                     raise SupervisorError(
                         f"saved child event contains a boundary violation: {violation}"
@@ -2199,6 +2209,27 @@ def audit_full_verify_event(event: Any, *, allowed: bool) -> str | None:
         for command in _event_command_strings(event)
     ):
         return "efficient profile reserves npm run verify for critical gates"
+    return None
+
+
+def audit_group_checkpoint_message(
+    message: str, *, expected_prompt_ids: tuple[str, ...]
+) -> str | None:
+    if not expected_prompt_ids:
+        return None
+    markers = list(re.finditer(r"(?m)^SLICE HANDOFF\s*$", message))
+    if not markers or len(markers) > 1:
+        return None
+    if message[: markers[0].start()].strip():
+        return "efficient group emitted an invalid intermediate handoff"
+    try:
+        handoff = parse_handoff(message)
+    except SupervisorError:
+        return "efficient group emitted an invalid intermediate handoff"
+    if handoff.prompt_id not in expected_prompt_ids:
+        return "efficient group emitted a checkpoint outside its selected prompts"
+    if handoff.status == "BLOCKED":
+        return f"{handoff.prompt_id} returned Status BLOCKED"
     return None
 
 
@@ -2487,6 +2518,7 @@ class Supervisor:
                             events_value,
                             subagents_allowed=False,
                             full_verify_allowed=allow_full_verify,
+                            group_prompt_ids=tuple(prompt_ids_value),
                         )
                         messages = _saved_agent_messages(events_value)
                         final_value = active.get("final_response_path")
@@ -2996,6 +3028,7 @@ class Supervisor:
             allowed_paths=allowed_paths,
             subagents_allowed=False,
             full_verify_allowed=bool(full_verify_ids),
+            group_prompt_ids=group.prompt_ids,
         )
         blocker: str | None = None
         if result.timed_out:
@@ -3324,6 +3357,15 @@ class Supervisor:
         if handoff.fields["Live/external actions"].strip().upper() != "NONE":
             raise SupervisorError(
                 f"{prompt.prompt_id} reported a forbidden external action"
+            )
+        if (
+            re.match(
+                r"^clean(?:\b|$)", handoff.fields["Worktree"].strip(), re.IGNORECASE
+            )
+            is None
+        ):
+            raise SupervisorError(
+                f"{prompt.prompt_id} handoff does not report a clean worktree"
             )
 
     def _validate_completed_group(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from typing import Any
 import unittest
 from unittest.mock import patch
 
@@ -252,7 +254,7 @@ def planning_pack(
     *,
     reviewer_pair: tuple[str, ...] | None = None,
     gated_prompts: frozenset[str] = frozenset(),
-) -> object:
+) -> Any:
     prompts = {
         prompt_id: supervisor.Prompt(
             prompt_id,
@@ -550,6 +552,32 @@ class EfficientExecutionProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "exact prompt order"):
             supervisor.parse_group_handoffs(
                 text, expected_prompt_ids=("T04-F", "T04-E")
+            )
+
+    def test_group_handoff_requires_a_clean_worktree_at_each_prompt(self) -> None:
+        config = replace(
+            supervisor.SupervisorConfig.defaults(), execution_profile="efficient"
+        )
+        instance = supervisor.Supervisor(config)
+        handoff = supervisor.parse_handoff(
+            valid_handoff(
+                prompt="T04-E",
+                title="E",
+                commit="1" * 40,
+                subject="commit T04-E",
+                next_prompt="T04-F",
+            )
+            .replace(
+                "Green evidence: ",
+                "Green evidence: `git diff --check` passed; "
+                "`git status --short --branch` reported clean; ",
+            )
+            .replace("Worktree: clean", "Worktree: dirty")
+        )
+
+        with self.assertRaisesRegex(supervisor.SupervisorError, "clean worktree"):
+            instance._validate_group_handoff_evidence(
+                self.pack, self.pack.prompt("T04-E"), handoff
             )
 
     def test_group_prompt_contains_each_scope_and_efficient_gate_contract(self) -> None:
@@ -1093,6 +1121,71 @@ class PromptAssemblyTests(unittest.TestCase):
 
 
 class ManagedProcessTests(unittest.TestCase):
+    def test_efficient_group_stops_on_blocked_or_invalid_checkpoint(self) -> None:
+        self.assertIn(
+            "group_prompt_ids",
+            inspect.signature(supervisor.run_managed_process).parameters,
+        )
+        valid = valid_handoff(
+            prompt="T04-E",
+            title="E",
+            commit="1" * 40,
+            subject="commit T04-E",
+            next_prompt="T04-F",
+        )
+        self.assertIsNone(
+            supervisor.audit_group_checkpoint_message(
+                valid, expected_prompt_ids=("T04-E", "T04-F")
+            )
+        )
+        cases = (
+            (
+                "blocked",
+                valid.replace("Status: COMPLETE", "Status: BLOCKED").replace(
+                    f"Commit: {'1' * 40} commit T04-E", "Commit: NONE"
+                ),
+                "Status BLOCKED",
+            ),
+            ("invalid", "SLICE HANDOFF\nPrompt: T04-E: E\n", "invalid"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, message, expected_reason in cases:
+                with self.subTest(name=name):
+                    case_root = root / name
+                    case_root.mkdir()
+                    marker = case_root / "continued"
+                    executable = case_root / "child"
+                    write_executable(
+                        executable,
+                        f"""#!/usr/bin/env python3
+import json
+from pathlib import Path
+import time
+
+print(json.dumps({{
+    "type": "item.completed",
+    "item": {{"type": "agent_message", "text": {message!r}}},
+}}), flush=True)
+time.sleep(0.7)
+Path({str(marker)!r}).write_text("continued\\n", encoding="utf-8")
+""",
+                    )
+                    result = supervisor.run_managed_process(
+                        command=(str(executable),),
+                        prompt="group prompt",
+                        cwd=case_root,
+                        timeout_seconds=2.0,
+                        events_path=case_root / "events.jsonl",
+                        stderr_path=case_root / "stderr.log",
+                        final_path=case_root / "final.txt",
+                        group_prompt_ids=("T04-E", "T04-F"),
+                    )
+                    time.sleep(0.8)
+
+                    self.assertIn(expected_reason, result.violation or "")
+                    self.assertFalse(marker.exists())
+
     def test_secret_detection_allows_typed_api_key_identifiers(self) -> None:
         source = "\n".join(
             (

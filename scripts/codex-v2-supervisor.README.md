@@ -74,8 +74,9 @@ Each range must be contiguous within one numbered task and may not contain an
 explicit Max prompt, reviewer, or authorization gate. A group creates one exact
 commit per prompt unless its configuration object supplies
 `consolidated_commit_subject`. Per-prompt checkpoints make a validated committed
-prefix restartable without rerunning it. Group completion requires ordered
-handoffs for every prompt, exact ordered commits, domain regression tests,
+prefix restartable without rerunning it; a BLOCKED or malformed standalone
+checkpoint terminates the grouped child immediately. Group completion requires
+ordered handoffs for every prompt, exact ordered commits, domain regression tests,
 type-check, relevant lint, and one final synchronization of `CLAUDE.md` and
 `AGENTS.md`. `npm run verify` is reserved for numbered-task closures and the
 configured critical-gate patterns.
