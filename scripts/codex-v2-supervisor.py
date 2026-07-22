@@ -3779,6 +3779,7 @@ class Supervisor:
         reasoning_effort: str | None = None,
     ) -> tuple[str, ...]:
         selected_effort = reasoning_effort or self.config.reasoning_effort
+        config_isolation = ("--ignore-user-config",) if self.config.execution_profile == "efficient" else ()
         return (
             self.config.codex_executable,
             *capabilities.full_autonomy_prefix_flags,
@@ -3788,6 +3789,7 @@ class Supervisor:
             self.config.model,
             "--config",
             f'model_reasoning_effort="{selected_effort}"',
+            *config_isolation,
             "--cd",
             str(self.config.repository_path.resolve()),
             "--ephemeral",
