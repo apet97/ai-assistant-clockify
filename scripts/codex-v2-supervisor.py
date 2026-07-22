@@ -1591,7 +1591,15 @@ FORBIDDEN_COMMAND_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"\bgit\s+commit\b[^\n;&|]*--amend\b"),
         "forbidden commit amendment",
     ),
-    (re.compile(r"\b(?:railway|gh)\b"), "forbidden external administration command"),
+    (
+        re.compile(
+            r"(?:^|[\n;&|()]\s*|(?:-lc|-c)\s+['\"])\s*"
+            r"(?:(?:env|command|exec|sudo)(?:\s+-\S+)*\s+|"
+            r"[A-Za-z_][A-Za-z0-9_]*=\S+\s+|(?:if|then|do|while|until)\s+)*"
+            r"(?:\S*/)?(?:railway|gh)(?=\s|[;&|()]|$)"
+        ),
+        "forbidden external administration command",
+    ),
     (re.compile(r"\bnpm\s+(?:publish|unpublish)\b"), "forbidden package publication"),
     (
         re.compile(r"\bdeploy:private-production\b|\brailway\s+up\b"),

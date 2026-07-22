@@ -725,6 +725,27 @@ class ManagedProcessTests(unittest.TestCase):
 
         self.assertIsNone(supervisor.audit_structured_event(event))
 
+    def test_structured_event_audit_allows_gh_token_pattern_as_rg_argument(
+        self,
+    ) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": "git diff | rg -n 'gh[pousr]_[A-Za-z0-9]+'",
+            }
+        }
+
+        self.assertIsNone(supervisor.audit_structured_event(event))
+
+    def test_structured_event_audit_rejects_external_admin_executables(self) -> None:
+        for command in ("gh pr create", "railway status", "git diff | gh pr create"):
+            with self.subTest(command=command):
+                event = {"item": {"type": "command_execution", "command": command}}
+                self.assertEqual(
+                    supervisor.audit_structured_event(event),
+                    "forbidden external administration command",
+                )
+
     def test_findings_guard_denies_file_content_reads(self) -> None:
         supervisor.validate_findings_guard_support()
 
