@@ -740,6 +740,31 @@ class PromptAssemblyTests(unittest.TestCase):
 
 
 class ManagedProcessTests(unittest.TestCase):
+    def test_secret_detection_allows_typed_api_key_identifiers(self) -> None:
+        source = "\n".join(
+            (
+                'api_key: assertAvailabilityDecision(actionName, "api_key", value.api_key),',
+                (
+                    "availabilityByAuthClass?: { addon: AvailabilityDecision; "
+                    "api_key: AvailabilityDecision };"
+                ),
+            )
+        )
+
+        self.assertIsNone(supervisor.secret_violation(source))
+
+    def test_secret_detection_keeps_literal_assignments_fail_closed(self) -> None:
+        for assignment in (
+            "API_KEY=abcdefghijklmnop",
+            'api_key: "abcdefghijklmnop"',
+            "password: abcdefghijklmnop123",
+        ):
+            with self.subTest(assignment=assignment):
+                self.assertEqual(
+                    supervisor.secret_violation(assignment),
+                    "secret-like value detected: credential-like assignment",
+                )
+
     def test_timeout_terminates_the_complete_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

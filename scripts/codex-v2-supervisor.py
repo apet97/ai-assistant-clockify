@@ -1714,7 +1714,10 @@ SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     ),
     (
         re.compile(
-            r"(?i)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret)\s*[:=]\s*['\"]?[A-Za-z0-9_./+=-]{16,}"
+            r"(?im)\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|"
+            r"password|secret)\s*[:=]\s*"
+            r"(?:(?:['\"][A-Za-z0-9_./+=-]{16,}['\"])|"
+            r"(?:[A-Za-z0-9_./+=-]{16,}\s*(?:$|\#)))"
         ),
         "credential-like assignment",
     ),
