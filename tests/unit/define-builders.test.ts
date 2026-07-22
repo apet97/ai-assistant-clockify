@@ -21,11 +21,22 @@ import { durableMutationContract } from "../../src/harness/durable-mutation-cont
 // touch are real; the rest are cast placeholders.
 const ctx = {} as unknown as ActionContext;
 
+const LOCAL_TEST_METADATA = {
+  apiExposure: "local" as const,
+  availabilityByAuthClass: {
+    addon: { available: true as const },
+    api_key: { available: true as const },
+  },
+};
+
 describe("defineRiskyAction", () => {
   const schema = z.object({ id: z.string().min(1) });
   type RiskyDef = Parameters<typeof defineRiskyAction<typeof schema>>[0];
 
-  function build(previewImpl: RiskyDef["preview"], extra?: Partial<RiskyDef>) {
+  function build(
+    previewImpl: RiskyDef["preview"],
+    extra?: Partial<Omit<RiskyDef, "apiExposure" | "availabilityByAuthClass">>,
+  ) {
     return defineRiskyAction<typeof schema>({
       name: "demo_risky",
       description: "Demo risky action.",
@@ -42,6 +53,7 @@ describe("defineRiskyAction", () => {
         });
       },
       ...extra,
+      ...LOCAL_TEST_METADATA,
     });
   }
 
@@ -114,6 +126,7 @@ describe("defineRiskyAction", () => {
   it("(iii) generated commit delegates to def.commit with operation.payload", async () => {
     let seen: Record<string, unknown> | undefined;
     const action = defineRiskyAction<typeof schema>({
+      ...LOCAL_TEST_METADATA,
       name: "demo_risky",
       description: "Demo risky action.",
       group: "work_structure",
@@ -190,6 +203,7 @@ describe("defineRiskyAction", () => {
   it("makes the one durable operation id available to preview, commit, and idempotency", async () => {
     const seen: { preview?: string; commit?: string; idempotency?: string } = {};
     const action = defineRiskyAction({
+      ...LOCAL_TEST_METADATA,
       name: "demo_durable",
       description: "Durable risky action.",
       group: "invoices",
@@ -273,6 +287,7 @@ describe("defineReadAction", () => {
   it("(v) yields {kind:'receipt'} wrapping the handler's receipt, and risks ['read']", async () => {
     const receipt = successReceipt({ action: "demo_read", entity: "demo", data: { ok: 1 } });
     const action = defineReadAction({
+      ...LOCAL_TEST_METADATA,
       name: "demo_read",
       description: "Demo read action.",
       group: "work_structure",

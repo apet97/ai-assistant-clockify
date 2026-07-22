@@ -125,6 +125,7 @@ const getTask = defineAction({
 });
 
 const createTaskDefinition = defineStructureDurableSafeWriteAction({
+  ...STRUCTURE_API_METADATA.clockify_tasks_create,
   name: "clockify_tasks_create",
   description:
     "Create a task under a project, optionally assigning members inline with `assigneeIds` — each entry is a user id, an exact name, or 'me'; the harness resolves names server-side (clarifies on an unknown name). Safe write — executes immediately when policy allows.",
@@ -211,7 +212,6 @@ const createTaskDefinition = defineStructureDurableSafeWriteAction({
 
 const createTask = Object.freeze({
   ...createTaskDefinition,
-  ...STRUCTURE_API_METADATA.clockify_tasks_create,
 });
 
 const updateTask = defineRiskyAction({

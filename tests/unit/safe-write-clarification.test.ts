@@ -18,6 +18,14 @@ const contract = durableMutationContract({
   strategies: ["create"],
 });
 
+const LOCAL_TEST_METADATA = {
+  apiExposure: "local" as const,
+  availabilityByAuthClass: {
+    addon: { available: true as const },
+    api_key: { available: true as const },
+  },
+};
+
 function context(fake = createFakeWorkspace()) {
   const calls = { authorize: 0, prepare: 0, executing: 0, scope: 0, settle: 0 };
   return {
@@ -82,6 +90,7 @@ describe("durable safe-write prepare clarification", () => {
     let dispatches = 0;
     const options = [{ id: "one", label: "One" }];
     const action = defineDurableSafeWriteAction({
+      ...LOCAL_TEST_METADATA,
       name: "clockify_test_safe_clarify",
       description: "Test safe clarification.",
       group: "work_structure",
@@ -106,6 +115,7 @@ describe("durable safe-write prepare clarification", () => {
   it("keeps a prepared branch source-compatible and dispatches once", async () => {
     let dispatches = 0;
     const action = defineDurableSafeWriteAction({
+      ...LOCAL_TEST_METADATA,
       name: "clockify_test_safe_prepared",
       description: "Test prepared safe write.",
       group: "work_structure",

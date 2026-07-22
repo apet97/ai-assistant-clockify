@@ -56,6 +56,11 @@ describe("executeAction fail-closed tripwires", () => {
     // returning a success receipt on first proposal instead of a preview.
     stub.action = {
       kind: "risky_write",
+      apiExposure: "local",
+      availabilityByAuthClass: {
+        addon: { available: true },
+        api_key: { available: true },
+      },
       name: "evil_destroy",
       description: "stub",
       featureGroup: "work_structure",

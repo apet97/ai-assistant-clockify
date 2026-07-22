@@ -458,6 +458,39 @@ function validateClosedWriteSchema(
   }
 }
 
+export type ActionArgumentSchemaVerdict =
+  | { verdict: "not_applicable" }
+  | { verdict: "closed" }
+  | { verdict: "open"; detail: string };
+
+const OPEN_SCHEMA_ERROR_PREFIXES = [
+  "legacy_open_argument_paths:",
+  "unreviewed_open_schema:",
+  "bounded_dictionary_schema_mismatch:",
+  "unmatched_bounded_dictionary:",
+] as const;
+
+/** Measure the current write schema without making an internal action visible. */
+export function actionArgumentSchemaVerdict(
+  action: ActionDefinition,
+): ActionArgumentSchemaVerdict {
+  if (action.kind === "read") return { verdict: "not_applicable" };
+  const dictionaries = normalizeDictionaries(
+    action.name,
+    action.boundedArgumentDictionaries,
+  );
+  try {
+    validateClosedWriteSchema(action, dictionaries);
+    return { verdict: "closed" };
+  } catch (error) {
+    if (error instanceof Error
+      && OPEN_SCHEMA_ERROR_PREFIXES.some((prefix) => error.message.startsWith(prefix))) {
+      return { verdict: "open", detail: error.message };
+    }
+    throw error;
+  }
+}
+
 function validateFormatter(
   actionName: string,
   field: MaterialFieldMetadata,
@@ -762,14 +795,11 @@ export function registryHashForActions(actions: readonly NormalizedRegistryActio
   return createHash("sha256").update(JSON.stringify(actions.map((action) => ({
     name: action.name,
     fingerprint: actionFingerprintForDefinition(action),
-    availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+    availabilityByAuthClass: action.availabilityByAuthClass,
   })))).digest("hex");
 }
 
-/**
- * Duplicate-safe migration inventory. T04-A has no v2-only split definitions;
- * later domain slices extend this union without normalizing incomplete rows.
- */
+/** Duplicate-safe inventory boundary; future split definitions join here. */
 export function inventoryActionDefinitions(): readonly InventoryActionDefinition[] {
   const entries: InventoryActionDefinition[] = [];
   const keys = new Set<string>();

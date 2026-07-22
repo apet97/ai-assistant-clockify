@@ -146,7 +146,7 @@ const schedulingEndpoint = Object.freeze({
 const SCHEDULING_API_METADATA = Object.freeze({
   clockify_scheduling_assignments_list: schedulingApiMetadata({
     actionName: "clockify_scheduling_assignments_list",
-    operationId: "getAllSchedulingAssignments",
+    operationId: "getAllAssignments",
     method: "GET",
     path: "/workspaces/{workspaceId}/scheduling/assignments/all",
     access: "read",
@@ -162,7 +162,7 @@ const SCHEDULING_API_METADATA = Object.freeze({
   }),
   clockify_scheduling_assignments_create: schedulingApiMetadata({
     actionName: "clockify_scheduling_assignments_create",
-    operationId: "createRecurringAssignment",
+    operationId: "createRecurring",
     method: "POST",
     path: "/workspaces/{workspaceId}/scheduling/assignments/recurring",
     access: "write",
@@ -184,7 +184,7 @@ const SCHEDULING_API_METADATA = Object.freeze({
   }),
   clockify_scheduling_assignments_update: schedulingApiMetadata({
     actionName: "clockify_scheduling_assignments_update",
-    operationId: "updateRecurringAssignment",
+    operationId: "editRecurring",
     method: "PATCH",
     path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
     access: "write",
@@ -199,7 +199,7 @@ const SCHEDULING_API_METADATA = Object.freeze({
   }),
   clockify_scheduling_assignments_delete: schedulingApiMetadata({
     actionName: "clockify_scheduling_assignments_delete",
-    operationId: "deleteRecurringAssignment",
+    operationId: "deleteRRecurringAssignment",
     method: "DELETE",
     path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
     access: "write",
@@ -233,7 +233,7 @@ const SCHEDULING_API_METADATA = Object.freeze({
   }),
   clockify_scheduling_user_totals: schedulingApiMetadata({
     actionName: "clockify_scheduling_user_totals",
-    operationId: "getUserCapacityTotal",
+    operationId: "getUserTotalsForSingleUser",
     method: "GET",
     path: "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals",
     access: "read",

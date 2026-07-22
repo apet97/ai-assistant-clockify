@@ -8,13 +8,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
-- T04-J completes annotation of all 140 definitions: 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; none remain unclassified.
-- Atomic expense/category, user/group, leave/approval, and scheduling operations bind literal official method/path/operation IDs; API-key-only custom-field creation is the only new auth restriction in T04-F through T04-I.
-- Custom-field array writes, dynamic rate/project-total selectors, unbounded policy scopes, the 27-user balance update, list-and-find reads, group/approval loops, and multi-primary category wrappers remain internal with exact reasons.
-- Local permission/show/recent-outcome actions have no Clockify endpoint, and undo remains a local service outside the 140 definitions; generic cross-entity update/delete and curated period-report/onboarding workflows receive no invented operation ID.
-- Raw metadata remains temporarily optional only until T04-K; normalization still supplies no defaults and rejects every incomplete registry entry.
+- T04-K closes metadata migration: all 140 definitions are classified as 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; no action or raw adapter shape is unclassified.
+- Inventory schema/generator version 1 emits `api-catalog.generated.ts`, JSON evidence, and Markdown from one model with catalog hash `e200dcbdbeac4e0de32ec2d19b0d0c65394db11484e5b75efec9fddaa03881a9`.
+- The evidence covers 142 raw call sites / 118 shapes, canonical official OpenAPI correlations, per-auth availability, internal-support consumers, material/presenter metadata, and primary/compensation counts; the audit POST alone records `official_operation_id_missing`.
+- Classification and availability are required on every raw definition, participate in fingerprints, and receive no normalization defaults.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof: T04-J focus, F-J domain regression, type-check, and lint passed. No generated, live, deployment, or external action. Next: T04-K.
+- Node 22 proof: generation was byte-stable across two reruns; inventory/scope checks, 230 focused tests, and `npm run verify` (272 files / 3,384 tests) passed.
+- No live, deployment, or external action ran. Next: independent read-only reviews T04-R1 and T04-R2; do not start Task 5 before both are resolved.
 
 ## Start here
 
@@ -120,16 +120,14 @@ confirmation, undo, and external dispatch is uncached.
   depth/node/byte/array limit contract in `src/harness/safety-limits.ts`. The same
   contract governs declaration decoding, persistence, raw authority matching,
   action schemas, and catalog metadata; it does not change the capability version.
-- During T04-A through T04-J, only raw action definitions may omit the v2 API
-  metadata carrier. `normalizeRegistryAction` is the sole raw-to-registry boundary:
-  it supplies no classification defaults, validates exposure, per-auth availability,
-  reviewed endpoint keys, closed model-write schemas, bounded dictionaries,
-  material facts, presenter identity/version, and one primary mutation, and
-  recomputes `writeAuthorityFor()` before returning an immutable definition. No
-  incomplete definition may enter a model registry. T04-K makes the carrier
-  required after every domain is annotated. Once metadata is present, all of its
-  fields participate in action fingerprints and registry/catalog hashes; absent
-  metadata preserves the unchanged v1 fingerprint during coexistence.
+- Every raw action definition requires an exposure decision and per-auth
+  availability. `normalizeRegistryAction` is the sole raw-to-registry boundary:
+  it supplies no classification defaults, validates reviewed endpoint keys,
+  closed model-write schemas, bounded dictionaries, material facts, presenter
+  identity/version, and one primary mutation, and recomputes
+  `writeAuthorityFor()` before returning an immutable definition. Every metadata
+  field participates in action fingerprints and registry/catalog hashes; no
+  incomplete definition may enter a model registry.
 - Every advertised batch limit is derived from the deterministic worst-case host
   call estimator. Group-member additions are capped at 14. A prepared external
   mutation binds and hashes `maxHostCalls`, reserves its complete remaining cost
@@ -229,17 +227,20 @@ bug was found against the REAL API, not by reading the code.
   workspace settlement barrier used by lifecycle and mutation routes.
 - `scripts/lib/adapter-endpoints.ts` owns the fail-closed raw `RestCore` scanner,
   path normalization, source location, stable call-site identity/order, and
-  pagination metadata. Duplicate method/path call sites remain distinct through
-  scope assignment; the generator uses the separate legacy request-shape key only
-  for its 118-shape inventory count and retains classification/Markdown rendering.
-  The pure correlation seam remains unused pending completion of the Task 4 domain annotations.
+  pagination metadata, plus the pinned official-OpenAPI spine parser and reviewed
+  dynamic-path correlation. Duplicate method/path call sites remain distinct
+  through scope assignment. `scripts/generate-api-action-inventory.ts` projects
+  one deterministic evidence model into `src/harness/api-catalog.generated.ts`,
+  `evidence/api-action-inventory.json`, and `docs/API_ACTION_INVENTORY.md`; checks
+  reject stale outputs, missing dispositions, or invalid correlations.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`
   (executor + `commitConfirmedOperation`, the single risky-commit choke point),
-  `api-operation.ts` (the typed metadata carrier), `action-registry.ts` (the sole
-  fail-closed raw-definition normalizer plus duplicate-safe migration inventory),
-  `catalog.ts` (v1-preserving conditional metadata fingerprints),
+  `api-operation.ts` (the required typed metadata carrier), `action-registry.ts`
+  (the sole fail-closed raw-definition normalizer plus duplicate-safe inventory
+  and schema verdict), `api-catalog.generated.ts` (handler-free API descriptors),
+  `catalog.ts` (required metadata fingerprints),
   `workflows/structure-api-metadata.ts` (the reviewed T04-B operation IDs,
   endpoint bindings, auth availability, exposure, material facts, and presenters
   for 31 structure definitions), `workflows/time-tracking.ts` and
@@ -664,6 +665,8 @@ npm test               # build exact server + served UI artifact, then Vitest; n
 npm run build          # tsc + vite -> dist/server, dist/ui
 npm run lint           # typed eslint across src + operational scripts; zero warnings
 npm run verify         # both type-checks + lint + cycles + dup + test + build
+npm run generate:api-action-inventory # regenerate TS, JSON, and Markdown from one evidence model
+npm run check:api-action-inventory # fail if inventory artifacts or classifications drift
 npm run test:e2e       # Chromium + Firefox + WebKit product/browser matrix
 npm run perf:local-ui  # local UI, history, status, and 20 KiB gzip gates
 npm run media:marketplace # deterministic icon/banner/screenshots/demo package

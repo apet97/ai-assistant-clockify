@@ -75,17 +75,13 @@ export interface ActionPresentationMetadata {
   version: number;
 }
 
-/**
- * Temporary raw-definition carrier for T04-A through T04-J. No field has a
- * default: registry normalization rejects an incomplete definition, and T04-K
- * removes this optional migration boundary once every action is annotated.
- */
+/** Metadata supplied by every raw action definition before registry validation. */
 export interface ApiActionMetadataCarrier {
-  apiExposure?: ApiExposure;
+  apiExposure: ApiExposure;
   apiExposureReason?: string;
   apiOperation?: ApiOperationMetadata;
   adapterEndpoints?: AdapterEndpointBinding;
-  availabilityByAuthClass?: AvailabilityByAuthClass;
+  availabilityByAuthClass: AvailabilityByAuthClass;
   boundedArgumentDictionaries?: readonly BoundedDictionaryMetadata[];
   materialFields?: readonly MaterialFieldMetadata[];
   presentation?: ActionPresentationMetadata;
@@ -93,12 +89,13 @@ export interface ApiActionMetadataCarrier {
 
 export type ActionRegistryId = "v1-internal" | "v2-api" | "v2-local";
 
-/** Copy only explicitly supplied carrier fields through action builders. */
+/** Copy required metadata and only explicitly supplied exposure-specific fields. */
 export function apiActionMetadataFields(
   source: ApiActionMetadataCarrier,
 ): ApiActionMetadataCarrier {
   return {
-    ...(source.apiExposure === undefined ? {} : { apiExposure: source.apiExposure }),
+    apiExposure: source.apiExposure,
+    availabilityByAuthClass: source.availabilityByAuthClass,
     ...(source.apiExposureReason === undefined
       ? {}
       : { apiExposureReason: source.apiExposureReason }),
@@ -106,9 +103,6 @@ export function apiActionMetadataFields(
     ...(source.adapterEndpoints === undefined
       ? {}
       : { adapterEndpoints: source.adapterEndpoints }),
-    ...(source.availabilityByAuthClass === undefined
-      ? {}
-      : { availabilityByAuthClass: source.availabilityByAuthClass }),
     ...(source.boundedArgumentDictionaries === undefined
       ? {}
       : { boundedArgumentDictionaries: source.boundedArgumentDictionaries }),

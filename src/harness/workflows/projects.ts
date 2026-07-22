@@ -135,6 +135,7 @@ const getProject = defineAction({
 // ── Safe writes ──────────────────────────────────────────────────────────────
 
 const createProjectDefinition = defineStructureDurableSafeWriteAction({
+  ...STRUCTURE_API_METADATA.clockify_projects_create,
   name: "clockify_projects_create",
   description:
     "Create a project. Assign a client by `clientId` or its exact `clientName` (resolved server-side — an unknown client clarifies). Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
@@ -238,10 +239,10 @@ const createProjectDefinition = defineStructureDurableSafeWriteAction({
 
 const createProject = Object.freeze({
   ...createProjectDefinition,
-  ...STRUCTURE_API_METADATA.clockify_projects_create,
 });
 
 const createFromTemplateDefinition = defineStructureDurableSafeWriteAction({
+  ...STRUCTURE_API_METADATA.clockify_projects_from_template,
   name: "clockify_projects_from_template",
   description:
     "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list), plus the new project's `name` (required by the API).",
@@ -322,7 +323,6 @@ const createFromTemplateDefinition = defineStructureDurableSafeWriteAction({
 
 const createFromTemplate = Object.freeze({
   ...createFromTemplateDefinition,
-  ...STRUCTURE_API_METADATA.clockify_projects_from_template,
 });
 
 // ── Risky writes (preview → commit) ──────────────────────────────────────────

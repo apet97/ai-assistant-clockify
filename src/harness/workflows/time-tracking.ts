@@ -535,6 +535,7 @@ function resolveLogTimes(
 }
 
 const logWorkDefinition = defineStructureDurableSafeWriteAction({
+  ...TIME_TRACKING_API_METADATA.clockify_log_work,
   name: "clockify_log_work",
   description:
     "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — never invent one. Use exactly one shape: `start+end`, `start+durationHours|durationMinutes`, or `date|dayOffset + durationHours|durationMinutes`. Explicit datetimes require Z or a numeric offset. Duration is capped at 168 hours.",
@@ -659,7 +660,6 @@ const logWorkDefinition = defineStructureDurableSafeWriteAction({
 
 const logWork = Object.freeze({
   ...logWorkDefinition,
-  ...TIME_TRACKING_API_METADATA.clockify_log_work,
 });
 
 const reviewDay = defineAction({

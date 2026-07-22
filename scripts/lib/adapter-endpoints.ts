@@ -3,6 +3,101 @@ import { relative, resolve } from "node:path";
 import ts from "typescript";
 
 import type { ScopeAccess } from "../../src/addon/scope-contract.js";
+import type {
+  ApiHost,
+  ApiMethod,
+  AvailabilityByAuthClass,
+} from "../../src/harness/api-operation.js";
+
+export const OFFICIAL_OPENAPI_SOURCE = Object.freeze({
+  version: "v1",
+  sha256: "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
+  corroborationPath: "../clockify-ts-sdk/spec/official/clockify.official.openapi.yaml",
+});
+
+export interface CanonicalOpenApiOperation {
+  host: ApiHost;
+  method: ApiMethod;
+  path: string;
+  operationId: string;
+}
+
+/**
+ * Official operations consumed only by current internal actions. Atomic API
+ * actions carry their own reviewed operation metadata; this table closes the
+ * remaining raw-adapter correlation surface without making those actions
+ * model-visible before Task 6.
+ */
+export const INTERNAL_OPENAPI_OPERATIONS = [
+  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "deleteClient" },
+  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}", operationId: "deleteCategory" },
+  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/projects/{projectId}", operationId: "deleteProject" },
+  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}", operationId: "deleteTask" },
+  { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/created", operationId: "getCreatedEntityInfo" },
+  { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/deleted", operationId: "getDeletedEntityInfo" },
+  { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/updated", operationId: "getUpdatedEntityInfo" },
+  { host: "api", method: "GET", path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}", operationId: "getProjectTotalsForSingleProject" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}/status", operationId: "updateExpenseCategoryStatus" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/invoices/{invoiceId}/status", operationId: "changeInvoiceStatus" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{customFieldId}", operationId: "editProjectCustomFieldDefaultValue" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/projects/{projectId}/estimate", operationId: "updateEstimate" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/projects/{projectId}/memberships", operationId: "updateMemberships" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-entries/invoiced", operationId: "updateInvoicedStatus" },
+  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}", operationId: "updateBalance" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/clients", operationId: "createClient" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/custom-fields", operationId: "create" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/holidays", operationId: "createHoliday" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/invoices", operationId: "createInvoice" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/invoices/{invoiceId}/items/import", operationId: "importTimeEntriesAndExpenses" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/projects/{projectId}/tasks", operationId: "createTask" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals", operationId: "getFilteredProjectTotals" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-entries", operationId: "createTimeEntry" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-off/policies", operationId: "createPolicy" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/user-groups/{userGroupId}/users", operationId: "addUser" },
+  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/webhooks", operationId: "createWebhook" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "updateClient" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/custom-fields/{customFieldId}", operationId: "editCustomField" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}", operationId: "updateCategory" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/holidays/{holidayId}", operationId: "updateHoliday" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/invoices/{invoiceId}", operationId: "updateInvoice" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/cost-rate", operationId: "setTaskCostRate" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/hourly-rate", operationId: "setTaskHourlyRate" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}", operationId: "updateTask" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate", operationId: "addUsersCostRate" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate", operationId: "addUsersHourlyRate" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-entries/{id}", operationId: "updateTimeEntry" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-off/policies/{id}", operationId: "updatePolicy" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/users/{userId}/cost-rate", operationId: "setCostRateForUser" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/users/{userId}/hourly-rate", operationId: "setHourlyRateForUser" },
+  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/webhooks/{webhookId}", operationId: "updateWebhook" },
+] as const satisfies readonly CanonicalOpenApiOperation[];
+
+export interface NonActionAdapterDisposition {
+  adapterKey: string;
+  decision: "internal_support";
+  consumers: readonly string[];
+  availabilityByAuthClass: AvailabilityByAuthClass;
+  reason: string;
+}
+
+export const NON_ACTION_ADAPTER_DISPOSITIONS = [
+  {
+    adapterKey: [
+      "read",
+      "api",
+      "GET",
+      "/workspaces/{workspaceId}",
+      "users.ts",
+    ].join("\0"),
+    decision: "internal_support",
+    consumers: ["src/routes/chat-pipeline.ts", "src/routes/component.ts"],
+    availabilityByAuthClass: {
+      addon: { available: true },
+      api_key: { available: true },
+    },
+    reason: "Loads the authenticated admin's calendar context before action selection; it is route support, not an action endpoint.",
+  },
+] as const satisfies readonly NonActionAdapterDisposition[];
 
 type RestCoreOperation =
   | "call"
@@ -35,6 +130,18 @@ export interface AdapterEndpoint {
   sourceModule: string;
   sourceLine: number;
   pagination: AdapterEndpointPagination;
+}
+
+export interface OpenApiDescriptionOperation {
+  method: ApiMethod;
+  path: string;
+  operationId: string;
+}
+
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function lastIdentifier(text: string): string {
@@ -197,9 +304,73 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
   const unique = new Map<string, AdapterEndpoint>();
   for (const endpoint of extracted) unique.set(adapterEndpointKey(endpoint), endpoint);
   return [...unique.values()].sort((left, right) =>
-    `${left.sourceModule} ${left.host} ${left.method} ${left.rawPath}`.localeCompare(
-      `${right.sourceModule} ${right.host} ${right.method} ${right.rawPath}`,
-    ) || left.sourceLine - right.sourceLine || left.pagination.localeCompare(right.pagination));
+    compareText(
+      `${left.sourceModule}\0${left.host}\0${left.method}\0${left.rawPath}`,
+      `${right.sourceModule}\0${right.host}\0${right.method}\0${right.rawPath}`,
+    ) || left.sourceLine - right.sourceLine || compareText(left.pagination, right.pagination));
+}
+
+export function canonicalOpenApiPath(path: string): string {
+  return path.replaceAll(/\{[^}]+\}/gu, "{}");
+}
+
+export function expandReviewedDynamicAdapterPath(path: string): readonly string[] {
+  const expansions = [
+    ["changeType", ["created", "deleted", "updated"]],
+    ["kind", ["cost-rate", "hourly-rate"]],
+  ] as const;
+  let paths = [path];
+  for (const [placeholder, values] of expansions) {
+    const marker = `{${placeholder}}`;
+    if (!paths.some((candidate) => candidate.includes(marker))) continue;
+    paths = paths.flatMap((candidate) => values.map((value) => candidate.replaceAll(marker, value)));
+  }
+  return [...new Set(paths)].sort(compareText);
+}
+
+function openApiMethod(value: string): ApiMethod | undefined {
+  switch (value) {
+    case "get": return "GET";
+    case "post": return "POST";
+    case "put": return "PUT";
+    case "patch": return "PATCH";
+    case "delete": return "DELETE";
+    default: return undefined;
+  }
+}
+
+/** Parse only the OpenAPI path/method/operationId spine used by correlation. */
+export function extractOpenApiDescriptionOperations(
+  source: string,
+): readonly OpenApiDescriptionOperation[] {
+  const operations: OpenApiDescriptionOperation[] = [];
+  let currentPath: string | undefined;
+  let currentMethod: ApiMethod | undefined;
+  for (const line of source.split(/\r?\n/u)) {
+    const pathMatch = /^ {2}(\/[^:]+):\s*$/u.exec(line);
+    if (pathMatch?.[1]) {
+      currentPath = pathMatch[1].replace(/^\/v1/u, "");
+      currentMethod = undefined;
+      continue;
+    }
+    const methodMatch = /^ {4}(get|post|put|patch|delete):\s*$/u.exec(line);
+    if (methodMatch?.[1] && currentPath !== undefined) {
+      currentMethod = openApiMethod(methodMatch[1]);
+      continue;
+    }
+    const operationMatch = /^ {6}operationId:\s*(\S+)\s*$/u.exec(line);
+    if (operationMatch?.[1] && currentPath !== undefined && currentMethod !== undefined) {
+      operations.push({
+        method: currentMethod,
+        path: currentPath,
+        operationId: operationMatch[1],
+      });
+    }
+  }
+  return operations.sort((left, right) => compareText(
+    `${left.path}\0${left.method}\0${left.operationId}`,
+    `${right.path}\0${right.method}\0${right.operationId}`,
+  ));
 }
 
 export function correlateAdapterEndpointPaths(
@@ -207,5 +378,6 @@ export function correlateAdapterEndpointPaths(
   normalizePlaceholderNames: (path: string) => string,
   expandDynamicLiterals: (path: string) => readonly string[],
 ): string[] {
-  return [...new Set(expandDynamicLiterals(rawPath).map(normalizePlaceholderNames))].sort();
+  return [...new Set(expandDynamicLiterals(rawPath).map(normalizePlaceholderNames))]
+    .sort(compareText);
 }

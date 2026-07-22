@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -12,8 +12,106 @@ import type { ActionDefinition } from "../../src/harness/action.js";
 import {
   ACTION_CATALOG,
   actionFingerprintForDefinition,
+  catalogHash,
   getAction,
 } from "../../src/harness/catalog.js";
+
+interface InventoryActionRow {
+  name: string;
+  kind: "read" | "safe_write" | "risky_write";
+  featureGroup: string;
+  workflowModule: string;
+  exposure: "api" | "composite" | "generic" | "local";
+  decisionReason: string;
+  primaryMutationCount: number;
+  compensationCount: number;
+  boundedArgumentDictionaries: readonly { path: string }[];
+  openSchemaVerdict: "closed" | "open" | "not_applicable";
+  materialFields: readonly { kind: "value" | "array_item" | "dictionary_entry" }[];
+  presentation: { presenterId: string; version: number } | null;
+  operation: {
+    host: "api" | "reports" | "audit";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    path: string;
+  } | null;
+  adapterShapes: readonly {
+    role: "primary" | "support";
+    host: "api" | "reports" | "audit";
+    method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    path: string;
+  }[];
+}
+
+interface InventoryAdapterRow {
+  key: string;
+  host: "api" | "reports" | "audit";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  decision: "model_api" | "internal_support" | "unavailable";
+  mappedModelActionNames: readonly string[];
+  internalSupportConsumers: readonly string[];
+  sourceCallSites: readonly { sourceModule: string; sourceLine: number }[];
+}
+
+interface InventoryCorrelationRow {
+  adapterKey: string;
+  operations: readonly { operationId: string; method: string; path: string }[];
+  unavailableReason?: "official_operation_id_missing";
+}
+
+interface ApiActionInventoryEvidence {
+  schemaVersion: number;
+  generatorVersion: number;
+  catalogHash: string;
+  counts: {
+    actions: number;
+    rawAdapterCallSites: number;
+    rawAdapterShapes: number;
+    unclassifiedActions: number;
+    unclassifiedAdapterShapes: number;
+    exposures: { api: number; composite: number; generic: number; local: number };
+  };
+  actions: readonly InventoryActionRow[];
+  adapterRequestShapes: readonly InventoryAdapterRow[];
+  openApiCorrelations: readonly InventoryCorrelationRow[];
+}
+
+interface InventoryArtifacts {
+  apiCatalogSource: string;
+  evidenceJson: string;
+  inventoryMarkdown: string;
+}
+
+interface InventoryGeneratorModule {
+  buildApiActionInventoryEvidence(repositoryRoot: string): ApiActionInventoryEvidence;
+  renderApiActionInventoryArtifacts(evidence: ApiActionInventoryEvidence): InventoryArtifacts;
+}
+
+function isInventoryGeneratorModule(value: unknown): value is InventoryGeneratorModule {
+  return typeof value === "object" && value !== null
+    && "buildApiActionInventoryEvidence" in value
+    && typeof value.buildApiActionInventoryEvidence === "function"
+    && "renderApiActionInventoryArtifacts" in value
+    && typeof value.renderApiActionInventoryArtifacts === "function";
+}
+
+async function loadInventoryGeneratorModule(): Promise<InventoryGeneratorModule> {
+  const sourceUrl = new URL("../../scripts/generate-api-action-inventory.ts", import.meta.url);
+  if (!existsSync(fileURLToPath(sourceUrl))) {
+    throw new Error("missing_api_action_inventory_generator");
+  }
+  const loaded: unknown = await import(/* @vite-ignore */ sourceUrl.href);
+  if (!isInventoryGeneratorModule(loaded)) {
+    throw new Error("invalid_api_action_inventory_generator");
+  }
+  return loaded;
+}
+
+function compareText(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
 
 type RegistryId = "v1-internal" | "v2-api" | "v2-local";
 
@@ -23,7 +121,7 @@ interface InventoryEntry {
 }
 
 interface RegistryModule {
-  normalizeRegistryAction(definition: ActionDefinition, registryId: RegistryId): ActionDefinition;
+  normalizeRegistryAction(definition: unknown, registryId: RegistryId): ActionDefinition;
   registryHashForActions(actions: readonly ActionDefinition[]): string;
   inventoryActionDefinitions(): readonly InventoryEntry[];
 }
@@ -49,7 +147,7 @@ interface AvailabilityDecision {
 }
 
 interface TestApiMetadata {
-  apiExposure?: "api" | "composite" | "generic" | "local";
+  apiExposure: "api" | "composite" | "generic" | "local";
   apiExposureReason?: string;
   apiOperation?: {
     operationId: string;
@@ -60,7 +158,7 @@ interface TestApiMetadata {
     exposure: "api" | "composite" | "generic" | "local";
   };
   adapterEndpoints?: { primary: readonly string[]; support: readonly string[] };
-  availabilityByAuthClass?: { addon: AvailabilityDecision; api_key: AvailabilityDecision };
+  availabilityByAuthClass: { addon: AvailabilityDecision; api_key: AvailabilityDecision };
   boundedArgumentDictionaries?: readonly {
     path: string;
     keyPattern: string;
@@ -214,6 +312,7 @@ const STRUCTURE_ENDPOINT = {
   projects: {
     list: structureEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
     get: structureEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    membershipState: structureEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
     create: structureEndpointKey("write", "POST", "/workspaces/{workspaceId}/projects", "projects.ts"),
     fromTemplate: structureEndpointKey("write", "POST", "/workspaces/{workspaceId}/projects/from-template", "projects.ts"),
     update: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
@@ -642,7 +741,7 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     exposure: "generic",
     reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
     primary: [STRUCTURE_ENDPOINT.projects.rate],
-    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.users.list],
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState, STRUCTURE_ENDPOINT.users.list],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   internalAnnotation({
@@ -658,7 +757,7 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     exposure: "generic",
     reason: "Accepts open membership rows and unbounded add/replace arrays; Task 6 must split and bound the membership operations.",
     primary: [STRUCTURE_ENDPOINT.projects.memberships],
-    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get],
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   apiAnnotation({
@@ -890,6 +989,7 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
       STRUCTURE_ENDPOINT.users.list,
       STRUCTURE_ENDPOINT.projects.list,
       STRUCTURE_ENDPOINT.projects.get,
+      STRUCTURE_ENDPOINT.projects.membershipState,
     ],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
@@ -2194,7 +2294,7 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
 const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   apiAnnotation({
     name: "clockify_scheduling_assignments_list",
-    operationId: "getAllSchedulingAssignments",
+    operationId: "getAllAssignments",
     method: "GET",
     path: "/workspaces/{workspaceId}/scheduling/assignments/all",
     access: "read",
@@ -2214,7 +2314,7 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   {
     ...apiAnnotation({
       name: "clockify_scheduling_assignments_create",
-      operationId: "createRecurringAssignment",
+      operationId: "createRecurring",
       method: "POST",
       path: "/workspaces/{workspaceId}/scheduling/assignments/recurring",
       access: "write",
@@ -2241,7 +2341,7 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   {
     ...apiAnnotation({
       name: "clockify_scheduling_assignments_update",
-      operationId: "updateRecurringAssignment",
+      operationId: "editRecurring",
       method: "PATCH",
       path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
       access: "write",
@@ -2261,7 +2361,7 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   {
     ...apiAnnotation({
       name: "clockify_scheduling_assignments_delete",
-      operationId: "deleteRecurringAssignment",
+      operationId: "deleteRRecurringAssignment",
       method: "DELETE",
       path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
       access: "write",
@@ -2309,7 +2409,7 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   }),
   apiAnnotation({
     name: "clockify_scheduling_user_totals",
-    operationId: "getUserCapacityTotal",
+    operationId: "getUserTotalsForSingleUser",
     method: "GET",
     path: "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals",
     access: "read",
@@ -2432,7 +2532,7 @@ const ADAPTER_ENDPOINT_KEYS = new Set(
     .map(adapterRequestShapeKey),
 );
 
-function withoutApiMetadata(definition: ActionDefinition): ActionDefinition {
+function withoutApiMetadata(definition: ActionDefinition): object {
   const {
     apiExposure: _apiExposure,
     apiExposureReason: _apiExposureReason,
@@ -2516,8 +2616,9 @@ describe("API action inventory normalization", () => {
             ? "v2-local"
             : "v1-internal",
       )).not.toThrow();
+      const changedExposure = definition.apiExposure === "local" ? "generic" : "local";
       expect(actionFingerprintForDefinition(definition)).not.toBe(
-        actionFingerprintForDefinition(withoutApiMetadata(definition)),
+        actionFingerprintForDefinition({ ...definition, apiExposure: changedExposure }),
       );
 
       if (expected.primaryMutationCount !== undefined) {
@@ -2663,5 +2764,135 @@ describe("API action inventory normalization", () => {
       registry.registryHashForActions([addonUnavailable]),
     );
     expect(registry.registryHashForActions([available])).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it("projects every action and raw adapter shape into one deterministic generated inventory", async () => {
+    const generator = await loadInventoryGeneratorModule();
+    const repositoryRoot = fileURLToPath(new URL("../..", import.meta.url));
+    const evidence = generator.buildApiActionInventoryEvidence(repositoryRoot);
+    const secondEvidence = generator.buildApiActionInventoryEvidence(repositoryRoot);
+    const artifacts = generator.renderApiActionInventoryArtifacts(evidence);
+    const secondArtifacts = generator.renderApiActionInventoryArtifacts(secondEvidence);
+
+    expect(evidence).toEqual(secondEvidence);
+    expect(artifacts).toEqual(secondArtifacts);
+    expect(evidence.schemaVersion).toBe(1);
+    expect(evidence.generatorVersion).toBe(1);
+    expect(evidence.catalogHash).toBe(catalogHash());
+    expect(evidence.catalogHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.counts).toEqual({
+      actions: 140,
+      rawAdapterCallSites: 142,
+      rawAdapterShapes: 118,
+      unclassifiedActions: 0,
+      unclassifiedAdapterShapes: 0,
+      exposures: { api: 82, composite: 23, generic: 31, local: 4 },
+    });
+    expect(evidence.actions).toHaveLength(evidence.counts.actions);
+    expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);
+    expect(evidence.openApiCorrelations).toHaveLength(evidence.counts.rawAdapterShapes);
+
+    const actionSortKeys = evidence.actions.map((action) => {
+      const anchor = action.operation ?? action.adapterShapes[0];
+      return [
+        anchor?.host ?? "local",
+        anchor?.path ?? "",
+        anchor?.method ?? "",
+        action.name,
+      ].join("\0");
+    });
+    expect(actionSortKeys).toEqual([...actionSortKeys].sort(compareText));
+    expect(new Set(evidence.actions.map((action) => action.name)).size)
+      .toBe(evidence.counts.actions);
+    for (const action of evidence.actions) {
+      expect(action.workflowModule).toMatch(/^[a-z0-9-]+\.ts$/u);
+      expect(action.decisionReason.trim()).not.toBe("");
+      expect(action.primaryMutationCount).toBeGreaterThanOrEqual(0);
+      expect(action.compensationCount).toBeGreaterThanOrEqual(0);
+      expect(["closed", "open", "not_applicable"]).toContain(action.openSchemaVerdict);
+      if (action.exposure === "api") {
+        expect(action.operation).not.toBeNull();
+        expect(action.presentation).not.toBeNull();
+      }
+    }
+
+    const adapterSortKeys = evidence.adapterRequestShapes.map((row) => [
+      row.host,
+      row.path,
+      row.method,
+      row.mappedModelActionNames[0] ?? row.internalSupportConsumers[0] ?? "",
+      row.key,
+    ].join("\0"));
+    expect(adapterSortKeys).toEqual([...adapterSortKeys].sort(compareText));
+    expect(evidence.adapterRequestShapes.reduce(
+      (sum, row) => sum + row.sourceCallSites.length,
+      0,
+    )).toBe(evidence.counts.rawAdapterCallSites);
+    expect(evidence.adapterRequestShapes.every((row) =>
+      ["model_api", "internal_support", "unavailable"].includes(row.decision)))
+      .toBe(true);
+    expect(evidence.openApiCorrelations.map((row) => row.adapterKey))
+      .toEqual(evidence.adapterRequestShapes.map((row) => row.key));
+    expect(evidence.openApiCorrelations.every((row) =>
+      row.operations.length > 0 || row.unavailableReason === "official_operation_id_missing"))
+      .toBe(true);
+
+    const membershipRead = evidence.adapterRequestShapes.find((row) => row.key === [
+      "read",
+      "api",
+      "GET",
+      "/workspaces/{workspaceId}/projects/{projectId}",
+      "projects.ts",
+    ].join("\0"));
+    expect(membershipRead).toMatchObject({ decision: "internal_support" });
+    expect(membershipRead?.internalSupportConsumers).toEqual(expect.arrayContaining([
+      "clockify_projects_memberships_update",
+      "clockify_projects_rate_update",
+      "clockify_setup_project",
+    ]));
+
+    const calendarRead = evidence.adapterRequestShapes.find((row) => row.key === [
+      "read",
+      "api",
+      "GET",
+      "/workspaces/{workspaceId}",
+      "users.ts",
+    ].join("\0"));
+    expect(calendarRead).toMatchObject({
+      decision: "internal_support",
+      internalSupportConsumers: ["src/routes/chat-pipeline.ts", "src/routes/component.ts"],
+    });
+
+    const auditSearch = evidence.adapterRequestShapes.find((row) => row.key === [
+      "read",
+      "audit",
+      "POST",
+      "/workspaces/{workspaceId}/audit-log",
+      "audit.ts",
+    ].join("\0"));
+    expect(auditSearch).toMatchObject({ decision: "unavailable" });
+    expect(evidence.openApiCorrelations.find((row) => row.adapterKey === auditSearch?.key))
+      .toMatchObject({ operations: [], unavailableReason: "official_operation_id_missing" });
+
+    expect(artifacts.evidenceJson).toBe(`${JSON.stringify(evidence, null, 2)}\n`);
+    expect(artifacts.apiCatalogSource).not.toMatch(/\b(?:handler|executor|zod)\b/iu);
+    expect(JSON.stringify(artifacts)).not.toMatch(/generatedAt|timestamp/iu);
+    expect(artifacts.inventoryMarkdown).toContain(`Catalog hash: \`${evidence.catalogHash}\``);
+    expect(readFileSync(new URL("../../src/harness/api-catalog.generated.ts", import.meta.url), "utf8"))
+      .toBe(artifacts.apiCatalogSource);
+    expect(readFileSync(new URL("../../evidence/api-action-inventory.json", import.meta.url), "utf8"))
+      .toBe(artifacts.evidenceJson);
+    expect(readFileSync(new URL("../../docs/API_ACTION_INVENTORY.md", import.meta.url), "utf8"))
+      .toBe(artifacts.inventoryMarkdown);
+
+    const packageSource = readFileSync(new URL("../../package.json", import.meta.url), "utf8");
+    expect(packageSource).toContain(
+      '"generate:api-action-inventory": "tsx scripts/generate-api-action-inventory.ts"',
+    );
+    expect(packageSource).toContain(
+      '"check:api-action-inventory": "tsx scripts/generate-api-action-inventory.ts --check"',
+    );
+    expect(packageSource.indexOf("npm run check:scope-contract"))
+      .toBeLessThan(packageSource.indexOf("npm run check:api-action-inventory"));
   });
 });

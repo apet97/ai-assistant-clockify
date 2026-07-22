@@ -24,11 +24,11 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
-- T04-J completes all 140 annotations: 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; none remain unclassified.
-- Atomic expense, user/group, leave/approval, and scheduling operations bind exact official evidence; dynamic selectors, list-and-find reads, bounded loops, unbounded arrays, and multi-primary wrappers remain internal.
-- Permission/show/recent-outcome operations are local and undo remains a local service outside the 140 definitions; cross-entity update/delete and curated report/onboarding workflows have exact non-API reasons and no invented operation ID.
-- Raw metadata stays optional only until T04-K; normalization supplies no defaults or incomplete entries. V1 remains default and v2 remains `not_ready` with no runner or cutover.
-- Node 22 proof: T04-J focus, F-J regression, type-check, and lint passed. No generated, live, deployment, or external action. Next: T04-K.
+- T04-K closes migration at 140 actions (82 `api`, 23 `composite`, 31 `generic`, 4 `local`) and 142 raw call sites / 118 shapes, with zero unclassified rows.
+- Schema/generator version 1 emits three deterministic artifacts with catalog hash `e200dcbdbeac4e0de32ec2d19b0d0c65394db11484e5b75efec9fddaa03881a9` and canonical official correlations.
+- Raw definitions now require classification and per-auth availability; normalization has no defaults, and required metadata participates in fingerprints.
+- Node 22 proof: two byte-stable regenerations, inventory/scope checks, 230 focused tests, and `npm run verify` (272 files / 3,384 tests) passed.
+- V1 remains default and v2 remains `not_ready`; no live/external action ran. Next: independent read-only reviews T04-R1 and T04-R2 before Task 5.
 
 ## Non-negotiable invariants
 
@@ -70,11 +70,11 @@ here; this file is the execution map.
 - Literal constraints may contain bounded structured JSON under the one shared
   limit contract in `src/harness/safety-limits.ts`; declaration, persistence,
   authority matching, schemas, and catalog metadata must not diverge.
-- Through T04-J, API metadata may be absent only from raw action definitions.
-  `normalizeRegistryAction` is the sole raw-to-registry boundary: it supplies no
-  classification defaults, validates complete metadata/closed model-write schemas,
-  recomputes reviewed write authority, and rejects non-atomic primary mutation
-  plans. T04-K removes this temporary optionality after all domains are annotated.
+- Every raw action definition requires API classification and per-auth
+  availability. `normalizeRegistryAction` is the sole raw-to-registry boundary:
+  it supplies no defaults, validates complete metadata and closed model-write
+  schemas, recomputes reviewed write authority, and rejects non-atomic primary
+  mutation plans before model-registry insertion.
 - Semantic literal aliases are exact, catalog-hashed, and scoped to one
   action/path/value. Every model-controlled boolean path has reviewed aliases or
   an explicit exact-literal exclusion; opposite-polarity containment fails closed.
@@ -157,6 +157,8 @@ npm run audit:prod    # fail-closed production advisory policy
 npm run license:prod  # production license policy + deterministic JSON evidence
 npm run eval:smoke    # offline scripted-model safety corpus (no credentials)
 npm run check:scope-contract # generated endpoint/scope contract must be current
+npm run generate:api-action-inventory # regenerate TS, JSON, and Markdown inventory artifacts
+npm run check:api-action-inventory # generated API action inventory must be current
 npm run deploy:private-production # guarded release transaction; prerequisites in DEPLOYMENT.md
 npm run dev           # tsx src/server.ts (needs env)
 ```
@@ -219,9 +221,10 @@ npm run dev           # tsx src/server.ts (needs env)
   bounded selection context survive clarification/confirm resume).
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`), `actions.ts` (executor +
-  `commitConfirmedOperation`), `api-operation.ts` (typed API metadata carrier),
-  `action-registry.ts` (fail-closed normalization and raw migration inventory),
-  `catalog.ts` (v1-preserving conditional metadata fingerprints),
+  `commitConfirmedOperation`), `api-operation.ts` (required typed API metadata
+  carrier), `action-registry.ts` (fail-closed normalization, duplicate-safe
+  inventory, and schema verdict), `api-catalog.generated.ts` (handler-free API
+  descriptors), `catalog.ts` (required metadata fingerprints),
   `workflows/structure-api-metadata.ts` (reviewed operation/endpoint/auth/exposure
   and material/presenter evidence for 31 structure definitions), `workflows/time-tracking.ts`
   and `workflows/entries.ts` (equivalent evidence for 11 time definitions), plus
@@ -292,10 +295,10 @@ npm run dev           # tsx src/server.ts (needs env)
   RTO/RPO gate (source-schema read/token proof, private mode-0600 v8 migration clone,
   exact built server identity, and post-shutdown schema/integrity/writer-lock proof).
   `scripts/lib/adapter-endpoints.ts` owns raw fail-closed `RestCore` call-site
-  extraction, stable ordering, and pagination metadata; duplicates remain distinct
-  through scope assignment. The generator retains classification/rendering, uses a
-  separate legacy shape key for its 118-shape count, and does not call the future
-  correlation seam.
+  extraction, stable ordering, pagination metadata, and reviewed official-OpenAPI
+  correlation; duplicates remain distinct through scope assignment.
+  `scripts/generate-api-action-inventory.ts` generates the handler-free catalog,
+  JSON evidence, and Markdown inventory from one deterministic evidence model.
 
 ## Live request-shape gotchas (encoded in the adapter + unit tests)
 

@@ -9,6 +9,18 @@ import {
 } from "../../src/harness/action.js";
 import { actionFingerprint, getAction } from "../../src/harness/catalog.js";
 import { defineDurableSafeWriteAction } from "../../src/harness/durable-safe-write.js";
+import type { ApiActionMetadataCarrier } from "../../src/harness/api-operation.js";
+
+type IsRequired<Key extends keyof ApiActionMetadataCarrier> =
+  object extends Pick<ApiActionMetadataCarrier, Key> ? false : true;
+
+const REQUIRED_METADATA_FIELDS: {
+  apiExposure: IsRequired<"apiExposure">;
+  availabilityByAuthClass: IsRequired<"availabilityByAuthClass">;
+} = {
+  apiExposure: true,
+  availabilityByAuthClass: true,
+};
 
 const BASE_OPERATION = {
   operationId: "createTag",
@@ -91,7 +103,11 @@ function metadataFingerprint(changes: readonly (readonly [string, unknown])[]): 
 }
 
 describe("API operation metadata fingerprints", () => {
-  it("threads the optional Task 4 carrier through every current action builder without defaults", () => {
+  it("requires classification metadata and threads it through every current action builder", () => {
+    expect(REQUIRED_METADATA_FIELDS).toEqual({
+      apiExposure: true,
+      availabilityByAuthClass: true,
+    });
     const carrier = {
       apiExposure: "local" as const,
       availabilityByAuthClass: {

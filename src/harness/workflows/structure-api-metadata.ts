@@ -128,6 +128,7 @@ const endpoint = Object.freeze({
   projects: Object.freeze({
     list: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
     get: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    membershipState: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
     create: endpointKey("write", "POST", "/workspaces/{workspaceId}/projects", "projects.ts"),
     fromTemplate: endpointKey("write", "POST", "/workspaces/{workspaceId}/projects/from-template", "projects.ts"),
     update: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
@@ -276,7 +277,7 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     exposure: "generic",
     reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
     primary: [endpoint.projects.rate],
-    support: [endpoint.projects.list, endpoint.projects.get, endpoint.users.list],
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState, endpoint.users.list],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   clockify_projects_estimate_update: internalMetadata({
@@ -290,7 +291,7 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     exposure: "generic",
     reason: "Accepts open membership rows and unbounded add/replace arrays; Task 6 must split and bound the membership operations.",
     primary: [endpoint.projects.memberships],
-    support: [endpoint.projects.list, endpoint.projects.get],
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   clockify_tasks_list: apiMetadata({
@@ -502,6 +503,7 @@ export const STRUCTURE_API_METADATA = Object.freeze({
       endpoint.users.list,
       endpoint.projects.list,
       endpoint.projects.get,
+      endpoint.projects.membershipState,
     ],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
