@@ -678,6 +678,15 @@ def derive_allowed_path_specs(
         for path in plan.prefixes
         if category_permitted(path) and matches_scope(path)
     }
+    if re.search(
+        r"\b(?:named|focused)\s+(?:unit\s+)?tests?\b",
+        primary_source,
+        re.IGNORECASE,
+    ):
+        focused_gate = _extract_path_specs(_bold_field(prompt.text, "Focused gate"))
+        plan_exact.update(
+            path for path in focused_gate.exact if path.startswith("tests/")
+        )
     if "annotation files" in primary_source.lower():
         plan_prefixes.add("src/harness/workflows/")
     if "metadata carrier types/builders" in primary_source.lower():

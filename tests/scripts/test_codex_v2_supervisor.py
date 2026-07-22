@@ -537,6 +537,48 @@ class GitBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
             supervisor.validate_frozen_paths(("src/unrelated.ts",), allowed)
 
+    def test_named_unit_tests_resolve_from_the_focused_gate_only(self) -> None:
+        prompt = supervisor.Prompt(
+            "T01-D",
+            "Quarantine evidence",
+            """## Prompt T01-D: Quarantine evidence
+
+**Frozen files:**
+
+- `scripts/evidence/release-evidence.ts`;
+- their four named unit tests from Task 1;
+- `CLAUDE.md`, `AGENTS.md` only for synchronized truth.
+
+**Focused gate:**
+
+```bash
+npx vitest run tests/unit/deepseek-release-evidence.test.ts tests/unit/live-browser-acceptance-evidence.test.ts tests/unit/private-production-release-evidence.test.ts tests/unit/release-evidence.test.ts
+```
+
+**Task gate:**
+
+```bash
+npx vitest run tests/unit/config.test.ts tests/integration/routes.test.ts
+```
+""",
+            "COMPLETE T01-C",
+            "docs: quarantine evidence",
+            (),
+        )
+        allowed = supervisor.derive_allowed_path_specs(prompt, (), "")
+
+        supervisor.validate_frozen_paths(
+            (
+                "tests/unit/deepseek-release-evidence.test.ts",
+                "tests/unit/live-browser-acceptance-evidence.test.ts",
+                "tests/unit/private-production-release-evidence.test.ts",
+                "tests/unit/release-evidence.test.ts",
+            ),
+            allowed,
+        )
+        with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
+            supervisor.validate_frozen_paths(("tests/unit/config.test.ts",), allowed)
+
     def test_path_extraction_rejects_parent_paths_and_keeps_guidance_at_root(
         self,
     ) -> None:
