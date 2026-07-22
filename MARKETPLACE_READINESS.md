@@ -37,8 +37,9 @@ The evidence record is the single status source. It covers:
   pending/skipped, or todo tests;
 - `audit:prod`, `license:prod`, `eval:smoke`, configured DeepSeek evaluation,
   actionlint, dependency review, secret scan, CodeQL, SBOM, and license artifacts;
-- Chromium, Firefox, and WebKit coverage for the release viewport, theme, locale,
-  keyboard, policy, action, confirmation, partial-result, history, and PDF flows;
+- Chromium, Firefox, and WebKit coverage for the release viewport, theme, keyboard,
+  policy, action, confirmation, partial-result, history, and PDF flows;
+- English interface; Unicode workspace data; timezone-aware Intl formatting;
 - deterministic lifecycle, cancellation, demotion, provider-outage, throttle,
   malformed-response, artifact-isolation, and crash-recovery coverage;
 - the DeepSeek safety and latency benchmark, including cache-hit tokens and comparison

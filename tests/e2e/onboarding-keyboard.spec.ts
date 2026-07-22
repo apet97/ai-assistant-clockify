@@ -18,7 +18,7 @@ const permissionGroups = [
 ] as const;
 
 test("first-run disclosure and permissions are completable with the keyboard", async ({ page, browserName }) => {
-  await openAssistant(page, { scenario: "first-run", theme: "dark", language: "sr" });
+  await openAssistant(page, { scenario: "first-run", theme: "dark" });
 
   await expect(page.getByRole("heading", { name: "Set up your assistant permissions" })).toBeVisible();
   await expect(page.getByText("DeepSeek processes chat requests for this assistant.")).toBeVisible();
@@ -51,8 +51,9 @@ test("first-run disclosure and permissions are completable with the keyboard", a
   expect(Object.keys(savedPolicy.groups)).toHaveLength(permissionGroups.length);
 });
 
-test("display controls apply Serbian and dark preferences", async ({ page, browserName }) => {
-  await openAssistant(page, { theme: "light", language: "en" });
+test("display controls apply dark preferences to the fixed English interface", async ({ page, browserName }) => {
+  await openAssistant(page, { theme: "light" });
+  expect(new URL(page.url()).searchParams.has("language")).toBe(false);
   const display = page.getByRole("button", { name: "Display" });
   await tabTo(page, display, browserName, 80, true);
   await page.keyboard.press("Enter");
@@ -62,17 +63,21 @@ test("display controls apply Serbian and dark preferences", async ({ page, brows
   await expect(page.getByText("Clockify time zone", { exact: false })).toContainText("Europe/Belgrade");
   await page.keyboard.type("Dark");
   await expect(theme).toHaveValue("dark");
-
-  const language = page.getByRole("combobox", { name: "Language" });
-  await tabTo(page, language, browserName);
-  await page.keyboard.type("Srpski");
-  await expect(language).toHaveValue("sr");
+  await expect(page.getByRole("combobox", { name: "Language" })).toHaveCount(0);
 
   const save = page.getByRole("button", { name: "Save display" });
   await tabTo(page, save, browserName);
   await page.keyboard.press("Enter");
 
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await expect(page.locator("html")).toHaveAttribute("lang", "sr");
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
   await expect(display).toBeFocused();
+});
+
+test("the browser fixture rejects obsolete language query knobs", async ({ request }) => {
+  for (const value of ["en", "sr"] as const) {
+    const query = new URLSearchParams({ language: value });
+    const response = await request.get(`/?${query.toString()}`);
+    expect(response.status()).toBe(400);
+  }
 });

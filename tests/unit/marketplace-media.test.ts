@@ -104,6 +104,14 @@ describe("marketplace media package", () => {
     expect(generator).toContain("conversation_card_outside_capture");
   });
 
+  it("captures the fixed English interface without a language query knob", async () => {
+    const generator = await readFile(resolve("scripts/generate-marketplace-media.ts"), "utf8");
+    expect(generator).not.toMatch(/language=(?:en|sr)/);
+    expect(generator).toContain("assertFixedEnglishInterface");
+    expect(generator).toMatch(/async function openPage[\s\S]*await assertFixedEnglishInterface\(page\)/);
+    expect(generator).toContain("marketplace_media_language_contract");
+  });
+
   it("records a secret-free seven-step fixture demo and exact delivery-asset hashes", async () => {
     const evidence = JSON.parse(await readFile(evidencePath, "utf8")) as MarketplaceMediaEvidence;
     expect(evidence).toMatchObject({

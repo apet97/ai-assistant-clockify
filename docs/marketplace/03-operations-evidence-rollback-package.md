@@ -634,6 +634,7 @@ only the strict booleans/counts accepted by
 - risky preview/cancel with the original effect preserved, then a separate risky
   preview/button-confirm with a receipt and authoritative absence proof;
 - chat switching, history restore, full-page reload, and restored operation cards;
+- English interface; Unicode workspace data; timezone-aware Intl formatting;
 - the visible Download PDF action plus authenticated PDF bytes: `.pdf` filename,
   `application/pdf`, `%PDF-` signature, nonzero byte count, authenticated 200, and a
   separate unauthenticated 401;

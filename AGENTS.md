@@ -24,12 +24,12 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Task 1 (`T01-A`-`T01-D`) is complete: ADR 001, the atomic engine config/version field, one construction-time seam, and historical-v1 evidence quarantine.
-- T02-C is complete: Task 2 runtime sources contain no Serbian interface/router branch, and the eight Serbian v1 selector tokens are removed.
+- Task 2 (`T02-A`-`T02-D`) is complete: preferences and rendering are fixed-English, runtime sources contain no Serbian interface/router branch, and release/media/E2E surfaces reject obsolete language query knobs.
 - Preferences remain exactly `{theme,timeZone?}`; legacy localStorage/cookies drop valid `language`, and Clockify language claims remain ignored.
 - Generic non-ASCII selector input still fails open; English-prose Latin/Cyrillic fixtures retain UTF-8 byte-span, authority, and retention coverage.
 - Task 2 criterion: **English interface; Unicode workspace data; timezone-aware Intl formatting**.
 - V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 gates passed: T02-C focus 221 tests; type-check; lint; documentation/diff checks. No live/external action. Next: T02-D.
+- Node 22 proof passed: media focus 9 tests; complete Task 2 focus 313 tests; 42 E2E tests across Chromium, Firefox, and WebKit; canonical no-match scan; and diff checks. Unicode media data remains deterministic; no generated asset was edited or published. No live/external action. Next: T03-A.
 
 ## Non-negotiable invariants
 

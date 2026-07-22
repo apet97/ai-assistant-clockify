@@ -23,6 +23,9 @@ evidence that v2 code, release evidence, or deployment exists. V1 remains the
 default while v2 is built beside it under `src/assistant-v2/`.
 During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
 
+The interface and workspace-data criterion is: **English interface; Unicode workspace
+data; timezone-aware Intl formatting**.
+
 ## Highlights
 
 - **Admin/owner only.** Non-admins are rejected before a session is ever created.

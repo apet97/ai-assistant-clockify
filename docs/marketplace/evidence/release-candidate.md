@@ -74,14 +74,14 @@ release record binds its SHA-256 and exact passed/total/failed/pending/todo coun
 | Maintainability | Discriminated action types, shadow mutation removed with parity, chat coordination extracted, script lint, one Zod-shape adapter | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Endpoint-to-scope contract | Generated contract passes; every scope has endpoint/probe; `REPORTS_WRITE` absent | PENDING CURRENT RUN | PENDING CURRENT RUN |
 
-## Browser, accessibility, localization, and product flow
+## Browser, accessibility, interface, and product flow
 
 | Gate | Required result | Status | Evidence reference |
 |---|---|---|---|
 | Cross-browser suite | Chromium, Firefox, and WebKit pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Responsive suite | 280, 320, and 375 px plus desktop; no horizontal overflow; controls at least 44 x 44 px | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Theme and contrast | Light and dark; all small text meets the configured contrast checks | PENDING CURRENT RUN | PENDING CURRENT RUN |
-| Locale and preferences | English plus one non-English locale; Clockify theme/language decoded; page language and `Intl` formatting verified | PENDING CURRENT RUN | PENDING CURRENT RUN |
+| Interface, data, and formatting | English interface; Unicode workspace data; timezone-aware Intl formatting | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Keyboard operation | First run, composer, history, preview, confirm/cancel, artifact action, and policy controls usable without pointer | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Permission-aware first run | DeepSeek disclosure and saved policy shown; restricted-policy welcome/prompts are truthful | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Action journeys | Read, safe write, risky preview/confirm/cancel, confirm-all partial, undo, history, and reload pass | PENDING CURRENT RUN | PENDING CURRENT RUN |

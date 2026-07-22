@@ -12,6 +12,7 @@ const port = Number(process.env.E2E_PORT ?? 4174);
 const uiRoot = join(process.cwd(), "dist", "ui");
 const sessions = new Map();
 const expiresAt = "2099-01-01T00:05:00.000Z";
+const unicodeWorkspaceData = "Čukarica 東京 — račun № 7";
 
 // Derive browser/media policy fixtures from the built production vocabulary so a
 // newly-added group cannot silently disappear from onboarding screenshots or E2E.
@@ -85,6 +86,7 @@ const fixtureActionPolicy = {
   "risky-cancel": { action: "clockify_projects_update", group: "work_structure", required: "read_write" },
   batch: { action: "clockify_projects_update", group: "work_structure", required: "read_write" },
   pdf: { action: "clockify_invoices_export", group: "invoices", required: "read" },
+  unicode: { action: "clockify_reports_summary", group: "reports", required: "read" },
 };
 
 function policyAllows(policy, requirement) {
@@ -156,6 +158,9 @@ async function streamChat(request, response, state) {
       },
     })];
     reply = "Your authenticated invoice export is ready.";
+  } else if (message === "unicode") {
+    results = [receipt("clockify_reports_summary", `Loaded project ${unicodeWorkspaceData}.`)];
+    reply = "Here is the requested workspace record.";
   } else {
     results = [];
     reply = `Echo: ${message}`;
@@ -169,11 +174,10 @@ async function streamChat(request, response, state) {
   ]);
 }
 
-function initialState(scenario, theme, language) {
+function initialState(scenario, theme) {
   return {
     scenario,
     theme,
-    language,
     permissionsSaved: false,
     policy: scenario === "restricted" ? structuredClone(restrictedPolicy) : structuredClone(fullPolicy),
     activeView: "current",
@@ -212,6 +216,9 @@ function sessionSummaries() {
 }
 
 async function serveStatic(request, response, pathname, url) {
+  if (url.searchParams.has("language")) {
+    return json(response, 400, { ok: false, message: "Language query parameters are unsupported." });
+  }
   const existing = stateFor(request);
   let state = existing;
   const setCookies = [];
@@ -220,7 +227,6 @@ async function serveStatic(request, response, pathname, url) {
     state = initialState(
       url.searchParams.get("scenario") ?? "default",
       url.searchParams.get("theme") ?? "light",
-      url.searchParams.get("language") ?? "en",
     );
     sessions.set(id, state);
     setCookies.push(`e2e_session=${id}; Path=/; HttpOnly; SameSite=Lax`);
@@ -264,7 +270,7 @@ const server = createServer(async (request, response) => {
       adminUserId: "admin-e2e",
       workspaceRole: "ADMIN",
       csrfToken: "e2e-csrf",
-      preferences: { theme: state.theme, language: state.language, timeZone: "Europe/Belgrade" },
+      preferences: { theme: state.theme, timeZone: "Europe/Belgrade" },
       links: {
         privacy: "https://example.test/privacy",
         security: "https://example.test/security",

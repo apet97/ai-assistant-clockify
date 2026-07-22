@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { openAssistant } from "./helpers.js";
+import { openAssistant, send } from "./helpers.js";
+
+const unicodeWorkspaceData = "Čukarica 東京 — račun № 7";
 
 test("first-run initialization fetches the permissions policy exactly once", async ({ page }) => {
   let permissionsGets = 0;
@@ -80,13 +82,21 @@ test("a saved read-only policy immediately refreshes welcome copy and suggestion
   await expect(page.getByRole("button", { name: "What did I track today?" })).toBeVisible();
 });
 
-test("Serbian preferences localize relative time and the currency-bearing suggestion with Intl", async ({ page }) => {
-  await openAssistant(page, { language: "sr" });
-  await expect(page.getByRole("button", { name: /Log a 50,00.*US\$ travel expense/ })).toBeVisible();
+test("fixed English preferences preserve Unicode workspace data with timezone-aware Intl formatting", async ({ page }) => {
+  await openAssistant(page);
+  await expect(page.locator("html")).toHaveAttribute("lang", "en");
+  await expect(page.getByRole("button", { name: /Log a \$50\.00 travel expense/ })).toBeVisible();
+
+  await send(page, "unicode");
+  await expect(page.getByRole("group", { name: "Done: clockify_reports_summary" }))
+    .toContainText(unicodeWorkspaceData);
 
   await page.getByRole("button", { name: "Chats" }).click();
   const labels = await page.locator(".chats-time").allTextContents();
   expect(labels.length).toBeGreaterThan(0);
-  expect(labels.join(" ")).not.toContain("ago");
-  expect(labels.join(" ")).toMatch(/sada|juče|prekjuče|pre /);
+  expect(labels.join(" ")).toContain("ago");
+
+  await page.getByRole("button", { name: "Display" }).click();
+  await expect(page.getByText("Clockify time zone", { exact: false })).toContainText("Europe/Belgrade");
+  await expect(page.getByRole("combobox", { name: "Language" })).toHaveCount(0);
 });
