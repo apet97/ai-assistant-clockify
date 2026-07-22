@@ -954,6 +954,37 @@ class GitBoundaryTests(unittest.TestCase):
             "Git staging command exceeds frozen scope",
         )
 
+    def test_focused_task_tests_resolve_from_the_canonical_task_plan(self) -> None:
+        prompt = supervisor.Prompt(
+            "T04-E",
+            "Annotate invoice actions",
+            """## Prompt T04-E: Annotate invoice actions
+
+**Frozen files:** `src/harness/workflows/invoices.ts`, focused Task 4/invoice tests, `CLAUDE.md`, `AGENTS.md`.
+
+**Focused gate:** Task 4 metadata/fingerprint/mutation tests plus invoice workflow/hardening tests.
+""",
+            "COMPLETE T04-D",
+            "docs: annotate invoice API action metadata",
+            (),
+        )
+        plan_context = """## Task 4: API action metadata
+
+- `src/harness/workflows/invoices.ts`
+- `tests/unit/api-action-inventory.test.ts`
+"""
+        allowed = supervisor.derive_allowed_path_specs(prompt, (), plan_context)
+
+        supervisor.validate_frozen_paths(
+            (
+                "src/harness/workflows/invoices.ts",
+                "tests/unit/api-action-inventory.test.ts",
+            ),
+            allowed,
+        )
+        with self.assertRaisesRegex(supervisor.SupervisorError, "frozen scope"):
+            supervisor.validate_frozen_paths(("tests/unit/unrelated.test.ts",), allowed)
+
     def test_named_unit_tests_resolve_from_the_focused_gate_only(self) -> None:
         prompt = supervisor.Prompt(
             "T01-D",

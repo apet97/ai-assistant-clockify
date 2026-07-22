@@ -1008,7 +1008,11 @@ def derive_allowed_path_specs(
             if path.startswith("src/harness/")
             and not path.startswith("src/harness/workflows/")
         )
-    if "all task 4 tests" in primary_source.lower():
+    if "all task 4 tests" in primary_source.lower() or re.search(
+        r"\bfocused\s+task\s+4(?:/[a-z0-9_-]+)?\s+tests\b",
+        primary_source,
+        re.IGNORECASE,
+    ):
         plan_exact.update(path for path in plan.exact if path.startswith("tests/"))
     if "eval/release/live workflows" in primary_source.lower():
         plan_exact.update(
