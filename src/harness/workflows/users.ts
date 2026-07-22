@@ -24,6 +24,14 @@ import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import type { UserRoleAssignment } from "../../clockify/ports/users.js";
 import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiExposure,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -37,6 +45,255 @@ import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-lim
  */
 
 const UG = "users_groups" as const;
+
+type UserGroupActionName =
+  | "clockify_users_list"
+  | "clockify_users_invite"
+  | "clockify_users_role_update"
+  | "clockify_users_rate_update"
+  | "clockify_users_deactivate"
+  | "clockify_groups_list"
+  | "clockify_groups_get"
+  | "clockify_groups_create"
+  | "clockify_groups_update"
+  | "clockify_groups_delete"
+  | "clockify_groups_add_user"
+  | "clockify_groups_remove_user";
+
+const USER_GROUP_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function userGroupEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "users.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function userGroupMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function userGroupApiMetadata(input: {
+  actionName: UserGroupActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: USER_GROUP_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function userGroupInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: USER_GROUP_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const userGroupEndpoint = Object.freeze({
+  usersList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/users"),
+  usersInvite: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/users"),
+  usersRole: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/users/{userId}/roles"),
+  usersRate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}/{kind}"),
+  usersStatus: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}"),
+  groupsList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/user-groups"),
+  groupsCreate: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/user-groups"),
+  groupsUpdate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/user-groups/{id}"),
+  groupsDelete: userGroupEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/user-groups/{id}"),
+  groupsAddUser: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/user-groups/{groupId}/users"),
+  groupsRemoveUser: userGroupEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}"),
+  projectsList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+  projectsGet: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  workspaceGet: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}", "workspace.ts"),
+});
+
+const USER_GROUP_API_METADATA = Object.freeze({
+  clockify_users_list: userGroupApiMetadata({
+    actionName: "clockify_users_list",
+    operationId: "getUsersOfWorkspace",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/users",
+    access: "read",
+    primary: userGroupEndpoint.usersList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_users_invite: userGroupApiMetadata({
+    actionName: "clockify_users_invite",
+    operationId: "addUsers",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/users",
+    access: "write",
+    primary: userGroupEndpoint.usersInvite,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/email", "Email", "text", true),
+      userGroupMaterialField("/sendEmail", "Send email", "boolean", true),
+    ],
+  }),
+  clockify_users_role_update: userGroupApiMetadata({
+    actionName: "clockify_users_role_update",
+    operationId: "createUserRole",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/users/{userId}/roles",
+    access: "write",
+    primary: userGroupEndpoint.usersRole,
+    support: [
+      userGroupEndpoint.usersList,
+      userGroupEndpoint.groupsList,
+      userGroupEndpoint.projectsList,
+      userGroupEndpoint.projectsGet,
+      userGroupEndpoint.workspaceGet,
+    ],
+    materialFields: [
+      userGroupMaterialField("/granteeId", "User", "entity", true),
+      userGroupMaterialField("/role", "Role", "text", true),
+      userGroupMaterialField("/entityId", "Role scope", "entity", true),
+      userGroupMaterialField("/sourceType", "Scope type", "text", false),
+    ],
+  }),
+  clockify_users_rate_update: userGroupInternalMetadata({
+    exposure: "generic",
+    reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
+    primary: [userGroupEndpoint.usersRate],
+    support: [userGroupEndpoint.usersList],
+  }),
+  clockify_users_deactivate: userGroupApiMetadata({
+    actionName: "clockify_users_deactivate",
+    operationId: "updateUserStatus",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/users/{userId}",
+    access: "write",
+    primary: userGroupEndpoint.usersStatus,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/userId", "User", "entity", true),
+    ],
+  }),
+  clockify_groups_list: userGroupApiMetadata({
+    actionName: "clockify_groups_list",
+    operationId: "getUserGroups",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user-groups",
+    access: "read",
+    primary: userGroupEndpoint.groupsList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_groups_get: userGroupInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one user group by scanning the workspace group list because Clockify exposes no GET /user-groups/{id}; it is not a fabricated get-one operation.",
+    primary: [userGroupEndpoint.groupsList],
+    support: [],
+  }),
+  clockify_groups_create: userGroupApiMetadata({
+    actionName: "clockify_groups_create",
+    operationId: "createUserGroup",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/user-groups",
+    access: "write",
+    primary: userGroupEndpoint.groupsCreate,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/name", "Group name", "text", true),
+    ],
+  }),
+  clockify_groups_update: userGroupApiMetadata({
+    actionName: "clockify_groups_update",
+    operationId: "updateUserGroup",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/user-groups/{id}",
+    access: "write",
+    primary: userGroupEndpoint.groupsUpdate,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/id", "Group", "entity", true),
+      userGroupMaterialField("/name", "Group name", "text", true),
+    ],
+  }),
+  clockify_groups_delete: userGroupApiMetadata({
+    actionName: "clockify_groups_delete",
+    operationId: "deleteUserGroup",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/user-groups/{id}",
+    access: "write",
+    primary: userGroupEndpoint.groupsDelete,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/id", "Group", "entity", true),
+      userGroupMaterialField("/name", "Group name", "text", false),
+    ],
+  }),
+  clockify_groups_add_user: userGroupInternalMetadata({
+    exposure: "composite",
+    reason: "May add up to 14 users through independent membership POSTs, so the current bounded loop is not one atomic API operation; Task 6 must expose a single-user add.",
+    primary: [userGroupEndpoint.groupsAddUser],
+    support: [userGroupEndpoint.groupsList, userGroupEndpoint.usersList],
+  }),
+  clockify_groups_remove_user: userGroupApiMetadata({
+    actionName: "clockify_groups_remove_user",
+    operationId: "deleteUser",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}",
+    access: "write",
+    primary: userGroupEndpoint.groupsRemoveUser,
+    support: [userGroupEndpoint.groupsList, userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/groupId", "Group", "entity", true),
+      userGroupMaterialField("/userId", "User", "entity", true),
+    ],
+  }),
+} satisfies Readonly<Record<UserGroupActionName, ApiActionMetadataCarrier>>);
+
 const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const userTargetContract = (strategy: "update" | "state-command") => durableMutationContract({
   source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: [strategy],
@@ -138,6 +395,7 @@ async function fetchUserGroupSnapshot(ctx: ActionContext, snapshot: TargetSnapsh
 
 const listUsers = defineReadAction({
   name: "clockify_users_list",
+  ...USER_GROUP_API_METADATA.clockify_users_list,
   description: "List workspace users.",
   group: UG,
   schema: z.object({}),
@@ -149,6 +407,7 @@ const listUsers = defineReadAction({
 
 const inviteUser = defineRiskyAction({
   name: "clockify_users_invite",
+  ...USER_GROUP_API_METADATA.clockify_users_invite,
   description: "Invite a user to the workspace by email. External side effect (may email) — previews and requires confirmation. Email is NOT sent unless sendEmail is true.",
   group: UG,
   risks: ["external_side_effect"],
@@ -205,6 +464,7 @@ const inviteUser = defineRiskyAction({
 
 const updateRole = defineRiskyAction({
   name: "clockify_users_role_update",
+  ...USER_GROUP_API_METADATA.clockify_users_role_update,
   description:
     "Give a workspace member a manager role; the SCOPE depends on the role (live-verified): WORKSPACE_ADMIN = the whole workspace (no scope needed); PROJECT_MANAGER = a project (pass `projectId` or exact `projectName`); TEAM_MANAGER = a user group (pass `groupId` or exact `groupName`). Pass the RECIPIENT by `userId`/`userName` (or 'me'). Elevated write — previews and requires confirmation.",
   group: UG,
@@ -343,6 +603,7 @@ const updateRole = defineRiskyAction({
 
 const rateUpdate = defineRiskyAction({
   name: "clockify_users_rate_update",
+  ...USER_GROUP_API_METADATA.clockify_users_rate_update,
   description:
     'Set a workspace member\'s default billable hourly or cost rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or "me"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is \'minor\'. Billing action — previews and requires confirmation.',
   group: "invoices",
@@ -425,6 +686,7 @@ const rateUpdate = defineRiskyAction({
 // defineAction to keep the guard byte-identical.
 const deactivateUser = defineAction({
   name: "clockify_users_deactivate",
+  ...USER_GROUP_API_METADATA.clockify_users_deactivate,
   description:
     "Deactivate a workspace user (removes their access). Pass the member by `userId`/`userName` — an id or the exact name, resolved + verified server-side. Elevated write — previews and requires confirmation.",
   featureGroup: UG,
@@ -510,6 +772,7 @@ const deactivateUser = defineAction({
 
 const listGroups = defineReadAction({
   name: "clockify_groups_list",
+  ...USER_GROUP_API_METADATA.clockify_groups_list,
   description: "List user groups.",
   group: UG,
   schema: z.object({}),
@@ -521,6 +784,7 @@ const listGroups = defineReadAction({
 
 const getGroup = defineAction({
   name: "clockify_groups_get",
+  ...USER_GROUP_API_METADATA.clockify_groups_get,
   description: "Fetch a single user group by id, or by its exact `name` (resolved server-side).",
   featureGroup: UG,
   risks: ["read"],
@@ -545,6 +809,7 @@ const getGroup = defineAction({
 
 const createGroup = defineRiskyAction({
   name: "clockify_groups_create",
+  ...USER_GROUP_API_METADATA.clockify_groups_create,
   description: "Create a user group. Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
@@ -597,6 +862,7 @@ const createGroup = defineRiskyAction({
 
 const updateGroup = defineRiskyAction({
   name: "clockify_groups_update",
+  ...USER_GROUP_API_METADATA.clockify_groups_update,
   description: "Rename a user group. Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
@@ -643,6 +909,7 @@ const updateGroup = defineRiskyAction({
 
 const deleteGroup = defineRiskyAction({
   name: "clockify_groups_delete",
+  ...USER_GROUP_API_METADATA.clockify_groups_delete,
   description:
     "Delete a user group. Pass the group id, or its exact `name` and the harness resolves it. Destructive — previews and requires confirmation.",
   group: UG,
@@ -739,6 +1006,7 @@ function partialGroupAdd(
 
 const addUser = defineRiskyAction({
   name: "clockify_groups_add_user",
+  ...USER_GROUP_API_METADATA.clockify_groups_add_user,
   description:
     "Add one or more members to a group. Pass the group by `groupId`/`groupName` and the members by `members` (an array where each entry is a user id, exact name, or 'me'); a single `userId`/`userName` is also accepted. The harness resolves names server-side and clarifies on an unknown one. Elevated write — previews ALL the adds as ONE card and requires confirmation.",
   group: UG,
@@ -869,6 +1137,7 @@ const addUser = defineRiskyAction({
 
 const removeUser = defineRiskyAction({
   name: "clockify_groups_remove_user",
+  ...USER_GROUP_API_METADATA.clockify_groups_remove_user,
   description:
     "Remove a user from a group. Pass the group by `groupId`/`groupName` and the user by `userId`/`userName` (or 'me') — the harness resolves names server-side and clarifies on an unknown one. Destructive — previews and requires confirmation.",
   group: UG,

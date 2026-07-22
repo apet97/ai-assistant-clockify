@@ -346,6 +346,29 @@ const EXPENSE_CUSTOM_FIELD_ENDPOINT = {
   },
 } as const;
 
+const USER_GROUP_ENDPOINT = {
+  users: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+    invite: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users", "users.ts"),
+    role: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users/{userId}/roles", "users.ts"),
+    rate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}/{kind}", "users.ts"),
+    status: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}", "users.ts"),
+  },
+  groups: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+    create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+    update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/user-groups/{id}", "users.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/user-groups/{id}", "users.ts"),
+    addUser: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/user-groups/{groupId}/users", "users.ts"),
+    removeUser: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}", "users.ts"),
+  },
+  projects: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  },
+  workspace: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}", "workspace.ts"),
+} as const;
+
 function materialField(
   path: string,
   label: string,
@@ -1596,6 +1619,191 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   },
 ];
 
+const USER_GROUP_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  apiAnnotation({
+    name: "clockify_users_list",
+    operationId: "getUsersOfWorkspace",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/users",
+    access: "read",
+    sourceModule: "users.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  {
+    ...apiAnnotation({
+      name: "clockify_users_invite",
+      operationId: "addUsers",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/users",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/email", "Email", "text", true),
+        materialField("/sendEmail", "Send email", "boolean", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_users_role_update",
+      operationId: "createUserRole",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/users/{userId}/roles",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [
+        USER_GROUP_ENDPOINT.users.list,
+        USER_GROUP_ENDPOINT.groups.list,
+        USER_GROUP_ENDPOINT.projects.list,
+        USER_GROUP_ENDPOINT.projects.get,
+        USER_GROUP_ENDPOINT.workspace,
+      ],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/granteeId", "User", "entity", true),
+        materialField("/role", "Role", "text", true),
+        materialField("/entityId", "Role scope", "entity", true),
+        materialField("/sourceType", "Scope type", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...internalAnnotation({
+      name: "clockify_users_rate_update",
+      exposure: "generic",
+      reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
+      primary: [USER_GROUP_ENDPOINT.users.rate],
+      support: [USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_users_deactivate",
+      operationId: "updateUserStatus",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/users/{userId}",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [materialField("/userId", "User", "entity", true)],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  apiAnnotation({
+    name: "clockify_groups_list",
+    operationId: "getUserGroups",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user-groups",
+    access: "read",
+    sourceModule: "users.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_groups_get",
+    exposure: "composite",
+    reason: "Finds one user group by scanning the workspace group list because Clockify exposes no GET /user-groups/{id}; it is not a fabricated get-one operation.",
+    primary: [USER_GROUP_ENDPOINT.groups.list],
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  {
+    ...apiAnnotation({
+      name: "clockify_groups_create",
+      operationId: "createUserGroup",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/user-groups",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.groups.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [materialField("/name", "Group name", "text", true)],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_groups_update",
+      operationId: "updateUserGroup",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/user-groups/{id}",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.groups.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Group", "entity", true),
+        materialField("/name", "Group name", "text", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_groups_delete",
+      operationId: "deleteUserGroup",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/user-groups/{id}",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.groups.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Group", "entity", true),
+        materialField("/name", "Group name", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...internalAnnotation({
+      name: "clockify_groups_add_user",
+      exposure: "composite",
+      reason: "May add up to 14 users through independent membership POSTs, so the current bounded loop is not one atomic API operation; Task 6 must expose a single-user add.",
+      primary: [USER_GROUP_ENDPOINT.groups.addUser],
+      support: [USER_GROUP_ENDPOINT.groups.list, USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 14,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_groups_remove_user",
+      operationId: "deleteUser",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.groups.list, USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/groupId", "Group", "entity", true),
+        materialField("/userId", "User", "entity", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -1641,6 +1849,7 @@ describe("API action inventory normalization", () => {
     ...ADMINISTRATION_ANNOTATIONS,
     ...INVOICE_ANNOTATIONS,
     ...EXPENSE_CUSTOM_FIELD_ANNOTATIONS,
+    ...USER_GROUP_ANNOTATIONS,
   ])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {
