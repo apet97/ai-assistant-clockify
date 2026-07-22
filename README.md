@@ -15,6 +15,12 @@ state; Marketplace submission has not occurred. Treat only the exact-run record 
 as current status, using [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md)
 for the acceptance criteria.
 
+The accepted architecture for the future atomic API agent is
+[`ADR 001`](./docs/adr/001-api-agent-v2.md). It is an architecture contract, not
+evidence that v2 code, release evidence, or deployment exists. V1 remains the
+default while v2 is built beside it under `src/assistant-v2/`.
+During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
+
 ## Highlights
 
 - **Admin/owner only.** Non-admins are rejected before a session is ever created.

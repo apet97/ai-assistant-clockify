@@ -20,8 +20,20 @@ facts, `DEPLOYMENT.md` for recovery/release operations, and
 `MARKETPLACE_READINESS.md` for exact evidence. Do not duplicate those documents
 here; this file is the execution map.
 
+## Current v2 implementation checkpoint
+
+- T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
+- Baseline: Node `v22.23.1` (ABI 127); `npm run verify` passed 266 files / 3,171 tests.
+- T01-A records the architecture-only contract in `docs/adr/001-api-agent-v2.md`.
+- Gates: focused ADR contract, `git diff --check`, type-check, and docs closeout passed.
+- V1 remains default; no v2 runtime/live/external proof exists; next is T01-B.
+
 ## Non-negotiable invariants
 
+- [`ADR 001`](./docs/adr/001-api-agent-v2.md) governs the v2 rewrite. V2 coexists
+  under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` will be the sole rewrite
+  switch and defaults to v1 until authorized cutover.
+  During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
 - Admin/owner only. Reject non-admins **before** creating a session.
 - Per-admin, per-workspace policy; genuinely new admins default to full
   `read_write`, while groups missing from an existing policy migrate to `off`.
