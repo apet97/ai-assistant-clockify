@@ -145,7 +145,7 @@ type ExpectedAvailability = NonNullable<TestApiMetadata["availabilityByAuthClass
 type ExpectedEndpoints = NonNullable<TestApiMetadata["adapterEndpoints"]>;
 type ExpectedMaterialFields = NonNullable<TestApiMetadata["materialFields"]>;
 
-type ExpectedStructureAnnotation =
+type ExpectedActionAnnotation =
   | {
       name: string;
       exposure: "api";
@@ -234,6 +234,11 @@ const STRUCTURE_ENDPOINT = {
   timeEntries: {
     running: structureEndpointKey("read", "GET", "/workspaces/{workspaceId}/user/{userId}/time-entries", "time-entries.ts"),
     create: structureEndpointKey("write", "POST", "/workspaces/{workspaceId}/time-entries", "time-entries.ts"),
+    get: structureEndpointKey("read", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+    stop: structureEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/user/{userId}/time-entries", "time-entries.ts"),
+    update: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+    delete: structureEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+    invoiced: structureEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/time-entries/invoiced", "time-entries.ts"),
   },
 } as const;
 
@@ -263,7 +268,7 @@ function apiAnnotation(input: {
   support: readonly string[];
   availability: ExpectedAvailability;
   materialFields: ExpectedMaterialFields;
-}): ExpectedStructureAnnotation {
+}): ExpectedActionAnnotation {
   const operation: TestApiOperation = {
     operationId: input.operationId,
     host: "api",
@@ -293,7 +298,7 @@ function internalAnnotation(input: {
   primary: readonly string[];
   support: readonly string[];
   availability: ExpectedAvailability;
-}): ExpectedStructureAnnotation {
+}): ExpectedActionAnnotation {
   return {
     name: input.name,
     exposure: input.exposure,
@@ -303,7 +308,7 @@ function internalAnnotation(input: {
   };
 }
 
-const STRUCTURE_ANNOTATIONS: readonly ExpectedStructureAnnotation[] = [
+const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   apiAnnotation({
     name: "clockify_projects_list",
     operationId: "getProjects",
@@ -675,6 +680,143 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedStructureAnnotation[] = [
   }),
 ];
 
+const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  apiAnnotation({
+    name: "clockify_status",
+    operationId: "getTimeEntries",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
+    access: "read",
+    sourceModule: "time-entries.ts",
+    support: [STRUCTURE_ENDPOINT.projects.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_start_timer",
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed start operation.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.create],
+    support: [
+      STRUCTURE_ENDPOINT.projects.list,
+      STRUCTURE_ENDPOINT.projects.get,
+      STRUCTURE_ENDPOINT.tasks.list,
+      STRUCTURE_ENDPOINT.tasks.get,
+      STRUCTURE_ENDPOINT.tags.list,
+      STRUCTURE_ENDPOINT.timeEntries.running,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_stop_timer",
+    operationId: "stopRunningTimeEntry",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
+    access: "write",
+    sourceModule: "time-entries.ts",
+    support: [STRUCTURE_ENDPOINT.timeEntries.running, STRUCTURE_ENDPOINT.timeEntries.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/userId", "User", "entity", true),
+      materialField("/end", "Stop time", "text", true),
+    ],
+  }),
+  internalAnnotation({
+    name: "clockify_log_work",
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed create operation.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.create],
+    support: [
+      STRUCTURE_ENDPOINT.projects.list,
+      STRUCTURE_ENDPOINT.projects.get,
+      STRUCTURE_ENDPOINT.tasks.list,
+      STRUCTURE_ENDPOINT.tasks.get,
+      STRUCTURE_ENDPOINT.tags.list,
+      STRUCTURE_ENDPOINT.timeEntries.running,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  internalAnnotation({
+    name: "clockify_review_day",
+    exposure: "composite",
+    reason: "Resolves a user and day window, then computes an aggregate total over the list response, so it remains an internal review workflow.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.running],
+    support: [STRUCTURE_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  internalAnnotation({
+    name: "clockify_review_week",
+    exposure: "composite",
+    reason: "Resolves a user and seven-day window, then computes an aggregate total over the list response, so it remains an internal review workflow.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.running],
+    support: [STRUCTURE_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  internalAnnotation({
+    name: "clockify_fix_entry",
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed update operation.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.update],
+    support: [
+      STRUCTURE_ENDPOINT.timeEntries.get,
+      STRUCTURE_ENDPOINT.projects.list,
+      STRUCTURE_ENDPOINT.projects.get,
+      STRUCTURE_ENDPOINT.tasks.list,
+      STRUCTURE_ENDPOINT.tasks.get,
+      STRUCTURE_ENDPOINT.tags.list,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_entries_list",
+    operationId: "getTimeEntries",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
+    access: "read",
+    sourceModule: "time-entries.ts",
+    support: [
+      STRUCTURE_ENDPOINT.users.list,
+      STRUCTURE_ENDPOINT.projects.list,
+      STRUCTURE_ENDPOINT.tasks.list,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_entries_get",
+    operationId: "getTimeEntry",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/time-entries/{id}",
+    access: "read",
+    sourceModule: "time-entries.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_entries_delete",
+    operationId: "deleteTimeEntry",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/time-entries/{id}",
+    access: "write",
+    sourceModule: "time-entries.ts",
+    support: [STRUCTURE_ENDPOINT.timeEntries.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Time entry", "entity", true),
+      materialField("/description", "Description", "text", false),
+    ],
+  }),
+  internalAnnotation({
+    name: "clockify_entries_mark_invoiced",
+    exposure: "generic",
+    reason: "The current batch maximum exceeds the 22-fact material presentation limit; Task 6 must narrow the invoiced-state operation.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.invoiced],
+    support: [STRUCTURE_ENDPOINT.timeEntries.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -714,7 +856,7 @@ describe("API action inventory normalization", () => {
       .toThrowError("missing_api_exposure:clockify_tags_create");
   });
 
-  it.each(STRUCTURE_ANNOTATIONS)(
+  it.each([...STRUCTURE_ANNOTATIONS, ...TIME_ENTRY_ANNOTATIONS])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {
       const registry = await loadRegistryModule();

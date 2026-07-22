@@ -303,6 +303,14 @@ describe("Phase 6 write authority enforcement", () => {
       mutationContract: action.mutationContract,
       writeAuthority: action.writeAuthority,
       preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
+      apiExposure: action.apiExposure ?? null,
+      apiExposureReason: action.apiExposureReason ?? null,
+      apiOperation: action.apiOperation ?? null,
+      adapterEndpoints: action.adapterEndpoints ?? null,
+      availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+      boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
+      materialFields: action.materialFields ?? [],
+      presentation: action.presentation ?? null,
     })).digest("hex");
     expect(actionFingerprint(action.name)).toBe(expected);
   });

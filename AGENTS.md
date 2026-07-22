@@ -24,12 +24,12 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
-- T04-B classifies 31/140 structure actions: 15 `api` (8 reads, 7 writes), 7 `composite`, and 9 `generic`; 109 remain.
-- API definitions bind official operation IDs, raw endpoint keys, per-auth availability, and complete write material/presenter contracts.
-- Deletes with preconditions/compensation, client create, setup/work-package flows, and task delete remain composite; open, dynamic, unbounded, and generic dispatch shapes remain internal for Task 6 splits.
+- T04-C classifies 11 time actions as 5 `api`, 2 `composite`, and 4 `generic`; cumulatively 42/140 are classified as 20 `api`, 9 `composite`, and 13 `generic`, with 98 remaining.
+- Exact time APIs are status/list/get, timer stop, and entry delete; they bind official operation IDs, raw endpoint/auth evidence, and complete stop/delete material/presenter contracts.
+- Start/log/fix remain generic because tag arrays are unbounded, invoiced state remains generic because 27 entries exceed 22 material facts, and day/week reviews plus work-package convenience remain composite.
 - Raw metadata remains optional only through T04-J; normalization supplies no defaults or incomplete registry entries, and T04-K makes the carrier required.
-- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof: focus 149, adjacent 57, type-check, and `npm run verify` (272 files/3,273 tests).
-- No generated, live, deployment, or external action. Next: T04-C.
+- V1 remains the unchanged default; v2 returns `not_ready` and has no runner or cutover. Node 22 proof: focus 122, adjacent 137, authority 16, type-check, and `npm run verify` (272 files/3,284 tests).
+- No generated, live, deployment, or external action. Next: T04-D.
 
 ## Non-negotiable invariants
 
@@ -224,7 +224,8 @@ npm run dev           # tsx src/server.ts (needs env)
   `action-registry.ts` (fail-closed normalization and raw migration inventory),
   `catalog.ts` (v1-preserving conditional metadata fingerprints),
   `workflows/structure-api-metadata.ts` (reviewed operation/endpoint/auth/exposure
-  and material/presenter evidence for 31 structure definitions), `permissions.ts`, `risk.ts`,
+  and material/presenter evidence for 31 structure definitions), `workflows/time-tracking.ts`
+  and `workflows/entries.ts` (equivalent evidence for 11 time definitions), `permissions.ts`, `risk.ts`,
   `receipts.ts` (`listReceipt` is the list/search receipt choke point),
   `confirmations.ts`, `tools.ts`, `intent-capability.ts` (immutable persisted
   declaration contract), `intent-authority.ts` (pre-Zod raw-argument matcher),

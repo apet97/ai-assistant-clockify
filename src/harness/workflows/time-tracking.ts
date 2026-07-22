@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { zNumberLike, zStringList } from "../arg-shapes.js";
 import { defineAction, defineRiskyAction, type ActionContext, type ActionDefinition, type ClarifyOption, type SemanticLiteralAlias } from "../action.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
@@ -24,6 +31,195 @@ import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispat
  * it previews + requires confirmation like every other update action (editing
  * existing data has no undo). Ambiguous project/task identity stops and asks.
  */
+
+type TimeTrackingActionName =
+  | "clockify_status"
+  | "clockify_start_timer"
+  | "clockify_stop_timer"
+  | "clockify_log_work"
+  | "clockify_review_day"
+  | "clockify_review_week"
+  | "clockify_fix_entry";
+
+const AVAILABLE_TO_BOTH_AUTH_CLASSES: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function endpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule: string,
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function valueField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function apiMetadata(input: {
+  actionName: TimeTrackingActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function internalMetadata(input: {
+  exposure: "composite" | "generic";
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const endpoint = Object.freeze({
+  timeEntries: Object.freeze({
+    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/user/{userId}/time-entries", "time-entries.ts"),
+    get: endpointKey("read", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+    create: endpointKey("write", "POST", "/workspaces/{workspaceId}/time-entries", "time-entries.ts"),
+    stop: endpointKey("write", "PATCH", "/workspaces/{workspaceId}/user/{userId}/time-entries", "time-entries.ts"),
+    update: endpointKey("write", "PUT", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+  }),
+  projects: Object.freeze({
+    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+    get: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  }),
+  tasks: Object.freeze({
+    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}/tasks", "tasks.ts"),
+    get: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}", "tasks.ts"),
+  }),
+  tags: Object.freeze({
+    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/tags", "tags.ts"),
+  }),
+  users: Object.freeze({
+    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  }),
+});
+
+const TIME_TRACKING_API_METADATA = Object.freeze({
+  clockify_status: apiMetadata({
+    actionName: "clockify_status",
+    operationId: "getTimeEntries",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
+    access: "read",
+    primary: endpoint.timeEntries.list,
+    support: [endpoint.projects.get],
+    materialFields: [],
+  }),
+  clockify_start_timer: internalMetadata({
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed start operation.",
+    primary: [endpoint.timeEntries.create],
+    support: [
+      endpoint.projects.list,
+      endpoint.projects.get,
+      endpoint.tasks.list,
+      endpoint.tasks.get,
+      endpoint.tags.list,
+      endpoint.timeEntries.list,
+    ],
+  }),
+  clockify_stop_timer: apiMetadata({
+    actionName: "clockify_stop_timer",
+    operationId: "stopRunningTimeEntry",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
+    access: "write",
+    primary: endpoint.timeEntries.stop,
+    support: [endpoint.timeEntries.list, endpoint.timeEntries.get],
+    materialFields: [
+      valueField("/userId", "User", "entity", true),
+      valueField("/end", "Stop time", "text", true),
+    ],
+  }),
+  clockify_log_work: internalMetadata({
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed create operation.",
+    primary: [endpoint.timeEntries.create],
+    support: [
+      endpoint.projects.list,
+      endpoint.projects.get,
+      endpoint.tasks.list,
+      endpoint.tasks.get,
+      endpoint.tags.list,
+      endpoint.timeEntries.list,
+    ],
+  }),
+  clockify_review_day: internalMetadata({
+    exposure: "composite",
+    reason: "Resolves a user and day window, then computes an aggregate total over the list response, so it remains an internal review workflow.",
+    primary: [endpoint.timeEntries.list],
+    support: [endpoint.users.list],
+  }),
+  clockify_review_week: internalMetadata({
+    exposure: "composite",
+    reason: "Resolves a user and seven-day window, then computes an aggregate total over the list response, so it remains an internal review workflow.",
+    primary: [endpoint.timeEntries.list],
+    support: [endpoint.users.list],
+  }),
+  clockify_fix_entry: internalMetadata({
+    exposure: "generic",
+    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed update operation.",
+    primary: [endpoint.timeEntries.update],
+    support: [
+      endpoint.timeEntries.get,
+      endpoint.projects.list,
+      endpoint.projects.get,
+      endpoint.tasks.list,
+      endpoint.tasks.get,
+      endpoint.tags.list,
+    ],
+  }),
+} satisfies Readonly<Record<TimeTrackingActionName, ApiActionMetadataCarrier>>);
 
 const BILLABLE_LITERAL_ALIASES = Object.freeze([
   { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
@@ -68,6 +264,7 @@ function totalMinutes(entries: TimeEntrySummary[]): number {
 
 const status = defineAction({
   name: "clockify_status",
+  ...TIME_TRACKING_API_METADATA.clockify_status,
   description: "Show the admin's currently running timer (if any).",
   featureGroup: "time_tracking",
   risks: ["read"],
@@ -96,6 +293,7 @@ const status = defineAction({
 
 const startTimer = defineDurableSafeWriteAction({
   name: "clockify_start_timer",
+  ...TIME_TRACKING_API_METADATA.clockify_start_timer,
   description:
     "Start a new timer for the admin on an EXISTING project. Call this DIRECTLY when asked to start a timer — do NOT check the current status first, and when no project is mentioned just start it with no project (all args are optional). Pass the project by name with `projectName` (resolved to its id; an unknown name CLARIFIES, it is never created) — use clockify_create_work_package with startTimer:true only when the admin explicitly asks to CREATE a new project.",
   group: "time_tracking",
@@ -192,6 +390,7 @@ const startTimer = defineDurableSafeWriteAction({
 
 const stopTimer = defineDurableSafeWriteAction({
   name: "clockify_stop_timer",
+  ...TIME_TRACKING_API_METADATA.clockify_stop_timer,
   description: "Stop the admin's currently running timer.",
   group: "time_tracking",
   stepName: "Stop timer",
@@ -335,7 +534,7 @@ function resolveLogTimes(
   return { kind: "ok", start, end };
 }
 
-const logWork = defineStructureDurableSafeWriteAction({
+const logWorkDefinition = defineStructureDurableSafeWriteAction({
   name: "clockify_log_work",
   description:
     "Log a completed time entry. Resolves project/task by name. `description` is OPTIONAL — never invent one. Use exactly one shape: `start+end`, `start+durationHours|durationMinutes`, or `date|dayOffset + durationHours|durationMinutes`. Explicit datetimes require Z or a numeric offset. Duration is capped at 168 hours.",
@@ -458,8 +657,14 @@ const logWork = defineStructureDurableSafeWriteAction({
   },
 });
 
+const logWork = Object.freeze({
+  ...logWorkDefinition,
+  ...TIME_TRACKING_API_METADATA.clockify_log_work,
+});
+
 const reviewDay = defineAction({
   name: "clockify_review_day",
+  ...TIME_TRACKING_API_METADATA.clockify_review_day,
   description:
     "Summarize a user's time entries for a single day (defaults to today and the caller). `date` accepts YYYY-MM-DD or a relative day (today/yesterday/last monday…), resolved server-side. `userId` accepts a user id, exact name, or 'me'.",
   featureGroup: "time_tracking",
@@ -505,6 +710,7 @@ const reviewDay = defineAction({
 
 const reviewWeek = defineAction({
   name: "clockify_review_week",
+  ...TIME_TRACKING_API_METADATA.clockify_review_week,
   description:
     "Summarize a user's time entries across a 7-day window from a start date (defaults to today and the caller). `start` accepts YYYY-MM-DD or a relative day (today/last monday…), resolved server-side. `userId` accepts a user id, exact name, or 'me'.",
   featureGroup: "time_tracking",
@@ -550,6 +756,7 @@ const reviewWeek = defineAction({
 
 const fixEntry = defineRiskyAction({
   name: "clockify_fix_entry",
+  ...TIME_TRACKING_API_METADATA.clockify_fix_entry,
   description:
     "Update fields of an existing time entry (description, project, task, tags, billable). Use this to make entries billable/non-billable. Pass the project/task by id or exact name (`projectId`/`projectName`, `taskId`/`taskName`) — resolved server-side, clarifies on an unknown one. Elevated write — editing an existing entry previews and requires confirmation.",
   group: "time_tracking",
