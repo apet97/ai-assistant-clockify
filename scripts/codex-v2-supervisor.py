@@ -1629,6 +1629,11 @@ SAFE_FINDINGS_REFERENCE_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(?m)^(?P<prefix>\s*(?:if\s+)?git\s+diff\s+--cached\s+--name-only"
         r"\s*\|\s*rg\s+-qx\s+)(?P<quote>['\"])FINDINGS\.md(?P=quote)"
     ),
+    re.compile(
+        r"(?P<prefix>\bgit\s+diff(?:(?![;&|\n]).)*?\s+)"
+        r"(?P<quote>['\"])(?P<pathspec>:\(exclude\))"
+        r"FINDINGS\.md(?P=quote)"
+    ),
 )
 
 
@@ -1637,6 +1642,7 @@ def _mask_safe_findings_references(command: str) -> str:
         command = pattern.sub(
             lambda match: (
                 f"{match.group('prefix')}{match.group('quote')}"
+                f"{match.groupdict().get('pathspec', '')}"
                 f"!FINDINGS.md{match.group('quote')}"
             ),
             command,

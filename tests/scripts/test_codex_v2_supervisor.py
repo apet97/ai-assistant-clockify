@@ -858,6 +858,35 @@ class ManagedProcessTests(unittest.TestCase):
             "attempted FINDINGS.md access",
         )
 
+    def test_structured_event_audit_allows_exact_git_diff_exclusion(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": (
+                    '/bin/zsh -lc "if git diff --no-ext-diff -- . '
+                    "':(exclude)FINDINGS.md' | LC_ALL=C rg -q 'secret'; "
+                    'then exit 1; else echo clean; fi"'
+                ),
+            }
+        }
+
+        self.assertIsNone(supervisor.audit_structured_event(event))
+
+    def test_git_diff_exclusion_does_not_mask_a_second_content_path(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": (
+                    "git diff --no-ext-diff -- . ':(exclude)FINDINGS.md' FINDINGS.md"
+                ),
+            }
+        }
+
+        self.assertEqual(
+            supervisor.audit_structured_event(event),
+            "attempted FINDINGS.md access",
+        )
+
     def test_structured_event_audit_allows_gh_token_pattern_as_rg_argument(
         self,
     ) -> None:
