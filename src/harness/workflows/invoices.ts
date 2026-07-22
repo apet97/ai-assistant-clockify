@@ -40,6 +40,13 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { BinaryResponseTooLargeError } from "../../clockify/rest/core.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Typed invoice workflows (goclmcp §2.6). Reads (list/get/items_list/
@@ -53,6 +60,253 @@ import { BinaryResponseTooLargeError } from "../../clockify/rest/core.js";
  */
 
 const INV = "invoices" as const;
+
+type InvoiceActionName =
+  | "clockify_invoices_list"
+  | "clockify_invoices_get"
+  | "clockify_invoices_items_list"
+  | "clockify_invoices_payments_list"
+  | "clockify_invoices_export"
+  | "clockify_invoices_create"
+  | "clockify_invoices_update"
+  | "clockify_invoices_delete"
+  | "clockify_invoices_items_add"
+  | "clockify_invoices_items_delete"
+  | "clockify_invoices_payments_create"
+  | "clockify_invoices_payments_delete"
+  | "clockify_invoices_import_time";
+
+const INVOICE_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function invoiceEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "invoices.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function invoiceValueField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function invoiceApiMetadata(input: {
+  actionName: InvoiceActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([
+        invoiceEndpointKey(input.access, input.method, input.path),
+      ]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: INVOICE_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function invoiceInternalMetadata(input: {
+  exposure: "composite" | "generic";
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: INVOICE_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const invoiceEndpoint = Object.freeze({
+  list: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices"),
+  get: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices/{id}"),
+  export: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices/{id}/export"),
+  paymentsList: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices/{id}/payments"),
+  create: invoiceEndpointKey("write", "POST", "/workspaces/{workspaceId}/invoices"),
+  update: invoiceEndpointKey("write", "PUT", "/workspaces/{workspaceId}/invoices/{id}"),
+  status: invoiceEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/invoices/{id}/status"),
+  addItem: invoiceEndpointKey("write", "POST", "/workspaces/{workspaceId}/invoices/{id}/items"),
+  importTime: invoiceEndpointKey("write", "POST", "/workspaces/{workspaceId}/invoices/{id}/items/import"),
+  clientsList: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients", "clients.ts"),
+  clientsGet: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+  projectsGet: invoiceEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+});
+
+const INVOICE_API_METADATA = Object.freeze({
+  clockify_invoices_list: invoiceApiMetadata({
+    actionName: "clockify_invoices_list",
+    operationId: "getInvoices",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices",
+    access: "read",
+    support: [],
+    materialFields: [],
+  }),
+  clockify_invoices_get: invoiceApiMetadata({
+    actionName: "clockify_invoices_get",
+    operationId: "getInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "read",
+    support: [invoiceEndpoint.list],
+    materialFields: [],
+  }),
+  clockify_invoices_items_list: invoiceApiMetadata({
+    actionName: "clockify_invoices_items_list",
+    operationId: "getInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "read",
+    support: [invoiceEndpoint.list],
+    materialFields: [],
+  }),
+  clockify_invoices_payments_list: invoiceApiMetadata({
+    actionName: "clockify_invoices_payments_list",
+    operationId: "getPaymentsForInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}/payments",
+    access: "read",
+    support: [invoiceEndpoint.list],
+    materialFields: [],
+  }),
+  clockify_invoices_export: invoiceApiMetadata({
+    actionName: "clockify_invoices_export",
+    operationId: "exportInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}/export",
+    access: "read",
+    support: [invoiceEndpoint.list],
+    materialFields: [],
+  }),
+  clockify_invoices_create: invoiceInternalMetadata({
+    exposure: "composite",
+    reason: "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; Task 6 must expose the atomic operations separately.",
+    primary: [invoiceEndpoint.create, invoiceEndpoint.update, invoiceEndpoint.addItem],
+    support: [invoiceEndpoint.clientsList, invoiceEndpoint.list, invoiceEndpoint.get],
+  }),
+  clockify_invoices_update: invoiceInternalMetadata({
+    exposure: "composite",
+    reason: "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; Task 6 must expose those operations separately.",
+    primary: [invoiceEndpoint.update, invoiceEndpoint.status],
+    support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.clientsList, invoiceEndpoint.clientsGet],
+  }),
+  clockify_invoices_delete: invoiceApiMetadata({
+    actionName: "clockify_invoices_delete",
+    operationId: "deleteInvoice",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get],
+    materialFields: [
+      invoiceValueField("/id", "Invoice", "entity", true),
+      invoiceValueField("/number", "Invoice number", "text", false),
+    ],
+  }),
+  clockify_invoices_items_add: invoiceApiMetadata({
+    actionName: "clockify_invoices_items_add",
+    operationId: "addInvoiceItem",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/invoices/{id}/items",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get],
+    materialFields: [
+      invoiceValueField("/invoiceId", "Invoice", "entity", true),
+      invoiceValueField("/item/itemType", "Item type", "text", true),
+      invoiceValueField("/item/description", "Description", "text", true),
+      invoiceValueField("/item/quantity", "Quantity", "number", true),
+      invoiceValueField("/item/unitPriceMinor", "Unit price", "money-minor", false),
+      invoiceValueField("/item/applyTaxes", "Taxes", "text", true),
+    ],
+  }),
+  clockify_invoices_items_delete: invoiceApiMetadata({
+    actionName: "clockify_invoices_items_delete",
+    operationId: "removeInvoiceItem",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/invoices/{id}/items/{index}",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get],
+    materialFields: [
+      invoiceValueField("/invoiceId", "Invoice", "entity", true),
+      invoiceValueField("/index", "Item index", "number", true),
+      invoiceValueField("/itemSnapshot/description", "Description", "text", false),
+    ],
+  }),
+  clockify_invoices_payments_create: invoiceApiMetadata({
+    actionName: "clockify_invoices_payments_create",
+    operationId: "createInvoicePayment",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/invoices/{id}/payments",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.paymentsList],
+    materialFields: [
+      invoiceValueField("/invoiceId", "Invoice", "entity", true),
+      invoiceValueField("/payment/amountMinor", "Payment amount", "money-minor", true),
+      invoiceValueField("/payment/paymentDate", "Payment date", "text", true),
+      invoiceValueField("/payment/note", "Payment note", "text", false),
+    ],
+  }),
+  clockify_invoices_payments_delete: invoiceApiMetadata({
+    actionName: "clockify_invoices_payments_delete",
+    operationId: "deletePaymentById",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/invoices/{id}/payments/{paymentId}",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.paymentsList],
+    materialFields: [
+      invoiceValueField("/invoiceId", "Invoice", "entity", true),
+      invoiceValueField("/paymentId", "Payment", "entity", true),
+      invoiceValueField("/paymentSnapshot/amount", "Payment amount", "money-minor", false),
+      invoiceValueField("/paymentSnapshot/paymentDate", "Payment date", "text", false),
+      invoiceValueField("/paymentSnapshot/note", "Payment note", "text", false),
+    ],
+  }),
+  clockify_invoices_import_time: invoiceInternalMetadata({
+    exposure: "generic",
+    reason: "The one-request import accepts up to 54 project ids, exceeding the 22-fact material presentation limit; Task 6 must expose a narrower import operation.",
+    primary: [invoiceEndpoint.importTime],
+    support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.projectsGet],
+  }),
+} satisfies Readonly<Record<InvoiceActionName, ApiActionMetadataCarrier>>);
+
 const invoiceCreateContract = durableMutationContract({
   source: "confirmed",
   targeting: { mode: "create_no_target" },
@@ -228,13 +482,18 @@ const invoiceRefSchema = z
 
 /** Read-with-resolution helper: clarify on an unresolvable ref, else the receipt. */
 function defineInvoiceRead(def: {
-  name: string;
+  name: Extract<InvoiceActionName,
+    | "clockify_invoices_get"
+    | "clockify_invoices_items_list"
+    | "clockify_invoices_payments_list"
+    | "clockify_invoices_export">;
   description: string;
   schema?: z.ZodTypeAny;
   read(ctx: ActionContext, id: string, args: Record<string, unknown>): Promise<SuccessReceipt | ReturnType<typeof errorReceipt>>;
 }): ActionDefinition {
   return defineAction({
     name: def.name,
+    ...INVOICE_API_METADATA[def.name],
     description: def.description,
     featureGroup: INV,
     risks: ["read"],
@@ -250,6 +509,7 @@ function defineInvoiceRead(def: {
 
 const listInvoices = defineReadAction({
   name: "clockify_invoices_list",
+  ...INVOICE_API_METADATA.clockify_invoices_list,
   description: "List invoices (optional live status filter).",
   group: INV,
   schema: z.object({ status: invoiceStatusSchema.optional() }),
@@ -411,6 +671,7 @@ const invoiceItemSchema = z.object({
 
 const createInvoice = defineRiskyAction({
   name: "clockify_invoices_create",
+  ...INVOICE_API_METADATA.clockify_invoices_create,
   description:
     "Create an invoice for a client. For a named client, always pass `clientName`; use `clientId` only when the admin explicitly supplied an id. For a request phrased like 'create an invoice for qwen for 1000', the canonical arguments are exactly `{clientName:'qwen',items:[{amount:1000}]}`. Omit item description, quantity, amountUnit, itemType, and applyTaxes unless the admin explicitly supplied them; the harness applies visible defaults. `issuedDate`/`dueDate` accept YYYY-MM-DD or a relative day/period (today, next monday, next month — resolved server-side; never guess a calendar date); `number`, dates, and `currency` default when omitted (a generated number, today, +30 days, USD). Optionally pass `items` (description, quantity, amount) to add line items in the same step. Set invoice tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` only when explicitly requested. Billing action — previews and requires confirmation.",
   group: INV,
@@ -610,6 +871,7 @@ const createInvoice = defineRiskyAction({
 
 const updateInvoice = defineRiskyAction({
   name: "clockify_invoices_update",
+  ...INVOICE_API_METADATA.clockify_invoices_update,
   description:
     "Update an invoice (note/subject/number/dates/currency/client, status, or tax/discount). `id` accepts the invoice id or its NUMBER (resolved server-side); `number` sets a NEW number. Set tax/discount with `taxPercent`/`tax2Percent`/`discountPercent` (whole percents, e.g. 3 for 3%). Billing action — previews and requires confirmation.",
   group: INV,
@@ -759,6 +1021,7 @@ const updateInvoice = defineRiskyAction({
 
 const deleteInvoice = defineRiskyAction({
   name: "clockify_invoices_delete",
+  ...INVOICE_API_METADATA.clockify_invoices_delete,
   description:
     "Delete an invoice, by id or by its `number` (resolved server-side). Destructive billing action — previews and requires confirmation.",
   group: INV,
@@ -821,6 +1084,7 @@ const deleteInvoice = defineRiskyAction({
 
 const addInvoiceItem = defineRiskyAction({
   name: "clockify_invoices_items_add",
+  ...INVOICE_API_METADATA.clockify_invoices_items_add,
   description:
     "Add a line item to an invoice. An amount alone is enough — description (defaults to the item type), quantity (1) and itemType (discovered from the workspace) all default server-side, so don't ask the admin for them. Billing action — previews and requires confirmation. `itemType` names a workspace-configured invoice item type; pass the one the admin asked for (e.g. \"service\") — the harness checks it against the workspace's actual types and, if it isn't configured, asks the admin to pick from the real list (it never guesses).",
   group: INV,
@@ -933,6 +1197,7 @@ const addInvoiceItem = defineRiskyAction({
 
 const deleteInvoiceItem = defineRiskyAction({
   name: "clockify_invoices_items_delete",
+  ...INVOICE_API_METADATA.clockify_invoices_items_delete,
   description:
     "Delete an invoice line item by its index (line order). Destructive billing action — previews and requires confirmation.",
   group: INV,
@@ -1015,6 +1280,7 @@ const deleteInvoiceItem = defineRiskyAction({
 
 const createInvoicePayment = defineRiskyAction({
   name: "clockify_invoices_payments_create",
+  ...INVOICE_API_METADATA.clockify_invoices_payments_create,
   description:
     "Record a payment against an invoice. Payment action — previews and requires confirmation.",
   group: INV,
@@ -1074,6 +1340,7 @@ const createInvoicePayment = defineRiskyAction({
 
 const deleteInvoicePayment = defineRiskyAction({
   name: "clockify_invoices_payments_delete",
+  ...INVOICE_API_METADATA.clockify_invoices_payments_delete,
   description:
     "Delete a recorded invoice payment. Destructive payment action — previews and requires confirmation.",
   group: INV,
@@ -1153,6 +1420,7 @@ const deleteInvoicePayment = defineRiskyAction({
 
 const importInvoiceTime = defineRiskyAction({
   name: "clockify_invoices_import_time",
+  ...INVOICE_API_METADATA.clockify_invoices_import_time,
   description:
     "Import billable time entries into an invoice by date range. `from`/`to` accept YYYY-MM-DD or a relative day/period (today, last week, this month — resolved server-side; never guess a calendar date). Billing action — previews and requires confirmation.",
   group: INV,

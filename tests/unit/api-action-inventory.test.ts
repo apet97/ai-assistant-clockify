@@ -154,6 +154,8 @@ type ExpectedActionAnnotation =
       availability: ExpectedAvailability;
       materialFields: ExpectedMaterialFields;
       presentation: NonNullable<TestApiMetadata["presentation"]>;
+      primaryMutationCount?: number;
+      compensationCount?: number;
     }
   | {
       name: string;
@@ -161,6 +163,8 @@ type ExpectedActionAnnotation =
       reason: string;
       endpoints: ExpectedEndpoints;
       availability: ExpectedAvailability;
+      primaryMutationCount?: number;
+      compensationCount?: number;
     }
   | {
       name: string;
@@ -168,6 +172,8 @@ type ExpectedActionAnnotation =
       reason: string;
       endpoints: undefined;
       availability: ExpectedAvailability;
+      primaryMutationCount?: number;
+      compensationCount?: number;
     };
 
 const AVAILABLE_TO_BOTH_AUTH_CLASSES = {
@@ -287,6 +293,22 @@ const ADMINISTRATION_ENDPOINT = {
     create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/webhooks", "webhooks.ts"),
     update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
   },
+} as const;
+
+const INVOICE_ENDPOINT = {
+  list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices", "invoices.ts"),
+  get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  export: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices/{id}/export", "invoices.ts"),
+  paymentsList: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/invoices/{id}/payments", "invoices.ts"),
+  create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/invoices", "invoices.ts"),
+  update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  status: adapterEndpointKey("write", "api", "PATCH", "/workspaces/{workspaceId}/invoices/{id}/status", "invoices.ts"),
+  delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  itemsAdd: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/invoices/{id}/items", "invoices.ts"),
+  itemsDelete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/invoices/{id}/items/{index}", "invoices.ts"),
+  paymentsCreate: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/invoices/{id}/payments", "invoices.ts"),
+  paymentsDelete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/invoices/{id}/payments/{paymentId}", "invoices.ts"),
+  importTime: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/invoices/{id}/items/import", "invoices.ts"),
 } as const;
 
 function materialField(
@@ -1091,6 +1113,200 @@ const ADMINISTRATION_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   }),
 ];
 
+const INVOICE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  apiAnnotation({
+    name: "clockify_invoices_list",
+    operationId: "getInvoices",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices",
+    access: "read",
+    sourceModule: "invoices.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_invoices_get",
+    operationId: "getInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "read",
+    sourceModule: "invoices.ts",
+    support: [INVOICE_ENDPOINT.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_invoices_items_list",
+    operationId: "getInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "read",
+    sourceModule: "invoices.ts",
+    support: [INVOICE_ENDPOINT.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_invoices_payments_list",
+    operationId: "getPaymentsForInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}/payments",
+    access: "read",
+    sourceModule: "invoices.ts",
+    support: [INVOICE_ENDPOINT.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_invoices_export",
+    operationId: "exportInvoice",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/invoices/{id}/export",
+    access: "read",
+    sourceModule: "invoices.ts",
+    support: [INVOICE_ENDPOINT.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  {
+    ...internalAnnotation({
+      name: "clockify_invoices_create",
+      exposure: "composite",
+      reason: "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; Task 6 must expose the atomic operations separately.",
+      primary: [INVOICE_ENDPOINT.create, INVOICE_ENDPOINT.update, INVOICE_ENDPOINT.itemsAdd],
+      support: [STRUCTURE_ENDPOINT.clients.list, INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 27,
+    compensationCount: 0,
+  },
+  {
+    ...internalAnnotation({
+      name: "clockify_invoices_update",
+      exposure: "composite",
+      reason: "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; Task 6 must expose those operations separately.",
+      primary: [INVOICE_ENDPOINT.update, INVOICE_ENDPOINT.status],
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get, STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 2,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_invoices_delete",
+      operationId: "deleteInvoice",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/invoices/{id}",
+      access: "write",
+      sourceModule: "invoices.ts",
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Invoice", "entity", true),
+        materialField("/number", "Invoice number", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_invoices_items_add",
+      operationId: "addInvoiceItem",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/invoices/{id}/items",
+      access: "write",
+      sourceModule: "invoices.ts",
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/invoiceId", "Invoice", "entity", true),
+        materialField("/item/itemType", "Item type", "text", true),
+        materialField("/item/description", "Description", "text", true),
+        materialField("/item/quantity", "Quantity", "number", true),
+        materialField("/item/unitPriceMinor", "Unit price", "money-minor", false),
+        materialField("/item/applyTaxes", "Taxes", "text", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_invoices_items_delete",
+      operationId: "removeInvoiceItem",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/invoices/{id}/items/{index}",
+      access: "write",
+      sourceModule: "invoices.ts",
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/invoiceId", "Invoice", "entity", true),
+        materialField("/index", "Item index", "number", true),
+        materialField("/itemSnapshot/description", "Description", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_invoices_payments_create",
+      operationId: "createInvoicePayment",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/invoices/{id}/payments",
+      access: "write",
+      sourceModule: "invoices.ts",
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get, INVOICE_ENDPOINT.paymentsList],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/invoiceId", "Invoice", "entity", true),
+        materialField("/payment/amountMinor", "Payment amount", "money-minor", true),
+        materialField("/payment/paymentDate", "Payment date", "text", true),
+        materialField("/payment/note", "Payment note", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_invoices_payments_delete",
+      operationId: "deletePaymentById",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/invoices/{id}/payments/{paymentId}",
+      access: "write",
+      sourceModule: "invoices.ts",
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get, INVOICE_ENDPOINT.paymentsList],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/invoiceId", "Invoice", "entity", true),
+        materialField("/paymentId", "Payment", "entity", true),
+        materialField("/paymentSnapshot/amount", "Payment amount", "money-minor", false),
+        materialField("/paymentSnapshot/paymentDate", "Payment date", "text", false),
+        materialField("/paymentSnapshot/note", "Payment note", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...internalAnnotation({
+      name: "clockify_invoices_import_time",
+      exposure: "generic",
+      reason: "The one-request import accepts up to 54 project ids, exceeding the 22-fact material presentation limit; Task 6 must expose a narrower import operation.",
+      primary: [INVOICE_ENDPOINT.importTime],
+      support: [INVOICE_ENDPOINT.list, INVOICE_ENDPOINT.get, STRUCTURE_ENDPOINT.projects.get],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -1134,6 +1350,7 @@ describe("API action inventory normalization", () => {
     ...STRUCTURE_ANNOTATIONS,
     ...TIME_ENTRY_ANNOTATIONS,
     ...ADMINISTRATION_ANNOTATIONS,
+    ...INVOICE_ANNOTATIONS,
   ])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {
@@ -1172,6 +1389,18 @@ describe("API action inventory normalization", () => {
       expect(actionFingerprintForDefinition(definition)).not.toBe(
         actionFingerprintForDefinition(withoutApiMetadata(definition)),
       );
+
+      if (expected.primaryMutationCount !== undefined) {
+        const plans = definition.writeAuthority?.mutationPlans ?? [];
+        const count = (kind: "primary" | "compensation"): number => Math.max(
+          0,
+          ...plans.map((plan) => plan.steps
+            .filter((step) => step.kind === kind)
+            .reduce((sum, step) => sum + step.max, 0)),
+        );
+        expect(count("primary")).toBe(expected.primaryMutationCount);
+        expect(count("compensation")).toBe(expected.compensationCount);
+      }
     },
   );
 
