@@ -24,11 +24,11 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
-- T03-A is complete: one reusable fail-closed raw adapter extractor owns normalization, source location, pagination metadata, and request-shape identity.
-- The generator still owns scope classification/rendering; its separate pure correlation seam remains unused until T03-B.
-- The checked Markdown stays byte-for-byte unchanged at 118 distinct adapter request shapes; no OpenAPI correlation or classification changed.
+- Task 3 (`T03-A`-`T03-B`) is complete: the fail-closed raw extractor owns normalization, stable call-site identity/order, source location, and pagination metadata.
+- All 142 raw call sites are scope-assigned separately; the generator's legacy shape key keeps the checked Markdown byte-identical at 118 distinct request shapes.
+- The generator still owns classification/rendering; the pure correlation seam remains unused and no OpenAPI correlation, action metadata, or classification changed.
 - V1 remains the unchanged default; v2 new turns return `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: `npm run verify` (270 files/3,196 tests), extractor/live-script focus 17 tests, manifest adjacency 10 tests, generated-byte diff, and diff checks. No live/external action. Next: T03-B.
+- Node 22 proof passed: focus 19 tests, scope/byte/script-type gates, and `npm run verify` (270 files/3,198 tests). No live/external action. Next: T04-A.
 
 ## Non-negotiable invariants
 
@@ -275,9 +275,11 @@ npm run dev           # tsx src/server.ts (needs env)
   metadata binder, plus the caller-read-only, secret-free `verify-restored-db.ts`
   RTO/RPO gate (source-schema read/token proof, private mode-0600 v8 migration clone,
   exact built server identity, and post-shutdown schema/integrity/writer-lock proof).
-  `scripts/lib/adapter-endpoints.ts` owns raw fail-closed `RestCore` extraction;
-  the scope generator retains classification/rendering and does not yet call the
-  separate future correlation seam.
+  `scripts/lib/adapter-endpoints.ts` owns raw fail-closed `RestCore` call-site
+  extraction, stable ordering, and pagination metadata; duplicates remain distinct
+  through scope assignment. The generator retains classification/rendering, uses a
+  separate legacy shape key for its 118-shape count, and does not call the future
+  correlation seam.
 
 ## Live request-shape gotchas (encoded in the adapter + unit tests)
 

@@ -8,12 +8,12 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-2 are complete: ADR/config/construction/evidence boundaries plus the fixed-English interface, Unicode workspace data, and timezone-aware Intl formatting.
-- T03-A is complete: `scripts/lib/adapter-endpoints.ts` owns reusable fail-closed raw `RestCore` scanning, normalization, source location, and pagination metadata.
-- Scope classification and Markdown rendering remain in the generator; the pure correlation-path seam is separate and unused pending reviewed placeholder/literal work.
-- The checked contract remains byte-for-byte unchanged at 118 distinct adapter request shapes; no OpenAPI correlation, action metadata, or classification changed.
+- Task 3 (`T03-A`-`T03-B`) is complete: `scripts/lib/adapter-endpoints.ts` owns fail-closed raw `RestCore` scanning, normalization, stable call-site identity/order, source location, and pagination metadata.
+- All 142 raw call sites are scope-assigned independently; the separate legacy shape key preserves the byte-identical checked inventory at 118 distinct request shapes.
+- Scope classification/Markdown rendering remain in the generator; the pure correlation seam remains unused, with no OpenAPI correlation, action metadata, or classification change.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof passed: `npm run verify` (270 files/3,196 tests), extractor/live-script focus 17 tests, manifest adjacency 10 tests, generated-byte diff, and diff checks.
-- No model call, deployment, live proof, generated artifact edit, or external action occurred. Next: T03-B.
+- Node 22 proof passed: extractor/live-script focus 19 tests, scope check, generated-byte diff, script type-check, and `npm run verify` (270 files/3,198 tests).
+- No model call, deployment, live proof, generated artifact edit, or external action occurred. Next: T04-A.
 
 ## Start here
 
@@ -217,10 +217,11 @@ bug was found against the REAL API, not by reading the code.
   settlement. `workspace-mutation-coordinator.ts` provides the generation-aware
   workspace settlement barrier used by lifecycle and mutation routes.
 - `scripts/lib/adapter-endpoints.ts` owns the fail-closed raw `RestCore` scanner,
-  path normalization, source location, request-shape identity, and pagination
-  metadata. `scripts/generate-endpoint-scope-contract.ts` consumes that inventory
-  but retains scope classification and Markdown rendering. Its pure correlation
-  path seam is deliberately unused until the reviewed T03-B correlation slice.
+  path normalization, source location, stable call-site identity/order, and
+  pagination metadata. Duplicate method/path call sites remain distinct through
+  scope assignment; the generator uses the separate legacy request-shape key only
+  for its 118-shape inventory count and retains classification/Markdown rendering.
+  The pure correlation seam remains unused pending T04-A.
 - `src/harness/` — the safety boundary: `action.ts` (contracts +
   `defineRiskyAction`/`defineReadAction`; `ActionContext` carries injected
   capabilities `savePolicy`/`recentOutcomes`/`idempotency`), `actions.ts`

@@ -3,13 +3,18 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ENDPOINT_SCOPE_SOURCES } from "../src/addon/scope-contract.js";
 import { ACTION_CATALOG } from "../src/harness/catalog.js";
-import { extractAdapterEndpoints, type AdapterEndpoint } from "./lib/adapter-endpoints.js";
+import {
+  adapterRequestShapeKey,
+  extractAdapterEndpoints,
+  type AdapterEndpoint,
+} from "./lib/adapter-endpoints.js";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const outputPath = resolve(repositoryRoot, "docs/ENDPOINT_SCOPE_CONTRACT.md");
 
 function render(): string {
   const adapterEndpoints = extractAdapterEndpoints(repositoryRoot);
+  const adapterRequestShapeCount = new Set(adapterEndpoints.map(adapterRequestShapeKey)).size;
   const catalogGroups = new Map<string, string[]>();
   for (const action of ACTION_CATALOG) {
     const names = catalogGroups.get(action.featureGroup) ?? [];
@@ -76,7 +81,7 @@ function render(): string {
     "",
     "Clockify's add-on authorization contract defines scopes as resource + READ/WRITE permissions and states that an endpoint called without its appropriate declared scope fails with HTTP 403. The release gate combines that platform rule with this exact one-to-one adapter assignment and `scripts/live-scope-probe.ts` against a newly issued production add-on token: every retained scope must have one distinct exact endpoint probe which clears authorization. Static extraction alone is not treated as live permission evidence.",
     "",
-    `Generated inventory: **${adapterEndpoints.length} distinct adapter request shapes**, **${ACTION_CATALOG.length} catalog actions**, **${ENDPOINT_SCOPE_SOURCES.length} retained scopes**.`,
+    `Generated inventory: **${adapterRequestShapeCount} distinct adapter request shapes**, **${ACTION_CATALOG.length} catalog actions**, **${ENDPOINT_SCOPE_SOURCES.length} retained scopes**.`,
     "",
     "| Scope | Exact adapter request shape(s) | Potential catalog feature groups | Offline request-shape probe(s) |",
     "|---|---|---|---|",

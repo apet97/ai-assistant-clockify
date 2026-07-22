@@ -4,14 +4,26 @@ import ts from "typescript";
 
 import type { ScopeAccess } from "../../src/addon/scope-contract.js";
 
-const CORE_METHODS = new Set([
+type RestCoreOperation =
+  | "call"
+  | "postQuery"
+  | "mutate"
+  | "paginate"
+  | "paginateEnvelope"
+  | "getBinary";
+
+const CORE_METHODS: readonly RestCoreOperation[] = [
   "call",
   "postQuery",
   "mutate",
   "paginate",
   "paginateEnvelope",
   "getBinary",
-]);
+];
+
+function isRestCoreOperation(value: string): value is RestCoreOperation {
+  return CORE_METHODS.some((operation) => operation === value);
+}
 
 export type AdapterEndpointPagination = "none" | "plain" | "envelope";
 
@@ -63,14 +75,21 @@ function typescriptFiles(directory: string): string[] {
   });
 }
 
+type RestCoreCallExpression = ts.CallExpression & {
+  expression: ts.PropertyAccessExpression & {
+    name: ts.Identifier & { text: RestCoreOperation };
+  };
+};
+
 function isRestCoreCall(
   node: ts.Node,
   source: ts.SourceFile,
-): node is ts.CallExpression & { expression: ts.PropertyAccessExpression } {
+): node is RestCoreCallExpression {
   return ts.isCallExpression(node)
     && ts.isPropertyAccessExpression(node.expression)
+    && ts.isIdentifier(node.expression.name)
     && node.expression.expression.getText(source) === "core"
-    && CORE_METHODS.has(node.expression.name.text);
+    && isRestCoreOperation(node.expression.name.text);
 }
 
 function assertNoEscapedRestCoreCallsites(
@@ -99,19 +118,32 @@ function assertNoEscapedRestCoreCallsites(
   }
 }
 
-function paginationFor(operation: string): AdapterEndpointPagination {
-  if (operation === "paginate") return "plain";
-  if (operation === "paginateEnvelope") return "envelope";
-  return "none";
+function paginationFor(operation: RestCoreOperation): AdapterEndpointPagination {
+  switch (operation) {
+    case "paginate": return "plain";
+    case "paginateEnvelope": return "envelope";
+    case "call":
+    case "postQuery":
+    case "mutate":
+    case "getBinary": return "none";
+  }
 }
 
-export function adapterEndpointKey(endpoint: AdapterEndpoint): string {
+export function adapterRequestShapeKey(endpoint: AdapterEndpoint): string {
   return [
     endpoint.access,
     endpoint.host,
     endpoint.method,
     endpoint.rawPath,
     endpoint.sourceModule,
+  ].join("\u0000");
+}
+
+export function adapterEndpointKey(endpoint: AdapterEndpoint): string {
+  return [
+    adapterRequestShapeKey(endpoint),
+    endpoint.sourceLine,
+    endpoint.pagination,
   ].join("\u0000");
 }
 
@@ -167,7 +199,7 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
   return [...unique.values()].sort((left, right) =>
     `${left.sourceModule} ${left.host} ${left.method} ${left.rawPath}`.localeCompare(
       `${right.sourceModule} ${right.host} ${right.method} ${right.rawPath}`,
-    ));
+    ) || left.sourceLine - right.sourceLine || left.pagination.localeCompare(right.pagination));
 }
 
 export function correlateAdapterEndpointPaths(

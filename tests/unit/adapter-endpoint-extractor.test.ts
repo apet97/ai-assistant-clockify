@@ -5,30 +5,50 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   adapterEndpointKey,
+  adapterRequestShapeKey,
   correlateAdapterEndpointPaths,
   extractAdapterEndpoints,
 } from "../../scripts/lib/adapter-endpoints.js";
 
 const fixtureRoots: string[] = [];
 
-function fixtureRepository(): string {
+interface FixtureModule {
+  sourceModule: string;
+  lines: readonly string[];
+}
+
+function fixtureRepositoryFrom(modules: readonly FixtureModule[]): string {
   const repositoryRoot = mkdtempSync(join(tmpdir(), "adapter-endpoints-"));
   fixtureRoots.push(repositoryRoot);
   const restRoot = join(repositoryRoot, "src/clockify/rest");
   mkdirSync(restRoot, { recursive: true });
-  writeFileSync(join(restRoot, "alpha.ts"), [
-    "const ws = `/workspaces/${workspaceId}`;",
-    'core.call("api", "GET", `${ws}/projects/${projectId}?archived=true`);',
-    'core.paginate("api", `${ws}/clients`);',
-    'core.paginateEnvelope("api", `${ws}/expenses`, "expenses.expenses");',
-    'core.postQuery("reports", `${ws}/reports/detailed`, body);',
-    'core.mutate("api", "POST", `${ws}/projects`, body);',
-  ].join("\n"));
-  writeFileSync(join(restRoot, "beta.ts"), [
-    "const ws = `/workspaces/${workspaceId}`;",
-    'core.call("api", "GET", `${ws}/projects/${projectId}`);',
-  ].join("\n"));
+  for (const module of modules) {
+    writeFileSync(join(restRoot, module.sourceModule), module.lines.join("\n"));
+  }
   return repositoryRoot;
+}
+
+function fixtureRepository(): string {
+  return fixtureRepositoryFrom([
+    {
+      sourceModule: "alpha.ts",
+      lines: [
+        "const ws = `/workspaces/${workspaceId}`;",
+        'core.call("api", "GET", `${ws}/projects/${projectId}?archived=true`);',
+        'core.paginate("api", `${ws}/clients`);',
+        'core.paginateEnvelope("api", `${ws}/expenses`, "expenses.expenses");',
+        'core.postQuery("reports", `${ws}/reports/detailed`, body);',
+        'core.mutate("api", "POST", `${ws}/projects`, body);',
+      ],
+    },
+    {
+      sourceModule: "beta.ts",
+      lines: [
+        "const ws = `/workspaces/${workspaceId}`;",
+        'core.call("api", "GET", `${ws}/projects/${projectId}`);',
+      ],
+    },
+  ]);
 }
 
 afterEach(() => {
@@ -118,5 +138,74 @@ describe("raw adapter endpoint extraction", () => {
       "/workspaces/{workspace}/projects/hourly-rate",
     ]);
     expect(rawPath).toBe("/workspaces/{workspaceId}/projects/{kind}");
+  });
+
+  it("keeps duplicate call sites and literal control-flow branches distinct in stable order", () => {
+    const endpoints = extractAdapterEndpoints(fixtureRepositoryFrom([
+      {
+        sourceModule: "branch.ts",
+        lines: [
+          "const ws = `/workspaces/${workspaceId}`;",
+          'if (rateKind === "cost") {',
+          '  core.call("api", "GET", `${ws}/projects/${projectId}/cost-rate`);',
+          "} else {",
+          '  core.call("api", "GET", `${ws}/projects/${projectId}/hourly-rate`);',
+          "}",
+        ],
+      },
+      {
+        sourceModule: "duplicate.ts",
+        lines: [
+          "const ws = `/workspaces/${workspaceId}`;",
+          'core.call("api", "GET", `${ws}/projects/${projectId}`);',
+          'core.call("api", "GET", `${ws}/projects/${projectId}`);',
+        ],
+      },
+    ]));
+
+    expect(endpoints.map(({ sourceModule, sourceLine, rawPath }) =>
+      [sourceModule, sourceLine, rawPath])).toEqual([
+      ["branch.ts", 3, "/workspaces/{workspaceId}/projects/{projectId}/cost-rate"],
+      ["branch.ts", 5, "/workspaces/{workspaceId}/projects/{projectId}/hourly-rate"],
+      ["duplicate.ts", 2, "/workspaces/{workspaceId}/projects/{projectId}"],
+      ["duplicate.ts", 3, "/workspaces/{workspaceId}/projects/{projectId}"],
+    ]);
+
+    const duplicates = endpoints.filter(({ sourceModule }) => sourceModule === "duplicate.ts");
+    const [first, second] = duplicates;
+    if (!first || !second) throw new Error("duplicate fixture call sites were not extracted");
+    expect(adapterEndpointKey(first)).not.toBe(adapterEndpointKey(second));
+    expect(adapterRequestShapeKey(first)).toBe(adapterRequestShapeKey(second));
+  });
+
+  it("classifies every RestCore pagination variant", () => {
+    const endpoints = extractAdapterEndpoints(fixtureRepositoryFrom([
+      {
+        sourceModule: "pagination.ts",
+        lines: [
+          "const ws = `/workspaces/${workspaceId}`;",
+          'core.getBinary("api", `${ws}/binary`);',
+          'core.call("api", "GET", `${ws}/call`);',
+          'core.mutate("api", "POST", `${ws}/mutation`, body);',
+          'core.paginateEnvelope("api", `${ws}/paginated-envelope`, "items");',
+          'core.paginate("api", `${ws}/paginated-plain`);',
+          'core.call("api", "GET", `${ws}/shared`);',
+          'core.paginate("api", `${ws}/shared`);',
+          'core.postQuery("reports", `${ws}/search`, body);',
+        ],
+      },
+    ]));
+
+    expect(endpoints.map(({ access, host, method, rawPath, pagination }) =>
+      [access, host, method, rawPath, pagination])).toEqual([
+      ["read", "api", "GET", "/workspaces/{workspaceId}/binary", "none"],
+      ["read", "api", "GET", "/workspaces/{workspaceId}/call", "none"],
+      ["read", "api", "GET", "/workspaces/{workspaceId}/paginated-envelope", "envelope"],
+      ["read", "api", "GET", "/workspaces/{workspaceId}/paginated-plain", "plain"],
+      ["read", "api", "GET", "/workspaces/{workspaceId}/shared", "none"],
+      ["read", "api", "GET", "/workspaces/{workspaceId}/shared", "plain"],
+      ["write", "api", "POST", "/workspaces/{workspaceId}/mutation", "none"],
+      ["read", "reports", "POST", "/workspaces/{workspaceId}/search", "none"],
+    ]);
   });
 });
