@@ -398,6 +398,26 @@ const TIME_OFF_APPROVAL_ENDPOINT = {
   },
 } as const;
 
+const SCHEDULING_ENDPOINT = {
+  assignments: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/scheduling/assignments/all", "scheduling.ts"),
+    create: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/scheduling/assignments/recurring", "scheduling.ts"),
+    update: adapterEndpointKey("write", "api", "PATCH", "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}", "scheduling.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}", "scheduling.ts"),
+    publish: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/scheduling/assignments/publish", "scheduling.ts"),
+    projectTotalsAll: adapterEndpointKey("read", "api", "POST", "/workspaces/{workspaceId}/scheduling/assignments/projects/totals", "scheduling.ts"),
+    projectTotalsOne: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}", "scheduling.ts"),
+    userTotals: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals", "scheduling.ts"),
+  },
+  users: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  },
+  projects: {
+    list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+    get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  },
+} as const;
+
 function materialField(
   path: string,
   label: string,
@@ -2119,6 +2139,135 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   },
 ];
 
+const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
+  apiAnnotation({
+    name: "clockify_scheduling_assignments_list",
+    operationId: "getAllSchedulingAssignments",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/all",
+    access: "read",
+    sourceModule: "scheduling.ts",
+    support: [SCHEDULING_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  internalAnnotation({
+    name: "clockify_scheduling_assignments_get",
+    exposure: "composite",
+    reason: "Finds one assignment by scanning the assignment list because Clockify exposes no usable GET assignment-by-id operation; it is not a fabricated get-one operation.",
+    primary: [SCHEDULING_ENDPOINT.assignments.list],
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  {
+    ...apiAnnotation({
+      name: "clockify_scheduling_assignments_create",
+      operationId: "createRecurringAssignment",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/scheduling/assignments/recurring",
+      access: "write",
+      sourceModule: "scheduling.ts",
+      support: [
+        SCHEDULING_ENDPOINT.users.list,
+        SCHEDULING_ENDPOINT.projects.list,
+        SCHEDULING_ENDPOINT.projects.get,
+        SCHEDULING_ENDPOINT.assignments.list,
+      ],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/input/userId", "User", "entity", true),
+        materialField("/input/projectId", "Project", "entity", true),
+        materialField("/input/start", "Start", "text", true),
+        materialField("/input/end", "End", "text", true),
+        materialField("/input/hoursPerDay", "Hours per day", "number", true),
+        materialField("/input/note", "Note", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_scheduling_assignments_update",
+      operationId: "updateRecurringAssignment",
+      method: "PATCH",
+      path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
+      access: "write",
+      sourceModule: "scheduling.ts",
+      support: [SCHEDULING_ENDPOINT.assignments.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Assignment", "entity", true),
+        materialField("/patch/hoursPerDay", "Hours per day", "number", false),
+        materialField("/patch/note", "Note", "text", false),
+        materialField("/patch/seriesUpdateOption", "Series update", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_scheduling_assignments_delete",
+      operationId: "deleteRecurringAssignment",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
+      access: "write",
+      sourceModule: "scheduling.ts",
+      support: [SCHEDULING_ENDPOINT.assignments.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Assignment", "entity", true),
+        materialField("/seriesUpdateOption", "Series update", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_scheduling_publish",
+      operationId: "publishAssignments",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/scheduling/assignments/publish",
+      access: "write",
+      sourceModule: "scheduling.ts",
+      support: [SCHEDULING_ENDPOINT.assignments.list, SCHEDULING_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/start", "Start", "text", true),
+        materialField("/end", "End", "text", true),
+        materialField("/notifyUsers", "Notify users", "boolean", false),
+        materialField("/userId", "User", "entity", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  internalAnnotation({
+    name: "clockify_scheduling_project_totals",
+    exposure: "generic",
+    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; Task 6 must split the two official operations.",
+    primary: [
+      SCHEDULING_ENDPOINT.assignments.projectTotalsAll,
+      SCHEDULING_ENDPOINT.assignments.projectTotalsOne,
+    ],
+    support: [SCHEDULING_ENDPOINT.projects.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_scheduling_user_totals",
+    operationId: "getUserCapacityTotal",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals",
+    access: "read",
+    sourceModule: "scheduling.ts",
+    support: [SCHEDULING_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+];
+
 const ADAPTER_ENDPOINT_KEYS = new Set(
   extractAdapterEndpoints(fileURLToPath(new URL("../..", import.meta.url)))
     .map(adapterRequestShapeKey),
@@ -2166,6 +2315,7 @@ describe("API action inventory normalization", () => {
     ...EXPENSE_CUSTOM_FIELD_ANNOTATIONS,
     ...USER_GROUP_ANNOTATIONS,
     ...TIME_OFF_APPROVAL_ANNOTATIONS,
+    ...SCHEDULING_ANNOTATIONS,
   ])(
     "classifies $name and binds its endpoint evidence into the fingerprint",
     async (expected) => {

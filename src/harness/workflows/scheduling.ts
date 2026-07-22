@@ -21,6 +21,14 @@ import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable
 import { nowDate } from "../../durations.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import type { AssignmentSummary, CreateAssignmentInput } from "../../clockify/ports/scheduling.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiExposure,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Typed scheduling workflows (goclmcp §2.10). Reads (list/get/totals) and
@@ -31,6 +39,210 @@ import type { AssignmentSummary, CreateAssignmentInput } from "../../clockify/po
  */
 
 const SCHED = "scheduling" as const;
+
+type SchedulingActionName =
+  | "clockify_scheduling_assignments_list"
+  | "clockify_scheduling_assignments_get"
+  | "clockify_scheduling_assignments_create"
+  | "clockify_scheduling_assignments_update"
+  | "clockify_scheduling_assignments_delete"
+  | "clockify_scheduling_publish"
+  | "clockify_scheduling_project_totals"
+  | "clockify_scheduling_user_totals";
+
+const SCHEDULING_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function schedulingEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "scheduling.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function schedulingMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function schedulingApiMetadata(input: {
+  actionName: SchedulingActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: SCHEDULING_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function schedulingInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: SCHEDULING_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const schedulingEndpoint = Object.freeze({
+  assignmentsList: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/scheduling/assignments/all"),
+  assignmentsCreate: schedulingEndpointKey("write", "POST", "/workspaces/{workspaceId}/scheduling/assignments/recurring"),
+  assignmentsUpdate: schedulingEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}"),
+  assignmentsDelete: schedulingEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}"),
+  assignmentsPublish: schedulingEndpointKey("write", "PUT", "/workspaces/{workspaceId}/scheduling/assignments/publish"),
+  projectTotalsAll: schedulingEndpointKey("read", "POST", "/workspaces/{workspaceId}/scheduling/assignments/projects/totals"),
+  projectTotalsOne: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}"),
+  userTotals: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals"),
+  usersList: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  projectsList: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+  projectsGet: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+});
+
+const SCHEDULING_API_METADATA = Object.freeze({
+  clockify_scheduling_assignments_list: schedulingApiMetadata({
+    actionName: "clockify_scheduling_assignments_list",
+    operationId: "getAllSchedulingAssignments",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/all",
+    access: "read",
+    primary: schedulingEndpoint.assignmentsList,
+    support: [schedulingEndpoint.usersList],
+    materialFields: [],
+  }),
+  clockify_scheduling_assignments_get: schedulingInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one assignment by scanning the assignment list because Clockify exposes no usable GET assignment-by-id operation; it is not a fabricated get-one operation.",
+    primary: [schedulingEndpoint.assignmentsList],
+    support: [],
+  }),
+  clockify_scheduling_assignments_create: schedulingApiMetadata({
+    actionName: "clockify_scheduling_assignments_create",
+    operationId: "createRecurringAssignment",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/recurring",
+    access: "write",
+    primary: schedulingEndpoint.assignmentsCreate,
+    support: [
+      schedulingEndpoint.usersList,
+      schedulingEndpoint.projectsList,
+      schedulingEndpoint.projectsGet,
+      schedulingEndpoint.assignmentsList,
+    ],
+    materialFields: [
+      schedulingMaterialField("/input/userId", "User", "entity", true),
+      schedulingMaterialField("/input/projectId", "Project", "entity", true),
+      schedulingMaterialField("/input/start", "Start", "text", true),
+      schedulingMaterialField("/input/end", "End", "text", true),
+      schedulingMaterialField("/input/hoursPerDay", "Hours per day", "number", true),
+      schedulingMaterialField("/input/note", "Note", "text", false),
+    ],
+  }),
+  clockify_scheduling_assignments_update: schedulingApiMetadata({
+    actionName: "clockify_scheduling_assignments_update",
+    operationId: "updateRecurringAssignment",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
+    access: "write",
+    primary: schedulingEndpoint.assignmentsUpdate,
+    support: [schedulingEndpoint.assignmentsList],
+    materialFields: [
+      schedulingMaterialField("/id", "Assignment", "entity", true),
+      schedulingMaterialField("/patch/hoursPerDay", "Hours per day", "number", false),
+      schedulingMaterialField("/patch/note", "Note", "text", false),
+      schedulingMaterialField("/patch/seriesUpdateOption", "Series update", "text", false),
+    ],
+  }),
+  clockify_scheduling_assignments_delete: schedulingApiMetadata({
+    actionName: "clockify_scheduling_assignments_delete",
+    operationId: "deleteRecurringAssignment",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/recurring/{id}",
+    access: "write",
+    primary: schedulingEndpoint.assignmentsDelete,
+    support: [schedulingEndpoint.assignmentsList],
+    materialFields: [
+      schedulingMaterialField("/id", "Assignment", "entity", true),
+      schedulingMaterialField("/seriesUpdateOption", "Series update", "text", false),
+    ],
+  }),
+  clockify_scheduling_publish: schedulingApiMetadata({
+    actionName: "clockify_scheduling_publish",
+    operationId: "publishAssignments",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/publish",
+    access: "write",
+    primary: schedulingEndpoint.assignmentsPublish,
+    support: [schedulingEndpoint.assignmentsList, schedulingEndpoint.usersList],
+    materialFields: [
+      schedulingMaterialField("/start", "Start", "text", true),
+      schedulingMaterialField("/end", "End", "text", true),
+      schedulingMaterialField("/notifyUsers", "Notify users", "boolean", false),
+      schedulingMaterialField("/userId", "User", "entity", false),
+    ],
+  }),
+  clockify_scheduling_project_totals: schedulingInternalMetadata({
+    exposure: "generic",
+    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; Task 6 must split the two official operations.",
+    primary: [schedulingEndpoint.projectTotalsAll, schedulingEndpoint.projectTotalsOne],
+    support: [schedulingEndpoint.projectsList],
+  }),
+  clockify_scheduling_user_totals: schedulingApiMetadata({
+    actionName: "clockify_scheduling_user_totals",
+    operationId: "getUserCapacityTotal",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/users/{userId}/totals",
+    access: "read",
+    primary: schedulingEndpoint.userTotals,
+    support: [schedulingEndpoint.usersList],
+    materialFields: [],
+  }),
+} satisfies Readonly<Record<SchedulingActionName, ApiActionMetadataCarrier>>);
+
 const seriesOption = z.enum(["ONLY_THIS", "ALL", "THIS_AND_FOLLOWING"]);
 
 const schedulingTargetContract = (strategy: "update" | "delete" | "state-command") => durableMutationContract({
@@ -113,6 +325,7 @@ function resolveSchedulingWindow(
 }
 
 const listAssignments = defineAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_assignments_list,
   name: "clockify_scheduling_assignments_list",
   description:
     "List scheduling assignments in a date range (optional user/project filter; `userId` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/next monday…), resolved server-side.",
@@ -138,6 +351,7 @@ const listAssignments = defineAction({
 });
 
 const getAssignment = defineReadAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_assignments_get,
   name: "clockify_scheduling_assignments_get",
   description: "Fetch a single scheduling assignment by id.",
   group: SCHED,
@@ -149,6 +363,7 @@ const getAssignment = defineReadAction({
 });
 
 const createAssignment = defineDurableSafeWriteAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_assignments_create,
   name: "clockify_scheduling_assignments_create",
   description:
     "Create a scheduling assignment (draft) for ONE user (Clockify scheduling is per-user — there is no group assignment). Pass `userId` and `projectId` as ids or exact names (or 'me' for the user) — resolved server-side, clarifies on an unknown one. `start`/`end` accept YYYY-MM-DD or a relative day (today/next monday…). Safe write — executes immediately when policy allows.",
@@ -313,6 +528,7 @@ const createAssignment = defineDurableSafeWriteAction({
 });
 
 const updateAssignment = defineRiskyAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_assignments_update,
   name: "clockify_scheduling_assignments_update",
   description: "Update a scheduling assignment. Elevated write — previews and requires confirmation.",
   group: SCHED,
@@ -398,6 +614,7 @@ const updateAssignment = defineRiskyAction({
 });
 
 const deleteAssignment = defineRiskyAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_assignments_delete,
   name: "clockify_scheduling_assignments_delete",
   description: "Delete a scheduling assignment. Destructive — previews and requires confirmation.",
   group: SCHED,
@@ -447,6 +664,7 @@ const deleteAssignment = defineRiskyAction({
 });
 
 const publish = defineRiskyAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_publish,
   name: "clockify_scheduling_publish",
   description:
     "Publish draft scheduling assignments in a date range. Publishes ALL drafts overlapping the range unless you pass `userId` (or a user's exact name / 'me') to scope it to one person. External side effect (notifies assignees) — previews and requires confirmation.",
@@ -553,6 +771,7 @@ const publish = defineRiskyAction({
 });
 
 const projectTotals = defineAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_project_totals,
   name: "clockify_scheduling_project_totals",
   description:
     "Get scheduled-hours totals per project in a date range (`start`/`end` accept relative days, resolved server-side). Filter to one project by `projectId` or its exact `projectName` (resolved server-side).",
@@ -592,6 +811,7 @@ const projectTotals = defineAction({
 });
 
 const userTotals = defineAction({
+  ...SCHEDULING_API_METADATA.clockify_scheduling_user_totals,
   name: "clockify_scheduling_user_totals",
   description:
     "Get a user's scheduled-hours totals in a date range (defaults to you; `userId` accepts a user id, exact name, or 'me'; `start`/`end` accept relative days, resolved server-side).",
