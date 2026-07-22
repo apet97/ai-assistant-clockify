@@ -1,0 +1,13 @@
+{
+  "repository_path": "/Users/15x/Downloads/WORKING/addons-me/ai-assistant-addon",
+  "prompt_pack_path": "/Users/15x/Downloads/ai-assistant-addon-v2-task-prompts.md",
+  "state_dir": "/Users/15x/.local/state/ai-assistant-v2-supervisor",
+  "codex_executable": "/Users/15x/.local/bin/codex",
+  "node_executable": "/opt/homebrew/opt/node@22/bin/node",
+  "child_timeout_seconds": 14400,
+  "reviewer_timeout_seconds": 14400,
+  "model": "gpt-5.6-sol",
+  "reasoning_effort": "max",
+  "stop_before": "T18-A",
+  "protect_findings": true
+}
