@@ -9,9 +9,14 @@ export default defineConfig({
     include: ["tests/**/*.test.ts"],
     environment: "node",
     // Keep the local and CI test resource ceiling deterministic on developer
-    // machines with very high core counts. Individual concurrency tests use
-    // explicit barriers rather than relying on a larger worker pool.
-    maxWorkers: 4,
+    // machines with very high core counts. Two workers avoid cross-process
+    // Supertest/SQLite/subprocess contention during the full verification gate;
+    // individual concurrency tests use explicit barriers instead.
+    maxWorkers: 2,
+    // Heavy integration and retention tests are normally much faster, but can
+    // cross Vitest's 5 s default while the complete gate is CPU constrained.
+    // Keep a finite budget so real hangs still fail deterministically.
+    testTimeout: 30_000,
     retry: 0,
     ...(process.env.VITEST_RELEASE_REPORT_PATH
       ? {

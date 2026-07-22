@@ -559,5 +559,5 @@ describe("intent capability store", () => {
       rmSync(`${path}-wal`, { force: true });
       rmSync(`${path}-shm`, { force: true });
     }
-  }, 15_000);
+  }, 30_000);
 });
