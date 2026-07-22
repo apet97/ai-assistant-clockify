@@ -715,6 +715,16 @@ class ManagedProcessTests(unittest.TestCase):
 
         self.assertIsNone(supervisor.audit_structured_event(event))
 
+    def test_structured_event_audit_allows_findings_exclusion_glob(self) -> None:
+        event = {
+            "item": {
+                "type": "command_execution",
+                "command": "rg -n -g '!FINDINGS.md' 'release evidence' .",
+            }
+        }
+
+        self.assertIsNone(supervisor.audit_structured_event(event))
+
     def test_findings_guard_denies_file_content_reads(self) -> None:
         supervisor.validate_findings_guard_support()
 
