@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+from dataclasses import replace
 import stat
 import subprocess
 import sys
@@ -219,6 +220,14 @@ class OperatorArtifactTests(unittest.TestCase):
         self.assertEqual(config.stop_before, "T18-A")
         self.assertTrue(config.protect_findings)
         self.assertGreater(config.child_timeout_seconds, 0)
+        self.assertEqual(config.execution_profile, "strict")
+        self.assertEqual(
+            tuple(
+                f"{group.start_prompt}..{group.end_prompt}"
+                for group in config.efficient_prompt_groups
+            ),
+            supervisor.INITIAL_EFFICIENT_GROUP_RANGES,
+        )
 
     def test_readme_contains_every_operator_command_and_review_transition(self) -> None:
         text = README_PATH.read_text(encoding="utf-8")
@@ -229,11 +238,355 @@ class OperatorArtifactTests(unittest.TestCase):
             "codex-v2-supervisor.py status",
             "codex-v2-supervisor.py step",
             "codex-v2-supervisor.py run --stop-before T18-A",
+            "--execution-profile efficient",
+            "/Users/15x/Downloads/codex-v2-supervisor-recovery.json",
             "T04-R3",
             "--dangerously-bypass-approvals-and-sandbox",
         ):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, text)
+
+
+def planning_pack(
+    prompt_ids: tuple[str, ...],
+    *,
+    reviewer_pair: tuple[str, ...] | None = None,
+    gated_prompts: frozenset[str] = frozenset(),
+) -> object:
+    prompts = {
+        prompt_id: supervisor.Prompt(
+            prompt_id,
+            prompt_id,
+            f"## Prompt {prompt_id}: {prompt_id}\n",
+            "",
+            f"commit {prompt_id}",
+            (
+                ("explicit operator authorization required",)
+                if prompt_id in gated_prompts
+                else ()
+            ),
+        )
+        for prompt_id in prompt_ids
+    }
+    order_items: list[str | tuple[str, ...]] = []
+    index = 0
+    while index < len(prompt_ids):
+        if (
+            reviewer_pair
+            and prompt_ids[index : index + len(reviewer_pair)] == reviewer_pair
+        ):
+            order_items.append(reviewer_pair)
+            index += len(reviewer_pair)
+        else:
+            order_items.append(prompt_ids[index])
+            index += 1
+    return supervisor.PromptPack(
+        text="",
+        base_contract="BASE\n",
+        prompts=prompts,
+        contracts=(),
+        order_items=tuple(order_items),
+        repository_path="/tmp/repo",
+        implementation_plan_path="/tmp/plan",
+        declared_plan_sha256="a" * 64,
+        baseline_commit="b" * 40,
+    )
+
+
+class EfficientExecutionProfileTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.pack = planning_pack(
+            (
+                "T04-D",
+                "T04-E",
+                "T04-F",
+                "T04-G",
+                "T04-H",
+                "T04-I",
+                "T04-J",
+                "T04-K",
+                "T04-R1",
+                "T04-R2",
+                "T04-R3",
+                "T05-A",
+                "T05-B",
+                "T05-C",
+                "T06-PROJECTS",
+                "T06-TASKS",
+                "T06-USER-RATES",
+                "T06-FINAL",
+                "T08-A",
+                "T18-A",
+            ),
+            reviewer_pair=("T04-R1", "T04-R2"),
+            gated_prompts=frozenset({"T18-A"}),
+        )
+
+    def test_cli_accepts_explicit_efficient_profile(self) -> None:
+        args = supervisor._argument_parser().parse_args(
+            ["--execution-profile", "efficient", "run", "--stop-before", "T18-A"]
+        )
+
+        self.assertEqual(args.execution_profile, "efficient")
+
+    def test_group_resolution_and_partial_restart_keep_ordered_suffix(self) -> None:
+        groups = supervisor.resolve_prompt_groups(
+            self.pack,
+            (supervisor.PromptGroupSpec("T04-E", "T04-J"),),
+            max_prompt_patterns=("T04-K",),
+        )
+
+        self.assertEqual(
+            groups[0].prompt_ids,
+            ("T04-E", "T04-F", "T04-G", "T04-H", "T04-I", "T04-J"),
+        )
+        selected = supervisor.select_prompt_group(groups, "T04-G")
+        self.assertIsNotNone(selected)
+        assert selected is not None
+        self.assertEqual(selected.prompt_ids, ("T04-G", "T04-H", "T04-I", "T04-J"))
+
+    def test_partial_group_recovery_advances_only_the_validated_commit_prefix(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            git(repo, "init")
+            git(repo, "config", "user.name", "Supervisor Test")
+            git(repo, "config", "user.email", "supervisor@example.invalid")
+            (repo / "base.txt").write_text("base\n", encoding="utf-8")
+            git(repo, "add", "--", "base.txt")
+            git(repo, "commit", "-m", "base")
+            pre_head = git(repo, "rev-parse", "HEAD")
+            (repo / "e.txt").write_text("e\n", encoding="utf-8")
+            git(repo, "add", "--", "e.txt")
+            git(repo, "commit", "-m", "commit T04-E")
+            commit = git(repo, "rev-parse", "HEAD")
+            handoff = supervisor.parse_handoff(
+                valid_handoff(
+                    prompt="T04-E",
+                    title="T04-E",
+                    commit=commit,
+                    subject="commit T04-E",
+                    next_prompt="T04-F",
+                )
+            )
+            config = replace(
+                supervisor.SupervisorConfig.defaults(),
+                repository_path=repo,
+                state_dir=root / "state",
+                execution_profile="efficient",
+                efficient_prompt_groups=(supervisor.PromptGroupSpec("T04-E", "T04-F"),),
+            )
+            instance = supervisor.Supervisor(config)
+            instance._create_state_directories()
+            state = {
+                "last_completed_prompt": "T04-D",
+                "last_commit": pre_head,
+                "next_prompt": "T04-E",
+                "current_status": "running",
+                "last_blocker": None,
+                "last_failed_run": None,
+                "active_run": {"run_id": "group"},
+                "last_run_completed_at": None,
+            }
+            group = supervisor.ResolvedPromptGroup(
+                prompt_ids=("T04-E", "T04-F"),
+                configured_prompt_ids=("T04-E", "T04-F"),
+            )
+            with patch.object(
+                instance, "_validate_completed_group", return_value=(handoff,)
+            ):
+                with self.assertRaisesRegex(
+                    supervisor.SupervisorError,
+                    "validated committed prefix through T04-E",
+                ):
+                    instance._reconcile_or_block_group(
+                        pack=self.pack,
+                        state=state,
+                        group=group,
+                        pre_head=pre_head,
+                        messages=(handoff.raw,),
+                        blocker="interrupted",
+                    )
+
+            saved = json.loads(instance.state_path.read_text(encoding="utf-8"))
+            self.assertEqual(saved["last_completed_prompt"], "T04-E")
+            self.assertEqual(saved["last_commit"], commit)
+            self.assertEqual(saved["next_prompt"], "T04-F")
+            self.assertEqual(
+                saved["efficient_group_progress"]["completed_prompt_ids"],
+                ["T04-E"],
+            )
+
+    def test_effort_selection_defaults_to_high_and_uses_explicit_max_patterns(
+        self,
+    ) -> None:
+        strict = supervisor.SupervisorConfig.defaults()
+        efficient = replace(
+            strict,
+            execution_profile="efficient",
+            efficient_max_prompt_patterns=("T04-K", "T08-*"),
+            efficient_audit_prompt_patterns=("T05-B",),
+            efficient_critical_gate_patterns=("T05-C",),
+        )
+
+        self.assertEqual(supervisor.reasoning_effort_for_prompt(strict, "T04-E"), "max")
+        self.assertEqual(
+            supervisor.reasoning_effort_for_prompt(efficient, "T04-E"), "high"
+        )
+        for prompt_id in ("T04-K", "T08-A", "T05-B", "T05-C"):
+            with self.subTest(prompt_id=prompt_id):
+                self.assertEqual(
+                    supervisor.reasoning_effort_for_prompt(efficient, prompt_id),
+                    "max",
+                )
+
+    def test_full_verify_is_limited_to_task_closures_and_critical_gates(self) -> None:
+        config = replace(
+            supervisor.SupervisorConfig.defaults(),
+            execution_profile="efficient",
+            efficient_critical_gate_patterns=("T04-K",),
+        )
+
+        for prompt_id in ("T04-K", "T05-C", "T06-FINAL"):
+            with self.subTest(prompt_id=prompt_id):
+                self.assertTrue(
+                    supervisor.efficient_full_verify_required(
+                        config, self.pack, prompt_id
+                    )
+                )
+        for prompt_id in ("T04-E", "T05-A", "T06-PROJECTS"):
+            with self.subTest(prompt_id=prompt_id):
+                self.assertFalse(
+                    supervisor.efficient_full_verify_required(
+                        config, self.pack, prompt_id
+                    )
+                )
+
+    def test_no_subagent_policy_has_only_named_exceptions(self) -> None:
+        config = replace(
+            supervisor.SupervisorConfig.defaults(),
+            execution_profile="efficient",
+            efficient_audit_prompt_patterns=("T13-B",),
+        )
+
+        self.assertFalse(supervisor.subagents_allowed(config, ("T04-E",)))
+        for prompt_id in ("T04-R1", "T04-R2", "T19-J", "T13-B"):
+            with self.subTest(prompt_id=prompt_id):
+                self.assertTrue(supervisor.subagents_allowed(config, (prompt_id,)))
+        event = {
+            "item": {
+                "type": "collaboration_tool_call",
+                "tool_name": "spawn_agent",
+            }
+        }
+        self.assertEqual(
+            supervisor.audit_subagent_event(event, allowed=False),
+            "efficient profile forbids subagents for this prompt",
+        )
+        self.assertIsNone(supervisor.audit_subagent_event(event, allowed=True))
+        verify_event = {
+            "item": {
+                "type": "command_execution",
+                "command": "PATH=/opt/homebrew/bin:$PATH npm run verify",
+            }
+        }
+        self.assertEqual(
+            supervisor.audit_full_verify_event(verify_event, allowed=False),
+            "efficient profile reserves npm run verify for critical gates",
+        )
+        self.assertIsNone(
+            supervisor.audit_full_verify_event(verify_event, allowed=True)
+        )
+
+    def test_groups_cannot_cross_task_max_reviewer_or_authorization_boundaries(
+        self,
+    ) -> None:
+        cases = (
+            (supervisor.PromptGroupSpec("T05-C", "T06-PROJECTS"), "numbered task"),
+            (supervisor.PromptGroupSpec("T04-E", "T04-K"), "Max boundary"),
+            (supervisor.PromptGroupSpec("T04-R1", "T04-R3"), "reviewer boundary"),
+            (supervisor.PromptGroupSpec("T08-A", "T18-A"), "authorization gate"),
+        )
+        for group, message in cases:
+            with self.subTest(group=group):
+                with self.assertRaisesRegex(supervisor.SupervisorError, message):
+                    supervisor.resolve_prompt_groups(
+                        self.pack,
+                        (group,),
+                        max_prompt_patterns=("T04-K",),
+                    )
+
+    def test_group_handoff_requires_every_prompt_in_exact_order(self) -> None:
+        text = "\n".join(
+            (
+                valid_handoff(
+                    prompt="T04-E",
+                    title="E",
+                    commit="1" * 40,
+                    subject="commit T04-E",
+                    next_prompt="T04-F",
+                ).rstrip(),
+                valid_handoff(
+                    prompt="T04-F",
+                    title="F",
+                    commit="2" * 40,
+                    subject="commit T04-F",
+                    next_prompt="T04-G",
+                ).rstrip(),
+            )
+        )
+
+        handoffs = supervisor.parse_group_handoffs(
+            text, expected_prompt_ids=("T04-E", "T04-F")
+        )
+
+        self.assertEqual(tuple(item.prompt_id for item in handoffs), ("T04-E", "T04-F"))
+        self.assertEqual(
+            tuple(item.commit_sha for item in handoffs), ("1" * 40, "2" * 40)
+        )
+        with self.assertRaisesRegex(supervisor.SupervisorError, "exact prompt order"):
+            supervisor.parse_group_handoffs(
+                text, expected_prompt_ids=("T04-F", "T04-E")
+            )
+
+    def test_group_prompt_contains_each_scope_and_efficient_gate_contract(self) -> None:
+        group = supervisor.ResolvedPromptGroup(
+            prompt_ids=("T04-E", "T04-F"),
+            configured_prompt_ids=("T04-E", "T04-F"),
+        )
+
+        prompt = supervisor.build_efficient_group_prompt(
+            self.pack,
+            group,
+            "SLICE HANDOFF\nPrompt: T04-D: prior\n",
+            full_verify_prompt_ids=(),
+        )
+
+        self.assertIn("## Prompt T04-E:", prompt)
+        self.assertIn("## Prompt T04-F:", prompt)
+        self.assertIn("Do not spawn or delegate to subagents", prompt)
+        self.assertIn("synchronize `CLAUDE.md` and `AGENTS.md` exactly once", prompt)
+        self.assertIn("one SLICE HANDOFF block for every prompt", prompt)
+        self.assertIn("Do not run `npm run verify` for this group", prompt)
+
+    def test_implementation_command_uses_selected_effort_without_changing_strict(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = RepositoryFixture(Path(directory))
+            capabilities = supervisor.detect_codex_capabilities(str(fixture.codex))
+            strict_command = supervisor.Supervisor(
+                fixture.config
+            )._implementation_command(capabilities, reasoning_effort="max")
+            efficient_command = supervisor.Supervisor(
+                replace(fixture.config, execution_profile="efficient")
+            )._implementation_command(capabilities, reasoning_effort="high")
+
+        self.assertIn('model_reasoning_effort="max"', strict_command)
+        self.assertIn('model_reasoning_effort="high"', efficient_command)
 
 
 class PromptPackParsingTests(unittest.TestCase):
@@ -1202,6 +1555,17 @@ class SupervisorExecutionTests(unittest.TestCase):
             self.assertEqual(stopped["current_status"], "boundary_reached")
             self.assertEqual(stopped["next_prompt"], "T18-A")
             self.assertIn("stopped before T18-A", stopped["last_blocker"])
+
+            efficient = supervisor.Supervisor(
+                replace(
+                    fixture.config,
+                    execution_profile="efficient",
+                    efficient_prompt_groups=(),
+                )
+            )
+            efficiently_stopped = efficient.run_until(stop_before="T18-A")
+            self.assertEqual(efficiently_stopped["current_status"], "boundary_reached")
+            self.assertEqual(efficiently_stopped["next_prompt"], "T18-A")
 
 
 if __name__ == "__main__":

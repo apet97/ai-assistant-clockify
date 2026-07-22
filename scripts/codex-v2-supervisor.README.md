@@ -1,10 +1,12 @@
 # Codex v2 local supervisor
 
-`codex-v2-supervisor.py` adopts the completed T01-C boundary and runs one fresh
-Codex process per prompt from T01-D through T17-G. It parses prompt order and
-prompt content from the prompt pack; it does not carry a handwritten task list.
-It stops before T18-A and never deploys, pushes, tags, publishes, or performs a
-live Clockify/Railway/Marketplace action.
+`codex-v2-supervisor.py` adopts the completed T01-C boundary and runs Codex from
+T01-D through T17-G. Strict mode, which remains the default, launches one fresh
+process per prompt. The optional efficient profile may run a configured sequence
+of related prompts in one fresh process while retaining each prompt's scope,
+evidence, commit, and clean-worktree boundary. The supervisor parses prompt order
+and content from the prompt pack, stops before T18-A, and never deploys, pushes,
+tags, publishes, or performs a live Clockify/Railway/Marketplace action.
 
 ## Before adoption
 
@@ -58,6 +60,32 @@ python3 scripts/codex-v2-supervisor.py --config scripts/codex-v2-supervisor.exam
 
 The defaults already match the paths in this checkout. The example mainly makes
 the four-hour implementation/reviewer hard timeouts visible and editable.
+
+## Efficient execution profile
+
+Strict behavior is unchanged unless `--execution-profile efficient` is supplied
+or `execution_profile` is set to `efficient` in configuration. Efficient mode
+uses Sol High by default. Configured architecture, safety, task-closure, and
+independent-review prompt patterns use Sol Max. Subagents are rejected from
+structured events except for T04-R1, T04-R2, T19-J, and configured audit prompts.
+
+The initial `efficient_prompt_groups` are recorded in the example configuration.
+Each range must be contiguous within one numbered task and may not contain an
+explicit Max prompt, reviewer, or authorization gate. A group creates one exact
+commit per prompt unless its configuration object supplies
+`consolidated_commit_subject`. Per-prompt checkpoints make a validated committed
+prefix restartable without rerunning it. Group completion requires ordered
+handoffs for every prompt, exact ordered commits, domain regression tests,
+type-check, relevant lint, and one final synchronization of `CLAUDE.md` and
+`AGENTS.md`. `npm run verify` is reserved for numbered-task closures and the
+configured critical-gate patterns.
+
+Resume the already completed T04-D boundary in efficient mode, using the current
+recovery configuration, with exactly:
+
+```bash
+python3 scripts/codex-v2-supervisor.py --config /Users/15x/Downloads/codex-v2-supervisor-recovery.json --execution-profile efficient run --stop-before T18-A
+```
 
 ## T04 independent-review boundary
 
@@ -113,10 +141,11 @@ uses the only accepted writable mode:
 ```
 
 Reviewers instead use `--ask-for-approval never` plus `--sandbox read-only`.
-Every invocation is `--ephemeral`, uses `gpt-5.6-sol` with max reasoning, and is
-given only the Base Execution Contract, required task contract(s), selected
-prompt, immediately preceding handoff, and autonomy rules. T04-R3 additionally
-receives the two bound reviewer reports.
+Every invocation is `--ephemeral` and uses `gpt-5.6-sol`. Strict mode uses Max
+reasoning. Efficient mode selects High or configured Max and gives a grouped
+process only the Base Execution Contract, required task contract(s), selected
+prompt sections, immediately preceding handoff, and efficient gate rules. T04-R3
+additionally receives the two bound reviewer reports.
 
 Runtime state is private and atomically replaced under:
 
@@ -146,11 +175,3 @@ Frozen paths are derived conservatively from exact path references in the
 selected prompt and required contracts, plus only role/domain-matching paths
 from the named canonical-plan and task context. A semantically described path
 that cannot be proved is a blocker, not an implicit scope expansion.
-
-## Current checkout caveat
-
-At supervisor creation time, `npm run verify` reaches `type-check:scripts` and
-fails because the tracked `scripts/repro-chat.ts` T01-C-era `AppConfig` fixture
-does not set the required `assistantEngine`. The supervisor files do not touch
-that implementation. Resolve this pre-existing checkpoint mismatch and refresh
-the adopted T01-C boundary before expecting unattended T01-D execution.

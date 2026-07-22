@@ -6,7 +6,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import argparse
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 import fcntl
 import fnmatch
@@ -28,6 +28,52 @@ from typing import Any, Iterable, Iterator, Mapping
 
 PROMPT_ID_RE = re.compile(r"\bT\d{2}(?:-[A-Z0-9]+)+\b")
 
+INITIAL_EFFICIENT_GROUP_RANGES: tuple[str, ...] = (
+    "T04-E..T04-J",
+    "T05-A..T05-C",
+    "T06-PROJECTS..T06-USER-RATES",
+    "T06-ENTRY-READS..T06-ENTRY-UPDATE",
+    "T06-REPORTS..T06-WEBHOOKS",
+    "T06-INVOICE-READS..T06-INVOICE-IMPORT",
+    "T06-EXPENSES..T06-CUSTOM-FIELDS",
+    "T06-USERS..T06-GROUP-MEMBERSHIP",
+    "T06-TIME-OFF-POLICIES..T06-APPROVALS",
+    "T06-SCHEDULING-ASSIGNMENTS..T06-SCHEDULING-PUBLISH",
+    "T07-A..T07-B",
+    "T10-A..T10-C",
+    "T10-D..T10-G",
+    "T12-A..T12-C",
+    "T12-D..T12-G",
+    "T15-A..T15-E",
+    "T17-A..T17-G",
+)
+
+DEFAULT_EFFICIENT_MAX_PROMPT_PATTERNS: tuple[str, ...] = (
+    "T04-K",
+    "T04-R1",
+    "T04-R2",
+    "T04-R3",
+    "T06-FINAL",
+    "T08-*",
+    "T09-*",
+    "T10-H",
+    "T11-*",
+    "T12-H",
+    "T13-*",
+    "T14-*",
+    "T16-*",
+    "T18-*",
+    "T19-*",
+)
+
+DEFAULT_EFFICIENT_CRITICAL_GATE_PATTERNS: tuple[str, ...] = (
+    "T04-K",
+    "T04-R3",
+    "T06-FINAL",
+    "T10-H",
+    "T12-H",
+)
+
 
 class SupervisorError(RuntimeError):
     """A fail-closed validation or execution error."""
@@ -35,6 +81,57 @@ class SupervisorError(RuntimeError):
 
 class StopBoundary(SupervisorError):
     """A deliberate operator/reviewer/late-task stop boundary."""
+
+
+@dataclass(frozen=True)
+class PromptGroupSpec:
+    start_prompt: str
+    end_prompt: str
+    consolidated_commit_subject: str | None = None
+
+    @classmethod
+    def parse(cls, value: Any) -> "PromptGroupSpec":
+        if isinstance(value, str):
+            parts = value.split("..")
+            if len(parts) != 2 or not all(
+                PROMPT_ID_RE.fullmatch(part) for part in parts
+            ):
+                raise SupervisorError(
+                    "efficient prompt group strings must use START..END prompt IDs"
+                )
+            return cls(parts[0], parts[1])
+        if not isinstance(value, dict):
+            raise SupervisorError("efficient prompt groups must be strings or objects")
+        unknown = set(value) - {
+            "start_prompt",
+            "end_prompt",
+            "consolidated_commit_subject",
+        }
+        if unknown:
+            raise SupervisorError(
+                "unknown efficient prompt group keys: " + ", ".join(sorted(unknown))
+            )
+        start = value.get("start_prompt")
+        end = value.get("end_prompt")
+        subject = value.get("consolidated_commit_subject")
+        if not isinstance(start, str) or PROMPT_ID_RE.fullmatch(start) is None:
+            raise SupervisorError("efficient group start_prompt is invalid")
+        if not isinstance(end, str) or PROMPT_ID_RE.fullmatch(end) is None:
+            raise SupervisorError("efficient group end_prompt is invalid")
+        if subject is not None and (
+            not isinstance(subject, str) or not subject.strip()
+        ):
+            raise SupervisorError(
+                "consolidated_commit_subject must be a non-empty string"
+            )
+        return cls(start, end, subject)
+
+
+@dataclass(frozen=True)
+class ResolvedPromptGroup:
+    prompt_ids: tuple[str, ...]
+    consolidated_commit_subject: str | None = None
+    configured_prompt_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -283,6 +380,101 @@ class PromptPack:
         )
 
 
+def _prompt_task_number(prompt_id: str) -> int:
+    match = re.match(r"^T(\d{2})-", prompt_id)
+    if match is None:
+        raise SupervisorError(f"cannot determine numbered task for {prompt_id}")
+    return int(match.group(1))
+
+
+def _matches_prompt_patterns(prompt_id: str, patterns: Iterable[str]) -> bool:
+    return any(fnmatch.fnmatchcase(prompt_id, pattern) for pattern in patterns)
+
+
+def resolve_prompt_groups(
+    pack: PromptPack,
+    specs: Iterable[PromptGroupSpec],
+    *,
+    max_prompt_patterns: Iterable[str],
+) -> tuple[ResolvedPromptGroup, ...]:
+    ordered = pack.ordered_prompt_ids
+    positions = {prompt_id: index for index, prompt_id in enumerate(ordered)}
+    reviewer_ids = {
+        prompt_id
+        for item in pack.order_items
+        if isinstance(item, tuple)
+        for prompt_id in item
+    }
+    claimed: set[str] = set()
+    resolved: list[ResolvedPromptGroup] = []
+    for spec in specs:
+        if spec.start_prompt not in positions or spec.end_prompt not in positions:
+            raise SupervisorError(
+                f"efficient group references an unknown prompt: "
+                f"{spec.start_prompt}..{spec.end_prompt}"
+            )
+        start = positions[spec.start_prompt]
+        end = positions[spec.end_prompt]
+        if end < start:
+            raise SupervisorError(
+                f"efficient group is not ordered: {spec.start_prompt}..{spec.end_prompt}"
+            )
+        prompt_ids = ordered[start : end + 1]
+        if any(pack.prompt(prompt_id).authorization_gates for prompt_id in prompt_ids):
+            raise SupervisorError(
+                f"efficient group crosses an authorization gate: "
+                f"{spec.start_prompt}..{spec.end_prompt}"
+            )
+        if any(prompt_id in reviewer_ids for prompt_id in prompt_ids):
+            raise SupervisorError(
+                f"efficient group crosses a reviewer boundary: "
+                f"{spec.start_prompt}..{spec.end_prompt}"
+            )
+        if len(prompt_ids) > 1 and any(
+            _matches_prompt_patterns(prompt_id, max_prompt_patterns)
+            for prompt_id in prompt_ids
+        ):
+            raise SupervisorError(
+                f"efficient group crosses an explicit Max boundary: "
+                f"{spec.start_prompt}..{spec.end_prompt}"
+            )
+        task_numbers = {_prompt_task_number(prompt_id) for prompt_id in prompt_ids}
+        if len(task_numbers) != 1:
+            raise SupervisorError(
+                f"efficient group crosses a numbered task closure: "
+                f"{spec.start_prompt}..{spec.end_prompt}"
+            )
+        overlap = claimed.intersection(prompt_ids)
+        if overlap:
+            raise SupervisorError(
+                "efficient prompt groups overlap: " + ", ".join(sorted(overlap))
+            )
+        claimed.update(prompt_ids)
+        resolved.append(
+            ResolvedPromptGroup(
+                prompt_ids=prompt_ids,
+                consolidated_commit_subject=spec.consolidated_commit_subject,
+                configured_prompt_ids=prompt_ids,
+            )
+        )
+    return tuple(resolved)
+
+
+def select_prompt_group(
+    groups: Iterable[ResolvedPromptGroup], next_prompt: str
+) -> ResolvedPromptGroup | None:
+    for group in groups:
+        if next_prompt not in group.prompt_ids:
+            continue
+        index = group.prompt_ids.index(next_prompt)
+        return ResolvedPromptGroup(
+            prompt_ids=group.prompt_ids[index:],
+            consolidated_commit_subject=group.consolidated_commit_subject,
+            configured_prompt_ids=(group.configured_prompt_ids or group.prompt_ids),
+        )
+    return None
+
+
 HANDOFF_FIELDS: tuple[str, ...] = (
     "Prompt",
     "Status",
@@ -378,6 +570,35 @@ def parse_handoff(text: str) -> Handoff:
         fields=parsed,
         next_prompt_ids=next_ids,
     )
+
+
+def parse_group_handoffs(
+    text: str, *, expected_prompt_ids: tuple[str, ...]
+) -> tuple[Handoff, ...]:
+    markers = list(re.finditer(r"(?m)^SLICE HANDOFF\s*$", text))
+    if not markers or text[: markers[0].start()].strip():
+        raise SupervisorError(
+            "efficient group response must contain only SLICE HANDOFF blocks"
+        )
+    handoffs = tuple(
+        parse_handoff(
+            text[
+                marker.start() : (
+                    markers[index + 1].start()
+                    if index + 1 < len(markers)
+                    else len(text)
+                )
+            ].strip()
+            + "\n"
+        )
+        for index, marker in enumerate(markers)
+    )
+    actual = tuple(handoff.prompt_id for handoff in handoffs)
+    if actual != expected_prompt_ids:
+        raise SupervisorError(
+            "efficient group handoff does not contain every prompt in exact prompt order"
+        )
+    return handoffs
 
 
 def _bold_field(section: str, name: str) -> str:
@@ -493,6 +714,17 @@ class SupervisorConfig:
     reasoning_effort: str
     stop_before: str
     protect_findings: bool
+    execution_profile: str = "strict"
+    efficient_prompt_groups: tuple[PromptGroupSpec, ...] = tuple(
+        PromptGroupSpec.parse(value) for value in INITIAL_EFFICIENT_GROUP_RANGES
+    )
+    efficient_max_prompt_patterns: tuple[str, ...] = (
+        DEFAULT_EFFICIENT_MAX_PROMPT_PATTERNS
+    )
+    efficient_audit_prompt_patterns: tuple[str, ...] = ()
+    efficient_critical_gate_patterns: tuple[str, ...] = (
+        DEFAULT_EFFICIENT_CRITICAL_GATE_PATTERNS
+    )
 
     ALLOWED_KEYS = frozenset(
         {
@@ -507,6 +739,11 @@ class SupervisorConfig:
             "reasoning_effort",
             "stop_before",
             "protect_findings",
+            "execution_profile",
+            "efficient_prompt_groups",
+            "efficient_max_prompt_patterns",
+            "efficient_audit_prompt_patterns",
+            "efficient_critical_gate_patterns",
         }
     )
 
@@ -528,6 +765,13 @@ class SupervisorConfig:
             reasoning_effort="max",
             stop_before="T18-A",
             protect_findings=True,
+            execution_profile="strict",
+            efficient_prompt_groups=tuple(
+                PromptGroupSpec.parse(value) for value in INITIAL_EFFICIENT_GROUP_RANGES
+            ),
+            efficient_max_prompt_patterns=DEFAULT_EFFICIENT_MAX_PROMPT_PATTERNS,
+            efficient_audit_prompt_patterns=(),
+            efficient_critical_gate_patterns=(DEFAULT_EFFICIENT_CRITICAL_GATE_PATTERNS),
         )
 
     @classmethod
@@ -557,9 +801,63 @@ class SupervisorConfig:
             if value <= 0:
                 raise SupervisorError(f"{key} must be positive")
             values[key] = value
+        if values["execution_profile"] not in {"strict", "efficient"}:
+            raise SupervisorError("execution_profile must be strict or efficient")
+        raw_groups = values["efficient_prompt_groups"]
+        if not isinstance(raw_groups, (list, tuple)):
+            raise SupervisorError("efficient_prompt_groups must be a JSON array")
+        values["efficient_prompt_groups"] = tuple(
+            value
+            if isinstance(value, PromptGroupSpec)
+            else PromptGroupSpec.parse(value)
+            for value in raw_groups
+        )
+        for key in (
+            "efficient_max_prompt_patterns",
+            "efficient_audit_prompt_patterns",
+            "efficient_critical_gate_patterns",
+        ):
+            raw_patterns = values[key]
+            if not isinstance(raw_patterns, (list, tuple)) or not all(
+                isinstance(pattern, str) and pattern.strip() for pattern in raw_patterns
+            ):
+                raise SupervisorError(f"{key} must be an array of prompt patterns")
+            values[key] = tuple(raw_patterns)
         if values["model"] != "gpt-5.6-sol" or values["reasoning_effort"] != "max":
             raise SupervisorError("model must be gpt-5.6-sol with max reasoning")
         return cls(**values)
+
+
+def reasoning_effort_for_prompt(config: SupervisorConfig, prompt_id: str) -> str:
+    if config.execution_profile == "strict":
+        return config.reasoning_effort
+    max_patterns = (
+        config.efficient_max_prompt_patterns
+        + config.efficient_audit_prompt_patterns
+        + config.efficient_critical_gate_patterns
+    )
+    return "max" if _matches_prompt_patterns(prompt_id, max_patterns) else "high"
+
+
+def subagents_allowed(config: SupervisorConfig, prompt_ids: tuple[str, ...]) -> bool:
+    if config.execution_profile == "strict":
+        return True
+    if len(prompt_ids) != 1:
+        return False
+    prompt_id = prompt_ids[0]
+    return prompt_id in {"T04-R1", "T04-R2", "T19-J"} or _matches_prompt_patterns(
+        prompt_id, config.efficient_audit_prompt_patterns
+    )
+
+
+def efficient_full_verify_required(
+    config: SupervisorConfig, pack: PromptPack, prompt_id: str
+) -> bool:
+    if config.execution_profile == "strict":
+        return True
+    return prompt_id in task_closure_prompt_ids(pack) or _matches_prompt_patterns(
+        prompt_id, config.efficient_critical_gate_patterns
+    )
 
 
 @contextmanager
@@ -593,6 +891,20 @@ class AllowedPathSpecs:
     basenames: frozenset[str]
     globs: frozenset[str]
     prefixes: frozenset[str]
+
+
+def merge_allowed_path_specs(
+    specs: Iterable[AllowedPathSpecs],
+) -> AllowedPathSpecs:
+    materialized = tuple(specs)
+    return AllowedPathSpecs(
+        exact=frozenset(path for spec in materialized for path in spec.exact),
+        basenames=frozenset(
+            basename for spec in materialized for basename in spec.basenames
+        ),
+        globs=frozenset(pattern for spec in materialized for pattern in spec.globs),
+        prefixes=frozenset(prefix for spec in materialized for prefix in spec.prefixes),
+    )
 
 
 def derive_allowed_path_specs(
@@ -1205,6 +1517,7 @@ def build_child_prompt(
     reviewer_reports: Mapping[str, str] | None = None,
     read_only_reviewer: bool = False,
     immutable_sha: str | None = None,
+    allow_subagents: bool = True,
 ) -> str:
     selected = pack.prompt(prompt_id)
     sections = [pack.base_contract.rstrip()]
@@ -1234,10 +1547,148 @@ def build_child_prompt(
         + (
             READ_ONLY_REVIEWER_INSTRUCTIONS
             if read_only_reviewer
-            else AUTONOMY_INSTRUCTIONS
+            else (
+                AUTONOMY_INSTRUCTIONS
+                if allow_subagents
+                else AUTONOMY_INSTRUCTIONS.replace(
+                    "Subagents are read-only investigators and may not edit, generate, "
+                    "format, stage, commit, switch branches/worktrees, or perform "
+                    "external actions.",
+                    "Do not spawn or delegate to subagents. Do not invoke nested Codex, "
+                    "Claude, or other agent processes.",
+                )
+            )
         )
     )
     return "\n\n---\n\n".join(sections).rstrip() + "\n"
+
+
+def task_closure_prompt_ids(pack: PromptPack) -> frozenset[str]:
+    ordered = pack.ordered_prompt_ids
+    closures: set[str] = set()
+    for index, prompt_id in enumerate(ordered):
+        task_number = _prompt_task_number(prompt_id)
+        if (
+            index + 1 == len(ordered)
+            or _prompt_task_number(ordered[index + 1]) != task_number
+        ):
+            closures.add(prompt_id)
+    return frozenset(closures)
+
+
+def build_efficient_group_prompt(
+    pack: PromptPack,
+    group: ResolvedPromptGroup,
+    previous_handoff: str,
+    *,
+    full_verify_prompt_ids: tuple[str, ...],
+) -> str:
+    if not group.prompt_ids:
+        raise SupervisorError("efficient prompt group cannot be empty")
+    contracts: list[TaskContract] = []
+    seen_contracts: set[int] = set()
+    for prompt_id in group.prompt_ids:
+        for contract in pack.required_contracts_for(prompt_id):
+            if contract.task_number not in seen_contracts:
+                seen_contracts.add(contract.task_number)
+                contracts.append(contract)
+    sections = [pack.base_contract.rstrip()]
+    sections.extend(contract.text.rstrip() for contract in contracts)
+    sections.extend(
+        (
+            f"Selected efficient-group prompt {index + 1}/{len(group.prompt_ids)}: "
+            f"{prompt_id}\n\n{pack.prompt(prompt_id).text.rstrip()}"
+        )
+        for index, prompt_id in enumerate(group.prompt_ids)
+    )
+    sections.append(
+        "Immediately preceding SLICE HANDOFF\n\n" + previous_handoff.rstrip()
+    )
+    if group.configured_prompt_ids and group.prompt_ids != group.configured_prompt_ids:
+        completed = group.configured_prompt_ids[
+            : len(group.configured_prompt_ids) - len(group.prompt_ids)
+        ]
+        sections.append(
+            "Recovered efficient-group prefix\n\n"
+            + "The supervisor already validated these committed prompt boundaries: "
+            + ", ".join(completed)
+            + ". Resume only the selected suffix. Guidance synchronization and group-end "
+            + "gates remain deferred until the configured final prompt "
+            + group.configured_prompt_ids[-1]
+            + "."
+        )
+    commit_rule = (
+        "Create each selected prompt's exact required commit before starting the next "
+        "prompt."
+        if group.consolidated_commit_subject is None
+        else (
+            "Do not commit between prompts. Create exactly one final consolidated "
+            f"commit with subject `{group.consolidated_commit_subject}` after all "
+            "prompt and group gates pass."
+        )
+    )
+    verify_rule = (
+        "Run `npm run verify` only after completing: "
+        + ", ".join(full_verify_prompt_ids)
+        + "."
+        if full_verify_prompt_ids
+        else "Do not run `npm run verify` for this group."
+    )
+    sections.append(
+        f"""Efficient execution profile contract
+
+Execute these prompt IDs in exact order: {", ".join(group.prompt_ids)}.
+
+- Preserve every prompt's own frozen scope. A later prompt never expands an earlier prompt's scope.
+- For every prompt, record its focused red/green evidence, run required generated checks, run type-check only when relevant, run `git diff --check`, and stop immediately on BLOCKED or invalid evidence.
+- {commit_rule}
+- After every prompt boundary, run `git status --short --branch`; only the optional untracked protected pathname may remain. Do not inspect that file.
+- Before starting the next prompt, emit one complete `SLICE HANDOFF` checkpoint as a standalone assistant message. This makes a committed prefix recoverable after interruption.
+- At the end of the group, run the combined domain regression gates, `npm run type-check`, and `npm run lint` when relevant; synchronize `CLAUDE.md` and `AGENTS.md` exactly once in the final prompt's commit.
+- {verify_rule}
+- Do not spawn or delegate to subagents. Do not invoke nested Codex, Claude, or other agent processes.
+- Never continue across a numbered-task closure, reviewer boundary, or authorization gate. The selected group already ends before any such boundary.
+- The final response must contain one SLICE HANDOFF block for every prompt in exact order and no other text. Every block must report that prompt's exact files and focused evidence. The final block's `Green evidence` must include the literal label `group-end domain regression` followed by its command/result, plus the group-end type-check, relevant lint, and any required full verify. The blocks must report the exact ordered commits; for a configured consolidated group, intermediate blocks report `Commit: NONE` and the final block reports the one consolidated commit.
+
+The efficient profile overrides only the Base Execution Contract's per-micro-prompt documentation and full-verification cadence. All safety, scope, TDD, evidence, commit, clean-worktree, and stop invariants remain binding."""
+    )
+    return "\n\n---\n\n".join(sections).rstrip() + "\n"
+
+
+def build_efficient_single_prompt(
+    pack: PromptPack,
+    prompt_id: str,
+    previous_handoff: str,
+    *,
+    reviewer_reports: Mapping[str, str] | None,
+    allow_subagents: bool,
+    full_verify_required: bool,
+) -> str:
+    prompt = build_child_prompt(
+        pack,
+        prompt_id,
+        previous_handoff,
+        reviewer_reports=reviewer_reports,
+        allow_subagents=allow_subagents,
+    ).rstrip()
+    verify_rule = (
+        "Run `npm run verify`; this prompt is a numbered-task closure or configured "
+        "critical gate."
+        if full_verify_required
+        else (
+            "Do not run `npm run verify`; this prompt is neither a numbered-task "
+            "closure nor a configured critical gate."
+        )
+    )
+    return (
+        prompt
+        + "\n\n---\n\nEfficient execution profile gate\n\n"
+        + "Run the prompt's focused tests, required generated checks, relevant "
+        + "type-check, and `git diff --check`; create its required commit and prove "
+        + "a clean worktree. "
+        + verify_rule
+        + " All scope, safety, evidence, documentation, and stop rules remain binding.\n"
+    )
 
 
 @dataclass(frozen=True)
@@ -1248,6 +1699,7 @@ class ChildProcessResult:
     violation: str | None
     final_response: str
     duration_seconds: float
+    agent_messages: tuple[str, ...]
 
 
 _ACTIVE_PROCESS_LOCK = threading.Lock()
@@ -1267,6 +1719,8 @@ def run_managed_process(
     pid_path: Path | None = None,
     allowed_paths: AllowedPathSpecs | None = None,
     read_only: bool = False,
+    subagents_allowed: bool = True,
+    full_verify_allowed: bool = True,
 ) -> ChildProcessResult:
     for path in (events_path, stderr_path, final_path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -1326,6 +1780,12 @@ def run_managed_process(
                     except json.JSONDecodeError:
                         continue
                     violation = audit_structured_event(event)
+                    violation = violation or audit_subagent_event(
+                        event, allowed=subagents_allowed
+                    )
+                    violation = violation or audit_full_verify_event(
+                        event, allowed=full_verify_allowed
+                    )
                     for command_text in _event_command_strings(event):
                         if read_only and re.search(
                             r"\bgit\s+(?:add|commit|mv|rm|reset|checkout|switch|rebase|cherry-pick|revert)\b",
@@ -1448,6 +1908,7 @@ def run_managed_process(
         violation=violation_box[0] if violation_box else None,
         final_response=final_response,
         duration_seconds=time.monotonic() - started,
+        agent_messages=tuple(final_messages),
     )
 
 
@@ -1536,7 +1997,12 @@ def _terminate_recorded_process_group(pid: int) -> None:
         pass
 
 
-def _validate_saved_events(path_value: Any) -> None:
+def _validate_saved_events(
+    path_value: Any,
+    *,
+    subagents_allowed: bool = True,
+    full_verify_allowed: bool = True,
+) -> None:
     if path_value is None:
         return
     if not isinstance(path_value, str):
@@ -1549,6 +2015,12 @@ def _validate_saved_events(path_value: Any) -> None:
                 except json.JSONDecodeError:
                     continue
                 violation = audit_structured_event(event)
+                violation = violation or audit_subagent_event(
+                    event, allowed=subagents_allowed
+                )
+                violation = violation or audit_full_verify_event(
+                    event, allowed=full_verify_allowed
+                )
                 if violation:
                     raise SupervisorError(
                         f"saved child event contains a boundary violation: {violation}"
@@ -1557,6 +2029,27 @@ def _validate_saved_events(path_value: Any) -> None:
         return
     except (OSError, UnicodeError) as error:
         raise SupervisorError(f"cannot read structured-event log: {error}") from error
+
+
+def _saved_agent_messages(path_value: Any) -> tuple[str, ...]:
+    if not isinstance(path_value, str):
+        return ()
+    messages: list[str] = []
+    try:
+        with Path(path_value).open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                message = _agent_message_from_event(event)
+                if message is not None:
+                    messages.append(message)
+    except FileNotFoundError:
+        return ()
+    except (OSError, UnicodeError) as error:
+        raise SupervisorError(f"cannot read structured-event log: {error}") from error
+    return tuple(messages)
 
 
 def _agent_message_from_event(event: Any) -> str | None:
@@ -1656,6 +2149,56 @@ def audit_structured_event(event: Any) -> str | None:
         for pattern, reason in FORBIDDEN_COMMAND_PATTERNS:
             if pattern.search(command):
                 return reason
+    return None
+
+
+SUBAGENT_TOOL_NAMES = frozenset(
+    {
+        "spawn_agent",
+        "send_message",
+        "followup_task",
+        "wait_agent",
+        "interrupt_agent",
+        "task",
+    }
+)
+
+
+def _event_tool_names(value: Any, key: str = "") -> Iterable[str]:
+    if isinstance(value, dict):
+        for child_key, child_value in value.items():
+            normalized = child_key.lower().replace("-", "_")
+            if normalized in {
+                "name",
+                "tool",
+                "tool_name",
+                "function_name",
+            } and isinstance(child_value, str):
+                yield child_value
+            yield from _event_tool_names(child_value, child_key)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _event_tool_names(child, key)
+
+
+def audit_subagent_event(event: Any, *, allowed: bool) -> str | None:
+    if allowed:
+        return None
+    for tool_name in _event_tool_names(event):
+        normalized = tool_name.rsplit(".", 1)[-1].lower().replace("-", "_")
+        if normalized in SUBAGENT_TOOL_NAMES:
+            return "efficient profile forbids subagents for this prompt"
+    return None
+
+
+def audit_full_verify_event(event: Any, *, allowed: bool) -> str | None:
+    if allowed:
+        return None
+    if any(
+        re.search(r"\bnpm\s+run\s+verify\b", command)
+        for command in _event_command_strings(event)
+    ):
+        return "efficient profile reserves npm run verify for critical gates"
     return None
 
 
@@ -1899,6 +2442,14 @@ class Supervisor:
             active = state.get("active_run")
             if not isinstance(active, dict):
                 raise SupervisorError("running state has no valid active_run")
+            if (
+                active.get("execution_profile") == "efficient"
+                and self.config.execution_profile != "efficient"
+            ):
+                raise SupervisorError(
+                    "interrupted efficient run must be reconciled with "
+                    "--execution-profile efficient"
+                )
             receipt = _reconcile_process_receipt(active.get("pid_path"))
             actual_head = _git(self.config.repository_path, "rev-parse", "HEAD")
             if actual_head == active.get("pre_head"):
@@ -1911,6 +2462,102 @@ class Supervisor:
                 state["last_run_completed_at"] = _utc_now()
                 self._write_state(state)
             else:
+                prompt_ids_value = active.get("prompt_ids")
+                if (
+                    active.get("execution_profile") == "efficient"
+                    and isinstance(prompt_ids_value, list)
+                    and len(prompt_ids_value) > 1
+                    and all(isinstance(value, str) for value in prompt_ids_value)
+                ):
+                    pack = self.load_pack()
+                    allow_full_verify = any(
+                        efficient_full_verify_required(self.config, pack, prompt_id)
+                        for prompt_id in prompt_ids_value
+                    )
+                    try:
+                        events_value = active.get("events_path")
+                        if (
+                            not isinstance(events_value, str)
+                            or not Path(events_value).is_file()
+                        ):
+                            raise SupervisorError(
+                                "efficient group structured-event evidence is missing"
+                            )
+                        _validate_saved_events(
+                            events_value,
+                            subagents_allowed=False,
+                            full_verify_allowed=allow_full_verify,
+                        )
+                        messages = _saved_agent_messages(events_value)
+                        final_value = active.get("final_response_path")
+                        try:
+                            final_response = (
+                                Path(final_value).read_text(encoding="utf-8")
+                                if isinstance(final_value, str)
+                                else ""
+                            )
+                        except FileNotFoundError:
+                            final_response = ""
+                    except (OSError, UnicodeError, SupervisorError) as error:
+                        raise SupervisorError(
+                            "interrupted efficient group changed Git and its saved "
+                            "evidence is invalid; manual reconciliation required: "
+                            f"{error}"
+                        ) from error
+                    configured_value = active.get("configured_prompt_ids")
+                    configured_prompt_ids = (
+                        tuple(configured_value)
+                        if isinstance(configured_value, list)
+                        and all(isinstance(value, str) for value in configured_value)
+                        else tuple(prompt_ids_value)
+                    )
+                    subject_value = active.get("consolidated_commit_subject")
+                    if subject_value is not None and not isinstance(subject_value, str):
+                        raise SupervisorError(
+                            "interrupted efficient group has malformed commit policy"
+                        )
+                    group = ResolvedPromptGroup(
+                        prompt_ids=tuple(prompt_ids_value),
+                        configured_prompt_ids=configured_prompt_ids,
+                        consolidated_commit_subject=subject_value,
+                    )
+                    process_succeeded = receipt is not None and (
+                        receipt.get("active") is False and receipt.get("exit_code") == 0
+                    )
+                    if process_succeeded:
+                        try:
+                            handoffs = self._validate_completed_group(
+                                pack=pack,
+                                group=group,
+                                pre_head=str(active.get("pre_head", "")),
+                                final_response=final_response,
+                            )
+                        except SupervisorError as error:
+                            return self._reconcile_or_block_group(
+                                pack=pack,
+                                state=state,
+                                group=group,
+                                pre_head=str(active.get("pre_head", "")),
+                                messages=messages,
+                                blocker=(
+                                    "interrupted efficient group final boundary failed "
+                                    f"validation: {error}"
+                                ),
+                            )
+                        return self._record_completed_group(
+                            pack=pack,
+                            state=state,
+                            group=group,
+                            handoffs=handoffs,
+                        )
+                    return self._reconcile_or_block_group(
+                        pack=pack,
+                        state=state,
+                        group=group,
+                        pre_head=str(active.get("pre_head", "")),
+                        messages=messages,
+                        blocker="efficient group process was interrupted",
+                    )
                 final_path_value = active.get("final_response_path")
                 try:
                     if receipt is not None and (
@@ -1920,12 +2567,25 @@ class Supervisor:
                         raise SupervisorError(
                             "child process success was not durably recorded"
                         )
-                    _validate_saved_events(active.get("events_path"))
+                    pack = self.load_pack()
+                    prompt_id = str(active.get("prompt_id", ""))
+                    efficient_recovery = active.get("execution_profile") == "efficient"
+                    _validate_saved_events(
+                        active.get("events_path"),
+                        subagents_allowed=(
+                            subagents_allowed(self.config, (prompt_id,))
+                            if efficient_recovery
+                            else True
+                        ),
+                        full_verify_allowed=(
+                            efficient_full_verify_required(self.config, pack, prompt_id)
+                            if efficient_recovery
+                            else True
+                        ),
+                    )
                     if not isinstance(final_path_value, str):
                         raise SupervisorError("active run has no final-response path")
                     final_response = Path(final_path_value).read_text(encoding="utf-8")
-                    pack = self.load_pack()
-                    prompt_id = str(active.get("prompt_id", ""))
                     prompt = pack.prompt(prompt_id)
                     recovery_scope = ""
                     if prompt_id == "T04-R3":
@@ -2101,6 +2761,20 @@ class Supervisor:
         if next_action_kind(pack, next_prompt) == "reviewer_pair":
             return self._run_reviewer_pair(pack, capabilities, state)
 
+        if self.config.execution_profile == "efficient":
+            groups = resolve_prompt_groups(
+                pack,
+                self.config.efficient_prompt_groups,
+                max_prompt_patterns=(
+                    self.config.efficient_max_prompt_patterns
+                    + self.config.efficient_audit_prompt_patterns
+                    + self.config.efficient_critical_gate_patterns
+                ),
+            )
+            selected_group = select_prompt_group(groups, next_prompt)
+            if selected_group is not None:
+                return self._run_prompt_group(pack, capabilities, state, selected_group)
+
         if state["current_status"] == "blocked":
             state["current_status"] = "ready"
             state["last_blocker"] = None
@@ -2115,12 +2789,26 @@ class Supervisor:
         reports: dict[str, str] | None = None
         if next_prompt == "T04-R3":
             reports = self._load_reviewer_reports(state)
-        child_prompt = build_child_prompt(
-            pack,
-            next_prompt,
-            previous_handoff,
-            reviewer_reports=reports,
+        allow_subagents = subagents_allowed(self.config, (next_prompt,))
+        allow_full_verify = efficient_full_verify_required(
+            self.config, pack, next_prompt
         )
+        if self.config.execution_profile == "efficient":
+            child_prompt = build_efficient_single_prompt(
+                pack,
+                next_prompt,
+                previous_handoff,
+                reviewer_reports=reports,
+                allow_subagents=allow_subagents,
+                full_verify_required=allow_full_verify,
+            )
+        else:
+            child_prompt = build_child_prompt(
+                pack,
+                next_prompt,
+                previous_handoff,
+                reviewer_reports=reports,
+            )
         extra_scope_text = "\n".join(reports.values()) if reports else ""
         allowed_paths = self._allowed_paths_for_prompt(pack, prompt, extra_scope_text)
         prompt_secret = secret_violation(child_prompt)
@@ -2133,7 +2821,7 @@ class Supervisor:
         pre_head = _git(self.config.repository_path, "rev-parse", "HEAD")
         state["current_status"] = "running"
         state["last_run_started_at"] = _utc_now()
-        state["active_run"] = {
+        active_run: dict[str, Any] = {
             "prompt_id": next_prompt,
             "pre_head": pre_head,
             "run_id": run_id,
@@ -2143,9 +2831,23 @@ class Supervisor:
             "final_response_path": str(paths["final"]),
             "pid_path": str(paths["pid"]),
         }
+        if self.config.execution_profile == "efficient":
+            active_run.update(
+                {
+                    "prompt_ids": [next_prompt],
+                    "execution_profile": "efficient",
+                    "reasoning_effort": reasoning_effort_for_prompt(
+                        self.config, next_prompt
+                    ),
+                }
+            )
+        state["active_run"] = active_run
         self._write_state(state)
 
-        command = self._implementation_command(capabilities)
+        command = self._implementation_command(
+            capabilities,
+            reasoning_effort=reasoning_effort_for_prompt(self.config, next_prompt),
+        )
         command = self._guarded_command(command, run_id)
         child_env = self._child_environment()
         result = run_managed_process(
@@ -2159,6 +2861,8 @@ class Supervisor:
             env=child_env,
             pid_path=paths["pid"],
             allowed_paths=allowed_paths,
+            subagents_allowed=allow_subagents,
+            full_verify_allowed=allow_full_verify,
         )
         if result.timed_out:
             return self._block_and_raise(state, f"{next_prompt} child timed out")
@@ -2197,6 +2901,8 @@ class Supervisor:
         state["current_status"] = "ready"
         state["last_blocker"] = None
         state["active_run"] = None
+        if self.config.execution_profile == "efficient":
+            state.pop("efficient_group_progress", None)
         state["last_run_completed_at"] = _utc_now()
         if expected_next and expected_next[0].startswith("T18-"):
             state["completion_timestamp"] = _utc_now()
@@ -2209,6 +2915,290 @@ class Supervisor:
             }
         self._write_state(state)
         return state
+
+    def _run_prompt_group(
+        self,
+        pack: PromptPack,
+        capabilities: CodexCapabilities,
+        state: dict[str, Any],
+        group: ResolvedPromptGroup,
+    ) -> dict[str, Any]:
+        if self.config.execution_profile != "efficient":
+            raise SupervisorError("prompt groups require the efficient profile")
+        if state["current_status"] == "blocked":
+            state["current_status"] = "ready"
+            state["last_blocker"] = None
+        previous_path = (
+            self.config.state_dir / "handoffs" / f"{state['last_completed_prompt']}.txt"
+        )
+        try:
+            previous_handoff = previous_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as error:
+            raise SupervisorError(f"cannot read preceding handoff: {error}") from error
+        full_verify_ids = tuple(
+            prompt_id
+            for prompt_id in group.prompt_ids
+            if efficient_full_verify_required(self.config, pack, prompt_id)
+        )
+        child_prompt = build_efficient_group_prompt(
+            pack,
+            group,
+            previous_handoff,
+            full_verify_prompt_ids=full_verify_ids,
+        )
+        prompt_secret = secret_violation(child_prompt)
+        if prompt_secret:
+            raise SupervisorError(prompt_secret)
+        allowed_paths = merge_allowed_path_specs(
+            self._allowed_paths_for_prompt(pack, pack.prompt(prompt_id))
+            for prompt_id in group.prompt_ids
+        )
+        run_label = f"{group.prompt_ids[0]}-GROUP-{group.prompt_ids[-1]}"
+        run_id = _run_id(run_label)
+        paths = self._run_paths(run_id)
+        _atomic_write_bytes(paths["prompt"], child_prompt.encode("utf-8"), mode=0o600)
+        pre_head = _git(self.config.repository_path, "rev-parse", "HEAD")
+        effort = reasoning_effort_for_prompt(self.config, group.prompt_ids[0])
+        state["current_status"] = "running"
+        state["last_run_started_at"] = _utc_now()
+        state["active_run"] = {
+            "prompt_id": group.prompt_ids[0],
+            "prompt_ids": list(group.prompt_ids),
+            "configured_prompt_ids": list(
+                group.configured_prompt_ids or group.prompt_ids
+            ),
+            "consolidated_commit_subject": group.consolidated_commit_subject,
+            "pre_head": pre_head,
+            "run_id": run_id,
+            "prompt_path": str(paths["prompt"]),
+            "events_path": str(paths["events"]),
+            "stderr_path": str(paths["stderr"]),
+            "final_response_path": str(paths["final"]),
+            "pid_path": str(paths["pid"]),
+            "execution_profile": "efficient",
+            "reasoning_effort": effort,
+        }
+        self._write_state(state)
+        command = self._guarded_command(
+            self._implementation_command(capabilities, reasoning_effort=effort),
+            run_id,
+        )
+        result = run_managed_process(
+            command=command,
+            prompt=child_prompt,
+            cwd=self.config.repository_path,
+            timeout_seconds=self.config.child_timeout_seconds,
+            events_path=paths["events"],
+            stderr_path=paths["stderr"],
+            final_path=paths["final"],
+            env=self._child_environment(),
+            pid_path=paths["pid"],
+            allowed_paths=allowed_paths,
+            subagents_allowed=False,
+            full_verify_allowed=bool(full_verify_ids),
+        )
+        blocker: str | None = None
+        if result.timed_out:
+            blocker = f"{run_label} child timed out"
+        elif result.interrupted:
+            blocker = f"{run_label} child was interrupted"
+        elif result.violation:
+            blocker = f"{run_label} child boundary violation: {result.violation}"
+        elif result.exit_code != 0:
+            blocker = f"{run_label} child exited with status {result.exit_code}"
+        if blocker is not None:
+            return self._reconcile_or_block_group(
+                pack=pack,
+                state=state,
+                group=group,
+                pre_head=pre_head,
+                messages=result.agent_messages,
+                blocker=blocker,
+            )
+        try:
+            handoffs = self._validate_completed_group(
+                pack=pack,
+                group=group,
+                pre_head=pre_head,
+                final_response=result.final_response,
+            )
+        except SupervisorError as error:
+            return self._reconcile_or_block_group(
+                pack=pack,
+                state=state,
+                group=group,
+                pre_head=pre_head,
+                messages=result.agent_messages,
+                blocker=str(error),
+            )
+        return self._record_completed_group(
+            pack=pack,
+            state=state,
+            group=group,
+            handoffs=handoffs,
+        )
+
+    def _record_completed_group(
+        self,
+        *,
+        pack: PromptPack,
+        state: dict[str, Any],
+        group: ResolvedPromptGroup,
+        handoffs: tuple[Handoff, ...],
+    ) -> dict[str, Any]:
+        actual_head = _git(self.config.repository_path, "rev-parse", "HEAD")
+        for handoff in handoffs:
+            _atomic_write_bytes(
+                self.config.state_dir / "handoffs" / f"{handoff.prompt_id}.txt",
+                handoff.raw.encode("utf-8"),
+                mode=0o600,
+            )
+        last_prompt = group.prompt_ids[-1]
+        expected_next = pack.expected_next(last_prompt)
+        state["last_completed_prompt"] = last_prompt
+        state["last_commit"] = actual_head
+        state["next_prompt"] = expected_next[0] if expected_next else "STOP"
+        state["current_status"] = "ready"
+        state["last_blocker"] = None
+        state["active_run"] = None
+        state.pop("efficient_group_progress", None)
+        state["last_run_completed_at"] = _utc_now()
+        if expected_next and expected_next[0].startswith("T18-"):
+            state["completion_timestamp"] = _utc_now()
+        if len(expected_next) > 1:
+            state["reviewer_boundary_state"] = {
+                "status": "pending",
+                "reviewers": list(expected_next),
+                "immutable_sha": actual_head,
+                "reports": {},
+            }
+        self._write_state(state)
+        return state
+
+    def _reconcile_or_block_group(
+        self,
+        *,
+        pack: PromptPack,
+        state: dict[str, Any],
+        group: ResolvedPromptGroup,
+        pre_head: str,
+        messages: tuple[str, ...],
+        blocker: str,
+    ) -> dict[str, Any]:
+        actual_head = _git(self.config.repository_path, "rev-parse", "HEAD")
+        if actual_head == pre_head:
+            return self._block_and_raise(state, blocker)
+        if group.consolidated_commit_subject is not None:
+            return self._block_and_raise(
+                state,
+                blocker
+                + "; consolidated group changed Git without a complete validated handoff; "
+                "manual reconciliation required",
+            )
+
+        checkpoints: dict[str, Handoff] = {}
+        for message in messages:
+            try:
+                handoff = parse_handoff(message)
+            except SupervisorError:
+                continue
+            if handoff.prompt_id in group.prompt_ids:
+                checkpoints[handoff.prompt_id] = handoff
+        prefix_ids: list[str] = []
+        prefix_handoffs: list[Handoff] = []
+        for prompt_id in group.prompt_ids[:-1]:
+            handoff = checkpoints.get(prompt_id)
+            if handoff is None or handoff.status != "COMPLETE":
+                break
+            prefix_ids.append(prompt_id)
+            prefix_handoffs.append(handoff)
+        if not prefix_ids:
+            return self._block_and_raise(
+                state,
+                blocker
+                + "; group changed Git without a recoverable prompt checkpoint; "
+                "manual reconciliation required",
+            )
+        commits = _git_lines(
+            self.config.repository_path,
+            "rev-list",
+            "--reverse",
+            f"{pre_head}..{actual_head}",
+        )
+        if len(commits) != len(prefix_ids) or any(
+            handoff.commit_sha != commit
+            for handoff, commit in zip(prefix_handoffs, commits, strict=True)
+        ):
+            return self._block_and_raise(
+                state,
+                blocker + "; Git contains work beyond the recoverable group prefix; "
+                "manual reconciliation required",
+            )
+        prefix_group = ResolvedPromptGroup(
+            prompt_ids=tuple(prefix_ids),
+            configured_prompt_ids=(group.configured_prompt_ids or group.prompt_ids),
+        )
+        prefix_response = "\n".join(handoff.raw.rstrip() for handoff in prefix_handoffs)
+        try:
+            validated = self._validate_completed_group(
+                pack=pack,
+                group=prefix_group,
+                pre_head=pre_head,
+                final_response=prefix_response,
+                complete_configured_group=False,
+            )
+        except SupervisorError as error:
+            return self._block_and_raise(
+                state,
+                blocker + "; committed prefix failed validation; manual reconciliation "
+                f"required: {error}",
+            )
+        for handoff in validated:
+            _atomic_write_bytes(
+                self.config.state_dir / "handoffs" / f"{handoff.prompt_id}.txt",
+                handoff.raw.encode("utf-8"),
+                mode=0o600,
+            )
+        active_run = state.get("active_run")
+        progress = state.get("efficient_group_progress")
+        prior_completed = (
+            list(progress.get("completed_prompt_ids", []))
+            if isinstance(progress, dict)
+            else []
+        )
+        guidance_checkpoint = (
+            str(progress.get("guidance_checkpoint_prompt"))
+            if isinstance(progress, dict)
+            else str(state["last_completed_prompt"])
+        )
+        group_start_commit = (
+            str(progress.get("group_start_commit"))
+            if isinstance(progress, dict)
+            else pre_head
+        )
+        last_prompt = prefix_ids[-1]
+        state["last_completed_prompt"] = last_prompt
+        state["last_commit"] = actual_head
+        state["next_prompt"] = pack.expected_next(last_prompt)[0]
+        state["current_status"] = "blocked"
+        state["last_blocker"] = (
+            blocker
+            + f"; validated committed prefix through {last_prompt}; retry starts at "
+            f"{state['next_prompt']}"
+        )
+        state["last_failed_run"] = active_run
+        state["active_run"] = None
+        state["last_run_completed_at"] = _utc_now()
+        state["efficient_group_progress"] = {
+            "configured_prompt_ids": list(
+                group.configured_prompt_ids or group.prompt_ids
+            ),
+            "completed_prompt_ids": prior_completed + prefix_ids,
+            "guidance_checkpoint_prompt": guidance_checkpoint,
+            "group_start_commit": group_start_commit,
+        }
+        self._write_state(state)
+        raise SupervisorError(str(state["last_blocker"]))
 
     def _validate_stored_state(
         self,
@@ -2263,9 +3253,312 @@ class Supervisor:
             raise SupervisorError(
                 f"stored next prompt {state['next_prompt']} does not follow {last_completed}"
             )
-        validate_guidance_checkpoint(
-            self.config.repository_path, last_completed, expected
+        progress = state.get("efficient_group_progress")
+        if isinstance(progress, dict) and self.config.execution_profile != "efficient":
+            raise SupervisorError(
+                "partial efficient group must resume with --execution-profile efficient"
+            )
+        if self.config.execution_profile == "efficient" and isinstance(progress, dict):
+            guidance_prompt = str(progress.get("guidance_checkpoint_prompt", ""))
+            if not guidance_prompt:
+                raise SupervisorError(
+                    "efficient group progress is missing its guidance checkpoint"
+                )
+            validate_guidance_checkpoint(
+                self.config.repository_path,
+                guidance_prompt,
+                pack.expected_next(guidance_prompt),
+            )
+        else:
+            validate_guidance_checkpoint(
+                self.config.repository_path, last_completed, expected
+            )
+
+    def _required_evidence_for_prompt(
+        self, pack: PromptPack, prompt: Prompt
+    ) -> tuple[str, ...]:
+        evidence_contract = (
+            prompt.text
+            + "\n"
+            + "\n".join(
+                contract.text
+                for contract in pack.required_contracts_for(prompt.prompt_id)
+            )
         )
+        commands = required_evidence_commands(evidence_contract)
+        if self.config.execution_profile == "efficient":
+            if not efficient_full_verify_required(self.config, pack, prompt.prompt_id):
+                commands = tuple(
+                    command
+                    for command in commands
+                    if _normalize_command(command) != "npm run verify"
+                )
+            else:
+                commands = (*commands, "npm run verify")
+            commands = (
+                *commands,
+                "git diff --check",
+                "git status --short --branch",
+            )
+            commands = tuple(dict.fromkeys(commands))
+        return commands
+
+    def _validate_group_handoff_evidence(
+        self, pack: PromptPack, prompt: Prompt, handoff: Handoff
+    ) -> None:
+        if handoff.status != "COMPLETE":
+            raise SupervisorError(f"{prompt.prompt_id} returned Status BLOCKED")
+        evidence = (
+            handoff.fields["Red evidence"] + "\n" + handoff.fields["Green evidence"]
+        )
+        missing = [
+            command
+            for command in self._required_evidence_for_prompt(pack, prompt)
+            if _normalize_command(command) not in _normalize_command(evidence)
+        ]
+        if missing:
+            raise SupervisorError(
+                f"{prompt.prompt_id} handoff omits required evidence commands: "
+                + ", ".join(missing)
+            )
+        if handoff.fields["Live/external actions"].strip().upper() != "NONE":
+            raise SupervisorError(
+                f"{prompt.prompt_id} reported a forbidden external action"
+            )
+
+    def _validate_completed_group(
+        self,
+        *,
+        pack: PromptPack,
+        group: ResolvedPromptGroup,
+        pre_head: str,
+        final_response: str,
+        complete_configured_group: bool = True,
+    ) -> tuple[Handoff, ...]:
+        handoffs = parse_group_handoffs(
+            final_response, expected_prompt_ids=group.prompt_ids
+        )
+        actual_head = _git(self.config.repository_path, "rev-parse", "HEAD")
+        commits = _git_lines(
+            self.config.repository_path,
+            "rev-list",
+            "--reverse",
+            f"{pre_head}..{actual_head}",
+        )
+        if (
+            not complete_configured_group
+            and group.consolidated_commit_subject is not None
+        ):
+            raise SupervisorError(
+                "a consolidated group has no recoverable intermediate commit boundary"
+            )
+        if group.consolidated_commit_subject is None:
+            if len(commits) != len(group.prompt_ids):
+                raise SupervisorError(
+                    "efficient group did not create exactly one ordered commit per prompt"
+                )
+        elif len(commits) != 1:
+            raise SupervisorError(
+                "efficient consolidated group did not create exactly one commit"
+            )
+
+        all_reported_paths: set[str] = set()
+        all_changed_paths: set[str] = set()
+        final_prompt_paths: set[str] = set()
+        prior_commit = pre_head
+        final_index = len(group.prompt_ids) - 1
+        configured_final = (
+            group.configured_prompt_ids[-1]
+            if group.configured_prompt_ids
+            else group.prompt_ids[-1]
+        )
+        for index, (prompt_id, handoff) in enumerate(
+            zip(group.prompt_ids, handoffs, strict=True)
+        ):
+            prompt = pack.prompt(prompt_id)
+            self._validate_group_handoff_evidence(pack, prompt, handoff)
+            expected_next = (
+                (group.prompt_ids[index + 1],)
+                if index < final_index
+                else pack.expected_next(prompt_id)
+            )
+            if handoff.next_prompt_ids != expected_next:
+                raise SupervisorError(
+                    f"{prompt_id} group handoff next prompt "
+                    f"{handoff.next_prompt_ids} does not match {expected_next}"
+                )
+
+            if group.consolidated_commit_subject is None:
+                commit = commits[index]
+                if handoff.commit_sha != commit:
+                    raise SupervisorError(
+                        f"{prompt_id} handoff commit is not the ordered group commit"
+                    )
+                if (
+                    prompt.commit_subject is None
+                    or handoff.commit_subject != prompt.commit_subject
+                ):
+                    raise SupervisorError(
+                        f"{prompt_id} handoff commit subject does not satisfy the prompt"
+                    )
+                actual_subject = _git(
+                    self.config.repository_path, "show", "-s", "--format=%s", commit
+                )
+                if actual_subject != handoff.commit_subject:
+                    raise SupervisorError(
+                        f"{prompt_id} reported commit subject does not match Git"
+                    )
+                if (
+                    _git(self.config.repository_path, "rev-parse", f"{commit}^")
+                    != prior_commit
+                ):
+                    raise SupervisorError(
+                        f"{prompt_id} group commit has unexpected topology"
+                    )
+                changed_paths = set(
+                    _git_lines(
+                        self.config.repository_path,
+                        "diff",
+                        "--name-only",
+                        prior_commit,
+                        commit,
+                        "--",
+                    )
+                )
+                prior_commit = commit
+            else:
+                commit = commits[0]
+                if index < final_index:
+                    if handoff.commit_sha is not None:
+                        raise SupervisorError(
+                            "consolidated group intermediate handoff must report Commit NONE"
+                        )
+                else:
+                    if (
+                        handoff.commit_sha != commit
+                        or handoff.commit_subject != group.consolidated_commit_subject
+                    ):
+                        raise SupervisorError(
+                            "consolidated group final handoff does not report its exact commit"
+                        )
+                    actual_subject = _git(
+                        self.config.repository_path,
+                        "show",
+                        "-s",
+                        "--format=%s",
+                        commit,
+                    )
+                    if actual_subject != group.consolidated_commit_subject:
+                        raise SupervisorError(
+                            "consolidated group commit subject does not match Git"
+                        )
+                changed_paths = set(
+                    extract_reported_paths(handoff.fields["Files changed"])
+                )
+
+            if "FINDINGS.md" in changed_paths:
+                raise SupervisorError("FINDINGS.md was committed")
+            allowed = self._allowed_paths_for_prompt(pack, prompt)
+            validate_frozen_paths(tuple(sorted(changed_paths)), allowed)
+            reported_paths = set(
+                extract_reported_paths(handoff.fields["Files changed"])
+            )
+            if (
+                group.consolidated_commit_subject is None
+                and reported_paths != changed_paths
+            ):
+                raise SupervisorError(
+                    f"{prompt_id} handoff Files changed does not match its commit"
+                )
+            if prompt_id != configured_final and {
+                "CLAUDE.md",
+                "AGENTS.md",
+            }.intersection(changed_paths):
+                raise SupervisorError(
+                    "efficient group must synchronize guidance only in its final commit"
+                )
+            all_changed_paths.update(changed_paths)
+            all_reported_paths.update(reported_paths)
+            if index == final_index:
+                final_prompt_paths = reported_paths
+
+            diff_base = (
+                pre_head
+                if group.consolidated_commit_subject is not None
+                else (_git(self.config.repository_path, "rev-parse", f"{commit}^"))
+            )
+            diff = _git(
+                self.config.repository_path,
+                "diff",
+                "--unified=0",
+                diff_base,
+                commit,
+                "--",
+            )
+            diff_secret = secret_violation("\n".join(_added_diff_lines(diff)))
+            if diff_secret:
+                raise SupervisorError(diff_secret)
+
+        if group.consolidated_commit_subject is not None:
+            consolidated_paths = set(
+                _git_lines(
+                    self.config.repository_path,
+                    "diff",
+                    "--name-only",
+                    pre_head,
+                    actual_head,
+                    "--",
+                )
+            )
+            if all_reported_paths != consolidated_paths:
+                raise SupervisorError(
+                    "consolidated group handoff paths do not cover the exact commit diff"
+                )
+            all_changed_paths = consolidated_paths
+
+        if prior_commit != actual_head and group.consolidated_commit_subject is None:
+            raise SupervisorError(
+                "efficient group HEAD is not its final ordered commit"
+            )
+        validate_dirty_entries(git_status_entries(self.config.repository_path))
+        staged = _git_lines(
+            self.config.repository_path, "diff", "--cached", "--name-only", "--"
+        )
+        if staged:
+            raise SupervisorError("efficient group left staged paths after commit")
+        if complete_configured_group:
+            required_guidance = {"CLAUDE.md", "AGENTS.md"}
+            if not required_guidance.issubset(final_prompt_paths):
+                raise SupervisorError(
+                    "efficient group final prompt must synchronize CLAUDE.md and AGENTS.md"
+                )
+            expected_after = pack.expected_next(group.prompt_ids[-1])
+            validate_guidance_checkpoint(
+                self.config.repository_path, group.prompt_ids[-1], expected_after
+            )
+            final_green = handoffs[-1].fields["Green evidence"]
+            for required in ("group-end domain regression", "npm run type-check"):
+                if required not in final_green.lower():
+                    raise SupervisorError(
+                        f"efficient group final handoff omits {required} evidence"
+                    )
+            if any(path.endswith((".ts", ".tsx")) for path in all_changed_paths) and (
+                "npm run lint" not in final_green
+            ):
+                raise SupervisorError(
+                    "efficient group final handoff omits relevant npm run lint evidence"
+                )
+            if (
+                any(
+                    efficient_full_verify_required(self.config, pack, prompt_id)
+                    for prompt_id in group.prompt_ids
+                )
+                and "npm run verify" not in final_green
+            ):
+                raise SupervisorError(
+                    "efficient group final handoff omits required npm run verify evidence"
+                )
+        return handoffs
 
     def _validate_completed_child(
         self,
@@ -2361,17 +3654,9 @@ class Supervisor:
         evidence = (
             handoff.fields["Red evidence"] + "\n" + handoff.fields["Green evidence"]
         )
-        evidence_contract = (
-            prompt.text
-            + "\n"
-            + "\n".join(
-                contract.text
-                for contract in pack.required_contracts_for(prompt.prompt_id)
-            )
-        )
         missing_commands = [
             command
-            for command in required_evidence_commands(evidence_contract)
+            for command in self._required_evidence_for_prompt(pack, prompt)
             if _normalize_command(command) not in _normalize_command(evidence)
         ]
         if missing_commands:
@@ -2426,8 +3711,12 @@ class Supervisor:
         )
 
     def _implementation_command(
-        self, capabilities: CodexCapabilities
+        self,
+        capabilities: CodexCapabilities,
+        *,
+        reasoning_effort: str | None = None,
     ) -> tuple[str, ...]:
+        selected_effort = reasoning_effort or self.config.reasoning_effort
         return (
             self.config.codex_executable,
             *capabilities.full_autonomy_prefix_flags,
@@ -2436,7 +3725,7 @@ class Supervisor:
             "--model",
             self.config.model,
             "--config",
-            f'model_reasoning_effort="{self.config.reasoning_effort}"',
+            f'model_reasoning_effort="{selected_effort}"',
             "--cd",
             str(self.config.repository_path.resolve()),
             "--ephemeral",
@@ -2711,6 +4000,16 @@ class Supervisor:
                 f"configured repository {repository} is not Git root {root}"
             )
         pack = self.load_pack()
+        if self.config.execution_profile == "efficient":
+            resolve_prompt_groups(
+                pack,
+                self.config.efficient_prompt_groups,
+                max_prompt_patterns=(
+                    self.config.efficient_max_prompt_patterns
+                    + self.config.efficient_audit_prompt_patterns
+                    + self.config.efficient_critical_gate_patterns
+                ),
+            )
         if Path(pack.repository_path).resolve() != repository:
             raise SupervisorError(
                 "prompt-pack repository path does not match configuration"
@@ -3079,6 +4378,12 @@ def _argument_parser() -> argparse.ArgumentParser:
         ),
         help="optional JSON configuration path",
     )
+    parser.add_argument(
+        "--execution-profile",
+        choices=("strict", "efficient"),
+        default=None,
+        help="execution policy; strict remains the default",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     adopt = commands.add_parser("adopt", help="adopt the completed T01-C boundary")
     adopt.add_argument("--completed", required=True)
@@ -3126,6 +4431,8 @@ def main(argv: list[str] | None = None) -> int:
     prior_sigterm = signal.signal(signal.SIGTERM, interrupt_handler)
     try:
         config = SupervisorConfig.load(args.config)
+        if args.execution_profile is not None:
+            config = replace(config, execution_profile=args.execution_profile)
         with supervisor_lock(config):
             instance = Supervisor(config)
             if args.command == "adopt":
