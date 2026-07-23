@@ -10,6 +10,7 @@ import { PROJECT_API_ACTIONS } from "./api-actions/projects.js";
 import { TASK_API_ACTIONS } from "./api-actions/tasks.js";
 import { CLIENT_API_ACTIONS } from "./api-actions/clients.js";
 import { ENTRY_API_ACTIONS } from "./api-actions/time-entries.js";
+import { INVOICE_API_ACTIONS } from "./api-actions/invoices.js";
 import { USER_GROUP_ACTIONS, USER_API_ACTIONS } from "./workflows/users.js";
 import { TASK_ACTIONS } from "./workflows/tasks.js";
 import { CLIENT_ACTIONS } from "./workflows/clients.js";
@@ -78,6 +79,7 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...ENTRY_API_ACTIONS,
   ...TAG_ACTIONS,
   ...INVOICE_ACTIONS,
+  ...INVOICE_API_ACTIONS,
   ...EXPENSE_ACTIONS,
   ...CUSTOM_FIELD_ACTIONS,
   ...TIME_OFF_ACTIONS,
