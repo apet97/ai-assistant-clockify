@@ -6,6 +6,7 @@ import type {
   RegistryId,
 } from "./action-discriminators.js";
 import type { RiskLabel } from "./risk.js";
+import { exactNonsecretJson } from "./safe-json.js";
 
 /**
  * One-use risky-write confirmation lifecycle (SPEC "Confirmation Rules",
@@ -97,6 +98,8 @@ export interface CreateConfirmationInput {
   executorKind?: ExecutorKind;
   runId?: string;
   batchId?: string;
+  /** v2 assistant previews bind nonce/hash to the persisted operation_run payload hash. */
+  operationBindingHash?: string;
 }
 
 export interface CreatedConfirmation {
@@ -188,7 +191,34 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
       !input.operation || typeof input.operation !== "object" || Array.isArray(input.operation)
     ? input.operation
     : { ...input.operation as Record<string, unknown>, installationGeneration: input.installationGeneration };
-  const operationHash = hashOperation(operation);
+  const recordForHash: PendingConfirmationRecord = {
+    id,
+    operationId: randomUUID(),
+    sessionId: input.sessionId,
+    workspaceId: input.workspaceId,
+    adminUserId: input.adminUserId,
+    status: "pending",
+    risk: input.risk,
+    preview: input.preview,
+    operation,
+    ...(input.installationGeneration === undefined
+      ? {}
+      : { installationGeneration: input.installationGeneration }),
+    operationHash: "",
+    targetFingerprints: [],
+    actionFingerprint: input.actionFingerprint ?? hashOperation({ operation, version: 1 }),
+    catalogHash: input.catalogHash ?? "unbound",
+    nonceHash: "",
+    expiresAt: "",
+    createdAt: "",
+    ...(input.origin ? { origin: input.origin } : {}),
+    ...(input.registryId ? { registryId: input.registryId } : {}),
+    ...(input.authorityModel ? { authorityModel: input.authorityModel } : {}),
+    ...(input.executorKind ? { executorKind: input.executorKind } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.batchId ? { batchId: input.batchId } : {}),
+  };
+  const operationHash = input.operationBindingHash ?? confirmationOperationBindingHash(recordForHash);
   const previewTargets = (input.preview as { targets?: unknown[] } | undefined)?.targets ?? [];
 
   const suppliedOperationId = operation && typeof operation === "object"
@@ -277,7 +307,7 @@ function checkConfirmationGate(
   }
   // Tamper tripwire: the stored operation must still hash to the stored hash
   // (SAFETY_AND_PERMISSIONS "operation hash matches stored operation").
-  if (!timingSafeStringEqual(hashOperation(record.operation), record.operationHash)) {
+  if (!timingSafeStringEqual(confirmationOperationBindingHash(record), record.operationHash)) {
     return { ok: false, code: "operation_mismatch", message: "Preview integrity check failed." };
   }
   if (g.expectedActionFingerprint) {
@@ -364,6 +394,43 @@ export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
     nonce,
     record: { ...record, nonceHash: hashNonce(nonce, record.id, record.operationHash, input.sessionSecret) },
   };
+}
+
+const TRUSTED_DIRECT_ORIGINS = new Set<ActionOrigin>(["direct_ui", "system", "live_test"]);
+const V2_PREVIEW_EXECUTORS = new Set<ExecutorKind>(["prepared_safe_write", "risky_commit"]);
+
+/** True when this pending row is a v2 assistant preview awaiting single confirm. */
+export function isV2AssistantPreviewConfirmation(record: PendingConfirmationRecord): boolean {
+  return record.origin === "assistant" &&
+    record.registryId === "v2-api" &&
+    record.authorityModel === "preview_confirmation_v2" &&
+    !!record.executorKind &&
+    V2_PREVIEW_EXECUTORS.has(record.executorKind) &&
+    typeof record.runId === "string" &&
+    record.runId.length > 0 &&
+    !record.batchId &&
+    !record.capabilityId;
+}
+
+/** Hash bound to nonce validation and the persisted operation_run payload for v2 previews. */
+export function confirmationOperationBindingHash(record: PendingConfirmationRecord): string {
+  if (isV2AssistantPreviewConfirmation(record)) {
+    const operation = record.operation;
+    if (operation && typeof operation === "object" && !Array.isArray(operation)) {
+      const payload = (operation as { payload?: unknown }).payload;
+      return hashOperation(exactNonsecretJson(JSON.parse(JSON.stringify(payload ?? {}))));
+    }
+  }
+  return hashOperation(record.operation);
+}
+
+/** Batch-owned previews must use the batch confirm route (Task 11-E). */
+export function isBatchOwnedConfirmation(record: PendingConfirmationRecord): boolean {
+  return typeof record.batchId === "string" && record.batchId.length > 0;
+}
+
+export function isTrustedDirectOrigin(origin: ActionOrigin | undefined): origin is ActionOrigin {
+  return !!origin && TRUSTED_DIRECT_ORIGINS.has(origin);
 }
 
 export function cancelPending(input: CancelPendingInput): CancelPendingResult {

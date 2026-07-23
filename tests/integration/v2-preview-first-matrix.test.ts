@@ -6,6 +6,11 @@ import { computeRequestHash } from "../../src/assistant-v2/state.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { createStore } from "../../src/db/store.js";
 import { createOperationPreparationService } from "../../src/services/operation-preparation-service.js";
+import { createConfirmationService } from "../../src/services/confirmation-service.js";
+import { createWorkspaceMutationCoordinator } from "../../src/clockify/workspace-mutation-coordinator.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
+import { rotatePendingNonce } from "../../src/harness/confirmations.js";
+import { executeTrustedDirectV2SafeWrite } from "../../src/harness/actions.js";
 import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import {
   WRITE_PREVIEW_BASE_SEED,
@@ -145,5 +150,125 @@ describe("v2 preview-first write matrix", () => {
     expect(operation?.fieldProvenanceHash).toMatch(/^[a-f0-9]{64}$/u);
 
     store.close();
+  });
+
+  it("confirms a prepared safe write through the stored executor without re-preparing", async () => {
+    const actionName = "clockify_tags_create";
+    const fixture = WRITE_PREVIEW_FIXTURES[actionName]!;
+    const fake = createFakeWorkspace(mergeSeed(fixture));
+    const mutationsBefore = mutationCallTotal(fake.counts);
+
+    const store = createStore(databasePath(), { encryptionKey: "k", now: () => NOW });
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "u1", addonToken: "token" });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    store.startRunWithTurn({
+      scope: {
+        sessionId: session.id,
+        runId: "run-confirm",
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        installationGeneration: 1,
+        authClass: "addon",
+      },
+      originalRequest: `confirm ${actionName}`,
+      requestHash: computeRequestHash(`confirm ${actionName}`),
+      catalogHash: MODEL_API_ACTION_CATALOG.hash(),
+      loadedToolNames: [actionName],
+      intentHash: "intent-confirm",
+    });
+
+    const scope = {
+      sessionId: session.id,
+      runId: "run-confirm",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+
+    const preparation = createOperationPreparationService({
+      store,
+      registry: MODEL_API_ACTION_CATALOG,
+      sessionSecret: SESSION_SECRET,
+      clockifyForScope: () => fake.client,
+      now: () => NOW,
+      loadCalendarContext: async () => ({ timeZone: "UTC", weekStartsOn: 1 }),
+    });
+
+    const prepared = await preparation.prepare([{
+      id: "tool-confirm",
+      name: actionName,
+      arguments: fixture.args,
+    }], scope);
+    expect(prepared.kind).toBe("prepared");
+    if (prepared.kind !== "prepared") return;
+
+    const confirmationId = prepared.confirmationIds[0]!;
+    const pending = store.getPendingConfirmation(confirmationId)!;
+    const rotated = rotatePendingNonce({
+      record: pending,
+      sessionId: session.id,
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      sessionSecret: SESSION_SECRET,
+      nonce: "confirm-nonce",
+      now: NOW,
+    });
+    expect(rotated.ok).toBe(true);
+    if (!rotated.ok) return;
+    store.updateConfirmationNonceHash(confirmationId, rotated.record.nonceHash);
+
+    const confirmationService = createConfirmationService({
+      store,
+      registry: MODEL_API_ACTION_CATALOG,
+      sessionSecret: SESSION_SECRET,
+      catalogHash: () => MODEL_API_ACTION_CATALOG.hash(),
+      now: () => NOW,
+      loadPolicy: () => defaultAdminPolicy(),
+      verifyWriteAuthority: async () => ({ ok: true as const }),
+      actionContext: (_workspaceId, _adminUserId) => ({
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        policy: defaultAdminPolicy(),
+        clockify: fake.client,
+        now: () => NOW,
+      }),
+      mutationCoordinator: createWorkspaceMutationCoordinator(),
+      recordUndoIfReversible: () => undefined,
+    });
+
+    const outcome = await confirmationService.confirmSingle({
+      claims: { sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1" },
+      record: store.getPendingConfirmation(confirmationId)!,
+      nonce: rotated.nonce,
+    });
+
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.receipt.ok).toBe(true);
+    expect(mutationCallTotal(fake.counts) - mutationsBefore).toBe(1);
+    expect(store.getPendingConfirmation(confirmationId)?.status).toBe("succeeded");
+    store.close();
+  });
+
+  it("rejects trusted direct execution without an explicit origin", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeTrustedDirectV2SafeWrite({
+      origin: "assistant",
+      registryId: "v2-api",
+      actionName: "clockify_tags_create",
+      args: { name: "Direct Tag" },
+      context: {
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        policy: defaultAdminPolicy(),
+        clockify: fake.client,
+        now: () => NOW,
+      },
+    });
+    expect(result.kind).toBe("receipt");
+    if (result.kind !== "receipt") return;
+    expect(result.receipt.ok).toBe(false);
+    expect(result.receipt.code).toBe("invalid_origin");
   });
 });

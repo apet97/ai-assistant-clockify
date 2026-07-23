@@ -66,6 +66,7 @@ here; this file is the execution map.
 - **T11-A CLOSED:** schema v11 discriminator matrix + exact-batch persistence (`confirmation_batches`/`confirmation_batch_items`), capability-linked v1 backfill, batch store with ordered tuple hash; missing discriminator fails closed. Gate: batch/migration/retention/restore/scrub tests green. Live: `not_run`. Next: `T11-B`.
 - **T11-B CLOSED:** exact material expansion + registered formatters/presenters + mandatory `validatePreparedWritePresentation` (22 material facts, RFC6901, bounds, provenance gate, fail-closed no truncation). Provenance is evidence only. Gate: v2-prepared-write + catalog/inventory tests green. Live: `not_run`. Next: `T11-C`.
 - **T11-C CLOSED:** assistant-origin v2 writes always prepare via `OperationPreparationService`/`executeV2ApiAction` (no v1 capability, no host mutation during preparation, host reservation + persisted operation/plan/provenance/discriminator). Legacy v1 safe-write immediate path unchanged. Gate: v2-preview-first-matrix + listed write-safety tests green. Live: `not_run`. Next: `T11-D`.
+- **T11-D CLOSED:** `ConfirmationService` confirms v2 previews via stored executors only (`confirmSingle`, trusted direct safe writes with explicit origins, undo commit branch); single route rejects batch-owned previews; batch confirm stubbed for T11-E. Gate: listed confirm/undo/recheck/idempotency/scrub tests green. Live: `not_run`. Next: `T11-E`.
 
 ## Non-negotiable invariants
 

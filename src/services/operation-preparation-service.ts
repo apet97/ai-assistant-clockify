@@ -81,6 +81,7 @@ function buildPreparedWriteInput(input: {
   sessionSecret: string;
   now?: Date;
 }): PreparedAssistantWriteInput {
+  const mutationPlan = input.operation.mutationPlan!;
   const created = createPendingConfirmation({
     id: randomUUID(),
     sessionId: input.scope.sessionId,
@@ -100,11 +101,9 @@ function buildPreparedWriteInput(input: {
     executorKind: executorKindFor(input.action),
     runId: input.scope.runId,
   });
-  const mutationPlan = input.operation.mutationPlan!;
   const operationPayload = exactNonsecretJson(
     JSON.parse(JSON.stringify(input.operation.payload)),
   ) as Record<string, unknown>;
-  const operationHash = hashOperation(operationPayload);
   return {
     hostCalls: mutationPlan.maxHostCalls,
     event: {
@@ -120,7 +119,7 @@ function buildPreparedWriteInput(input: {
       actionName: input.action.name,
       actionFingerprint: actionFingerprintForDefinition(input.action),
       catalogHash: input.catalogHash,
-      operationHash,
+      operationHash: created.record.operationHash,
       operation: operationPayload,
       mutationPlan,
       discriminator: {

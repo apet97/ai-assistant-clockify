@@ -1,5 +1,6 @@
 import type { RiskLabel } from "../../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../../harness/confirmations.js";
+import { confirmationOperationBindingHash } from "../../harness/confirmations.js";
 import { v1DiscriminatorFromCapability } from "../../harness/action-discriminators.js";
 import type { StoreContext } from "./context.js";
 import { randomUUID } from "node:crypto";
@@ -144,6 +145,10 @@ export function buildConfirmationStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     savePendingConfirmation(record) {
+      if (record.authorityModel === "preview_confirmation_v2" && record.registryId === "v2-api" &&
+          confirmationOperationBindingHash(record) !== record.operationHash) {
+        throw new Error("v2_confirmation_operation_hash_mismatch");
+      }
       const executable = record.status === "pending";
       const scrubPreview = record.status === "cancelled" || record.status === "expired";
       const discriminator = record.origin

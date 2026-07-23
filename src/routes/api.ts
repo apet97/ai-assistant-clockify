@@ -1,14 +1,15 @@
 import { Router, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { buildMetrics, buildUsageMetrics } from "../metrics/metrics.js";
-import { firstDeniedGroup, reverseCreationDurably, undoMutationPlan } from "../harness/undo.js";
+import { firstDeniedGroup } from "../harness/undo.js";
+import { reversibleCreations } from "../harness/undo.js";
 import {
   FEATURE_GROUPS,
   applyPolicyPatch,
   defaultAdminPolicy,
   type AdminPolicy,
 } from "../harness/permissions.js";
-import { rotatePendingNonce } from "../harness/confirmations.js";
+import { rotatePendingNonce, isV2AssistantPreviewConfirmation } from "../harness/confirmations.js";
 import { successReceipt } from "../harness/receipts.js";
 import { setSessionCookie, type AppDeps } from "./deps.js";
 import { type SessionClaims } from "../auth/sessions.js";
@@ -17,6 +18,7 @@ import { isTransientErrorMessage } from "./history-sanitizer.js";
 import {
   groupsPatchSchema,
   confirmBodySchema,
+  confirmBatchBodySchema,
 } from "./request-schemas.js";
 import { asyncHandler, fifoAsyncHandler } from "./async-handler.js";
 import { bestEffort } from "./best-effort.js";
@@ -33,13 +35,14 @@ import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
 import { KeyedFifo } from "./fifo-lock.js";
 import { withHostCallBudget } from "../clockify/request-governor.js";
-import { hashOperation } from "../harness/confirmations.js";
 import { catalogHash } from "../harness/catalog.js";
 import {
   createWorkspaceMutationCoordinator,
   WorkspaceMutationRevokedError,
   type WorkspaceMutationLease,
 } from "../clockify/workspace-mutation-coordinator.js";
+import { createConfirmationService } from "../services/confirmation-service.js";
+import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
 import {
   DEFAULT_API_RATE_LIMIT_MAX,
   DEFAULT_API_RATE_LIMIT_WINDOW_MS,
@@ -131,6 +134,32 @@ export function apiRouter(
   );
   const { loadPolicy, requireSession, verifyWriteAuthority, newChatAllowed, actionContext, runResume, commitConfirmation, executeChatTurn, chatPreconditions } =
     pipeline;
+
+  const confirmationService = createConfirmationService({
+    store: deps.store,
+    registry: MODEL_API_ACTION_CATALOG,
+    sessionSecret: deps.config.sessionSecret,
+    catalogHash,
+    now,
+    loadPolicy,
+    verifyWriteAuthority,
+    actionContext,
+    mutationCoordinator,
+    recordUndoIfReversible(claims, installationGeneration, receipt) {
+      if (!receipt.ok) return undefined;
+      if (receipt.warnings?.some((w) => w.code === "idempotent_replay")) return undefined;
+      const reversal = reversibleCreations(receipt);
+      if (reversal.length === 0) return undefined;
+      return deps.store.recordUndoable({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        actionName: receipt.action,
+        installationGeneration,
+        reversal,
+      });
+    },
+  });
 
   const expectedOrigin = new URL(deps.config.baseUrl).origin;
   const authenticatedRateLimitClaims = new WeakMap<Request, SessionClaims>();
@@ -687,7 +716,14 @@ export function apiRouter(
     let committed: Awaited<ReturnType<typeof commitConfirmation>>;
     try {
       committed = await withHostCallBudget(
-        () => commitConfirmation(claims, record, parsed.data.nonce, requestAbort.signal),
+        () => isV2AssistantPreviewConfirmation(record)
+          ? confirmationService.confirmSingle({
+              claims,
+              record,
+              nonce: parsed.data.nonce,
+              signal: requestAbort.signal,
+            })
+          : commitConfirmation(claims, record, parsed.data.nonce, requestAbort.signal),
       );
     } catch (error) {
       requestAbort.dispose();
@@ -775,6 +811,18 @@ export function apiRouter(
     });
   }));
 
+  router.post("/confirmation-batches/:id/confirm", sessionAsyncHandler(async (req, res) => {
+    const parsed = confirmBatchBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ ok: false, code: "invalid_args", message: "Batch confirmation payload is invalid." });
+    }
+    return res.status(501).json({
+      ok: false,
+      code: "not_implemented",
+      message: "Exact batch confirmation is implemented in T11-E.",
+    });
+  }));
+
   // Undo the last reversible action (Phase 5b): delete the entities it created.
   router.post("/undo/:id", sessionAsyncHandler(async (req, res) => {
     const claims = await requireSession(req, res);
@@ -847,28 +895,6 @@ export function apiRouter(
     }
 
     try {
-    const mutationPlan = undoMutationPlan(record.reversal);
-    const operation = {
-      undoId: record.id,
-      installationGeneration: record.installationGeneration,
-      reversal: record.reversal,
-    };
-    const operationId = deps.store.startUndoOperation(record.id, {
-      sessionId: claims.sessionId,
-      workspaceId: claims.workspaceId,
-      adminUserId: claims.adminUserId,
-      actionName: "undo",
-      actionFingerprint: hashOperation({ actionName: "undo", version: 1 }),
-      catalogHash: catalogHash(),
-      operationHash: hashOperation({ actionName: "undo", operation, mutationPlan }),
-      operation,
-      mutationPlan,
-    });
-    // Atomic one-use + durable-operation claim: only its winner may dispatch.
-    if (!operationId) {
-      return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
-    }
-
     const undoContext = actionContext(
       claims.workspaceId,
       claims.adminUserId,
@@ -876,29 +902,17 @@ export function apiRouter(
       claims.sessionId,
       mutationLease.signal,
     );
-    undoContext.mutationJournal = deps.store.mutationStepJournal(operationId);
-    const undo = await withHostCallBudget(() => reverseCreationDurably(
-      undoContext,
-      record.reversal,
-      operationId,
-      mutationPlan,
-    ));
-    const { receipt, remaining, status: undoStatus } = undo;
-    let undoResultRef: import("../db/store.js").ActionResultRef | undefined;
-    let undoSettlementError: unknown;
-    for (let attempt = 0; attempt < 2 && !undoResultRef; attempt += 1) {
-      try {
-        undoResultRef = deps.store.settleUndoOperation(record.id, operationId, undoStatus, remaining, receipt);
-      } catch (error) {
-        undoSettlementError = error;
-      }
+    const undo = await withHostCallBudget(() => confirmationService.executeUndoCommit({
+      claims,
+      undoId: record.id,
+      record,
+      context: undoContext,
+      signal: mutationLease.signal,
+    }));
+    if (!undo.operationId) {
+      return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
     }
-    if (!undoResultRef) {
-      console.error(
-        "undo settlement persistence degraded (reversal already dispatched; receipt preserved):",
-        undoSettlementError instanceof Error ? undoSettlementError.message : String(undoSettlementError),
-      );
-    }
+    const { receipt, resultRef: undoResultRef, persistenceDegraded } = undo;
     // The reversal already happened (and the one-use claim is executing). A
     // transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.

@@ -23,6 +23,7 @@ import {
   sanitizeCompleteJson,
 } from "../../harness/safe-json.js";
 import { hashOperation } from "../../harness/confirmations.js";
+import type { PendingConfirmationRecord } from "../../harness/confirmations.js";
 import { v1DiscriminatorFromCapability } from "../../harness/action-discriminators.js";
 import { HOST_CALL_BUDGET_MAXIMUM } from "../../clockify/request-governor.js";
 import { successReceipt } from "../../harness/receipts.js";
@@ -239,6 +240,9 @@ function completeStartupEvidence(value: unknown): unknown {
 function hasValidPersistedOperationHash(run: OperationRun): boolean {
   const operation = run.operation;
   const confirmed = run.confirmationId !== undefined;
+  if (run.authorityModel === "preview_confirmation_v2" && run.registryId === "v2-api") {
+    return hashOperation(operation) === run.operationHash;
+  }
   if (confirmed && (!operation || typeof operation !== "object" ||
     (operation as Record<string, unknown>).operationId !== run.id ||
     (operation as Record<string, unknown>).actionName !== run.actionName)) return false;
@@ -344,6 +348,25 @@ function toSanitizedScopedOperationRun(
   };
 }
 
+/** Cross-check a persisted v2 assistant preview against its prepared operation run. */
+export function preparedAssistantPreviewMatchesConfirmation(
+  run: OperationRun,
+  record: PendingConfirmationRecord,
+): boolean {
+  if (run.status !== "prepared") return false;
+  if (record.authorityModel !== "preview_confirmation_v2" || record.registryId !== "v2-api") return false;
+  if (run.runId !== record.runId ||
+    run.registryId !== record.registryId ||
+    run.authorityModel !== record.authorityModel ||
+    run.executorKind !== record.executorKind ||
+    run.actionFingerprint !== record.actionFingerprint ||
+    run.catalogHash !== record.catalogHash ||
+    run.operationHash !== record.operationHash) {
+    return false;
+  }
+  return true;
+}
+
 export function buildOperationRunStore(ctx: StoreContext): {
   prepareOperationRun(input: PrepareOperationRunInput): string;
   markOperationExecuting(id: string): boolean;
@@ -354,6 +377,10 @@ export function buildOperationRunStore(ctx: StoreContext): {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  preparedAssistantPreviewMatchesConfirmation(
+    operationId: string,
+    record: PendingConfirmationRecord,
+  ): boolean;
   getScopedOperationRun(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined;
   listScopedOperationRuns(workspaceId: string, adminUserId: string, sessionId: string, limit?: number): SanitizedOperationRun[];
   listStartupReconciliationCandidates(): StartupReconciliationOperation[];
@@ -524,6 +551,10 @@ export function buildOperationRunStore(ctx: StoreContext): {
     getOperationRun(id) {
       const row = db.prepare("SELECT * FROM operation_runs WHERE id = ?").get(id) as OperationRunRow | undefined;
       return row ? toRun(row) : undefined;
+    },
+    preparedAssistantPreviewMatchesConfirmation(operationId, record) {
+      const run = store.getOperationRun(operationId);
+      return !!run && preparedAssistantPreviewMatchesConfirmation(run, record);
     },
     getScopedOperationRun(id, workspaceId, adminUserId, sessionId) {
       const row = db.prepare(

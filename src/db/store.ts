@@ -379,6 +379,10 @@ export interface Store {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  preparedAssistantPreviewMatchesConfirmation(
+    operationId: string,
+    record: import("../harness/confirmations.js").PendingConfirmationRecord,
+  ): boolean;
   getScopedOperationRun(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined;
   listScopedOperationRuns(workspaceId: string, adminUserId: string, sessionId: string, limit?: number): SanitizedOperationRun[];
   listStartupReconciliationCandidates(): StartupReconciliationOperation[];

@@ -506,6 +506,214 @@ function settleImmediateOperation(ctx: ActionContext, operationId: string | unde
   return { ...result, operationId };
 }
 
+export interface ExecuteTrustedDirectV2Input extends ExecuteActionInput {
+  origin: ActionOrigin;
+  registryId: RegistryId;
+  installationGeneration?: number;
+}
+
+/**
+ * Trusted-origin immediate safe write: explicit origin is required and only
+ * reviewed safe_write actions may dispatch without a pending confirmation row.
+ */
+export async function executeTrustedDirectV2SafeWrite(
+  input: ExecuteTrustedDirectV2Input,
+): Promise<ActionResult> {
+  if (input.origin === "assistant" || !["direct_ui", "system", "live_test"].includes(input.origin)) {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "invalid_origin",
+        message: "Trusted direct execution requires an explicit direct_ui, system, or live_test origin.",
+        recovery: { hint: "Pass the caller origin explicitly.", retryable: false },
+      }),
+    };
+  }
+  if (input.registryId !== "v2-api" && input.registryId !== "v2-local") {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "invalid_registry",
+        message: "Trusted direct execution requires the v2-api or v2-local registry.",
+        recovery: { hint: "Load the current registry before retrying.", retryable: false },
+      }),
+    };
+  }
+
+  const action = getAction(input.actionName);
+  if (!action || action.kind !== "safe_write") {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "incompatible_action",
+        message: "Only reviewed safe writes may execute through the trusted direct path.",
+        recovery: { hint: "Use preview confirmation for risky writes.", retryable: false },
+      }),
+    };
+  }
+
+  const rawError = validateV2RawActionArguments(action, input.args);
+  if (rawError) return { kind: "receipt", receipt: rawError };
+
+  const parsed = action.schema.safeParse(input.args);
+  if (!parsed.success) {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: action.name,
+        code: "invalid_args",
+        message: formatZodIssues(parsed.error) || "Invalid arguments.",
+        recovery: { hint: "Fix the arguments and try again.", retryable: true },
+      }),
+    };
+  }
+
+  const group = action.resolveFeatureGroup
+    ? action.resolveFeatureGroup(parsed.data)
+    : action.featureGroup;
+  if (!canWrite(input.context.policy, group)) {
+    return policyDenied(action.name, group, "write");
+  }
+
+  let prepared: Awaited<ReturnType<SafeWriteActionDefinition["prepareSafeWrite"]>> | undefined;
+  try {
+    prepared = await action.prepareSafeWrite(input.context, parsed.data);
+  } catch (error) {
+    return { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
+  }
+  if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+  if (isSafeWriteNoop(prepared)) return { kind: "receipt", receipt: prepared.receipt };
+  if (prepared !== undefined && !isPreparedSafeWrite(prepared)) {
+    return invalidSafeWritePreparation(action.name);
+  }
+  const boundedPrepared = prepared
+    ? {
+        ...prepared,
+        mutationPlan: bindMutationPlanHostCalls(action.name, prepared.operation, prepared.mutationPlan),
+      }
+    : undefined;
+  if (!boundedPrepared) return invalidSafeWritePreparation(action.name);
+  const primaryError = validateAssistantPrimaryMutationPlan(action, boundedPrepared.mutationPlan);
+  if (primaryError) return invalidWriteAuthorityActionResult(action.name, primaryError);
+  const authorityPlanError = validateWriteAuthorityOperation(
+    action,
+    boundedPrepared.operation,
+    boundedPrepared.mutationPlan,
+  );
+  if (authorityPlanError) return invalidWriteAuthorityActionResult(action.name, authorityPlanError);
+
+  const authorityError = await input.context.authorizeWrite?.(action.name);
+  if (authorityError) return { kind: "receipt", receipt: authorityError };
+
+  const executed = input.context.mutationJournal
+    ? await withMutationPlanScope({
+        actionName: action.name,
+        plan: boundedPrepared.mutationPlan,
+        authorizeDispatch: () => input.context.authorizeWrite?.(action.name),
+        onDispatch: (step) => markScopedStepDispatched(input.context.mutationJournal!, step.id, step.kind),
+        authoritativelyReconciled: (stepId) =>
+          hasAuthoritativelyReconciledStep(input.context.mutationJournal!, stepId),
+        requiresComplete: commitResultRequiresComplete,
+      }, () => action.executeSafeWrite!(input.context, boundedPrepared))
+    : await action.executeSafeWrite!(input.context, boundedPrepared);
+
+  return isPartialCommitResult(executed)
+    ? executed
+    : { kind: "receipt", receipt: executed };
+}
+
+/**
+ * Execute a persisted v2 assistant preview using only the stored bounded
+ * preparation or confirmable operation — never re-resolve names/dates or
+ * re-run prepareSafeWrite/handler preview paths.
+ */
+export async function executeStoredV2Write(
+  ctx: ActionContext,
+  operation: ConfirmableOperation & { mutationPlan: ExternalMutationPlan },
+  executorKind: "prepared_safe_write" | "risky_commit",
+): Promise<CommitResult> {
+  const action = getAction(operation.actionName);
+  if (!action) {
+    return errorReceipt({
+      action: operation.actionName,
+      code: "unknown_action",
+      message: `No committable action: ${operation.actionName}`,
+      recovery: { hint: "This preview can no longer be executed.", retryable: false },
+    });
+  }
+
+  if (executorKind === "prepared_safe_write") {
+    if (action.kind !== "safe_write" || !action.executeSafeWrite) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "incompatible_executor",
+        message: "The stored executor does not match this action's safe-write contract.",
+        recovery: { hint: "Create a fresh preview.", retryable: false },
+      });
+    }
+    const planError = mutationPlanContractError(action.mutationContract, operation.mutationPlan);
+    if (planError) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "invalid_mutation_plan",
+        message: "The stored host mutation plan is incompatible with this action's durable contract.",
+        recovery: { hint: "Create a fresh preview.", retryable: false },
+      });
+    }
+    const authorityPlanError = validateWriteAuthorityOperation(
+      action,
+      operation.payload,
+      operation.mutationPlan,
+    );
+    if (authorityPlanError) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "intent_capability_denied",
+        message: "The stored operation exceeds this action's reviewed write authority.",
+        recovery: { hint: "Create a fresh preview.", retryable: false },
+      });
+    }
+    const prepared = {
+      operation: operation.payload,
+      mutationPlan: operation.mutationPlan,
+    };
+    const commit = () => action.executeSafeWrite!(ctx, prepared);
+    return ctx.mutationJournal
+      ? withMutationPlanScope({
+          actionName: action.name,
+          plan: operation.mutationPlan,
+          authorizeDispatch: () => ctx.authorizeWrite?.(action.name),
+          onDispatch: (step) => markScopedStepDispatched(ctx.mutationJournal!, step.id, step.kind),
+          authoritativelyReconciled: (stepId) =>
+            hasAuthoritativelyReconciledStep(ctx.mutationJournal!, stepId),
+          requiresComplete: commitResultRequiresComplete,
+        }, commit)
+      : commit();
+  }
+
+  if (executorKind === "risky_commit") {
+    if (action.kind !== "risky_write") {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "incompatible_executor",
+        message: "The stored executor does not match this action's risky-write contract.",
+        recovery: { hint: "Create a fresh preview.", retryable: false },
+      });
+    }
+    return commitConfirmedOperation(ctx, operation);
+  }
+
+  return errorReceipt({
+    action: operation.actionName,
+    code: "incompatible_executor",
+    message: "The stored executor kind is not supported for v2 confirmation.",
+    recovery: { hint: "Create a fresh preview.", retryable: false },
+  });
+}
+
 /**
  * Execute a stored operation after a button confirmation (SPEC "Confirmation
  * Rules"). Re-validates current policy at confirm time (safety requirement:
