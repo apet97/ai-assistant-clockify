@@ -245,6 +245,19 @@ export interface Store {
     resultLinks?: DurableResultLink[],
   ): void;
   getTurnRun(sessionId: string, requestId: string): TurnRun | undefined;
+  startRunWithTurn(input: import("./store/runs.js").StartAssistantRunInput): void;
+  getRun(scope: import("./store/runs.js").AssistantRunScope): import("../assistant-v2/state.js").RunState | undefined;
+  saveRun(state: import("../assistant-v2/state.js").RunState): void;
+  findLatestEligibleRunForCache(
+    sessionId: string,
+    workspaceId: string,
+    adminUserId: string,
+    installationGeneration: number,
+    authClass: import("../harness/api-operation.js").AuthClass,
+    catalogHash: string,
+  ): import("../assistant-v2/state.js").RunState | undefined;
+  recoverOrphanedActiveRuns(scope: import("../assistant-v2/protocol.js").RunScope): number;
+  failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
   createIntentCapability(input: CreateIntentCapabilityInput): IntentCapabilityRecord;
   getIntentCapability(id: string, scope: IntentCapabilityScope): IntentCapabilityRecord | undefined;
   getIntentCapabilityForOperation(input: IntentCapabilityOperationScope): IntentCapabilityRecord;
@@ -310,7 +323,7 @@ export interface Store {
   mutationStepJournal(operationId: string): MutationStepJournal;
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
-  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number };
+  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number; assistantRuns: number };
   recordActionResult(input: {
     workspaceId: string;
     adminUserId: string;
@@ -829,7 +842,21 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
         }
         const confirmations = confirmationRows.length;
-        return { turns, operations, confirmations, undos };
+        const assistantRuns = db.prepare(
+          `UPDATE assistant_runs SET phase = 'failed', updated_at = ?
+            WHERE phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,
+        ).run(timestamp).changes;
+        if (assistantRuns > 0) {
+          db.prepare(
+            `UPDATE turn_runs SET status = 'failed', updated_at = ?
+              WHERE status IN ('prepared', 'executing')
+                AND request_id IN (
+                  SELECT run_id FROM assistant_runs
+                   WHERE phase = 'failed' AND updated_at = ?
+                )`,
+          ).run(timestamp, timestamp);
+        }
+        return { turns, operations, confirmations, undos, assistantRuns };
       })();
     },
 

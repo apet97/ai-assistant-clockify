@@ -379,7 +379,7 @@ describe("routes", () => {
     }
   });
 
-  it("returns the deterministic v2 not_ready result without calling the v1 model runner", async () => {
+  it("returns v2 model_unavailable without calling the v1 JSON model runner", async () => {
     const complete = vi.fn<ModelClient["complete"]>(async () => {
       throw new Error("v1 assistant runner was called");
     });
@@ -395,8 +395,8 @@ describe("routes", () => {
       expect(response.status).toBe(502);
       expect(response.body).toEqual({
         ok: false,
-        code: "not_ready",
-        message: "Assistant engine v2 is not ready.",
+        code: "model_unavailable",
+        message: "Assistant engine v2 requires a native tool-calling model client.",
       });
       expect(complete).not.toHaveBeenCalled();
     } finally {

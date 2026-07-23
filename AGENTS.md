@@ -53,6 +53,7 @@ here; this file is the execution map.
 - **T08-B CLOSED:** schema v9 (`assistant_runs`, request/result links, scoped FKs, one active run/session); `src/db/store/runs.ts`; retention/erasure/restore wiring. Gate: v2-runner-persistence + migration/retention/tombstone tests green. Next: `T08-C`.
 - **T08-C CLOSED:** v2 provider loop — completion validation, cache seed, refinement cap, no provider transcript persistence. Gate: v2-runner tests green. Next: `T08-D`.
 - **T08-D CLOSED:** bounded four-worker reads, provider-order results, ordered write prep, persisted host-call budget. Gate: concurrency/cancellation tests green. Next: `T08-E`.
+- **T08-E CLOSED / Task 8 green:** provider-independent suspension/replay/startup recovery; v2 pipeline never falls through to v1; default engine stays v1. Next: `T09-A`.
 
 ## Non-negotiable invariants
 

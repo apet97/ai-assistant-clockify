@@ -161,4 +161,39 @@ describe("v2 assistant run persistence", () => {
     })).not.toThrow();
     store.close();
   });
+
+  it("marks active assistant runs failed on startup orphan recovery", () => {
+    const path = databasePath();
+    const store = createStore(path, { encryptionKey: "k" });
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    store.startRunWithTurn({
+      scope: {
+        sessionId: session.id,
+        runId: "run-active",
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        installationGeneration: 1,
+        authClass: "addon",
+      },
+      originalRequest: "in flight",
+      requestHash: computeRequestHash("in flight"),
+      catalogHash: "d".repeat(64),
+      loadedToolNames: ["assistant_find_api_operations"],
+      intentHash: "intent-active",
+    });
+    store.close();
+
+    const recovered = createStore(path, { encryptionKey: "k" });
+    const run = recovered.getRun({
+      sessionId: session.id,
+      runId: "run-active",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon",
+    });
+    expect(run?.phase).toBe("failed");
+    expect(recovered.recoverOrphanedRuns().assistantRuns).toBe(0);
+    recovered.close();
+  });
 });

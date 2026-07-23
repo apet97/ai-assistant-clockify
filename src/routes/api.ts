@@ -25,8 +25,8 @@ import { sanitizeResultsForHistory } from "./chat-results.js";
 import {
   createChatPipeline,
   type ChatPipeline,
-  type ChatTurnOutcome,
 } from "./chat-pipeline.js";
+import { createV2RunnerPipeline } from "./v2-chat-pipeline.js";
 import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
 import { KeyedFifo } from "./fifo-lock.js";
@@ -68,24 +68,9 @@ export interface AssistantPipelineFactories {
   v2: ChatPipelineFactory;
 }
 
-const V2_NOT_READY: ChatTurnOutcome = {
-  ok: false,
-  code: "not_ready",
-  message: "Assistant engine v2 is not ready.",
-};
-
-function createV2NotReadyPipeline(deps: AppDeps): ChatPipeline {
-  const sharedControlPlane = createChatPipeline(deps);
-  return {
-    ...sharedControlPlane,
-    runResume: async () => undefined,
-    executeChatTurn: async () => V2_NOT_READY,
-  };
-}
-
 export const defaultAssistantPipelineFactories: AssistantPipelineFactories = {
   v1: createChatPipeline,
-  v2: createV2NotReadyPipeline,
+  v2: createV2RunnerPipeline,
 };
 
 function createSelectedAssistantPipeline(

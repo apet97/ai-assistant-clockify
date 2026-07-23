@@ -171,8 +171,8 @@ describe("restored database verification", () => {
         },
         schema: {
           status: "passed",
-          sourceUserVersion: 8,
-          userVersion: 8,
+          sourceUserVersion: 9,
+          userVersion: 9,
           migration: "not_required",
           requiredTables: 11,
           requiredColumns: 43,
@@ -267,7 +267,7 @@ describe("restored database verification", () => {
     expect(existsSync(clonePath)).toBe(false);
   });
 
-  it("validates a production-v7 source before migrating only a private clone to v8", async () => {
+  it("validates a production-v7 source before migrating only a private clone to v9", async () => {
     const fixture = await restoredFixture({ userVersion: 7 });
     const original = readFileSync(fixture.restoredPath);
 
@@ -299,7 +299,7 @@ describe("restored database verification", () => {
     expect(evidence.checks.schema).toEqual({
       status: "passed",
       sourceUserVersion: 7,
-      userVersion: 8,
+      userVersion: 9,
       migration: "candidate_private_clone",
       requiredTables: 11,
       requiredColumns: 43,
