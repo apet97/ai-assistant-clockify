@@ -58,6 +58,7 @@ here; this file is the execution map.
 - **T10-A CLOSED:** structure read port + 10/10 generated parity rows green; live `not_run`. Next: `T10-B`.
 - **T10-B CLOSED:** time reads 2/2 parity green; live `not_run`. Next: `T10-C`.
 - **T10-C CLOSED:** reporting/admin reads 10/10 parity green; webhooks auth-filtered; live `not_run`. Next: `T10-D`.
+- **T10-D CLOSED:** invoice reads 4/4 parity green; live `not_run`. Next: `T10-E`.
 
 ## Non-negotiable invariants
 

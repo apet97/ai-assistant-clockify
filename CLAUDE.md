@@ -55,6 +55,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T10-A CLOSED:** v2 read execution port (`src/assistant-v2/read-execution.ts`) wired in `v2-chat-pipeline.ts`; generated structure read parity matrix covers all 10 catalog `access:"read"` rows in `work_structure` (projects/tasks/clients/tags/templates list+get). Gate: `v2-read-parity-structure` + Task 6A structure gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-B`.
 - **T10-B CLOSED:** time-entry read parity matrix covers both catalog `time_tracking` reads (`clockify_entries_list`, `clockify_entries_get`) with server date normalization and truncated list receipts. Gate: `v2-read-parity-time` + Task 6B gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-C`.
 - **T10-C CLOSED:** reporting/admin read parity matrix covers all 10 catalog reads in reports/audit/workspace/webhooks groups; addon-unavailable webhook reads stay out of discovery/schemas and deny under addon auth. Gate: `v2-read-parity-reporting` + Task 6C gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-D`.
+- **T10-D CLOSED:** invoice read parity matrix covers all 4 catalog invoice reads (list/get/payments/export); no composite item GET exposure. Gate: `v2-read-parity-invoices` + Task 6D gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-E`.
 
 ## Start here
 
