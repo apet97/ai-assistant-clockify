@@ -145,15 +145,11 @@ const endpoint = Object.freeze({
 });
 
 const TIME_TRACKING_API_METADATA = Object.freeze({
-  clockify_status: apiMetadata({
-    actionName: "clockify_status",
-    operationId: "getTimeEntries",
-    method: "GET",
-    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
-    access: "read",
-    primary: endpoint.timeEntries.list,
+  clockify_status: internalMetadata({
+    exposure: "composite",
+    reason: "Filters the running-timer list response and enriches it with a project name lookup, so it is not one exact Clockify read operation.",
+    primary: [endpoint.timeEntries.list],
     support: [endpoint.projects.get],
-    materialFields: [],
   }),
   clockify_start_timer: internalMetadata({
     exposure: "generic",

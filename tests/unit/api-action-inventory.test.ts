@@ -1289,16 +1289,13 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
 ];
 
 const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
-  apiAnnotation({
+  internalAnnotation({
     name: "clockify_status",
-    operationId: "getTimeEntries",
-    method: "GET",
-    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
-    access: "read",
-    sourceModule: "time-entries.ts",
+    exposure: "composite",
+    reason: "Filters the running-timer list response and enriches it with a project name lookup, so it is not one exact Clockify read operation.",
+    primary: [STRUCTURE_ENDPOINT.timeEntries.running],
     support: [STRUCTURE_ENDPOINT.projects.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
-    materialFields: [],
   }),
   internalAnnotation({
     name: "clockify_start_timer",
@@ -3250,7 +3247,7 @@ describe("API action inventory normalization", () => {
       rawAdapterShapes: 124,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 100, composite: 23, generic: 27, local: 4 },
+      exposures: { api: 99, composite: 24, generic: 27, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

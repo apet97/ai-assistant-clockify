@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "20987bd42b31dba8f9be6f89b26118cf5cd7a568e52c7a7144752dc75f902cf6",
+  "catalogHash": "2db40fb18122e18fb1005c8d4fa5aae4a12956b3e848d8c05956132bac1ca8d3",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,8 +14,8 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 100,
-      "composite": 23,
+      "api": 99,
+      "composite": 24,
       "generic": 27,
       "local": 4
     }
@@ -6325,6 +6325,55 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_status",
+      "description": "Show the admin's currently running timer (if any).",
+      "kind": "read",
+      "featureGroup": "time_tracking",
+      "workflowModule": "time-tracking.ts",
+      "actionFingerprint": "71b86bdb1818d4e3d2de9764b79637761507fbda7908fef3dc7e5cdba846083e",
+      "exposure": "composite",
+      "decisionReason": "Filters the running-timer list response and enriches it with a project name lookup, so it is not one exact Clockify read operation.",
+      "operation": null,
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user/{userId}/time-entries\u0000time-entries.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/user/{userId}/time-entries",
+          "sourceModule": "time-entries.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": null,
+      "requiredArguments": [],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_templates_get",
       "description": "Fetch a single project template by id, or by its exact `name` (resolved server-side).",
       "kind": "read",
@@ -11406,65 +11455,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_status",
-      "description": "Show the admin's currently running timer (if any).",
-      "kind": "read",
-      "featureGroup": "time_tracking",
-      "workflowModule": "time-tracking.ts",
-      "actionFingerprint": "363cc51611ff43a0f3e40c7a236574be2ad394763e4746cddded66efcde23f41",
-      "exposure": "api",
-      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/user/{userId}/time-entries (getTimeEntries).",
-      "operation": {
-        "operationId": "getTimeEntries",
-        "host": "api",
-        "method": "GET",
-        "path": "/workspaces/{workspaceId}/user/{userId}/time-entries",
-        "access": "read",
-        "exposure": "api"
-      },
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user/{userId}/time-entries\u0000time-entries.ts",
-          "role": "primary",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/user/{userId}/time-entries",
-          "sourceModule": "time-entries.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "not_applicable",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": {
-        "presenterId": "clockify_status",
-        "version": 1
-      },
-      "requiredArguments": [],
-      "primaryMutationCount": 0,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_stop_timer",
       "description": "Stop the admin's currently running timer.",
       "kind": "safe_write",
@@ -16520,8 +16510,7 @@
         }
       ],
       "mappedModelActionNames": [
-        "clockify_entries_list",
-        "clockify_status"
+        "clockify_entries_list"
       ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
@@ -16529,6 +16518,7 @@
         "clockify_review_day",
         "clockify_review_week",
         "clockify_start_timer",
+        "clockify_status",
         "clockify_stop_timer"
       ],
       "availabilityByAuthClass": {

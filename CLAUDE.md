@@ -21,8 +21,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: `delete_completed` (`deleteTask`), `status_update`/`assignees_replace`/closed `update` (`updateTask`), bounded `create` (`createTask`), hourly/cost (`setTaskHourlyRate`/`setTaskCostRate`).
 - T06-CLIENTS CLOSED at `9880859`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations already exposed as atomic `api` actions in `workflows/tags.ts` — verified, no empty split file.
-- T06-USER-RATES CLOSED: `clockify_users_hourly_rate_update` (`setHourlyRateForUser`) and `clockify_users_cost_rate_update` (`setCostRateForUser`) with literal `/hourly-rate` and `/cost-rate` REST paths; v1 `clockify_users_rate_update` stays internal generic. Current counts: `ACTION_CATALOG` 154, `MODEL_API` 100, local 4. Live: `live_not_run_missing_credentials`.
-- Next: `T06-ENTRY-READS`.
+- T06-ENTRY-READS CLOSED: exact `clockify_entries_list` (`getTimeEntries`) and `clockify_entries_get` (`getTimeEntry`) with server-resolved dates and `truncated` list receipts; `clockify_status`, review-day/week, and work-package convenience stay off MODEL_API. Next: `T06-ENTRY-CREATE-TIMER`. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
