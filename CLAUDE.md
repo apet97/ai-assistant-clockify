@@ -8,13 +8,15 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scope-assigned call sites and the byte-identical 118-shape legacy projection.
-- T04-K closes metadata migration: all 140 definitions are classified as 82 `api`, 23 `composite`, 31 `generic`, and 4 `local`; no action or raw adapter shape is unclassified.
-- Inventory schema/generator version 1 emits `api-catalog.generated.ts`, JSON evidence, and Markdown from one model with catalog hash `e200dcbdbeac4e0de32ec2d19b0d0c65394db11484e5b75efec9fddaa03881a9`.
-- The evidence covers 142 raw call sites / 118 shapes, canonical official OpenAPI correlations, per-auth availability, internal-support consumers, material/presenter metadata, and primary/compensation counts; the audit POST alone records `official_operation_id_missing`.
+- Task 4 is CLOSED at product SHA `6184efa80a95be06020635540185bae01ba1299e` (`fix: resolve atomic API inventory review findings`).
+- T04-K classified all 140 definitions as 82 `api`, 23 `composite`, 31 `generic`, and 4 `local` (zero unclassified actions/shapes).
+- T04-R1/R2 on `776eb081bcee3e693903d972d8205d69dc1605a9` accepted four findings (material-contract binding; schema maxima; fatal official OpenAPI corroboration; recursive/columnar adapter identity). T04-R3 remediated them; re-reviews on `6184efa80a95be06020635540185bae01ba1299e` returned zero HIGH/MEDIUM (LOW candidates explicitly rejected with evidence).
+- Inventory schema/generator version 2 emits `api-catalog.generated.ts`, JSON evidence, and Markdown from one model with catalog hash `9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c`.
+- Evidence covers 142 raw call sites / 118 shapes (each site carries `sourceColumn`), repository-owned `evidence/openapi/clockify.official.openapi.yaml` (SHA-256 `044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2`), canonical official correlations, per-auth availability, material fields plus fingerprinted `normalizedOperationMaterialContract`, presenters, and primary/compensation counts; the audit POST alone records `official_operation_id_missing`.
 - Classification and availability are required on every raw definition, participate in fingerprints, and receive no normalization defaults.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
-- Node 22 proof: generation was byte-stable across two reruns; inventory/scope checks, 230 focused tests, and `npm run verify` (272 files / 3,384 tests) passed.
-- No live, deployment, or external action ran. Next: independent read-only reviews T04-R1 and T04-R2; do not start Task 5 before both are resolved.
+- Node 22 proof on the repair SHA: focused Task 4 suite 223 passed; full `npm run verify` 272 files / 3,394 tests passed. No live, deployment, or external action ran.
+- Next: `T05-A` (explicit `v1-internal` / `v2-api` / `v2-local` registries).
 
 ## Start here
 

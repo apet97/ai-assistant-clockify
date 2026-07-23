@@ -24,11 +24,10 @@ here; this file is the execution map.
 
 - T00-A authorized `codex/rewrite-api-agent-v2` at `d0f29bc90c28e42d052db441a414abcb37865681`.
 - Tasks 1-3 are complete; the raw extractor preserves 142 independently scoped call sites and the byte-identical 118-shape legacy projection.
-- T04-K closes migration at 140 actions (82 `api`, 23 `composite`, 31 `generic`, 4 `local`) and 142 raw call sites / 118 shapes, with zero unclassified rows.
-- Schema/generator version 1 emits three deterministic artifacts with catalog hash `e200dcbdbeac4e0de32ec2d19b0d0c65394db11484e5b75efec9fddaa03881a9` and canonical official correlations.
-- Raw definitions now require classification and per-auth availability; normalization has no defaults, and required metadata participates in fingerprints.
-- Node 22 proof: two byte-stable regenerations, inventory/scope checks, 230 focused tests, and `npm run verify` (272 files / 3,384 tests) passed.
-- V1 remains default and v2 remains `not_ready`; no live/external action ran. Next: independent read-only reviews T04-R1 and T04-R2 before Task 5.
+- Task 4 CLOSED at `6184efa80a95be06020635540185bae01ba1299e`: 140 actions (82 `api`, 23 `composite`, 31 `generic`, 4 `local`), 142 call sites / 118 shapes, inventory schema/generator v2, catalog hash `9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c`.
+- T04-R3 remediated the four accepted findings from reviews on `776eb081…`; re-reviews on `6184efa…` accepted zero HIGH/MEDIUM.
+- Official OpenAPI snapshot is repository-owned under `evidence/openapi/`; material contracts and schema maxima are fail-closed before registry insertion; adapter identities include `sourceColumn`.
+- V1 remains default and v2 remains `not_ready`; no live/external action ran. Next: `T05-A`.
 
 ## Non-negotiable invariants
 
