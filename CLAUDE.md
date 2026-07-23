@@ -57,6 +57,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T10-C CLOSED:** reporting/admin read parity matrix covers all 10 catalog reads in reports/audit/workspace/webhooks groups; addon-unavailable webhook reads stay out of discovery/schemas and deny under addon auth. Gate: `v2-read-parity-reporting` + Task 6C gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-D`.
 - **T10-D CLOSED:** invoice read parity matrix covers all 4 catalog invoice reads (list/get/payments/export); no composite item GET exposure. Gate: `v2-read-parity-invoices` + Task 6D gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-E`.
 - **T10-E CLOSED:** expense/custom-field read parity matrix covers all 4 catalog reads with nested expense envelope and truncated list truth preserved. Gate: `v2-read-parity-expenses` + Task 6E gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-F`.
+- **T10-F CLOSED:** user/group read parity matrix covers both catalog `users_groups` reads (`clockify_users_list`, `clockify_groups_list`). Gate: `v2-read-parity-users` + Task 6F gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-G`.
 
 ## Start here
 
