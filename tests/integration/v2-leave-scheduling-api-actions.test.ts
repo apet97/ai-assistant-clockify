@@ -179,4 +179,24 @@ describe("v2 scheduling assignment API actions", () => {
     expect(modelNames.has("clockify_scheduling_assignments_get")).toBe(false);
     expect(getAction("clockify_scheduling_assignments_get")?.apiExposure).toBe("composite");
   });
+
+  it("create commits through the atomic recurring assignment POST", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "u1", name: "Admin", email: "a@example.com", status: "ACTIVE" }],
+      projects: [{ id: "p1", name: "Alpha", archived: false }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_scheduling_assignments_create",
+      args: {
+        userId: "u1",
+        projectId: "p1",
+        start: "2026-07-01",
+        end: "2026-07-05",
+        hoursPerDay: 8,
+      },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected safe-write receipt");
+    expect(fake.counts.createAssignmentAtomic).toBe(1);
+  });
 });
