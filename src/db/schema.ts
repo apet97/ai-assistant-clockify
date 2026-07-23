@@ -339,7 +339,37 @@ const SCHEMA_V9_STATEMENTS: readonly string[] = [
     ON assistant_runs(updated_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 9;
+const SCHEMA_V10_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS run_events (
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'run.started', 'model.started', 'model.completed',
+      'api.search_started', 'api.operations_loaded',
+      'tool.requested', 'tool.denied', 'tool.started', 'tool.completed',
+      'operation.prepared', 'operation.confirmed', 'operation.started',
+      'operation.completed', 'clarification.required', 'run.suspended',
+      'run.completed', 'run.failed'
+    )),
+    payload_json TEXT NOT NULL
+      CHECK (json_valid(payload_json)
+        AND length(CAST(payload_json AS BLOB)) <= 65536),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, run_id, sequence),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_run_events_scope_sequence
+    ON run_events(workspace_id, admin_user_id, session_id, run_id, sequence)`,
+  `CREATE INDEX IF NOT EXISTS idx_run_events_prune_created
+    ON run_events(created_at)`,
+];
+
+export const LATEST_SCHEMA_VERSION = 10;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -510,6 +540,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 7, statements: [] },
   { version: 8, statements: [CREATE_LIFECYCLE_AUTHORITY_WATERMARKS] },
   { version: 9, statements: SCHEMA_V9_STATEMENTS },
+  { version: 10, statements: SCHEMA_V10_STATEMENTS },
 ];
 
 export function migrate(db: Database.Database): void {

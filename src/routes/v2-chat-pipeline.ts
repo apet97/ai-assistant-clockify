@@ -6,10 +6,14 @@ import { runAssistantV2 } from "../assistant-v2/runner.js";
 import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
 import { assertNativeToolClient, type NativeToolModelClient } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
+import { createRunEventService } from "../services/run-event-service.js";
+import { createRunEventViewService } from "../services/run-event-view-service.js";
 
 /** V2 chat pipeline: native-tool runner only — never falls through to v1 planner. */
 export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
   const controlPlane = createChatPipeline(deps);
+  const eventService = createRunEventService(deps.store);
+  const eventViews = createRunEventViewService(deps.store, { sessionSecret: deps.config.sessionSecret, now: deps.now });
   return {
     ...controlPlane,
     runResume: async () => undefined,
@@ -46,6 +50,9 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
       }, {
         modelClient: deps.modelClient as NativeToolModelClient,
         runStore: deps.store,
+        eventStore: deps.store,
+        eventService,
+        eventViews,
         actionRegistry: MODEL_API_ACTION_CATALOG,
         discovery: {
           search: async (input, scope) => {

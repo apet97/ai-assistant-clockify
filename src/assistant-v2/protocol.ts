@@ -5,6 +5,17 @@ import type {
   FindApiOperationsInput,
 } from "../harness/api-operation.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
+import type {
+  ListRunEventsInput,
+  RunEventPage,
+  RunEventPayloadMap,
+  RunEventType,
+  RunEventViewPort,
+  SequencedRunEvent,
+} from "./events.js";
+import type { RunEventStore } from "../db/store/run-events.js";
+
+export type { ListRunEventsInput, RunEventPage, RunEventViewPort, SequencedRunEvent };
 
 export interface RunScope {
   sessionId: string;
@@ -20,15 +31,16 @@ export type PresentationRef =
   | { kind: "confirmation"; id: string };
 
 export type RunOutcome =
-  | { kind: "completed"; runId: string; presentationRefs: PresentationRef[] }
+  | { kind: "completed"; runId: string; lastSequence: number; presentationRefs: PresentationRef[] }
   | {
       kind: "suspended";
       runId: string;
+      lastSequence: number;
       reason: "awaiting_confirmation" | "awaiting_clarification";
       continuationId: string;
       presentationRefs: PresentationRef[];
     }
-  | { kind: "failed"; runId: string; code: string; presentationRefs: PresentationRef[] };
+  | { kind: "failed"; runId: string; lastSequence: number; code: string; presentationRefs: PresentationRef[] };
 
 export type ReadExecutionOutcome =
   | { kind: "succeeded"; actionResultId: string }
@@ -69,8 +81,17 @@ export interface RunStateStore {
     loadedToolNames: string[];
     intentHash: string;
   }): void;
+  startRunWithEvent(input: {
+    scope: RunScope & { runId: string };
+    originalRequest: string;
+    requestHash: string;
+    catalogHash: string;
+    loadedToolNames: string[];
+    intentHash: string;
+  }): SequencedRunEvent;
   getRun(scope: RunScope & { runId: string }): import("./state.js").RunState | undefined;
   saveRun(state: import("./state.js").RunState): void;
+  getLastRunEventSequence(scope: RunScope & { runId: string }): number;
   findLatestEligibleRunForCache(
     sessionId: string,
     workspaceId: string,
@@ -83,9 +104,58 @@ export interface RunStateStore {
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 }
 
+export type RunEventStorePort = Pick<
+  RunEventStore,
+  | "reserveModelCallWithEvent"
+  | "completeModelCallWithEvent"
+  | "reserveDiscoveryCallWithEvent"
+  | "loadOperationsWithEvent"
+  | "requestToolWithEvent"
+  | "denyToolWithEvent"
+  | "startToolWithEvent"
+  | "completeToolWithEvent"
+  | "suspendRunWithEvent"
+  | "completeRunWithEvent"
+  | "failRunWithEvent"
+  | "getLastRunEventSequence"
+>;
+
+export interface RunEventCommand<K extends RunEventType = RunEventType> {
+  scope: RunScope & { runId: string };
+  state: import("./state.js").RunState;
+  payload: RunEventPayloadMap[K];
+}
+
+export interface RunEventServicePort {
+  startRun(input: {
+    scope: RunScope & { runId: string };
+    input: {
+      originalRequest: string;
+      requestHash: string;
+      catalogHash: string;
+      loadedToolNames: string[];
+      intentHash: string;
+    };
+  }): SequencedRunEvent;
+  reserveModelCall(input: RunEventCommand<"model.started">): SequencedRunEvent;
+  completeModelCall(input: RunEventCommand<"model.completed">): SequencedRunEvent;
+  reserveDiscoveryCall(input: RunEventCommand<"api.search_started">): SequencedRunEvent;
+  loadOperations(input: RunEventCommand<"api.operations_loaded">): SequencedRunEvent;
+  requestTool(input: RunEventCommand<"tool.requested">): SequencedRunEvent;
+  denyTool(input: RunEventCommand<"tool.denied">): SequencedRunEvent;
+  startTool(input: RunEventCommand<"tool.started">): SequencedRunEvent;
+  completeTool(input: RunEventCommand<"tool.completed">): SequencedRunEvent;
+  suspendRun(input: RunEventCommand<"run.suspended">): SequencedRunEvent;
+  completeRun(input: RunEventCommand<"run.completed">): SequencedRunEvent;
+  failRun(input: RunEventCommand<"run.failed">): SequencedRunEvent;
+}
+
 export interface RunnerDependencies {
   modelClient: NativeToolModelClient;
   runStore: RunStateStore;
+  eventStore: RunEventStorePort;
+  eventService: RunEventServicePort;
+  eventViews: RunEventViewPort;
   actionRegistry: ActionRegistry;
   discovery: {
     search(input: FindApiOperationsInput, scope: RunScope): Promise<ApiSearchResult>;

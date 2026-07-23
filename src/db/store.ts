@@ -60,6 +60,7 @@ import {
 } from "./store/retention.js";
 import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildAssistantRunStore } from "./store/runs.js";
+import { buildRunEventStore } from "./store/run-events.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import {
@@ -258,6 +259,76 @@ export interface Store {
   ): import("../assistant-v2/state.js").RunState | undefined;
   recoverOrphanedActiveRuns(scope: import("../assistant-v2/protocol.js").RunScope): number;
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
+  startRunWithEvent(input: import("./store/runs.js").StartAssistantRunInput): import("../assistant-v2/events.js").SequencedRunEvent;
+  listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput): import("./store/run-events.js").RunEventPageStoreResult;
+  getLastRunEventSequence(scope: import("./store/runs.js").AssistantRunScope): number;
+  getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
+    runId: string;
+    phase: import("../assistant-v2/state.js").RunPhase;
+    lastSequence: number;
+    updatedAt: string;
+  } | undefined;
+  reserveModelCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["model.started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeModelCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["model.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  reserveDiscoveryCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["api.search_started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  loadOperationsWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["api.operations_loaded"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  requestToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.requested"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  denyToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.denied"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  startToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  suspendRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.suspended"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  failRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.failed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
+    runId: string;
+    phase: import("../assistant-v2/state.js").RunPhase;
+    lastSequence: number;
+    updatedAt: string;
+  } | undefined;
   createIntentCapability(input: CreateIntentCapabilityInput): IntentCapabilityRecord;
   getIntentCapability(id: string, scope: IntentCapabilityScope): IntentCapabilityRecord | undefined;
   getIntentCapabilityForOperation(input: IntentCapabilityOperationScope): IntentCapabilityRecord;
@@ -566,6 +637,15 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
     ...buildAssistantRunStore(ctx),
+    ...(() => {
+      const runEventStore = buildRunEventStore(ctx);
+      return {
+        ...runEventStore,
+        listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
+          return runEventStore.listEvents(input);
+        },
+      };
+    })(),
     ...buildIntentCapabilityStore(ctx),
     ...operationRunStore,
     startUndoOperation(id, input) {

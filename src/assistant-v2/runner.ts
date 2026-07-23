@@ -14,9 +14,6 @@ import {
   canReserveModelCall,
   chargeFailedModelAttempt,
   chargeSuccessfulModelAttempt,
-  incrementApiCallsUsed,
-  incrementDiscoveryCallsUsed,
-  incrementModelCallsUsed,
   isActiveWallBudgetExceeded,
   isTokenBudgetExceeded,
   preflightModelRequest,
@@ -24,6 +21,7 @@ import {
   utf8ByteLength,
 } from "./budgets.js";
 import { buildResumeUserMessage, buildV2SystemPrompt } from "./prompt.js";
+import { computeArgumentsHash } from "./events.js";
 import type {
   NativeToolModelClient,
   ReadExecutionOutcome,
@@ -37,7 +35,6 @@ import {
   computeRequestHash,
   createEmptyRunBudget,
   isTerminalPhase,
-  type CompletedToolResult,
   type RunState,
 } from "./state.js";
 import { discoveryToolsForLoadedSet } from "../harness/tools.js";
@@ -152,16 +149,6 @@ function seedCacheFromPriorRun(
   return initialV2ToolSet(registry, ordered);
 }
 
-function toRunScope(state: RunState): RunScope {
-  return {
-    sessionId: state.sessionId,
-    workspaceId: state.workspaceId,
-    adminUserId: state.adminUserId,
-    installationGeneration: state.installationGeneration,
-    authClass: state.authClass,
-  };
-}
-
 function buildFreshMessages(state: RunState, resumeSummaries: string[] = []): ModelMessage[] {
   const userContent = resumeSummaries.length > 0
     ? buildResumeUserMessage({
@@ -175,16 +162,33 @@ function buildFreshMessages(state: RunState, resumeSummaries: string[] = []): Mo
   ];
 }
 
-function budgetStopOutcome(state: RunState, code: string): RunOutcome {
+function scopedRun(state: RunState): RunScope & { runId: string } {
+  return {
+    sessionId: state.sessionId,
+    workspaceId: state.workspaceId,
+    adminUserId: state.adminUserId,
+    installationGeneration: state.installationGeneration,
+    authClass: state.authClass,
+    runId: state.runId,
+  };
+}
+
+function lastSequence(deps: RunnerDependencies, state: RunState): number {
+  return deps.runStore.getLastRunEventSequence(scopedRun(state));
+}
+
+function budgetStopOutcome(deps: RunnerDependencies, state: RunState, code: string): RunOutcome {
   return {
     kind: "failed",
     runId: state.runId,
+    lastSequence: lastSequence(deps, state),
     code,
     presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
   };
 }
 
 function suspendOutcome(
+  deps: RunnerDependencies,
   state: RunState,
   reason: "awaiting_confirmation" | "awaiting_clarification",
   continuationId: string,
@@ -192,23 +196,43 @@ function suspendOutcome(
   return {
     kind: "suspended",
     runId: state.runId,
+    lastSequence: lastSequence(deps, state),
     reason,
     continuationId,
     presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
   };
 }
 
-function completeOutcome(state: RunState): RunOutcome {
+function completeOutcome(deps: RunnerDependencies, state: RunState): RunOutcome {
   return {
     kind: "completed",
     runId: state.runId,
+    lastSequence: lastSequence(deps, state),
     presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
   };
 }
 
-function persistState(deps: RunnerDependencies, state: RunState): void {
-  deps.installationGuard.assertCurrent(toRunScope(state));
-  deps.runStore.saveRun({ ...state, updatedAt: new Date().toISOString() });
+function failRun(deps: RunnerDependencies, state: RunState, code: string): RunOutcome {
+  deps.eventService.failRun({
+    scope: scopedRun(state),
+    state,
+    payload: { code },
+  });
+  state = deps.runStore.getRun(scopedRun(state)) ?? state;
+  return budgetStopOutcome(deps, state, code);
+}
+
+function completeRun(deps: RunnerDependencies, state: RunState, chatMessageId?: string): RunOutcome {
+  deps.eventService.completeRun({
+    scope: scopedRun(state),
+    state,
+    payload: {
+      chatMessageId,
+      actionResultIds: state.completedResults.map((r) => r.actionResultId),
+    },
+  });
+  state = deps.runStore.getRun(scopedRun(state)) ?? state;
+  return completeOutcome(deps, state);
 }
 
 async function callModel(
@@ -216,8 +240,9 @@ async function callModel(
   state: RunState,
   messages: ModelMessage[],
   tools: ToolDefinition[],
+  modelCall: number,
   signal?: AbortSignal,
-): Promise<{ completion: Awaited<ReturnType<NativeToolModelClient["completeWithTools"]>>; providerAttempts: 1 | 2 }> {
+): Promise<{ completion: Awaited<ReturnType<NativeToolModelClient["completeWithTools"]>>; providerAttempts: 1 | 2; latencyMs: number }> {
   const requestBytes = serializeModelRequestForPreflight(
     serializeMessagesForPreflight(messages),
     serializeToolsForPreflight(tools),
@@ -225,15 +250,39 @@ async function callModel(
   const preflight = preflightModelRequest(state.budget, requestBytes);
   if (!preflight.ok) throw new Error("token_budget_exhausted");
   let providerAttempts: 1 | 2 = 1;
+  deps.eventService.reserveModelCall({
+    scope: scopedRun(state),
+    state,
+    payload: {
+      modelCall,
+      providerAttempt: 1,
+      loadedOperationIds: state.loadedToolNames.filter((n) => n !== DISCOVERY_META_TOOL_NAME),
+      cacheSeeded: state.usedToolNames.length > 0,
+    },
+  });
+  state = deps.runStore.getRun(scopedRun(state)) ?? state;
   const started = deps.clock.monotonicMs();
   try {
     const completion = await deps.modelClient.completeWithTools(messages, tools, signal, {
       maxOutputTokens: preflight.maxOutputTokens,
       onProviderAttempt: (attempt) => {
-        providerAttempts = attempt;
+        if (attempt === 2 && providerAttempts === 1) {
+          providerAttempts = 2;
+          deps.eventService.reserveModelCall({
+            scope: scopedRun(state),
+            state: deps.runStore.getRun(scopedRun(state)) ?? state,
+            payload: {
+              modelCall,
+              providerAttempt: 2,
+              loadedOperationIds: state.loadedToolNames.filter((n) => n !== DISCOVERY_META_TOOL_NAME),
+              cacheSeeded: state.usedToolNames.length > 0,
+            },
+          });
+        }
       },
     });
     const responseBytes = utf8ByteLength(JSON.stringify(completion));
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
     state.budget = chargeSuccessfulModelAttempt(
       state.budget,
       completion.usage
@@ -242,17 +291,35 @@ async function callModel(
       requestBytes,
       responseBytes,
     );
-    return { completion, providerAttempts };
+    const latencyMs = deps.clock.monotonicMs() - started;
+    deps.eventService.completeModelCall({
+      scope: scopedRun(state),
+      state,
+      payload: {
+        modelCall,
+        providerAttempts,
+        usage: {
+          promptTokens: completion.usage?.promptTokens,
+          completionTokens: completion.usage?.completionTokens,
+        },
+        latencyMs,
+      },
+    });
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    return { completion, providerAttempts, latencyMs };
   } catch (error) {
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
     if (providerAttempts === 1) {
       state.budget = chargeFailedModelAttempt(state.budget, preflight.inputReserve, preflight.maxOutputTokens);
     }
     throw error;
   } finally {
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
     state.budget = {
       ...state.budget,
       activeWallMsUsed: state.budget.activeWallMsUsed + (deps.clock.monotonicMs() - started),
     };
+    deps.runStore.saveRun({ ...state, updatedAt: new Date().toISOString() });
   }
 }
 
@@ -282,25 +349,25 @@ export async function runAssistantV2(
 
   if (state && isTerminalPhase(state.phase)) {
     if (state.phase === "failed") {
-      return budgetStopOutcome(state, "interrupted_before_durable_completion");
+      return budgetStopOutcome(deps, state, "interrupted_before_durable_completion");
     }
-    return completeOutcome(state);
+    return completeOutcome(deps, state);
   }
 
   if (state && (state.phase === "awaiting_confirmation" || state.phase === "awaiting_clarification")) {
     if (state.phase === "awaiting_confirmation") {
-      return suspendOutcome(state, "awaiting_confirmation", state.continuation.kind === "awaiting_operations"
+      return suspendOutcome(deps, state, "awaiting_confirmation", state.continuation.kind === "awaiting_operations"
         ? state.continuation.operationIds[0] ?? input.runId
         : input.runId);
     }
-    return suspendOutcome(state, "awaiting_clarification", state.continuation.kind === "awaiting_clarification"
+    return suspendOutcome(deps, state, "awaiting_clarification", state.continuation.kind === "awaiting_clarification"
       ? state.continuation.clarificationId
       : input.runId);
   }
 
   if (!state) {
     if (!input.originalRequest) {
-      return { kind: "failed", runId: input.runId, code: "missing_original_request", presentationRefs: [] };
+      return { kind: "failed", runId: input.runId, lastSequence: 0, code: "missing_original_request", presentationRefs: [] };
     }
     const prior = deps.runStore.findLatestEligibleRunForCache(
       scope.sessionId,
@@ -334,52 +401,44 @@ export async function runAssistantV2(
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
-    deps.runStore.startRunWithTurn({
+    deps.eventService.startRun({
       scope: { ...scope, runId: input.runId },
-      originalRequest: input.originalRequest,
-      requestHash: state.requestHash,
-      catalogHash: state.catalogHash,
-      loadedToolNames: state.loadedToolNames,
-      intentHash: input.runId,
+      input: {
+        originalRequest: input.originalRequest,
+        requestHash: state.requestHash,
+        catalogHash: state.catalogHash,
+        loadedToolNames: state.loadedToolNames,
+        intentHash: input.runId,
+      },
     });
     state = deps.runStore.getRun({ ...scope, runId: input.runId }) ?? state;
   }
 
   if (signalAborted(input.signal)) {
-    state.phase = "failed";
-    persistState(deps, state);
-    return budgetStopOutcome(state, "cancelled");
+    return failRun(deps, state, "cancelled");
   }
 
+  let modelCall = state.budget.modelCallsUsed;
   while (canReserveModelCall(state.budget) && !isTokenBudgetExceeded(state.budget) && !isActiveWallBudgetExceeded(state.budget)) {
     if (signalAborted(input.signal)) {
-      state.phase = "failed";
-      persistState(deps, state);
-      return budgetStopOutcome(state, "cancelled");
+      return failRun(deps, state, "cancelled");
     }
-    state.phase = "model";
-    state.budget = incrementModelCallsUsed(state.budget);
-    persistState(deps, state);
+    modelCall += 1;
     const messages = buildFreshMessages(state);
     const tools = toolsForState(deps.actionRegistry, state);
     let completion;
     try {
-      ({ completion } = await callModel(deps, state, messages, tools, input.signal));
+      ({ completion } = await callModel(deps, state, messages, tools, modelCall, input.signal));
     } catch (error) {
       if (error instanceof ProviderProtocolError) {
-        state.phase = "failed";
-        persistState(deps, state);
-        return budgetStopOutcome(state, error.reason);
+        return failRun(deps, state, error.reason);
       }
-      state.phase = "failed";
-      persistState(deps, state);
-      return budgetStopOutcome(state, error instanceof Error ? error.message : "model_failed");
+      return failRun(deps, state, error instanceof Error ? error.message : "model_failed");
     }
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
 
     if (completion.toolCalls.length === 0) {
-      state.phase = "completed";
-      persistState(deps, state);
-      return completeOutcome(state);
+      return completeRun(deps, state);
     }
 
     const loadedSet = loadedToolSetFromState(state);
@@ -410,29 +469,40 @@ export async function runAssistantV2(
 
     const writeNames = writeCalls.map((c) => `${c.name}:${JSON.stringify(c.arguments)}`);
     if (new Set(writeNames).size !== writeNames.length) {
-      state.phase = "failed";
-      persistState(deps, state);
-      return budgetStopOutcome(state, denyCode("duplicate_write"));
+      return failRun(deps, state, denyCode("duplicate_write"));
     }
 
-    state.phase = "discovering";
-    persistState(deps, state);
+    let searchIndex = state.budget.discoveryCallsUsed;
     for (const call of discoveryCalls) {
       if (!canReserveDiscoveryCall(state.budget)) {
-        state.phase = "failed";
-        persistState(deps, state);
-        return budgetStopOutcome(state, denyCode("too_many_refinements"));
+        return failRun(deps, state, denyCode("too_many_refinements"));
       }
-      state.budget = incrementDiscoveryCallsUsed(state.budget);
-      const parsed = call.arguments as { query?: string };
+      searchIndex += 1;
+      const parsed = call.arguments as { query?: string; access?: "read" | "write" | "any" };
+      deps.eventService.reserveDiscoveryCall({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          searchIndex,
+          access: parsed.access ?? "any",
+          groups: [],
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
       const searchResult = await deps.discovery.search({ query: String(parsed.query ?? "") }, scope);
       state.loadedToolNames = [...refineLoadedToolSet(loadedToolSetFromState(state), new Set(state.usedToolNames), searchResult)];
       if (!state.usedToolNames.includes(call.name)) state.usedToolNames.push(call.name);
-      persistState(deps, state);
+      deps.eventService.loadOperations({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          operationIds: state.loadedToolNames.filter((n) => n !== DISCOVERY_META_TOOL_NAME),
+          source: "discovery",
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
     }
 
-    state.phase = "executing_reads";
-    persistState(deps, state);
     const readOutcomes: Array<{ call: ToolCall; outcome: ReadExecutionOutcome }> = [];
     const readCallsToRun: ToolCall[] = [];
     for (const call of readCalls) {
@@ -440,7 +510,6 @@ export async function runAssistantV2(
         denied.push({ toolCallId: call.id, actionName: call.name, code: denyCode("budget_exhausted") });
         continue;
       }
-      state.budget = incrementApiCallsUsed(state.budget);
       readCallsToRun.push(call);
     }
     await executeReadsConcurrently(readCallsToRun, scope, deps, input.signal, (call, outcome) => {
@@ -448,28 +517,49 @@ export async function runAssistantV2(
     });
 
     for (const { call, outcome } of readOutcomes) {
-      if (!state.usedToolNames.includes(call.name)) state.usedToolNames.push(call.name);
-      if (outcome.kind === "succeeded") {
-        const link: CompletedToolResult = {
+      deps.eventService.requestTool({
+        scope: scopedRun(state),
+        state,
+        payload: {
           toolCallId: call.id,
           actionName: call.name,
-          actionResultId: outcome.actionResultId,
-        };
-        state.completedResults.push(link);
+          argumentsHash: computeArgumentsHash(call.arguments),
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      deps.eventService.startTool({
+        scope: scopedRun(state),
+        state,
+        payload: { toolCallId: call.id, actionName: call.name },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      if (!state.usedToolNames.includes(call.name)) state.usedToolNames.push(call.name);
+      if (outcome.kind === "succeeded") {
+        deps.eventService.completeTool({
+          scope: scopedRun(state),
+          state,
+          payload: {
+            toolCallId: call.id,
+            actionName: call.name,
+            actionResultId: outcome.actionResultId,
+          },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
       } else if (outcome.kind === "clarification") {
-        state.phase = "awaiting_clarification";
         state.continuation = { kind: "awaiting_clarification", clarificationId: outcome.clarificationId };
-        persistState(deps, state);
-        return suspendOutcome(state, "awaiting_clarification", outcome.clarificationId);
+        deps.eventService.suspendRun({
+          scope: scopedRun(state),
+          state,
+          payload: { reason: "awaiting_clarification" },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        return suspendOutcome(deps, state, "awaiting_clarification", outcome.clarificationId);
       }
     }
 
     if (writeCalls.length > 0) {
-      state.phase = "preparing_writes";
-      persistState(deps, state);
       for (const _call of writeCalls) {
         if (!canReserveApiCall(state.budget)) break;
-        state.budget = incrementApiCallsUsed(state.budget);
       }
       let preparation: WritePreparationOutcome;
       try {
@@ -478,33 +568,50 @@ export async function runAssistantV2(
         preparation = { kind: "not_ready", code: "write_port_not_ready", actionResultId: "prep-failed" };
       }
       if (preparation.kind === "prepared") {
-        state.phase = "awaiting_confirmation";
         state.continuation = { kind: "awaiting_operations", operationIds: preparation.operationIds, batchId: preparation.batchId };
         state.pendingOperationIds = preparation.operationIds;
-        persistState(deps, state);
-        return suspendOutcome(state, "awaiting_confirmation", preparation.confirmationIds[0] ?? input.runId);
+        deps.eventService.suspendRun({
+          scope: scopedRun(state),
+          state,
+          payload: { reason: "awaiting_confirmation" },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        return suspendOutcome(deps, state, "awaiting_confirmation", preparation.confirmationIds[0] ?? input.runId);
       }
       if (preparation.kind === "not_ready") {
-        const link: CompletedToolResult = {
-          toolCallId: writeCalls[0]?.id ?? "unknown",
-          actionName: writeCalls[0]?.name ?? "unknown",
-          actionResultId: preparation.actionResultId,
-        };
-        state.completedResults.push(link);
+        const call = writeCalls[0];
+        if (call) {
+          deps.eventService.completeTool({
+            scope: scopedRun(state),
+            state,
+            payload: {
+              toolCallId: call.id,
+              actionName: call.name,
+              actionResultId: preparation.actionResultId,
+            },
+          });
+          state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        }
       }
     }
 
     for (const d of denied) {
-      void d;
+      deps.eventService.denyTool({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          toolCallId: d.toolCallId,
+          actionName: d.actionName,
+          code: d.code,
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
     }
 
-    persistState(deps, state);
     if (!canReserveModelCall(state.budget)) break;
   }
 
-  state.phase = "failed";
-  persistState(deps, state);
-  return budgetStopOutcome(state, "budget_exhausted");
+  return failRun(deps, state, "budget_exhausted");
 }
 
 function signalAborted(signal: AbortSignal | undefined): boolean {

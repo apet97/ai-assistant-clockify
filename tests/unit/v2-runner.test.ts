@@ -21,22 +21,66 @@ function baseScope(): RunScope {
   };
 }
 
+function fakeEventLayer() {
+  let sequence = 0;
+  const next = (runId: string, eventType: string) => ({
+    runId,
+    sequence: ++sequence,
+    event: { eventType, payload: {}, createdAt: new Date().toISOString() },
+  });
+  const eventStore = {
+    reserveModelCallWithEvent: vi.fn((_s, _st, _p) => next("run", "model.started")),
+    completeModelCallWithEvent: vi.fn((_s, _st, _p) => next("run", "model.completed")),
+    reserveDiscoveryCallWithEvent: vi.fn((_s, _st, _p) => next("run", "api.search_started")),
+    loadOperationsWithEvent: vi.fn((_s, _st, _p) => next("run", "api.operations_loaded")),
+    requestToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.requested")),
+    denyToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.denied")),
+    startToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.started")),
+    completeToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.completed")),
+    suspendRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.suspended")),
+    completeRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.completed")),
+    failRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.failed")),
+    getLastRunEventSequence: vi.fn(() => sequence),
+  };
+  const eventService = {
+    startRun: vi.fn(() => next("run", "run.started")),
+    reserveModelCall: vi.fn((input) => eventStore.reserveModelCallWithEvent({}, input.state, input.payload)),
+    completeModelCall: vi.fn((input) => eventStore.completeModelCallWithEvent({}, input.state, input.payload)),
+    reserveDiscoveryCall: vi.fn((input) => eventStore.reserveDiscoveryCallWithEvent({}, input.state, input.payload)),
+    loadOperations: vi.fn((input) => eventStore.loadOperationsWithEvent({}, input.state, input.payload)),
+    requestTool: vi.fn((input) => eventStore.requestToolWithEvent({}, input.state, input.payload)),
+    denyTool: vi.fn((input) => eventStore.denyToolWithEvent({}, input.state, input.payload)),
+    startTool: vi.fn((input) => eventStore.startToolWithEvent({}, input.state, input.payload)),
+    completeTool: vi.fn((input) => eventStore.completeToolWithEvent({}, input.state, input.payload)),
+    suspendRun: vi.fn((input) => eventStore.suspendRunWithEvent({}, input.state, input.payload)),
+    completeRun: vi.fn((input) => eventStore.completeRunWithEvent({}, input.state, input.payload)),
+    failRun: vi.fn((input) => eventStore.failRunWithEvent({}, input.state, input.payload)),
+  };
+  return { eventStore, eventService };
+}
+
 function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependencies {
   const modelClient = {
     complete: vi.fn(),
     completeWithTools: vi.fn(async () => ({ text: "done", toolCalls: [] })),
   };
+  const { eventStore, eventService } = fakeEventLayer();
   const store = {
     startRunWithTurn: vi.fn(),
+    startRunWithEvent: vi.fn(),
     getRun: vi.fn(() => undefined),
     saveRun: vi.fn(),
+    getLastRunEventSequence: vi.fn(() => 0),
     findLatestEligibleRunForCache: vi.fn(() => undefined),
     recoverOrphanedActiveRuns: vi.fn(() => 0),
     failActiveRunsForSession: vi.fn(() => 0),
   };
   return {
     modelClient,
-    runStore: store,
+    runStore: store as unknown as RunnerDependencies["runStore"],
+    eventStore: eventStore as unknown as RunnerDependencies["eventStore"],
+    eventService: eventService as unknown as RunnerDependencies["eventService"],
+    eventViews: { list: vi.fn(() => ({ runId: "run", events: [], nextAfter: 0, hasMore: false, lastSequence: 0 })) },
     actionRegistry: MODEL_API_ACTION_CATALOG,
     discovery: {
       search: vi.fn(async () => ({ kind: "matches" as const, query: "x", access: "any" as const, operations: [] })),
@@ -55,7 +99,7 @@ function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependenci
     },
     clock: { now: () => new Date(), monotonicMs: () => 0 },
     ...overrides,
-  };
+  } as RunnerDependencies;
 }
 
 describe("validateCompletionToolCalls", () => {
@@ -189,12 +233,14 @@ describe("runAssistantV2", () => {
     const deps = fakeDeps({
       runStore: {
         startRunWithTurn: vi.fn(),
+        startRunWithEvent: vi.fn(),
         getRun: vi.fn(() => completed),
         saveRun: vi.fn(),
+        getLastRunEventSequence: vi.fn(() => 1),
         findLatestEligibleRunForCache: vi.fn(() => undefined),
         recoverOrphanedActiveRuns: vi.fn(() => 0),
         failActiveRunsForSession: vi.fn(() => 0),
-      },
+      } as unknown as RunnerDependencies["runStore"],
     });
     const outcome = await runAssistantV2({ runId: "run-1", scope: baseScope() }, deps);
     expect(outcome.kind).toBe("completed");
