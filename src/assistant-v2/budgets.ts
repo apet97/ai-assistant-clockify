@@ -1,5 +1,5 @@
 import type { RunBudget } from "./state.js";
-import { createEmptyRunBudget, totalChargedTokens } from "./state.js";
+import { totalChargedTokens } from "./state.js";
 
 export { createEmptyRunBudget } from "./state.js";
 

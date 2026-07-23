@@ -46,6 +46,8 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T07-B CLOSED:** sole meta-tool `assistant_find_api_operations`, discovery-only `initialV2ToolSet`, `refineLoadedToolSet` (max 12 API + discovery), `validateLoadedToolCall`, startup index injection via `createApp`/`server.ts`; shared schema helper in `harness/tool-schema.ts`. Gate: discovery integration + tools tests + `npm run verify` green (276 files / 3473 tests). Live: N/A. Next: `T08-B`.
 - **T08-A CLOSED:** v2 runner contracts in `src/assistant-v2/{state,budgets,protocol,prompt}.ts`; shared `src/assistant/tool-results.ts` (`TOOL_RESULT_MAX_BYTES=24_000`); model client `maxOutputTokens` + `onProviderAttempt`; two-attempt token preflight/reservation. Gate: `v2-budgets`, `v2-run-state`, `tool-result-cap`, model-client, agent-loop tests green. Live: N/A. Next: `T08-B`.
 - **T08-B CLOSED:** schema v9 assistant run/link tables, scoped store in `src/db/store/runs.ts`, retention/erasure/restore/orphan wiring; never persists provider reasoning/transcript. Gate: v2-runner-persistence + migration/retention/tombstone tests green. Live: N/A. Next: `T08-C`.
+- **T08-C CLOSED:** v2 provider loop in `src/assistant-v2/runner.ts` — atomic completion validation, mixed-discovery-only batches, exact-scope cache seed, max two refinements, fresh system/user prompt only. Gate: v2-runner + budgets/state tests green. Live: N/A. Next: `T08-D`.
+- **T08-D CLOSED:** four-worker read pool with provider-order results, ordered write preparation only (no host mutation dispatch), persisted host-call allowance via `withHostCallBudgetFromUsed`. Gate: v2 concurrency/cancellation/runner tests green. Live: N/A. Next: `T08-E`.
 
 ## Start here
 

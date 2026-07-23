@@ -51,6 +51,8 @@ here; this file is the execution map.
 - **T07-B CLOSED:** bounded dynamic discovery seam — meta-tool only at init, loaded-tool validation, startup index injection; max 12 API tools + discovery. Gate: `npm run verify` green. Next: `T08-B`.
 - **T08-A CLOSED:** v2 budgets/protocol/state/prompt contracts; shared 24,000-byte tool-result cap; model-client native-tool preflight/accounting. Gate: budgets/state/cap/model-client/agent-loop tests green. Next: `T08-B`.
 - **T08-B CLOSED:** schema v9 (`assistant_runs`, request/result links, scoped FKs, one active run/session); `src/db/store/runs.ts`; retention/erasure/restore wiring. Gate: v2-runner-persistence + migration/retention/tombstone tests green. Next: `T08-C`.
+- **T08-C CLOSED:** v2 provider loop — completion validation, cache seed, refinement cap, no provider transcript persistence. Gate: v2-runner tests green. Next: `T08-D`.
+- **T08-D CLOSED:** bounded four-worker reads, provider-order results, ordered write prep, persisted host-call budget. Gate: concurrency/cancellation tests green. Next: `T08-E`.
 
 ## Non-negotiable invariants
 

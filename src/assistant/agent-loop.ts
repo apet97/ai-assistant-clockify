@@ -18,7 +18,7 @@
 import type { ActionResult, ClarifyOption, ConfirmableOperation, PreviewCard } from "../harness/action.js";
 import { hasChanges, type SuccessReceipt, type ErrorReceipt } from "../harness/receipts.js";
 import type { ModelClient, ModelMessage, ToolCall, ToolCompletion, ToolDefinition } from "./model-client.js";
-import { capToolResultForModel, TOOL_RESULT_MAX_BYTES } from "./tool-results.js";
+import { capToolResultForModel } from "./tool-results.js";
 
 export { capToolResultForModel, TOOL_RESULT_MAX_BYTES } from "./tool-results.js";
 

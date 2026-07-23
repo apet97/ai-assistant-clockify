@@ -27,6 +27,16 @@ export class HostRequestCancelledError extends Error {
 
 export const HOST_CALL_BUDGET_MAXIMUM = 60;
 
+export function withHostCallBudgetFromUsed<T>(
+  operation: () => Promise<T>,
+  alreadyUsed: number,
+  maximum = HOST_CALL_BUDGET_MAXIMUM,
+): Promise<T> {
+  if (hostCallBudget.getStore()) return operation();
+  const used = Math.max(0, Math.min(maximum, alreadyUsed));
+  return hostCallBudget.run({ used, maximum }, operation);
+}
+
 export function withHostCallBudget<T>(
   operation: () => Promise<T>,
   maximum = HOST_CALL_BUDGET_MAXIMUM,
@@ -34,8 +44,7 @@ export function withHostCallBudget<T>(
   // Route authentication and the action/confirmation helpers it invokes are
   // one physical request budget. A nested helper must never reset that budget
   // (which previously let a cold role lookup sit outside a 60-call mutation).
-  if (hostCallBudget.getStore()) return operation();
-  return hostCallBudget.run({ used: 0, maximum }, operation);
+  return withHostCallBudgetFromUsed(operation, 0, maximum);
 }
 
 /** Atomically charge a complete operation before its first mutation. Calls made
