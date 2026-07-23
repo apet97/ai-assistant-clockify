@@ -130,10 +130,9 @@ export const MARK_INVOICED_ENTRY_BATCH_MAX = Math.min(
     CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
   ),
 );
-export const INVOICE_IMPORT_PROJECT_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => count + 3,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
-);
+/** One-request import batch bound by the 22-fact material presentation cap
+ * (invoiceId + from + to + up to 19 project ids). */
+export const INVOICE_IMPORT_PROJECT_BATCH_MAX = 19;
 export const SETUP_TASK_ASSIGNEE_BATCH_MAX = deriveMaximumBatchSize(
   (count) => 3 * count + 11,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,

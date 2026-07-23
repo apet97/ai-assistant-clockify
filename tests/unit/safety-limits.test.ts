@@ -185,7 +185,7 @@ describe("deterministic mutation host-call bounds", () => {
     expect(3 + 2 * MARK_INVOICED_ENTRY_BATCH_MAX + 2).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
     expect(MARK_INVOICED_ENTRY_BATCH_MAX).toBe(21);
     expect(3 + INVOICE_IMPORT_PROJECT_BATCH_MAX + 3).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
-    expect(3 + (INVOICE_IMPORT_PROJECT_BATCH_MAX + 1) + 3).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
+    expect(INVOICE_IMPORT_PROJECT_BATCH_MAX).toBe(19);
     expect(3 + 3 * SETUP_TASK_ASSIGNEE_BATCH_MAX + 11).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
     expect(3 + 3 * (SETUP_TASK_ASSIGNEE_BATCH_MAX + 1) + 11).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
     expect(3 + 2 * TIME_OFF_BALANCE_USER_BATCH_MAX + 3).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
