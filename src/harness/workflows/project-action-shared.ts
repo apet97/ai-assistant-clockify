@@ -179,13 +179,15 @@ export async function commitProjectMemberRateStep(
       const result = await dispatchWithReconciliation({
         dispatch: async () => { await options.dispatch(rateInput); return true as const; },
         reconcile: async () => {
-          const row = await ctx.clockify.getProject(rateInput.projectId) as unknown as Record<string, unknown> | null;
+          // Member rates live on membership rows, not project-default hourlyRate/costRate.
+          const memberships = await ctx.clockify.getProjectMemberships(rateInput.projectId);
+          if (memberships.truncated) return undefined;
           const key = options.reconcileRateKey === "dynamic"
             ? (rateInput.rateKind === "COST" ? "costRate" : "hourlyRate")
             : options.reconcileRateKey;
-          return row && (row[key] as { amount?: unknown } | undefined)?.amount === rateInput.amountMinor
-            ? true as const
-            : undefined;
+          const member = memberships.rows.find((row) => String(row.userId) === rateInput.userId);
+          const amount = (member?.[key] as { amount?: unknown } | undefined)?.amount;
+          return amount === rateInput.amountMinor ? true as const : undefined;
         },
       });
       return {

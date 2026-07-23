@@ -237,6 +237,41 @@ describe("structure startup reconciliation", () => {
     expect(deleted).toMatchObject({ authoritative: true, reason: "authoritative_match" });
   });
 
+  it("reconciles project member rates from membership rows, not project defaults", async () => {
+    const operation = {
+      payload: { projectId: "project", userId: "u1", amountMinor: 9_000, rateKind: "HOURLY" },
+    };
+    const matched = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_member_hourly_rate_update",
+      planStepId: "update-project-member-hourly-rate",
+      strategy: "update",
+      operation,
+      clockify: {
+        getProject: vi.fn(async () => ({ id: "project", hourlyRate: { amount: 1 } })),
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [{ userId: "u1", hourlyRate: { amount: 9_000 } }, { userId: "u2" }],
+        })),
+      } as never,
+    }));
+    expect(matched).toMatchObject({ authoritative: true, reason: "authoritative_match" });
+
+    const mismatchedDefault = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_member_cost_rate_update",
+      planStepId: "update-project-member-cost-rate",
+      strategy: "update",
+      operation: { payload: { projectId: "project", userId: "u1", amountMinor: 9_000 } },
+      clockify: {
+        getProject: vi.fn(async () => ({ id: "project", costRate: { amount: 9_000 } })),
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [{ userId: "u1", costRate: { amount: 8_000 } }],
+        })),
+      } as never,
+    }));
+    expect(mismatchedDefault).toMatchObject({ authoritative: false });
+  });
+
   it("reconciles membership readback canonically and rejects a requested-rate mismatch", async () => {
     const operation = {
       payload: {

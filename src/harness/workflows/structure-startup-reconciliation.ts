@@ -441,19 +441,31 @@ const deleteProject: Handler = async (input) => {
   return id ? deleteByRead(input, "project", id, () => input.clockify.getProject(id)) : invalidInput(input);
 };
 
-const updateProjectRate: Handler = async (input) => {
+async function reconcileProjectMemberRate(
+  input: HandlerInput,
+  rateKey: "hourlyRate" | "costRate",
+): Promise<ReconciliationResult> {
   const payload = payloadOf(input.candidate);
-  const id = stringValue(payload?.projectId);
-  const key = payload?.rateKind === "COST" ? "costRate" : payload?.rateKind === "HOURLY" ? "hourlyRate" : undefined;
-  if (!id || !key || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  const projectId = stringValue(payload?.projectId);
+  const userId = stringValue(payload?.userId);
+  if (!projectId || !userId || typeof payload?.amountMinor !== "number") return invalidInput(input);
   return singleRead(input, {
     strategy: "update",
     async read() {
-      const row = await input.clockify.getProject(id);
-      return row ? candidate("project", id, row) : undefined;
+      const memberships = await input.clockify.getProjectMemberships(projectId);
+      if (memberships.truncated) return undefined;
+      const member = memberships.rows.find((row) => String(row.userId) === userId);
+      return member ? candidate("project-membership", `${projectId}:${userId}`, member) : undefined;
     },
-    matches: (item) => record(record(item.projection)?.[key])?.amount === payload.amountMinor,
+    matches: (item) => record(record(item.projection)?.[rateKey])?.amount === payload.amountMinor,
   });
+}
+
+const updateProjectRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const key = payload?.rateKind === "COST" ? "costRate" : payload?.rateKind === "HOURLY" ? "hourlyRate" : undefined;
+  if (!key) return invalidInput(input);
+  return reconcileProjectMemberRate(input, key);
 };
 
 const updateProjectEstimate: Handler = async (input) => {
@@ -471,33 +483,11 @@ const updateProjectEstimate: Handler = async (input) => {
   });
 };
 
-const updateProjectMemberHourlyRate: Handler = async (input) => {
-  const payload = payloadOf(input.candidate);
-  const id = stringValue(payload?.projectId);
-  if (!id || typeof payload?.amountMinor !== "number") return invalidInput(input);
-  return singleRead(input, {
-    strategy: "update",
-    async read() {
-      const row = await input.clockify.getProject(id);
-      return row ? candidate("project", id, row) : undefined;
-    },
-    matches: (item) => record(record(item.projection)?.hourlyRate)?.amount === payload.amountMinor,
-  });
-};
+const updateProjectMemberHourlyRate: Handler = (input) =>
+  reconcileProjectMemberRate(input, "hourlyRate");
 
-const updateProjectMemberCostRate: Handler = async (input) => {
-  const payload = payloadOf(input.candidate);
-  const id = stringValue(payload?.projectId);
-  if (!id || typeof payload?.amountMinor !== "number") return invalidInput(input);
-  return singleRead(input, {
-    strategy: "update",
-    async read() {
-      const row = await input.clockify.getProject(id);
-      return row ? candidate("project", id, row) : undefined;
-    },
-    matches: (item) => record(record(item.projection)?.costRate)?.amount === payload.amountMinor,
-  });
-};
+const updateProjectMemberCostRate: Handler = (input) =>
+  reconcileProjectMemberRate(input, "costRate");
 
 const updateProjectMemberships: Handler = async (input) => {
   const payload = payloadOf(input.candidate);

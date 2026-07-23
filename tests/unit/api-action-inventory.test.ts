@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -3467,6 +3467,30 @@ describe("API action inventory normalization", () => {
     }
   });
 
+  it("fails closed when the official OpenAPI snapshot hash drifts", async () => {
+    const generator = await loadInventoryGeneratorModule();
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "tampered-official-openapi-"));
+    try {
+      const sourcePath = join(repositoryRoot, "evidence", "openapi", "clockify.official.openapi.yaml");
+      mkdirSync(join(repositoryRoot, "evidence", "openapi"), { recursive: true });
+      const realRoot = fileURLToPath(new URL("../..", import.meta.url));
+      copyFileSync(
+        join(realRoot, "evidence", "openapi", "clockify.official.openapi.yaml"),
+        sourcePath,
+      );
+      writeFileSync(sourcePath, `${readFileSync(sourcePath, "utf8")}\n# tampered\n`, "utf8");
+      const verifySnapshot = generator.verifyOfficialOpenApiSnapshot;
+      expect(verifySnapshot).toBeTypeOf("function");
+      if (!verifySnapshot) {
+        throw new Error("missing_official_openapi_verifier");
+      }
+      expect(() => verifySnapshot(repositoryRoot, []))
+        .toThrowError("official_openapi_hash_mismatch");
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps undo as a local service outside the action-definition inventory", () => {
     expect(getAction("undo")).toBeUndefined();
     expect(ACTION_CATALOG.some((definition) => definition.name === "undo")).toBe(false);
@@ -3725,6 +3749,50 @@ describe("API action inventory normalization", () => {
       ],
     }, "v2-api")).toThrowError(
       "material_array_max_mismatch:clockify_tags_create:/tagIds",
+    );
+  });
+
+  it("rejects material array maxima that drift from the normalized-operation contract", async () => {
+    const registry = await loadRegistryModule();
+    expect(() => registry.normalizeRegistryAction({
+      ...fixtureAction("clockify_tags_create"),
+      ...TAG_METADATA,
+      schema: z.object({
+        name: z.string().min(1),
+        tagIds: z.array(z.string()).max(3),
+      }).strict(),
+      materialFields: [
+        {
+          kind: "value",
+          path: "/name",
+          label: "Name",
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+        {
+          kind: "array_item",
+          containerPath: "/tagIds",
+          itemPath: "",
+          labelTemplate: "Tag {index}",
+          maxItems: 3,
+          formatterId: "entity",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+      ],
+      normalizedOperationMaterialContract: [
+        { kind: "value", path: "/name", scalarType: "string" },
+        {
+          kind: "array_item",
+          containerPath: "/tagIds",
+          itemPath: "",
+          maxItems: 2,
+          scalarType: "string",
+        },
+      ],
+    }, "v2-api")).toThrowError(
+      "material_contract_max_mismatch:clockify_tags_create:/tagIds",
     );
   });
 
