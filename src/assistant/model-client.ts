@@ -95,6 +95,10 @@ export interface ToolCompletion {
 export interface ModelRequestOptions {
   /** Defaults to true. Declaration disables this to preserve one provider pass. */
   retryTransient?: boolean;
+  /** Maps to OpenAI-compatible `max_tokens` when set. */
+  maxOutputTokens?: number;
+  /** Observes each provider HTTP attempt (1 or 2) for one logical model call. */
+  onProviderAttempt?: (attempt: 1 | 2) => void;
 }
 
 export type ProviderProtocolErrorReason = "unoffered_tool" | "malformed_tool" | "malformed_completion";
@@ -380,9 +384,11 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
     body: Record<string, unknown>,
     signal?: AbortSignal,
     retryTransient = true,
+    attemptObserver?: (attempt: 1 | 2) => void,
   ): Promise<ChatCompletionResponse> {
     for (let attempt = 0; ; attempt += 1) {
       if (signal?.aborted) throw callerAborted();
+      attemptObserver?.((attempt + 1) as 1 | 2);
       const timeoutSignal = AbortSignal.timeout(timeoutMs);
       const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
       let response: Response;
@@ -479,7 +485,8 @@ export function createModelClient(config: ModelClientConfig): ModelClient {
           function: { name: tool.name, description: tool.description, parameters: tool.parameters },
         })),
         tool_choice: "auto",
-      }, signal, options?.retryTransient !== false);
+        ...(options?.maxOutputTokens !== undefined ? { max_tokens: options.maxOutputTokens } : {}),
+      }, signal, options?.retryTransient !== false, options?.onProviderAttempt);
       if (!isRecord(data) || !Array.isArray(data.choices) || data.choices.length !== 1) {
         throw new ProviderProtocolError("malformed_completion");
       }

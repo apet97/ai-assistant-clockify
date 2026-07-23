@@ -853,6 +853,23 @@ describe("createModelClient request timeout", () => {
     );
   });
 
+  it("maps maxOutputTokens to max_tokens and observes each provider attempt", async () => {
+    const attempts: Array<1 | 2> = [];
+    const captured: { body?: string } = {};
+    const payload = {
+      choices: [{ message: { content: "ok", tool_calls: [] } }],
+    };
+    const c = client(payload, true, captured);
+    await c.completeWithTools!(
+      [{ role: "user", content: "hi" }],
+      tools,
+      undefined,
+      { maxOutputTokens: 4096, onProviderAttempt: (attempt) => attempts.push(attempt) },
+    );
+    expect(JSON.parse(captured.body ?? "{}").max_tokens).toBe(4096);
+    expect(attempts).toEqual([1]);
+  });
+
   it("defaults the timeout to 120s and leaves non-abort errors untouched", async () => {
     const failFetch = vi.fn(async () => {
       throw new Error("ECONNREFUSED");
