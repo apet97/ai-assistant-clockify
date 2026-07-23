@@ -99,6 +99,8 @@ export const GROUP_MEMBER_BATCH_MAX = deriveMaximumBatchSize(
   estimateGroupMemberBatchHostCalls,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
+/** Tag ids on bounded time-entry create/start/update actions must fit the 22-fact material presentation ceiling alongside other preview fields. */
+export const TIME_ENTRY_TAG_BATCH_MAX = 14;
 export const ONBOARD_GROUP_BATCH_MAX = deriveMaximumBatchSize(
   estimateOnboardGroupBatchHostCalls,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,

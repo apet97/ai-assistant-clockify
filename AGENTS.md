@@ -32,7 +32,7 @@ here; this file is the execution map.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
 - T06-CLIENTS CLOSED at `9880859`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file.
-- T06-ENTRY-READS CLOSED: exact `clockify_entries_list`/`clockify_entries_get` on MODEL_API; `clockify_status`, review-day/week, and work-package convenience stay internal. `MODEL_API` = 99; `ACTION_CATALOG` = 154. Live: `live_not_run_missing_credentials`. Next: `T06-ENTRY-CREATE-TIMER`.
+- T06-ENTRY-CREATE-TIMER CLOSED: `clockify_entries_create`/`clockify_entries_start` (`createTimeEntry`) plus `clockify_stop_timer` (`stopRunningTimeEntry`); v1 log/start/work-package wrappers stay internal. `MODEL_API` = 101; `ACTION_CATALOG` = 156. Live: `live_not_run_missing_credentials`. Next: `T06-ENTRY-UPDATE`.
 
 ## Non-negotiable invariants
 

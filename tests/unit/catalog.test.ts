@@ -73,6 +73,8 @@ describe("catalog", () => {
     for (const required of [
       "clockify_entries_list",
       "clockify_entries_get",
+      "clockify_entries_create",
+      "clockify_entries_start",
       "clockify_entries_delete",
       "clockify_entries_mark_invoiced",
     ]) {

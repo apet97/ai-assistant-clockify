@@ -13,11 +13,22 @@ const ENTRY_READ_API_ACTIONS = [
   "clockify_entries_get",
 ] as const;
 
+const ENTRY_CREATE_TIMER_API_ACTIONS = [
+  "clockify_entries_create",
+  "clockify_entries_start",
+  "clockify_stop_timer",
+] as const;
+
 const INTERNAL_ONLY_ENTRY_READ_ACTIONS = [
   "clockify_status",
   "clockify_review_day",
   "clockify_review_week",
   "clockify_create_work_package",
+] as const;
+
+const INTERNAL_ONLY_ENTRY_MUTATION_ACTIONS = [
+  "clockify_log_work",
+  "clockify_start_timer",
 ] as const;
 
 function makeContext(fake: FakeWorkspace): ActionContext {
@@ -27,6 +38,8 @@ function makeContext(fake: FakeWorkspace): ActionContext {
     policy: defaultAdminPolicy(),
     clockify: fake.client,
     now: () => NOW,
+    timeZone: "UTC",
+    weekStartsOn: 1,
   };
 }
 
@@ -84,5 +97,69 @@ describe("v2 time entry read API actions", () => {
       presentation: { presenterId: action.presentation!.presenterId, version: action.presentation!.version + 1 },
     });
     expect(altered).not.toBe(baseline);
+  });
+});
+
+describe("v2 time entry create and timer API actions", () => {
+  it("exposes atomic create/start/stop actions on MODEL_API and hides generic wrappers", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of ENTRY_CREATE_TIMER_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(getAction("clockify_entries_create")?.apiOperation?.operationId).toBe("createTimeEntry");
+    expect(getAction("clockify_entries_start")?.apiOperation?.operationId).toBe("createTimeEntry");
+    expect(getAction("clockify_stop_timer")?.apiOperation?.operationId).toBe("stopRunningTimeEntry");
+    for (const name of INTERNAL_ONLY_ENTRY_MUTATION_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).toBe("generic");
+    }
+    expect(modelNames.has("clockify_create_work_package")).toBe(false);
+  });
+
+  it("clockify_entries_create executes with a single POST", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Apollo" }] });
+    const result = await executeAction({
+      actionName: "clockify_entries_create",
+      args: {
+        date: "today",
+        durationHours: 2,
+        projectName: "Apollo",
+        description: "Design",
+      },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.createTimeEntryAtomic).toBe(1);
+    expect(fake.counts.startTimeEntryAtomic ?? 0).toBe(0);
+  });
+
+  it("clockify_entries_start executes with a single POST and no prior status read", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Apollo" }] });
+    const result = await executeAction({
+      actionName: "clockify_entries_start",
+      args: { projectName: "Apollo", description: "Timer" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.startTimeEntryAtomic).toBe(1);
+    expect(fake.counts.createTimeEntryAtomic ?? 0).toBe(0);
+  });
+
+  it("clockify_stop_timer stops with a single PATCH", async () => {
+    const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Apollo" }] });
+    const started = await executeAction({
+      actionName: "clockify_entries_start",
+      args: { description: "Running" },
+      context: makeContext(fake),
+    });
+    if (started.kind !== "receipt" || !started.receipt.ok) throw new Error("expected start receipt");
+    const result = await executeAction({
+      actionName: "clockify_stop_timer",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.stopTimeEntryAtomic).toBe(1);
   });
 });

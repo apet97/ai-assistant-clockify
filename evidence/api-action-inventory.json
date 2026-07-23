@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "2db40fb18122e18fb1005c8d4fa5aae4a12956b3e848d8c05956132bac1ca8d3",
+  "catalogHash": "6732f9e483a9781a5fe8fd49c4fc2d46798d333f0de536dfdc98eb3d02e0e307",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 154,
+    "actions": 156,
     "rawAdapterCallSites": 148,
     "rawAdapterShapes": 124,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 99,
+      "api": 101,
       "composite": 24,
       "generic": 27,
       "local": 4
@@ -5687,7 +5687,7 @@
       "kind": "safe_write",
       "featureGroup": "time_tracking",
       "workflowModule": "time-tracking.ts",
-      "actionFingerprint": "3df1dfbd1b7cf3215744ed05240599347bba131a9795408086e42df1654899f9",
+      "actionFingerprint": "aeeedad73cb7cb3b20df96c21d0f0c1c7e41c60d01f9f903563ee63113c0f0ea",
       "exposure": "generic",
       "decisionReason": "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed start operation.",
       "operation": null,
@@ -9440,6 +9440,382 @@
       ],
       "presentation": {
         "presenterId": "clockify_tags_update",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_entries_create",
+      "description": "Log a completed time entry with one POST /time-entries. Resolves project/task by name server-side. Use exactly one shape: `start+end`, `start+durationHours|durationMinutes`, or `date|dayOffset + durationHours|durationMinutes`. Up to 14 tag ids/names in `tagIds`. Safe write — executes immediately when policy allows.",
+      "kind": "safe_write",
+      "featureGroup": "time_tracking",
+      "workflowModule": "api-actions/time-entries.ts",
+      "actionFingerprint": "c296832400654c1b723e09c7cc8c9497afcc94a79e71ce4cdd5f0035ab184093",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/time-entries (createTimeEntry).",
+      "operation": {
+        "operationId": "createTimeEntry",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/time-entries",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/tags\u0000tags.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/tags",
+          "sourceModule": "tags.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-entries\u0000time-entries.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-entries",
+          "sourceModule": "time-entries.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user/{userId}/time-entries\u0000time-entries.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/user/{userId}/time-entries",
+          "sourceModule": "time-entries.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/start",
+          "label": "Start time",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/end",
+          "label": "End time",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/description",
+          "label": "Description",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "label": "Billable",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "labelTemplate": "Tag {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/start",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/end",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/description",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_entries_create",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_entries_start",
+      "description": "Start a running timer with one POST /time-entries (start only). Pass the project/task by name — resolved server-side; unknown names clarify. Up to 14 tag ids/names in `tagIds`. Safe write — executes immediately when policy allows.",
+      "kind": "safe_write",
+      "featureGroup": "time_tracking",
+      "workflowModule": "api-actions/time-entries.ts",
+      "actionFingerprint": "e8f647c036d6893f8495fd834547de5dc2f2109f8c6c7b726cfdba87c76b5956",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/time-entries (createTimeEntry).",
+      "operation": {
+        "operationId": "createTimeEntry",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/time-entries",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/tags\u0000tags.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/tags",
+          "sourceModule": "tags.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-entries\u0000time-entries.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-entries",
+          "sourceModule": "time-entries.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user/{userId}/time-entries\u0000time-entries.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/user/{userId}/time-entries",
+          "sourceModule": "time-entries.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/description",
+          "label": "Description",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "label": "Billable",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "labelTemplate": "Tag {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/description",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_entries_start",
         "version": 1
       },
       "requiredArguments": [],
@@ -14438,7 +14814,9 @@
       "internalSupportConsumers": [
         "clockify_create_work_package",
         "clockify_delete_entity",
+        "clockify_entries_create",
         "clockify_entries_list",
+        "clockify_entries_start",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -14614,6 +14992,8 @@
         "clockify_create_work_package",
         "clockify_custom_fields_set_value_project",
         "clockify_delete_entity",
+        "clockify_entries_create",
+        "clockify_entries_start",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -14905,7 +15285,9 @@
       ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
+        "clockify_entries_create",
         "clockify_entries_list",
+        "clockify_entries_start",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -15026,6 +15408,8 @@
       ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
+        "clockify_entries_create",
+        "clockify_entries_start",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -15536,6 +15920,8 @@
       "internalSupportConsumers": [
         "clockify_create_work_package",
         "clockify_delete_entity",
+        "clockify_entries_create",
+        "clockify_entries_start",
         "clockify_fix_entry",
         "clockify_list_entities",
         "clockify_log_work",
@@ -15717,7 +16103,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_entries_create",
+        "clockify_entries_start"
+      ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
         "clockify_log_work",
@@ -15731,8 +16120,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/time-entries/invoiced\u0000time-entries.ts",
@@ -16514,6 +16903,8 @@
       ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
+        "clockify_entries_create",
+        "clockify_entries_start",
         "clockify_log_work",
         "clockify_review_day",
         "clockify_review_week",

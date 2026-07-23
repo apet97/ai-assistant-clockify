@@ -7,13 +7,6 @@ import {
   type ActionDefinition,
   type SemanticLiteralAlias,
 } from "../action.js";
-import type {
-  ApiAccess,
-  ApiActionMetadataCarrier,
-  ApiMethod,
-  AvailabilityByAuthClass,
-  MaterialFieldMetadata,
-} from "../api-operation.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveProjectTaskRefs, resolveUserFilter } from "./resolve.js";
 import { nowDate } from "../../durations.js";
@@ -21,6 +14,7 @@ import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete } from "./structure-durable.js";
 import { MARK_INVOICED_ENTRY_BATCH_MAX } from "../safety-limits.js";
+import { ENTRY_API_METADATA } from "./entry-api-metadata.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -29,149 +23,6 @@ import { MARK_INVOICED_ENTRY_BATCH_MAX } from "../safety-limits.js";
  * `mark_invoiced` is a billing state change, so it is gated by the `invoices`
  * feature group even though it operates on time entries.
  */
-
-type EntryActionName =
-  | "clockify_entries_list"
-  | "clockify_entries_get"
-  | "clockify_entries_delete"
-  | "clockify_entries_mark_invoiced";
-
-const AVAILABLE_TO_BOTH_AUTH_CLASSES: AvailabilityByAuthClass = Object.freeze({
-  addon: Object.freeze({ available: true }),
-  api_key: Object.freeze({ available: true }),
-});
-
-function endpointKey(
-  access: ApiAccess,
-  method: ApiMethod,
-  path: string,
-  sourceModule: string,
-): string {
-  return [access, "api", method, path, sourceModule].join("\0");
-}
-
-function valueField(
-  path: string,
-  label: string,
-  formatterId: string,
-  requiredInPreview: boolean,
-): MaterialFieldMetadata {
-  return Object.freeze({
-    kind: "value",
-    path,
-    label,
-    formatterId,
-    formatterVersion: 1,
-    requiredInPreview,
-  });
-}
-
-function apiMetadata(input: {
-  actionName: EntryActionName;
-  operationId: string;
-  method: ApiMethod;
-  path: string;
-  access: ApiAccess;
-  primary: string;
-  support: readonly string[];
-  materialFields: readonly MaterialFieldMetadata[];
-}): ApiActionMetadataCarrier {
-  return Object.freeze({
-    apiExposure: "api",
-    apiOperation: Object.freeze({
-      operationId: input.operationId,
-      host: "api",
-      method: input.method,
-      path: input.path,
-      access: input.access,
-      exposure: "api",
-    }),
-    adapterEndpoints: Object.freeze({
-      primary: Object.freeze([input.primary]),
-      support: Object.freeze([...input.support]),
-    }),
-    availabilityByAuthClass: AVAILABLE_TO_BOTH_AUTH_CLASSES,
-    boundedArgumentDictionaries: Object.freeze([]),
-    materialFields: Object.freeze([...input.materialFields]),
-    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
-  });
-}
-
-function internalMetadata(input: {
-  reason: string;
-  primary: readonly string[];
-  support: readonly string[];
-}): ApiActionMetadataCarrier {
-  return Object.freeze({
-    apiExposure: "generic",
-    apiExposureReason: input.reason,
-    adapterEndpoints: Object.freeze({
-      primary: Object.freeze([...input.primary]),
-      support: Object.freeze([...input.support]),
-    }),
-    availabilityByAuthClass: AVAILABLE_TO_BOTH_AUTH_CLASSES,
-    boundedArgumentDictionaries: Object.freeze([]),
-  });
-}
-
-const endpoint = Object.freeze({
-  timeEntries: Object.freeze({
-    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/user/{userId}/time-entries", "time-entries.ts"),
-    get: endpointKey("read", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
-    delete: endpointKey("write", "DELETE", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
-    invoiced: endpointKey("write", "PATCH", "/workspaces/{workspaceId}/time-entries/invoiced", "time-entries.ts"),
-  }),
-  users: Object.freeze({
-    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
-  }),
-  projects: Object.freeze({
-    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
-  }),
-  tasks: Object.freeze({
-    list: endpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{projectId}/tasks", "tasks.ts"),
-  }),
-});
-
-const ENTRY_API_METADATA = Object.freeze({
-  clockify_entries_list: apiMetadata({
-    actionName: "clockify_entries_list",
-    operationId: "getTimeEntries",
-    method: "GET",
-    path: "/workspaces/{workspaceId}/user/{userId}/time-entries",
-    access: "read",
-    primary: endpoint.timeEntries.list,
-    support: [endpoint.users.list, endpoint.projects.list, endpoint.tasks.list],
-    materialFields: [],
-  }),
-  clockify_entries_get: apiMetadata({
-    actionName: "clockify_entries_get",
-    operationId: "getTimeEntry",
-    method: "GET",
-    path: "/workspaces/{workspaceId}/time-entries/{id}",
-    access: "read",
-    primary: endpoint.timeEntries.get,
-    support: [],
-    materialFields: [],
-  }),
-  clockify_entries_delete: apiMetadata({
-    actionName: "clockify_entries_delete",
-    operationId: "deleteTimeEntry",
-    method: "DELETE",
-    path: "/workspaces/{workspaceId}/time-entries/{id}",
-    access: "write",
-    primary: endpoint.timeEntries.delete,
-    support: [endpoint.timeEntries.get],
-    materialFields: [
-      valueField("/id", "Time entry", "entity", true),
-      valueField("/description", "Description", "text", false),
-    ],
-  }),
-  clockify_entries_mark_invoiced: internalMetadata({
-    reason: "The current batch maximum exceeds the 22-fact material presentation limit; Task 6 must narrow the invoiced-state operation.",
-    primary: [endpoint.timeEntries.invoiced],
-    support: [endpoint.timeEntries.get],
-  }),
-} satisfies Readonly<Record<EntryActionName, ApiActionMetadataCarrier>>);
 
 const listEntries = defineAction({
   name: "clockify_entries_list",

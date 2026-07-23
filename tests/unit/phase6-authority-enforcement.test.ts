@@ -152,8 +152,10 @@ describe("Phase 6 write authority enforcement", () => {
     expect([...writeAuthorityActionNames()].sort()).toEqual(modelVisibleWrites().map((action) => action.name).sort());
   });
 
-  it("catalog-fingerprints authored command and literal authority for exactly all 12 safe writes", () => {
+  it("catalog-fingerprints authored command and literal authority for exactly all 14 safe writes", () => {
     const expected = [
+      "clockify_entries_create",
+      "clockify_entries_start",
       "clockify_start_timer",
       "clockify_stop_timer",
       "clockify_log_work",

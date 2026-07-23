@@ -18,6 +18,8 @@ const EXPECTED_BINDINGS = [
   ["clockify_start_timer", "start-timer", "create"],
   ["clockify_stop_timer", "stop-timer", "state-command"],
   ["clockify_log_work", "log-time-entry", "create"],
+  ["clockify_entries_create", "create-time-entry", "create"],
+  ["clockify_entries_start", "start-time-entry", "create"],
   ["clockify_fix_entry", "update-time-entry", "update"],
   ["clockify_entries_delete", "delete-time-entry", "delete"],
   ["clockify_entries_mark_invoiced", "mark-entries-invoiced", "state-command"],

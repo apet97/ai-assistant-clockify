@@ -99,6 +99,8 @@ const local = (): ActionAuthoritySemantics => ({
 const ACTION_SEMANTICS = Object.freeze({
   assistant_update_permissions: local(),
   clockify_start_timer: single("start-timer", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]", "operation.body.userId"], defaults: ["operation.body.start"] }),
+  clockify_entries_create: single("create-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
+  clockify_entries_start: single("start-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]", "operation.body.userId"], defaults: ["operation.body.start"] }),
   clockify_stop_timer: single("stop-timer", { derivedIds: ["operation.entryId", "operation.userId"] }),
   clockify_log_work: single("log-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
   clockify_fix_entry: single("update-time-entry", { derivedIds: ["operation.entryId", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
@@ -332,6 +334,66 @@ const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
     obligation(["taskId", "taskName"], "\\btask\\b"),
     obligation(["tagIds[]", "tagNames[]"], "\\b(?:tags?|tagged)\\b"),
   ], [], [], ["\\b(?:logging|recording|adding|entering|tracking)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b"]),
+
+  clockify_entries_create: authoredIntent([
+    "\\b(?:log|record|add|enter|track)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b",
+  ], [
+    obligation(["description"], "\\b(?:description|note)\\b"),
+    obligation(["start"], "\\b(?:from|starting(?:\\s+at)?|at)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["end"], "\\b(?:to|until|ending(?:\\s+at)?)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["date"], "\\b(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:on\\s+)?\\d{4}-\\d{2}-\\d{2})\\b"),
+    obligation(["dayOffset"], "\\bday\\s+offset\\b"),
+    obligation(["durationMinutes"], "\\b\\d+(?:\\.\\d+)?\\s*(?:m|min|mins|minute|minutes)\\b"),
+    obligation(["durationHours"], "\\b\\d+(?:\\.\\d+)?\\s*(?:h|hr|hrs|hour|hours)\\b"),
+    obligation(
+      ["projectId", "projectName"],
+      "\\bproject\\b",
+      "\\b(?:on|to)\\s+(?!(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{1,4}(?::\\d{2})?\\s*(?:am|pm)?|\\d{4}-\\d{2}-\\d{2})\\b)(?:project\\s+)?[\"'\\p{L}]",
+    ),
+    obligation(["taskId", "taskName"], "\\btask\\b"),
+    obligation(["tagIds[]"], "\\b(?:tags?|tagged)\\b"),
+  ], [], [], ["\\b(?:logging|recording|adding|entering|tracking)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b"]),
+
+  clockify_entries_start: authoredIntent([
+    "\\b(?:start|begin)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclock\\s+(?:me\\s+)?in\\b",
+  ], [
+    boundObligation(
+      ["description"],
+      [
+        `\\b(?:description|note)(?:\\s+is|\\s*:)?\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+        `\\btimer\\s+(?:called|named)\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+      ],
+      ["\\b(?:timer\\s+)?(?:description|note)\\b", "\\btimer\\s+(?:called|named)\\b"],
+    ),
+    boundObligation(
+      ["projectId", "projectName"],
+      [
+        `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+        `\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+      ],
+      [
+        "\\bproject\\b",
+        "\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?[\"'\\p{L}\\p{N}]",
+      ],
+    ),
+    boundObligation(
+      ["taskId", "taskName"],
+      [`\\btask(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|tagged)\\b|[,.;!?]|$)`],
+      ["\\btask\\b"],
+    ),
+    boundObligation(
+      ["tagIds[]"],
+      [
+        `\\btagged\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+        `\\btags?(?:\\s+(?:named|called|are|is|:))?\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+      ],
+      ["\\b(?:tags?|tagged)\\b"],
+    ),
+  ], ["\\b(?:create|make|add|set\\s+up)\\b[^.!?;\\n]{0,160}\\b(?:project|client|task|tag)\\b"], [], [
+    "\\b(?:starting|beginning)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclocking\\s+(?:me\\s+)?in\\b",
+  ]),
 
   clockify_create_work_package: authoredIntent([
     "\\b(?:create|make|add|set\\s+up)(?:\\s+(?:a|the|new))?\\s+work\\s+package\\b",
