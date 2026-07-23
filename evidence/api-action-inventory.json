@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "8f9fc179ebed434b9beea639c3e9cd609ef800fe5da8e5771a8fe4829458e3a7",
+  "catalogHash": "5785dcb6bf948cbe6ca51bdfb1771b0aa8eca6189ce1e859da716cc7160bba83",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 163,
+    "actions": 166,
     "rawAdapterCallSites": 150,
     "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 113,
+      "api": 116,
       "composite": 24,
       "generic": 22,
       "local": 4
@@ -3246,9 +3246,9 @@
       "kind": "risky_write",
       "featureGroup": "expenses",
       "workflowModule": "expenses.ts",
-      "actionFingerprint": "46229a56097bc0d66b4c537c9c4a5bbae0a31e11cc1c5c6fffb8f5f10a4aa5cc",
+      "actionFingerprint": "a2699362b7ff6c8b4363bdd07d501ee3e41b6fa30173555ee86e7b9ded6252f5",
       "exposure": "composite",
-      "decisionReason": "Archives an active category before deletion, so one invocation can contain two primary mutations; Task 6 must expose delete of an already archived category separately.",
+      "decisionReason": "Archives an active category before deletion, so one invocation can contain two primary mutations; use clockify_expenses_categories_status_update and clockify_expenses_categories_delete_archived instead.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -3354,9 +3354,9 @@
       "kind": "risky_write",
       "featureGroup": "expenses",
       "workflowModule": "expenses.ts",
-      "actionFingerprint": "9bc7be38ad4e3138a70b1f6ada4d22a7b1b3eb147c8f9e6244fc262f857e84a6",
+      "actionFingerprint": "7431c0d1c514dd91cce04cac9a3eeaf8b00c6592429cc6b9216e6cbdb3357efc",
       "exposure": "composite",
-      "decisionReason": "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; Task 6 must expose the atomic operations separately.",
+      "decisionReason": "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; use clockify_expenses_categories_rename and clockify_expenses_categories_status_update instead.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -3477,6 +3477,271 @@
       },
       "requiredArguments": [
         "name"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_expenses_categories_delete_archived",
+      "description": "Delete an already-archived expense category with a single DELETE (Clockify rejects deleting an active category). Pass the category id or its exact name. Destructive billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "expenses",
+      "workflowModule": "api-actions/expenses.ts",
+      "actionFingerprint": "6dd9113e8dd3d866b03331164c345f185a5570afeefe5cef69d62bc215f2b1bd",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/expenses/categories/{id} (deleteCategory).",
+      "operation": {
+        "operationId": "deleteCategory",
+        "host": "api",
+        "method": "DELETE",
+        "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/expenses/categories\u0000expenses.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/expenses/categories",
+          "sourceModule": "expenses.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/expenses/categories/{id}\u0000expenses.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+          "sourceModule": "expenses.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Category",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Category name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_expenses_categories_delete_archived",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_expenses_categories_rename",
+      "description": "Rename an expense category with one name PUT. Status changes use clockify_expenses_categories_status_update. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "expenses",
+      "workflowModule": "api-actions/expenses.ts",
+      "actionFingerprint": "0fb14acd7cdd1403ab3b349231311b4c34717aac1e67fb9de9c290fc73861ef8",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/expenses/categories/{id} (updateCategory).",
+      "operation": {
+        "operationId": "updateCategory",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/expenses/categories\u0000expenses.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/expenses/categories",
+          "sourceModule": "expenses.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/expenses/categories/{id}\u0000expenses.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+          "sourceModule": "expenses.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Category",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Category name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_expenses_categories_rename",
+        "version": 1
+      },
+      "requiredArguments": [
+        "name"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_expenses_categories_status_update",
+      "description": "Archive or unarchive an expense category with one status PATCH. Renames use clockify_expenses_categories_rename. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "expenses",
+      "workflowModule": "api-actions/expenses.ts",
+      "actionFingerprint": "2b3c70efee942ecfeaef2bb5daebb2058e3ce3366420a9ec0006502c77259bcd",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/expenses/categories/{id}/status (updateExpenseCategoryStatus).",
+      "operation": {
+        "operationId": "updateExpenseCategoryStatus",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/expenses/categories/{id}/status",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/expenses/categories\u0000expenses.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/expenses/categories",
+          "sourceModule": "expenses.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/expenses/categories/{id}/status\u0000expenses.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PATCH",
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}/status",
+          "sourceModule": "expenses.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Category",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/archived",
+          "label": "Archived",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/archived",
+          "scalarType": "boolean"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_expenses_categories_status_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "archived"
       ],
       "primaryMutationCount": 1,
       "compensationCount": 0
@@ -15290,6 +15555,9 @@
       "internalSupportConsumers": [
         "clockify_expenses_categories_create",
         "clockify_expenses_categories_delete",
+        "clockify_expenses_categories_delete_archived",
+        "clockify_expenses_categories_rename",
+        "clockify_expenses_categories_status_update",
         "clockify_expenses_categories_update",
         "clockify_expenses_create",
         "clockify_expenses_update"
@@ -15350,7 +15618,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_expenses_categories_delete_archived"
+      ],
       "internalSupportConsumers": [
         "clockify_expenses_categories_delete"
       ],
@@ -15362,8 +15632,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/expenses/categories/{id}\u0000expenses.ts",
@@ -15380,7 +15650,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_expenses_categories_rename"
+      ],
       "internalSupportConsumers": [
         "clockify_expenses_categories_update"
       ],
@@ -15392,8 +15664,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/expenses/categories/{id}/status\u0000expenses.ts",
@@ -15410,7 +15682,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_expenses_categories_status_update"
+      ],
       "internalSupportConsumers": [
         "clockify_expenses_categories_delete",
         "clockify_expenses_categories_update"
@@ -15423,8 +15697,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/expenses/{id}\u0000expenses.ts",
@@ -19286,10 +19560,12 @@
       ],
       "operations": [
         {
+          "operationId": "deleteCategory",
           "host": "api",
           "method": "DELETE",
-          "path": "/workspaces/{workspaceId}/expenses/categories/{categoryId}",
-          "operationId": "deleteCategory"
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19300,10 +19576,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateCategory",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/expenses/categories/{categoryId}",
-          "operationId": "updateCategory"
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19314,10 +19592,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateExpenseCategoryStatus",
           "host": "api",
           "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/expenses/categories/{categoryId}/status",
-          "operationId": "updateExpenseCategoryStatus"
+          "path": "/workspaces/{workspaceId}/expenses/categories/{id}/status",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },

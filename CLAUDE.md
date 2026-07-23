@@ -29,6 +29,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-HOLIDAYS CLOSED: bounded `clockify_holidays_create`/`update` (`createHoliday`/`updateHoliday`, max 8 users + 8 groups); list/in_period/delete stay or promote as before; `clockify_holidays_get` stays composite/off MODEL_API.
 - T06-INVOICE CLOSED (READS/CREATE/UPDATE/ITEMS/PAYMENTS/IMPORT): atomic `clockify_invoices_list`/`get`/`export`; `clockify_invoices_items_list` stays generic (embedded GET items); `clockify_invoices_create_base` (minimal POST only); `clockify_invoices_fields_update`/`status_update` (split PUT/PATCH); one-item `items_add`/`items_delete`; atomic `payments_*`; bounded `import_time` (max 19 projectIds, one host POST). v1 `clockify_invoices_create`/`update` stay internal composites. Next: `T06-EXPENSES` category splits.
 - T06-EXPENSES RECORDS CLOSED: atomic `clockify_expenses_list`/`get`/`create`/`update`/`delete` plus `clockify_expenses_categories_list`/`create` on MODEL_API (already in `workflows/expenses.ts`). Counts unchanged at `ACTION_CATALOG` 163 / `MODEL_API` 113. Live: `live_not_run_missing_credentials`.
+- T06-EXPENSES CATEGORIES CLOSED: split `clockify_expenses_categories_rename` (`updateCategory`), `clockify_expenses_categories_status_update` (`updateExpenseCategoryStatus`), and `clockify_expenses_categories_delete_archived` (`deleteCategory`); v1 `clockify_expenses_categories_update`/`delete` stay internal composites. Counts: `ACTION_CATALOG` 166, `MODEL_API` 116. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 

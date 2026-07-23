@@ -10,7 +10,12 @@ import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durabl
 import { isJournalDegradedStep, withJournalDegradedWarning, type MutationDispatchResult } from "../mutation-workflow.js";
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
-import type { ExpenseCategorySummary, ExpenseSummary, PreparedExpenseUpdateInput } from "../../clockify/ports/expenses.js";
+import {
+  expenseCategoryById as categoryById,
+  expenseCategoryTarget as categoryTarget,
+  listAllExpenseCategories as listAllCategories,
+} from "./expense-action-shared.js";
+import type { ExpenseSummary, PreparedExpenseUpdateInput } from "../../clockify/ports/expenses.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import type {
   ApiAccess,
@@ -261,12 +266,12 @@ const EXPENSE_API_METADATA = Object.freeze({
     ],
   }),
   clockify_expenses_categories_update: expenseInternalMetadata({
-    reason: "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; Task 6 must expose the atomic operations separately.",
+    reason: "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; use clockify_expenses_categories_rename and clockify_expenses_categories_status_update instead.",
     primary: [expenseEndpoint.categoriesUpdate, expenseEndpoint.categoriesStatus],
     support: [expenseEndpoint.categoriesList],
   }),
   clockify_expenses_categories_delete: expenseInternalMetadata({
-    reason: "Archives an active category before deletion, so one invocation can contain two primary mutations; Task 6 must expose delete of an already archived category separately.",
+    reason: "Archives an active category before deletion, so one invocation can contain two primary mutations; use clockify_expenses_categories_status_update and clockify_expenses_categories_delete_archived instead.",
     primary: [expenseEndpoint.categoriesStatus, expenseEndpoint.categoriesDelete],
     support: [expenseEndpoint.categoriesList],
   }),
@@ -284,27 +289,6 @@ const targetContract = (strategies: ["update" | "delete" | "state-command" | "co
 async function expenseTarget(ctx: ActionContext, id: string): Promise<TargetSnapshot | undefined> {
   const expense = await ctx.clockify.getExpense(id);
   return expense ? captureTargetSnapshot("target", { type: "expense", id: expense.id, name: expense.name }, expense) : undefined;
-}
-
-async function categoryById(ctx: ActionContext, id: string) {
-  const complete = await listAllCategories(ctx);
-  if (!complete) return undefined;
-  const matches = complete.filter((row) => row.id === id);
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
-async function listAllCategories(ctx: ActionContext): Promise<ExpenseCategorySummary[] | undefined> {
-  const [active, archived] = await Promise.all([
-    ctx.clockify.listExpenseCategories({ archived: false }),
-    ctx.clockify.listExpenseCategories({ archived: true }),
-  ]);
-  if (active.truncated || archived.truncated) return undefined;
-  return [...new Map([...active.rows, ...archived.rows].map((row) => [row.id, row])).values()];
-}
-
-async function categoryTarget(ctx: ActionContext, id: string): Promise<TargetSnapshot | undefined> {
-  const category = await categoryById(ctx, id);
-  return category ? captureTargetSnapshot("target", { type: "expense_category", id: category.id, name: category.name }, category) : undefined;
 }
 
 function staleExpenseFetch(ctx: ActionContext, snapshot: TargetSnapshot) {

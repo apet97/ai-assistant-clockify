@@ -30,12 +30,10 @@ export interface CanonicalOpenApiOperation {
  */
 export const INTERNAL_OPENAPI_OPERATIONS = [
   { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "deleteClient" },
-  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}", operationId: "deleteCategory" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/created", operationId: "getCreatedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/deleted", operationId: "getDeletedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/updated", operationId: "getUpdatedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}", operationId: "getProjectTotalsForSingleProject" },
-  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}/status", operationId: "updateExpenseCategoryStatus" },
   { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{customFieldId}", operationId: "editProjectCustomFieldDefaultValue" },
   { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-entries/invoiced", operationId: "updateInvoicedStatus" },
   { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}", operationId: "updateBalance" },
@@ -47,7 +45,6 @@ export const INTERNAL_OPENAPI_OPERATIONS = [
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/user-groups/{userGroupId}/users", operationId: "addUser" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "updateClient" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/custom-fields/{customFieldId}", operationId: "editCustomField" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}", operationId: "updateCategory" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-entries/{id}", operationId: "updateTimeEntry" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-off/policies/{id}", operationId: "updatePolicy" },
 ] as const satisfies readonly CanonicalOpenApiOperation[];

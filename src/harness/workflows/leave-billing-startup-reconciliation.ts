@@ -36,6 +36,9 @@ const metadata = {
   clockify_expenses_update: { "update-expense": "update" },
   clockify_expenses_delete: { "delete-expense": "delete" },
   clockify_expenses_categories_create: { "create-expense-category": "create" },
+  clockify_expenses_categories_rename: { "rename-expense-category": "update" },
+  clockify_expenses_categories_status_update: { "set-expense-category-status": "state-command" },
+  clockify_expenses_categories_delete_archived: { "delete-expense-category": "delete" },
   clockify_expenses_categories_update: {
     "rename-expense-category": "update",
     "set-expense-category-status": "state-command",

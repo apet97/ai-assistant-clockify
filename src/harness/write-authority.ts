@@ -169,6 +169,9 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_expenses_update: single("update-expense", { derivedIds: ["operation.expenseId", "operation.id", "operation.categoryId", "operation.projectId", "operation.taskId", "operation.body.categoryId", "operation.body.projectId", "operation.body.taskId", "operation.updateBody.userId", "operation.updateBody.categoryId", "operation.updateBody.projectId", "operation.updateBody.taskId", "operation.values.categoryId", "operation.values.projectId", "operation.values.taskId"], defaults: ["operation.amountUnit", "operation.body.amountUnit"] }),
   clockify_expenses_delete: single("delete-expense", { derivedIds: ["operation.expenseId", "operation.id"] }),
   clockify_expenses_categories_create: single("create-expense-category"),
+  clockify_expenses_categories_rename: single("rename-expense-category", { derivedIds: ["operation.categoryId", "operation.id"] }),
+  clockify_expenses_categories_status_update: single("set-expense-category-status", { derivedIds: ["operation.categoryId", "operation.id"] }),
+  clockify_expenses_categories_delete_archived: single("delete-expense-category", { derivedIds: ["operation.categoryId", "operation.id"] }),
   clockify_expenses_categories_update: fixed(2, [
     plan("single", step("rename-expense-category")), plan("single", step("set-expense-category-status")),
     plan("curated", step("rename-expense-category"), step("set-expense-category-status")),

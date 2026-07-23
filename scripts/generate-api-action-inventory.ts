@@ -40,6 +40,7 @@ import { CURATED_ACTIONS } from "../src/harness/workflows/curated.js";
 import { CUSTOM_FIELD_ACTIONS } from "../src/harness/workflows/custom-fields.js";
 import { ENTRY_ACTIONS } from "../src/harness/workflows/entries.js";
 import { EXPENSE_ACTIONS } from "../src/harness/workflows/expenses.js";
+import { EXPENSE_API_ACTIONS } from "../src/harness/api-actions/expenses.js";
 import { HOLIDAY_ACTIONS } from "../src/harness/workflows/holidays.js";
 import { INVOICE_ACTIONS } from "../src/harness/workflows/invoices.js";
 import { INVOICE_API_ACTIONS } from "../src/harness/api-actions/invoices.js";
@@ -189,6 +190,7 @@ const WORKFLOW_OWNERS: readonly WorkflowOwner[] = [
   { workflowModule: "invoices.ts", definitions: INVOICE_ACTIONS },
   { workflowModule: "api-actions/invoices.ts", definitions: INVOICE_API_ACTIONS },
   { workflowModule: "expenses.ts", definitions: EXPENSE_ACTIONS },
+  { workflowModule: "api-actions/expenses.ts", definitions: EXPENSE_API_ACTIONS },
   { workflowModule: "custom-fields.ts", definitions: CUSTOM_FIELD_ACTIONS },
   { workflowModule: "time-off.ts", definitions: TIME_OFF_ACTIONS },
   { workflowModule: "holidays.ts", definitions: HOLIDAY_ACTIONS },
