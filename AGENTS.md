@@ -71,6 +71,7 @@ here; this file is the execution map.
 - **T11-F CLOSED / Task 11 green:** preview-first closure gate green (prepared-write, batches, matrix, scrub, migration/retention/restore, inventory, verify); every assistant write prepares then confirms; default engine stays v1. Live: `not_run`. Next: `T12-A`.
 - **T12-A CLOSED:** 17/17 structure (`work_structure`) writes in `v2-write-parity-structure.test.ts`; prepare denies policy/auth cleanly; one-primary button confirm; default engine stays v1. Live: `not_run`. Next: `T12-B`.
 - **T12-B CLOSED:** time write parity matrix + auth-class prepare gate + Atomic mutation counting. Live: `not_run`. Next: `T12-C`.
+- **T12-C CLOSED:** reporting/admin write parity incl. webhook auth-class gate. Live: `not_run`. Next: `T12-D`.
 
 ## Non-negotiable invariants
 
