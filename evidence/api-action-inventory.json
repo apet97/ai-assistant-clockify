@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "e365a4d24c5b3d6dca4f8005275d43c4683d44bb777fb6e05de43d017556cea1",
+  "catalogHash": "8f9fc179ebed434b9beea639c3e9cd609ef800fe5da8e5771a8fe4829458e3a7",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 160,
+    "actions": 163,
     "rawAdapterCallSites": 150,
     "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 110,
+      "api": 113,
       "composite": 24,
       "generic": 22,
       "local": 4
@@ -1297,9 +1297,9 @@
       "kind": "risky_write",
       "featureGroup": "invoices",
       "workflowModule": "invoices.ts",
-      "actionFingerprint": "032263f1f902946a2719027c515027eefc1a6238d23263dc1043498b434d61a7",
+      "actionFingerprint": "b540ca37b2e221297fa7445254c7666f42396f31e61a2ba8f63026f8c71f660c",
       "exposure": "composite",
-      "decisionReason": "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; Task 6 must expose the atomic operations separately.",
+      "decisionReason": "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; use the atomic create_base, fields_update, and items_add operations instead.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -1382,9 +1382,9 @@
       "kind": "risky_write",
       "featureGroup": "invoices",
       "workflowModule": "invoices.ts",
-      "actionFingerprint": "ebf10c522f32f2ebe9e21de08e2843ffa0b76ea21bbdc700f95660da07f911b5",
+      "actionFingerprint": "1de2eef9369a1f84adef4e985f849321bda3327269d19acd06e51f384817fbb3",
       "exposure": "composite",
-      "decisionReason": "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; Task 6 must expose those operations separately.",
+      "decisionReason": "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; use clockify_invoices_fields_update and clockify_invoices_status_update instead.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -4434,14 +4434,14 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_invoices_import_time",
-      "description": "Import billable time entries into an invoice by date range. `from`/`to` accept YYYY-MM-DD or a relative day/period (today, last week, this month — resolved server-side; never guess a calendar date). Billing action — previews and requires confirmation.",
-      "kind": "risky_write",
+      "name": "clockify_invoices_items_list",
+      "description": "List the line items on an invoice (by invoice id or `number`).",
+      "kind": "read",
       "featureGroup": "invoices",
       "workflowModule": "invoices.ts",
-      "actionFingerprint": "c8255d581f3003d447e32825687e9cb831696ed73149a844b1aab59856a20d99",
+      "actionFingerprint": "55e3a0f86261f1b71bcdb4d67e421e21cc52af520a15757f9476c75771426f25",
       "exposure": "generic",
-      "decisionReason": "The one-request import accepts up to 54 project ids, exceeding the 22-fact material presentation limit; Task 6 must expose a narrower import operation.",
+      "decisionReason": "Line items are embedded in GET /invoices/{id}; this convenience read does not map to a separate host operation.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -4463,44 +4463,22 @@
         },
         {
           "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
-          "role": "support",
+          "role": "primary",
           "access": "read",
           "host": "api",
           "method": "GET",
           "path": "/workspaces/{workspaceId}/invoices/{id}",
           "sourceModule": "invoices.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/invoices/{id}/items/import\u0000invoices.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/invoices/{id}/items/import",
-          "sourceModule": "invoices.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
         }
       ],
       "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
+      "openSchemaVerdict": "not_applicable",
       "openSchemaDetail": null,
       "materialFields": [],
       "normalizedOperationMaterialContract": [],
       "presentation": null,
-      "requiredArguments": [
-        "from",
-        "invoiceId",
-        "to"
-      ],
-      "primaryMutationCount": 1,
+      "requiredArguments": [],
+      "primaryMutationCount": 0,
       "compensationCount": 0
     },
     {
@@ -4551,6 +4529,141 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_invoices_create_base",
+      "description": "Create an invoice with only the minimal POST body (client, number, issued/due dates, currency). Enrichment fields and line items require separate follow-up operations. Safe write — executes immediately when policy allows.",
+      "kind": "safe_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/invoices.ts",
+      "actionFingerprint": "8745aa937532be76d3fe5d9daf157f3ba32bf89d5d9f219b0421ebb05b1902eb",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/invoices (createInvoice).",
+      "operation": {
+        "operationId": "createInvoice",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/invoices",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/invoices",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/invoices",
+          "sourceModule": "invoices.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/base/clientId",
+          "label": "Client",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/base/number",
+          "label": "Invoice number",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/base/issuedDate",
+          "label": "Issued date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/base/dueDate",
+          "label": "Due date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/base/currency",
+          "label": "Currency",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/base/clientId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/base/number",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/base/issuedDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/base/dueDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/base/currency",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_invoices_create_base",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -4710,20 +4823,20 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_invoices_items_list",
-      "description": "List the line items on an invoice (by invoice id or `number`).",
-      "kind": "read",
+      "name": "clockify_invoices_fields_update",
+      "description": "Update invoice fields (note/subject/number/dates/currency/client, or tax/discount percents) with one fields PUT. Status changes use clockify_invoices_status_update. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
       "featureGroup": "invoices",
-      "workflowModule": "invoices.ts",
-      "actionFingerprint": "f23b327bcd8cbaceec901d7f465255af412b9653f687683c9513f5c9d55219f8",
+      "workflowModule": "api-actions/invoices.ts",
+      "actionFingerprint": "6c881c1d94aded8a2398c337e3e3b64bca6986fcfbbf593338ff258321e6dbca",
       "exposure": "api",
-      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/invoices/{id} (getInvoice).",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/invoices/{id} (updateInvoice).",
       "operation": {
-        "operationId": "getInvoice",
+        "operationId": "updateInvoice",
         "host": "api",
-        "method": "GET",
+        "method": "PUT",
         "path": "/workspaces/{workspaceId}/invoices/{id}",
-        "access": "read",
+        "access": "write",
         "exposure": "api"
       },
       "availabilityByAuthClass": {
@@ -4736,6 +4849,24 @@
       },
       "adapterShapes": [
         {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        },
+        {
           "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
           "role": "support",
           "access": "read",
@@ -4746,25 +4877,181 @@
         },
         {
           "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
-          "role": "primary",
+          "role": "support",
           "access": "read",
           "host": "api",
           "method": "GET",
           "path": "/workspaces/{workspaceId}/invoices/{id}",
           "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/invoices/{id}",
+          "sourceModule": "invoices.ts"
         }
       ],
       "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "not_applicable",
+      "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Invoice",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/patch/number",
+          "label": "Invoice number",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/issuedDate",
+          "label": "Issued date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/dueDate",
+          "label": "Due date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/currency",
+          "label": "Currency",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/note",
+          "label": "Note",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/subject",
+          "label": "Subject",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/clientId",
+          "label": "Client",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/taxPercent",
+          "label": "Tax percent",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/tax2Percent",
+          "label": "Tax 2 percent",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/discountPercent",
+          "label": "Discount percent",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/number",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/issuedDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/dueDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/currency",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/note",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/subject",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/clientId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/taxPercent",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/tax2Percent",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/discountPercent",
+          "scalarType": "number"
+        }
+      ],
       "presentation": {
-        "presenterId": "clockify_invoices_items_list",
+        "presenterId": "clockify_invoices_fields_update",
         "version": 1
       },
-      "requiredArguments": [],
-      "primaryMutationCount": 0,
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -4972,6 +5259,145 @@
       },
       "requiredArguments": [
         "invoiceId"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_invoices_import_time",
+      "description": "Import billable time entries into an invoice by date range. `from`/`to` accept YYYY-MM-DD or a relative day/period (today, last week, this month — resolved server-side; never guess a calendar date). Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "invoices.ts",
+      "actionFingerprint": "e4fa61b436e6c25b62363b270b70abb6242f71194d8c09f766ce099a4bead1d2",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/invoices/{id}/items/import (importTimeEntriesAndExpenses).",
+      "operation": {
+        "operationId": "importTimeEntriesAndExpenses",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/invoices/{id}/items/import",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/invoices",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/invoices/{id}",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/invoices/{id}/items/import\u0000invoices.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/invoices/{id}/items/import",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/invoiceId",
+          "label": "Invoice",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/from",
+          "label": "From date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/to",
+          "label": "To date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/projectIds",
+          "itemPath": "/projectId",
+          "labelTemplate": "Project {index}",
+          "maxItems": 19,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/invoiceId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/from",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/to",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/projectIds",
+          "itemPath": "/projectId",
+          "maxItems": 19,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_invoices_import_time",
+        "version": 1
+      },
+      "requiredArguments": [
+        "from",
+        "invoiceId",
+        "to"
       ],
       "primaryMutationCount": 1,
       "compensationCount": 0
@@ -5425,6 +5851,105 @@
       "requiredArguments": [
         "invoiceId",
         "paymentId"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_invoices_status_update",
+      "description": "Update an invoice's status with one status PATCH. Field changes use clockify_invoices_fields_update. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/invoices.ts",
+      "actionFingerprint": "9bf66b10cba23ad3722c8fd2a4404fc46c6e5e07327eda67176e4d3af379e917",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/invoices/{id}/status (changeInvoiceStatus).",
+      "operation": {
+        "operationId": "changeInvoiceStatus",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/invoices/{id}/status",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/invoices",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/invoices/{id}",
+          "sourceModule": "invoices.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/invoices/{id}/status\u0000invoices.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PATCH",
+          "path": "/workspaces/{workspaceId}/invoices/{id}/status",
+          "sourceModule": "invoices.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Invoice",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "label": "Status",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_invoices_status_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id",
+        "status"
       ],
       "primaryMutationCount": 1,
       "compensationCount": 0
@@ -14276,6 +14801,8 @@
         "clockify_create_work_package",
         "clockify_delete_entity",
         "clockify_invoices_create",
+        "clockify_invoices_create_base",
+        "clockify_invoices_fields_update",
         "clockify_invoices_update",
         "clockify_list_entities",
         "clockify_projects_create",
@@ -14399,6 +14926,7 @@
         "clockify_create_work_package",
         "clockify_delete_entity",
         "clockify_get_entity",
+        "clockify_invoices_fields_update",
         "clockify_invoices_update",
         "clockify_projects_create",
         "clockify_projects_update",
@@ -15195,8 +15723,10 @@
       "internalSupportConsumers": [
         "clockify_delete_entity",
         "clockify_invoices_create",
+        "clockify_invoices_create_base",
         "clockify_invoices_delete",
         "clockify_invoices_export",
+        "clockify_invoices_fields_update",
         "clockify_invoices_get",
         "clockify_invoices_import_time",
         "clockify_invoices_items_add",
@@ -15205,6 +15735,7 @@
         "clockify_invoices_payments_create",
         "clockify_invoices_payments_delete",
         "clockify_invoices_payments_list",
+        "clockify_invoices_status_update",
         "clockify_invoices_update"
       ],
       "availabilityByAuthClass": {
@@ -15233,7 +15764,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_invoices_create_base"
+      ],
       "internalSupportConsumers": [
         "clockify_invoices_create"
       ],
@@ -15245,8 +15778,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/invoices/{id}\u0000invoices.ts",
@@ -15320,18 +15853,20 @@
         }
       ],
       "mappedModelActionNames": [
-        "clockify_invoices_get",
-        "clockify_invoices_items_list"
+        "clockify_invoices_get"
       ],
       "internalSupportConsumers": [
         "clockify_delete_entity",
         "clockify_invoices_create",
         "clockify_invoices_delete",
+        "clockify_invoices_fields_update",
         "clockify_invoices_import_time",
         "clockify_invoices_items_add",
         "clockify_invoices_items_delete",
+        "clockify_invoices_items_list",
         "clockify_invoices_payments_create",
         "clockify_invoices_payments_delete",
+        "clockify_invoices_status_update",
         "clockify_invoices_update"
       ],
       "availabilityByAuthClass": {
@@ -15360,7 +15895,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_invoices_fields_update"
+      ],
       "internalSupportConsumers": [
         "clockify_invoices_create",
         "clockify_invoices_update"
@@ -15373,8 +15910,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices/{id}/export\u0000invoices.ts",
@@ -15453,10 +15990,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_invoices_import_time"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -15465,8 +16002,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/invoices/{id}/items/{index}\u0000invoices.ts",
@@ -15606,7 +16143,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_invoices_status_update"
+      ],
       "internalSupportConsumers": [
         "clockify_invoices_update"
       ],
@@ -15618,8 +16157,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
@@ -18933,10 +19472,12 @@
       ],
       "operations": [
         {
+          "operationId": "createInvoice",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/invoices",
-          "operationId": "createInvoice"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -18979,10 +19520,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateInvoice",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/invoices/{invoiceId}",
-          "operationId": "updateInvoice"
+          "path": "/workspaces/{workspaceId}/invoices/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19025,10 +19568,12 @@
       ],
       "operations": [
         {
+          "operationId": "importTimeEntriesAndExpenses",
           "host": "api",
           "method": "POST",
-          "path": "/workspaces/{workspaceId}/invoices/{invoiceId}/items/import",
-          "operationId": "importTimeEntriesAndExpenses"
+          "path": "/workspaces/{workspaceId}/invoices/{id}/items/import",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19103,10 +19648,12 @@
       ],
       "operations": [
         {
+          "operationId": "changeInvoiceStatus",
           "host": "api",
           "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/invoices/{invoiceId}/status",
-          "operationId": "changeInvoiceStatus"
+          "path": "/workspaces/{workspaceId}/invoices/{id}/status",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
