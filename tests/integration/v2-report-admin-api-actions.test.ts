@@ -71,3 +71,40 @@ describe("v2 report API actions", () => {
     expect(altered).not.toBe(baseline);
   });
 });
+
+describe("v2 audit API actions", () => {
+  const ENTITY_CHANGE_API_ACTIONS = [
+    "clockify_entity_changes_created",
+    "clockify_entity_changes_updated",
+    "clockify_entity_changes_deleted",
+  ] as const;
+
+  it("exposes three literal entity-change reads on MODEL_API and hides the changeType wrapper", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of ENTITY_CHANGE_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(getAction("clockify_entity_changes_created")?.apiOperation?.operationId).toBe("getCreatedEntityInfo");
+    expect(getAction("clockify_entity_changes_updated")?.apiOperation?.operationId).toBe("getUpdatedEntityInfo");
+    expect(getAction("clockify_entity_changes_deleted")?.apiOperation?.operationId).toBe("getDeletedEntityInfo");
+    expect(modelNames.has("clockify_entity_changes_list")).toBe(false);
+    expect(getAction("clockify_entity_changes_list")?.apiExposure).toBe("generic");
+    expect(modelNames.has("clockify_audit_logs_search")).toBe(false);
+    expect(getAction("clockify_audit_logs_search")?.availabilityByAuthClass.addon.reason).toBe(
+      "official_operation_id_missing",
+    );
+  });
+
+  it("clockify_entity_changes_created reads the created feed with one GET", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_entity_changes_created",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect((result.receipt.data as { changeType?: string }).changeType).toBe("created");
+    expect(fake.counts.listEntityChanges).toBe(1);
+  });
+});

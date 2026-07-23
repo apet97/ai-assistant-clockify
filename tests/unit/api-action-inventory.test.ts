@@ -415,7 +415,7 @@ const STRUCTURE_ENDPOINT = {
 const ADMINISTRATION_ENDPOINT = {
   audit: {
     search: adapterEndpointKey("read", "audit", "POST", "/workspaces/{workspaceId}/audit-log", "audit.ts"),
-    entityChanges: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/entities/{changeType}", "audit.ts"),
+    entityChanges: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/entities/created", "audit.ts"),
   },
   workspace: {
     templatesList: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "workspace.ts"),
@@ -1584,10 +1584,43 @@ const ADMINISTRATION_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     support: [],
     availability: OFFICIAL_OPERATION_ID_MISSING,
   }),
+  apiAnnotation({
+    name: "clockify_entity_changes_created",
+    operationId: "getCreatedEntityInfo",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/entities/created",
+    access: "read",
+    sourceModule: "audit.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_entity_changes_updated",
+    operationId: "getUpdatedEntityInfo",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/entities/updated",
+    access: "read",
+    sourceModule: "audit.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_entity_changes_deleted",
+    operationId: "getDeletedEntityInfo",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/entities/deleted",
+    access: "read",
+    sourceModule: "audit.ts",
+    support: [],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
   internalAnnotation({
     name: "clockify_entity_changes_list",
     exposure: "generic",
-    reason: "Selects the created, updated, or deleted entity-change endpoint from changeType, so one action cannot bind one official operation ID; Task 6 must split the three reads.",
+    reason: "Selects the created, updated, or deleted entity-change endpoint from changeType; superseded on MODEL_API by the three literal entity-change reads.",
     primary: [ADMINISTRATION_ENDPOINT.audit.entityChanges],
     support: [],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
@@ -3359,12 +3392,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 157,
-      rawAdapterCallSites: 148,
-      rawAdapterShapes: 124,
+      actions: 160,
+      rawAdapterCallSites: 150,
+      rawAdapterShapes: 126,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 103, composite: 24, generic: 26, local: 4 },
+      exposures: { api: 106, composite: 24, generic: 26, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

@@ -37,6 +37,14 @@ describe("audit rest (multi-host)", () => {
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/entities/created");
   });
 
+  it("listEntityChanges uses literal updated and deleted paths", async () => {
+    const f = vi.fn(async () => jsonResponse([{ id: "p2" }]));
+    await rest(f as unknown as typeof fetch).listEntityChanges("updated");
+    await rest(f as unknown as typeof fetch).listEntityChanges("deleted");
+    expect((f as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/entities/updated");
+    expect((f as any).mock.calls[1][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/entities/deleted");
+  });
+
   it("searchAuditLog surfaces a clean error (not 'fetch failed') when no audit host exists (dev)", async () => {
     // The dev/path host (developer.clockify.me/api) publishes no audit host, so the
     // action that the workflow calls must fail with an explained message and must

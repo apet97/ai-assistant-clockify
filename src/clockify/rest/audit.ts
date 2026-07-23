@@ -38,8 +38,20 @@ export function makeAuditRest(core: RestCore, workspaceId: string): AuditPort {
       });
     },
     async listEntityChanges(changeType) {
-      const rows = (await core.call("api", "GET", `${ws}/entities/${changeType}`)) as unknown[] | null;
-      return { rows: Array.isArray(rows) ? rows : [], truncated: false };
+      switch (changeType) {
+        case "created": {
+          const rows = (await core.call("api", "GET", `${ws}/entities/created`)) as unknown[] | null;
+          return { rows: Array.isArray(rows) ? rows : [], truncated: false };
+        }
+        case "updated": {
+          const rows = (await core.call("api", "GET", `${ws}/entities/updated`)) as unknown[] | null;
+          return { rows: Array.isArray(rows) ? rows : [], truncated: false };
+        }
+        case "deleted": {
+          const rows = (await core.call("api", "GET", `${ws}/entities/deleted`)) as unknown[] | null;
+          return { rows: Array.isArray(rows) ? rows : [], truncated: false };
+        }
+      }
     },
   };
 }

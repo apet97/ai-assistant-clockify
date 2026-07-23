@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "44b9d6ced5cf007a5c4e61a16a90141fd1c3ae4dbfd3bb84e3769db65c64ac71",
+  "catalogHash": "3c584ed9c509815e58461452ae69f766bb2489d42e9614bb947d7dbb1937961c",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 157,
-    "rawAdapterCallSites": 148,
-    "rawAdapterShapes": 124,
+    "actions": 160,
+    "rawAdapterCallSites": 150,
+    "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 103,
+      "api": 106,
       "composite": 24,
       "generic": 26,
       "local": 4
@@ -2778,14 +2778,64 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_entity_changes_created",
+      "description": "List recently created entities (experimental change-tracking feed).",
+      "kind": "read",
+      "featureGroup": "audit_log",
+      "workflowModule": "audit.ts",
+      "actionFingerprint": "ce4c675529c6817989e2de6123fed0b2685cb80d5c3097557e1ba31fc60fef98",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/entities/created (getCreatedEntityInfo).",
+      "operation": {
+        "operationId": "getCreatedEntityInfo",
+        "host": "api",
+        "method": "GET",
+        "path": "/workspaces/{workspaceId}/entities/created",
+        "access": "read",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/created\u0000audit.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/entities/created",
+          "sourceModule": "audit.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": {
+        "presenterId": "clockify_entity_changes_created",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_entity_changes_list",
       "description": "List recently created/updated/deleted entities (experimental change-tracking feed).",
       "kind": "read",
       "featureGroup": "audit_log",
       "workflowModule": "audit.ts",
-      "actionFingerprint": "9dcde2aa6397bcf1b83f5f3e684b89ee490729d1c37819198c7710f415302593",
+      "actionFingerprint": "fefd5fbc4ced2f1e173c102f0b667e9bcb0fe1e4d9a15638d84ce9a8a8011a64",
       "exposure": "generic",
-      "decisionReason": "Selects the created, updated, or deleted entity-change endpoint from changeType, so one action cannot bind one official operation ID; Task 6 must split the three reads.",
+      "decisionReason": "Selects the created, updated, or deleted entity-change endpoint from changeType; superseded on MODEL_API by the three literal entity-change reads.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -2797,12 +2847,12 @@
       },
       "adapterShapes": [
         {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/{changeType}\u0000audit.ts",
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/created\u0000audit.ts",
           "role": "primary",
           "access": "read",
           "host": "api",
           "method": "GET",
-          "path": "/workspaces/{workspaceId}/entities/{changeType}",
+          "path": "/workspaces/{workspaceId}/entities/created",
           "sourceModule": "audit.ts"
         }
       ],
@@ -2815,6 +2865,106 @@
       "requiredArguments": [
         "changeType"
       ],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_entity_changes_deleted",
+      "description": "List recently deleted entities (experimental change-tracking feed).",
+      "kind": "read",
+      "featureGroup": "audit_log",
+      "workflowModule": "audit.ts",
+      "actionFingerprint": "9034379f8096e21339c2104a046cbe426cdf9d5d790de461f84b3172f605c795",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/entities/deleted (getDeletedEntityInfo).",
+      "operation": {
+        "operationId": "getDeletedEntityInfo",
+        "host": "api",
+        "method": "GET",
+        "path": "/workspaces/{workspaceId}/entities/deleted",
+        "access": "read",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/deleted\u0000audit.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/entities/deleted",
+          "sourceModule": "audit.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": {
+        "presenterId": "clockify_entity_changes_deleted",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_entity_changes_updated",
+      "description": "List recently updated entities (experimental change-tracking feed).",
+      "kind": "read",
+      "featureGroup": "audit_log",
+      "workflowModule": "audit.ts",
+      "actionFingerprint": "be02a3860d3765da1748e15d3bb7108767b3f2f62196744c6fd47146f8e871ed",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/entities/updated (getUpdatedEntityInfo).",
+      "operation": {
+        "operationId": "getUpdatedEntityInfo",
+        "host": "api",
+        "method": "GET",
+        "path": "/workspaces/{workspaceId}/entities/updated",
+        "access": "read",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/updated\u0000audit.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/entities/updated",
+          "sourceModule": "audit.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": {
+        "presenterId": "clockify_entity_changes_updated",
+        "version": 1
+      },
+      "requiredArguments": [],
       "primaryMutationCount": 0,
       "compensationCount": 0
     },
@@ -14053,21 +14203,23 @@
       "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
     },
     {
-      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/{changeType}\u0000audit.ts",
+      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/created\u0000audit.ts",
       "access": "read",
       "host": "api",
       "method": "GET",
-      "path": "/workspaces/{workspaceId}/entities/{changeType}",
+      "path": "/workspaces/{workspaceId}/entities/created",
       "sourceModule": "audit.ts",
       "sourceCallSites": [
         {
           "sourceModule": "audit.ts",
-          "sourceLine": 41,
-          "sourceColumn": 27,
+          "sourceLine": 43,
+          "sourceColumn": 31,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_entity_changes_created"
+      ],
       "internalSupportConsumers": [
         "clockify_entity_changes_list"
       ],
@@ -14079,8 +14231,68 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/deleted\u0000audit.ts",
+      "access": "read",
+      "host": "api",
+      "method": "GET",
+      "path": "/workspaces/{workspaceId}/entities/deleted",
+      "sourceModule": "audit.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "audit.ts",
+          "sourceLine": 51,
+          "sourceColumn": 31,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_entity_changes_deleted"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/updated\u0000audit.ts",
+      "access": "read",
+      "host": "api",
+      "method": "GET",
+      "path": "/workspaces/{workspaceId}/entities/updated",
+      "sourceModule": "audit.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "audit.ts",
+          "sourceLine": 47,
+          "sourceColumn": 31,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_entity_changes_updated"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/expenses\u0000expenses.ts",
@@ -18039,11 +18251,9 @@
       ]
     },
     {
-      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/{changeType}\u0000audit.ts",
+      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/created\u0000audit.ts",
       "expandedPaths": [
-        "/workspaces/{workspaceId}/entities/created",
-        "/workspaces/{workspaceId}/entities/deleted",
-        "/workspaces/{workspaceId}/entities/updated"
+        "/workspaces/{workspaceId}/entities/created"
       ],
       "operations": [
         {
@@ -18051,13 +18261,29 @@
           "method": "GET",
           "path": "/workspaces/{workspaceId}/entities/created",
           "operationId": "getCreatedEntityInfo"
-        },
+        }
+      ]
+    },
+    {
+      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/deleted\u0000audit.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/entities/deleted"
+      ],
+      "operations": [
         {
           "host": "api",
           "method": "GET",
           "path": "/workspaces/{workspaceId}/entities/deleted",
           "operationId": "getDeletedEntityInfo"
-        },
+        }
+      ]
+    },
+    {
+      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/updated\u0000audit.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/entities/updated"
+      ],
+      "operations": [
         {
           "host": "api",
           "method": "GET",

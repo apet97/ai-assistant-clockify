@@ -104,7 +104,13 @@ describe("catalog", () => {
 
   it("includes the typed audit actions (Phase 15)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
-    for (const required of ["clockify_audit_logs_search", "clockify_entity_changes_list"]) {
+    for (const required of [
+      "clockify_audit_logs_search",
+      "clockify_entity_changes_created",
+      "clockify_entity_changes_updated",
+      "clockify_entity_changes_deleted",
+      "clockify_entity_changes_list",
+    ]) {
       expect(names).toContain(required);
     }
   });

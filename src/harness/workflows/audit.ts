@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineAction, type ActionContext, type ActionDefinition } from "../action.js";
+import { defineAction, defineReadAction, type ActionContext, type ActionDefinition } from "../action.js";
 import { listReceipt } from "../receipts.js";
 import { SEVEN_DAYS_MS } from "../../durations.js";
 import type {
@@ -20,6 +20,9 @@ const AUDIT_MAX_BYTES = 200_000;
 
 type AuditActionName =
   | "clockify_audit_logs_search"
+  | "clockify_entity_changes_created"
+  | "clockify_entity_changes_updated"
+  | "clockify_entity_changes_deleted"
   | "clockify_entity_changes_list";
 
 const AUDIT_AVAILABLE_TO_BOTH: AvailabilityByAuthClass = Object.freeze({
@@ -40,13 +43,45 @@ function auditEndpointKey(
   return ["read", host, method, path, "audit.ts"].join("\0");
 }
 
+function auditApiMetadata(input: {
+  actionName: Extract<
+    AuditActionName,
+    | "clockify_entity_changes_created"
+    | "clockify_entity_changes_updated"
+    | "clockify_entity_changes_deleted"
+  >;
+  operationId: string;
+  path: string;
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: "GET",
+      path: input.path,
+      access: "read",
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([auditEndpointKey("api", "GET", input.path)]),
+      support: Object.freeze([]),
+    }),
+    availabilityByAuthClass: AUDIT_AVAILABLE_TO_BOTH,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
 function auditInternalMetadata(input: {
   reason: string;
   primary: string;
   availability: AvailabilityByAuthClass;
+  exposure?: "generic" | "composite";
 }): ApiActionMetadataCarrier {
   return Object.freeze({
-    apiExposure: "generic",
+    apiExposure: input.exposure ?? "generic",
     apiExposureReason: input.reason,
     adapterEndpoints: Object.freeze({
       primary: Object.freeze([input.primary]),
@@ -63,9 +98,24 @@ const AUDIT_API_METADATA = Object.freeze({
     primary: auditEndpointKey("audit", "POST", "/workspaces/{workspaceId}/audit-log"),
     availability: AUDIT_OPERATION_ID_MISSING,
   }),
+  clockify_entity_changes_created: auditApiMetadata({
+    actionName: "clockify_entity_changes_created",
+    operationId: "getCreatedEntityInfo",
+    path: "/workspaces/{workspaceId}/entities/created",
+  }),
+  clockify_entity_changes_updated: auditApiMetadata({
+    actionName: "clockify_entity_changes_updated",
+    operationId: "getUpdatedEntityInfo",
+    path: "/workspaces/{workspaceId}/entities/updated",
+  }),
+  clockify_entity_changes_deleted: auditApiMetadata({
+    actionName: "clockify_entity_changes_deleted",
+    operationId: "getDeletedEntityInfo",
+    path: "/workspaces/{workspaceId}/entities/deleted",
+  }),
   clockify_entity_changes_list: auditInternalMetadata({
-    reason: "Selects the created, updated, or deleted entity-change endpoint from changeType, so one action cannot bind one official operation ID; Task 6 must split the three reads.",
-    primary: auditEndpointKey("api", "GET", "/workspaces/{workspaceId}/entities/{changeType}"),
+    reason: "Selects the created, updated, or deleted entity-change endpoint from changeType; superseded on MODEL_API by the three literal entity-change reads.",
+    primary: auditEndpointKey("api", "GET", "/workspaces/{workspaceId}/entities/created"),
     availability: AUDIT_AVAILABLE_TO_BOTH,
   }),
 } satisfies Readonly<Record<AuditActionName, ApiActionMetadataCarrier>>);
@@ -89,6 +139,30 @@ function capRows(rows: unknown[]): { data?: unknown[]; count: number; bytes: num
 
 /** Every audit action in the enum — the default when the planner names none. */
 const ALL_AUDIT_ACTIONS = auditAction.options;
+
+type EntityChangeType = "created" | "updated" | "deleted";
+
+async function entityChangesReceipt(
+  ctx: ActionContext,
+  actionName: string,
+  changeType: EntityChangeType,
+) {
+  const result = await ctx.clockify.listEntityChanges(changeType);
+  const capped = capRows(result.rows);
+  return listReceipt({
+    action: actionName,
+    entity: "audit_log",
+    ids: { workspaceId: ctx.workspaceId },
+    rows: capped.data ?? [],
+    dataKey: "entities",
+    count: capped.count,
+    truncated: result.truncated || capped.truncated,
+    data: { changeType, bytes: capped.bytes, inlineTruncated: capped.truncated },
+    warnings: capped.truncated
+      ? [{ code: "audit_truncated", message: `Change feed is ${capped.bytes} bytes, over the inline cap.` }]
+      : undefined,
+  });
+}
 
 const search = defineAction({
   name: "clockify_audit_logs_search",
@@ -132,6 +206,33 @@ const search = defineAction({
   },
 });
 
+const entityChangesCreated = defineReadAction({
+  name: "clockify_entity_changes_created",
+  ...AUDIT_API_METADATA.clockify_entity_changes_created,
+  description: "List recently created entities (experimental change-tracking feed).",
+  group: AUD,
+  schema: z.object({}),
+  handler: (ctx) => entityChangesReceipt(ctx, "clockify_entity_changes_created", "created"),
+});
+
+const entityChangesUpdated = defineReadAction({
+  name: "clockify_entity_changes_updated",
+  ...AUDIT_API_METADATA.clockify_entity_changes_updated,
+  description: "List recently updated entities (experimental change-tracking feed).",
+  group: AUD,
+  schema: z.object({}),
+  handler: (ctx) => entityChangesReceipt(ctx, "clockify_entity_changes_updated", "updated"),
+});
+
+const entityChangesDeleted = defineReadAction({
+  name: "clockify_entity_changes_deleted",
+  ...AUDIT_API_METADATA.clockify_entity_changes_deleted,
+  description: "List recently deleted entities (experimental change-tracking feed).",
+  group: AUD,
+  schema: z.object({}),
+  handler: (ctx) => entityChangesReceipt(ctx, "clockify_entity_changes_deleted", "deleted"),
+});
+
 const entityChanges = defineAction({
   name: "clockify_entity_changes_list",
   ...AUDIT_API_METADATA.clockify_entity_changes_list,
@@ -140,23 +241,15 @@ const entityChanges = defineAction({
   risks: ["read"],
   schema: z.object({ changeType: z.enum(["created", "updated", "deleted"]) }),
   async handler(ctx, args) {
-    const result = await ctx.clockify.listEntityChanges(args.changeType);
-    const capped = capRows(result.rows);
-    return {
-      kind: "receipt",
-      receipt: listReceipt({
-        action: "clockify_entity_changes_list",
-        entity: "audit_log",
-        ids: { workspaceId: ctx.workspaceId },
-        rows: capped.data ?? [],
-        dataKey: "entities",
-        count: capped.count,
-        truncated: result.truncated || capped.truncated,
-        data: { changeType: args.changeType, bytes: capped.bytes, inlineTruncated: capped.truncated },
-        warnings: capped.truncated ? [{ code: "audit_truncated", message: `Change feed is ${capped.bytes} bytes, over the inline cap.` }] : undefined,
-      }),
-    };
+    const receipt = await entityChangesReceipt(ctx, "clockify_entity_changes_list", args.changeType);
+    return { kind: "receipt", receipt };
   },
 });
 
-export const AUDIT_ACTIONS: ActionDefinition[] = [search, entityChanges];
+export const AUDIT_ACTIONS: ActionDefinition[] = [
+  search,
+  entityChangesCreated,
+  entityChangesUpdated,
+  entityChangesDeleted,
+  entityChanges,
+];
