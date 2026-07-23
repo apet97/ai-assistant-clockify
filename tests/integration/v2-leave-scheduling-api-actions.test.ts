@@ -133,3 +133,50 @@ describe("v2 time off balance API actions", () => {
     expect(TIME_OFF_BALANCE_USER_BATCH_MAX).toBeLessThanOrEqual(TIME_OFF_BALANCE_USER_MATERIAL_MAX);
   });
 });
+
+const APPROVAL_API_ACTIONS = [
+  "clockify_approvals_list",
+  "clockify_approvals_submit",
+  "clockify_approvals_approve",
+  "clockify_approvals_reject",
+  "clockify_approvals_withdraw",
+  "clockify_approvals_resubmit",
+] as const;
+
+const INTERNAL_ONLY_APPROVAL_ACTIONS = [
+  "clockify_approvals_get",
+  "clockify_approvals_approve_pending",
+] as const;
+
+describe("v2 approval API actions", () => {
+  it("exposes single-request approval actions on MODEL_API", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of APPROVAL_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    for (const name of INTERNAL_ONLY_APPROVAL_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).not.toBe("api");
+    }
+  });
+});
+
+const SCHEDULING_ASSIGNMENT_API_ACTIONS = [
+  "clockify_scheduling_assignments_list",
+  "clockify_scheduling_assignments_create",
+  "clockify_scheduling_assignments_update",
+  "clockify_scheduling_assignments_delete",
+] as const;
+
+describe("v2 scheduling assignment API actions", () => {
+  it("exposes assignment CRUD/list on MODEL_API and hides composite get", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of SCHEDULING_ASSIGNMENT_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(modelNames.has("clockify_scheduling_assignments_get")).toBe(false);
+    expect(getAction("clockify_scheduling_assignments_get")?.apiExposure).toBe("composite");
+  });
+});

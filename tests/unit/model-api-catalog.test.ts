@@ -34,6 +34,9 @@ const INTERNAL_ONLY_EXCLUSIONS = [
   "clockify_expenses_categories_delete",
   "clockify_groups_add_user",
   "clockify_time_off_requests_create",
+  "clockify_approvals_get",
+  "clockify_approvals_approve_pending",
+  "clockify_scheduling_assignments_get",
 ] as const;
 
 const LOCAL_ASSISTANT_NAMES = [
