@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ActionDefinition } from "./action.js";
 import type {
   ApiHost,
@@ -171,6 +172,120 @@ export function getValueAtPointer(
     current = record[segment];
   }
   return { present: true, value: current };
+}
+
+function setValueAtPointer(root: JsonObject, pointer: string, value: JsonValue): void {
+  if (!pointer.startsWith("/")) throw new Error(`invalid_pointer:${pointer}`);
+  if (pointer === "/") throw new Error("cannot_replace_root");
+  const segments = pointer.slice(1).split("/").map(decodeRfc6901Segment);
+  let current: JsonValue = root;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index]!;
+    if (Array.isArray(current)) {
+      const slot = Number(segment);
+      if (!Number.isInteger(slot) || slot < 0 || slot >= current.length) throw new Error(`invalid_pointer:${pointer}`);
+      current = current[slot]!;
+      continue;
+    }
+    if (!current || typeof current !== "object") throw new Error(`invalid_pointer:${pointer}`);
+    const record = current as JsonObject;
+    if (!(segment in record)) throw new Error(`invalid_pointer:${pointer}`);
+    current = record[segment]!;
+  }
+  const leaf = segments[segments.length - 1]!;
+  if (Array.isArray(current)) {
+    const slot = Number(leaf);
+    if (!Number.isInteger(slot) || slot < 0 || slot >= current.length) throw new Error(`invalid_pointer:${pointer}`);
+    current[slot] = value;
+    return;
+  }
+  if (!current || typeof current !== "object") throw new Error(`invalid_pointer:${pointer}`);
+  (current as JsonObject)[leaf] = value;
+}
+
+function omitUndefinedJson(value: unknown): JsonValue | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (Array.isArray(value)) {
+    const items = value
+      .map((entry) => omitUndefinedJson(entry))
+      .filter((entry): entry is JsonValue => entry !== undefined);
+    return items;
+  }
+  if (typeof value === "object") {
+    const out: JsonObject = {};
+    for (const [key, child] of Object.entries(value)) {
+      const cleaned = omitUndefinedJson(child);
+      if (cleaned !== undefined) out[key] = cleaned;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+function itemPathKey(itemPath: string): string {
+  if (itemPath === "" || itemPath === "/") return "";
+  return itemPath.startsWith("/") ? itemPath.slice(1) : itemPath;
+}
+
+function promotedPresentationFields(payload: JsonObject): JsonObject {
+  const promoted: JsonObject = {};
+  for (const key of ["input", "patch"] as const) {
+    const nested = payload[key];
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+      Object.assign(promoted, nested as JsonObject);
+    }
+  }
+  return promoted;
+}
+
+function coerceMaterialArrayContainers(
+  definition: ActionDefinition,
+  normalizedOperation: JsonObject,
+): void {
+  for (const field of definition.materialFields ?? []) {
+    if (field.kind !== "array_item") continue;
+    const container = getValueAtPointer(normalizedOperation, field.containerPath);
+    if (!container.present) continue;
+    const key = itemPathKey(field.itemPath);
+    if (Array.isArray(container.value)) {
+      if (key && container.value.every((entry) => isJsonScalar(entry))) {
+        setValueAtPointer(
+          normalizedOperation,
+          field.containerPath,
+          container.value.map((entry) => ({ [key]: entry })),
+        );
+      }
+      continue;
+    }
+    if (isJsonScalar(container.value)) {
+      const item = key ? ({ [key]: container.value } as JsonObject) : container.value;
+      setValueAtPointer(normalizedOperation, field.containerPath, [item]);
+    }
+  }
+}
+
+/** Build the material-field view used by the v2 assistant presentation gate. */
+export function buildNormalizedOperationForPresentation(
+  definition: ActionDefinition,
+  rawArgs: Record<string, unknown>,
+  operationPayload: unknown,
+): JsonObject {
+  const parsed = definition.schema.safeParse(rawArgs);
+  const argsObj = omitUndefinedJson(parsed.success ? parsed.data : rawArgs);
+  const payloadObj = (
+    operationPayload && typeof operationPayload === "object" && !Array.isArray(operationPayload)
+  )
+    ? omitUndefinedJson(operationPayload) as JsonObject
+    : {};
+  const merged = omitUndefinedJson({
+    ...payloadObj,
+    ...promotedPresentationFields(payloadObj),
+    ...(argsObj && typeof argsObj === "object" && !Array.isArray(argsObj) ? argsObj : {}),
+  }) as JsonObject;
+  coerceMaterialArrayContainers(definition, merged);
+  return merged;
 }
 
 function relativePointer(base: string, relative: string): string {
@@ -468,17 +583,17 @@ export const metadataDrivenPresentPreparedWrite: PresentPreparedWrite = (input) 
       ? [{ code: "high_risk_write", message: "This action overwrites existing workspace data." }]
       : [];
 
-  return Object.freeze({
+  return {
     title: defaultTitle(input.definition),
-    facts: Object.freeze(facts),
-    warnings: Object.freeze(warnings),
+    facts,
+    warnings,
     reversibility: defaultReversibility(input.definition),
-    endpoint: Object.freeze({
+    endpoint: {
       host: operation.host,
       method: operation.method,
       path: operation.path,
-    }),
-  });
+    },
+  };
 };
 
 export function validatePreparedWritePresentation(input: {
@@ -640,11 +755,11 @@ export function toPublicPresentationFacts(
 ): Array<{ label: string; value: string }> {
   const materialFacts = presentation.facts.map(({ label, value }) => ({ label, value }));
   const endpointValue = `${presentation.endpoint.method} ${presentation.endpoint.host}${presentation.endpoint.path}`;
-  return Object.freeze([
+  return [
     ...materialFacts,
-    Object.freeze({ label: "API endpoint", value: endpointValue }),
-    Object.freeze({ label: "Reversibility", value: presentation.reversibility.explanation }),
-  ]);
+    { label: "API endpoint", value: endpointValue },
+    { label: "Reversibility", value: presentation.reversibility.explanation },
+  ];
 }
 
 function registerBuiltInFormatters(): void {
@@ -726,4 +841,36 @@ export function initializePreparedWritePresentationRegistries(
     });
   }
   validateCatalogPresentationRegistries(actions);
+}
+
+function canonicalProvenanceJson(value: FieldProvenanceMap): string {
+  const sorted: Record<string, FieldProvenance> = {};
+  for (const key of Object.keys(value).sort()) {
+    sorted[key] = value[key]!;
+  }
+  return JSON.stringify(sorted);
+}
+
+export function hashFieldProvenanceMap(map: FieldProvenanceMap): string {
+  return createHash("sha256").update(canonicalProvenanceJson(map)).digest("hex");
+}
+
+/** Default v2 assistant provenance: every expanded material pointer is model inference. */
+export function buildModelInferenceProvenance(
+  definition: ActionDefinition,
+  normalizedOperation: JsonObject,
+): FieldProvenanceMap | { ok: false; detail: string } {
+  const expansion = expandMaterialFields({
+    materialFields: definition.materialFields ?? [],
+    normalizedOperation,
+    boundedArgumentDictionaries: definition.boundedArgumentDictionaries,
+  });
+  if (!expansion.ok) return expansion;
+  const map: Record<string, FieldProvenance> = {};
+  for (const field of expansion.fields) {
+    if (field.requiredInPreview || field.present) {
+      map[field.path] = { source: "model_inference" };
+    }
+  }
+  return map;
 }

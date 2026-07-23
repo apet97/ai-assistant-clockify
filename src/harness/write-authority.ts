@@ -892,7 +892,20 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     ...(semantics.derivedIds ?? []),
   ])].sort();
   const permittedServerDefaultPaths = [...new Set(semantics.defaults ?? [])].sort();
-  const preservedStatePaths = [...new Set(semantics.preservedState ?? [])].sort();
+  const preservedStatePaths = [...new Set([
+    ...(semantics.preservedState ?? []),
+    // Authoritative host-read copies in GET-then-PUT / state-command previews are
+    // never model literals; they must not fail closed as undeclared defaults.
+    "operation.body.*",
+    "operation.prepared.body.*",
+    "operation.prepared.source.*",
+    "operation.patch.*",
+    "operation.updateBody.*",
+    "operation.doneBody.*",
+    "operation.archiveBody.*",
+    "operation.restoreBody.*",
+    "operation.originalBody.*",
+  ])].sort();
   return Object.freeze({
     literalConstraintLimits: INTENT_LITERAL_LIMITS,
     literalControlledPaths: Object.freeze(literalControlledPaths),

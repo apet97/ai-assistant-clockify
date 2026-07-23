@@ -65,6 +65,7 @@ here; this file is the execution map.
 - **T10-H CLOSED / Task 10 green:** 43/43 catalog reads, hash `f79307bc…de3e3b`, verify green; default engine stays v1. Live: `not_run`. Next: `T11-A`.
 - **T11-A CLOSED:** schema v11 discriminator matrix + exact-batch persistence (`confirmation_batches`/`confirmation_batch_items`), capability-linked v1 backfill, batch store with ordered tuple hash; missing discriminator fails closed. Gate: batch/migration/retention/restore/scrub tests green. Live: `not_run`. Next: `T11-B`.
 - **T11-B CLOSED:** exact material expansion + registered formatters/presenters + mandatory `validatePreparedWritePresentation` (22 material facts, RFC6901, bounds, provenance gate, fail-closed no truncation). Provenance is evidence only. Gate: v2-prepared-write + catalog/inventory tests green. Live: `not_run`. Next: `T11-C`.
+- **T11-C CLOSED:** assistant-origin v2 writes always prepare via `OperationPreparationService`/`executeV2ApiAction` (no v1 capability, no host mutation during preparation, host reservation + persisted operation/plan/provenance/discriminator). Legacy v1 safe-write immediate path unchanged. Gate: v2-preview-first-matrix + listed write-safety tests green. Live: `not_run`. Next: `T11-D`.
 
 ## Non-negotiable invariants
 

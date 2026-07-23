@@ -33,6 +33,11 @@ import type {
   PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
+  ConfirmationBatchRecord,
+  ConfirmationBatchItemRecord,
+  ConfirmationBatchStatus,
+  ConfirmationBatchItemStatus,
+  CreateConfirmationBatchInput,
 } from "./store/context.js";
 import {
   actionResultJson,
@@ -63,6 +68,11 @@ import { buildTurnRunStore } from "./store/turn-runs.js";
 import { buildAssistantRunStore } from "./store/runs.js";
 import { buildRunEventStore } from "./store/run-events.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
+import {
+  buildAssistantWritePreparationStore,
+  type PreparedAssistantWriteInput,
+  type PreparedAssistantWriteResult,
+} from "./store/assistant-write-preparation.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import {
   buildIntentCapabilityStore,
@@ -343,6 +353,20 @@ export interface Store {
   consumeIntentCapabilityExecution(input: BindIntentCapabilityOperationInput): ConsumeIntentCapabilityExecutionResult;
   consumeIntentCapabilityForOperation(input: IntentCapabilityOperationScope): ConsumeIntentCapabilityExecutionResult;
   prepareOperationRun(input: PrepareOperationRunInput): string;
+  prepareAssistantWriteWithEvent(input: {
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    write: PreparedAssistantWriteInput;
+  }): PreparedAssistantWriteResult;
+  prepareAssistantWriteBatchWithEvents(input: {
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    writes: readonly PreparedAssistantWriteInput[];
+  }): {
+    state: import("../assistant-v2/state.js").RunState;
+    events: import("../assistant-v2/events.js").SequencedRunEvent[];
+    items: Array<{ operationId: string; confirmationId: string }>;
+  };
   markOperationExecuting(id: string): boolean;
   settleOperationRun(
     id: string,
@@ -624,6 +648,10 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const confirmationBatchStore = buildConfirmationBatchStore(ctx);
   const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
+  const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
+    prepareOperationRun: (input) => operationRunStore.prepareOperationRun(input),
+    savePendingConfirmation: (record) => confirmationStore.savePendingConfirmation(record),
+  });
   const mutationStepJournal = (operationId: string): MutationStepJournal => ({
     operationId,
     getOperationStatus: () => operationRunStore.getOperationRun(operationId)?.status,
@@ -681,6 +709,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     })(),
     ...buildIntentCapabilityStore(ctx),
     ...operationRunStore,
+    ...assistantWritePreparationStore,
     startUndoOperation(id, input) {
       return db.transaction(() => {
         if (!undoStore.markUndoExecuting(id)) return undefined;

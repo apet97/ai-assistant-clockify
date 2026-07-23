@@ -201,6 +201,7 @@ describe("prepared write presentation", () => {
   it("requires resolved targets and server defaults to appear in formatted facts", () => {
     const definition = defineRiskyAction({
       ...tagDefinition(),
+      group: tagDefinition().featureGroup,
       materialFields: [{
         kind: "value",
         path: "/projectId",
@@ -238,6 +239,7 @@ describe("prepared write presentation", () => {
 
     const defaultDefinition = defineRiskyAction({
       ...tagDefinition(),
+      group: tagDefinition().featureGroup,
       materialFields: [{
         kind: "value",
         path: "/body/billable",
@@ -290,6 +292,7 @@ describe("prepared write presentation", () => {
     });
     const definition = defineRiskyAction({
       ...tagDefinition(),
+      group: tagDefinition().featureGroup,
       materialFields: [{
         kind: "value",
         path: "/body/name",

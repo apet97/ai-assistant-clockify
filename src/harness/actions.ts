@@ -11,6 +11,7 @@ import {
 } from "./action.js";
 import type {
   ActionContext,
+  ActionDefinition,
   ActionResult,
   AtomicIdempotencyLedger,
   ClaimState,
@@ -18,7 +19,11 @@ import type {
   CommitResult,
   ExternalMutationPlan,
   IdempotencyLedger,
+  SafeWriteActionDefinition,
 } from "./action.js";
+import type { ActionOrigin, RegistryId } from "./action-discriminators.js";
+import { buildPreparedSafeWritePreview } from "./durable-safe-write.js";
+import { validateAssistantPrimaryMutationPlan } from "./durable-risky-write.js";
 import { canRead, canWrite } from "./permissions.js";
 import type { FeatureGroup } from "./permissions.js";
 import { isSafeWrite, requiresConfirmation } from "./risk.js";
@@ -43,6 +48,196 @@ export interface ExecuteActionInput {
   actionName: string;
   args: unknown;
   context: ActionContext;
+}
+
+export interface ExecuteV2ApiActionInput extends ExecuteActionInput {
+  origin: ActionOrigin;
+  registryId: RegistryId;
+  installationGeneration?: number;
+}
+
+/** Strict closed raw-args gate for v2 assistant writes — no v1 capability matcher. */
+export function validateV2RawActionArguments(
+  action: ActionDefinition,
+  rawArgs: unknown,
+): ErrorReceipt | undefined {
+  if (rawArgs && typeof rawArgs === "object" && !Array.isArray(rawArgs)) {
+    if ("provenance" in (rawArgs as Record<string, unknown>)) {
+      return errorReceipt({
+        action: action.name,
+        code: "invalid_args",
+        message: "Model-supplied provenance is not allowed.",
+        recovery: { hint: "Remove the provenance field and try again.", retryable: false },
+      });
+    }
+  }
+  const unknown = unknownArgumentPaths(
+    action.schema,
+    rawArgs,
+    action.argumentAliases,
+    action.argumentOpenPaths,
+  );
+  if (unknown.length > 0) {
+    return errorReceipt({
+      action: action.name,
+      code: "invalid_args",
+      message: `Unknown argument${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}.`,
+      recovery: { hint: "Remove unknown fields and try again.", retryable: true },
+    });
+  }
+  return undefined;
+}
+
+function invalidWriteAuthorityActionResult(action: string, detail: string): ActionResult {
+  return invalidWriteAuthorityResult(action, detail);
+}
+
+/**
+ * V2 assistant-origin write path: always prepare, never dispatch. Legacy
+ * executeAction safe-write immediate execution remains unchanged for v1 rollback.
+ */
+export async function executeV2ApiAction(input: ExecuteV2ApiActionInput): Promise<ActionResult> {
+  if (input.origin !== "assistant") {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "invalid_origin",
+        message: "Only assistant origin may use the v2 preparation path.",
+        recovery: { hint: "Use a trusted origin for direct execution.", retryable: false },
+      }),
+    };
+  }
+  if (input.registryId !== "v2-api") {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "invalid_registry",
+        message: "The v2 preparation path requires the v2-api registry.",
+        recovery: { hint: "Load the current model catalog before retrying.", retryable: false },
+      }),
+    };
+  }
+
+  const action = getAction(input.actionName);
+  if (!action) {
+    const suggestions = suggestActionNames(input.actionName);
+    const hint = suggestions.length
+      ? `Did you mean: ${suggestions.join(", ")}? Use only catalog action names.`
+      : "Use only the actions in the catalog.";
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: input.actionName,
+        code: "unknown_action",
+        message: `Unknown action: ${input.actionName}`,
+        recovery: { hint, retryable: suggestions.length > 0 },
+      }),
+    };
+  }
+
+  const rawError = validateV2RawActionArguments(action, input.args);
+  if (rawError) return { kind: "receipt", receipt: rawError };
+
+  const parsed = action.schema.safeParse(input.args);
+  if (!parsed.success) {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: action.name,
+        code: "invalid_args",
+        message: formatZodIssues(parsed.error) || "Invalid arguments.",
+        recovery: { hint: "Fix the arguments and try again.", retryable: true },
+      }),
+    };
+  }
+
+  const group = action.resolveFeatureGroup
+    ? action.resolveFeatureGroup(parsed.data)
+    : action.featureGroup;
+  const kindMatchesRisk = action.kind === "read"
+    ? action.risks.length > 0 && action.risks.every((risk) => risk === "read")
+    : action.kind === "safe_write"
+      ? isSafeWrite(action.risks)
+      : action.kind === "risky_write" && requiresConfirmation(action.risks);
+  if (!kindMatchesRisk || action.kind === "read") return unclassifiedAction(action.name);
+
+  const isPermissionChange = action.risks.includes("permission_change");
+  if (!isPermissionChange && !canWrite(input.context.policy, group)) {
+    return policyDenied(action.name, group, "write");
+  }
+
+  if (action.kind === "safe_write") {
+    let prepared: Awaited<ReturnType<SafeWriteActionDefinition["prepareSafeWrite"]>> | undefined;
+    try {
+      prepared = await action.prepareSafeWrite(input.context, parsed.data);
+    } catch (error) {
+      return { kind: "receipt", receipt: writeFailureReceipt(action.name, error) };
+    }
+    if (isSafeWriteClarification(prepared)) return clarifyResult(prepared);
+    if (isSafeWriteNoop(prepared)) return { kind: "receipt", receipt: prepared.receipt };
+    if (prepared !== undefined && !isPreparedSafeWrite(prepared)) {
+      return invalidSafeWritePreparation(action.name);
+    }
+    const boundedPrepared = prepared
+      ? {
+          ...prepared,
+          mutationPlan: bindMutationPlanHostCalls(action.name, prepared.operation, prepared.mutationPlan),
+        }
+      : undefined;
+    if (!boundedPrepared) return invalidSafeWritePreparation(action.name);
+    const primaryError = validateAssistantPrimaryMutationPlan(action, boundedPrepared.mutationPlan);
+    if (primaryError) return invalidWriteAuthorityActionResult(action.name, primaryError);
+    const authorityPlanError = validateWriteAuthorityOperation(
+      action,
+      boundedPrepared.operation,
+      boundedPrepared.mutationPlan,
+    );
+    if (authorityPlanError) return invalidWriteAuthorityActionResult(action.name, authorityPlanError);
+    return buildPreparedSafeWritePreview({
+      action,
+      prepared: boundedPrepared,
+      group,
+      installationGeneration: input.installationGeneration,
+    });
+  }
+
+  const result = await action.handler(input.context, parsed.data);
+  if (result.kind === "receipt" && result.receipt.ok) {
+    return {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: action.name,
+        code: "risky_without_confirmation",
+        message: "Risky action attempted to execute without confirmation.",
+        recovery: { hint: "This is a bug; the action was blocked.", retryable: false },
+      }),
+    };
+  }
+  if (result.kind !== "preview") return result;
+  if (result.operation.mutationPlan) {
+    result.operation.mutationPlan = bindMutationPlanHostCalls(
+      action.name,
+      result.operation.payload,
+      result.operation.mutationPlan,
+    );
+    const primaryError = validateAssistantPrimaryMutationPlan(action, result.operation.mutationPlan);
+    if (primaryError) return invalidWriteAuthorityActionResult(action.name, primaryError);
+    const authorityPlanError = validateWriteAuthorityOperation(
+      action,
+      result.operation.payload,
+      result.operation.mutationPlan,
+    );
+    if (authorityPlanError) return invalidWriteAuthorityActionResult(action.name, authorityPlanError);
+  }
+  if (input.installationGeneration !== undefined) {
+    result.operation = {
+      ...result.operation,
+      installationGeneration: input.installationGeneration,
+    };
+  }
+  return result;
 }
 
 function hasAuthoritativelyReconciledStep(

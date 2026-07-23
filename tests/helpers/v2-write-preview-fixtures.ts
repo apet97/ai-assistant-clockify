@@ -1,0 +1,158 @@
+import type { FakeWorkspaceSeed } from "./fake-clockify.js";
+import { READ_PARITY_BASE_SEED } from "./v2-read-parity-fixtures.js";
+
+export interface WritePreviewFixture {
+  args: Record<string, unknown>;
+  seed?: FakeWorkspaceSeed;
+  /** When false, preparation may clarify/deny instead of returning a preview. */
+  expectPreview?: false;
+}
+
+export const WRITE_PREVIEW_BASE_SEED: FakeWorkspaceSeed = {
+  ...READ_PARITY_BASE_SEED,
+  projects: [
+    ...(READ_PARITY_BASE_SEED.projects ?? []),
+    { id: "p-arch", name: "Archived", archived: true },
+  ],
+  clients: [
+    ...(READ_PARITY_BASE_SEED.clients ?? []),
+    { id: "c-arch", name: "Archived client", archived: true },
+  ],
+  tasks: [
+    ...(READ_PARITY_BASE_SEED.tasks ?? []),
+    { id: "t-done", name: "Done task", projectId: "p1", status: "DONE" } as FakeWorkspaceSeed["tasks"] extends (infer T)[] | undefined ? T : never,
+  ],
+  projectMemberships: { p1: [{ userId: "admin-1" }] },
+  assignments: [
+    { id: "a1", userId: "admin-1", projectId: "p1", start: "2026-06-01", end: "2026-06-30", hoursPerDay: 8 },
+  ],
+  users: [
+    ...(READ_PARITY_BASE_SEED.users ?? []),
+    { id: "u2", name: "Bob", email: "bob@example.com", status: "ACTIVE" },
+  ],
+  running: { id: "run1", description: "Running", start: "2026-06-06T09:00:00.000Z" },
+  entries: [
+    ...(READ_PARITY_BASE_SEED.entries ?? []),
+    { id: "run1", description: "Running", start: "2026-06-06T09:00:00.000Z" },
+  ],
+  timeOffPolicies: [
+    { id: "pol1", name: "Vacation", timeUnit: "DAYS" },
+    { id: "polh", name: "Hours", timeUnit: "HOURS" },
+  ],
+  timeOffRequests: [{ id: "tor1", policyId: "pol1", userId: "admin-1", status: "PENDING" }],
+  approvals: [{ id: "ap1", userId: "admin-1", state: "PENDING", periodStart: "2026-06-01T00:00:00.000Z" }],
+  expenses: [
+    {
+      id: "exp1",
+      name: "Travel",
+      notes: "Travel",
+      total: 5000,
+      date: "2026-06-05T12:00:00.000Z",
+      userId: "admin-1",
+      categoryId: "ec1",
+    },
+  ],
+  timeOffBalances: [{ policyId: "pol1", userId: "admin-1", balance: 10 }],
+  invoices: [
+    ...(READ_PARITY_BASE_SEED.invoices ?? []),
+    {
+      id: "inv1",
+      number: "INV-1",
+      clientId: "c1",
+      currency: "GBP",
+      status: "UNSENT",
+      items: [{ order: 0, description: "Discovery", quantity: 1, unitPrice: 10000, itemType: "TIME" }],
+    },
+  ],
+};
+
+export const WRITE_PREVIEW_FIXTURES: Record<string, WritePreviewFixture> = {
+  clockify_approvals_approve: { args: { id: "ap1" } },
+  clockify_approvals_reject: { args: { id: "ap1" } },
+  clockify_approvals_resubmit: { args: { week: "this_week" } },
+  clockify_approvals_submit: { args: { week: "last_week" } },
+  clockify_approvals_withdraw: { args: { id: "ap1" } },
+  clockify_clients_archive: { args: { id: "c1" } },
+  clockify_clients_create_base: { args: { name: "Preview Client" } },
+  clockify_clients_delete_archived: { args: { id: "c-arch" } },
+  clockify_clients_update: { args: { id: "c1", name: "Renamed Client" } },
+  clockify_custom_fields_create: { args: { name: "Priority2", fieldType: "TXT" } },
+  clockify_custom_fields_delete: { args: { id: "cf1" } },
+  clockify_custom_fields_set_value_entry: { args: { entryId: "e1", fieldId: "cf1", value: "High" } },
+  clockify_custom_fields_set_value_project: { args: { projectId: "p1", fieldId: "cf1", value: "High" } },
+  clockify_custom_fields_update: { args: { id: "cf1", name: "Priority renamed" } },
+  clockify_entries_create: { args: { date: "today", durationHours: 1, description: "Work" } },
+  clockify_entries_delete: { args: { id: "e1" } },
+  clockify_entries_mark_invoiced: { args: { ids: ["e1"], invoiced: true } },
+  clockify_entries_start: { args: { description: "Timer" } },
+  clockify_entries_update: { args: { id: "e1", description: "After" } },
+  clockify_expenses_categories_create: { args: { name: "Meals" } },
+  clockify_expenses_categories_delete_archived: { args: { id: "ec1" }, expectPreview: false },
+  clockify_expenses_categories_rename: { args: { id: "ec1", name: "Travel renamed" } },
+  clockify_expenses_categories_status_update: { args: { id: "ec1", archived: true } },
+  clockify_expenses_create: { args: { amount: 100, date: "2026-06-06", categoryId: "ec1", notes: "Travel" } },
+  clockify_expenses_delete: { args: { id: "exp1" } },
+  clockify_expenses_update: { args: { id: "exp1", notes: "Travel updated" } },
+  clockify_groups_add_member: { args: { groupId: "g1", userId: "u2" } },
+  clockify_groups_create: { args: { name: "Ops" } },
+  clockify_groups_delete: { args: { id: "g1" } },
+  clockify_groups_remove_user: { args: { groupId: "g1", userId: "u2" } },
+  clockify_groups_update: { args: { id: "g1", name: "Team renamed" } },
+  clockify_holidays_create: { args: { name: "Team day", startDate: "2026-12-25", endDate: "2026-12-25", userIds: ["admin-1"] } },
+  clockify_holidays_delete: { args: { id: "h1" } },
+  clockify_holidays_update: { args: { id: "h1", name: "Renamed holiday" } },
+  clockify_invoices_create_base: { args: { clientId: "c1", number: "INV-PREV", currency: "GBP" } },
+  clockify_invoices_delete: { args: { id: "inv1" } },
+  clockify_invoices_fields_update: { args: { id: "inv1", note: "Note" } },
+  clockify_invoices_import_time: { args: { invoiceId: "inv1", from: "2026-06-01", to: "2026-06-30" } },
+  clockify_invoices_items_add: { args: { invoiceId: "inv1", description: "Line", quantity: 1, unitPrice: 100 } },
+  clockify_invoices_items_delete: { args: { invoiceId: "inv1", index: 0 } },
+  clockify_invoices_payments_create: { args: { invoiceId: "inv1", amount: 100, paymentDate: "2026-06-06" } },
+  clockify_invoices_payments_delete: { args: { id: "inv1", paymentId: "pay1" }, expectPreview: false },
+  clockify_invoices_status_update: { args: { id: "inv1", status: "SENT" } },
+  clockify_projects_archive: { args: { id: "p1" } },
+  clockify_projects_create: { args: { name: "Preview Project" } },
+  clockify_projects_delete_archived: { args: { id: "p-arch" } },
+  clockify_projects_estimate_update: { args: { id: "p1", timeEstimate: { estimate: "PT2H", active: true } } },
+  clockify_projects_from_template: { args: { templateName: "Onboarding template", name: "From template" }, expectPreview: false },
+  clockify_projects_member_cost_rate_update: { args: { projectId: "p1", userId: "me", amount: 40 } },
+  clockify_projects_member_hourly_rate_update: { args: { projectId: "p1", userId: "me", amount: 75 } },
+  clockify_projects_memberships_replace: { args: { id: "p1", memberships: [{ userId: "admin-1" }] } },
+  clockify_projects_update: { args: { id: "p1", name: "Renamed Project" } },
+  clockify_scheduling_assignments_create: { args: { userId: "admin-1", projectId: "p1", start: "2026-06-10", end: "2026-06-10", hoursPerDay: 8 } },
+  clockify_scheduling_assignments_delete: { args: { id: "a1", seriesUpdateOption: "ONLY_THIS" } },
+  clockify_scheduling_assignments_update: { args: { id: "a1", hoursPerDay: 6 } },
+  clockify_scheduling_publish: { args: { start: "2026-06-01", end: "2026-06-30" } },
+  clockify_stop_timer: { args: {} },
+  clockify_tags_create: { args: { name: "Preview Tag" } },
+  clockify_tags_delete: { args: { id: "tag1" } },
+  clockify_tags_update: { args: { id: "tag1", name: "Renamed" } },
+  clockify_tasks_assignees_replace: { args: { projectId: "p1", id: "t1", assigneeIds: ["admin-1"] } },
+  clockify_tasks_cost_rate_update: { args: { projectId: "p1", taskId: "t1", amount: 40 } },
+  clockify_tasks_create: { args: { projectId: "p1", name: "Preview Task" } },
+  clockify_tasks_delete_completed: { args: { projectId: "p1", id: "t-done" } },
+  clockify_tasks_hourly_rate_update: { args: { projectId: "p1", taskId: "t1", amount: 75 } },
+  clockify_tasks_status_update: { args: { projectId: "p1", id: "t1", status: "DONE" } },
+  clockify_tasks_update: { args: { projectId: "p1", id: "t1", name: "Renamed Task" } },
+  clockify_time_off_approve: { args: { policyId: "pol1", requestId: "tor1" } },
+  clockify_time_off_balance_update: { args: { policyId: "pol1", userIds: ["admin-1"], value: 1 } },
+  clockify_time_off_deny: { args: { policyId: "pol1", requestId: "tor1" } },
+  clockify_time_off_policies_archive: { args: { id: "pol1" } },
+  clockify_time_off_policies_create: { args: { name: "Sick" } },
+  clockify_time_off_policies_update: { args: { id: "pol1", name: "Vacation renamed" } },
+  clockify_time_off_requests_create_days: { args: { policyId: "pol1", start: "2026-07-01", end: "2026-07-01", days: 1 } },
+  clockify_time_off_requests_create_hours: { args: { policyId: "polh", start: "2026-07-01T09:00:00Z", end: "2026-07-01T11:00:00Z" } },
+  clockify_time_off_requests_delete: { args: { policyId: "pol1", requestId: "tor1" } },
+  clockify_users_cost_rate_update: { args: { userName: "Bob", amount: 25 } },
+  clockify_users_deactivate: { args: { userId: "u2" } },
+  clockify_users_hourly_rate_update: { args: { userName: "Bob", amount: 60 } },
+  clockify_users_invite: { args: { email: "new@example.com" } },
+  clockify_users_role_update: { args: { userId: "u2", role: "WORKSPACE_ADMIN" } },
+  clockify_webhooks_create: { args: { name: "Notify", url: "https://example.com/hook", webhookEvent: "TIME_ENTRY_CREATED" } },
+  clockify_webhooks_delete: { args: { id: "wh1" } },
+  clockify_webhooks_update: { args: { id: "wh1", name: "Renamed" } },
+};
+
+export function catalogWriteActionNames(): string[] {
+  return Object.keys(WRITE_PREVIEW_FIXTURES).sort();
+}

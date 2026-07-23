@@ -27,6 +27,24 @@ export class HostRequestCancelledError extends Error {
 
 export const HOST_CALL_BUDGET_MAXIMUM = 60;
 
+/** Mirror a v2 run budget into remaining physical host-call slots for read dispatch. */
+export function remainingHostCallsFromRunBudget(
+  budget: { hostCallsUsed: number; hostCallsReserved: number },
+  maximum = HOST_CALL_BUDGET_MAXIMUM,
+): number {
+  return Math.max(0, maximum - budget.hostCallsUsed - budget.hostCallsReserved);
+}
+
+/** Persist the post-read allowance back into the run budget used counter. */
+export function persistRunHostCallAllowance(
+  budget: { hostCallsUsed: number; hostCallsReserved: number },
+  remaining: number,
+  maximum = HOST_CALL_BUDGET_MAXIMUM,
+): { hostCallsUsed: number; hostCallsReserved: number } {
+  const used = Math.max(0, Math.min(maximum, maximum - remaining - budget.hostCallsReserved));
+  return { ...budget, hostCallsUsed: used };
+}
+
 export function withHostCallBudgetFromUsed<T>(
   operation: () => Promise<T>,
   alreadyUsed: number,

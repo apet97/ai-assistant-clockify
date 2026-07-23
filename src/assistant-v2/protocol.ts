@@ -59,6 +59,41 @@ export type WritePreparationOutcome =
   | { kind: "denied"; code: string; actionResultId: string }
   | { kind: "not_ready"; code: "write_port_not_ready"; actionResultId: string };
 
+export interface ValidatedWriteCall {
+  runId: string;
+  toolCallId: string;
+  actionName: string;
+  apiOperationId: string;
+  access: "write";
+  registryId: "v2-api";
+  catalogHash: string;
+  actionFingerprint: string;
+  rawArguments: Record<string, unknown>;
+}
+
+export interface PrepareBatchInput {
+  scope: RunScope;
+  runId: string;
+  calls: ValidatedWriteCall[];
+}
+
+export interface PreparedOperationRef {
+  operationId: string;
+  confirmationId: string;
+  actionName: string;
+  actionFingerprint: string;
+  maxHostCalls: number;
+  expiresAt: string;
+}
+
+export interface PreparedBatch {
+  runId: string;
+  batchId?: string;
+  items: PreparedOperationRef[];
+  expiresAt: string;
+  lastSequence: number;
+}
+
 export type NativeToolModelClient = ModelClient &
   Required<Pick<ModelClient, "completeWithTools">>;
 

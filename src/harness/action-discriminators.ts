@@ -28,6 +28,8 @@ export interface DiscriminatorTuple {
   executorKind: ExecutorKind;
   /** Required for v2 assistant preview rows. */
   runId?: string;
+  /** Present when this preview belongs to a multi-write confirmation batch. */
+  batchId?: string;
   /** Required for undo_v2 operation rows. */
   sourceUndoId?: string;
   sourceUndoHash?: string;
