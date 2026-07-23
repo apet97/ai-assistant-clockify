@@ -273,7 +273,7 @@ export function buildConfirmationBatchStore(ctx: StoreContext): {
           WHERE id = ? AND status = 'pending'`,
       ).run(timestamp, batchId).changes === 1;
     },
-    advanceConfirmationBatchProgress(batchId, nextIndex, timestamp) {
+    advanceConfirmationBatchProgress(batchId, nextIndex, _timestamp) {
       return db.prepare(
         `UPDATE confirmation_batches
             SET current_index = ?

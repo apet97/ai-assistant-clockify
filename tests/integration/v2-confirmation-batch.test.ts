@@ -20,6 +20,7 @@ import { testKeys } from "../helpers/test-keys.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { signSessionCookie } from "../../src/auth/sessions.js";
 import { buildSessionCookie } from "../../src/routes/deps.js";
+import { selectModelClient } from "../../src/assistant/select-model-client.js";
 
 const SESSION_SECRET = "test-session-secret";
 const NOW = new Date("2026-06-06T12:00:00.000Z");
@@ -430,6 +431,7 @@ describe("v2 confirmation batches", () => {
       config,
       store,
       parser: createSignatureParser("ai-assistant", keys.pem),
+      modelClient: selectModelClient(config),
       clockifyForWorkspace: () => fake.client,
     });
     const cookie = cookieForSession(session, scope);

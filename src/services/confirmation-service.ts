@@ -1,4 +1,4 @@
-import type { ActionContext, ActionResult, AtomicIdempotencyLedger, CommitResult, ConfirmableOperation, ExternalMutationPlan } from "../harness/action.js";
+import type { ActionContext, ActionResult, AtomicIdempotencyLedger, ConfirmableOperation, ExternalMutationPlan } from "../harness/action.js";
 import { isPartialCommitResult } from "../harness/action.js";
 import type { ActionOrigin, RegistryId } from "../harness/action-discriminators.js";
 import {
@@ -312,75 +312,20 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     }
 
     try {
-      const executorKind = record.executorKind!;
-      const authorizedContext = {
-        ...deps.actionContext(
-          claims.workspaceId,
-          claims.adminUserId,
-          installation,
-          claims.sessionId,
-          mutationLease.signal,
-        ),
-        mutationJournal: deps.store.mutationStepJournal(record.operationId),
-        idempotency: atomicLedger(claims, record.id),
-      };
-
-      const commitResult = await executeStoredV2Write(
-        authorizedContext,
-        operation,
-        executorKind === "prepared_safe_write" ? "prepared_safe_write" : "risky_commit",
-      );
-
-      let partialResult: Extract<ActionResult, { kind: "partial" }> | undefined;
-      let receipt: SuccessReceipt | ErrorReceipt;
-      if (isPartialCommitResult(commitResult)) {
-        partialResult = commitResult;
-        receipt = commitResult.receipt;
-      } else {
-        receipt = commitResult;
-      }
-
-      const terminalStatus = partialResult
-        ? "partial"
-        : receipt.ok
-          ? "succeeded"
-          : receipt.code === "commit_outcome_unknown"
-            ? "outcome_unknown"
-            : "definitive_failed";
-
-      let resultRef: ActionResultRef | undefined;
-      let settlementError: unknown;
-      for (let attempt = 0; attempt < 2 && !resultRef; attempt += 1) {
-        try {
-          resultRef = deps.store.settleConfirmedOperation(
-            record.id,
-            terminalStatus,
-            operation.actionName,
-            partialResult ?? receipt,
-          );
-        } catch (error) {
-          settlementError = error;
-        }
-      }
-      if (!resultRef) {
-        console.error(
-          "canonical action-result persistence degraded (change already applied; receipt preserved):",
-          settlementError instanceof Error ? settlementError.message : String(settlementError),
-        );
-      }
-
-      const undoId = resultRef
-        ? deps.recordUndoIfReversible(claims, installation.generation, receipt)
-        : undefined;
-
+      const dispatched = await dispatchConfirmedPreview({
+        claims,
+        record,
+        installation,
+        mutationLease,
+      });
       return {
         ok: true,
-        receipt,
-        ...(partialResult ? { partialResult } : {}),
-        undoId,
+        receipt: dispatched.receipt,
+        ...(dispatched.partialResult ? { partialResult: dispatched.partialResult } : {}),
+        undoId: dispatched.undoId,
         agentState: undefined,
         installation,
-        ...(!resultRef ? { persistenceDegraded: true as const } : {}),
+        ...(dispatched.persistenceDegraded ? { persistenceDegraded: true as const } : {}),
       };
     } finally {
       mutationLease.release();
@@ -405,7 +350,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
   }
 
   async function executeUndoCommit(input: UndoCommitInput): Promise<UndoCommitOutcome> {
-    const { claims, record, context, signal } = input;
+    const { claims, record, context } = input;
     const sourceUndoHash = hashOperation(record.reversal);
     const mutationPlan = undoMutationPlan(record.reversal);
     const operationPayload = {
@@ -740,7 +685,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
         if (stopRemaining) break;
         const item = storedItems[index]!;
         const body = bodyItems[index]!;
-        let record = deps.store.getPendingConfirmation(item.confirmationId)!;
+        const record = deps.store.getPendingConfirmation(item.confirmationId)!;
 
         if (item.status !== "pending") {
           const replay = terminalItemOutcome(item, record);

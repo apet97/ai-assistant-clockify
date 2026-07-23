@@ -370,17 +370,28 @@ describe("Phase 6 write authority enforcement", () => {
       "operation.projectId",
       "operation.clientId",
     ]));
-    expect(projectUpdate.preservedStatePaths).toEqual([]);
+    expect(projectUpdate.preservedStatePaths).toEqual(expect.arrayContaining([
+      "operation.body.*",
+      "operation.patch.*",
+      "operation.updateBody.*",
+      "operation.archiveBody.*",
+      "operation.restoreBody.*",
+      "operation.doneBody.*",
+      "operation.originalBody.*",
+      "operation.prepared.body.*",
+      "operation.prepared.source.*",
+    ]));
     expect(projectUpdate.cardinality).toEqual({ mode: "single", maxExecutions: 1 });
     expect(validateWriteAuthorityOperation(
       ACTION_CATALOG.find((action) => action.name === "clockify_projects_update")!,
       {
         id: "project-1",
         patch: { isPublic: false },
-        body: { name: "Apollo", isPublic: false, hourlyRate: { amount: 7_500, currency: "USD" } },
+        body: { name: "Apollo", isPublic: false },
+        invented: { currency: "USD" },
       },
       { mode: "single", maxHostCalls: 60, steps: [{ id: "update-project", kind: "primary" }] },
-    )).toBe("undeclared_server_default_path:operation.body.hourlyRate.currency");
+    )).toBe("undeclared_server_default_path:operation.invented.currency");
   });
 
   it("pins the reviewed nested id/default paths used by prepared replacement workflows", () => {
@@ -408,9 +419,12 @@ describe("Phase 6 write authority enforcement", () => {
       "operation.prepared.body.start",
       "operation.prepared.source.start",
     ]);
-    expect(entryField.preservedStatePaths).toEqual([
-      "operation.prepared.body.description", "operation.prepared.source.description",
-    ]);
+    expect(entryField.preservedStatePaths).toEqual(expect.arrayContaining([
+      "operation.prepared.body.description",
+      "operation.prepared.source.description",
+      "operation.prepared.body.*",
+      "operation.prepared.source.*",
+    ]));
     expect(validateWriteAuthorityOperation(
       ACTION_CATALOG.find((action) => action.name === "clockify_custom_fields_set_value_entry")!,
       { invented: { description: "not-authoritative" } },

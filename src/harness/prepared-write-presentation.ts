@@ -685,7 +685,6 @@ export function validatePreparedWritePresentation(input: {
   }
 
   for (const field of expansion.fields) {
-    const shouldAppear = field.requiredInPreview || field.present;
     const hasFact = factByPath.has(field.path);
     const hasProvenance = Object.prototype.hasOwnProperty.call(input.fieldProvenance, field.path);
     if (field.requiredInPreview && !hasFact) {

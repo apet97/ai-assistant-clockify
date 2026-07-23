@@ -16,7 +16,7 @@ import { executeV2ApiAction, validateV2RawActionArguments } from "../harness/act
 import type { ActionContext, ActionDefinition, ConfirmableOperation } from "../harness/action.js";
 import { MODEL_API_ACTION_CATALOG, type ActionRegistry } from "../harness/api-catalog.js";
 import { actionFingerprintForDefinition } from "../harness/catalog.js";
-import { createPendingConfirmation, hashOperation } from "../harness/confirmations.js";
+import { createPendingConfirmation } from "../harness/confirmations.js";
 import { exactNonsecretJson } from "../harness/safe-json.js";
 import { defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
 import {
@@ -26,10 +26,10 @@ import {
   metadataDrivenPresentPreparedWrite,
   validatePreparedWritePresentation,
   type FieldProvenanceMap,
-  type JsonObject,
 } from "../harness/prepared-write-presentation.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import { errorReceipt } from "../harness/receipts.js";
+import { buildV2ActionContext } from "../assistant-v2/action-context.js";
 
 export interface OperationPreparationDeps {
   store: Store;
@@ -53,17 +53,13 @@ function toAssistantScope(scope: RunScope & { runId: string }): AssistantRunScop
 }
 
 async function buildContext(scope: RunScope, deps: OperationPreparationDeps): Promise<ActionContext> {
-  const policy = deps.getAdminPolicy?.(scope.workspaceId, scope.adminUserId) ?? defaultAdminPolicy();
-  const calendar = await deps.loadCalendarContext?.(scope);
-  return {
-    workspaceId: scope.workspaceId,
-    adminUserId: scope.adminUserId,
-    policy,
+  return buildV2ActionContext({
+    scope,
+    policy: deps.getAdminPolicy?.(scope.workspaceId, scope.adminUserId) ?? defaultAdminPolicy(),
     clockify: deps.clockifyForScope(scope),
-    now: deps.now ?? (() => new Date()),
-    ...(calendar?.timeZone ? { timeZone: calendar.timeZone } : {}),
-    ...(calendar?.weekStartsOn !== undefined ? { weekStartsOn: calendar.weekStartsOn } : {}),
-  };
+    now: deps.now,
+    loadCalendarContext: deps.loadCalendarContext,
+  });
 }
 
 function executorKindFor(action: ActionDefinition): "prepared_safe_write" | "risky_commit" {
@@ -305,7 +301,7 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
     async prepareBatch(input: PrepareBatchInput): Promise<PreparedBatch> {
       if (input.calls.length === 0) throw new Error("empty_prepare_batch");
       const scope = { ...input.scope, runId: input.runId };
-      let state = deps.store.getRun(toAssistantScope(scope));
+      const state = deps.store.getRun(toAssistantScope(scope));
       if (!state) throw new Error("assistant_run_not_found");
 
       let batchMeta: Omit<import("../db/store/context.js").CreateConfirmationBatchInput, "items"> | undefined;

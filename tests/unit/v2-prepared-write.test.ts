@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defineRiskyAction } from "../../src/harness/action.js";
+import type { ActionDefinition } from "../../src/harness/action.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { getAction } from "../../src/harness/catalog.js";
 import {
@@ -22,6 +22,13 @@ function tagDefinition() {
   const action = getAction("clockify_tags_create");
   if (!action) throw new Error("clockify_tags_create missing");
   return action;
+}
+
+/** Presentation-only fixture — avoids defineRiskyAction registry insertion contracts. */
+function presentationDefinition(
+  overrides: Partial<ActionDefinition> & Pick<ActionDefinition, "materialFields">,
+): ActionDefinition {
+  return { ...tagDefinition(), ...overrides } as ActionDefinition;
 }
 
 describe("prepared write presentation", () => {
@@ -199,9 +206,7 @@ describe("prepared write presentation", () => {
   });
 
   it("requires resolved targets and server defaults to appear in formatted facts", () => {
-    const definition = defineRiskyAction({
-      ...tagDefinition(),
-      group: tagDefinition().featureGroup,
+    const definition = presentationDefinition({
       materialFields: [{
         kind: "value",
         path: "/projectId",
@@ -215,8 +220,6 @@ describe("prepared write presentation", () => {
         path: "/projectId",
         scalarType: "string",
       }],
-      preview: async () => ({ clarify: "unused" }),
-      commit: async () => ({ ok: true as const, action: "test", entity: "project", summary: "ok" }),
     });
     const normalizedOperation = { projectId: "0123456789abcdef01234567" };
     const fieldProvenance = {
@@ -237,9 +240,7 @@ describe("prepared write presentation", () => {
     });
     expect(presentation.facts[0]?.value).toBe("Roadmap (0123456789abcdef01234567)");
 
-    const defaultDefinition = defineRiskyAction({
-      ...tagDefinition(),
-      group: tagDefinition().featureGroup,
+    const defaultDefinition = presentationDefinition({
       materialFields: [{
         kind: "value",
         path: "/body/billable",
@@ -253,8 +254,6 @@ describe("prepared write presentation", () => {
         path: "/body/billable",
         scalarType: "boolean",
       }],
-      preview: async () => ({ clarify: "unused" }),
-      commit: async () => ({ ok: true as const, action: "test", entity: "entry", summary: "ok" }),
     });
     const defaultOperation = { body: { billable: true } };
     const defaultProvenance = {
@@ -290,9 +289,7 @@ describe("prepared write presentation", () => {
       maxOutputUtf8Bytes: 8,
       format: () => "0123456789",
     });
-    const definition = defineRiskyAction({
-      ...tagDefinition(),
-      group: tagDefinition().featureGroup,
+    const definition = presentationDefinition({
       materialFields: [{
         kind: "value",
         path: "/body/name",
@@ -301,8 +298,6 @@ describe("prepared write presentation", () => {
         formatterVersion: 1,
         requiredInPreview: true,
       }],
-      preview: async () => ({ clarify: "unused" }),
-      commit: async () => ({ ok: true as const, action: "test", entity: "tag", summary: "ok" }),
     });
     expect(() => metadataDrivenPresentPreparedWrite({
       definition,

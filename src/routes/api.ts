@@ -988,7 +988,7 @@ export function apiRouter(
     if (!undo.operationId) {
       return res.status(409).json({ ok: false, code: "undo_not_available", message: "This undo is no longer available." });
     }
-    const { receipt, resultRef: undoResultRef, persistenceDegraded } = undo;
+    const { receipt, resultRef: undoResultRef } = undo;
     // The reversal already happened (and the one-use claim is executing). A
     // transient audit-write failure must NOT surface as a 500 — the admin
     // would retry and hit already_undone (409), believing it failed when it succeeded.

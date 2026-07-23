@@ -8,6 +8,7 @@ import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "../harness
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionResultRef } from "../db/action-results.js";
 import type { ReadExecutionOutcome, RunScope } from "./protocol.js";
+import { buildV2ActionContext } from "./action-context.js";
 
 export interface ReadExecutionStore {
   recordActionResult(input: {
@@ -55,18 +56,14 @@ function persistResult(
 }
 
 async function buildContext(scope: RunScope, deps: ReadExecutionDeps): Promise<ActionContext> {
-  const policy = deps.store.getAdminPolicy(scope.workspaceId, scope.adminUserId) ?? defaultAdminPolicy();
-  const calendar = await deps.loadCalendarContext?.(scope);
-  return {
-    workspaceId: scope.workspaceId,
-    adminUserId: scope.adminUserId,
-    policy,
+  return buildV2ActionContext({
+    scope,
+    policy: deps.store.getAdminPolicy(scope.workspaceId, scope.adminUserId) ?? defaultAdminPolicy(),
     clockify: deps.clockifyForScope(scope),
-    now: deps.now ?? (() => new Date()),
-    ...(calendar?.timeZone ? { timeZone: calendar.timeZone } : {}),
-    ...(calendar?.weekStartsOn !== undefined ? { weekStartsOn: calendar.weekStartsOn } : {}),
-    ...(deps.saveArtifact ? { saveArtifact: deps.saveArtifact } : {}),
-  };
+    now: deps.now,
+    loadCalendarContext: deps.loadCalendarContext,
+    saveArtifact: deps.saveArtifact,
+  });
 }
 
 export async function executeV2Read(

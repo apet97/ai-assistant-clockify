@@ -225,7 +225,7 @@ describe("v2 preview-first write matrix", () => {
       catalogHash: () => MODEL_API_ACTION_CATALOG.hash(),
       now: () => NOW,
       loadPolicy: () => defaultAdminPolicy(),
-      verifyWriteAuthority: async () => ({ ok: true as const }),
+      verifyWriteAuthority: async () => ({ ok: true as const, installationGeneration: 1 }),
       actionContext: (_workspaceId, _adminUserId) => ({
         workspaceId: "ws-1",
         adminUserId: "admin-1",
@@ -269,6 +269,7 @@ describe("v2 preview-first write matrix", () => {
     expect(result.kind).toBe("receipt");
     if (result.kind !== "receipt") return;
     expect(result.receipt.ok).toBe(false);
+    if (result.receipt.ok) return;
     expect(result.receipt.code).toBe("invalid_origin");
   });
 });
