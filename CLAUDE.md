@@ -31,6 +31,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-EXPENSES RECORDS CLOSED: atomic `clockify_expenses_list`/`get`/`create`/`update`/`delete` plus `clockify_expenses_categories_list`/`create` on MODEL_API (already in `workflows/expenses.ts`). Counts unchanged at `ACTION_CATALOG` 163 / `MODEL_API` 113. Live: `live_not_run_missing_credentials`.
 - T06-EXPENSES CATEGORIES CLOSED: split `clockify_expenses_categories_rename` (`updateCategory`), `clockify_expenses_categories_status_update` (`updateExpenseCategoryStatus`), and `clockify_expenses_categories_delete_archived` (`deleteCategory`); v1 `clockify_expenses_categories_update`/`delete` stay internal composites. Counts: `ACTION_CATALOG` 166, `MODEL_API` 116. Live: `live_not_run_missing_credentials`.
 - T06-CUSTOM-FIELDS CLOSED: bounded `clockify_custom_fields_create`/`update`/`set_value_project`/`set_value_entry` on MODEL_API; legacy unbounded handlers stay off-catalog; `clockify_custom_fields_get` stays composite/off MODEL_API. Counts: `ACTION_CATALOG` 166, `MODEL_API` 120. Live: `live_not_run_missing_credentials`.
+- T06-USERS CLOSED: atomic `clockify_users_invite` (`addUsers`), `clockify_users_deactivate`, and `clockify_users_role_update` (`createUserRole`) verified on MODEL_API. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
