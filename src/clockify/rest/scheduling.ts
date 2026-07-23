@@ -142,19 +142,7 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
     async updateAssignment(id, patch) { return updateAssignmentAtomic(id, await prepareAssignmentUpdate(id, patch)); },
     deleteAssignment: deleteAssignmentAtomic,
     publishSchedule: publishScheduleAtomic,
-    async getProjectScheduleTotals(input) {
-      // A single project's totals live at GET …/projects/totals/{projectId}?start&end.
-      // The POST search body (ProjectTotalsRequestV1) has NO projectId field — sending
-      // it was silently dropped, returning ALL projects instead of the one requested.
-      if (input.projectId !== undefined) {
-        const qs = new URLSearchParams({ start: input.start, end: input.end });
-        const one = (await core.call(
-          "api",
-          "GET",
-          `${ws}/scheduling/assignments/projects/totals/${input.projectId}?${qs.toString()}`,
-        )) as unknown;
-        return { rows: Array.isArray(one) ? one : one ? [one] : [], truncated: false };
-      }
+    async getAllProjectScheduleTotals(input) {
       return collectPages({
         label: `${ws}/scheduling/assignments/projects/totals`,
         pageSize: PAGE_SIZE,
@@ -168,6 +156,25 @@ export function makeSchedulingRest(core: RestCore, workspaceId: string): Schedul
           return { rows: Array.isArray(out) ? out : out ? [out] : [] };
         },
       });
+    },
+    async getOneProjectScheduleTotals(input) {
+      const qs = new URLSearchParams({ start: input.start, end: input.end });
+      const one = (await core.call(
+        "api",
+        "GET",
+        `${ws}/scheduling/assignments/projects/totals/${input.projectId}?${qs.toString()}`,
+      )) as unknown;
+      return { rows: Array.isArray(one) ? one : one ? [one] : [], truncated: false };
+    },
+    async getProjectScheduleTotals(input) {
+      if (input.projectId !== undefined) {
+        return this.getOneProjectScheduleTotals({
+          start: input.start,
+          end: input.end,
+          projectId: input.projectId,
+        });
+      }
+      return this.getAllProjectScheduleTotals({ start: input.start, end: input.end });
     },
     async getUserScheduleTotals(userId, range) {
       const qs = new URLSearchParams({ start: range.start, end: range.end });

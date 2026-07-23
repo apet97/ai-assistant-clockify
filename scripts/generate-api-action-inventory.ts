@@ -54,6 +54,7 @@ import { USER_GROUP_ACTIONS } from "../src/harness/workflows/users.js";
 import { USER_API_ACTIONS } from "../src/harness/api-actions/users.js";
 import { REPORT_ACTIONS } from "../src/harness/workflows/reports.js";
 import { SCHEDULING_ACTIONS } from "../src/harness/workflows/scheduling.js";
+import { SCHEDULING_TOTALS_API_ACTIONS } from "../src/harness/api-actions/scheduling-totals.js";
 import { SETUP_PROJECT_ACTIONS } from "../src/harness/workflows/setup-project.js";
 import { SETUP_TASK_ACTIONS } from "../src/harness/workflows/setup-task.js";
 import { TAG_ACTIONS } from "../src/harness/workflows/tags.js";
@@ -200,6 +201,7 @@ const WORKFLOW_OWNERS: readonly WorkflowOwner[] = [
   { workflowModule: "api-actions/time-off-requests.ts", definitions: TIME_OFF_REQUEST_API_ACTIONS },
   { workflowModule: "holidays.ts", definitions: HOLIDAY_ACTIONS },
   { workflowModule: "scheduling.ts", definitions: SCHEDULING_ACTIONS },
+  { workflowModule: "api-actions/scheduling-totals.ts", definitions: SCHEDULING_TOTALS_API_ACTIONS },
   { workflowModule: "approvals.ts", definitions: APPROVAL_ACTIONS },
   { workflowModule: "webhooks.ts", definitions: WEBHOOK_ACTIONS },
   { workflowModule: "users.ts", definitions: USER_GROUP_ACTIONS },

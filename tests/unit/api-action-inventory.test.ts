@@ -3277,13 +3277,37 @@ const SCHEDULING_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   internalAnnotation({
     name: "clockify_scheduling_project_totals",
     exposure: "generic",
-    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; Task 6 must split the two official operations.",
+    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; use clockify_scheduling_project_totals_all or clockify_scheduling_project_totals_one.",
     primary: [
       SCHEDULING_ENDPOINT.assignments.projectTotalsAll,
       SCHEDULING_ENDPOINT.assignments.projectTotalsOne,
     ],
     support: [SCHEDULING_ENDPOINT.projects.list],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_scheduling_project_totals_all",
+    operationId: "getFilteredProjectTotals",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals",
+    access: "read",
+    sourceModule: "scheduling.ts",
+    support: [SCHEDULING_ENDPOINT.projects.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [],
+  }),
+  apiAnnotation({
+    name: "clockify_scheduling_project_totals_one",
+    operationId: "getProjectTotalsForSingleProject",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}",
+    access: "read",
+    sourceModule: "scheduling.ts",
+    support: [SCHEDULING_ENDPOINT.projects.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/projectId", "Project", "entity", true),
+    ],
   }),
   apiAnnotation({
     name: "clockify_scheduling_user_totals",
@@ -3823,12 +3847,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 169,
+      actions: 171,
       rawAdapterCallSites: 150,
       rawAdapterShapes: 126,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 125, composite: 24, generic: 16, local: 4 },
+      exposures: { api: 127, composite: 24, generic: 16, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

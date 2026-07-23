@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "7d410c4511e859a0e586b238b2d0a2a1c492e21bea6a98da68a905a22b1d13c3",
+  "catalogHash": "7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 169,
+    "actions": 171,
     "rawAdapterCallSites": 150,
     "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 125,
+      "api": 127,
       "composite": 24,
       "generic": 16,
       "local": 4
@@ -6730,9 +6730,9 @@
       "kind": "read",
       "featureGroup": "scheduling",
       "workflowModule": "scheduling.ts",
-      "actionFingerprint": "0b26b0774a69404a3581f6968e1d94d55d31b6ada8f9d5213c8e9b97f0929015",
+      "actionFingerprint": "e06fde0b3c3b24e5272d9ed40b91679669c409273c103c188aa61b124725f006",
       "exposure": "generic",
-      "decisionReason": "Selects POST all-project totals or GET one-project totals from the optional project filter; Task 6 must split the two official operations.",
+      "decisionReason": "Selects POST all-project totals or GET one-project totals from the optional project filter; use clockify_scheduling_project_totals_all or clockify_scheduling_project_totals_one.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -9807,6 +9807,139 @@
         "version": 1
       },
       "requiredArguments": [],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_scheduling_project_totals_all",
+      "description": "Get scheduled-hours totals for all projects in a date range (`start`/`end` accept relative days, resolved server-side) via the POST all-projects search.",
+      "kind": "read",
+      "featureGroup": "scheduling",
+      "workflowModule": "api-actions/scheduling-totals.ts",
+      "actionFingerprint": "e0adcb62082dc6966551e48f12cd7f257c422c0074527b15b732ca2c089fa8fa",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/scheduling/assignments/projects/totals (getFilteredProjectTotals).",
+      "operation": {
+        "operationId": "getFilteredProjectTotals",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/scheduling/assignments/projects/totals",
+        "access": "read",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000POST\u0000/workspaces/{workspaceId}/scheduling/assignments/projects/totals\u0000scheduling.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/scheduling/assignments/projects/totals",
+          "sourceModule": "scheduling.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": {
+        "presenterId": "clockify_scheduling_project_totals_all",
+        "version": 1
+      },
+      "requiredArguments": [
+        "end",
+        "start"
+      ],
+      "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_scheduling_project_totals_one",
+      "description": "Get scheduled-hours totals for one project in a date range (`start`/`end` accept relative days; pass `projectId` or exact `projectName`, resolved server-side). Uses GET …/totals/{projectId}.",
+      "kind": "read",
+      "featureGroup": "scheduling",
+      "workflowModule": "api-actions/scheduling-totals.ts",
+      "actionFingerprint": "d1dc32221f55c9f5d13718748129f4c860155ef33101ecd5917d36a7b4438e5e",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: GET /workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId} (getProjectTotalsForSingleProject).",
+      "operation": {
+        "operationId": "getProjectTotalsForSingleProject",
+        "host": "api",
+        "method": "GET",
+        "path": "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}",
+        "access": "read",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}\u0000scheduling.ts",
+          "role": "primary",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}",
+          "sourceModule": "scheduling.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "not_applicable",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [],
+      "presentation": {
+        "presenterId": "clockify_scheduling_project_totals_one",
+        "version": 1
+      },
+      "requiredArguments": [
+        "end",
+        "start"
+      ],
       "primaryMutationCount": 0,
       "compensationCount": 0
     },
@@ -17334,6 +17467,8 @@
         "clockify_projects_update",
         "clockify_scheduling_assignments_create",
         "clockify_scheduling_project_totals",
+        "clockify_scheduling_project_totals_all",
+        "clockify_scheduling_project_totals_one",
         "clockify_setup_project",
         "clockify_setup_task",
         "clockify_start_timer",
@@ -18200,12 +18335,14 @@
       "sourceCallSites": [
         {
           "sourceModule": "scheduling.ts",
-          "sourceLine": 162,
+          "sourceLine": 150,
           "sourceColumn": 30,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_scheduling_project_totals_all"
+      ],
       "internalSupportConsumers": [
         "clockify_scheduling_project_totals"
       ],
@@ -18217,8 +18354,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}\u0000scheduling.ts",
@@ -18230,12 +18367,14 @@
       "sourceCallSites": [
         {
           "sourceModule": "scheduling.ts",
-          "sourceLine": 151,
-          "sourceColumn": 28,
+          "sourceLine": 162,
+          "sourceColumn": 26,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_scheduling_project_totals_one"
+      ],
       "internalSupportConsumers": [
         "clockify_scheduling_project_totals"
       ],
@@ -18247,8 +18386,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/scheduling/assignments/publish\u0000scheduling.ts",
@@ -18380,7 +18519,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "scheduling.ts",
-          "sourceLine": 174,
+          "sourceLine": 181,
           "sourceColumn": 14,
           "pagination": "none"
         }

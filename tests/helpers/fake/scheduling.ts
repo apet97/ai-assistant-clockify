@@ -16,6 +16,8 @@ export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): 
   | "deleteAssignment"
   | "publishSchedule"
   | "getProjectScheduleTotals"
+  | "getAllProjectScheduleTotals"
+  | "getOneProjectScheduleTotals"
   | "getUserScheduleTotals"
 > {
   const createAssignmentAtomic: WorkspaceClient["createAssignmentAtomic"] = async (input) => {
@@ -93,6 +95,18 @@ export function makeFakeScheduling({ state, seed, bump, nextId }: FakeContext): 
     },
     deleteAssignment: deleteAssignmentAtomic,
     publishSchedule: publishScheduleAtomic,
+    async getAllProjectScheduleTotals(input) {
+      bump("getAllProjectScheduleTotals");
+      bump("getProjectScheduleTotals");
+      void input;
+      return fakeListResult(seed, "getAllProjectScheduleTotals", []);
+    },
+    async getOneProjectScheduleTotals(input) {
+      bump("getOneProjectScheduleTotals");
+      bump("getProjectScheduleTotals");
+      void input;
+      return fakeListResult(seed, "getOneProjectScheduleTotals", []);
+    },
     async getProjectScheduleTotals(input) {
       bump("getProjectScheduleTotals");
       void input;

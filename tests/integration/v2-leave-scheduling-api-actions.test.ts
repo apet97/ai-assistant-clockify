@@ -200,3 +200,45 @@ describe("v2 scheduling assignment API actions", () => {
     expect(fake.counts.createAssignmentAtomic).toBe(1);
   });
 });
+
+const SCHEDULING_TOTALS_API_ACTIONS = [
+  "clockify_scheduling_project_totals_all",
+  "clockify_scheduling_project_totals_one",
+  "clockify_scheduling_user_totals",
+] as const;
+
+describe("v2 scheduling totals API actions", () => {
+  it("exposes split project totals and user totals on MODEL_API", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of SCHEDULING_TOTALS_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(modelNames.has("clockify_scheduling_project_totals")).toBe(false);
+    expect(getAction("clockify_scheduling_project_totals")?.apiExposure).toBe("generic");
+  });
+
+  it("project_totals_all uses POST all-projects totals", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_scheduling_project_totals_all",
+      args: { start: "2026-07-01", end: "2026-07-07" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.getAllProjectScheduleTotals).toBe(1);
+  });
+
+  it("project_totals_one uses GET one-project totals", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Alpha", archived: false }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_scheduling_project_totals_one",
+      args: { start: "2026-07-01", end: "2026-07-07", projectId: "p1" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.getOneProjectScheduleTotals).toBe(1);
+  });
+});

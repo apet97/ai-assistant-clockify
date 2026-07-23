@@ -25,6 +25,7 @@ import { TIME_OFF_ACTIONS } from "./workflows/time-off.js";
 import { TIME_OFF_REQUEST_API_ACTIONS } from "./api-actions/time-off-requests.js";
 import { HOLIDAY_ACTIONS } from "./workflows/holidays.js";
 import { SCHEDULING_ACTIONS } from "./workflows/scheduling.js";
+import { SCHEDULING_TOTALS_API_ACTIONS } from "./api-actions/scheduling-totals.js";
 import { APPROVAL_ACTIONS } from "./workflows/approvals.js";
 import { WEBHOOK_ACTIONS } from "./workflows/webhooks.js";
 import { REPORT_ACTIONS } from "./workflows/reports.js";
@@ -92,6 +93,7 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...TIME_OFF_REQUEST_API_ACTIONS,
   ...HOLIDAY_ACTIONS,
   ...SCHEDULING_ACTIONS,
+  ...SCHEDULING_TOTALS_API_ACTIONS,
   ...APPROVAL_ACTIONS,
   ...WEBHOOK_ACTIONS,
   ...USER_GROUP_ACTIONS,

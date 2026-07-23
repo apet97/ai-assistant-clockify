@@ -48,6 +48,8 @@ type SchedulingActionName =
   | "clockify_scheduling_assignments_delete"
   | "clockify_scheduling_publish"
   | "clockify_scheduling_project_totals"
+  | "clockify_scheduling_project_totals_all"
+  | "clockify_scheduling_project_totals_one"
   | "clockify_scheduling_user_totals";
 
 const SCHEDULING_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
@@ -143,7 +145,7 @@ const schedulingEndpoint = Object.freeze({
   projectsGet: schedulingEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
 });
 
-const SCHEDULING_API_METADATA = Object.freeze({
+export const SCHEDULING_API_METADATA = Object.freeze({
   clockify_scheduling_assignments_list: schedulingApiMetadata({
     actionName: "clockify_scheduling_assignments_list",
     operationId: "getAllAssignments",
@@ -227,9 +229,31 @@ const SCHEDULING_API_METADATA = Object.freeze({
   }),
   clockify_scheduling_project_totals: schedulingInternalMetadata({
     exposure: "generic",
-    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; Task 6 must split the two official operations.",
+    reason: "Selects POST all-project totals or GET one-project totals from the optional project filter; use clockify_scheduling_project_totals_all or clockify_scheduling_project_totals_one.",
     primary: [schedulingEndpoint.projectTotalsAll, schedulingEndpoint.projectTotalsOne],
     support: [schedulingEndpoint.projectsList],
+  }),
+  clockify_scheduling_project_totals_all: schedulingApiMetadata({
+    actionName: "clockify_scheduling_project_totals_all",
+    operationId: "getFilteredProjectTotals",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals",
+    access: "read",
+    primary: schedulingEndpoint.projectTotalsAll,
+    support: [schedulingEndpoint.projectsList],
+    materialFields: [],
+  }),
+  clockify_scheduling_project_totals_one: schedulingApiMetadata({
+    actionName: "clockify_scheduling_project_totals_one",
+    operationId: "getProjectTotalsForSingleProject",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}",
+    access: "read",
+    primary: schedulingEndpoint.projectTotalsOne,
+    support: [schedulingEndpoint.projectsList],
+    materialFields: [
+      schedulingMaterialField("/projectId", "Project", "entity", true),
+    ],
   }),
   clockify_scheduling_user_totals: schedulingApiMetadata({
     actionName: "clockify_scheduling_user_totals",
@@ -309,7 +333,7 @@ function createdAssignmentProjection(assignment: AssignmentSummary) {
  * non-empty raw input, resolveDateRange returns `ok:false` on an unparseable
  * date, so on the `ok:true` path both bounds are provably defined for them.
  */
-function resolveSchedulingWindow(
+export function resolveSchedulingWindow(
   ctx: ActionContext,
   args: { start?: string; end?: string },
 ): { ok: true; start?: string; end?: string } | { ok: false; message: string } {
