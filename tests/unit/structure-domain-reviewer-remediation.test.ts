@@ -154,17 +154,17 @@ describe("Task 7 reviewer remediation", () => {
     expect(fake.state.projects[0]).toMatchObject({ opaque: { retained: true } });
   });
 
-  it("reconciles an ambiguous task update from status and retained open fields", async () => {
+  it("reconciles an ambiguous task update from billable and preserved raw fields", async () => {
     const fake = createFakeWorkspace({
       projects: [{ id: "project-1", name: "Project" }],
-      tasks: [{ id: "task-1", name: "Task", projectId: "project-1", status: "ACTIVE", opaque: { revision: 1 } } as never],
+      tasks: [{ id: "task-1", name: "Task", projectId: "project-1", status: "ACTIVE", billable: true, opaque: { revision: 1 } } as never],
     });
     const originalUpdate = fake.client.updateTaskAtomic.bind(fake.client);
     const clockify = {
       ...fake.client,
       getTask: async (projectId: string, id: string) => {
         const row = fake.state.tasks.find((candidate) => candidate.projectId === projectId && candidate.id === id);
-        return row ? { id: row.id, name: row.name, projectId: row.projectId, assigneeIds: row.assigneeIds } : null;
+        return row ? { id: row.id, name: row.name, projectId: row.projectId, assigneeIds: row.assigneeIds, billable: (row as { billable?: boolean }).billable } : null;
       },
       updateTaskAtomic: async (projectId: string, id: string, body: Record<string, unknown>) => {
         await originalUpdate(projectId, id, body);
@@ -172,13 +172,14 @@ describe("Task 7 reviewer remediation", () => {
       },
     };
     const operation = await preview(fake, "clockify_tasks_update", {
-      projectId: "project-1", id: "task-1", status: "DONE", fields: { opaque: { revision: 2 } },
+      projectId: "project-1", id: "task-1", billable: false,
     }, clockify);
 
     const result = await commitConfirmedOperation(context(fake, clockify), operation);
 
     expect(result).toMatchObject({ ok: true });
     expect(fake.counts.updateTaskAtomic).toBe(1);
+    expect(fake.state.tasks[0]).toMatchObject({ opaque: { revision: 1 }, billable: false });
   });
 
   it.each([

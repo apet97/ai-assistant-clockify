@@ -76,6 +76,7 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   ] },
   "clockify_projects_update\0archived": { aliases: ARCHIVED },
   "clockify_projects_update\0billable": { aliases: BILLABLE },
+  "clockify_tasks_update\0billable": { aliases: BILLABLE },
   "clockify_projects_update\0isPublic": { aliases: [
     alias("isPublic", false, ["private", "not public", "non-public"]),
     alias("isPublic", true, ["public", "not private"]),

@@ -130,6 +130,11 @@ const ACTION_SEMANTICS = Object.freeze({
     plan("curated", step("complete-task-for-delete"), step("delete-task"), step("restore-task-status", "compensation")),
   ], { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.doneBody.projectId"] }),
   clockify_tasks_rate_update: single("update-task-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
+  clockify_tasks_delete_completed: single("delete-completed-task", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id"] }),
+  clockify_tasks_status_update: single("update-task-status", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.body.projectId"] }),
+  clockify_tasks_assignees_replace: single("replace-task-assignees", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]"] }),
+  clockify_tasks_hourly_rate_update: single("update-task-hourly-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
+  clockify_tasks_cost_rate_update: single("update-task-cost-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
   clockify_clients_create: fixed(2, [plan("single", step("create-client")), plan("curated", step("create-client"), step("enrich-client"))], { derivedIds: ["operation.enrichment.currencyId"] }),
   clockify_clients_update: single("update-client", { derivedIds: ["operation.clientId", "operation.id", "operation.body.currencyId", "operation.patch.currencyId"] }),
   clockify_clients_delete: fixed(3, [

@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 144 typed
+the full test/build suite, and circular-dependency/duplication gates. 149 typed
 actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 (volume-backed SQLite at `/data`); deploy only through the checked transaction in
 `DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
@@ -28,7 +28,8 @@ here; this file is the execution map.
 - T04-R3 remediated the four accepted findings from reviews on `776eb081…`; re-reviews on `6184efa…` accepted zero HIGH/MEDIUM.
 - Official OpenAPI snapshot is repository-owned under `evidence/openapi/`; material contracts and schema maxima are fail-closed before registry insertion; adapter identities include `sourceColumn`.
 - Task 5 CLOSED: explicit `INTERNAL`/`MODEL_API`/`LOCAL` registries; `catalogForModel`/`toolsForModel` require a registry; v1 callers pass `INTERNAL_ACTION_CATALOG`.
-- T06-PROJECTS CLOSED: atomic project API actions (`delete_archived`/`deleteProject`, member hourly `addUsersHourlyRate`, member cost `addUsersCostRate`, `memberships_replace`/`updateMemberships`, closed `estimate_update`/`updateEstimate`). v1 composite/generic project wrappers stay internal. `MODEL_API_ACTION_CATALOG` = 87; `ACTION_CATALOG` = 144. Live: `live_not_run_missing_credentials`. Next: `T06-TASKS`.
+- T06-PROJECTS CLOSED: atomic project API actions (`delete_archived`/`deleteProject`, member hourly `addUsersHourlyRate`, member cost `addUsersCostRate`, `memberships_replace`/`updateMemberships`, closed `estimate_update`/`updateEstimate`). v1 composite/generic project wrappers stay internal.
+- T06-TASKS CLOSED: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal. `MODEL_API_ACTION_CATALOG` = 94; `ACTION_CATALOG` = 149. Live: `live_not_run_missing_credentials`. Next: `T06-CLIENTS`.
 
 ## Non-negotiable invariants
 

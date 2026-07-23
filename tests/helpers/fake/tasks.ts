@@ -4,7 +4,8 @@ import { fakeListResult, type FakeContext } from "./state.js";
 export function makeFakeTasks({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listTasks" | "getTask" | "createTask" | "updateTask" | "deleteTask" | "updateTaskRate" |
-  "createTaskAtomic" | "prepareTaskUpdate" | "updateTaskAtomic" | "deleteTaskAtomic" | "updateTaskRateAtomic"
+  "createTaskAtomic" | "prepareTaskUpdate" | "updateTaskAtomic" | "deleteTaskAtomic" | "updateTaskRateAtomic" |
+  "updateTaskHourlyRateAtomic" | "updateTaskCostRateAtomic"
 > {
   const createAtomic: WorkspaceClient["createTaskAtomic"] = async ({ projectId, name, assigneeIds }) => {
     bump("createTaskAtomic");
@@ -78,6 +79,14 @@ export function makeFakeTasks({ state, seed, bump, nextId }: FakeContext): Pick<
     },
     async updateTaskRateAtomic(input) {
       bump("updateTaskRateAtomic");
+      void input;
+    },
+    async updateTaskHourlyRateAtomic(input) {
+      bump("updateTaskHourlyRateAtomic");
+      void input;
+    },
+    async updateTaskCostRateAtomic(input) {
+      bump("updateTaskCostRateAtomic");
       void input;
     },
   };

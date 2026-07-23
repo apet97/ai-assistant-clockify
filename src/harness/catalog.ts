@@ -7,6 +7,7 @@ import { ENTRY_ACTIONS } from "./workflows/entries.js";
 import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
 import { PROJECT_ACTIONS } from "./workflows/projects.js";
 import { PROJECT_API_ACTIONS } from "./api-actions/projects.js";
+import { TASK_API_ACTIONS } from "./api-actions/tasks.js";
 import { TASK_ACTIONS } from "./workflows/tasks.js";
 import { CLIENT_ACTIONS } from "./workflows/clients.js";
 import { TAG_ACTIONS } from "./workflows/tags.js";
@@ -69,6 +70,7 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...PROJECT_ACTIONS,
   ...PROJECT_API_ACTIONS,
   ...TASK_ACTIONS,
+  ...TASK_API_ACTIONS,
   ...CLIENT_ACTIONS,
   ...TAG_ACTIONS,
   ...INVOICE_ACTIONS,

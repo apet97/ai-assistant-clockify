@@ -289,6 +289,11 @@ describe("catalog", () => {
       "clockify_tasks_update",
       "clockify_tasks_delete",
       "clockify_tasks_rate_update",
+      "clockify_tasks_delete_completed",
+      "clockify_tasks_status_update",
+      "clockify_tasks_assignees_replace",
+      "clockify_tasks_hourly_rate_update",
+      "clockify_tasks_cost_rate_update",
     ]) {
       expect(names).toContain(required);
     }

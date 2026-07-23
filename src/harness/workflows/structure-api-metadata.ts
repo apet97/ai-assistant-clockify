@@ -28,6 +28,11 @@ type StructureActionName =
   | "clockify_tasks_update"
   | "clockify_tasks_delete"
   | "clockify_tasks_rate_update"
+  | "clockify_tasks_delete_completed"
+  | "clockify_tasks_status_update"
+  | "clockify_tasks_assignees_replace"
+  | "clockify_tasks_hourly_rate_update"
+  | "clockify_tasks_cost_rate_update"
   | "clockify_clients_list"
   | "clockify_clients_get"
   | "clockify_clients_create"
@@ -150,6 +155,8 @@ const endpoint = Object.freeze({
     create: endpointKey("write", "POST", "/workspaces/{workspaceId}/projects/{projectId}/tasks", "tasks.ts"),
     update: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}", "tasks.ts"),
     delete: endpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}", "tasks.ts"),
+    hourlyRate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate", "tasks.ts"),
+    costRate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate", "tasks.ts"),
     rate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/{kind}", "tasks.ts"),
   }),
   clients: Object.freeze({
@@ -392,19 +399,45 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     support: [endpoint.projects.list, endpoint.tasks.list],
     materialFields: [],
   }),
-  clockify_tasks_create: internalMetadata({
-    exposure: "generic",
-    reason: "The assigneeIds array is unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must narrow the schema.",
-    primary: [endpoint.tasks.create],
+  clockify_tasks_create: apiMetadata({
+    actionName: "clockify_tasks_create",
+    operationId: "createTask",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+    access: "write",
+    primary: endpoint.tasks.create,
     support: [endpoint.projects.get, endpoint.users.list, endpoint.tasks.list],
-    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/name", "Task name", "text", true),
+      {
+        kind: "array_item",
+        containerPath: "/assigneeIds",
+        itemPath: "/userId",
+        labelTemplate: "Assignee {index}",
+        maxItems: GROUP_MEMBER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
-  clockify_tasks_update: internalMetadata({
-    exposure: "generic",
-    reason: "Accepts an open fields dictionary and an unbounded assigneeIds array; Task 6 must split and narrow the update schema.",
-    primary: [endpoint.tasks.update],
-    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get, endpoint.users.list],
-    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  clockify_tasks_update: apiMetadata({
+    actionName: "clockify_tasks_update",
+    operationId: "updateTask",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+    access: "write",
+    primary: endpoint.tasks.update,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/id", "Task", "entity", true),
+      valueField("/patch/name", "Task name", "text", false),
+      valueField("/patch/estimate", "Time estimate", "text", false),
+      valueField("/patch/budgetEstimate", "Budget estimate", "number", false),
+      valueField("/patch/billable", "Billable", "boolean", false),
+    ],
   }),
   clockify_tasks_delete: internalMetadata({
     exposure: "composite",
@@ -419,6 +452,85 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     primary: [endpoint.tasks.rate],
     support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  clockify_tasks_delete_completed: apiMetadata({
+    actionName: "clockify_tasks_delete_completed",
+    operationId: "deleteTask",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+    access: "write",
+    primary: endpoint.tasks.delete,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/id", "Task", "entity", true),
+      valueField("/name", "Task name", "text", false),
+    ],
+  }),
+  clockify_tasks_status_update: apiMetadata({
+    actionName: "clockify_tasks_status_update",
+    operationId: "updateTask",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+    access: "write",
+    primary: endpoint.tasks.update,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/id", "Task", "entity", true),
+      valueField("/status", "Status", "text", true),
+    ],
+  }),
+  clockify_tasks_assignees_replace: apiMetadata({
+    actionName: "clockify_tasks_assignees_replace",
+    operationId: "updateTask",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+    access: "write",
+    primary: endpoint.tasks.update,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get, endpoint.users.list],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/id", "Task", "entity", true),
+      {
+        kind: "array_item",
+        containerPath: "/assigneeIds",
+        itemPath: "/userId",
+        labelTemplate: "Assignee {index}",
+        maxItems: GROUP_MEMBER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
+    ],
+  }),
+  clockify_tasks_hourly_rate_update: apiMetadata({
+    actionName: "clockify_tasks_hourly_rate_update",
+    operationId: "setTaskHourlyRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+    access: "write",
+    primary: endpoint.tasks.hourlyRate,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/taskId", "Task", "entity", true),
+      valueField("/amountMinor", "Hourly rate", "money-minor", true),
+    ],
+  }),
+  clockify_tasks_cost_rate_update: apiMetadata({
+    actionName: "clockify_tasks_cost_rate_update",
+    operationId: "setTaskCostRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+    access: "write",
+    primary: endpoint.tasks.costRate,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.tasks.list, endpoint.tasks.get],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/taskId", "Task", "entity", true),
+      valueField("/amountMinor", "Cost rate", "money-minor", true),
+    ],
   }),
   clockify_clients_list: apiMetadata({
     actionName: "clockify_clients_list",

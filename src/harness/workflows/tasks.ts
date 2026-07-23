@@ -5,24 +5,32 @@ import {
   defineAction,
   defineReadAction,
   defineRiskyAction,
-  type ActionContext,
   type ActionDefinition,
   type CommitResult,
-  type RiskyClarifyResult,
+  type SemanticLiteralAlias,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
-import { toMinor } from "../money.js";
-import { describePatch, resolveEntityRef, resolveUserRefs } from "./resolve.js";
-import { RATE_FIELDS, buildRatePreview } from "./rate.js";
+import { resolveUserRefs } from "./resolve.js";
+import { RATE_FIELDS } from "./rate.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
-import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { executeDurableRiskyStep } from "../durable-risky-write.js";
 import { executeCompensationStep, isJournalDegradedStep } from "../mutation-workflow.js";
 import { errorReceipt } from "../receipts.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
-import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileCreate, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
-import { sanitizedFingerprint } from "../safe-json.js";
+import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, mutationPlan, reconcileCreate, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
+import { GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
+import {
+  commitGenericTaskRate,
+  commitTaskClosedUpdate,
+  loadTaskDeleteBaseline,
+  previewTaskClosedUpdate,
+  previewTaskRate,
+  resolveTaskRef,
+  taskClosedUpdateSchema,
+  taskRateSchema,
+  taskTargetRefSchema,
+} from "./task-action-shared.js";
 
 /**
  * Typed task workflows (goclmcp §2.3). Tasks live under a project. Reads + create
@@ -31,42 +39,10 @@ import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
  */
 
 const WORK = "work_structure" as const;
-
-/**
- * Tasks are project-scoped, so a symbolic reference resolves in two steps:
- * project (by id or name) first, then the task within it. Either step can stop
- * with a clarify — an unresolved reference must never reach a confirmable
- * operation (the live loop confirmed previews whose commits then 400'd).
- */
-async function resolveTaskRef(
-  ctx: ActionContext,
-  refs: { projectId?: string; projectName?: string; id?: string; name?: string },
-  verb: string,
-  // `verifyTask` forces a real task lookup even for a 24-hex id so the caller's
-  // preview shows the REAL task name (billing rate cards) and a wrong id clarifies.
-  opts?: { verifyTask?: boolean },
-): Promise<
-  | { ok: true; projectId: string; id: string; name?: string }
-  | { ok: false; clarify: RiskyClarifyResult }
-> {
-  const project = await resolveEntityRef(
-    { id: refs.projectId, name: refs.projectName },
-    {
-      noun: "project",
-      verb,
-      list: (filter) => ctx.clockify.listProjects(filter),
-      // A task delete may target a task inside an ARCHIVED project.
-      includeArchived: verb === "delete",
-    },
-  );
-  if (!project.ok) return project;
-  const task = await resolveEntityRef(
-    { id: refs.id, name: refs.name },
-    { noun: "task", verb, list: () => ctx.clockify.listTasks(project.id), verifyId: opts?.verifyTask },
-  );
-  if (!task.ok) return task;
-  return { ok: true, projectId: project.id, id: task.id, name: task.name ?? refs.name };
-}
+const TASK_BILLABLE_LITERAL_ALIASES = Object.freeze([
+  { path: "billable", value: false, authoredPhrases: Object.freeze(["non-billable", "nonbillable", "non billable", "not billable"]) },
+  { path: "billable", value: true, authoredPhrases: Object.freeze(["billable"]) },
+] satisfies readonly SemanticLiteralAlias[]);
 
 const listTasks = defineReadAction({
   name: "clockify_tasks_list",
@@ -93,19 +69,7 @@ const getTask = defineAction({
     "Fetch a single task within a project — by id or exact `name`, in a project given by `projectId` or `projectName` (resolved server-side).",
   featureGroup: WORK,
   risks: ["read"],
-  schema: z
-    .object({
-      projectId: z.string().min(1).optional(),
-      projectName: z.string().min(1).optional(),
-      id: z.string().min(1).optional(),
-      name: z.string().min(1).optional(),
-    })
-    .refine(
-      (v) =>
-        (v.projectId !== undefined || v.projectName !== undefined) &&
-        (v.id !== undefined || v.name !== undefined),
-      { message: "Provide the project (id or name) and the task (id or name)." },
-    ),
+  schema: taskTargetRefSchema,
   async handler(ctx, args) {
     const resolved = await resolveTaskRef(ctx, args, "fetch");
     if (!resolved.ok) {
@@ -139,8 +103,7 @@ const createTaskDefinition = defineStructureDurableSafeWriteAction({
   schema: z.object({
     projectId: z.string().min(1),
     name: z.string().min(1),
-    /** Assignees to set on the new task: user ids, exact names, or 'me' (resolved server-side). */
-    assigneeIds: zStringList().optional(),
+    assigneeIds: zStringList(z.array(z.string()).max(GROUP_MEMBER_BATCH_MAX)).optional(),
   }),
   async prepare(ctx, args) {
     const project = await ctx.clockify.getProject(args.projectId);
@@ -199,8 +162,6 @@ const createTaskDefinition = defineStructureDurableSafeWriteAction({
         action: "clockify_tasks_create",
         entity: "task",
         ids: { workspaceId: ctx.workspaceId, projectId: body.projectId },
-        // projectId rides on the ref so an undo (reverseCreation) can delete the
-        // task — a task delete is project-scoped on the wire.
         changed: { created: [created] },
       }),
       externalId: task.id,
@@ -218,99 +179,15 @@ const updateTask = defineRiskyAction({
   name: "clockify_tasks_update",
   ...STRUCTURE_API_METADATA.clockify_tasks_update,
   description:
-    "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. `assigneeIds` entries may be user ids, exact names, or 'me' (resolved server-side, clarifies on an unknown name). Elevated write — previews and requires confirmation.",
+    "Update a task's name, estimate, budget estimate, or billable flag. Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. For status or assignees, use clockify_tasks_status_update or clockify_tasks_assignees_replace. Elevated write — previews and requires confirmation.",
   group: WORK,
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent", "target"] }, strategies: ["update"] }),
-  argumentOpenPaths: ["fields"],
-  schema: z
-    .object({
-      projectId: z.string().min(1).optional(),
-      /** The task's project name, resolved to an id server-side. */
-      projectName: z.string().min(1).optional(),
-      id: z.string().min(1).optional(),
-      /** The task's existing name, resolved to an id server-side (rename-by-name). */
-      currentName: z.string().min(1).optional(),
-      name: z.string().optional(),
-      status: z.string().optional(),
-      assigneeIds: zStringList(z.array(z.string())).optional(),
-      fields: z.record(z.string(), z.unknown()).optional(),
-    })
-    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
-      message: "Provide the project id or its exact projectName.",
-    })
-    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
-      message: "Provide the task id or its exact currentName.",
-    })
-    .refine((v) => v.name !== undefined || v.status !== undefined || v.assigneeIds !== undefined || v.fields !== undefined, {
-      message: "Provide at least one field to change.",
-    }),
-  async preview(ctx, args) {
-    const resolved = await resolveTaskRef(
-      ctx,
-      { projectId: args.projectId, projectName: args.projectName, id: args.id, name: args.currentName },
-      "update",
-      { verifyTask: true },
-    );
-    if (!resolved.ok) return resolved.clarify;
-    let assigneeIds: string[] | undefined;
-    if (args.assigneeIds !== undefined) {
-      const assignees = await resolveUserRefs(args.assigneeIds, {
-        verb: "assign",
-        adminUserId: ctx.adminUserId,
-        listUsers: () => ctx.clockify.listUsers(),
-      });
-      if (!assignees.ok) return assignees.clarify;
-      assigneeIds = assignees.userIds;
-    }
-    const patch: Record<string, unknown> = {
-      ...(args.name !== undefined ? { name: args.name } : {}),
-      ...(args.status !== undefined ? { status: args.status } : {}),
-      ...(assigneeIds !== undefined ? { assigneeIds } : {}),
-      ...(args.fields ?? {}),
-    };
-    const parent = await ctx.clockify.getProject(resolved.projectId);
-    const current = await ctx.clockify.getTask(resolved.projectId, resolved.id);
-    if (!parent || !current) return { clarify: "The task or its project no longer exists. Refresh and try again." };
-    const targetSnapshots = [
-      await captureStructureSnapshot(ctx, "parent", "project", parent),
-      await captureStructureSnapshot(ctx, "target", "task", current, { projectId: resolved.projectId }),
-    ];
-    const body = await ctx.clockify.prepareTaskUpdate(resolved.projectId, resolved.id, patch);
-    return {
-      actionLabel: "Update task",
-      targets: [{ type: "task", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: describePatch(patch),
-      reversibility: "You can update the task again to revert most fields.",
-      warnings: ["Updating a task changes live workspace data."],
-      payload: { projectId: resolved.projectId, id: resolved.id, patch, body },
-      targetSnapshots,
-      mutationPlan: mutationPlan([{ id: "update-task", strategy: "update", fingerprint: targetSnapshots[1]!.fingerprint }]),
-    };
-  },
-  async commit(ctx, payload, operation) {
-    const { projectId, id, body } = payload as { projectId: string; id: string; body: Record<string, unknown> };
-    let updated: Awaited<ReturnType<typeof ctx.clockify.getTask>>;
-    return commitSingleDurableRiskyStep({
-      ctx, operation, planStepId: "update-task", name: "Update task",
-      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
-      dispatch: async () => {
-        const result = await dispatchWithReconciliation({
-          dispatch: () => ctx.clockify.updateTaskAtomic(projectId, id, body),
-          reconcile: async () => {
-            const raw = await ctx.clockify.prepareTaskUpdate(projectId, id, {});
-            return sanitizedFingerprint(raw) === sanitizedFingerprint(body)
-              ? raw as unknown as Awaited<ReturnType<typeof ctx.clockify.updateTaskAtomic>>
-              : undefined;
-          },
-        });
-        updated = result.value;
-        return { externalId: result.value.id, effect: { updated: { type: "task", id, projectId } }, detail: { reconciled: result.reconciled } };
-      },
-      success: () => successReceipt({ action: "clockify_tasks_update", entity: "task", ids: { workspaceId: ctx.workspaceId, projectId }, changed: { updated: [{ type: "task", id, name: updated?.name }] } }),
-    });
-  },
+  semanticLiteralAliases: TASK_BILLABLE_LITERAL_ALIASES,
+  schema: taskClosedUpdateSchema,
+  preview: (ctx, args) => previewTaskClosedUpdate(ctx, args),
+  commit: (ctx, payload, operation) => commitTaskClosedUpdate(ctx, payload, operation, "clockify_tasks_update"),
 });
 
 const deleteTask = defineRiskyAction({
@@ -322,32 +199,11 @@ const deleteTask = defineRiskyAction({
   risks: ["destructive"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent", "target"] }, strategies: ["state-command", "delete", "update"] }),
-  schema: z
-    .object({
-      projectId: z.string().min(1).optional(),
-      projectName: z.string().min(1).optional(),
-      id: z.string().min(1).optional(),
-      name: z.string().min(1).optional(),
-    })
-    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, {
-      message: "Provide the project id or its exact projectName.",
-    })
-    .refine((v) => v.id !== undefined || v.name !== undefined, {
-      message: "Provide the task id or its exact name.",
-    }),
+  schema: taskTargetRefSchema,
   async preview(ctx, args) {
-    const resolved = await resolveTaskRef(
-      ctx,
-      { projectId: args.projectId, projectName: args.projectName, id: args.id, name: args.name },
-      "delete",
-      { verifyTask: true },
-    );
-    if (!resolved.ok) return resolved.clarify;
-    const name = resolved.name ?? args.name;
-    const parent = await ctx.clockify.getProject(resolved.projectId);
-    const current = await ctx.clockify.getTask(resolved.projectId, resolved.id);
-    if (!parent || !current) return { clarify: "The task or its project no longer exists. Refresh and try again." };
-    const raw = await ctx.clockify.prepareTaskUpdate(resolved.projectId, resolved.id, {});
+    const baseline = await loadTaskDeleteBaseline(ctx, args);
+    if (!baseline.ok) return baseline.clarify;
+    const { resolved, name, parent, current, raw } = baseline;
     const originalStatus = typeof raw.status === "string" ? raw.status : undefined;
     const changedState = originalStatus !== "DONE";
     const doneBody = changedState ? { ...raw, status: "DONE" } : undefined;
@@ -468,83 +324,13 @@ const rateUpdate = defineRiskyAction({
   risks: ["billing"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent", "target"] }, strategies: ["update"] }),
-  schema: z
-    .object({
-      projectId: z.string().min(1).optional(),
-      projectName: z.string().min(1).optional(),
-      taskId: z.string().min(1).optional(),
-      taskName: z.string().min(1).optional(),
-      ...RATE_FIELDS,
-    })
-    .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact projectName." })
-    .refine((v) => v.taskId !== undefined || v.taskName !== undefined, { message: "Provide the task id or its exact taskName." }),
-  async preview(ctx, args) {
-    // Resolve + VERIFY the task exists before previewing (verifyTask): an
-    // unverified 24-hex id would otherwise sail past the trust-the-id path,
-    // echo the model-supplied name onto the billing card, and 404 at commit.
-    // verifyTask fetches the REAL name and clarifies on a wrong id.
-    const resolved = await resolveTaskRef(
-      ctx,
-      { projectId: args.projectId, projectName: args.projectName, id: args.taskId, name: args.taskName },
-      "set a rate on",
-      { verifyTask: true },
-    );
-    if (!resolved.ok) return resolved.clarify;
-    const amountMinor = toMinor(args.amount, args.amountUnit);
-    const parent = await ctx.clockify.getProject(resolved.projectId);
-    const current = await ctx.clockify.getTask(resolved.projectId, resolved.id);
-    if (!parent || !current) return { clarify: "The task or its project no longer exists. Refresh and try again." };
-    const targetSnapshots = [
-      await captureStructureSnapshot(ctx, "parent", "project", parent),
-      await captureStructureSnapshot(ctx, "target", "task", current, { projectId: resolved.projectId }),
-    ];
-    const taskLabel = resolved.name ?? resolved.id;
-    return {
-      ...buildRatePreview({
-        targetType: "task",
-        targetId: resolved.id,
-        targetName: resolved.name,
-        scopeLabel: `for "${taskLabel}"`,
-        amountMinor,
-        rateKind: args.rateKind,
-        kindNoun: "task",
-      }),
-      payload: {
-        projectId: resolved.projectId,
-        taskId: resolved.id,
-        rateKind: args.rateKind,
-        amountMinor,
-        since: args.since,
-      },
-      targetSnapshots,
-      mutationPlan: mutationPlan([{ id: "update-task-rate", strategy: "update", fingerprint: targetSnapshots[1]!.fingerprint }]),
-    };
-  },
-  async commit(ctx, payload, operation) {
-    const typed = payload as {
-      projectId: string;
-      taskId: string;
-      rateKind: "HOURLY" | "COST";
-      amountMinor: number;
-      since?: string;
-    };
-    return commitSingleDurableRiskyStep({
-      ctx, operation, planStepId: "update-task-rate", name: "Update task rate",
-      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
-      dispatch: async () => {
-        const result = await dispatchWithReconciliation({
-          dispatch: async () => { await ctx.clockify.updateTaskRateAtomic(typed); return true as const; },
-          reconcile: async () => {
-            const row = await ctx.clockify.getTask(typed.projectId, typed.taskId) as unknown as Record<string, unknown> | null;
-            const key = typed.rateKind === "COST" ? "costRate" : "hourlyRate";
-            return row && (row[key] as { amount?: unknown } | undefined)?.amount === typed.amountMinor ? true as const : undefined;
-          },
-        });
-        return { effect: { updatedRate: { projectId: typed.projectId, taskId: typed.taskId } }, detail: { reconciled: result.reconciled } };
-      },
-      success: () => successReceipt({ action: "clockify_tasks_rate_update", entity: "task", ids: { workspaceId: ctx.workspaceId, projectId: typed.projectId }, changed: { updated: [{ type: "task", id: typed.taskId }] } }),
-    });
-  },
+  schema: z.intersection(taskRateSchema, z.object({ rateKind: RATE_FIELDS.rateKind })),
+  preview: (ctx, args) => previewTaskRate(ctx, args, {
+    rateKind: args.rateKind,
+    planStepId: "update-task-rate",
+    payloadExtras: { rateKind: args.rateKind },
+  }),
+  commit: (ctx, payload, operation) => commitGenericTaskRate(ctx, payload, operation, "clockify_tasks_rate_update"),
 });
 
 export const TASK_ACTIONS: ActionDefinition[] = [

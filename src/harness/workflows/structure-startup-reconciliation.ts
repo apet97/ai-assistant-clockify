@@ -61,6 +61,11 @@ const metadata = {
     "delete-task": "delete",
   },
   clockify_tasks_rate_update: { "update-task-rate": "update" },
+  clockify_tasks_delete_completed: { "delete-completed-task": "delete" },
+  clockify_tasks_status_update: { "update-task-status": "update" },
+  clockify_tasks_assignees_replace: { "replace-task-assignees": "update" },
+  clockify_tasks_hourly_rate_update: { "update-task-hourly-rate": "update" },
+  clockify_tasks_cost_rate_update: { "update-task-cost-rate": "update" },
   clockify_clients_create: { "create-client": "create", "enrich-client": "update" },
   clockify_clients_update: { "update-client": "update" },
   clockify_clients_delete: { "archive-client": "state-command", "delete-client": "delete" },
@@ -560,6 +565,36 @@ const updateTaskRate: Handler = async (input) => {
   });
 };
 
+const updateTaskHourlyRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const projectId = stringValue(payload?.projectId);
+  const taskId = stringValue(payload?.taskId);
+  if (!projectId || !taskId || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getTask(projectId, taskId);
+      return row ? candidate("task", taskId, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.hourlyRate)?.amount === payload.amountMinor,
+  });
+};
+
+const updateTaskCostRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const projectId = stringValue(payload?.projectId);
+  const taskId = stringValue(payload?.taskId);
+  if (!projectId || !taskId || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getTask(projectId, taskId);
+      return row ? candidate("task", taskId, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.costRate)?.amount === payload.amountMinor,
+  });
+};
+
 const createClient: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
   const base = record(payload?.base);
@@ -838,6 +873,11 @@ const handlers = new Map<string, Handler>([
   ["clockify_tasks_delete\0complete-task-for-delete", completeTask],
   ["clockify_tasks_delete\0delete-task", deleteTask],
   ["clockify_tasks_rate_update\0update-task-rate", updateTaskRate],
+  ["clockify_tasks_delete_completed\0delete-completed-task", deleteTask],
+  ["clockify_tasks_status_update\0update-task-status", updateTask],
+  ["clockify_tasks_assignees_replace\0replace-task-assignees", updateTask],
+  ["clockify_tasks_hourly_rate_update\0update-task-hourly-rate", updateTaskHourlyRate],
+  ["clockify_tasks_cost_rate_update\0update-task-cost-rate", updateTaskCostRate],
   ["clockify_clients_create\0create-client", createClient],
   ["clockify_clients_create\0enrich-client", enrichClient],
   ["clockify_clients_update\0update-client", updateClient],

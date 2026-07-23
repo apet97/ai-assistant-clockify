@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "b6bdc361dfb0e965c14a2e587b68f03d80367a6dcf9ec32b232f78f833681d30",
+  "catalogHash": "069eb1160111b527dc20033f1a5601bdbb2582164458370630a0ffaec57bc749",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 144,
-    "rawAdapterCallSites": 144,
-    "rawAdapterShapes": 120,
+    "actions": 149,
+    "rawAdapterCallSites": 146,
+    "rawAdapterShapes": 122,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 87,
+      "api": 94,
       "composite": 23,
-      "generic": 30,
+      "generic": 28,
       "local": 4
     }
   },
@@ -5508,7 +5508,7 @@
       "kind": "risky_write",
       "featureGroup": "invoices",
       "workflowModule": "tasks.ts",
-      "actionFingerprint": "8bb524700553e53e4eab2a120abca7ee06c7d4efea7b48735c4fb0feb5d3f294",
+      "actionFingerprint": "a1cf90d13f2909aa8e68e996f15d3848a460776c8d85f9ca25a948a3a20a570d",
       "exposure": "generic",
       "decisionReason": "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
       "operation": null,
@@ -5568,96 +5568,8 @@
         }
       ],
       "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "amount",
-        "rateKind"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_tasks_update",
-      "description": "Update a task (rename, reassign, status, estimate). Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. `assigneeIds` entries may be user ids, exact names, or 'me' (resolved server-side, clarifies on an unknown name). Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "work_structure",
-      "workflowModule": "tasks.ts",
-      "actionFingerprint": "75fae4ade7a606ef7d09016cd393b44621b263d75adcb74db0a1cc9f4013e204",
-      "exposure": "generic",
-      "decisionReason": "Accepts an open fields dictionary and an unbounded assigneeIds array; Task 6 must split and narrow the update schema.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
-          "sourceModule": "tasks.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
-          "sourceModule": "tasks.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
-          "sourceModule": "tasks.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/users",
-          "sourceModule": "users.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "open",
-      "openSchemaDetail": "legacy_open_argument_paths:clockify_tasks_update",
+      "openSchemaDetail": "unreviewed_open_schema:clockify_tasks_rate_update:/",
       "materialFields": [],
       "normalizedOperationMaterialContract": [],
       "presentation": null,
@@ -6051,76 +5963,6 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_tasks_create",
-      "description": "Create a task under a project, optionally assigning members inline with `assigneeIds` — each entry is a user id, an exact name, or 'me'; the harness resolves names server-side (clarifies on an unknown name). Safe write — executes immediately when policy allows.",
-      "kind": "safe_write",
-      "featureGroup": "work_structure",
-      "workflowModule": "tasks.ts",
-      "actionFingerprint": "f084950d7c8bc81bbe4973d51c7aabb507ad8848c4607e21ff339fe8da1ac413",
-      "exposure": "generic",
-      "decisionReason": "The assigneeIds array is unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must narrow the schema.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
-          "sourceModule": "tasks.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
-          "sourceModule": "tasks.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/users",
-          "sourceModule": "users.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "name",
-        "projectId"
-      ],
-      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -6872,6 +6714,258 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_create",
+      "description": "Create a task under a project, optionally assigning members inline with `assigneeIds` — each entry is a user id, an exact name, or 'me'; the harness resolves names server-side (clarifies on an unknown name). Safe write — executes immediately when policy allows.",
+      "kind": "safe_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "tasks.ts",
+      "actionFingerprint": "436b4f3e6abb9e789ba797feddf7ff62e9eaeb215dfa7615bf6970392393520d",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/projects/{projectId}/tasks (createTask).",
+      "operation": {
+        "operationId": "createTask",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Task name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/assigneeIds",
+          "itemPath": "/userId",
+          "labelTemplate": "Assignee {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/assigneeIds",
+          "itemPath": "/userId",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_create",
+        "version": 1
+      },
+      "requiredArguments": [
+        "name",
+        "projectId"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_delete_completed",
+      "description": "Delete a task that is already DONE with a single DELETE (Clockify rejects deleting a non-DONE task). Pass the project and task by id or exact name. Previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "api-actions/tasks.ts",
+      "actionFingerprint": "abc3df3abccdb0462cb01ddc6d8810569640d10c9ba9cebd3cb3f3f2838a8d51",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/projects/{projectId}/tasks/{id} (deleteTask).",
+      "operation": {
+        "operationId": "deleteTask",
+        "host": "api",
+        "method": "DELETE",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Task name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_delete_completed",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_tasks_get",
       "description": "Fetch a single task within a project — by id or exact `name`, in a project given by `projectId` or `projectName` (resolved server-side).",
       "kind": "read",
@@ -6936,6 +7030,701 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_assignees_replace",
+      "description": "Replace who is assigned to a task by passing the full assignee set. Each entry is a user id, an exact name, or 'me' (resolved server-side). Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "users_groups",
+      "workflowModule": "api-actions/tasks.ts",
+      "actionFingerprint": "e3d5055ac0aa96ab8d6f5ce4b4aad8aebfb01c8cd154ff0e52d51871d5ee041d",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/tasks/{id} (updateTask).",
+      "operation": {
+        "operationId": "updateTask",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/assigneeIds",
+          "itemPath": "/userId",
+          "labelTemplate": "Assignee {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/assigneeIds",
+          "itemPath": "/userId",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_assignees_replace",
+        "version": 1
+      },
+      "requiredArguments": [
+        "assigneeIds"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_status_update",
+      "description": "Update a task's status (ACTIVE or DONE). Pass the project and task by id or exact name — the harness resolves names server-side. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "api-actions/tasks.ts",
+      "actionFingerprint": "7ba6ffd769b25a92e3c4010e3e864039adbc24a7676380a3608de28018c5ead3",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/tasks/{id} (updateTask).",
+      "operation": {
+        "operationId": "updateTask",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "label": "Status",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_status_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "status"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_update",
+      "description": "Update a task's name, estimate, budget estimate, or billable flag. Pass `projectId` (or the exact `projectName`) and the task's `id` (or its exact `currentName`) — the harness resolves names server-side; use `currentName` + the new `name` to RENAME without listing first. For status or assignees, use clockify_tasks_status_update or clockify_tasks_assignees_replace. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "tasks.ts",
+      "actionFingerprint": "e3910bdaed018a1b2772e1e8218a1319447ef106e2adf5701ef5c3da500b1b87",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/tasks/{id} (updateTask).",
+      "operation": {
+        "operationId": "updateTask",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/patch/name",
+          "label": "Task name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/estimate",
+          "label": "Time estimate",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/budgetEstimate",
+          "label": "Budget estimate",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/billable",
+          "label": "Billable",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/estimate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/budgetEstimate",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/billable",
+          "scalarType": "boolean"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_update",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_cost_rate_update",
+      "description": "Set a task's cost rate. Pass the project and task by id or exact name — the harness resolves and verifies the task server-side. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/tasks.ts",
+      "actionFingerprint": "80683e1f5abe80299214b8a744b8c37bc902a9fdc1f34f604bad63d93cd270b1",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate (setTaskCostRate).",
+      "operation": {
+        "operationId": "setTaskCostRate",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+          "sourceModule": "tasks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Cost rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_cost_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_tasks_hourly_rate_update",
+      "description": "Set a task's billable hourly rate. Pass the project and task by id or exact name — the harness resolves and verifies the task server-side. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/tasks.ts",
+      "actionFingerprint": "4a9663d9be1e60e77a43c5a8311061fb200555eef9a6525be6ea8f5cb93a2a9e",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate (setTaskHourlyRate).",
+      "operation": {
+        "operationId": "setTaskHourlyRate",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate\u0000tasks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+          "sourceModule": "tasks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Hourly rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_tasks_hourly_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -13135,9 +13924,14 @@
         "clockify_setup_project",
         "clockify_setup_task",
         "clockify_start_timer",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
         "clockify_tasks_delete",
+        "clockify_tasks_delete_completed",
         "clockify_tasks_get",
+        "clockify_tasks_hourly_rate_update",
         "clockify_tasks_rate_update",
+        "clockify_tasks_status_update",
         "clockify_tasks_update",
         "clockify_update_entity",
         "clockify_users_role_update"
@@ -13305,9 +14099,14 @@
         "clockify_setup_task",
         "clockify_start_timer",
         "clockify_status",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
         "clockify_tasks_create",
         "clockify_tasks_delete",
+        "clockify_tasks_delete_completed",
+        "clockify_tasks_hourly_rate_update",
         "clockify_tasks_rate_update",
+        "clockify_tasks_status_update",
         "clockify_tasks_update",
         "clockify_update_entity",
         "clockify_users_role_update"
@@ -13559,7 +14358,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "tasks.ts",
-          "sourceLine": 57,
+          "sourceLine": 69,
           "sourceColumn": 28,
           "pagination": "plain"
         }
@@ -13577,10 +14376,15 @@
         "clockify_log_work",
         "clockify_setup_task",
         "clockify_start_timer",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
         "clockify_tasks_create",
         "clockify_tasks_delete",
+        "clockify_tasks_delete_completed",
         "clockify_tasks_get",
+        "clockify_tasks_hourly_rate_update",
         "clockify_tasks_rate_update",
+        "clockify_tasks_status_update",
         "clockify_tasks_update"
       ],
       "availabilityByAuthClass": {
@@ -13609,11 +14413,12 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_tasks_create"
+      ],
       "internalSupportConsumers": [
         "clockify_create_work_package",
-        "clockify_setup_task",
-        "clockify_tasks_create"
+        "clockify_setup_task"
       ],
       "availabilityByAuthClass": {
         "addon": {
@@ -13623,8 +14428,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
@@ -13641,7 +14446,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_tasks_delete_completed"
+      ],
       "internalSupportConsumers": [
         "clockify_tasks_delete"
       ],
@@ -13653,8 +14460,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
@@ -13672,7 +14479,7 @@
         },
         {
           "sourceModule": "tasks.ts",
-          "sourceLine": 61,
+          "sourceLine": 73,
           "sourceColumn": 24,
           "pagination": "none"
         }
@@ -13689,8 +14496,13 @@
         "clockify_log_work",
         "clockify_setup_task",
         "clockify_start_timer",
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_cost_rate_update",
         "clockify_tasks_delete",
+        "clockify_tasks_delete_completed",
+        "clockify_tasks_hourly_rate_update",
         "clockify_tasks_rate_update",
+        "clockify_tasks_status_update",
         "clockify_tasks_update"
       ],
       "availabilityByAuthClass": {
@@ -13719,10 +14531,13 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
-        "clockify_tasks_delete",
+      "mappedModelActionNames": [
+        "clockify_tasks_assignees_replace",
+        "clockify_tasks_status_update",
         "clockify_tasks_update"
+      ],
+      "internalSupportConsumers": [
+        "clockify_tasks_delete"
       ],
       "availabilityByAuthClass": {
         "addon": {
@@ -13732,8 +14547,68 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate\u0000tasks.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+      "sourceModule": "tasks.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "tasks.ts",
+          "sourceLine": 58,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_tasks_cost_rate_update"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate\u0000tasks.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+      "sourceModule": "tasks.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "tasks.ts",
+          "sourceLine": 52,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_tasks_hourly_rate_update"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/{kind}\u0000tasks.ts",
@@ -15209,8 +16084,8 @@
         "clockify_scheduling_user_totals",
         "clockify_setup_project",
         "clockify_setup_task",
+        "clockify_tasks_assignees_replace",
         "clockify_tasks_create",
-        "clockify_tasks_update",
         "clockify_time_off_balance_get",
         "clockify_time_off_balance_update",
         "clockify_time_off_policies_create",
@@ -16604,10 +17479,12 @@
       ],
       "operations": [
         {
+          "operationId": "createTask",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
-          "operationId": "createTask"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -16618,10 +17495,12 @@
       ],
       "operations": [
         {
+          "operationId": "deleteTask",
           "host": "api",
           "method": "DELETE",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}",
-          "operationId": "deleteTask"
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -16648,10 +17527,44 @@
       ],
       "operations": [
         {
+          "operationId": "updateTask",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}",
-          "operationId": "updateTask"
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate\u0000tasks.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate"
+      ],
+      "operations": [
+        {
+          "operationId": "setTaskCostRate",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+          "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate\u0000tasks.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate"
+      ],
+      "operations": [
+        {
+          "operationId": "setTaskHourlyRate",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -16663,16 +17576,20 @@
       ],
       "operations": [
         {
+          "operationId": "setTaskCostRate",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/cost-rate",
-          "operationId": "setTaskCostRate"
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/cost-rate",
+          "access": "write",
+          "exposure": "api"
         },
         {
+          "operationId": "setTaskHourlyRate",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}/hourly-rate",
-          "operationId": "setTaskHourlyRate"
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{taskId}/hourly-rate",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },

@@ -15,6 +15,14 @@ export interface UpdateTaskRateInput {
   since?: string;
 }
 
+/** Per-task rate write without an endpoint chooser (v2 atomic API). */
+export interface UpdateTaskRateAtomicInput {
+  projectId: string;
+  taskId: string;
+  amountMinor: number;
+  since?: string;
+}
+
 /**
  * Task slice of the {@link WorkspaceClient} port (goclmcp §2.3). Tasks live under
  * a project. `updateTask` is fetch-then-merge (PUT replaces, requires `name`);
@@ -33,4 +41,6 @@ export interface TaskPort {
   deleteTaskAtomic(projectId: string, id: string): Promise<void>;
   updateTaskRate(input: UpdateTaskRateInput): Promise<void>;
   updateTaskRateAtomic(input: UpdateTaskRateInput): Promise<void>;
+  updateTaskHourlyRateAtomic(input: UpdateTaskRateAtomicInput): Promise<void>;
+  updateTaskCostRateAtomic(input: UpdateTaskRateAtomicInput): Promise<void>;
 }

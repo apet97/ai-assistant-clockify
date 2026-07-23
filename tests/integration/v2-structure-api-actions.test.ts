@@ -16,6 +16,20 @@ const NEW_PROJECT_API_ACTIONS = [
   "clockify_projects_estimate_update",
 ] as const;
 
+const NEW_TASK_API_ACTIONS = [
+  "clockify_tasks_delete_completed",
+  "clockify_tasks_status_update",
+  "clockify_tasks_assignees_replace",
+  "clockify_tasks_hourly_rate_update",
+  "clockify_tasks_cost_rate_update",
+] as const;
+
+const INTERNAL_ONLY_TASK_ACTIONS = [
+  "clockify_setup_task",
+  "clockify_tasks_delete",
+  "clockify_tasks_rate_update",
+] as const;
+
 const INTERNAL_ONLY_PROJECT_ACTIONS = [
   "clockify_setup_project",
   "clockify_projects_delete",
@@ -102,6 +116,92 @@ describe("v2 project structure API actions", () => {
   it("changes the catalog fingerprint when project API presentation metadata changes", () => {
     const action = getAction("clockify_projects_delete_archived");
     if (!action) throw new Error("missing delete_archived action");
+    const baseline = actionFingerprintForDefinition(action);
+    const altered = actionFingerprintForDefinition({
+      ...action,
+      presentation: { presenterId: action.presentation!.presenterId, version: action.presentation!.version + 1 },
+    });
+    expect(altered).not.toBe(baseline);
+  });
+});
+
+describe("v2 task structure API actions", () => {
+  it("exposes atomic task actions on MODEL_API and hides v1 composites/generics", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of NEW_TASK_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    for (const name of INTERNAL_ONLY_TASK_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).not.toBe("api");
+    }
+    expect(modelNames.has("clockify_tasks_create")).toBe(true);
+    expect(modelNames.has("clockify_tasks_update")).toBe(true);
+  });
+
+  it("refuses delete_completed preview for a non-DONE task", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      tasks: [{ id: "t1", name: "Design", projectId: "p1", status: "ACTIVE" } as any],
+    });
+    const result = await executeAction({
+      actionName: "clockify_tasks_delete_completed",
+      args: { projectId: "p1", id: "t1" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") {
+      expect(result.message).toContain("not DONE");
+    }
+    expect(fake.counts.deleteTaskAtomic ?? 0).toBe(0);
+  });
+
+  it("delete_completed commits with a single DELETE for a DONE task", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      tasks: [{ id: "t1", name: "Design", projectId: "p1", status: "DONE" } as any],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_tasks_delete_completed",
+      args: { projectId: "p1", id: "t1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteTaskAtomic).toBe(1);
+    expect(fake.counts.updateTaskAtomic ?? 0).toBe(0);
+  });
+
+  it("routes hourly and cost task-rate actions through distinct fake REST ports", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "p1", name: "Website" }],
+      tasks: [{ id: "t1", name: "Design", projectId: "p1" }],
+    });
+    const hourlyPreview = await executeAction({
+      actionName: "clockify_tasks_hourly_rate_update",
+      args: { projectId: "p1", taskId: "t1", amount: 75 },
+      context: makeContext(fake),
+    });
+    if (hourlyPreview.kind !== "preview") throw new Error("expected hourly preview");
+    await commitConfirmedOperation(makeContext(fake), hourlyPreview.operation);
+    expect(fake.counts.updateTaskHourlyRateAtomic).toBe(1);
+    expect(fake.counts.updateTaskCostRateAtomic ?? 0).toBe(0);
+
+    const costPreview = await executeAction({
+      actionName: "clockify_tasks_cost_rate_update",
+      args: { projectId: "p1", taskId: "t1", amount: 40 },
+      context: makeContext(fake),
+    });
+    if (costPreview.kind !== "preview") throw new Error("expected cost preview");
+    await commitConfirmedOperation(makeContext(fake), costPreview.operation);
+    expect(fake.counts.updateTaskCostRateAtomic).toBe(1);
+  });
+
+  it("changes the catalog fingerprint when task API presentation metadata changes", () => {
+    const action = getAction("clockify_tasks_delete_completed");
+    if (!action) throw new Error("missing delete_completed action");
     const baseline = actionFingerprintForDefinition(action);
     const altered = actionFingerprintForDefinition({
       ...action,
