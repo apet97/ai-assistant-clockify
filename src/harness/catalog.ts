@@ -36,6 +36,7 @@ import { CURATED_ACTIONS } from "./workflows/curated.js";
 import { SETUP_PROJECT_ACTIONS } from "./workflows/setup-project.js";
 import { SETUP_TASK_ACTIONS } from "./workflows/setup-task.js";
 import { createHash } from "node:crypto";
+import { PRESENTATION_RULES_VERSION } from "./prepared-write-presentation.js";
 import { writeAuthorityActionNames, writeAuthorityFor } from "./write-authority.js";
 
 /** Structural registry view — avoids importing api-catalog (cycle with ACTION_CATALOG). */
@@ -205,6 +206,7 @@ function actionFingerprintContract(action: ActionDefinition) {
           normalizedOperationMaterialContract:
             action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
+          presentationRulesVersion: PRESENTATION_RULES_VERSION,
         }
       : {}),
   };

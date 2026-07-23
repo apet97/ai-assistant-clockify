@@ -14,6 +14,7 @@ import { ACTION_CATALOG, actionFingerprint } from "../../src/harness/catalog.js"
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { errorReceipt, type ErrorReceipt } from "../../src/harness/receipts.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
+import { PRESENTATION_RULES_VERSION } from "../../src/harness/prepared-write-presentation.js";
 import {
   optionalLiteralPathsFromJsonSchema,
   validateWriteAuthorityOperation,
@@ -317,6 +318,7 @@ describe("Phase 6 write authority enforcement", () => {
       normalizedOperationMaterialContract:
         action.normalizedOperationMaterialContract ?? [],
       presentation: action.presentation ?? null,
+      presentationRulesVersion: PRESENTATION_RULES_VERSION,
     })).digest("hex");
     expect(actionFingerprint(action.name)).toBe(expected);
   });

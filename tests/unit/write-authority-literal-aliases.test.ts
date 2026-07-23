@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionDefinition } from "../../src/harness/action.js";
 import { ACTION_CATALOG, actionFingerprint, catalogHash, getAction } from "../../src/harness/catalog.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
+import { PRESENTATION_RULES_VERSION } from "../../src/harness/prepared-write-presentation.js";
 import { writeAuthorityFor } from "../../src/harness/write-authority.js";
 
 type AliasDefinition = {
@@ -233,6 +234,7 @@ function fingerprintContract(action: ActionDefinition) {
           normalizedOperationMaterialContract:
             action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
+          presentationRulesVersion: PRESENTATION_RULES_VERSION,
         }
       : {}),
   };

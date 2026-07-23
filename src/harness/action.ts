@@ -24,6 +24,17 @@ export type {
   ExecutorKind,
   RegistryId,
 } from "./action-discriminators.js";
+export type {
+  FieldProvenance,
+  FieldProvenanceMap,
+  PreparedWriteFact,
+  PreparedWritePresentation,
+  PreparedWritePresenterRegistration,
+  PreparedWriteValidationError,
+  PresentPreparedWrite,
+  ResolvedTargetView,
+  ServerDefaultView,
+} from "./prepared-write-presentation.js";
 
 /**
  * A durable operation row can exist before the rest of preparation finishes.

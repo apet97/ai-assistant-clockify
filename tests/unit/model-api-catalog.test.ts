@@ -9,6 +9,10 @@ import {
 } from "../../src/harness/api-catalog.js";
 import { ACTION_CATALOG, catalogForModel } from "../../src/harness/catalog.js";
 import { toolsForModel } from "../../src/harness/tools.js";
+import {
+  getMaterialFormatter,
+  getPreparedWritePresenter,
+} from "../../src/harness/prepared-write-presentation.js";
 
 const INTERNAL_ONLY_EXCLUSIONS = [
   "clockify_period_report",
@@ -122,9 +126,14 @@ describe("explicit ActionRegistry surfaces", () => {
         presenterId: expect.any(String),
         version: expect.any(Number),
       }));
+      expect(getPreparedWritePresenter(action.presentation!.presenterId)?.version)
+        .toBe(action.presentation!.version);
       if (action.kind !== "read") {
         expect(action.materialFields?.length).toBeGreaterThan(0);
         expect(action.normalizedOperationMaterialContract?.length).toBeGreaterThan(0);
+        for (const field of action.materialFields ?? []) {
+          expect(getMaterialFormatter(field.formatterId, field.formatterVersion)).toBeDefined();
+        }
       }
     }
   });

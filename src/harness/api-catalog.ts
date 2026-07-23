@@ -5,6 +5,7 @@ import {
   registryHashForActions,
   type NormalizedRegistryAction,
 } from "./action-registry.js";
+import { initializePreparedWritePresentationRegistries } from "./prepared-write-presentation.js";
 import type {
   ActionRegistryId,
   AuthClass,
@@ -78,6 +79,8 @@ export const INTERNAL_ACTION_CATALOG: ActionRegistry = createActionRegistry("v1-
  * definitions that pass normalizeRegistryAction atomicity/availability gates.
  */
 export const MODEL_API_ACTION_CATALOG: ActionRegistry = createActionRegistry("v2-api");
+
+initializePreparedWritePresentationRegistries(MODEL_API_ACTION_CATALOG.actions);
 
 /**
  * V2 local-only surface — permissions, recent outcomes, and other

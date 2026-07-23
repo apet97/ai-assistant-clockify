@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { ACTION_CATALOG, actionFingerprint, catalogHash, getAction } from "../../src/harness/catalog.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
+import { PRESENTATION_RULES_VERSION } from "../../src/harness/prepared-write-presentation.js";
 
 const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
   const hasApiMetadata = action.apiExposure !== undefined
@@ -37,6 +38,7 @@ const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
           normalizedOperationMaterialContract:
             action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
+          presentationRulesVersion: PRESENTATION_RULES_VERSION,
         }
       : {}),
   };
