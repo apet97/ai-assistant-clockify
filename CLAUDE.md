@@ -58,6 +58,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T10-D CLOSED:** invoice read parity matrix covers all 4 catalog invoice reads (list/get/payments/export); no composite item GET exposure. Gate: `v2-read-parity-invoices` + Task 6D gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-E`.
 - **T10-E CLOSED:** expense/custom-field read parity matrix covers all 4 catalog reads with nested expense envelope and truncated list truth preserved. Gate: `v2-read-parity-expenses` + Task 6E gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-F`.
 - **T10-F CLOSED:** user/group read parity matrix covers both catalog `users_groups` reads (`clockify_users_list`, `clockify_groups_list`). Gate: `v2-read-parity-users` + Task 6F gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-G`.
+- **T10-G CLOSED:** leave/approval/scheduling read parity matrix covers all 11 catalog reads across `time_off_approvals`, `scheduling`, and `approvals`; no list/find GET-one wrappers. Gate: `v2-read-parity-leave` + Task 6G gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-H`.
 
 ## Start here
 

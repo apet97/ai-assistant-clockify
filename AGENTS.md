@@ -61,6 +61,7 @@ here; this file is the execution map.
 - **T10-D CLOSED:** invoice reads 4/4 parity green; live `not_run`. Next: `T10-E`.
 - **T10-E CLOSED:** expense/custom-field reads 4/4 parity green; live `not_run`. Next: `T10-F`.
 - **T10-F CLOSED:** user/group reads 2/2 parity green; live `not_run`. Next: `T10-G`.
+- **T10-G CLOSED:** leave/scheduling reads 11/11 parity green; live `not_run`. Next: `T10-H`.
 
 ## Non-negotiable invariants
 
