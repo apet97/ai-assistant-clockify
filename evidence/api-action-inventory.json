@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "62d38705b5bb32d337cc0de243047281093e7c94b7996b4fba94ec3e7bcc7d05",
+  "catalogHash": "c04f19923e47691713ce555619f8940d4dbbccead64af8f9075e27fbe1be51a5",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,9 +14,9 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 121,
+      "api": 123,
       "composite": 24,
-      "generic": 18,
+      "generic": 16,
       "local": 4
     }
   },
@@ -11822,66 +11822,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_time_off_policies_create",
-      "description": "Create a time-off policy. Scope it with `userIds` and/or `userGroupIds` — each entry an id, exact name, or 'me' (groups by id/exact name), resolved server-side, clarifies on an unknown one; defaults to just you when neither is given. Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "time_off_approvals",
-      "workflowModule": "time-off.ts",
-      "actionFingerprint": "f7db5b8280667fb0651948be4063f1418060a8a8867d05791b248e00aa1d002a",
-      "exposure": "generic",
-      "decisionReason": "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed policy create operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/time-off/policies",
-          "sourceModule": "time-off.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/time-off/policies",
-          "sourceModule": "time-off.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/users",
-          "sourceModule": "users.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "name"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_time_off_policies_list",
       "description": "List time-off policies.",
       "kind": "read",
@@ -11928,6 +11868,164 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_time_off_policies_create",
+      "description": "Create a time-off policy. Scope it with `userIds` and/or `userGroupIds` — each entry an id, exact name, or 'me' (groups by id/exact name), resolved server-side, clarifies on an unknown one; defaults to just you when neither is given. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_off_approvals",
+      "workflowModule": "time-off.ts",
+      "actionFingerprint": "a5a0682417e66b393ffa1d35995308e2d9a51946991aaef89ea0c85a5e0101e5",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/time-off/policies (createPolicy).",
+      "operation": {
+        "operationId": "createPolicy",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/time-off/policies",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-off/policies",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Policy name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/requiresApproval",
+          "label": "Requires approval",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/daysPerYear",
+          "label": "Days per year",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/negativeBalance",
+          "label": "Negative balance",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "labelTemplate": "User {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "labelTemplate": "Group {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/requiresApproval",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "value",
+          "path": "/daysPerYear",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/negativeBalance",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "maxItems": 8,
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "maxItems": 8,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_time_off_policies_create",
+        "version": 1
+      },
+      "requiredArguments": [
+        "name"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -11987,66 +12085,6 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_time_off_policies_update",
-      "description": "Update a time-off policy (name / approval / days per year) or re-scope it with `userIds`/`userGroupIds` (ids, exact names, or 'me'; resolved server-side, clarifies on an unknown one). Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "time_off_approvals",
-      "workflowModule": "time-off.ts",
-      "actionFingerprint": "dd78e3685914e9f7f2110b0f33a51b7968a3b6254413c880c146755467172eea",
-      "exposure": "generic",
-      "decisionReason": "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed policy update operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
-          "sourceModule": "time-off.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
-          "sourceModule": "time-off.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/users",
-          "sourceModule": "users.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "id"
-      ],
-      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -12143,6 +12181,164 @@
       ],
       "presentation": {
         "presenterId": "clockify_time_off_policies_archive",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_time_off_policies_update",
+      "description": "Update a time-off policy (name / approval / days per year) or re-scope it with `userIds`/`userGroupIds` (ids, exact names, or 'me'; resolved server-side, clarifies on an unknown one). Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_off_approvals",
+      "workflowModule": "time-off.ts",
+      "actionFingerprint": "a5ec13bb22eee8874ddf99dc0ebc1f866572f97e71f0a9c1b417e3114aef2a12",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/time-off/policies/{id} (updatePolicy).",
+      "operation": {
+        "operationId": "updatePolicy",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Policy",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Policy name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/requiresApproval",
+          "label": "Requires approval",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/daysPerYear",
+          "label": "Days per year",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "labelTemplate": "User {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "labelTemplate": "Group {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/requiresApproval",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "value",
+          "path": "/daysPerYear",
+          "scalarType": "number"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "maxItems": 8,
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "maxItems": 8,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_time_off_policies_update",
         "version": 1
       },
       "requiredArguments": [
@@ -18460,10 +18656,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_time_off_policies_create"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -18472,8 +18668,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
@@ -18564,10 +18760,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_time_off_policies_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -18576,8 +18772,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/policies/{policyId}/requests\u0000time-off.ts",

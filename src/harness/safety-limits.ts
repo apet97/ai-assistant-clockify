@@ -108,6 +108,9 @@ export const CUSTOM_FIELD_VALUE_ARRAY_MAX = 19;
 /** Holiday scope arrays share one POST/PUT body; keep scalar preview fields plus both arrays within 22 facts. */
 export const HOLIDAY_SCOPE_USER_BATCH_MAX = 8;
 export const HOLIDAY_SCOPE_GROUP_BATCH_MAX = 8;
+/** Policy scope arrays share the holiday 22-fact material presentation cap. */
+export const TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX = 8;
+export const TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX = 8;
 /** Webhook triggerSource entries must fit the 22-fact preview ceiling with scalar fields. */
 export const WEBHOOK_TRIGGER_SOURCE_BATCH_MAX = 17;
 export const ONBOARD_GROUP_BATCH_MAX = deriveMaximumBatchSize(

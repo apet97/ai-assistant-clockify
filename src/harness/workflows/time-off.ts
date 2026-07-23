@@ -20,7 +20,11 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateTimeOffPolicyInput, CreateTimeOffRequestInput, TimeOffPolicySummary, TimeOffRequestSummary } from "../../clockify/ports/time-off.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
-import { TIME_OFF_BALANCE_USER_BATCH_MAX } from "../safety-limits.js";
+import {
+  TIME_OFF_BALANCE_USER_BATCH_MAX,
+  TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+  TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+} from "../safety-limits.js";
 import type {
   ApiAccess,
   ApiActionMetadataCarrier,
@@ -203,17 +207,75 @@ const TIME_OFF_API_METADATA = Object.freeze({
     support: [timeOffEndpoint.policiesList],
     materialFields: [],
   }),
-  clockify_time_off_policies_create: timeOffInternalMetadata({
-    exposure: "generic",
-    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed policy create operation.",
-    primary: [timeOffEndpoint.policiesCreate],
+  clockify_time_off_policies_create: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_create",
+    operationId: "createPolicy",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/time-off/policies",
+    access: "write",
+    primary: timeOffEndpoint.policiesCreate,
     support: [timeOffEndpoint.policiesList, timeOffEndpoint.usersList],
+    materialFields: [
+      timeOffMaterialField("/name", "Policy name", "text", true),
+      timeOffMaterialField("/requiresApproval", "Requires approval", "boolean", false),
+      timeOffMaterialField("/daysPerYear", "Days per year", "number", false),
+      timeOffMaterialField("/negativeBalance", "Negative balance", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
-  clockify_time_off_policies_update: timeOffInternalMetadata({
-    exposure: "generic",
-    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed policy update operation.",
-    primary: [timeOffEndpoint.policiesUpdate],
+  clockify_time_off_policies_update: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_update",
+    operationId: "updatePolicy",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/time-off/policies/{id}",
+    access: "write",
+    primary: timeOffEndpoint.policiesUpdate,
     support: [timeOffEndpoint.policiesGet, timeOffEndpoint.usersList],
+    materialFields: [
+      timeOffMaterialField("/id", "Policy", "entity", true),
+      timeOffMaterialField("/name", "Policy name", "text", false),
+      timeOffMaterialField("/requiresApproval", "Requires approval", "boolean", false),
+      timeOffMaterialField("/daysPerYear", "Days per year", "number", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
   clockify_time_off_policies_archive: timeOffApiMetadata({
     actionName: "clockify_time_off_policies_archive",
@@ -466,8 +528,8 @@ const createPolicy = defineRiskyAction({
     requiresApproval: z.boolean().optional(),
     daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
     negativeBalance: z.boolean().optional(),
-    userIds: zStringList().optional(),
-    userGroupIds: zStringList().optional(),
+    userIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX)).optional(),
+    userGroupIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX)).optional(),
   }),
   async preview(ctx, args) {
     const scope = await resolveScopeRefs(ctx, args, { verb: "scope the policy to" });
@@ -557,8 +619,8 @@ const updatePolicy = defineRiskyAction({
       name: z.string().optional(),
       requiresApproval: z.boolean().optional(),
       daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine(
       (v) =>
