@@ -75,6 +75,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 ## Start here
 - **T12-F CLOSED:** user/group write parity matrix. Gate: users write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-G`.
 
+- **T12-G CLOSED:** leave/approval/scheduling write parity matrix. Gate: leave write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-H`.
 - Product behavior and local setup: `README.md`.
 - Code changes: read "Safety & planner invariants", then the relevant entry in
   "Architecture". Do not infer authorization rules from UI or prompt text.

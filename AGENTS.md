@@ -78,6 +78,7 @@ here; this file is the execution map.
 ## Non-negotiable invariants
 - **T12-F CLOSED:** user/group write parity matrix. Live: `not_run`. Next: `T12-G`.
 
+- **T12-G CLOSED:** leave/approval/scheduling write parity. Live: `not_run`. Next: `T12-H`.
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) governs the v2 rewrite. V2 coexists
   under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` will be the sole rewrite
   switch and defaults to v1 until authorized cutover.
