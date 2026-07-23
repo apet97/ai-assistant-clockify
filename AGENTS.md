@@ -59,6 +59,7 @@ here; this file is the execution map.
 - **T10-B CLOSED:** time reads 2/2 parity green; live `not_run`. Next: `T10-C`.
 - **T10-C CLOSED:** reporting/admin reads 10/10 parity green; webhooks auth-filtered; live `not_run`. Next: `T10-D`.
 - **T10-D CLOSED:** invoice reads 4/4 parity green; live `not_run`. Next: `T10-E`.
+- **T10-E CLOSED:** expense/custom-field reads 4/4 parity green; live `not_run`. Next: `T10-F`.
 
 ## Non-negotiable invariants
 
