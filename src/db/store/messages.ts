@@ -93,7 +93,7 @@ export function buildMessageStore(ctx: StoreContext): {
         const payload = envelope === undefined && results.length === 0
           ? undefined
           : { ...(envelope ?? {}), ...(results.length > 0 ? { results } : {}) };
-        return { role: r.role, content: r.content, payload };
+        return { ...(r.id ? { id: r.id } : {}), role: r.role, content: r.content, payload };
       });
     },
   };

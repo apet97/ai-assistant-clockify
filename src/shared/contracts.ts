@@ -1,5 +1,25 @@
 /** Cross-boundary product contracts shared by the server and framework-free UI. */
 
+import type {
+  DoneFrame,
+  PresentedResult,
+  PresentedResultEnvelope,
+  RunEventAttachment,
+  RunEventFrame,
+  RunEventView,
+  SequencedRunEvent,
+} from "../assistant-v2/events.js";
+
+export type {
+  PresentedResult,
+  PresentedResultEnvelope,
+  RunEventAttachment,
+  RunEventFrame,
+  RunEventView,
+  DoneFrame,
+  SequencedRunEvent,
+};
+
 export type UiTheme = "system" | "light" | "dark";
 
 export interface UiPreferences {
@@ -25,6 +45,8 @@ export type ChatEvent<TResult = unknown, TReceipt = unknown> =
   | { type: "reply"; text: string; kind?: string }
   | { type: "error"; message: string; code?: string }
   | { type: "status"; label: string; action?: string }
+  | RunEventFrame
+  | DoneFrame
   | { type: "done" };
 
 export interface PublicProductLinks {

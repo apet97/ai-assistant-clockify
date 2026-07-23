@@ -27,6 +27,8 @@ import {
   type ChatPipeline,
 } from "./chat-pipeline.js";
 import { createV2RunnerPipeline } from "./v2-chat-pipeline.js";
+import { runsRouter } from "./runs.js";
+import { devRunInspectorRouter } from "./dev-run-inspector.js";
 import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
 import { KeyedFifo } from "./fifo-lock.js";
@@ -426,11 +428,17 @@ export function apiRouter(
       createdAt: operation.createdAt,
       updatedAt: operation.updatedAt,
     }));
+    const activeRun = deps.store.getActiveRunForSession(
+      claims.sessionId,
+      claims.workspaceId,
+      claims.adminUserId,
+    );
     res.json({
       ok: true,
       messages,
       pendingPreviews,
       ...(operationRuns.length > 0 ? { operationRuns } : {}),
+      ...(activeRun ? { activeRun } : {}),
     });
   }));
 
@@ -938,6 +946,10 @@ export function apiRouter(
     }
     res.json({ ok: true, status: "cancelled" });
   }));
+
+  router.use("/runs", runsRouter(deps));
+  const inspector = devRunInspectorRouter(deps);
+  if (inspector) router.use("/dev/runs", inspector);
 
   return router;
 }
