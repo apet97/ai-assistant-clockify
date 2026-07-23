@@ -408,7 +408,14 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
             }),
           },
         });
-        if (code === "host_call_budget_exceeded" || code === "clarification_required" || code.startsWith("invalid_") || code === "presentation_limit_exceeded") {
+        if (
+          code === "host_call_budget_exceeded" ||
+          code === "clarification_required" ||
+          code === "policy_denied" ||
+          code === "unavailable_for_auth_class" ||
+          code.startsWith("invalid_") ||
+          code === "presentation_limit_exceeded"
+        ) {
           return { kind: "denied", code, actionResultId: ref.id };
         }
         return { kind: "not_ready", code: "write_port_not_ready", actionResultId: ref.id };

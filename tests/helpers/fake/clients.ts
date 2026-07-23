@@ -78,7 +78,11 @@ export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pic
     updateClientAtomic: updateAtomic,
     archiveClientAtomic: async (id, body) => {
       bump("archiveClientAtomic");
-      return updateAtomic(id, body);
+      const index = state.clients.findIndex((client) => client.id === id);
+      const updated = { ...(index >= 0 ? state.clients[index] : { id, name: id }), ...body, id, archived: true } as EntitySummary;
+      if (index >= 0) state.clients[index] = updated;
+      else state.clients.push(updated);
+      return updated;
     },
     async deleteClient(id) {
       bump("deleteClient");

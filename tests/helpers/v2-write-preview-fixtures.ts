@@ -114,7 +114,7 @@ export const WRITE_PREVIEW_FIXTURES: Record<string, WritePreviewFixture> = {
   clockify_projects_create: { args: { name: "Preview Project" } },
   clockify_projects_delete_archived: { args: { id: "p-arch" } },
   clockify_projects_estimate_update: { args: { id: "p1", timeEstimate: { estimate: "PT2H", active: true } } },
-  clockify_projects_from_template: { args: { templateName: "Onboarding template", name: "From template" }, expectPreview: false },
+  clockify_projects_from_template: { args: { templateName: "Onboarding template", name: "From template" } },
   clockify_projects_member_cost_rate_update: { args: { projectId: "p1", userId: "me", amount: 40 } },
   clockify_projects_member_hourly_rate_update: { args: { projectId: "p1", userId: "me", amount: 75 } },
   clockify_projects_memberships_replace: { args: { id: "p1", memberships: [{ userId: "admin-1" }] } },
