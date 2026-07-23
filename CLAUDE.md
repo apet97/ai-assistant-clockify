@@ -42,6 +42,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-SCHEDULING-TOTALS CLOSED at `af7797d`: split `clockify_scheduling_project_totals_all` (`getFilteredProjectTotals`, POST) and `clockify_scheduling_project_totals_one` (`getProjectTotalsForSingleProject`, GET); `clockify_scheduling_user_totals` stays atomic; v1 `clockify_scheduling_project_totals` stays generic/off MODEL_API. Counts: `ACTION_CATALOG` 171, `MODEL_API` 127. Live: `live_not_run_missing_credentials`.
 - T06-SCHEDULING-PUBLISH CLOSED at `b66e140`: `clockify_scheduling_publish` (`publishAssignments`, one PUT primary) verified on MODEL_API with optional `userFilter`. Live: `live_not_run_missing_credentials`.
 - **Task 6 CLOSED (T06-FINAL):** full inventory/scope/model-registry parity gate green; `ACTION_CATALOG` 171, `MODEL_API` 127, catalog hash `7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab`. Node verify green. Live domains: `live_not_run_missing_credentials`. Next: `T07-A` (deterministic API discovery index).
+- **T07-A CLOSED:** pure NFKC/token/trigram discovery index in `src/assistant-v2/discovery/` (`api-text.ts`, `api-index.ts`, `api-search.ts`); field weights 40/30/20/10, exact-name bonus 1000, trigram threshold 0.34, auth pre-filter with unavailable-only notice, max 12. Focused gate: `v2-api-index` + `v2-api-search` + `model-api-catalog` 36 passed. Live: N/A. Next: `T07-B`.
 
 ## Start here
 

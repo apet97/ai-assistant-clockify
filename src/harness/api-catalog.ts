@@ -84,3 +84,8 @@ export const MODEL_API_ACTION_CATALOG: ActionRegistry = createActionRegistry("v2
  * `apiExposure === "local"` definitions. Never sent as Clockify model tools.
  */
 export const LOCAL_ASSISTANT_ACTIONS: ActionRegistry = createActionRegistry("v2-local");
+
+/** Names that must never appear in Clockify API discovery results. */
+export const LOCAL_ASSISTANT_TOOL_NAMES: ReadonlySet<string> = Object.freeze(
+  new Set(LOCAL_ASSISTANT_ACTIONS.actions.map((action) => action.name)),
+);

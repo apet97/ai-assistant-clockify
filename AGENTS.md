@@ -47,6 +47,7 @@ here; this file is the execution map.
 - T06-SCHEDULING-TOTALS CLOSED: split project_totals_all/one plus user_totals on MODEL_API; generic project_totals stays internal. Counts: `ACTION_CATALOG` 171, `MODEL_API` 127. Live: `live_not_run_missing_credentials`.
 - T06-SCHEDULING-PUBLISH CLOSED: atomic publish on MODEL_API. Live: `live_not_run_missing_credentials`.
 - **Task 6 CLOSED (T06-FINAL):** inventory/scope/registry parity gate green; `ACTION_CATALOG` 171, `MODEL_API` 127, catalog hash `7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab`. Next: `T07-A`.
+- **T07-A CLOSED:** deterministic discovery index/search (`src/assistant-v2/discovery/`); NFKC tokenization, weights 40/30/20/10, trigram ≥0.34, auth pre-filter + notice, cap 12. Gate: 36 focused tests green. Next: `T07-B`.
 
 ## Non-negotiable invariants
 

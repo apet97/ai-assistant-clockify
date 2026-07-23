@@ -1,7 +1,54 @@
+import type { FeatureGroup } from "./permissions.js";
+import type { RiskLabel } from "./risk.js";
+
 export type ApiHost = "api" | "reports" | "audit";
 export type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 export type ApiAccess = "read" | "write";
 export type ApiExposure = "api" | "composite" | "generic" | "local";
+
+/** Sole v2 discovery meta-tool; always loaded alongside at most 12 API tools. */
+export const DISCOVERY_META_TOOL_NAME = "assistant_find_api_operations" as const;
+
+export const API_SEARCH_QUERY_MAX_CHARS = 256;
+export const API_SEARCH_MAX_LIMIT = 12;
+export const API_SEARCH_TRIGRAM_THRESHOLD = 0.34;
+export const API_SEARCH_EXACT_MATCH_BONUS = 1_000;
+
+export type ApiSearchAccessFilter = "read" | "write" | "any";
+
+export interface FindApiOperationsInput {
+  query: string;
+  access?: ApiSearchAccessFilter;
+  groups?: FeatureGroup[];
+  limit?: number;
+}
+
+export interface ApiOperationDescriptor {
+  toolName: string;
+  operationId: string;
+  host: ApiHost;
+  method: ApiMethod;
+  path: string;
+  description: string;
+  requiredArguments: readonly string[];
+  access: ApiAccess;
+  risks: readonly RiskLabel[];
+}
+
+export type ApiSearchResult =
+  | {
+      kind: "matches";
+      query: string;
+      access: ApiSearchAccessFilter;
+      operations: readonly ApiOperationDescriptor[];
+    }
+  | {
+      kind: "notice";
+      code: "no_available_operation_for_auth_class";
+      authClass: AuthClass;
+    };
+
+export type ApiSearchAuthClass = AuthClass | "missing_auth_class";
 
 export interface ApiOperationMetadata {
   operationId: string;
