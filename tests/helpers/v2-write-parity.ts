@@ -63,10 +63,13 @@ export function mergeWriteSeed(fixture: WritePreviewFixture) {
 }
 
 export function mutationCallTotal(counts: Record<string, number>): number {
-  return Object.entries(counts).reduce(
-    (sum, [method, count]) => (MUTATION_METHOD.test(method) ? sum + count : sum),
-    0,
-  );
+  // Durable dispatch bumps *Atomic; many fakes also bump a legacy alias for the
+  // same host call. Count the Atomic method when both are present.
+  return Object.entries(counts).reduce((sum, [method, count]) => {
+    if (!MUTATION_METHOD.test(method)) return sum;
+    if (!method.endsWith("Atomic") && counts[`${method}Atomic`] !== undefined) return sum;
+    return sum + count;
+  }, 0);
 }
 
 export function isAddonUnavailableWrite(action: ActionDefinition): boolean {

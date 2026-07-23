@@ -73,6 +73,9 @@ describe("v2 preview-first write matrix", () => {
 
     const action = MODEL_API_ACTION_CATALOG.get(actionName);
     expect(action).toBeDefined();
+    const authClass = MODEL_API_ACTION_CATALOG.availability(actionName, "addon").available
+      ? "addon" as const
+      : "api_key" as const;
 
     expect(validateV2RawActionArguments(action!, { ...fixture.args, provenance: { "/x": "y" } })?.code)
       .toBe("invalid_args");
@@ -90,7 +93,7 @@ describe("v2 preview-first write matrix", () => {
         workspaceId: "ws-1",
         adminUserId: "admin-1",
         installationGeneration: 1,
-        authClass: "addon",
+        authClass,
       },
       originalRequest: `prepare ${actionName}`,
       requestHash: computeRequestHash(`prepare ${actionName}`),
@@ -105,7 +108,7 @@ describe("v2 preview-first write matrix", () => {
       workspaceId: "ws-1",
       adminUserId: "admin-1",
       installationGeneration: 1,
-      authClass: "addon" as const,
+      authClass,
     };
 
     const preparation = createOperationPreparationService({

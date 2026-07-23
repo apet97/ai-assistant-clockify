@@ -171,6 +171,27 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
       return { ok: false, code: rawError.code, actionResultId: ref.id };
     }
 
+    const availability = deps.registry.availability(call.actionName, scope.authClass);
+    if (!availability.available) {
+      const ref = deps.store.recordActionResult({
+        workspaceId: scope.workspaceId,
+        adminUserId: scope.adminUserId,
+        sessionId: scope.sessionId,
+        actionName: call.actionName,
+        status: "definitive_failed",
+        result: {
+          kind: "receipt",
+          receipt: errorReceipt({
+            action: call.actionName,
+            code: "unavailable_for_auth_class",
+            message: "This operation is not available for the current Clockify auth class.",
+            recovery: { hint: "Choose an operation available for this installation.", retryable: false },
+          }),
+        },
+      });
+      return { ok: false, code: "unavailable_for_auth_class", actionResultId: ref.id };
+    }
+
     const context = await buildContext(scope, deps);
     const result = await executeV2ApiAction({
       origin: "assistant",

@@ -70,6 +70,7 @@ here; this file is the execution map.
 - **T11-E CLOSED:** exact Confirm-all batches (ordered tuple hash, earliest expiry, single-confirm reject, definitive partial / ambiguity stop, replay, never-dispatched executing→pending recovery); `POST /api/confirmation-batches/:id/confirm`; v2 confirmation service uses `MODEL_API_ACTION_CATALOG.hash()`. Gate: confirmation-batches + v2-confirmation-batch + scrub + mutation-workflow green. Live: `not_run`. Next: `T11-F`.
 - **T11-F CLOSED / Task 11 green:** preview-first closure gate green (prepared-write, batches, matrix, scrub, migration/retention/restore, inventory, verify); every assistant write prepares then confirms; default engine stays v1. Live: `not_run`. Next: `T12-A`.
 - **T12-A CLOSED:** 17/17 structure (`work_structure`) writes in `v2-write-parity-structure.test.ts`; prepare denies policy/auth cleanly; one-primary button confirm; default engine stays v1. Live: `not_run`. Next: `T12-B`.
+- **T12-B CLOSED:** time write parity matrix + auth-class prepare gate + Atomic mutation counting. Live: `not_run`. Next: `T12-C`.
 
 ## Non-negotiable invariants
 

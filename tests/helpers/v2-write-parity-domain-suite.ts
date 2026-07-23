@@ -230,33 +230,59 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
           assertUnknownFieldRejected(action, fixture.args);
         });
 
-        it("denies policy-off preparation without host mutation", async () => {
-          if (addonUnavailable) {
-            const result = await prepareOnce({
+        if (addonUnavailable) {
+          it("denies addon preparation and confirms via api_key auth class", async () => {
+            const denied = await prepareOnce({
               actionName: action.name,
               args: fixture.args,
               authClass: "addon",
             });
+            expect(denied.prepared.kind).toBe("denied");
+            if (denied.prepared.kind === "denied") {
+              expect(receiptCode(denied.store, denied.prepared.actionResultId)).toBe("unavailable_for_auth_class");
+              expect(denied.mutationsAfterPrepare - denied.mutationsBefore).toBe(0);
+            }
+
+            if (!expectPreview) return;
+
+            const result = await prepareOnce({
+              actionName: action.name,
+              args: fixture.args,
+              authClass: "api_key",
+            });
+            expect(result.prepared.kind).toBe("prepared");
+            if (result.prepared.kind !== "prepared") return;
+            expect(result.mutationsAfterPrepare - result.mutationsBefore).toBe(0);
+            const confirmationId = result.prepared.confirmationIds[0]!;
+            const beforeConfirm = mutationCallTotal(result.fake.counts);
+            const outcome = await rotateAndConfirm({
+              store: result.store,
+              fake: result.fake,
+              sessionId: result.session.id,
+              confirmationId,
+              nonce: `api-key-${action.name}`,
+            });
+            expect(outcome.ok).toBe(true);
+            if (!outcome.ok) return;
+            expect(outcome.receipt.ok).toBe(true);
+            expect(mutationCallTotal(result.fake.counts) - beforeConfirm).toBe(1);
+          });
+        } else {
+          it("denies policy-off preparation without host mutation", async () => {
+            const result = await prepareOnce({
+              actionName: action.name,
+              args: fixture.args,
+              policyOff: true,
+            });
             expect(result.prepared.kind).toBe("denied");
             if (result.prepared.kind !== "denied") return;
-            expect(receiptCode(result.store, result.prepared.actionResultId)).toBe("unavailable_for_auth_class");
+            expect(receiptCode(result.store, result.prepared.actionResultId)).toBe("policy_denied");
             expect(result.mutationsAfterPrepare - result.mutationsBefore).toBe(0);
-            return;
-          }
-
-          const result = await prepareOnce({
-            actionName: action.name,
-            args: fixture.args,
-            policyOff: true,
           });
-          expect(result.prepared.kind).toBe("denied");
-          if (result.prepared.kind !== "denied") return;
-          expect(receiptCode(result.store, result.prepared.actionResultId)).toBe("policy_denied");
-          expect(result.mutationsAfterPrepare - result.mutationsBefore).toBe(0);
-        });
+        }
 
-        if (!expectPreview || addonUnavailable) {
-          it("does not prepare a preview under the current fixture/auth constraints", async () => {
+        if (!expectPreview) {
+          it("does not prepare a preview under the current fixture constraints", async () => {
             if (addonUnavailable) return;
             const result = await prepareOnce({
               actionName: action.name,
@@ -265,6 +291,10 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
             expect(result.prepared.kind).not.toBe("prepared");
             expect(result.mutationsAfterPrepare - result.mutationsBefore).toBe(0);
           });
+          return;
+        }
+
+        if (addonUnavailable) {
           return;
         }
 
@@ -428,6 +458,13 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
             expect(result.prepared.kind).toBe("prepared");
             if (result.prepared.kind !== "prepared") return;
             const confirmationId = result.prepared.confirmationIds[0]!;
+            const confirmation = result.store.getPendingConfirmation(confirmationId);
+            const operation = result.store.getOperationRun(result.prepared.operationIds[0]!);
+            const preparedSurface = JSON.stringify({
+              preview: confirmation?.preview,
+              operation: operation?.operation,
+            });
+            expect(preparedSurface).toContain("東京");
             const outcome = await rotateAndConfirm({
               store: result.store,
               fake: result.fake,
@@ -438,8 +475,6 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
             expect(outcome.ok).toBe(true);
             if (!outcome.ok) return;
             expect(outcome.receipt.ok).toBe(true);
-            const serialized = JSON.stringify(outcome.receipt);
-            expect(serialized).toContain("東京");
           });
         }
       });

@@ -55,8 +55,6 @@ export function makeFakeUsers({ state, seed, bump, nextId }: FakeContext): Pick<
     counter: "updateWorkspaceMemberHourlyRateAtomic" | "updateWorkspaceMemberCostRateAtomic",
   ) => {
     bump(counter);
-    bump("updateWorkspaceMemberRateAtomic");
-    bump("updateWorkspaceMemberRate");
     state.workspaceMemberRates[input.userId] = {
       ...(state.workspaceMemberRates[input.userId] ?? {}),
       [rateKind]: { amountMinor: input.amountMinor, ...(input.since !== undefined ? { since: input.since } : {}) },
