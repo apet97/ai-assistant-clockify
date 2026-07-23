@@ -59,6 +59,7 @@ import { SETUP_TASK_ACTIONS } from "../src/harness/workflows/setup-task.js";
 import { TAG_ACTIONS } from "../src/harness/workflows/tags.js";
 import { TASK_ACTIONS } from "../src/harness/workflows/tasks.js";
 import { TIME_OFF_ACTIONS } from "../src/harness/workflows/time-off.js";
+import { TIME_OFF_REQUEST_API_ACTIONS } from "../src/harness/api-actions/time-off-requests.js";
 import { TIME_TRACKING_ACTIONS } from "../src/harness/workflows/time-tracking.js";
 import { WEBHOOK_ACTIONS } from "../src/harness/workflows/webhooks.js";
 import { WORK_STRUCTURE_ACTIONS } from "../src/harness/workflows/work-structure.js";
@@ -196,6 +197,7 @@ const WORKFLOW_OWNERS: readonly WorkflowOwner[] = [
   { workflowModule: "custom-fields.ts", definitions: CUSTOM_FIELD_ACTIONS },
   { workflowModule: "api-actions/custom-fields.ts", definitions: CUSTOM_FIELD_API_ACTIONS },
   { workflowModule: "time-off.ts", definitions: TIME_OFF_ACTIONS },
+  { workflowModule: "api-actions/time-off-requests.ts", definitions: TIME_OFF_REQUEST_API_ACTIONS },
   { workflowModule: "holidays.ts", definitions: HOLIDAY_ACTIONS },
   { workflowModule: "scheduling.ts", definitions: SCHEDULING_ACTIONS },
   { workflowModule: "approvals.ts", definitions: APPROVAL_ACTIONS },

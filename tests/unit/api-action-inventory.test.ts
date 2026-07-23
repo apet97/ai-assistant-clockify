@@ -2911,8 +2911,25 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   {
-    ...apiAnnotation({
+    ...internalAnnotation({
       name: "clockify_time_off_requests_create",
+      exposure: "generic",
+      reason: "Combines DAYS and HOURS request bodies in one schema; use clockify_time_off_requests_create_days or clockify_time_off_requests_create_hours for unit-specific atomic operations.",
+      primary: [TIME_OFF_APPROVAL_ENDPOINT.requests.create],
+      support: [
+        TIME_OFF_APPROVAL_ENDPOINT.policies.list,
+        TIME_OFF_APPROVAL_ENDPOINT.policies.get,
+        TIME_OFF_APPROVAL_ENDPOINT.requests.list,
+        TIME_OFF_APPROVAL_ENDPOINT.balance.get,
+      ],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_time_off_requests_create_days",
       operationId: "createTimeOffRequest",
       method: "POST",
       path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
@@ -2927,12 +2944,36 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
       materialFields: [
         materialField("/policyId", "Policy", "entity", true),
-        materialField("/input/start", "Start", "text", true),
-        materialField("/input/end", "End", "text", true),
-        materialField("/input/timeUnit", "Time unit", "text", false),
-        materialField("/input/days", "Days", "number", false),
-        materialField("/input/halfDay", "Half day", "boolean", false),
-        materialField("/input/note", "Note", "text", false),
+        materialField("/start", "Start", "text", true),
+        materialField("/end", "End", "text", true),
+        materialField("/days", "Days", "number", false),
+        materialField("/halfDay", "Half day", "boolean", false),
+        materialField("/note", "Note", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_time_off_requests_create_hours",
+      operationId: "createTimeOffRequest",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+      access: "write",
+      sourceModule: "time-off.ts",
+      support: [
+        TIME_OFF_APPROVAL_ENDPOINT.policies.list,
+        TIME_OFF_APPROVAL_ENDPOINT.policies.get,
+        TIME_OFF_APPROVAL_ENDPOINT.requests.list,
+        TIME_OFF_APPROVAL_ENDPOINT.balance.get,
+      ],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/policyId", "Policy", "entity", true),
+        materialField("/start", "Start", "text", true),
+        materialField("/end", "End", "text", true),
+        materialField("/note", "Note", "text", false),
       ],
     }),
     primaryMutationCount: 1,
@@ -3765,12 +3806,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 167,
+      actions: 169,
       rawAdapterCallSites: 150,
       rawAdapterShapes: 126,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 123, composite: 24, generic: 16, local: 4 },
+      exposures: { api: 124, composite: 24, generic: 17, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "c04f19923e47691713ce555619f8940d4dbbccead64af8f9075e27fbe1be51a5",
+  "catalogHash": "2a2a0efbc334a7a35ae1186bbf0bd429e548bfa02aecf1dec6f5889bcf9dbee5",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 167,
+    "actions": 169,
     "rawAdapterCallSites": 150,
     "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 123,
+      "api": 124,
       "composite": 24,
-      "generic": 16,
+      "generic": 17,
       "local": 4
     }
   },
@@ -11822,6 +11822,82 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_time_off_requests_create",
+      "description": "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. For an HOUR-based policy, pass the day in `start` plus `hours` (the harness builds the hour window). External side effect (notifies approvers) — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_off_approvals",
+      "workflowModule": "time-off.ts",
+      "actionFingerprint": "f9c20fd7d7dd31bee92400ef6f2ef3a001145e39fcb26220e8534aa5d59d7f23",
+      "exposure": "generic",
+      "decisionReason": "Combines DAYS and HOURS request bodies in one schema; use clockify_time_off_requests_create_days or clockify_time_off_requests_create_hours for unit-specific atomic operations.",
+      "operation": null,
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/balance/user/{userId}\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/balance/user/{userId}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/policies/{policyId}/requests\u0000time-off.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/requests\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-off/requests",
+          "sourceModule": "time-off.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [],
+      "normalizedOperationMaterialContract": [],
+      "presentation": null,
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_time_off_policies_list",
       "description": "List time-off policies.",
       "kind": "read",
@@ -12349,12 +12425,12 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_time_off_requests_create",
-      "description": "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. For an HOUR-based policy, pass the day in `start` plus `hours` (the harness builds the hour window). External side effect (notifies approvers) — previews and requires confirmation.",
+      "name": "clockify_time_off_requests_create_days",
+      "description": "Submit a DAYS time-off request with bare YYYY-MM-DD start/end dates and optional period.days or halfDay. Pass the policy id — resolved and verified server-side. External side effect — previews and requires confirmation.",
       "kind": "risky_write",
       "featureGroup": "time_off_approvals",
-      "workflowModule": "time-off.ts",
-      "actionFingerprint": "75df73c13f36c0d7312c92f9704fbde1b18875b5614a1d01e6fec595c0c18047",
+      "workflowModule": "api-actions/time-off-requests.ts",
+      "actionFingerprint": "4b7b6554c08791ddbcb748cd1a2886134d04cf9997e545f1ed110ea7bde4fb69",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/time-off/policies/{policyId}/requests (createTimeOffRequest).",
       "operation": {
@@ -12434,7 +12510,7 @@
         },
         {
           "kind": "value",
-          "path": "/input/start",
+          "path": "/start",
           "label": "Start",
           "formatterId": "text",
           "formatterVersion": 1,
@@ -12442,7 +12518,7 @@
         },
         {
           "kind": "value",
-          "path": "/input/end",
+          "path": "/end",
           "label": "End",
           "formatterId": "text",
           "formatterVersion": 1,
@@ -12450,15 +12526,7 @@
         },
         {
           "kind": "value",
-          "path": "/input/timeUnit",
-          "label": "Time unit",
-          "formatterId": "text",
-          "formatterVersion": 1,
-          "requiredInPreview": false
-        },
-        {
-          "kind": "value",
-          "path": "/input/days",
+          "path": "/days",
           "label": "Days",
           "formatterId": "number",
           "formatterVersion": 1,
@@ -12466,7 +12534,7 @@
         },
         {
           "kind": "value",
-          "path": "/input/halfDay",
+          "path": "/halfDay",
           "label": "Half day",
           "formatterId": "boolean",
           "formatterVersion": 1,
@@ -12474,7 +12542,7 @@
         },
         {
           "kind": "value",
-          "path": "/input/note",
+          "path": "/note",
           "label": "Note",
           "formatterId": "text",
           "formatterVersion": 1,
@@ -12489,40 +12557,183 @@
         },
         {
           "kind": "value",
-          "path": "/input/start",
+          "path": "/start",
           "scalarType": "string"
         },
         {
           "kind": "value",
-          "path": "/input/end",
+          "path": "/end",
           "scalarType": "string"
         },
         {
           "kind": "value",
-          "path": "/input/timeUnit",
-          "scalarType": "string"
-        },
-        {
-          "kind": "value",
-          "path": "/input/days",
+          "path": "/days",
           "scalarType": "number"
         },
         {
           "kind": "value",
-          "path": "/input/halfDay",
+          "path": "/halfDay",
           "scalarType": "boolean"
         },
         {
           "kind": "value",
-          "path": "/input/note",
+          "path": "/note",
           "scalarType": "string"
         }
       ],
       "presentation": {
-        "presenterId": "clockify_time_off_requests_create",
+        "presenterId": "clockify_time_off_requests_create_days",
         "version": 1
       },
-      "requiredArguments": [],
+      "requiredArguments": [
+        "end",
+        "policyId",
+        "start"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_time_off_requests_create_hours",
+      "description": "Submit an HOURS time-off request with full ISO datetime start/end instants (no days or half-day fields). Pass the policy id — resolved and verified server-side. External side effect — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_off_approvals",
+      "workflowModule": "api-actions/time-off-requests.ts",
+      "actionFingerprint": "7e579609cd20b47cc96ffeb03a11f2ba97ae198d429787f6a115a1d61d848bb0",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/time-off/policies/{policyId}/requests (createTimeOffRequest).",
+      "operation": {
+        "operationId": "createTimeOffRequest",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/balance/user/{userId}\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/balance/user/{userId}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/policies/{id}\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{id}",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/policies/{policyId}/requests\u0000time-off.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+          "sourceModule": "time-off.ts"
+        },
+        {
+          "key": "read\u0000api\u0000POST\u0000/workspaces/{workspaceId}/time-off/requests\u0000time-off.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/time-off/requests",
+          "sourceModule": "time-off.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/policyId",
+          "label": "Policy",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/start",
+          "label": "Start",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/end",
+          "label": "End",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/note",
+          "label": "Note",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/policyId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/start",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/end",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/note",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_time_off_requests_create_hours",
+        "version": 1
+      },
+      "requiredArguments": [
+        "end",
+        "policyId",
+        "start"
+      ],
       "primaryMutationCount": 1,
       "compensationCount": 0
     },
@@ -18593,7 +18804,9 @@
       ],
       "internalSupportConsumers": [
         "clockify_time_off_balance_update",
-        "clockify_time_off_requests_create"
+        "clockify_time_off_requests_create",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours"
       ],
       "availabilityByAuthClass": {
         "addon": {
@@ -18628,7 +18841,9 @@
         "clockify_time_off_balance_update",
         "clockify_time_off_policies_create",
         "clockify_time_off_policies_get",
-        "clockify_time_off_requests_create"
+        "clockify_time_off_requests_create",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours"
       ],
       "availabilityByAuthClass": {
         "addon": {
@@ -18702,6 +18917,8 @@
         "clockify_time_off_policies_archive",
         "clockify_time_off_policies_update",
         "clockify_time_off_requests_create",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours",
         "clockify_time_off_requests_delete"
       ],
       "availabilityByAuthClass": {
@@ -18791,9 +19008,12 @@
         }
       ],
       "mappedModelActionNames": [
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours"
+      ],
+      "internalSupportConsumers": [
         "clockify_time_off_requests_create"
       ],
-      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -18888,6 +19108,8 @@
         "clockify_time_off_approve",
         "clockify_time_off_deny",
         "clockify_time_off_requests_create",
+        "clockify_time_off_requests_create_days",
+        "clockify_time_off_requests_create_hours",
         "clockify_time_off_requests_delete",
         "clockify_time_off_requests_get"
       ],

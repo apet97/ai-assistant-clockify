@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { getAction } from "../../src/harness/catalog.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
+import type { ActionContext } from "../../src/harness/action.js";
+import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import {
   TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
   TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
 } from "../../src/harness/safety-limits.js";
+
+const NOW = new Date("2026-06-06T00:00:00.000Z");
 
 const TIME_OFF_POLICY_API_ACTIONS = [
   "clockify_time_off_policies_list",
@@ -13,6 +19,30 @@ const TIME_OFF_POLICY_API_ACTIONS = [
   "clockify_time_off_policies_update",
   "clockify_time_off_policies_archive",
 ] as const;
+
+const TIME_OFF_REQUEST_API_ACTIONS = [
+  "clockify_time_off_requests_list",
+  "clockify_time_off_requests_delete",
+  "clockify_time_off_requests_create_days",
+  "clockify_time_off_requests_create_hours",
+] as const;
+
+const INTERNAL_ONLY_TIME_OFF_REQUEST_ACTIONS = [
+  "clockify_time_off_requests_create",
+  "clockify_time_off_requests_get",
+] as const;
+
+function makeContext(fake: FakeWorkspace): ActionContext {
+  return {
+    workspaceId: "ws-1",
+    adminUserId: "admin-1",
+    policy: defaultAdminPolicy(),
+    clockify: fake.client,
+    now: () => NOW,
+    timeZone: "UTC",
+    weekStartsOn: 1,
+  };
+}
 
 describe("v2 time off policy API actions", () => {
   it("exposes bounded policy CRUD actions on MODEL_API", () => {
@@ -23,12 +53,66 @@ describe("v2 time off policy API actions", () => {
     }
     const create = getAction("clockify_time_off_policies_create");
     const update = getAction("clockify_time_off_policies_update");
-    expect(create?.materialFields?.find((field) => field.kind === "array_item" && field.containerPath === "/userIds")?.maxItems)
-      .toBe(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX);
-    expect(create?.materialFields?.find((field) => field.kind === "array_item" && field.containerPath === "/userGroupIds")?.maxItems)
-      .toBe(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX);
-    expect(update?.materialFields?.find((field) => field.kind === "array_item" && field.containerPath === "/userIds")?.maxItems)
-      .toBe(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX);
-    expect(getAction("clockify_time_off_requests_get")?.apiExposure).toBe("composite");
+    const userIdsField = create?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/userIds",
+    );
+    const groupIdsField = create?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/userGroupIds",
+    );
+    const updateUserIdsField = update?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/userIds",
+    );
+    expect(userIdsField?.maxItems).toBe(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX);
+    expect(groupIdsField?.maxItems).toBe(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX);
+    expect(updateUserIdsField?.maxItems).toBe(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX);
+  });
+});
+
+describe("v2 time off request API actions", () => {
+  it("exposes unit-specific create actions and hides generic/composite wrappers", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of TIME_OFF_REQUEST_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    for (const name of INTERNAL_ONLY_TIME_OFF_REQUEST_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).not.toBe("api");
+    }
+    expect(getAction("clockify_time_off_requests_create_days")?.schema.safeParse({
+      policyId: "pol-1",
+      start: "2026-07-01",
+      end: "2026-07-03",
+      days: 3,
+    }).success).toBe(true);
+    expect(getAction("clockify_time_off_requests_create_hours")?.schema.safeParse({
+      policyId: "pol-1",
+      start: "2026-07-01T09:00:00Z",
+      end: "2026-07-01T13:00:00Z",
+    }).success).toBe(true);
+    expect(getAction("clockify_time_off_requests_create_hours")?.schema.safeParse({
+      policyId: "pol-1",
+      start: "2026-07-01T09:00:00Z",
+      end: "2026-07-01T13:00:00Z",
+      days: 1,
+    }).success).toBe(false);
+  });
+
+  it("create_days commit uses operation.actionName on the receipt", async () => {
+    const fake = createFakeWorkspace({
+      timeOffPolicies: [{ id: "pol-1", name: "Vacation", status: "ACTIVE", timeUnit: "DAYS" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_time_off_requests_create_days",
+      args: { policyId: "pol-1", start: "2026-07-01", end: "2026-07-01" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    if (receipt.ok) expect(receipt.action).toBe("clockify_time_off_requests_create_days");
   });
 });

@@ -28,6 +28,8 @@ const EXPECTED_BINDINGS = [
   ["clockify_time_off_policies_update", "update-time-off-policy", "update"],
   ["clockify_time_off_policies_archive", "archive-time-off-policy", "state-command"],
   ["clockify_time_off_requests_create", "create-time-off-request", "create"],
+  ["clockify_time_off_requests_create_days", "create-time-off-request", "create"],
+  ["clockify_time_off_requests_create_hours", "create-time-off-request", "create"],
   ["clockify_time_off_requests_delete", "delete-time-off-request", "delete"],
   ["clockify_time_off_approve", "approve-time-off-request", "state-command"],
   ["clockify_time_off_deny", "deny-time-off-request", "state-command"],
@@ -103,7 +105,7 @@ describe("leave/billing startup reconciliation", () => {
       Object.entries(steps).map(([planStepId, strategy]) => [actionName, planStepId, strategy]),
     );
     expect(actual).toEqual(EXPECTED_BINDINGS);
-    expect(LEAVE_BILLING_STARTUP_RECONCILIATION_HANDLER_COUNT).toBe(55);
+    expect(LEAVE_BILLING_STARTUP_RECONCILIATION_HANDLER_COUNT).toBe(57);
     expect(Object.isFrozen(LEAVE_BILLING_STARTUP_RECONCILIATION)).toBe(true);
     for (const [actionName, steps] of Object.entries(LEAVE_BILLING_STARTUP_RECONCILIATION)) {
       expect(Object.isFrozen(steps), actionName).toBe(true);

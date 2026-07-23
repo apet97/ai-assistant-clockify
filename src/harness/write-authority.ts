@@ -186,6 +186,8 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_time_off_policies_update: single("update-time-off-policy", { derivedIds: ["operation.policyId", "operation.id", "operation.patch.userIds[]", "operation.patch.userGroupIds[]", "operation.updateBody.userIds[]", "operation.updateBody.userGroupIds[]", "operation.updateBody.body.userIds[]", "operation.updateBody.body.userGroupIds[]", "operation.updateBody.source.userIds[]", "operation.updateBody.source.userGroupIds[]"] }),
   clockify_time_off_policies_archive: single("archive-time-off-policy", { derivedIds: ["operation.policyId", "operation.id"], defaults: ["operation.archived"] }),
   clockify_time_off_requests_create: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
+  clockify_time_off_requests_create_days: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
+  clockify_time_off_requests_create_hours: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
   clockify_time_off_requests_delete: single("delete-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_approve: single("approve-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_deny: single("deny-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
