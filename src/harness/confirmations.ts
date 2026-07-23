@@ -1,4 +1,10 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import type {
+  ActionOrigin,
+  AuthorityModel,
+  ExecutorKind,
+  RegistryId,
+} from "./action-discriminators.js";
 import type { RiskLabel } from "./risk.js";
 
 /**
@@ -55,6 +61,13 @@ export interface PendingConfirmationRecord {
    */
   agentState?: unknown;
   actionResultId?: string;
+  /** Closed origin/registry/authority/executor tuple. Missing only on unreadable legacy rows. */
+  origin?: ActionOrigin;
+  registryId?: RegistryId;
+  authorityModel?: AuthorityModel;
+  executorKind?: ExecutorKind;
+  runId?: string;
+  batchId?: string;
 }
 
 export interface CreateConfirmationInput {
@@ -78,6 +91,12 @@ export interface CreateConfirmationInput {
   catalogHash?: string;
   capabilityId?: string;
   capabilityHash?: string;
+  origin?: ActionOrigin;
+  registryId?: RegistryId;
+  authorityModel?: AuthorityModel;
+  executorKind?: ExecutorKind;
+  runId?: string;
+  batchId?: string;
 }
 
 export interface CreatedConfirmation {
@@ -194,6 +213,12 @@ export function createPendingConfirmation(input: CreateConfirmationInput): Creat
     catalogHash: input.catalogHash ?? "unbound",
     ...(input.capabilityId ? { capabilityId: input.capabilityId } : {}),
     ...(input.capabilityHash ? { capabilityHash: input.capabilityHash } : {}),
+    ...(input.origin ? { origin: input.origin } : {}),
+    ...(input.registryId ? { registryId: input.registryId } : {}),
+    ...(input.authorityModel ? { authorityModel: input.authorityModel } : {}),
+    ...(input.executorKind ? { executorKind: input.executorKind } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.batchId ? { batchId: input.batchId } : {}),
     nonceHash: hashNonce(nonce, id, operationHash, input.sessionSecret),
     expiresAt,
     createdAt: now.toISOString(),

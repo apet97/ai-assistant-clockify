@@ -1,4 +1,10 @@
 import type Database from "better-sqlite3";
+import type {
+  ActionOrigin,
+  AuthorityModel,
+  ExecutorKind,
+  RegistryId,
+} from "../../harness/action-discriminators.js";
 import type { RiskLabel } from "../../harness/risk.js";
 import type { SuccessReceipt, ErrorReceipt, EntityRef } from "../../harness/receipts.js";
 import type { ActionResultRef } from "../action-results.js";
@@ -187,6 +193,19 @@ export type OperationRunStatus =
   | "definitive_failed"
   | "outcome_unknown";
 
+export interface OperationDiscriminatorInput {
+  origin: ActionOrigin;
+  registryId: RegistryId;
+  authorityModel: AuthorityModel;
+  executorKind: ExecutorKind;
+  runId?: string;
+  batchId?: string;
+  fieldProvenanceJson?: string;
+  fieldProvenanceHash?: string;
+  sourceUndoId?: string;
+  sourceUndoHash?: string;
+}
+
 export interface PrepareOperationRunInput {
   id?: string;
   requestId?: string;
@@ -204,10 +223,87 @@ export interface PrepareOperationRunInput {
   /** Immutable admin-authored authority binding. Omitted only by legacy callers. */
   capabilityId?: string;
   capabilityHash?: string;
+  /** Explicit closed tuple. Omitted v1 callers receive capability-derived legacy values. */
+  discriminator?: OperationDiscriminatorInput;
 }
 
-export interface OperationRun extends Omit<PrepareOperationRunInput, "id"> {
+export type ConfirmationBatchStatus =
+  | "pending"
+  | "executing"
+  | "succeeded"
+  | "partial"
+  | "definitive_failed"
+  | "outcome_unknown"
+  | "cancelled"
+  | "expired";
+
+export type ConfirmationBatchItemStatus =
+  | "pending"
+  | "executing"
+  | "succeeded"
+  | "definitive_failed"
+  | "outcome_unknown"
+  | "cancelled";
+
+export interface ConfirmationBatchItemInput {
+  confirmationId: string;
+  operationId: string;
+}
+
+export interface CreateConfirmationBatchInput {
+  id?: string;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  adminUserId: string;
+  orderedTupleHash: string;
+  expiresAt: string;
+  items: readonly ConfirmationBatchItemInput[];
+}
+
+export interface ConfirmationBatchRecord {
   id: string;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  adminUserId: string;
+  orderedTupleHash: string;
+  status: ConfirmationBatchStatus;
+  currentIndex: number;
+  actionResultId?: string;
+  expiresAt: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface ConfirmationBatchItemRecord {
+  batchId: string;
+  itemIndex: number;
+  sessionId: string;
+  runId: string;
+  workspaceId: string;
+  adminUserId: string;
+  confirmationId: string;
+  operationId: string;
+  status: ConfirmationBatchItemStatus;
+  actionResultId?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface OperationRun extends Omit<PrepareOperationRunInput, "id" | "discriminator"> {
+  id: string;
+  origin?: ActionOrigin;
+  registryId?: RegistryId;
+  authorityModel?: AuthorityModel;
+  executorKind?: ExecutorKind;
+  runId?: string;
+  batchId?: string;
+  fieldProvenanceJson?: string;
+  fieldProvenanceHash?: string;
+  sourceUndoId?: string;
+  sourceUndoHash?: string;
   status: OperationRunStatus;
   actionResultId?: string;
   reconciledAt?: string;
@@ -387,6 +483,8 @@ export interface EraseCounts {
   assistantRunResultLinks: number;
   assistantRunRequestLinks: number;
   assistantRuns: number;
+  confirmationBatchItems: number;
+  confirmationBatches: number;
 }
 
 export type { InstallationAttestationRecord };

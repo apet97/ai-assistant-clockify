@@ -17,6 +17,13 @@ import type {
 } from "./mutation-contract.js";
 
 export type { ExternalMutationPlan, ExternalMutationPlanDraft } from "./mutation-contract.js";
+export type {
+  ActionOrigin,
+  AuthorityModel,
+  DiscriminatorTuple,
+  ExecutorKind,
+  RegistryId,
+} from "./action-discriminators.js";
 
 /**
  * A durable operation row can exist before the rest of preparation finishes.

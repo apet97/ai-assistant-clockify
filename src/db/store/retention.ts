@@ -27,6 +27,7 @@ export interface PruneCounts {
   chatSessions: number;
   retentionRuns: number;
   expiredConfirmations: number;
+  expiredConfirmationBatches: number;
   expiredUndoRecords: number;
   deletedTotal: number;
   expiredTotal: number;
@@ -58,6 +59,8 @@ export interface RetentionRunMetric {
 
 type PruneTable =
   | "pendingConfirmations"
+  | "confirmationBatchItems"
+  | "confirmationBatches"
   | "idempotencyKeys"
   | "undoRecords"
   | "turnTelemetry"
@@ -84,6 +87,28 @@ const batched = (table: string, predicate: string): string =>
 
 /** Ordered so child rows are removed before parent rows with foreign keys. */
 const PRUNE_DELETES: readonly PruneDelete[] = [
+  {
+    table: "confirmationBatchItems",
+    cutoff: "iso",
+    sqls: [
+      batched(
+        "confirmation_batch_items",
+        "batch_id IN (SELECT id FROM confirmation_batches WHERE status != 'pending' AND created_at < ?)",
+      ),
+      batched(
+        "confirmation_batch_items",
+        "batch_id IN (SELECT id FROM confirmation_batches WHERE status IN ('pending', 'executing') AND expires_at < ?)",
+      ),
+    ],
+  },
+  {
+    table: "confirmationBatches",
+    cutoff: "iso",
+    sqls: [
+      batched("confirmation_batches", "status != 'pending' AND created_at < ?"),
+      batched("confirmation_batches", "status IN ('pending', 'executing') AND expires_at < ?"),
+    ],
+  },
   {
     table: "pendingConfirmations",
     cutoff: "iso",
@@ -138,6 +163,8 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     cutoff: "iso",
     sqls: [batched("action_results", `created_at < ?
       AND NOT EXISTS (SELECT 1 FROM pending_confirmations WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM confirmation_batches WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM confirmation_batch_items WHERE action_result_id = action_results.id)
       AND NOT EXISTS (SELECT 1 FROM audit_events WHERE action_result_id = action_results.id)
       AND NOT EXISTS (SELECT 1 FROM undo_records WHERE action_result_id = action_results.id)
       AND NOT EXISTS (SELECT 1 FROM idempotency_keys WHERE action_result_id = action_results.id)
@@ -151,6 +178,7 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     sqls: [batched("chat_sessions", `expires_at < ?
       AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE session_id = chat_sessions.id)
       AND NOT EXISTS (SELECT 1 FROM pending_confirmations WHERE session_id = chat_sessions.id)
+      AND NOT EXISTS (SELECT 1 FROM confirmation_batches WHERE session_id = chat_sessions.id)
       AND NOT EXISTS (SELECT 1 FROM undo_records WHERE session_id = chat_sessions.id)
       AND NOT EXISTS (SELECT 1 FROM turn_telemetry WHERE session_id = chat_sessions.id)
       AND NOT EXISTS (SELECT 1 FROM turn_runs WHERE session_id = chat_sessions.id)
@@ -184,6 +212,8 @@ export function buildRetentionStore(
       const operationCutoff = isoCutoff(OPERATION_RETENTION_MS);
       const cutoffByTable: Record<PruneTable, string | number> = {
         pendingConfirmations: isoCutoff(CONFIRMATION_RETENTION_MS),
+        confirmationBatchItems: isoCutoff(CONFIRMATION_RETENTION_MS),
+        confirmationBatches: isoCutoff(CONFIRMATION_RETENTION_MS),
         idempotencyKeys: nowMs - IDEMPOTENCY_RETENTION_MS,
         undoRecords: isoCutoff(UNDO_RETENTION_MS),
         turnTelemetry: isoCutoff(TELEMETRY_RETENTION_MS),
@@ -201,6 +231,8 @@ export function buildRetentionStore(
       };
       const counts: Record<PruneTable, number> = {
         pendingConfirmations: 0,
+        confirmationBatchItems: 0,
+        confirmationBatches: 0,
         idempotencyKeys: 0,
         undoRecords: 0,
         turnTelemetry: 0,
@@ -218,6 +250,7 @@ export function buildRetentionStore(
       };
       let total = 0;
       let expiredConfirmations = 0;
+      let expiredConfirmationBatches = 0;
       let expiredUndoRecords = 0;
       let batches = 0;
       let changed = true;
@@ -239,6 +272,12 @@ export function buildRetentionStore(
           SELECT rowid FROM pending_confirmations
            WHERE status = 'pending' AND expires_at <= ? LIMIT ?
         )`;
+      const expireConfirmationBatches = `UPDATE confirmation_batches
+        SET status = 'expired', completed_at = COALESCE(completed_at, ?)
+        WHERE rowid IN (
+          SELECT rowid FROM confirmation_batches
+           WHERE status IN ('pending', 'executing') AND expires_at <= ? LIMIT ?
+        )`;
       const expireUndo = `UPDATE undo_records
         SET status = 'expired', reversal_json = '[]', remaining_json = '[]'
         WHERE rowid IN (
@@ -256,6 +295,17 @@ export function buildRetentionStore(
         expiredConfirmations += confirmationChanges;
         total += confirmationChanges;
         changed ||= confirmationChanges > 0;
+
+        if (total < MAX_ROWS_PER_PASS) {
+          limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+          const batchChanges = await runMutation(
+            expireConfirmationBatches,
+            [nowIsoArg, nowIsoArg, limit],
+          );
+          expiredConfirmationBatches += batchChanges;
+          total += batchChanges;
+          changed ||= batchChanges > 0;
+        }
 
         if (total < MAX_ROWS_PER_PASS) {
           limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
@@ -278,7 +328,7 @@ export function buildRetentionStore(
         }
       }
       const deletedTotal = Object.values(counts).reduce((sum, count) => sum + count, 0);
-      const expiredTotal = expiredConfirmations + expiredUndoRecords;
+      const expiredTotal = expiredConfirmations + expiredConfirmationBatches + expiredUndoRecords;
       const backlog = total >= MAX_ROWS_PER_PASS;
       const checkpointRow = (db.pragma("wal_checkpoint(PASSIVE)") as Array<{
         busy: number;
@@ -295,6 +345,7 @@ export function buildRetentionStore(
       const result: PruneCounts = {
         ...counts,
         expiredConfirmations,
+        expiredConfirmationBatches,
         expiredUndoRecords,
         deletedTotal,
         expiredTotal,

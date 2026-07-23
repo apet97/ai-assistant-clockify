@@ -51,6 +51,7 @@ import { buildSessionStore } from "./store/sessions.js";
 import { buildUndoStore } from "./store/undo.js";
 import { buildInstallationStore } from "./store/installations.js";
 import { buildConfirmationStore } from "./store/confirmations.js";
+import { buildConfirmationBatchStore } from "./store/confirmation-batches.js";
 import { buildIdempotencyStore } from "./store/idempotency.js";
 import {
   buildRetentionStore,
@@ -124,6 +125,12 @@ export type {
   PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
+  ConfirmationBatchRecord,
+  ConfirmationBatchItemRecord,
+  ConfirmationBatchStatus,
+  ConfirmationBatchItemStatus,
+  CreateConfirmationBatchInput,
+  OperationDiscriminatorInput,
 } from "./store/context.js";
 export type { ActionResultKind, ActionResultRef } from "./action-results.js";
 export type {
@@ -438,6 +445,30 @@ export interface Store {
   /** This session's still-live pending previews (status pending, not expired). */
   countPendingConfirmations(sessionId: string, nowIso: string): number;
 
+  computeOrderedTupleHash(
+    items: ReadonlyArray<{ confirmationId: string; operationId: string }>,
+  ): string;
+  createConfirmationBatch(input: CreateConfirmationBatchInput): ConfirmationBatchRecord;
+  getConfirmationBatch(id: string): ConfirmationBatchRecord | undefined;
+  listConfirmationBatchItems(batchId: string): ConfirmationBatchItemRecord[];
+  updateConfirmationBatchStatus(
+    id: string,
+    status: ConfirmationBatchStatus,
+    patch?: {
+      currentIndex?: number;
+      actionResultId?: string;
+      startedAt?: string;
+      completedAt?: string;
+    },
+  ): boolean;
+  updateConfirmationBatchItemStatus(
+    batchId: string,
+    itemIndex: number,
+    status: ConfirmationBatchItemStatus,
+    patch?: { actionResultId?: string; startedAt?: string; completedAt?: string },
+  ): boolean;
+  expireConfirmationBatches(nowIso: string): number;
+
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
   lookupIdempotency(key: string, workspaceId: string, adminUserId: string, notBeforeEpochMs: number): SuccessReceipt | undefined;
@@ -590,6 +621,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   // exactly as the inline methods used them.
   const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
   const confirmationStore = buildConfirmationStore(ctx);
+  const confirmationBatchStore = buildConfirmationBatchStore(ctx);
   const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
   const mutationStepJournal = (operationId: string): MutationStepJournal => ({
@@ -632,6 +664,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...undoStore,
     ...buildInstallationStore(ctx),
     ...confirmationStore,
+    ...confirmationBatchStore,
     settleConfirmedOperation: (...args) => confirmationStore.settleConfirmation(...args),
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),

@@ -286,12 +286,16 @@ export function buildInstallationStore(ctx: StoreContext): {
       const assistantRunRequestLinks = del(
         "DELETE FROM assistant_run_request_links WHERE workspace_id = ?",
       );
+      const confirmationBatchItems = del(
+        "DELETE FROM confirmation_batch_items WHERE workspace_id = ?",
+      );
+      const confirmationBatches = del("DELETE FROM confirmation_batches WHERE workspace_id = ?");
       const assistantRuns = del("DELETE FROM assistant_runs WHERE workspace_id = ?");
+      const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
       const turnRunResultLinks = del(
         "DELETE FROM turn_run_result_links WHERE session_id IN (SELECT session_id FROM turn_runs WHERE workspace_id = ?)",
       );
       const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
-      const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
       const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
       const undoRecords = del("DELETE FROM undo_records WHERE workspace_id = ?");
       const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
@@ -311,6 +315,8 @@ export function buildInstallationStore(ctx: StoreContext): {
         adminPolicies,
         chatSessions,
         chatMessages,
+        confirmationBatchItems,
+        confirmationBatches,
         pendingConfirmations,
         auditEvents,
         undoRecords,

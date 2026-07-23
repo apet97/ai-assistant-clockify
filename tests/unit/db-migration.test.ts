@@ -5,6 +5,11 @@ import { fileURLToPath } from "node:url";
 import { decryptSecret, encryptSecret } from "../../src/db/encryption.js";
 import { LATEST_SCHEMA_VERSION, migrate } from "../../src/db/schema.js";
 
+const LEGACY_V1_CONFIRMATION_DISCRIMINATOR_COLUMNS =
+  "origin, registry_id, authority_model, executor_kind, run_id, batch_id";
+const LEGACY_V1_CONFIRMATION_DISCRIMINATOR_VALUES =
+  "'assistant', 'v1-internal', 'legacy_v1', 'legacy_v1', NULL, NULL";
+
 /**
  * The idempotency-ledger migration (r1-concurrency-races-01): an OLD DB has
  * idempotency_keys with `receipt_json NOT NULL` and no `claimed_at` column. The
@@ -308,6 +313,20 @@ function v3GraphDatabase(): Database.Database {
       session_id TEXT, action_name TEXT NOT NULL, kind TEXT NOT NULL,
       result_json TEXT NOT NULL, created_at TEXT NOT NULL
     );
+    DROP TRIGGER IF EXISTS operation_runs_discriminator_insert;
+    DROP TRIGGER IF EXISTS operation_runs_discriminator_update;
+    DROP TRIGGER IF EXISTS pending_confirmations_discriminator_insert;
+    DROP TRIGGER IF EXISTS pending_confirmations_discriminator_update;
+    DROP TABLE IF EXISTS confirmation_batch_items;
+    DROP TABLE IF EXISTS confirmation_batches;
+    DROP TABLE operation_runs;
+    CREATE TABLE operation_runs (
+      id TEXT PRIMARY KEY, request_id TEXT, confirmation_id TEXT,
+      session_id TEXT NOT NULL, workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL,
+      action_name TEXT NOT NULL, action_fingerprint TEXT NOT NULL, catalog_hash TEXT NOT NULL,
+      operation_hash TEXT NOT NULL, status TEXT NOT NULL, action_result_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
     PRAGMA user_version = 3;
   `);
   return db;
@@ -518,6 +537,20 @@ describe("schema v4 canonical-result ownership", () => {
         id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL,
         session_id TEXT, action_name TEXT NOT NULL, kind TEXT NOT NULL,
         result_json TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      DROP TRIGGER IF EXISTS operation_runs_discriminator_insert;
+      DROP TRIGGER IF EXISTS operation_runs_discriminator_update;
+      DROP TRIGGER IF EXISTS pending_confirmations_discriminator_insert;
+      DROP TRIGGER IF EXISTS pending_confirmations_discriminator_update;
+      DROP TABLE IF EXISTS confirmation_batch_items;
+      DROP TABLE IF EXISTS confirmation_batches;
+      DROP TABLE operation_runs;
+      CREATE TABLE operation_runs (
+        id TEXT PRIMARY KEY, request_id TEXT, confirmation_id TEXT,
+        session_id TEXT NOT NULL, workspace_id TEXT NOT NULL, admin_user_id TEXT NOT NULL,
+        action_name TEXT NOT NULL, action_fingerprint TEXT NOT NULL, catalog_hash TEXT NOT NULL,
+        operation_hash TEXT NOT NULL, status TEXT NOT NULL, action_result_id TEXT,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       PRAGMA user_version = 3;
     `);
@@ -807,6 +840,12 @@ describe("schema v6 persisted intent capabilities", () => {
     migrate(db);
     db.exec(`
       DROP TRIGGER intent_capabilities_immutable;
+      DROP TRIGGER IF EXISTS operation_runs_discriminator_insert;
+      DROP TRIGGER IF EXISTS operation_runs_discriminator_update;
+      DROP TRIGGER IF EXISTS pending_confirmations_discriminator_insert;
+      DROP TRIGGER IF EXISTS pending_confirmations_discriminator_update;
+      DROP TABLE IF EXISTS confirmation_batch_items;
+      DROP TABLE IF EXISTS confirmation_batches;
       DROP TABLE intent_capability_usage;
       DROP TABLE intent_capabilities;
       DROP INDEX idx_pending_confirmations_capability;
@@ -887,23 +926,25 @@ describe("schema v7 retention evidence and scrub constraints", () => {
          id, operation_id, session_id, workspace_id, admin_user_id, status,
          risk_json, preview_json, operation_json, operation_hash,
          target_fingerprints_json, action_fingerprint, catalog_hash, nonce_hash,
-         expires_at, created_at, agent_state_json
+         expires_at, created_at, agent_state_json, ${LEGACY_V1_CONFIRMATION_DISCRIMINATOR_COLUMNS}
        ) VALUES ('confirmation-v7-expired-insert', 'operation-v7-expired-insert',
                  'session-v7', 'ws', 'admin', 'expired', '["destructive"]',
                  '{"secret":true}', '{"payload":true}', 'hash', '["fingerprint"]',
                  'action', 'catalog', 'nonce', '2026-01-01T00:00:00.000Z',
-                 '2026-01-01T00:00:00.000Z', '{"resume":true}')`,
+                 '2026-01-01T00:00:00.000Z', '{"resume":true}',
+                 ${LEGACY_V1_CONFIRMATION_DISCRIMINATOR_VALUES})`,
     ).run()).toThrow(/expired_confirmation_not_scrubbed/);
     db.prepare(
       `INSERT INTO pending_confirmations (
          id, operation_id, session_id, workspace_id, admin_user_id, status,
          risk_json, preview_json, operation_json, operation_hash,
          target_fingerprints_json, action_fingerprint, catalog_hash, nonce_hash,
-         expires_at, created_at
+         expires_at, created_at, ${LEGACY_V1_CONFIRMATION_DISCRIMINATOR_COLUMNS}
        ) VALUES ('confirmation-v7', 'operation-v7', 'session-v7', 'ws', 'admin',
                  'pending', '["destructive"]', '{"secret":true}', '{}', 'hash',
                  '["fingerprint"]', 'action', 'catalog',
-                 'nonce', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+                 'nonce', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+                 ${LEGACY_V1_CONFIRMATION_DISCRIMINATOR_VALUES})`,
     ).run();
     expect(() => db.prepare(
       "UPDATE pending_confirmations SET status = 'expired' WHERE id = 'confirmation-v7'",

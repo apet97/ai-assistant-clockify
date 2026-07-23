@@ -23,6 +23,7 @@ import {
   sanitizeCompleteJson,
 } from "../../harness/safe-json.js";
 import { hashOperation } from "../../harness/confirmations.js";
+import { v1DiscriminatorFromCapability } from "../../harness/action-discriminators.js";
 import { HOST_CALL_BUDGET_MAXIMUM } from "../../clockify/request-governor.js";
 import { successReceipt } from "../../harness/receipts.js";
 
@@ -44,6 +45,16 @@ interface OperationRunRow {
   reconciliation_json: string | null;
   capability_id: string | null;
   capability_hash: string | null;
+  origin: string | null;
+  registry_id: string | null;
+  authority_model: string | null;
+  executor_kind: string | null;
+  run_id: string | null;
+  batch_id: string | null;
+  field_provenance_json: string | null;
+  field_provenance_hash: string | null;
+  source_undo_id: string | null;
+  source_undo_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -178,6 +189,20 @@ function toRun(row: OperationRunRow): OperationRun {
     ...(row.action_result_id ? { actionResultId: row.action_result_id } : {}),
     ...(row.reconciled_at ? { reconciledAt: row.reconciled_at } : {}),
     ...(row.reconciliation_json ? { reconciliation: JSON.parse(row.reconciliation_json) } : {}),
+    ...(row.origin ? { origin: row.origin as OperationRun["origin"] } : {}),
+    ...(row.registry_id ? { registryId: row.registry_id as OperationRun["registryId"] } : {}),
+    ...(row.authority_model
+      ? { authorityModel: row.authority_model as OperationRun["authorityModel"] }
+      : {}),
+    ...(row.executor_kind
+      ? { executorKind: row.executor_kind as OperationRun["executorKind"] }
+      : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.batch_id ? { batchId: row.batch_id } : {}),
+    ...(row.field_provenance_json ? { fieldProvenanceJson: row.field_provenance_json } : {}),
+    ...(row.field_provenance_hash ? { fieldProvenanceHash: row.field_provenance_hash } : {}),
+    ...(row.source_undo_id ? { sourceUndoId: row.source_undo_id } : {}),
+    ...(row.source_undo_hash ? { sourceUndoHash: row.source_undo_hash } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -393,12 +418,18 @@ export function buildOperationRunStore(ctx: StoreContext): {
         ...(input.operation !== undefined ? { operation: input.operation } : {}),
         ...(input.mutationPlan ? { mutationPlan: input.mutationPlan } : {}),
       }, 1_000_000);
+      const discriminator = input.discriminator
+        ? input.discriminator
+        : v1DiscriminatorFromCapability(input.capabilityId);
       db.prepare(
         `INSERT INTO operation_runs (
            id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
            action_name, action_fingerprint, catalog_hash, operation_hash,
-           operation_json, capability_id, capability_hash, status, action_result_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
+           operation_json, capability_id, capability_hash, status, action_result_id,
+           origin, registry_id, authority_model, executor_kind, run_id, batch_id,
+           field_provenance_json, field_provenance_hash, source_undo_id, source_undo_hash,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         input.requestId ?? null,
@@ -413,6 +444,16 @@ export function buildOperationRunStore(ctx: StoreContext): {
         actionResultJson(operationEnvelope),
         input.capabilityId ?? null,
         input.capabilityHash ?? null,
+        discriminator.origin,
+        discriminator.registryId,
+        discriminator.authorityModel,
+        discriminator.executorKind,
+        discriminator.runId ?? null,
+        discriminator.batchId ?? null,
+        discriminator.fieldProvenanceJson ?? null,
+        discriminator.fieldProvenanceHash ?? null,
+        discriminator.sourceUndoId ?? null,
+        discriminator.sourceUndoHash ?? null,
         timestamp,
         timestamp,
       );

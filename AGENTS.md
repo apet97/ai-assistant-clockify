@@ -63,6 +63,7 @@ here; this file is the execution map.
 - **T10-F CLOSED:** user/group reads 2/2 parity green; live `not_run`. Next: `T10-G`.
 - **T10-G CLOSED:** leave/scheduling reads 11/11 parity green; live `not_run`. Next: `T10-H`.
 - **T10-H CLOSED / Task 10 green:** 43/43 catalog reads, hash `f79307bc…de3e3b`, verify green; default engine stays v1. Live: `not_run`. Next: `T11-A`.
+- **T11-A CLOSED:** schema v11 discriminator matrix + exact-batch persistence (`confirmation_batches`/`confirmation_batch_items`), capability-linked v1 backfill, batch store with ordered tuple hash; missing discriminator fails closed. Gate: batch/migration/retention/restore/scrub tests green. Live: `not_run`. Next: `T11-B`.
 
 ## Non-negotiable invariants
 

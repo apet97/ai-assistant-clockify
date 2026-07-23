@@ -172,7 +172,7 @@ describe("restored database verification", () => {
         },
         schema: {
           status: "passed",
-          sourceUserVersion: 10,
+          sourceUserVersion: 11,
           userVersion: LATEST_SCHEMA_VERSION,
           migration: "not_required",
           requiredTables: 11,
