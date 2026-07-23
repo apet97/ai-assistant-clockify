@@ -80,6 +80,21 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
     alias("isPublic", false, ["private", "not public", "non-public"]),
     alias("isPublic", true, ["public", "not private"]),
   ] },
+  "clockify_projects_estimate_update\0budgetEstimate.active": {
+    excluded: "Estimate enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0budgetEstimate.includeExpenses": {
+    excluded: "Estimate expense inclusion is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0estimateReset.active": {
+    excluded: "Estimate reset enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0timeEstimate.active": {
+    excluded: "Estimate enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0timeEstimate.includeNonBillable": {
+    excluded: "Estimate non-billable inclusion is a structured API flag; only exact true/false literals may authorize it.",
+  },
   "clockify_clients_update\0archived": { aliases: ARCHIVED },
   "clockify_tags_update\0archived": { aliases: ARCHIVED },
   "clockify_expenses_create\0billable": { aliases: BILLABLE },

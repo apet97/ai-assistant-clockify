@@ -3,6 +3,7 @@ import type { ActionDefinition } from "../../src/harness/action.js";
 import { CLIENT_ACTIONS } from "../../src/harness/workflows/clients.js";
 import { ENTRY_ACTIONS } from "../../src/harness/workflows/entries.js";
 import { PROJECT_ACTIONS } from "../../src/harness/workflows/projects.js";
+import { PROJECT_API_ACTIONS } from "../../src/harness/api-actions/projects.js";
 import { TAG_ACTIONS } from "../../src/harness/workflows/tags.js";
 import { TASK_ACTIONS } from "../../src/harness/workflows/tasks.js";
 import { TIME_TRACKING_ACTIONS } from "../../src/harness/workflows/time-tracking.js";
@@ -19,9 +20,13 @@ const EXPECTED_WRITES = [
   "clockify_projects_update",
   "clockify_projects_archive",
   "clockify_projects_delete",
+  "clockify_projects_delete_archived",
   "clockify_projects_rate_update",
+  "clockify_projects_member_hourly_rate_update",
+  "clockify_projects_member_cost_rate_update",
   "clockify_projects_estimate_update",
   "clockify_projects_memberships_update",
+  "clockify_projects_memberships_replace",
   "clockify_tasks_create",
   "clockify_tasks_update",
   "clockify_tasks_delete",
@@ -38,6 +43,7 @@ const actions = [
   ...TIME_TRACKING_ACTIONS,
   ...ENTRY_ACTIONS,
   ...PROJECT_ACTIONS,
+  ...PROJECT_API_ACTIONS,
   ...TASK_ACTIONS,
   ...CLIENT_ACTIONS,
   ...TAG_ACTIONS,

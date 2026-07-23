@@ -47,9 +47,13 @@ const metadata = {
     "archive-project-for-delete": "state-command",
     "delete-project": "delete",
   },
+  clockify_projects_delete_archived: { "delete-archived-project": "delete" },
   clockify_projects_rate_update: { "update-project-rate": "update" },
+  clockify_projects_member_hourly_rate_update: { "update-project-member-hourly-rate": "update" },
+  clockify_projects_member_cost_rate_update: { "update-project-member-cost-rate": "update" },
   clockify_projects_estimate_update: { "update-project-estimate": "update" },
   clockify_projects_memberships_update: { "update-project-memberships": "update" },
+  clockify_projects_memberships_replace: { "replace-project-memberships": "update" },
   clockify_tasks_create: { "create-task": "create" },
   clockify_tasks_update: { "update-task": "update" },
   clockify_tasks_delete: {
@@ -456,6 +460,34 @@ const updateProjectEstimate: Handler = async (input) => {
   });
 };
 
+const updateProjectMemberHourlyRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const id = stringValue(payload?.projectId);
+  if (!id || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getProject(id);
+      return row ? candidate("project", id, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.hourlyRate)?.amount === payload.amountMinor,
+  });
+};
+
+const updateProjectMemberCostRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const id = stringValue(payload?.projectId);
+  if (!id || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getProject(id);
+      return row ? candidate("project", id, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.costRate)?.amount === payload.amountMinor,
+  });
+};
+
 const updateProjectMemberships: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
   const id = stringValue(payload?.id);
@@ -475,6 +507,8 @@ const updateProjectMemberships: Handler = async (input) => {
     ),
   });
 };
+
+const replaceProjectMemberships: Handler = updateProjectMemberships;
 
 const updateTask: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
@@ -792,9 +826,13 @@ const handlers = new Map<string, Handler>([
   ["clockify_projects_archive\0archive-project", projectArchived],
   ["clockify_projects_delete\0archive-project-for-delete", projectArchived],
   ["clockify_projects_delete\0delete-project", deleteProject],
+  ["clockify_projects_delete_archived\0delete-archived-project", deleteProject],
   ["clockify_projects_rate_update\0update-project-rate", updateProjectRate],
+  ["clockify_projects_member_hourly_rate_update\0update-project-member-hourly-rate", updateProjectMemberHourlyRate],
+  ["clockify_projects_member_cost_rate_update\0update-project-member-cost-rate", updateProjectMemberCostRate],
   ["clockify_projects_estimate_update\0update-project-estimate", updateProjectEstimate],
   ["clockify_projects_memberships_update\0update-project-memberships", updateProjectMemberships],
+  ["clockify_projects_memberships_replace\0replace-project-memberships", replaceProjectMemberships],
   ["clockify_tasks_create\0create-task", createTask],
   ["clockify_tasks_update\0update-task", updateTask],
   ["clockify_tasks_delete\0complete-task-for-delete", completeTask],

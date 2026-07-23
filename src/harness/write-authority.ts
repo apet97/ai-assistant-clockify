@@ -116,9 +116,13 @@ const ACTION_SEMANTICS = Object.freeze({
     plan("single", step("delete-project")),
     plan("curated", step("archive-project-for-delete"), step("delete-project"), step("restore-project", "compensation")),
   ], { derivedIds: ["operation.id", "operation.projectId"] }),
+  clockify_projects_delete_archived: single("delete-archived-project", { derivedIds: ["operation.id", "operation.projectId"] }),
   clockify_projects_rate_update: single("update-project-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_projects_member_hourly_rate_update: single("update-project-member-hourly-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_projects_member_cost_rate_update: single("update-project-member-cost-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
   clockify_projects_estimate_update: single("update-project-estimate", { derivedIds: ["operation.projectId"] }),
   clockify_projects_memberships_update: single("update-project-memberships", { derivedIds: ["operation.projectId", "operation.userIds[]", "operation.memberships[].userId"], authenticatedSelfLiterals: ["addUserIds[]"] }),
+  clockify_projects_memberships_replace: single("replace-project-memberships", { derivedIds: ["operation.projectId", "operation.memberships[].userId"] }),
   clockify_tasks_create: single("create-task", { derivedIds: ["operation.projectId", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]"] }),
   clockify_tasks_update: single("update-task", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]", "operation.patch.assigneeIds[]"] }),
   clockify_tasks_delete: fixed(3, [

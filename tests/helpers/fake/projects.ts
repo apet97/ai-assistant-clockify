@@ -23,6 +23,8 @@ export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pi
   | "deleteProjectAtomic"
   | "createProjectFromTemplateAtomic"
   | "updateProjectRateAtomic"
+  | "updateProjectMemberHourlyRateAtomic"
+  | "updateProjectMemberCostRateAtomic"
   | "updateProjectEstimateAtomic"
   | "updateProjectMembershipsAtomic"
 > {
@@ -149,6 +151,20 @@ export function makeFakeProjects({ state, seed, bump, nextId }: FakeContext): Pi
       state.projectMemberships[input.projectId] = (state.projectMemberships[input.projectId] ?? []).map((row) =>
         String(row.userId) === input.userId
           ? { ...row, [key]: { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) } }
+          : row);
+    },
+    async updateProjectMemberHourlyRateAtomic(input) {
+      bump("updateProjectMemberHourlyRateAtomic");
+      state.projectMemberships[input.projectId] = (state.projectMemberships[input.projectId] ?? []).map((row) =>
+        String(row.userId) === input.userId
+          ? { ...row, hourlyRate: { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) } }
+          : row);
+    },
+    async updateProjectMemberCostRateAtomic(input) {
+      bump("updateProjectMemberCostRateAtomic");
+      state.projectMemberships[input.projectId] = (state.projectMemberships[input.projectId] ?? []).map((row) =>
+        String(row.userId) === input.userId
+          ? { ...row, costRate: { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) } }
           : row);
     },
     async updateProjectEstimate(id, patch) {

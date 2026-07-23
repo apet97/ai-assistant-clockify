@@ -76,7 +76,7 @@ describe("structure/time durable target and outcome safety", () => {
     const fake = createFakeWorkspace();
     const result = await executeAction({
       actionName: "clockify_projects_estimate_update",
-      args: { id: "aaaaaaaaaaaaaaaaaaaaaaaa", fields: { estimate: { type: "MANUAL" } } },
+      args: { id: "aaaaaaaaaaaaaaaaaaaaaaaa", timeEstimate: { type: "MANUAL" } },
       context: context(fake),
     });
     expect(result.kind).toBe("clarify");

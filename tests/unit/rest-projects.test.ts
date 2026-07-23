@@ -302,6 +302,33 @@ describe("project rest", () => {
     expect(JSON.parse(init.body)).toEqual({ amount: 5000 });
   });
 
+  it("updateProjectMemberHourlyRateAtomic PUTs the literal hourly-rate path", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateProjectMemberHourlyRateAtomic({
+      projectId: "p1",
+      userId: "u1",
+      amountMinor: 7500,
+      since: "2026-06-01T00:00:00Z",
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/users/u1/hourly-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 7500, since: "2026-06-01T00:00:00Z" });
+  });
+
+  it("updateProjectMemberCostRateAtomic PUTs the literal cost-rate path", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateProjectMemberCostRateAtomic({
+      projectId: "p1",
+      userId: "u1",
+      amountMinor: 5000,
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/users/u1/cost-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 5000 });
+  });
+
   it("updateProjectEstimate PATCHes /estimate (matches goclmcp)", async () => {
     const f = vi.fn(async () => jsonResponse({ id: "p1" }));
     await rest(f as unknown as typeof fetch).updateProjectEstimate("p1", {

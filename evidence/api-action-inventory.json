@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c",
+  "catalogHash": "b6bdc361dfb0e965c14a2e587b68f03d80367a6dcf9ec32b232f78f833681d30",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 140,
-    "rawAdapterCallSites": 142,
-    "rawAdapterShapes": 118,
+    "actions": 144,
+    "rawAdapterCallSites": 144,
+    "rawAdapterShapes": 120,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 82,
+      "api": 87,
       "composite": 23,
-      "generic": 31,
+      "generic": 30,
       "local": 4
     }
   },
@@ -1131,7 +1131,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "admin.ts",
-      "actionFingerprint": "211e20979b4a04deae63bd3f739713de842ec91c5098997e4e8401796ebe7e05",
+      "actionFingerprint": "965856c910e1c36f0393c3c2cb97f98e6481a849a937b9d337d892ad05cc07bf",
       "exposure": "generic",
       "decisionReason": "Selects unrelated entity delete endpoints and may archive a project or client before deletion with compensation; Task 6 must use the typed atomic operations.",
       "operation": null,
@@ -1236,15 +1236,6 @@
           "sourceModule": "projects.ts"
         },
         {
-          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "DELETE",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
           "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
           "role": "support",
           "access": "read",
@@ -1260,6 +1251,15 @@
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
           "sourceModule": "projects.ts"
         },
         {
@@ -4909,7 +4909,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "projects.ts",
-      "actionFingerprint": "f0b9e615b07b52119776f6ca3d4d53da3dc2b0711fb1e803fa40de5fe0a94ed2",
+      "actionFingerprint": "f42d632ebfdae948506ad29b58b3093239af34b192432576e9f87cda16aeb4fa",
       "exposure": "composite",
       "decisionReason": "Archives an active project before deletion and may compensate with a restore PUT, so one invocation can contain two primary mutations.",
       "operation": null,
@@ -4932,15 +4932,6 @@
           "sourceModule": "projects.ts"
         },
         {
-          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "DELETE",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
           "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
           "role": "support",
           "access": "read",
@@ -4956,6 +4947,15 @@
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
           "sourceModule": "projects.ts"
         }
       ],
@@ -5996,58 +5996,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_projects_estimate_update",
-      "description": "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "work_structure",
-      "workflowModule": "projects.ts",
-      "actionFingerprint": "1a680670ba46deb0cbfc95f0f7b476e949446a4be0ce69590e0f356311132da1",
-      "exposure": "generic",
-      "decisionReason": "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{id}/estimate\u0000projects.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/projects/{id}/estimate",
-          "sourceModule": "projects.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "open",
-      "openSchemaDetail": "legacy_open_argument_paths:clockify_projects_estimate_update",
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "fields",
-        "id"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_projects_get",
       "description": "Fetch a single project by id, or by its exact `name` (resolved server-side).",
       "kind": "read",
@@ -6550,6 +6498,328 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_projects_estimate_update",
+      "description": "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "projects.ts",
+      "actionFingerprint": "d07dc5372946f8391d5cb470a40a60f86a463933d21b1ce28bc860e60721e255",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/projects/{id}/estimate (updateEstimate).",
+      "operation": {
+        "operationId": "updateEstimate",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/projects/{id}/estimate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{id}/estimate\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PATCH",
+          "path": "/workspaces/{workspaceId}/projects/{id}/estimate",
+          "sourceModule": "projects.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/fields/timeEstimate/estimate",
+          "label": "Time estimate",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/fields/budgetEstimate/estimate",
+          "label": "Budget estimate",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/fields/estimateReset/active",
+          "label": "Estimate reset active",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fields/timeEstimate/estimate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fields/budgetEstimate/estimate",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/fields/estimateReset/active",
+          "scalarType": "boolean"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_projects_estimate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_projects_memberships_replace",
+      "description": "Replace who can access/track a project by passing the full membership set. Pass the project `id` or its exact `name`. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "users_groups",
+      "workflowModule": "api-actions/projects.ts",
+      "actionFingerprint": "319d92421baeae23314767e7d9e8f727fff569417cead77294ad855fc9457ad8",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/projects/{id}/memberships (updateMemberships).",
+      "operation": {
+        "operationId": "updateMemberships",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/projects/{id}/memberships",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{id}/memberships\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PATCH",
+          "path": "/workspaces/{workspaceId}/projects/{id}/memberships",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
+          "sourceModule": "projects.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/memberships",
+          "itemPath": "/userId",
+          "labelTemplate": "Member {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/memberships",
+          "itemPath": "/userId",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_projects_memberships_replace",
+        "version": 1
+      },
+      "requiredArguments": [
+        "memberships"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_projects_delete_archived",
+      "description": "Delete an already-archived project with a single DELETE (Clockify rejects deleting an active project). Pass the project id or its exact name. Previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "api-actions/projects.ts",
+      "actionFingerprint": "8fabd84fdbcb75903b53526196573b4185410ac674749c1e29e833491994f0f1",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/projects/{projectId} (deleteProject).",
+      "operation": {
+        "operationId": "deleteProject",
+        "host": "api",
+        "method": "DELETE",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
+          "sourceModule": "projects.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Project name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_projects_delete_archived",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_tasks_list",
       "description": "List tasks under a project (optional name filter).",
       "kind": "read",
@@ -6666,6 +6936,264 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_projects_member_cost_rate_update",
+      "description": "Set a project member's cost rate. Pass the project by `projectId` or exact `projectName`, the member by `userId`/`userName` (use \"me\" for the requesting admin). The member must already be on the project. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/projects.ts",
+      "actionFingerprint": "3af57fec945310c92b9dad095e5e313ff92d8deaa8187aede896e5ee32886e49",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate (addUsersCostRate).",
+      "operation": {
+        "operationId": "addUsersCostRate",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "label": "Member",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Cost rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_projects_member_cost_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_projects_member_hourly_rate_update",
+      "description": "Set a project member's billable hourly rate. Pass the project by `projectId` or exact `projectName`, the member by `userId`/`userName` (use \"me\" for the requesting admin). The member must already be on the project. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "api-actions/projects.ts",
+      "actionFingerprint": "c441e2d3c39ed96b68b0f88e58ba7f5f742504fcaa696c56371042b1d9312bb9",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate (addUsersHourlyRate).",
+      "operation": {
+        "operationId": "addUsersHourlyRate",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate\u0000projects.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "label": "Member",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Hourly rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_projects_member_hourly_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -12573,7 +13101,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 204,
+          "sourceLine": 216,
           "sourceColumn": 28,
           "pagination": "plain"
         }
@@ -12593,8 +13121,12 @@
         "clockify_projects_archive",
         "clockify_projects_create",
         "clockify_projects_delete",
+        "clockify_projects_delete_archived",
         "clockify_projects_from_template",
         "clockify_projects_get",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
         "clockify_projects_memberships_update",
         "clockify_projects_rate_update",
         "clockify_projects_update",
@@ -12718,37 +13250,6 @@
       "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
-      "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-      "access": "write",
-      "host": "api",
-      "method": "DELETE",
-      "path": "/workspaces/{workspaceId}/projects/{id}",
-      "sourceModule": "projects.ts",
-      "sourceCallSites": [
-        {
-          "sourceModule": "projects.ts",
-          "sourceLine": 181,
-          "sourceColumn": 11,
-          "pagination": "none"
-        }
-      ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
-        "clockify_delete_entity",
-        "clockify_projects_delete"
-      ],
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
-    },
-    {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
       "access": "read",
       "host": "api",
@@ -12764,13 +13265,13 @@
         },
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 208,
+          "sourceLine": 220,
           "sourceColumn": 24,
           "pagination": "none"
         },
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 212,
+          "sourceLine": 224,
           "sourceColumn": 20,
           "pagination": "none"
         }
@@ -12790,8 +13291,12 @@
         "clockify_log_work",
         "clockify_projects_archive",
         "clockify_projects_delete",
+        "clockify_projects_delete_archived",
         "clockify_projects_estimate_update",
         "clockify_projects_from_template",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
         "clockify_projects_memberships_update",
         "clockify_projects_rate_update",
         "clockify_projects_update",
@@ -12893,15 +13398,15 @@
       "sourceCallSites": [
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 193,
+          "sourceLine": 205,
           "sourceColumn": 11,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_projects_estimate_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -12910,8 +13415,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{id}/memberships\u0000projects.ts",
@@ -12923,12 +13428,14 @@
       "sourceCallSites": [
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 196,
+          "sourceLine": 208,
           "sourceColumn": 11,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_projects_memberships_replace"
+      ],
       "internalSupportConsumers": [
         "clockify_projects_memberships_update",
         "clockify_setup_project"
@@ -12941,8 +13448,41 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+      "access": "write",
+      "host": "api",
+      "method": "DELETE",
+      "path": "/workspaces/{workspaceId}/projects/{projectId}",
+      "sourceModule": "projects.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "projects.ts",
+          "sourceLine": 181,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_projects_delete_archived"
+      ],
+      "internalSupportConsumers": [
+        "clockify_delete_entity",
+        "clockify_projects_delete"
+      ],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
@@ -12954,13 +13494,16 @@
       "sourceCallSites": [
         {
           "sourceModule": "projects.ts",
-          "sourceLine": 252,
+          "sourceLine": 266,
           "sourceColumn": 23,
           "pagination": "none"
         }
       ],
       "mappedModelActionNames": [],
       "internalSupportConsumers": [
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
+        "clockify_projects_memberships_replace",
         "clockify_projects_memberships_update",
         "clockify_projects_rate_update",
         "clockify_setup_project"
@@ -13222,6 +13765,66 @@
       },
       "decision": "internal_support",
       "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate\u0000projects.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+      "sourceModule": "projects.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "projects.ts",
+          "sourceLine": 199,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_projects_member_cost_rate_update"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate\u0000projects.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+      "sourceModule": "projects.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "projects.ts",
+          "sourceLine": 193,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_projects_member_hourly_rate_update"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/{kind}\u0000projects.ts",
@@ -14595,6 +15198,8 @@
         "clockify_holidays_update",
         "clockify_list_entities",
         "clockify_onboard_user",
+        "clockify_projects_member_cost_rate_update",
+        "clockify_projects_member_hourly_rate_update",
         "clockify_projects_rate_update",
         "clockify_review_day",
         "clockify_review_week",
@@ -15851,20 +16456,6 @@
       ]
     },
     {
-      "adapterKey": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-      "expandedPaths": [
-        "/workspaces/{workspaceId}/projects/{id}"
-      ],
-      "operations": [
-        {
-          "host": "api",
-          "method": "DELETE",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}",
-          "operationId": "deleteProject"
-        }
-      ]
-    },
-    {
       "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
       "expandedPaths": [
         "/workspaces/{workspaceId}/projects/{id}"
@@ -15919,10 +16510,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateEstimate",
           "host": "api",
           "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/estimate",
-          "operationId": "updateEstimate"
+          "path": "/workspaces/{workspaceId}/projects/{id}/estimate",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -15933,10 +16526,28 @@
       ],
       "operations": [
         {
+          "operationId": "updateMemberships",
           "host": "api",
           "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/memberships",
-          "operationId": "updateMemberships"
+          "path": "/workspaces/{workspaceId}/projects/{id}/memberships",
+          "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/projects/{projectId}\u0000projects.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/projects/{projectId}"
+      ],
+      "operations": [
+        {
+          "operationId": "deleteProject",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -16066,6 +16677,38 @@
       ]
     },
     {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate\u0000projects.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate"
+      ],
+      "operations": [
+        {
+          "operationId": "addUsersCostRate",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+          "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate\u0000projects.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate"
+      ],
+      "operations": [
+        {
+          "operationId": "addUsersHourlyRate",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+          "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
       "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/{kind}\u0000projects.ts",
       "expandedPaths": [
         "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
@@ -16073,16 +16716,20 @@
       ],
       "operations": [
         {
+          "operationId": "addUsersCostRate",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
-          "operationId": "addUsersCostRate"
+          "access": "write",
+          "exposure": "api"
         },
         {
+          "operationId": "addUsersHourlyRate",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
-          "operationId": "addUsersHourlyRate"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },

@@ -17,6 +17,7 @@ import {
   catalogHash,
   getAction,
 } from "../../src/harness/catalog.js";
+import { GROUP_MEMBER_BATCH_MAX } from "../../src/harness/safety-limits.js";
 
 interface InventoryActionRow {
   name: string;
@@ -354,8 +355,10 @@ const STRUCTURE_ENDPOINT = {
     create: structureEndpointKey("write", "POST", "/workspaces/{workspaceId}/projects", "projects.ts"),
     fromTemplate: structureEndpointKey("write", "POST", "/workspaces/{workspaceId}/projects/from-template", "projects.ts"),
     update: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
-    delete: structureEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    delete: structureEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
     rate: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/{kind}", "projects.ts"),
+    hourlyRate: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate", "projects.ts"),
+    costRate: structureEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate", "projects.ts"),
     estimate: structureEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/projects/{id}/estimate", "projects.ts"),
     memberships: structureEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/projects/{id}/memberships", "projects.ts"),
   },
@@ -560,7 +563,7 @@ const NON_API_ENDPOINT = {
     list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
     get: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
     update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
-    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
   },
   clients: {
     list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/clients", "clients.ts"),
@@ -774,6 +777,20 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
+  apiAnnotation({
+    name: "clockify_projects_delete_archived",
+    operationId: "deleteProject",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/projects/{projectId}",
+    access: "write",
+    sourceModule: "projects.ts",
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Project", "entity", true),
+      materialField("/name", "Project name", "text", false),
+    ],
+  }),
   internalAnnotation({
     name: "clockify_projects_rate_update",
     exposure: "generic",
@@ -782,13 +799,51 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState, STRUCTURE_ENDPOINT.users.list],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
-  internalAnnotation({
+  apiAnnotation({
+    name: "clockify_projects_member_hourly_rate_update",
+    operationId: "addUsersHourlyRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+    access: "write",
+    sourceModule: "projects.ts",
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState, STRUCTURE_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/projectId", "Project", "entity", true),
+      materialField("/userId", "Member", "entity", true),
+      materialField("/amountMinor", "Hourly rate", "money-minor", true),
+    ],
+  }),
+  apiAnnotation({
+    name: "clockify_projects_member_cost_rate_update",
+    operationId: "addUsersCostRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+    access: "write",
+    sourceModule: "projects.ts",
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState, STRUCTURE_ENDPOINT.users.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/projectId", "Project", "entity", true),
+      materialField("/userId", "Member", "entity", true),
+      materialField("/amountMinor", "Cost rate", "money-minor", true),
+    ],
+  }),
+  apiAnnotation({
     name: "clockify_projects_estimate_update",
-    exposure: "generic",
-    reason: "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-    primary: [STRUCTURE_ENDPOINT.projects.estimate],
+    operationId: "updateEstimate",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/projects/{id}/estimate",
+    access: "write",
+    sourceModule: "projects.ts",
     support: [STRUCTURE_ENDPOINT.projects.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Project", "entity", true),
+      materialField("/fields/timeEstimate/estimate", "Time estimate", "text", false),
+      materialField("/fields/budgetEstimate/estimate", "Budget estimate", "number", false),
+      materialField("/fields/estimateReset/active", "Estimate reset active", "boolean", false),
+    ],
   }),
   internalAnnotation({
     name: "clockify_projects_memberships_update",
@@ -797,6 +852,29 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     primary: [STRUCTURE_ENDPOINT.projects.memberships],
     support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_projects_memberships_replace",
+    operationId: "updateMemberships",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/projects/{id}/memberships",
+    access: "write",
+    sourceModule: "projects.ts",
+    support: [STRUCTURE_ENDPOINT.projects.list, STRUCTURE_ENDPOINT.projects.get, STRUCTURE_ENDPOINT.projects.membershipState],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Project", "entity", true),
+      {
+        kind: "array_item",
+        containerPath: "/memberships",
+        itemPath: "/userId",
+        labelTemplate: "Member {index}",
+        maxItems: GROUP_MEMBER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
+    ],
   }),
   apiAnnotation({
     name: "clockify_tasks_list",
@@ -2983,12 +3061,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 140,
-      rawAdapterCallSites: 142,
-      rawAdapterShapes: 118,
+      actions: 144,
+      rawAdapterCallSites: 144,
+      rawAdapterShapes: 120,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 82, composite: 23, generic: 31, local: 4 },
+      exposures: { api: 87, composite: 23, generic: 30, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);
@@ -3007,7 +3085,7 @@ describe("API action inventory normalization", () => {
     expect(new Set(evidence.actions.map((action) => action.name)).size)
       .toBe(evidence.counts.actions);
     for (const action of evidence.actions) {
-      expect(action.workflowModule).toMatch(/^[a-z0-9-]+\.ts$/u);
+      expect(action.workflowModule).toMatch(/^[a-z0-9-]+(?:\/[a-z0-9-]+)?\.ts$/u);
       expect(action.decisionReason.trim()).not.toBe("");
       expect(action.primaryMutationCount).toBeGreaterThanOrEqual(0);
       expect(action.compensationCount).toBeGreaterThanOrEqual(0);

@@ -5,6 +5,7 @@ import type {
   AvailabilityByAuthClass,
   MaterialFieldMetadata,
 } from "../api-operation.js";
+import { GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
 
 type StructureActionName =
   | "clockify_projects_list"
@@ -14,9 +15,13 @@ type StructureActionName =
   | "clockify_projects_update"
   | "clockify_projects_archive"
   | "clockify_projects_delete"
+  | "clockify_projects_delete_archived"
   | "clockify_projects_rate_update"
+  | "clockify_projects_member_hourly_rate_update"
+  | "clockify_projects_member_cost_rate_update"
   | "clockify_projects_estimate_update"
   | "clockify_projects_memberships_update"
+  | "clockify_projects_memberships_replace"
   | "clockify_tasks_list"
   | "clockify_tasks_get"
   | "clockify_tasks_create"
@@ -132,8 +137,10 @@ const endpoint = Object.freeze({
     create: endpointKey("write", "POST", "/workspaces/{workspaceId}/projects", "projects.ts"),
     fromTemplate: endpointKey("write", "POST", "/workspaces/{workspaceId}/projects/from-template", "projects.ts"),
     update: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
-    delete: endpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+    delete: endpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
     rate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/{kind}", "projects.ts"),
+    hourlyRate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate", "projects.ts"),
+    costRate: endpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate", "projects.ts"),
     estimate: endpointKey("write", "PATCH", "/workspaces/{workspaceId}/projects/{id}/estimate", "projects.ts"),
     memberships: endpointKey("write", "PATCH", "/workspaces/{workspaceId}/projects/{id}/memberships", "projects.ts"),
   }),
@@ -273,6 +280,19 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     support: [endpoint.projects.list, endpoint.projects.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
+  clockify_projects_delete_archived: apiMetadata({
+    actionName: "clockify_projects_delete_archived",
+    operationId: "deleteProject",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/projects/{projectId}",
+    access: "write",
+    primary: endpoint.projects.delete,
+    support: [endpoint.projects.list, endpoint.projects.get],
+    materialFields: [
+      valueField("/id", "Project", "entity", true),
+      valueField("/name", "Project name", "text", false),
+    ],
+  }),
   clockify_projects_rate_update: internalMetadata({
     exposure: "generic",
     reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
@@ -280,12 +300,48 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState, endpoint.users.list],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
-  clockify_projects_estimate_update: internalMetadata({
-    exposure: "generic",
-    reason: "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-    primary: [endpoint.projects.estimate],
+  clockify_projects_member_hourly_rate_update: apiMetadata({
+    actionName: "clockify_projects_member_hourly_rate_update",
+    operationId: "addUsersHourlyRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/hourly-rate",
+    access: "write",
+    primary: endpoint.projects.hourlyRate,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState, endpoint.users.list],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/userId", "Member", "entity", true),
+      valueField("/amountMinor", "Hourly rate", "money-minor", true),
+    ],
+  }),
+  clockify_projects_member_cost_rate_update: apiMetadata({
+    actionName: "clockify_projects_member_cost_rate_update",
+    operationId: "addUsersCostRate",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/projects/{projectId}/users/{userId}/cost-rate",
+    access: "write",
+    primary: endpoint.projects.costRate,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState, endpoint.users.list],
+    materialFields: [
+      valueField("/projectId", "Project", "entity", true),
+      valueField("/userId", "Member", "entity", true),
+      valueField("/amountMinor", "Cost rate", "money-minor", true),
+    ],
+  }),
+  clockify_projects_estimate_update: apiMetadata({
+    actionName: "clockify_projects_estimate_update",
+    operationId: "updateEstimate",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/projects/{id}/estimate",
+    access: "write",
+    primary: endpoint.projects.estimate,
     support: [endpoint.projects.get],
-    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      valueField("/id", "Project", "entity", true),
+      valueField("/fields/timeEstimate/estimate", "Time estimate", "text", false),
+      valueField("/fields/budgetEstimate/estimate", "Budget estimate", "number", false),
+      valueField("/fields/estimateReset/active", "Estimate reset active", "boolean", false),
+    ],
   }),
   clockify_projects_memberships_update: internalMetadata({
     exposure: "generic",
@@ -293,6 +349,28 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     primary: [endpoint.projects.memberships],
     support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  clockify_projects_memberships_replace: apiMetadata({
+    actionName: "clockify_projects_memberships_replace",
+    operationId: "updateMemberships",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/projects/{id}/memberships",
+    access: "write",
+    primary: endpoint.projects.memberships,
+    support: [endpoint.projects.list, endpoint.projects.get, endpoint.projects.membershipState],
+    materialFields: [
+      valueField("/id", "Project", "entity", true),
+      {
+        kind: "array_item",
+        containerPath: "/memberships",
+        itemPath: "/userId",
+        labelTemplate: "Member {index}",
+        maxItems: GROUP_MEMBER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
+    ],
   }),
   clockify_tasks_list: apiMetadata({
     actionName: "clockify_tasks_list",

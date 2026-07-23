@@ -256,7 +256,7 @@ async function runProjects(h: LiveHarness): Promise<void> {
       });
       await h.previewOnly("clockify_projects_estimate_update", {
         id: projectId,
-        fields: { timeEstimate: { active: true, estimate: "PT8H", type: "MANUAL" } },
+        timeEstimate: { active: true, estimate: "PT8H", type: "MANUAL" },
       });
       await h.previewOnly("clockify_projects_memberships_update", {
         id: projectId,

@@ -304,9 +304,13 @@ describe("catalog", () => {
       "clockify_projects_update",
       "clockify_projects_archive",
       "clockify_projects_delete",
+      "clockify_projects_delete_archived",
       "clockify_projects_rate_update",
+      "clockify_projects_member_hourly_rate_update",
+      "clockify_projects_member_cost_rate_update",
       "clockify_projects_estimate_update",
       "clockify_projects_memberships_update",
+      "clockify_projects_memberships_replace",
     ]) {
       expect(names).toContain(required);
     }

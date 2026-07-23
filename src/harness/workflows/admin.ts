@@ -107,7 +107,7 @@ const adminEndpoint = Object.freeze({
   projectsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
   projectsGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
   projectsUpdate: adminEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
-  projectsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  projectsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
   clientsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients", "clients.ts"),
   clientsGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
   clientsUpdate: adminEndpointKey("write", "PUT", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),

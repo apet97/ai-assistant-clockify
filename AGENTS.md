@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 140 typed
+the full test/build suite, and circular-dependency/duplication gates. 144 typed
 actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 (volume-backed SQLite at `/data`); deploy only through the checked transaction in
 `DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
@@ -27,8 +27,8 @@ here; this file is the execution map.
 - Task 4 CLOSED at `6184efa80a95be06020635540185bae01ba1299e`: 140 actions (82 `api`, 23 `composite`, 31 `generic`, 4 `local`), 142 call sites / 118 shapes, inventory schema/generator v2, catalog hash `9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c`.
 - T04-R3 remediated the four accepted findings from reviews on `776eb081…`; re-reviews on `6184efa…` accepted zero HIGH/MEDIUM.
 - Official OpenAPI snapshot is repository-owned under `evidence/openapi/`; material contracts and schema maxima are fail-closed before registry insertion; adapter identities include `sourceColumn`.
-- Task 5 CLOSED: explicit `INTERNAL`/`MODEL_API`/`LOCAL` registries; `catalogForModel`/`toolsForModel` require a registry; v1 callers pass `INTERNAL_ACTION_CATALOG`. Next: `T06-PROJECTS`.
-- V1 remains default and v2 remains `not_ready`; no live/external action ran.
+- Task 5 CLOSED: explicit `INTERNAL`/`MODEL_API`/`LOCAL` registries; `catalogForModel`/`toolsForModel` require a registry; v1 callers pass `INTERNAL_ACTION_CATALOG`.
+- T06-PROJECTS CLOSED: atomic project API actions (`delete_archived`/`deleteProject`, member hourly `addUsersHourlyRate`, member cost `addUsersCostRate`, `memberships_replace`/`updateMemberships`, closed `estimate_update`/`updateEstimate`). v1 composite/generic project wrappers stay internal. `MODEL_API_ACTION_CATALOG` = 87; `ACTION_CATALOG` = 144. Live: `live_not_run_missing_credentials`. Next: `T06-TASKS`.
 
 ## Non-negotiable invariants
 
