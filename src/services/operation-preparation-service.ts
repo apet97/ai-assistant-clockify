@@ -308,7 +308,7 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
       let state = deps.store.getRun(toAssistantScope(scope));
       if (!state) throw new Error("assistant_run_not_found");
 
-      let batchId: string | undefined;
+      let batchMeta: Omit<import("../db/store/context.js").CreateConfirmationBatchInput, "items"> | undefined;
 
       const writes: PreparedAssistantWriteInput[] = [];
       for (const call of input.calls) {
@@ -319,7 +319,7 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
       }
 
       if (writes.length > 1) {
-        const batch = deps.store.createConfirmationBatch({
+        batchMeta = {
           sessionId: scope.sessionId,
           runId: scope.runId,
           workspaceId: scope.workspaceId,
@@ -331,24 +331,24 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
           expiresAt: writes.reduce((earliest, write) =>
             write.confirmation.expiresAt < earliest ? write.confirmation.expiresAt : earliest,
           writes[0]!.confirmation.expiresAt),
-          items: writes.map((write) => ({
-            confirmationId: write.confirmation.id,
-            operationId: write.operationRun.id!,
-          })),
-        });
-        batchId = batch.id;
-        for (const write of writes) {
-          write.confirmation.batchId = batch.id;
-          write.operationRun.discriminator!.batchId = batch.id;
-        }
+        };
       }
 
       const persisted = deps.store.prepareAssistantWriteBatchWithEvents({
         scope: toAssistantScope(scope),
         state,
         writes,
+        ...(batchMeta ? { batch: batchMeta } : {}),
       });
       deps.store.saveRun(persisted.state);
+
+      const batchId = persisted.batchId;
+      if (batchId) {
+        for (const write of writes) {
+          write.confirmation.batchId = batchId;
+          write.operationRun.discriminator!.batchId = batchId;
+        }
+      }
 
       return {
         runId: input.runId,

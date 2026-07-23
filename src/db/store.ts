@@ -362,10 +362,12 @@ export interface Store {
     scope: import("./store/runs.js").AssistantRunScope;
     state: import("../assistant-v2/state.js").RunState;
     writes: readonly PreparedAssistantWriteInput[];
+    batch?: Omit<CreateConfirmationBatchInput, "items">;
   }): {
     state: import("../assistant-v2/state.js").RunState;
     events: import("../assistant-v2/events.js").SequencedRunEvent[];
     items: Array<{ operationId: string; confirmationId: string }>;
+    batchId?: string;
   };
   markOperationExecuting(id: string): boolean;
   settleOperationRun(
@@ -477,7 +479,14 @@ export interface Store {
     items: ReadonlyArray<{ confirmationId: string; operationId: string }>,
   ): string;
   createConfirmationBatch(input: CreateConfirmationBatchInput): ConfirmationBatchRecord;
+  insertConfirmationBatch(input: CreateConfirmationBatchInput): ConfirmationBatchRecord;
   getConfirmationBatch(id: string): ConfirmationBatchRecord | undefined;
+  getScopedConfirmationBatch(
+    id: string,
+    workspaceId: string,
+    adminUserId: string,
+    sessionId: string,
+  ): ConfirmationBatchRecord | undefined;
   listConfirmationBatchItems(batchId: string): ConfirmationBatchItemRecord[];
   updateConfirmationBatchStatus(
     id: string,
@@ -495,6 +504,10 @@ export interface Store {
     status: ConfirmationBatchItemStatus,
     patch?: { actionResultId?: string; startedAt?: string; completedAt?: string },
   ): boolean;
+  markConfirmationBatchExecuting(batchId: string): boolean;
+  advanceConfirmationBatchProgress(batchId: string, nextIndex: number, timestamp: string): boolean;
+  cancelUndispatchedBatchItems(batchId: string, fromIndex: number, timestamp: string): number;
+  recoverConfirmationBatch(batchId: string, nowIsoArg: string): void;
   expireConfirmationBatches(nowIso: string): number;
 
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
@@ -655,6 +668,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
     prepareOperationRun: (input) => operationRunStore.prepareOperationRun(input),
     savePendingConfirmation: (record) => confirmationStore.savePendingConfirmation(record),
+    insertConfirmationBatch: (input) => confirmationBatchStore.insertConfirmationBatch(input),
   });
   const mutationStepJournal = (operationId: string): MutationStepJournal => ({
     operationId,
@@ -988,6 +1002,12 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
         }
         const confirmations = confirmationRows.length;
+        const executingBatches = db.prepare(
+          "SELECT id FROM confirmation_batches WHERE status = 'executing'",
+        ).all() as Array<{ id: string }>;
+        for (const row of executingBatches) {
+          confirmationBatchStore.recoverConfirmationBatch(row.id, timestamp);
+        }
         const assistantRuns = db.prepare(
           `UPDATE assistant_runs SET phase = 'failed', updated_at = ?
             WHERE phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,

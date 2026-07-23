@@ -31,6 +31,6 @@ export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) })
 export const confirmBatchBodySchema = z.object({
   items: z.array(z.object({
     confirmationId: z.string().uuid(),
-    nonce: z.string().min(1).max(256),
+    nonce: z.string().min(1).max(256).optional(),
   }).strict()).min(1).max(12),
 }).strict();

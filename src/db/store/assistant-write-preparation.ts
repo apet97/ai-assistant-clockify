@@ -3,7 +3,8 @@ import { encodeRunEventPayload, parseRunEventPayload } from "../../assistant-v2/
 import type { RunBudget, RunState } from "../../assistant-v2/state.js";
 import { canReserveHostCalls, reserveHostCalls } from "../../assistant-v2/budgets.js";
 import type { PendingConfirmationRecord } from "../../harness/confirmations.js";
-import type { PrepareOperationRunInput } from "./context.js";
+import { computeOrderedTupleHash } from "./confirmation-batches.js";
+import type { CreateConfirmationBatchInput, PrepareOperationRunInput } from "./context.js";
 import type { StoreContext } from "./context.js";
 import type { AssistantRunScope } from "./runs.js";
 
@@ -111,6 +112,9 @@ export function buildAssistantWritePreparationStore(
   deps: {
     prepareOperationRun(input: PrepareOperationRunInput): string;
     savePendingConfirmation(record: PendingConfirmationRecord): void;
+    insertConfirmationBatch(input: CreateConfirmationBatchInput): ReturnType<
+      ReturnType<typeof import("./confirmation-batches.js").buildConfirmationBatchStore>["insertConfirmationBatch"]
+    >;
   },
 ): {
   prepareAssistantWriteWithEvent(input: {
@@ -122,7 +126,13 @@ export function buildAssistantWritePreparationStore(
     scope: AssistantRunScope;
     state: RunState;
     writes: readonly PreparedAssistantWriteInput[];
-  }): { state: RunState; events: SequencedRunEvent[]; items: Array<{ operationId: string; confirmationId: string }> };
+    batch?: Omit<CreateConfirmationBatchInput, "items">;
+  }): {
+    state: RunState;
+    events: SequencedRunEvent[];
+    items: Array<{ operationId: string; confirmationId: string }>;
+    batchId?: string;
+  };
 } {
   const { db, nowIso } = ctx;
 
@@ -144,7 +154,30 @@ export function buildAssistantWritePreparationStore(
           events.push(result.event);
           items.push({ operationId: result.operationId, confirmationId: result.confirmationId });
         }
-        return { state, events, items };
+
+        let batchId: string | undefined;
+        if (input.batch && input.writes.length > 1) {
+          const batchItems = items.map(({ confirmationId, operationId }) => ({
+            confirmationId,
+            operationId,
+          }));
+          const orderedTupleHash = computeOrderedTupleHash(batchItems);
+          if (orderedTupleHash !== input.batch.orderedTupleHash) {
+            throw new Error("ordered_tuple_hash_mismatch");
+          }
+          const batch = deps.insertConfirmationBatch({
+            ...input.batch,
+            items: batchItems,
+            orderedTupleHash,
+          });
+          batchId = batch.id;
+          for (const write of input.writes) {
+            write.confirmation.batchId = batch.id;
+            if (write.operationRun.discriminator) write.operationRun.discriminator.batchId = batch.id;
+          }
+        }
+
+        return { state, events, items, ...(batchId ? { batchId } : {}) };
       })();
     },
   };

@@ -399,8 +399,8 @@ export function rotatePendingNonce(input: RotateNonceInput): RotateNonceResult {
 const TRUSTED_DIRECT_ORIGINS = new Set<ActionOrigin>(["direct_ui", "system", "live_test"]);
 const V2_PREVIEW_EXECUTORS = new Set<ExecutorKind>(["prepared_safe_write", "risky_commit"]);
 
-/** True when this pending row is a v2 assistant preview awaiting single confirm. */
-export function isV2AssistantPreviewConfirmation(record: PendingConfirmationRecord): boolean {
+/** Shared v2 assistant preview authority — identical for single and batch-owned rows. */
+function isV2PreviewAuthority(record: PendingConfirmationRecord): boolean {
   return record.origin === "assistant" &&
     record.registryId === "v2-api" &&
     record.authorityModel === "preview_confirmation_v2" &&
@@ -408,13 +408,18 @@ export function isV2AssistantPreviewConfirmation(record: PendingConfirmationReco
     V2_PREVIEW_EXECUTORS.has(record.executorKind) &&
     typeof record.runId === "string" &&
     record.runId.length > 0 &&
-    !record.batchId &&
     !record.capabilityId;
 }
 
-/** Hash bound to nonce validation and the persisted operation_run payload for v2 previews. */
+/** True when this pending row is a v2 assistant preview awaiting single confirm. */
+export function isV2AssistantPreviewConfirmation(record: PendingConfirmationRecord): boolean {
+  return isV2PreviewAuthority(record) && !record.batchId;
+}
+
+/** Hash bound to nonce validation and the persisted operation_run payload for v2 previews.
+ * Batch ownership must not change the binding hash — rows are hashed before batch_id is set. */
 export function confirmationOperationBindingHash(record: PendingConfirmationRecord): string {
-  if (isV2AssistantPreviewConfirmation(record)) {
+  if (isV2PreviewAuthority(record)) {
     const operation = record.operation;
     if (operation && typeof operation === "object" && !Array.isArray(operation)) {
       const payload = (operation as { payload?: unknown }).payload;
@@ -427,6 +432,11 @@ export function confirmationOperationBindingHash(record: PendingConfirmationReco
 /** Batch-owned previews must use the batch confirm route (Task 11-E). */
 export function isBatchOwnedConfirmation(record: PendingConfirmationRecord): boolean {
   return typeof record.batchId === "string" && record.batchId.length > 0;
+}
+
+/** True when this pending row is a v2 assistant batch preview awaiting batch confirm. */
+export function isV2AssistantBatchConfirmation(record: PendingConfirmationRecord): boolean {
+  return isV2PreviewAuthority(record) && isBatchOwnedConfirmation(record);
 }
 
 export function isTrustedDirectOrigin(origin: ActionOrigin | undefined): origin is ActionOrigin {
