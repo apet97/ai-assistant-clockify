@@ -144,3 +144,30 @@ describe("v2 workspace API actions", () => {
     expect((result.receipt.data as { entity?: { id?: string } }).entity?.id).toBe("tpl-1");
   });
 });
+
+describe("v2 holiday API actions", () => {
+  it("exposes bounded create/update on MODEL_API and keeps list-scan get composite", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of ["clockify_holidays_create", "clockify_holidays_update"] as const) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(modelNames.has("clockify_holidays_get")).toBe(false);
+    expect(getAction("clockify_holidays_get")?.apiExposure).toBe("composite");
+    expect(getAction("clockify_holidays_create")?.materialFields?.find((field) => field.kind === "array_item" && field.containerPath === "/userIds")?.maxItems).toBe(8);
+  });
+
+  it("clockify_holidays_create executes with one POST and bounded scope arrays", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "admin-1", name: "Admin", email: "a@example.com" }],
+      holidays: [],
+    });
+    const result = await executeAction({
+      actionName: "clockify_holidays_create",
+      args: { name: "Team day", startDate: "2026-12-25", userIds: ["me"] },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.createHolidayAtomic).toBe(1);
+  });
+});

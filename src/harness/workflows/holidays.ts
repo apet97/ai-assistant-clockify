@@ -17,6 +17,7 @@ import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveEntityRef, resolveRelativeDay, resolveScopeRefs, resolveUserFilter } from "./resolve.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
+import { HOLIDAY_SCOPE_GROUP_BATCH_MAX, HOLIDAY_SCOPE_USER_BATCH_MAX } from "../safety-limits.js";
 import { captureTargetSnapshot } from "../target-snapshots.js";
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateHolidayInput, HolidaySummary, PreparedHolidayUpdateInput } from "../../clockify/ports/holidays.js";
@@ -200,17 +201,76 @@ const HOLIDAY_API_METADATA = Object.freeze({
     support: [holidayEndpoint.users],
     materialFields: [],
   }),
-  clockify_holidays_create: holidayInternalMetadata({
-    exposure: "generic",
-    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
+  clockify_holidays_create: holidayApiMetadata({
+    actionName: "clockify_holidays_create",
+    operationId: "createHoliday",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/holidays",
+    access: "write",
     primary: holidayEndpoint.create,
     support: [holidayEndpoint.list, holidayEndpoint.users, holidayEndpoint.groups],
+    materialFields: [
+      holidayValueField("/name", "Holiday name", "text", true),
+      holidayValueField("/startDate", "Start date", "text", true),
+      holidayValueField("/endDate", "End date", "text", false),
+      holidayValueField("/occursAnnually", "Recurs annually", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: HOLIDAY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: HOLIDAY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
-  clockify_holidays_update: holidayInternalMetadata({
-    exposure: "generic",
-    reason: "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
+  clockify_holidays_update: holidayApiMetadata({
+    actionName: "clockify_holidays_update",
+    operationId: "updateHoliday",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/holidays/{id}",
+    access: "write",
     primary: holidayEndpoint.update,
     support: [holidayEndpoint.list, holidayEndpoint.users, holidayEndpoint.groups],
+    materialFields: [
+      holidayValueField("/id", "Holiday", "entity", true),
+      holidayValueField("/name", "Holiday name", "text", false),
+      holidayValueField("/startDate", "Start date", "text", false),
+      holidayValueField("/endDate", "End date", "text", false),
+      holidayValueField("/occursAnnually", "Recurs annually", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: HOLIDAY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: HOLIDAY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
   clockify_holidays_delete: holidayApiMetadata({
     actionName: "clockify_holidays_delete",
@@ -354,7 +414,7 @@ const createHoliday = defineDurableSafeWriteAction({
   name: "clockify_holidays_create",
   ...HOLIDAY_API_METADATA.clockify_holidays_create,
   description:
-    "Create a workspace holiday. Assign it with `userIds` and/or `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
+    "Create a workspace holiday. Assign it with up to 8 `userIds` and/or 8 `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
   group: TOA,
   stepName: "Create holiday",
   mutationContract: holidayCreateContract,
@@ -365,8 +425,8 @@ const createHoliday = defineDurableSafeWriteAction({
       startDate: z.string().min(1), // YYYY-MM-DD
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine((v) => (v.userIds?.length ?? 0) > 0 || (v.userGroupIds?.length ?? 0) > 0, {
       message: "A holiday needs at least one userIds or userGroupIds assignment.",
@@ -441,7 +501,7 @@ const updateHoliday = defineRiskyAction({
   name: "clockify_holidays_update",
   ...HOLIDAY_API_METADATA.clockify_holidays_update,
   description:
-    "Update a workspace holiday (name, dates, recurrence, or who it applies to). `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
+    "Update a workspace holiday (name, dates, recurrence, or who it applies to). Up to 8 `userIds` and/or 8 `userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
   group: TOA,
   // Editing an existing holiday overwrites live data for everyone assigned and has no
   // undo — same class as every other *_update, so preview→button-confirm (was wrongly
@@ -457,8 +517,8 @@ const updateHoliday = defineRiskyAction({
       startDate: z.string().optional(),
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine(
       (v) =>

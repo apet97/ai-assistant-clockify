@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "3c584ed9c509815e58461452ae69f766bb2489d42e9614bb947d7dbb1937961c",
+  "catalogHash": "25856a5ba9ac668dc8bb117932d6ea7aa23dbb5503939866b6b7c9bdc464eb51",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,9 +14,9 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 106,
+      "api": 108,
       "composite": 24,
-      "generic": 26,
+      "generic": 24,
       "local": 4
     }
   },
@@ -3845,76 +3845,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_holidays_create",
-      "description": "Create a workspace holiday. Assign it with `userIds` and/or `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
-      "kind": "safe_write",
-      "featureGroup": "time_off_approvals",
-      "workflowModule": "holidays.ts",
-      "actionFingerprint": "9eeee04362159f61c5fdcc584d406b4fa73e23d3b2ab868a554086a246987300",
-      "exposure": "generic",
-      "decisionReason": "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/holidays\u0000holidays.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/holidays",
-          "sourceModule": "holidays.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/holidays\u0000holidays.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/holidays",
-          "sourceModule": "holidays.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user-groups\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/user-groups",
-          "sourceModule": "users.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/users",
-          "sourceModule": "users.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "name",
-        "startDate"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_holidays_get",
       "description": "Fetch a single holiday by id, or by its exact `name` (resolved server-side).",
       "kind": "read",
@@ -4005,15 +3935,22 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_holidays_update",
-      "description": "Update a workspace holiday (name, dates, recurrence, or who it applies to). `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
-      "kind": "risky_write",
+      "name": "clockify_holidays_create",
+      "description": "Create a workspace holiday. Assign it with up to 8 `userIds` and/or 8 `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
+      "kind": "safe_write",
       "featureGroup": "time_off_approvals",
       "workflowModule": "holidays.ts",
-      "actionFingerprint": "f88214cb0f574b34223fadf3115c5188208b1cafb6198b8fece22d39c26e2630",
-      "exposure": "generic",
-      "decisionReason": "The userIds and userGroupIds arrays are unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
-      "operation": null,
+      "actionFingerprint": "0c24a888ebcef311a854c102b927d564bee498074fc9d1bd5baef9bf7d82ca94",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/holidays (createHoliday).",
+      "operation": {
+        "operationId": "createHoliday",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/holidays",
+        "access": "write",
+        "exposure": "api"
+      },
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -4033,12 +3970,12 @@
           "sourceModule": "holidays.ts"
         },
         {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/holidays/{id}\u0000holidays.ts",
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/holidays\u0000holidays.ts",
           "role": "primary",
           "access": "write",
           "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/holidays/{id}",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/holidays",
           "sourceModule": "holidays.ts"
         },
         {
@@ -4063,11 +4000,103 @@
       "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Holiday name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/startDate",
+          "label": "Start date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/endDate",
+          "label": "End date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/occursAnnually",
+          "label": "Recurs annually",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "labelTemplate": "User {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "labelTemplate": "Group {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/startDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/endDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/occursAnnually",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "maxItems": 8,
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "maxItems": 8,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_holidays_create",
+        "version": 1
+      },
       "requiredArguments": [
-        "id"
+        "name",
+        "startDate"
       ],
       "primaryMutationCount": 1,
       "compensationCount": 0
@@ -4215,6 +4244,186 @@
       ],
       "presentation": {
         "presenterId": "clockify_holidays_delete",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_holidays_update",
+      "description": "Update a workspace holiday (name, dates, recurrence, or who it applies to). Up to 8 `userIds` and/or 8 `userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_off_approvals",
+      "workflowModule": "holidays.ts",
+      "actionFingerprint": "12aaf95bc34ddd11757d7dd98d9538f014b1bafc388e4613da482d2cd73b2c2f",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/holidays/{id} (updateHoliday).",
+      "operation": {
+        "operationId": "updateHoliday",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/holidays/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/holidays\u0000holidays.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/holidays",
+          "sourceModule": "holidays.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/holidays/{id}\u0000holidays.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/holidays/{id}",
+          "sourceModule": "holidays.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user-groups\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/user-groups",
+          "sourceModule": "users.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Holiday",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Holiday name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/startDate",
+          "label": "Start date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/endDate",
+          "label": "End date",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/occursAnnually",
+          "label": "Recurs annually",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "labelTemplate": "User {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "labelTemplate": "Group {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/startDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/endDate",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/occursAnnually",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "maxItems": 8,
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userGroupIds",
+          "itemPath": "/groupId",
+          "maxItems": 8,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_holidays_update",
         "version": 1
       },
       "requiredArguments": [
@@ -14685,10 +14894,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_holidays_create"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -14697,8 +14906,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/holidays/in-period\u0000holidays.ts",
@@ -14775,10 +14984,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_holidays_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -14787,8 +14996,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/invoices\u0000invoices.ts",
@@ -18469,10 +18678,12 @@
       ],
       "operations": [
         {
+          "operationId": "createHoliday",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/holidays",
-          "operationId": "createHoliday"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -18515,10 +18726,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateHoliday",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/holidays/{holidayId}",
-          "operationId": "updateHoliday"
+          "path": "/workspaces/{workspaceId}/holidays/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
