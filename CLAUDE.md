@@ -22,7 +22,8 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-CLIENTS CLOSED at `9880859`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations already exposed as atomic `api` actions in `workflows/tags.ts` — verified, no empty split file.
 - T06-ENTRY-READS CLOSED: exact `clockify_entries_list` (`getTimeEntries`) and `clockify_entries_get` (`getTimeEntry`) with server-resolved dates and `truncated` list receipts; `clockify_status`, review-day/week, and work-package convenience stay off MODEL_API. Live: `live_not_run_missing_credentials`.
-- T06-ENTRY-UPDATE CLOSED: `clockify_entries_update` (`updateTimeEntry`, GET-then-PUT), existing `clockify_entries_delete`, and bounded `clockify_entries_mark_invoiced` (`updateInvoicedStatus`, max 21 ids); `clockify_fix_entry` stays generic/off MODEL_API. Next: `T06-REPORTS`. Current counts: `ACTION_CATALOG` 157, `MODEL_API` 103. Live: `live_not_run_missing_credentials`.
+- T06-ENTRY-UPDATE CLOSED: `clockify_entries_update` (`updateTimeEntry`, GET-then-PUT), existing `clockify_entries_delete`, and bounded `clockify_entries_mark_invoiced` (`updateInvoicedStatus`, max 21 ids); `clockify_fix_entry` stays generic/off MODEL_API.
+- T06-REPORTS CLOSED: `clockify_reports_summary` (`generateSummaryReport`), `clockify_reports_detailed` (`generateDetailedReport`), and `clockify_reports_weekly` (`generateWeeklyReport`) with server-resolved date ranges on the reports host; `clockify_period_report` stays composite/off MODEL_API. Next: `T06-AUDIT`. Current counts: `ACTION_CATALOG` 157, `MODEL_API` 103. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
