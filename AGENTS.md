@@ -74,6 +74,7 @@ here; this file is the execution map.
 - **T12-C CLOSED:** reporting/admin write parity incl. webhook auth-class gate. Live: `not_run`. Next: `T12-D`.
 - **T12-D CLOSED:** invoice write parity matrix. Live: `not_run`. Next: `T12-E`.
 
+- **T12-E CLOSED:** expense/custom-field write parity. Live: `not_run`. Next: `T12-F`.
 ## Non-negotiable invariants
 
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) governs the v2 rewrite. V2 coexists

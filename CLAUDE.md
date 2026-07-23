@@ -71,6 +71,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T12-C CLOSED:** reporting/admin write parity (`reports`/`audit_log`/`workspace_settings`/`webhooks`); addon-unavailable webhook writes denied on addon and confirmed via `api_key`. Gate: reporting write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-D`.
 - **T12-D CLOSED:** invoice write parity matrix (incl. rates under invoices group); payment delete fixture uses `invoiceId`. Gate: invoices write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-E`.
 
+- **T12-E CLOSED:** expense and custom-field write parity; archived category delete fixture seeds `archived: true`. Gate: expenses write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-F`.
 ## Start here
 
 - Product behavior and local setup: `README.md`.
