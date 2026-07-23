@@ -242,3 +242,31 @@ describe("v2 scheduling totals API actions", () => {
     expect(fake.counts.getOneProjectScheduleTotals).toBe(1);
   });
 });
+
+describe("v2 scheduling publish API action", () => {
+  it("exposes atomic publish on MODEL_API with one primary PUT", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    expect(modelNames.has("clockify_scheduling_publish")).toBe(true);
+    const publish = getAction("clockify_scheduling_publish");
+    expect(publish?.apiExposure).toBe("api");
+    expect(publish?.apiOperation?.operationId).toBe("publishAssignments");
+    expect(publish?.adapterEndpoints?.primary).toHaveLength(1);
+  });
+
+  it("publish preview commits through publishScheduleAtomic", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "u1", name: "Admin", email: "a@example.com", status: "ACTIVE" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_scheduling_publish",
+      args: { start: "2026-07-01", end: "2026-07-07", notifyUsers: false },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    expect(fake.counts.publishScheduleAtomic ?? 0).toBe(0);
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    if (receipt.ok) expect(receipt.action).toBe("clockify_scheduling_publish");
+    expect(fake.counts.publishScheduleAtomic).toBe(1);
+  });
+});
