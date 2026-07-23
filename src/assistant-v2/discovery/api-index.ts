@@ -9,7 +9,7 @@ import type {
 } from "../../harness/api-operation.js";
 import type { FeatureGroup } from "../../harness/permissions.js";
 import type { RiskLabel } from "../../harness/risk.js";
-import { actionParametersSchema } from "../../harness/tools.js";
+import { requiredArgumentsFromSchema } from "../../harness/tool-schema.js";
 import { normalizeSearchText, tokenizeSearchText } from "./api-text.js";
 
 export interface IndexedSearchFields {
@@ -47,10 +47,7 @@ export interface ApiOperationIndex {
 }
 
 function requiredArgumentsFor(action: ActionDefinition): readonly string[] {
-  const schema = actionParametersSchema(action.schema);
-  const required = schema.required;
-  if (!Array.isArray(required)) return Object.freeze([]);
-  return Object.freeze(required.filter((entry): entry is string => typeof entry === "string"));
+  return requiredArgumentsFromSchema(action.schema);
 }
 
 function pathSegmentText(path: string): string {

@@ -29,6 +29,8 @@ import { runProductionStartupReconciliation } from "./harness/startup-reconcilia
 import { completeInterruptedDeletionTombstones } from "./db/deletion-tombstones.js";
 import { renderPublicDocument, type PublicDocumentKind } from "./public-documents.js";
 import { verifyRuntimeReleaseArtifact } from "./release-artifact.js";
+import { buildApiOperationIndex } from "./assistant-v2/discovery/api-index.js";
+import { MODEL_API_ACTION_CATALOG } from "./harness/api-catalog.js";
 
 /**
  * Compose the Express app from injected dependencies (server-as-a-function, so
@@ -39,9 +41,12 @@ export function createApp(
   deps: AppDeps,
   pipelineFactories: AssistantPipelineFactories = defaultAssistantPipelineFactories,
 ): Express {
-  const runtimeDeps: AppDeps = deps.mutationCoordinator
-    ? deps
-    : { ...deps, mutationCoordinator: createWorkspaceMutationCoordinator() };
+  const apiOperationIndex = deps.apiOperationIndex ?? buildApiOperationIndex(MODEL_API_ACTION_CATALOG);
+  const runtimeDeps: AppDeps = {
+    ...deps,
+    apiOperationIndex,
+    mutationCoordinator: deps.mutationCoordinator ?? createWorkspaceMutationCoordinator(),
+  };
   const app = express();
   // Express identifies itself by default. The service has no need to disclose
   // that implementation detail to a caller, so remove it before any middleware
@@ -330,6 +335,7 @@ export async function start(): Promise<void> {
     store,
     parser,
     modelClient,
+    apiOperationIndex: buildApiOperationIndex(MODEL_API_ACTION_CATALOG),
     clockifyForWorkspace: (installation, options) => liveClockifyForWorkspace(
       installation,
       config.commitTimeoutMs,
