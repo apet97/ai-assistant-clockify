@@ -32,6 +32,8 @@ import {
 import {
   createRestoreGate,
   historyRestoreItems,
+  RunEventCursor,
+  restoreRunEvents,
   type ChatController,
   type ChatResult,
   type HistoryResponse,
@@ -57,7 +59,7 @@ export type {
   SwitchApiLike,
   SwitchHooks,
 } from "./composer-flow.js";
-export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
+export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream, RunEventCursor, restoreRunEvents, applyRunEventAttachment } from "./shared.js";
 export type {
   PolicyShape,
   ChatController,
@@ -613,12 +615,25 @@ function mount(root: HTMLElement, api: ChatApi): void {
     try {
       const history = await (historyRequest ?? api.getHistory());
       const items = historyRestoreItems(history);
-      if (items.length === 0) return;
+      if (items.length === 0 && !history.activeRun) return;
       dropWelcome(); // the conversation already started
       for (const item of items) {
         if (item.kind === "bubble") appendMessage(item.role, item.text);
         else if (item.kind === "results") renderResults(item.results);
         else messages.appendChild(renderOperationCard(item.operation));
+      }
+      if (history.activeRun && api.getRunEvents) {
+        const cursor = new RunEventCursor(history.activeRun.runId);
+        await restoreRunEvents(
+          (runId, after) => api.getRunEvents!(runId, after),
+          history.activeRun.runId,
+          cursor,
+          {
+            onAssistant: (text) => appendMessage("assistant", text),
+            onResults: (results) => renderResults(results),
+            onError: (message) => showError(message),
+          },
+        );
       }
       messages.scrollTop = messages.scrollHeight;
     } catch (error) {

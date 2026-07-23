@@ -849,7 +849,7 @@ describe("schema v8 lifecycle lineage", () => {
 
     migrate(db);
 
-    expect(db.pragma("user_version", { simple: true })).toBe(9);
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
     const columns = (db.pragma("table_info(lifecycle_authority_watermarks)") as Array<{ name: string }>)
       .map(({ name }) => name);
     expect(columns).toEqual([

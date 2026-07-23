@@ -467,11 +467,23 @@ export function decodeHistoryResponse(value: unknown): (HistoryResponse & { ok: 
   const operationRuns = envelope.operationRuns === undefined
     ? undefined
     : array(envelope.operationRuns, "API response.operationRuns", operationFrom);
+  const activeRun = envelope.activeRun === undefined
+    ? undefined
+    : (() => {
+        const run = record(envelope.activeRun, "API response.activeRun");
+        return {
+          runId: string(run.runId, "API response.activeRun.runId"),
+          phase: string(run.phase, "API response.activeRun.phase"),
+          lastSequence: positiveInteger(run.lastSequence, "API response.activeRun.lastSequence"),
+          updatedAt: isoString(run.updatedAt, "API response.activeRun.updatedAt"),
+        };
+      })();
   return {
     ok: true,
     messages,
     pendingPreviews,
     ...(operationRuns ? { operationRuns } : {}),
+    ...(activeRun ? { activeRun } : {}),
   };
 }
 
@@ -626,6 +638,127 @@ export function decodeNdjsonEvent(value: unknown): StreamEvent {
   }
   if (type === "error") return { type, message: string(event.message, "stream event.message"), ...(optionalString(event.code, "stream event.code") ? { code: event.code as string } : {}) };
   if (type === "status") return { type, label: string(event.label, "stream event.label"), ...(optionalString(event.action, "stream event.action") ? { action: event.action as string } : {}) };
-  if (type === "done") return { type };
+  if (type === "run_event") {
+    const runId = string(event.runId, "stream event.runId");
+    const sequence = positiveInteger(event.sequence, "stream event.sequence");
+    const payload = record(event.event, "stream event.event");
+    const eventType = string(payload.eventType, "stream event.event.eventType");
+    const createdAt = isoString(payload.createdAt, "stream event.event.createdAt");
+    const eventPayload = record(payload.payload, "stream event.event.payload");
+    const attachment = event.attachment === undefined
+      ? undefined
+      : decodeRunEventAttachment(event.attachment);
+    return {
+      type,
+      runId,
+      sequence,
+      event: { eventType, payload: eventPayload, createdAt } as import("../shared/contracts.js").RunEventView,
+      ...(attachment ? { attachment } : {}),
+    };
+  }
+  if (type === "done") {
+    if (event.runId !== undefined && event.lastSequence !== undefined) {
+      return {
+        type,
+        runId: string(event.runId, "stream event.runId"),
+        lastSequence: positiveInteger(event.lastSequence, "stream event.lastSequence"),
+      };
+    }
+    return { type };
+  }
   throw new ProtocolError("stream event.type is unknown");
+}
+
+function decodeRunEventAttachment(value: unknown): import("../shared/contracts.js").RunEventAttachment {
+  const attachment = record(value, "stream event.attachment");
+  const kind = string(attachment.kind, "stream event.attachment.kind");
+  if (kind === "assistant_message") {
+    return {
+      kind,
+      messageId: string(attachment.messageId, "stream event.attachment.messageId"),
+      text: string(attachment.text, "stream event.attachment.text"),
+    };
+  }
+  if (kind === "presented_result" || kind === "pending_confirmation") {
+    const envelope = record(attachment.envelope, "stream event.attachment.envelope");
+    const presentation = record(envelope.presentation, "stream event.attachment.envelope.presentation");
+    const decodedEnvelope = {
+      presentation: {
+        status: string(presentation.status, "stream event.attachment.envelope.presentation.status") as import("../shared/contracts.js").PresentedResult["status"],
+        title: string(presentation.title, "stream event.attachment.envelope.presentation.title"),
+        summary: string(presentation.summary, "stream event.attachment.envelope.presentation.summary"),
+        facts: [],
+        warnings: [],
+        references: [],
+      },
+      ...(typeof envelope.actionResultId === "string" ? { actionResultId: envelope.actionResultId } : {}),
+      ...(envelope.confirmation && typeof envelope.confirmation === "object"
+        ? {
+            confirmation: {
+              id: string((envelope.confirmation as Record<string, unknown>).id, "stream event.attachment.envelope.confirmation.id"),
+              nonce: string((envelope.confirmation as Record<string, unknown>).nonce, "stream event.attachment.envelope.confirmation.nonce"),
+              expiresAt: isoString((envelope.confirmation as Record<string, unknown>).expiresAt, "stream event.attachment.envelope.confirmation.expiresAt"),
+            },
+          }
+        : {}),
+    };
+    if (kind === "presented_result") {
+      return {
+        kind,
+        actionResultId: string(attachment.actionResultId, "stream event.attachment.actionResultId"),
+        envelope: decodedEnvelope,
+      };
+    }
+    return {
+      kind,
+      confirmationId: string(attachment.confirmationId, "stream event.attachment.confirmationId"),
+      envelope: decodedEnvelope,
+    };
+  }
+  if (kind === "pending_clarification") {
+    return {
+      kind,
+      clarificationId: string(attachment.clarificationId, "stream event.attachment.clarificationId"),
+      status: string(attachment.status, "stream event.attachment.status") as "pending" | "resolving",
+      missingField: string(attachment.missingField, "stream event.attachment.missingField"),
+      candidates: array(attachment.candidates, "stream event.attachment.candidates", (candidate, name) => {
+        const item = record(candidate, name);
+        return {
+          optionId: string(item.optionId, `${name}.optionId`),
+          label: string(item.label, `${name}.label`),
+          ...(typeof item.referenceId === "string" ? { referenceId: item.referenceId } : {}),
+        };
+      }),
+      expiresAt: isoString(attachment.expiresAt, "stream event.attachment.expiresAt"),
+    };
+  }
+  throw new ProtocolError("stream event.attachment.kind is unknown");
+}
+
+/** Decode one scoped run-event page for UI restoration. */
+export function decodeRunEventsResponse(value: unknown): import("./shared.js").RunEventPageResponse | ApiFailure {
+  const envelope = decodeApiEnvelope(value);
+  if (!envelope.ok) return failureFrom(envelope);
+  const events = array(envelope.events, "API response.events", (entry, name) => {
+    const item = record(entry, name);
+    const eventRecord = record(item.event, `${name}.event`);
+    return {
+      runId: string(item.runId, `${name}.runId`),
+      sequence: positiveInteger(item.sequence, `${name}.sequence`),
+      event: {
+        eventType: string(eventRecord.eventType, `${name}.event.eventType`),
+        payload: eventRecord.payload,
+        createdAt: isoString(eventRecord.createdAt, `${name}.event.createdAt`),
+      } as import("../shared/contracts.js").RunEventView,
+      ...(item.attachment === undefined ? {} : { attachment: decodeRunEventAttachment(item.attachment) }),
+    };
+  });
+  return {
+    ok: true,
+    runId: string(envelope.runId, "API response.runId"),
+    events,
+    nextAfter: positiveInteger(envelope.nextAfter, "API response.nextAfter"),
+    hasMore: boolean(envelope.hasMore, "API response.hasMore"),
+    lastSequence: positiveInteger(envelope.lastSequence, "API response.lastSequence"),
+  };
 }

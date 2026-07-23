@@ -49,6 +49,9 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T08-C CLOSED:** v2 provider loop in `src/assistant-v2/runner.ts` — atomic completion validation, mixed-discovery-only batches, exact-scope cache seed, max two refinements, fresh system/user prompt only. Gate: v2-runner + budgets/state tests green. Live: N/A. Next: `T08-D`.
 - **T08-D CLOSED:** four-worker read pool with provider-order results, ordered write preparation only (no host mutation dispatch), persisted host-call allowance via `withHostCallBudgetFromUsed`. Gate: v2 concurrency/cancellation/runner tests green. Live: N/A. Next: `T08-E`.
 - **T08-E CLOSED / Task 8 green:** durable provider-independent v2 runner (`runAssistantV2`, `createV2RunnerPipeline`); suspension/replay with zero model calls on terminal replay; startup orphan recovery for active assistant runs; `ASSISTANT_ENGINE` default remains v1. Gate: Task 8 Vitest + `npm run verify` green. Live: N/A. Next: `T09-A`.
+- **T09-A CLOSED:** schema v10 `run_events` with transactional allowlisted state+event methods, closed Zod payloads, monotonic sequence, cascade/retention/restore ownership. Gate: run-event store/transactionality/migration tests green. Next: `T09-B`.
+- **T09-B CLOSED:** scoped `GET /api/runs/:id/events` paging/hydration, non-production inspector, history `activeRun`. Gate: route/restoration/inspector/NDJSON/history tests green. Next: `T09-C`.
+- **T09-C CLOSED / Task 9 green:** cursor-safe UI run-event restoration (dedupe, gap paging, reload/second-tab); `ASSISTANT_ENGINE` default remains v1. Gate: Task 9 Vitest + `npm run verify` green. Live: N/A. Next: `T10-A`.
 
 ## Start here
 

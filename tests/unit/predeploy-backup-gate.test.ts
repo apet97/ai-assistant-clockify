@@ -38,7 +38,7 @@ function gateInput() {
         schema: {
           status: "passed",
           sourceUserVersion: 7,
-          userVersion: 9,
+          userVersion: 10,
           migration: "candidate_private_clone",
           requiredTables: 11,
           requiredColumns: 43,

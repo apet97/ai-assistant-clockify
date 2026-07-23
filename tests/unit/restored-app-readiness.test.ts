@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { probeRestoredApplicationReadiness } from "../../scripts/lib/restored-app-readiness.js";
 import { createStore } from "../../src/db/store.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 import { restoredDatabaseTestFixture } from "../helpers/restored-database-fixture.js";
 
 const RELEASE_SHA = "a".repeat(40);
@@ -114,7 +115,7 @@ describe("restored application readiness probe", () => {
         writerLock: "available",
       });
       const migrated = new Database(fixture.restoredPath, { readonly: true });
-      expect(migrated.pragma("user_version", { simple: true })).toBe(9);
+      expect(migrated.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
       expect(migrated.prepare(
         "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'lifecycle_authority_watermarks'",
       ).get()).toEqual({ count: 1 });

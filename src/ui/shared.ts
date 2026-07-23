@@ -6,7 +6,7 @@
  * `main.ts` re-exports these, so the public/test import surface (e.g.
  * `import { featureGroupRows } from "./main.js"`) is unchanged.
  */
-import type { ArtifactDescriptor, ChatEvent } from "../shared/contracts.js";
+import type { ArtifactDescriptor, ChatEvent, RunEventAttachment, SequencedRunEvent } from "../shared/contracts.js";
 
 export interface PreviewRef {
   previewId: string;
@@ -199,7 +199,114 @@ export function dispatchStreamEvent(
     else hooks.onError(message);
   } else if (event.type === "status") {
     hooks.onStatus?.(event.label);
+  } else if (event.type === "run_event") {
+    applyRunEventAttachment(event, hooks, buffer);
+  } else if (event.type === "done" && "lastSequence" in event) {
+    void event;
   }
+}
+
+function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
+  if (attachment.kind === "pending_confirmation") {
+    const confirmation = attachment.envelope.confirmation;
+    if (!confirmation) return [];
+    return [{
+      kind: "preview",
+      previewId: confirmation.id,
+      nonce: confirmation.nonce,
+      expiresAt: confirmation.expiresAt,
+      preview: {
+        actionLabel: attachment.envelope.presentation.title,
+        expectedChanges: attachment.envelope.presentation.summary
+          ? [attachment.envelope.presentation.summary]
+          : [],
+        reversibility: "",
+        warnings: attachment.envelope.presentation.warnings.map((w) => w.message),
+      },
+    }];
+  }
+  if (attachment.kind === "presented_result") {
+    const status = attachment.envelope.presentation.status;
+    if (status === "pending_confirmation") return attachmentToResults({
+      kind: "pending_confirmation",
+      confirmationId: attachment.envelope.confirmation?.id ?? attachment.actionResultId,
+      envelope: attachment.envelope,
+    });
+    return [{
+      kind: "receipt",
+      receipt: {
+        ok: status === "succeeded" || status === "partial",
+        action: attachment.envelope.presentation.title,
+        message: attachment.envelope.presentation.summary,
+        ...(attachment.envelope.undo ? { undo: attachment.envelope.undo } : {}),
+      },
+      ...(attachment.envelope.undo ? { undo: attachment.envelope.undo } : {}),
+    }];
+  }
+  if (attachment.kind === "pending_clarification") {
+    return [{
+      kind: "clarify",
+      message: attachment.missingField,
+      options: attachment.candidates.map((c) => ({ id: c.optionId, label: c.label })),
+    }];
+  }
+  return [];
+}
+
+export function applyRunEventAttachment(
+  event: Extract<StreamEvent, { type: "run_event" }>,
+  hooks: StreamDispatchHooks,
+  buffer: PreviewBuffer,
+): void {
+  if (!event.attachment) return;
+  if (event.attachment.kind === "assistant_message") {
+    if (event.attachment.text.trim()) hooks.onAssistant(event.attachment.text);
+    return;
+  }
+  const results = attachmentToResults(event.attachment);
+  if (results.length === 0) return;
+  for (const result of results) {
+    if (result.kind === "preview") buffer.push(result);
+    else hooks.onResults([result]);
+  }
+}
+
+export interface RunEventPageResponse {
+  ok: true;
+  runId: string;
+  events: SequencedRunEvent[];
+  nextAfter: number;
+  hasMore: boolean;
+  lastSequence: number;
+}
+
+/** Fetch and apply durable run events with cursor-safe dedupe and gap recovery. */
+export async function restoreRunEvents(
+  fetchPage: (runId: string, after: number) => Promise<RunEventPageResponse>,
+  runId: string,
+  cursor: RunEventCursor,
+  hooks: StreamDispatchHooks,
+  startAfter = 0,
+): Promise<number> {
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
+  let after = startAfter;
+  for (;;) {
+    const page = await fetchPage(runId, after);
+    for (const entry of page.events) {
+      if (!cursor.accept(entry.sequence)) continue;
+      applyRunEventAttachment({
+        type: "run_event",
+        runId: entry.runId,
+        sequence: entry.sequence,
+        event: entry.event,
+        attachment: entry.attachment,
+      }, hooks, buffer);
+    }
+    if (!page.hasMore) break;
+    after = page.nextAfter;
+  }
+  buffer.flush();
+  return cursor.highestSequence;
 }
 
 /**
@@ -392,6 +499,33 @@ export interface HistoryResponse {
   messages?: HistoryMessage[];
   pendingPreviews?: PreviewResult[];
   operationRuns?: OperationCardData[];
+  activeRun?: { runId: string; phase: string; lastSequence: number; updatedAt: string };
+}
+
+/** In-memory cursor for v2 run-event restoration; never persisted to storage. */
+export class RunEventCursor {
+  private readonly seen = new Set<string>();
+  private highest = 0;
+
+  constructor(private readonly runId: string) {}
+
+  accept(sequence: number): boolean {
+    const key = `${this.runId}:${sequence}`;
+    if (this.seen.has(key)) return false;
+    if (sequence !== this.highest + 1) return false;
+    this.seen.add(key);
+    this.highest = sequence;
+    return true;
+  }
+
+  get highestSequence(): number {
+    return this.highest;
+  }
+
+  reset(lastSequence: number): void {
+    this.seen.clear();
+    this.highest = lastSequence;
+  }
 }
 
 export interface OperationCardData {

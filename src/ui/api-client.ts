@@ -24,6 +24,7 @@ import {
   decodeSessionsResponse,
   decodeSimpleMutationResponse,
   decodeUndoResponse,
+  decodeRunEventsResponse,
   protocolErrorMessage,
   type ApiFailure,
   type ChatResponse,
@@ -51,6 +52,8 @@ export interface ChatApi {
   switchSession(id: string): Promise<SimpleMutationResponse>;
   /** Passive, scoped durable-operation status; never a control endpoint. */
   getOperation?(id: string): Promise<Awaited<ReturnType<typeof decodeOperationResponse>>>;
+  /** Scoped durable v2 run-event pages for reload/second-tab restoration. */
+  getRunEvents?(runId: string, after: number): Promise<import("./shared.js").RunEventPageResponse>;
   sendMessage(message: string): Promise<ChatResponse | ApiFailure>;
   /** Streaming send: harness results arrive incrementally, then the truthful reply. */
   streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
@@ -276,6 +279,16 @@ export function createFetchApi(): ChatApi {
     getHistory: async () => {
       const body = await json("/api/chat/history", undefined, decodeHistoryResponse, true);
       if (!body.ok) throw new ApiError(500, body.message ?? "Could not load history.");
+      return body;
+    },
+    getRunEvents: async (runId, after) => {
+      const body = await json(
+        `/api/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(String(after))}`,
+        undefined,
+        decodeRunEventsResponse,
+        true,
+      );
+      if (!body.ok) throw new ApiError(500, body.message ?? "Could not load run events.");
       return body;
     },
     newChat: () => mutation("/api/chat/new", { method: "POST" }, decodeSimpleMutationResponse),

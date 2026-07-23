@@ -18,6 +18,7 @@ import {
 } from "../../src/db/restore-verification.js";
 import { backupDatabase, restoreDatabase } from "../../src/db/recovery.js";
 import { createStore } from "../../src/db/store.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const ENCRYPTION_KEY = "restore-verification-test-key";
 const TOKEN = "secret-addon-token-that-must-never-be-evidence";
@@ -171,8 +172,8 @@ describe("restored database verification", () => {
         },
         schema: {
           status: "passed",
-          sourceUserVersion: 9,
-          userVersion: 9,
+          sourceUserVersion: 10,
+          userVersion: LATEST_SCHEMA_VERSION,
           migration: "not_required",
           requiredTables: 11,
           requiredColumns: 43,
@@ -299,7 +300,7 @@ describe("restored database verification", () => {
     expect(evidence.checks.schema).toEqual({
       status: "passed",
       sourceUserVersion: 7,
-      userVersion: 9,
+      userVersion: LATEST_SCHEMA_VERSION,
       migration: "candidate_private_clone",
       requiredTables: 11,
       requiredColumns: 43,
