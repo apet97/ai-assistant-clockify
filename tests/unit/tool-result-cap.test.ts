@@ -35,7 +35,11 @@ describe("capToolResultForModel", () => {
   });
 
   it("caps error receipts the same way as success receipts", () => {
-    const receipt = errorReceipt("clockify_tags_list", "failed", { message: "z".repeat(40_000) });
+    const receipt = errorReceipt({
+      action: "clockify_tags_list",
+      code: "failed",
+      message: "z".repeat(40_000),
+    });
     const capped = capToolResultForModel(receipt);
     expect(Buffer.byteLength(capped, "utf8")).toBeLessThanOrEqual(TOOL_RESULT_MAX_BYTES);
   });

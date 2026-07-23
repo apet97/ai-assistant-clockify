@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ErrorReceipt, SuccessReceipt } from "../harness/receipts.js";
+import { capToolResultForModel } from "./tool-results.js";
 export { capToolResultForModel } from "./tool-results.js";
 import type { ModelMessage } from "./model-client.js";
 

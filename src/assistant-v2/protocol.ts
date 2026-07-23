@@ -4,7 +4,7 @@ import type {
   AuthClass,
   FindApiOperationsInput,
 } from "../harness/api-operation.js";
-import type { ActionRegistry } from "../harness/catalog.js";
+import type { ActionRegistry } from "../harness/api-catalog.js";
 
 export interface RunScope {
   sessionId: string;
@@ -61,10 +61,26 @@ export interface RequestGovernorPort {
 }
 
 export interface RunStateStore {
-  getRun(scope: RunScope, runId: string): import("./state.js").RunState | undefined;
+  startRunWithTurn(input: {
+    scope: RunScope & { runId: string };
+    originalRequest: string;
+    requestHash: string;
+    catalogHash: string;
+    loadedToolNames: string[];
+    intentHash: string;
+  }): void;
+  getRun(scope: RunScope & { runId: string }): import("./state.js").RunState | undefined;
   saveRun(state: import("./state.js").RunState): void;
-  findLatestEligibleRunForCache(scope: RunScope, catalogHash: string): import("./state.js").RunState | undefined;
+  findLatestEligibleRunForCache(
+    sessionId: string,
+    workspaceId: string,
+    adminUserId: string,
+    installationGeneration: number,
+    authClass: AuthClass,
+    catalogHash: string,
+  ): import("./state.js").RunState | undefined;
   recoverOrphanedActiveRuns(scope: RunScope): number;
+  failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 }
 
 export interface RunnerDependencies {
