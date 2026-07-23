@@ -35,6 +35,7 @@ here; this file is the execution map.
 - T06-INVOICE CLOSED: atomic invoice reads/export; embedded items (no items GET); `create_base`; split `fields_update`/`status_update`; one-item add/delete; atomic payments; bounded `import_time`. Composites `clockify_invoices_create`/`update` stay internal. Next: `T06-EXPENSES` category splits.
 - T06-EXPENSES RECORDS CLOSED: atomic expense list/get/create/update/delete plus categories list/create on MODEL_API (`workflows/expenses.ts`). Counts unchanged: `MODEL_API` 113; `ACTION_CATALOG` 163. Live: `live_not_run_missing_credentials`.
 - T06-EXPENSES CATEGORIES CLOSED: split rename/status/delete_archived API actions; v1 category update/delete composites stay internal. Counts: `MODEL_API` 116; `ACTION_CATALOG` 166. Live: `live_not_run_missing_credentials`.
+- T06-CUSTOM-FIELDS CLOSED: bounded create/update/set_value_project/set_value_entry on MODEL_API; legacy unbounded handlers off-catalog; get stays composite. Counts: `MODEL_API` 120; `ACTION_CATALOG` 166. Live: `live_not_run_missing_credentials`.
 
 ## Non-negotiable invariants
 

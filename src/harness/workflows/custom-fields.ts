@@ -154,14 +154,14 @@ const CUSTOM_FIELD_API_METADATA = Object.freeze({
   }),
   clockify_custom_fields_create: customFieldInternalMetadata({
     exposure: "generic",
-    reason: "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
+    reason: "The allowedValues array is unbounded on the legacy path; use the bounded clockify_custom_fields_create API action instead.",
     primary: [customFieldEndpoint.create],
     support: [customFieldEndpoint.list],
     availability: CUSTOM_FIELD_CREATE_AVAILABILITY,
   }),
   clockify_custom_fields_update: customFieldInternalMetadata({
     exposure: "generic",
-    reason: "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
+    reason: "The allowedValues array is unbounded on the legacy path; use the bounded clockify_custom_fields_update API action instead.",
     primary: [customFieldEndpoint.update],
     support: [customFieldEndpoint.list],
     availability: CUSTOM_FIELD_AVAILABILITY,
@@ -181,14 +181,14 @@ const CUSTOM_FIELD_API_METADATA = Object.freeze({
   }),
   clockify_custom_fields_set_value_project: customFieldInternalMetadata({
     exposure: "generic",
-    reason: "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded project-value operation.",
+    reason: "The custom-field value accepts an unbounded string array on the legacy path; use the bounded clockify_custom_fields_set_value_project API action instead.",
     primary: [customFieldEndpoint.projectValue],
     support: [customFieldEndpoint.projectGet, customFieldEndpoint.list],
     availability: CUSTOM_FIELD_AVAILABILITY,
   }),
   clockify_custom_fields_set_value_entry: customFieldInternalMetadata({
     exposure: "generic",
-    reason: "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded entry-value operation.",
+    reason: "The custom-field value accepts an unbounded string array on the legacy path; use the bounded clockify_custom_fields_set_value_entry API action instead.",
     primary: [customFieldEndpoint.entryUpdate],
     support: [customFieldEndpoint.entryRead, customFieldEndpoint.list],
     availability: CUSTOM_FIELD_AVAILABILITY,
@@ -602,9 +602,5 @@ const setValueEntry = defineRiskyAction({
 export const CUSTOM_FIELD_ACTIONS: ActionDefinition[] = [
   listCustomFields,
   getCustomField,
-  createCustomField,
-  updateCustomField,
   deleteCustomField,
-  setValueProject,
-  setValueEntry,
 ];

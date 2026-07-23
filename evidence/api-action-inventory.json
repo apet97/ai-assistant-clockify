@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "5785dcb6bf948cbe6ca51bdfb1771b0aa8eca6189ce1e859da716cc7160bba83",
+  "catalogHash": "f8d3c3f821f65e969dd1bf7d422bff5011c3feeef17f2cee3f6f9595855ba2fd",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,9 +14,9 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 116,
+      "api": 120,
       "composite": 24,
-      "generic": 22,
+      "generic": 18,
       "local": 4
     }
   },
@@ -2372,58 +2372,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_custom_fields_create",
-      "description": "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). NOTE: Clockify blocks custom-field CREATION for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice; an admin can add the field in Clockify's workspace settings. Elevated write — previews and requires confirmation. Dropdowns require allowedValues.",
-      "kind": "risky_write",
-      "featureGroup": "custom_fields",
-      "workflowModule": "custom-fields.ts",
-      "actionFingerprint": "25c1371a5a1c80a9ecc2f90b42f6a8787a6e818d5956339d8093fa0fbeea53da",
-      "exposure": "generic",
-      "decisionReason": "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": false,
-          "reason": "unsupported_auth_class"
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/custom-fields",
-          "sourceModule": "custom-fields.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/custom-fields",
-          "sourceModule": "custom-fields.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "name"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_custom_fields_get",
       "description": "Fetch a single custom field by id, or by its exact `name` (resolved server-side).",
       "kind": "read",
@@ -2514,18 +2462,26 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_custom_fields_set_value_entry",
-      "description": "Set a custom field value on a time entry. Elevated write — previews and requires confirmation.",
+      "name": "clockify_custom_fields_create",
+      "description": "Create a custom field (TXT/NUMBER/DROPDOWN_SINGLE/DROPDOWN_MULTIPLE/CHECKBOX/LINK). NOTE: Clockify blocks custom-field CREATION for add-ons — inside the embedded add-on this returns an honest restriction notice. Dropdown allowedValues are capped. Elevated write — previews and requires confirmation.",
       "kind": "risky_write",
       "featureGroup": "custom_fields",
-      "workflowModule": "custom-fields.ts",
-      "actionFingerprint": "67f1a2b5b8ea23f601acbe1f260137221bc64f1cdb4f541c1bf2258b3f9f5258",
-      "exposure": "generic",
-      "decisionReason": "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded entry-value operation.",
-      "operation": null,
+      "workflowModule": "api-actions/custom-fields.ts",
+      "actionFingerprint": "86a10dba2c315c7b79415eeddae3528fa008815a657c05da1ac06682158ad968",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/custom-fields (create).",
+      "operation": {
+        "operationId": "create",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/custom-fields",
+        "access": "write",
+        "exposure": "api"
+      },
       "availabilityByAuthClass": {
         "addon": {
-          "available": true
+          "available": false,
+          "reason": "unsupported_auth_class"
         },
         "api_key": {
           "available": true
@@ -2542,147 +2498,97 @@
           "sourceModule": "custom-fields.ts"
         },
         {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/time-entries/{entryId}",
-          "sourceModule": "custom-fields.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
           "role": "primary",
           "access": "write",
           "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/time-entries/{entryId}",
-          "sourceModule": "custom-fields.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "entryId",
-        "fieldId",
-        "value"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_custom_fields_set_value_project",
-      "description": "Set a custom field value on a project. Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "custom_fields",
-      "workflowModule": "custom-fields.ts",
-      "actionFingerprint": "07994c50f1023029dba8d6011bb93e41d0b985c482d342a876b76503f195f4dc",
-      "exposure": "generic",
-      "decisionReason": "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded project-value operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
+          "method": "POST",
           "path": "/workspaces/{workspaceId}/custom-fields",
           "sourceModule": "custom-fields.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/projects/{id}",
-          "sourceModule": "projects.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}\u0000custom-fields.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}",
-          "sourceModule": "custom-fields.ts"
         }
       ],
       "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "fieldId",
-        "projectId",
-        "value"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_custom_fields_update",
-      "description": "Update a custom field (name/type/allowedValues/required/status). Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "custom_fields",
-      "workflowModule": "custom-fields.ts",
-      "actionFingerprint": "15050dbf01508261a0fccf3c6e6e4387e086b45bcdc27d39050cc4fa3d1db677",
-      "exposure": "generic",
-      "decisionReason": "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Field name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
         },
-        "api_key": {
-          "available": true
+        {
+          "kind": "value",
+          "path": "/fieldType",
+          "label": "Field type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/allowedValues",
+          "itemPath": "/value",
+          "labelTemplate": "Allowed value {index}",
+          "maxItems": 17,
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/required",
+          "label": "Required",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "label": "Status",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
         }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fieldType",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/allowedValues",
+          "itemPath": "/value",
+          "maxItems": 17,
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/required",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_custom_fields_create",
+        "version": 1
       },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/custom-fields",
-          "sourceModule": "custom-fields.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/custom-fields/{id}\u0000custom-fields.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/custom-fields/{id}",
-          "sourceModule": "custom-fields.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
       "requiredArguments": [
-        "id"
+        "name"
       ],
       "primaryMutationCount": 1,
       "compensationCount": 0
@@ -2768,6 +2674,151 @@
       ],
       "presentation": {
         "presenterId": "clockify_custom_fields_delete",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_custom_fields_update",
+      "description": "Update a custom field (name/type/allowedValues/required/status). allowedValues are capped. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "custom_fields",
+      "workflowModule": "api-actions/custom-fields.ts",
+      "actionFingerprint": "d260f8a6abec788805772feef147ada31511211e75afc8b600072e9da7b48745",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/custom-fields/{id} (editCustomField).",
+      "operation": {
+        "operationId": "editCustomField",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/custom-fields/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/custom-fields",
+          "sourceModule": "custom-fields.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/custom-fields/{id}\u0000custom-fields.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/custom-fields/{id}",
+          "sourceModule": "custom-fields.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Custom field",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Field name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/fieldType",
+          "label": "Field type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/allowedValues",
+          "itemPath": "/value",
+          "labelTemplate": "Allowed value {index}",
+          "maxItems": 17,
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/required",
+          "label": "Required",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "label": "Status",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fieldType",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/allowedValues",
+          "itemPath": "/value",
+          "maxItems": 17,
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/required",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "value",
+          "path": "/status",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_custom_fields_update",
         "version": 1
       },
       "requiredArguments": [
@@ -8218,6 +8269,123 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_custom_fields_set_value_project",
+      "description": "Set a custom field value on a project. Multi-select values are capped. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "custom_fields",
+      "workflowModule": "api-actions/custom-fields.ts",
+      "actionFingerprint": "85996107a84114f321c757b58bc625777218bbd3de6a9f6e04b79b3b8219d3d7",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId} (editProjectCustomFieldDefaultValue).",
+      "operation": {
+        "operationId": "editProjectCustomFieldDefaultValue",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/custom-fields",
+          "sourceModule": "custom-fields.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}\u0000custom-fields.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PATCH",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}",
+          "sourceModule": "custom-fields.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/fieldId",
+          "label": "Custom field",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/value",
+          "itemPath": "/item",
+          "labelTemplate": "Value {index}",
+          "maxItems": 19,
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fieldId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/value",
+          "itemPath": "/item",
+          "maxItems": 19,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_custom_fields_set_value_project",
+        "version": 1
+      },
+      "requiredArguments": [
+        "fieldId",
+        "projectId",
+        "value"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_tasks_list",
       "description": "List tasks under a project (optional name filter).",
       "kind": "read",
@@ -11204,6 +11372,123 @@
         "id"
       ],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_custom_fields_set_value_entry",
+      "description": "Set a custom field value on a time entry. Multi-select values are capped. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "custom_fields",
+      "workflowModule": "api-actions/custom-fields.ts",
+      "actionFingerprint": "ea30bcd5c56cc1b66125e5ff90ec2119145d9e29bf4016eac1ba52eb0326735d",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/time-entries/{id} (updateTimeEntry).",
+      "operation": {
+        "operationId": "updateTimeEntry",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/time-entries/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/custom-fields",
+          "sourceModule": "custom-fields.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "sourceModule": "custom-fields.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "sourceModule": "custom-fields.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/entryId",
+          "label": "Time entry",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/fieldId",
+          "label": "Custom field",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/value",
+          "itemPath": "/item",
+          "labelTemplate": "Value {index}",
+          "maxItems": 19,
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/entryId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/fieldId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/value",
+          "itemPath": "/item",
+          "maxItems": 19,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_custom_fields_set_value_entry",
+        "version": 1
+      },
+      "requiredArguments": [
+        "entryId",
+        "fieldId",
+        "value"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -15303,10 +15588,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_custom_fields_create"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": false,
@@ -15316,8 +15601,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/custom-fields/{id}\u0000custom-fields.ts",
@@ -15364,10 +15649,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_custom_fields_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -15376,8 +15661,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/entities/created\u0000audit.ts",
@@ -16893,10 +17178,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_custom_fields_set_value_project"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -16905,8 +17190,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
@@ -17800,66 +18085,6 @@
       "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
-      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
-      "access": "read",
-      "host": "api",
-      "method": "GET",
-      "path": "/workspaces/{workspaceId}/time-entries/{entryId}",
-      "sourceModule": "custom-fields.ts",
-      "sourceCallSites": [
-        {
-          "sourceModule": "custom-fields.ts",
-          "sourceLine": 93,
-          "sourceColumn": 25,
-          "pagination": "none"
-        }
-      ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
-        "clockify_custom_fields_set_value_entry"
-      ],
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
-    },
-    {
-      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
-      "access": "write",
-      "host": "api",
-      "method": "PUT",
-      "path": "/workspaces/{workspaceId}/time-entries/{entryId}",
-      "sourceModule": "custom-fields.ts",
-      "sourceCallSites": [
-        {
-          "sourceModule": "custom-fields.ts",
-          "sourceLine": 123,
-          "sourceColumn": 122,
-          "pagination": "none"
-        }
-      ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
-        "clockify_custom_fields_set_value_entry"
-      ],
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
-    },
-    {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000time-entries.ts",
       "access": "write",
       "host": "api",
@@ -17890,6 +18115,36 @@
       },
       "decision": "model_api",
       "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+      "access": "read",
+      "host": "api",
+      "method": "GET",
+      "path": "/workspaces/{workspaceId}/time-entries/{id}",
+      "sourceModule": "custom-fields.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "custom-fields.ts",
+          "sourceLine": 93,
+          "sourceColumn": 25,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [],
+      "internalSupportConsumers": [
+        "clockify_custom_fields_set_value_entry"
+      ],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "internal_support",
+      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000time-entries.ts",
@@ -17923,6 +18178,36 @@
         "clockify_fix_entry",
         "clockify_stop_timer"
       ],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/time-entries/{id}",
+      "sourceModule": "custom-fields.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "custom-fields.ts",
+          "sourceLine": 123,
+          "sourceColumn": 117,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_custom_fields_set_value_entry"
+      ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -19410,10 +19695,12 @@
       ],
       "operations": [
         {
+          "operationId": "create",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/custom-fields",
-          "operationId": "create"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19440,10 +19727,12 @@
       ],
       "operations": [
         {
+          "operationId": "editCustomField",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/custom-fields/{customFieldId}",
-          "operationId": "editCustomField"
+          "path": "/workspaces/{workspaceId}/custom-fields/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20120,10 +20409,12 @@
       ],
       "operations": [
         {
+          "operationId": "editProjectCustomFieldDefaultValue",
           "host": "api",
           "method": "PATCH",
-          "path": "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{customFieldId}",
-          "operationId": "editProjectCustomFieldDefaultValue"
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20554,36 +20845,6 @@
       ]
     },
     {
-      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
-      "expandedPaths": [
-        "/workspaces/{workspaceId}/time-entries/{entryId}"
-      ],
-      "operations": [
-        {
-          "operationId": "getTimeEntry",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/time-entries/{id}",
-          "access": "read",
-          "exposure": "api"
-        }
-      ]
-    },
-    {
-      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
-      "expandedPaths": [
-        "/workspaces/{workspaceId}/time-entries/{entryId}"
-      ],
-      "operations": [
-        {
-          "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/time-entries/{id}",
-          "operationId": "updateTimeEntry"
-        }
-      ]
-    },
-    {
       "adapterKey": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000time-entries.ts",
       "expandedPaths": [
         "/workspaces/{workspaceId}/time-entries/{id}"
@@ -20595,6 +20856,22 @@
           "method": "DELETE",
           "path": "/workspaces/{workspaceId}/time-entries/{id}",
           "access": "write",
+          "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/time-entries/{id}"
+      ],
+      "operations": [
+        {
+          "operationId": "getTimeEntry",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "access": "read",
           "exposure": "api"
         }
       ]
@@ -20612,6 +20889,20 @@
           "path": "/workspaces/{workspaceId}/time-entries/{id}",
           "access": "read",
           "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000custom-fields.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/time-entries/{id}"
+      ],
+      "operations": [
+        {
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "operationId": "updateTimeEntry"
         }
       ]
     },

@@ -50,6 +50,8 @@ const metadata = {
   clockify_custom_fields_create: { "create-custom-field": "create" },
   clockify_custom_fields_update: { "update-custom-field": "update" },
   clockify_custom_fields_delete: { "delete-custom-field": "delete" },
+  clockify_custom_fields_set_value_project: { "set-project-custom-field": "update" },
+  clockify_custom_fields_set_value_entry: { "set-entry-custom-field": "update" },
   clockify_time_off_policies_create: { "create-time-off-policy": "create" },
   clockify_time_off_policies_update: { "update-time-off-policy": "update" },
   clockify_time_off_policies_archive: { "archive-time-off-policy": "state-command" },

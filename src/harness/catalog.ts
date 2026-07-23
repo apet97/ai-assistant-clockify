@@ -19,6 +19,7 @@ import { INVOICE_ACTIONS } from "./workflows/invoices.js";
 import { EXPENSE_ACTIONS } from "./workflows/expenses.js";
 import { EXPENSE_API_ACTIONS } from "./api-actions/expenses.js";
 import { CUSTOM_FIELD_ACTIONS } from "./workflows/custom-fields.js";
+import { CUSTOM_FIELD_API_ACTIONS } from "./api-actions/custom-fields.js";
 import { TIME_OFF_ACTIONS } from "./workflows/time-off.js";
 import { HOLIDAY_ACTIONS } from "./workflows/holidays.js";
 import { SCHEDULING_ACTIONS } from "./workflows/scheduling.js";
@@ -84,6 +85,7 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...EXPENSE_ACTIONS,
   ...EXPENSE_API_ACTIONS,
   ...CUSTOM_FIELD_ACTIONS,
+  ...CUSTOM_FIELD_API_ACTIONS,
   ...TIME_OFF_ACTIONS,
   ...HOLIDAY_ACTIONS,
   ...SCHEDULING_ACTIONS,
