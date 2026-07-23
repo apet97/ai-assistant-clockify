@@ -32,7 +32,7 @@ here; this file is the execution map.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
 - T06-CLIENTS CLOSED at `9880859`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file.
-- T06-AUDIT CLOSED: entity-change reads split to `clockify_entity_changes_created`/`updated`/`deleted`; audit-log search stays off MODEL_API (`official_operation_id_missing`). `MODEL_API` = 106; `ACTION_CATALOG` = 160. Live: `live_not_run_missing_credentials`. Next: `T06-WORKSPACE`.
+- T06-WORKSPACE CLOSED: `clockify_workspace_get`, `clockify_templates_list`, `clockify_templates_get` on MODEL_API with exact project endpoint correlations. `MODEL_API` = 106; `ACTION_CATALOG` = 160. Live: `live_not_run_missing_credentials`. Next: `T06-HOLIDAYS`.
 
 ## Non-negotiable invariants
 

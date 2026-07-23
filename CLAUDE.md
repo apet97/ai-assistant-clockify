@@ -24,7 +24,8 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-ENTRY-READS CLOSED: exact `clockify_entries_list` (`getTimeEntries`) and `clockify_entries_get` (`getTimeEntry`) with server-resolved dates and `truncated` list receipts; `clockify_status`, review-day/week, and work-package convenience stay off MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-ENTRY-UPDATE CLOSED: `clockify_entries_update` (`updateTimeEntry`, GET-then-PUT), existing `clockify_entries_delete`, and bounded `clockify_entries_mark_invoiced` (`updateInvoicedStatus`, max 21 ids); `clockify_fix_entry` stays generic/off MODEL_API.
 - T06-REPORTS CLOSED: `clockify_reports_summary` (`generateSummaryReport`), `clockify_reports_detailed` (`generateDetailedReport`), and `clockify_reports_weekly` (`generateWeeklyReport`) with server-resolved date ranges on the reports host; `clockify_period_report` stays composite/off MODEL_API.
-- T06-AUDIT CLOSED: `clockify_entity_changes_created`/`updated`/`deleted` (`getCreatedEntityInfo`/`getUpdatedEntityInfo`/`getDeletedEntityInfo`) on the api host; `clockify_audit_logs_search` stays generic with `official_operation_id_missing`; legacy `clockify_entity_changes_list` stays generic/off MODEL_API. Next: `T06-WORKSPACE`. Current counts: `ACTION_CATALOG` 160, `MODEL_API` 106. Live: `live_not_run_missing_credentials`.
+- T06-AUDIT CLOSED: `clockify_entity_changes_created`/`updated`/`deleted` (`getCreatedEntityInfo`/`getUpdatedEntityInfo`/`getDeletedEntityInfo`) on the api host; `clockify_audit_logs_search` stays generic with `official_operation_id_missing`; legacy `clockify_entity_changes_list` stays generic/off MODEL_API.
+- T06-WORKSPACE CLOSED: `clockify_workspace_get` (`getWorkspaceOfUser`), `clockify_templates_list`/`get` (`getProjects`/`getProject` on project endpoints). Next: `T06-HOLIDAYS`. Current counts: `ACTION_CATALOG` 160, `MODEL_API` 106. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 

@@ -108,3 +108,39 @@ describe("v2 audit API actions", () => {
     expect(fake.counts.listEntityChanges).toBe(1);
   });
 });
+
+describe("v2 workspace API actions", () => {
+  const WORKSPACE_API_ACTIONS = [
+    "clockify_workspace_get",
+    "clockify_templates_list",
+    "clockify_templates_get",
+  ] as const;
+
+  it("exposes workspace and template reads on MODEL_API with exact project correlations", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of WORKSPACE_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(getAction("clockify_workspace_get")?.apiOperation?.operationId).toBe("getWorkspaceOfUser");
+    expect(getAction("clockify_templates_list")?.apiOperation?.operationId).toBe("getProjects");
+    expect(getAction("clockify_templates_get")?.apiOperation?.operationId).toBe("getProject");
+    expect(getAction("clockify_templates_list")?.apiOperation?.path).toBe("/workspaces/{workspaceId}/projects");
+    expect(getAction("clockify_templates_get")?.adapterEndpoints?.support).toContain(
+      ["read", "api", "GET", "/workspaces/{workspaceId}/projects", "workspace.ts"].join("\0"),
+    );
+  });
+
+  it("clockify_templates_get resolves a template name server-side", async () => {
+    const fake = createFakeWorkspace({
+      projects: [{ id: "tpl-1", name: "Onboarding template", archived: false }],
+    });
+    const result = await executeAction({
+      actionName: "clockify_templates_get",
+      args: { name: "Onboarding template" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect((result.receipt.data as { entity?: { id?: string } }).entity?.id).toBe("tpl-1");
+  });
+});
