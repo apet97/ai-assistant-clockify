@@ -73,12 +73,13 @@ here; this file is the execution map.
 - **T12-B CLOSED:** time write parity matrix + auth-class prepare gate + Atomic mutation counting. Live: `not_run`. Next: `T12-C`.
 - **T12-C CLOSED:** reporting/admin write parity incl. webhook auth-class gate. Live: `not_run`. Next: `T12-D`.
 - **T12-D CLOSED:** invoice write parity matrix. Live: `not_run`. Next: `T12-E`.
-
 - **T12-E CLOSED:** expense/custom-field write parity. Live: `not_run`. Next: `T12-F`.
-## Non-negotiable invariants
 - **T12-F CLOSED:** user/group write parity matrix. Live: `not_run`. Next: `T12-G`.
-
 - **T12-G CLOSED:** leave/approval/scheduling write parity. Live: `not_run`. Next: `T12-H`.
+- **T12-H CLOSED / Task 12 green:** compound dependent/independent journeys + exit gate green; default engine stays v1. Live: `not_run`. Next: `T13-A`.
+
+## Non-negotiable invariants
+
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) governs the v2 rewrite. V2 coexists
   under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` will be the sole rewrite
   switch and defaults to v1 until authorized cutover.

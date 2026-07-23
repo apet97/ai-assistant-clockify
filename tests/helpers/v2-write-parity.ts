@@ -64,10 +64,22 @@ export function mergeWriteSeed(fixture: WritePreviewFixture) {
 
 export function mutationCallTotal(counts: Record<string, number>): number {
   // Durable dispatch bumps *Atomic; many fakes also bump a legacy alias for the
-  // same host call. Count the Atomic method when both are present.
+  // same host call. Count Atomic methods, plus non-Atomic only when no Atomic
+  // sibling (or specific rate Atomic) was recorded.
   return Object.entries(counts).reduce((sum, [method, count]) => {
     if (!MUTATION_METHOD.test(method)) return sum;
-    if (!method.endsWith("Atomic") && counts[`${method}Atomic`] !== undefined) return sum;
+    if (method.endsWith("Atomic")) return sum + count;
+    if (counts[`${method}Atomic`] !== undefined) return sum;
+    if (
+      method === "updateWorkspaceMemberRate" &&
+      (
+        counts.updateWorkspaceMemberHourlyRateAtomic !== undefined ||
+        counts.updateWorkspaceMemberCostRateAtomic !== undefined ||
+        counts.updateWorkspaceMemberRateAtomic !== undefined
+      )
+    ) {
+      return sum;
+    }
     return sum + count;
   }, 0);
 }
