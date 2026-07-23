@@ -59,6 +59,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T10-E CLOSED:** expense/custom-field read parity matrix covers all 4 catalog reads with nested expense envelope and truncated list truth preserved. Gate: `v2-read-parity-expenses` + Task 6E gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-F`.
 - **T10-F CLOSED:** user/group read parity matrix covers both catalog `users_groups` reads (`clockify_users_list`, `clockify_groups_list`). Gate: `v2-read-parity-users` + Task 6F gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-G`.
 - **T10-G CLOSED:** leave/approval/scheduling read parity matrix covers all 11 catalog reads across `time_off_approvals`, `scheduling`, and `approvals`; no list/find GET-one wrappers. Gate: `v2-read-parity-leave` + Task 6G gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-H`.
+- **T10-H CLOSED / Task 10 green:** all 43 `MODEL_API_ACTION_CATALOG` rows with `apiOperation.access === "read"` covered by seven generated domain matrices (structure 10, time 2, reporting 10, invoices 4, expenses 4, users 2, leave 11); catalog hash `f79307bc42bf82b07a9bfbe33003706a0454000580f269a0a4e0e3e604de3e3b`; v1/v2 semantic receipt parity on identical fakes; `ASSISTANT_ENGINE` default remains v1. Gate: full Task 10 exit Vitest + inventory + `npm run verify` green (304 files / 3919 tests). Live: `live_not_run_missing_credentials`. Next: `T11-A`.
 
 ## Start here
 

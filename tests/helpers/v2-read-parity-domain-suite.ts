@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createStore, type Store } from "../../src/db/store.js";
+import type { ReadExecutionOutcome } from "../../src/assistant-v2/protocol.js";
 import { executeV2Read } from "../../src/assistant-v2/read-execution.js";
 import type { SuccessReceipt, ErrorReceipt } from "../../src/harness/receipts.js";
 import {
@@ -48,6 +49,21 @@ function storedReceipt(store: Store, actionResultId: string | undefined): Succes
     throw new Error("expected stored receipt");
   }
   return (stored as { receipt: SuccessReceipt | ErrorReceipt }).receipt;
+}
+
+function outcomeResultId(outcome: ReadExecutionOutcome): string {
+  if ("actionResultId" in outcome) return outcome.actionResultId;
+  throw new Error("expected actionResultId");
+}
+
+function errorCode(receipt: SuccessReceipt | ErrorReceipt): string {
+  if (!receipt.ok) return receipt.code;
+  throw new Error("expected error receipt");
+}
+
+function successReceipt(receipt: SuccessReceipt | ErrorReceipt): SuccessReceipt {
+  if (!receipt.ok) throw new Error("expected success receipt");
+  return receipt;
 }
 
 export function registerReadParityDomainSuite(
@@ -104,7 +120,7 @@ export function registerReadParityDomainSuite(
               deps,
             );
             expect(outcome.kind).toBe("denied");
-            expect(storedReceipt(store, outcome.actionResultId).code).toBe("unavailable_for_auth_class");
+            expect(errorCode(storedReceipt(store, outcomeResultId(outcome)))).toBe("unavailable_for_auth_class");
             return;
           }
           const fake = createFakeWorkspace(mergeSeed(fixture.seed));
@@ -116,7 +132,7 @@ export function registerReadParityDomainSuite(
             deps,
           );
           expect(outcome.kind).toBe("validation_failed");
-          expect(storedReceipt(store, outcome.actionResultId).code).toBe("invalid_args");
+          expect(errorCode(storedReceipt(store, outcomeResultId(outcome)))).toBe("invalid_args");
         });
 
         it("denies deterministic policy-off reads", async () => {
@@ -130,7 +146,7 @@ export function registerReadParityDomainSuite(
               deps,
             );
             expect(outcome.kind).toBe("denied");
-            expect(storedReceipt(store, outcome.actionResultId).code).toBe("unavailable_for_auth_class");
+            expect(errorCode(storedReceipt(store, outcomeResultId(outcome)))).toBe("unavailable_for_auth_class");
             return;
           }
           const fake = createFakeWorkspace(mergeSeed(fixture.seed));
@@ -143,7 +159,7 @@ export function registerReadParityDomainSuite(
             deps,
           );
           expect(outcome.kind).toBe("denied");
-          expect(storedReceipt(store, outcome.actionResultId).code).toBe("policy_denied");
+          expect(errorCode(storedReceipt(store, outcomeResultId(outcome)))).toBe("policy_denied");
         });
 
         if (fixture.listFamily && !fixture.addonUnavailable) {
@@ -154,17 +170,17 @@ export function registerReadParityDomainSuite(
             const store = testStore();
             const deps = buildReadDeps({ fake, store });
             const args = fixture.truncationArgs ?? fixture.args;
-            const v1 = await runV1Read(action.name, args, fake);
+            const v1 = successReceipt(await runV1Read(action.name, args, fake));
             expect(v1.ok).toBe(true);
             expect((v1.data as { truncated?: boolean }).truncated).toBe(true);
-            expect(v1.warnings?.some((warning) => warning.code === "list_truncated")).toBe(true);
+            expect(v1.warnings?.some((warning: { code?: string }) => warning.code === "list_truncated")).toBe(true);
             const outcome = await executeV2Read(
               { id: "t1", name: action.name, arguments: args },
               baseScope(parityAuthClass),
               deps,
             );
             expect(outcome.kind).toBe("succeeded");
-            expect(receiptsSemanticallyEqual(v1, storedReceipt(store, outcome.actionResultId))).toBe(true);
+            expect(receiptsSemanticallyEqual(v1, storedReceipt(store, outcomeResultId(outcome)))).toBe(true);
           });
         }
 
@@ -180,9 +196,9 @@ export function registerReadParityDomainSuite(
             deps,
           );
           expect(outcome.kind).toBe(v1.ok ? "succeeded" : "failed");
-          const v2 = storedReceipt(store, outcome.actionResultId);
+          const v2 = storedReceipt(store, outcomeResultId(outcome));
           expect(receiptsSemanticallyEqual(v1, v2)).toBe(true);
-          if (v1.ok) assertCanonicalLinkPreserved(v1, v2, outcome.actionResultId);
+          if (v1.ok) assertCanonicalLinkPreserved(v1, v2, outcomeResultId(outcome));
         });
 
         const unicodeSeed = unicodeSeedForAction(action.name);
@@ -193,16 +209,15 @@ export function registerReadParityDomainSuite(
             const args = unicodeArgsForAction(action.name) ?? fixture.args;
             const store = testStore();
             const deps = buildReadDeps({ fake, store });
-            const v1 = await runV1Read(action.name, args, fake);
-            expect(v1.ok).toBe(true);
+            const v1 = successReceipt(await runV1Read(action.name, args, fake));
             expect(receiptContainsUnicode(v1, unicodeNeedle)).toBe(true);
             const outcome = await executeV2Read(
               { id: "t1", name: action.name, arguments: args },
               baseScope(parityAuthClass),
               deps,
             );
-            const v2 = storedReceipt(store, outcome.actionResultId);
-            expect(receiptContainsUnicode(v2 as SuccessReceipt, unicodeNeedle)).toBe(true);
+            const v2 = successReceipt(storedReceipt(store, outcomeResultId(outcome)));
+            expect(receiptContainsUnicode(v2, unicodeNeedle)).toBe(true);
           });
         }
       });

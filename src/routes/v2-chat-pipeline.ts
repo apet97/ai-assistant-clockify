@@ -70,7 +70,7 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           now: deps.now,
           loadCalendarContext: async (scope) => {
             try {
-              return await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(scope.adminUserId);
+              return (await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(scope.adminUserId)) ?? {};
             } catch {
               return {};
             }

@@ -3,7 +3,7 @@ import { buildApiOperationIndex } from "../../src/assistant-v2/discovery/api-ind
 import { searchApiOperations } from "../../src/assistant-v2/discovery/api-search.js";
 import { executeV2Read, type ReadExecutionDeps } from "../../src/assistant-v2/read-execution.js";
 import { executeReadsConcurrently } from "../../src/assistant-v2/runner.js";
-import type { RunScope } from "../../src/assistant-v2/protocol.js";
+import type { ReadExecutionOutcome, RunScope } from "../../src/assistant-v2/protocol.js";
 import { capToolResultForModel, TOOL_RESULT_MAX_BYTES } from "../../src/assistant/tool-results.js";
 import { executeAction } from "../../src/harness/actions.js";
 import type { ActionDefinition } from "../../src/harness/action.js";
@@ -164,10 +164,10 @@ export async function runV2ReadReceipt(
   args: Record<string, unknown>,
   deps: ReadExecutionDeps,
   scope: RunScope,
-): Promise<{ outcome: Awaited<ReturnType<typeof executeV2Read>>; receipt: SuccessReceipt | ErrorReceipt }> {
+): Promise<{ outcome: ReadExecutionOutcome; receipt: SuccessReceipt | ErrorReceipt }> {
   const call: ToolCall = { id: "tool-1", name: actionName, arguments: args };
   const outcome = await executeV2Read(call, scope, deps);
-  if (!outcome.actionResultId) throw new Error(`missing actionResultId for ${actionName}`);
+  if (!("actionResultId" in outcome)) throw new Error(`missing actionResultId for ${actionName}`);
   const stored = deps.store.getActionResult(outcome.actionResultId);
   if (!stored || typeof stored !== "object" || (stored as { kind?: string }).kind !== "receipt") {
     throw new Error(`missing stored receipt for ${actionName}`);
@@ -245,7 +245,7 @@ export async function assertConcurrentReadsPreserveOrder(
   let active = 0;
   let maxActive = 0;
   const governor = {
-    runRead: async (_scope: RunScope, op: () => Promise<unknown>) => {
+    runRead: async <T>(_scope: RunScope, op: () => Promise<T>): Promise<T> => {
       active += 1;
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
