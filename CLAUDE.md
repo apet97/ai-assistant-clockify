@@ -20,8 +20,9 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-PROJECTS CLOSED at `61e18157969fb508eaf184a2e5e1c92bf07c8083`: `delete_archived` (`deleteProject`), member hourly/cost rates (`addUsersHourlyRate`/`addUsersCostRate`), `memberships_replace` (`updateMemberships`), closed `estimate_update` (`updateEstimate`).
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: `delete_completed` (`deleteTask`), `status_update`/`assignees_replace`/closed `update` (`updateTask`), bounded `create` (`createTask`), hourly/cost (`setTaskHourlyRate`/`setTaskCostRate`).
 - T06-CLIENTS CLOSED at `9880859`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
-- T06-TAGS CLOSED: all five tag operations (`getTags`, `getTag`, `createNewTag`, `updateTag`, `deleteTag`) already exposed as atomic `api` actions in `workflows/tags.ts` with closed schemas and addon+api_key availability — verified, no empty split file. Current counts: `ACTION_CATALOG` 152, `MODEL_API` 98, local 4. Live: `live_not_run_missing_credentials`.
-- Next: `T06-USER-RATES`.
+- T06-TAGS CLOSED at `e87a255`: all five tag operations already exposed as atomic `api` actions in `workflows/tags.ts` — verified, no empty split file.
+- T06-USER-RATES CLOSED: `clockify_users_hourly_rate_update` (`setHourlyRateForUser`) and `clockify_users_cost_rate_update` (`setCostRateForUser`) with literal `/hourly-rate` and `/cost-rate` REST paths; v1 `clockify_users_rate_update` stays internal generic. Current counts: `ACTION_CATALOG` 154, `MODEL_API` 100, local 4. Live: `live_not_run_missing_credentials`.
+- Next: `T06-ENTRY-READS`.
 
 ## Start here
 
@@ -57,7 +58,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 152 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 154 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

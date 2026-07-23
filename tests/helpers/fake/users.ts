@@ -12,6 +12,8 @@ export function makeFakeUsers({ state, seed, bump, nextId }: FakeContext): Pick<
   | "inviteUserAtomic"
   | "updateUserRoleAtomic"
   | "updateWorkspaceMemberRateAtomic"
+  | "updateWorkspaceMemberHourlyRateAtomic"
+  | "updateWorkspaceMemberCostRateAtomic"
   | "deactivateUserAtomic"
   | "inviteUser"
   | "updateUserRole"
@@ -47,12 +49,31 @@ export function makeFakeUsers({ state, seed, bump, nextId }: FakeContext): Pick<
     ];
     return { id: userId, name: role };
   };
-  const updateWorkspaceMemberRateAtomic: WorkspaceClient["updateWorkspaceMemberRateAtomic"] = async (input) => {
-    bump("updateWorkspaceMemberRateAtomic"); bump("updateWorkspaceMemberRate");
+  const applyWorkspaceMemberRate = (
+    input: { userId: string; amountMinor: number; since?: string },
+    rateKind: "HOURLY" | "COST",
+    counter: "updateWorkspaceMemberHourlyRateAtomic" | "updateWorkspaceMemberCostRateAtomic",
+  ) => {
+    bump(counter);
+    bump("updateWorkspaceMemberRateAtomic");
+    bump("updateWorkspaceMemberRate");
     state.workspaceMemberRates[input.userId] = {
       ...(state.workspaceMemberRates[input.userId] ?? {}),
-      [input.rateKind]: { amountMinor: input.amountMinor, ...(input.since !== undefined ? { since: input.since } : {}) },
+      [rateKind]: { amountMinor: input.amountMinor, ...(input.since !== undefined ? { since: input.since } : {}) },
     };
+  };
+  const updateWorkspaceMemberHourlyRateAtomic: WorkspaceClient["updateWorkspaceMemberHourlyRateAtomic"] = async (input) => {
+    applyWorkspaceMemberRate(input, "HOURLY", "updateWorkspaceMemberHourlyRateAtomic");
+  };
+  const updateWorkspaceMemberCostRateAtomic: WorkspaceClient["updateWorkspaceMemberCostRateAtomic"] = async (input) => {
+    applyWorkspaceMemberRate(input, "COST", "updateWorkspaceMemberCostRateAtomic");
+  };
+  const updateWorkspaceMemberRateAtomic: WorkspaceClient["updateWorkspaceMemberRateAtomic"] = async (input) => {
+    if (input.rateKind === "COST") {
+      await updateWorkspaceMemberCostRateAtomic(input);
+      return;
+    }
+    await updateWorkspaceMemberHourlyRateAtomic(input);
   };
   const deactivateUserAtomic: WorkspaceClient["deactivateUserAtomic"] = async (userId) => {
     bump("deactivateUserAtomic"); bump("deactivateUser");
@@ -114,6 +135,8 @@ export function makeFakeUsers({ state, seed, bump, nextId }: FakeContext): Pick<
     inviteUserAtomic,
     updateUserRoleAtomic,
     updateWorkspaceMemberRateAtomic,
+    updateWorkspaceMemberHourlyRateAtomic,
+    updateWorkspaceMemberCostRateAtomic,
     deactivateUserAtomic,
     inviteUser: inviteUserAtomic,
     updateUserRole: updateUserRoleAtomic,

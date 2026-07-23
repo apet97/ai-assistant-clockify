@@ -158,6 +158,14 @@ describe("user & group rest", () => {
     [url, init] = (c as any).mock.calls[0];
     expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/cost-rate");
     expect(JSON.parse(init.body)).toEqual({ amount: 3000, since: "2026-01-01" });
+
+    const hourly = vi.fn(async () => jsonResponse({}));
+    await rest(hourly as unknown as typeof fetch).updateWorkspaceMemberHourlyRateAtomic({ userId: "u1", amountMinor: 7500 });
+    expect((hourly as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/hourly-rate");
+
+    const cost = vi.fn(async () => jsonResponse({}));
+    await rest(cost as unknown as typeof fetch).updateWorkspaceMemberCostRateAtomic({ userId: "u1", amountMinor: 3000, since: "2026-01-01" });
+    expect((cost as any).mock.calls[0][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/users/u1/cost-rate");
   });
 
   it("deactivateUser PUTs /users/{id} {status:INACTIVE}", async () => {

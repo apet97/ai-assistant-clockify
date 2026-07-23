@@ -27,6 +27,7 @@ const INTERNAL_ONLY_EXCLUSIONS = [
   "clockify_projects_memberships_update",
   "clockify_tasks_delete",
   "clockify_tasks_rate_update",
+  "clockify_users_rate_update",
 ] as const;
 
 const LOCAL_ASSISTANT_NAMES = [
@@ -172,7 +173,7 @@ describe("explicit ActionRegistry surfaces", () => {
       .map((action) => action.name)
       .sort();
     expect(namesOf(MODEL_API_ACTION_CATALOG).sort()).toEqual(expected);
-    expect(MODEL_API_ACTION_CATALOG.actions).toHaveLength(98);
+    expect(MODEL_API_ACTION_CATALOG.actions).toHaveLength(100);
   });
 
   it("rejects catalog/tool construction without an exact registry", () => {
@@ -190,7 +191,7 @@ describe("explicit ActionRegistry surfaces", () => {
   it("keeps local and non-api definitions out of the model API tool schemas", () => {
     const modelTools = toolsForModel(MODEL_API_ACTION_CATALOG);
     const modelNames = new Set(modelTools.map((tool) => tool.name));
-    expect(modelTools).toHaveLength(98);
+    expect(modelTools).toHaveLength(100);
     for (const name of LOCAL_ASSISTANT_NAMES) {
       expect(modelNames.has(name)).toBe(false);
     }

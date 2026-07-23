@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "9ec88417f0e62cea5ff847f988cff6a2b7a724fa5bce41779e14970cc86ac748",
+  "catalogHash": "20987bd42b31dba8f9be6f89b26118cf5cd7a568e52c7a7144752dc75f902cf6",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 152,
-    "rawAdapterCallSites": 146,
-    "rawAdapterShapes": 122,
+    "actions": 154,
+    "rawAdapterCallSites": 148,
+    "rawAdapterShapes": 124,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 98,
+      "api": 100,
       "composite": 23,
       "generic": 27,
       "local": 4
@@ -11826,6 +11826,184 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_users_cost_rate_update",
+      "description": "Set a workspace member's default cost rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or \"me\"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "users.ts",
+      "actionFingerprint": "3ac94b917100b320e2f6eef63143162dbdaf94f76be5253004239ec91075a850",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/users/{userId}/cost-rate (setCostRateForUser).",
+      "operation": {
+        "operationId": "setCostRateForUser",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/cost-rate\u0000users.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/userId",
+          "label": "Member",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Cost rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/userId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_users_cost_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_users_hourly_rate_update",
+      "description": "Set a workspace member's default hourly rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or \"me\"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "invoices",
+      "workflowModule": "users.ts",
+      "actionFingerprint": "944ec54d0f75a75186133ec3074fcc5c110722b0fee2181e18d78e59f7768fb9",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/users/{userId}/hourly-rate (setHourlyRateForUser).",
+      "operation": {
+        "operationId": "setHourlyRateForUser",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/hourly-rate\u0000users.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/userId",
+          "label": "Member",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "label": "Hourly rate",
+          "formatterId": "money-minor",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/userId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/amountMinor",
+          "scalarType": "number"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_users_hourly_rate_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "amount"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_users_role_update",
       "description": "Give a workspace member a manager role; the SCOPE depends on the role (live-verified): WORKSPACE_ADMIN = the whole workspace (no scope needed); PROJECT_MANAGER = a project (pass `projectId` or exact `projectName`); TEAM_MANAGER = a user group (pass `groupId` or exact `groupName`). Pass the RECIPIENT by `userId`/`userName` (or 'me'). Elevated write — previews and requires confirmation.",
       "kind": "risky_write",
@@ -12784,7 +12962,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 268,
+          "sourceLine": 282,
           "sourceColumn": 9,
           "pagination": "none"
         }
@@ -16129,13 +16307,13 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 293,
+          "sourceLine": 309,
           "sourceColumn": 28,
           "pagination": "plain"
         },
         {
           "sourceModule": "users.ts",
-          "sourceLine": 299,
+          "sourceLine": 315,
           "sourceColumn": 28,
           "pagination": "plain"
         }
@@ -16177,7 +16355,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 179,
+          "sourceLine": 193,
           "sourceColumn": 24,
           "pagination": "none"
         }
@@ -16207,7 +16385,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 199,
+          "sourceLine": 213,
           "sourceColumn": 11,
           "pagination": "none"
         }
@@ -16238,7 +16416,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 203,
+          "sourceLine": 217,
           "sourceColumn": 11,
           "pagination": "none"
         }
@@ -16268,7 +16446,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 195,
+          "sourceLine": 209,
           "sourceColumn": 11,
           "pagination": "none"
         }
@@ -16300,7 +16478,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 187,
+          "sourceLine": 201,
           "sourceColumn": 24,
           "pagination": "none"
         }
@@ -16410,19 +16588,19 @@
         },
         {
           "sourceModule": "users.ts",
-          "sourceLine": 210,
+          "sourceLine": 224,
           "sourceColumn": 28,
           "pagination": "plain"
         },
         {
           "sourceModule": "users.ts",
-          "sourceLine": 218,
+          "sourceLine": 232,
           "sourceColumn": 26,
           "pagination": "none"
         },
         {
           "sourceModule": "users.ts",
-          "sourceLine": 267,
+          "sourceLine": 281,
           "sourceColumn": 9,
           "pagination": "plain"
         }
@@ -16460,7 +16638,9 @@
         "clockify_time_off_policies_create",
         "clockify_time_off_policies_update",
         "clockify_time_off_requests_list",
+        "clockify_users_cost_rate_update",
         "clockify_users_deactivate",
+        "clockify_users_hourly_rate_update",
         "clockify_users_invite",
         "clockify_users_rate_update",
         "clockify_users_role_update"
@@ -16518,13 +16698,73 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 171,
+          "sourceLine": 185,
           "sourceColumn": 24,
           "pagination": "none"
         }
       ],
       "mappedModelActionNames": [
         "clockify_users_deactivate"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/cost-rate\u0000users.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
+      "sourceModule": "users.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "users.ts",
+          "sourceLine": 170,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_users_cost_rate_update"
+      ],
+      "internalSupportConsumers": [],
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
+    },
+    {
+      "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/hourly-rate\u0000users.ts",
+      "access": "write",
+      "host": "api",
+      "method": "PUT",
+      "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
+      "sourceModule": "users.ts",
+      "sourceCallSites": [
+        {
+          "sourceModule": "users.ts",
+          "sourceLine": 163,
+          "sourceColumn": 11,
+          "pagination": "none"
+        }
+      ],
+      "mappedModelActionNames": [
+        "clockify_users_hourly_rate_update"
       ],
       "internalSupportConsumers": [],
       "availabilityByAuthClass": {
@@ -16578,7 +16818,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "users.ts",
-          "sourceLine": 164,
+          "sourceLine": 178,
           "sourceColumn": 11,
           "pagination": "none"
         }
@@ -18668,6 +18908,34 @@
           "path": "/workspaces/{workspaceId}/users/{userId}",
           "access": "write",
           "exposure": "api"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/cost-rate\u0000users.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/users/{userId}/cost-rate"
+      ],
+      "operations": [
+        {
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
+          "operationId": "setCostRateForUser"
+        }
+      ]
+    },
+    {
+      "adapterKey": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/users/{userId}/hourly-rate\u0000users.ts",
+      "expandedPaths": [
+        "/workspaces/{workspaceId}/users/{userId}/hourly-rate"
+      ],
+      "operations": [
+        {
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
+          "operationId": "setHourlyRateForUser"
         }
       ]
     },

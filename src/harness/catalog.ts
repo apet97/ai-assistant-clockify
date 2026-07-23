@@ -9,6 +9,7 @@ import { PROJECT_ACTIONS } from "./workflows/projects.js";
 import { PROJECT_API_ACTIONS } from "./api-actions/projects.js";
 import { TASK_API_ACTIONS } from "./api-actions/tasks.js";
 import { CLIENT_API_ACTIONS } from "./api-actions/clients.js";
+import { USER_GROUP_ACTIONS, USER_API_ACTIONS } from "./workflows/users.js";
 import { TASK_ACTIONS } from "./workflows/tasks.js";
 import { CLIENT_ACTIONS } from "./workflows/clients.js";
 import { TAG_ACTIONS } from "./workflows/tags.js";
@@ -20,7 +21,6 @@ import { HOLIDAY_ACTIONS } from "./workflows/holidays.js";
 import { SCHEDULING_ACTIONS } from "./workflows/scheduling.js";
 import { APPROVAL_ACTIONS } from "./workflows/approvals.js";
 import { WEBHOOK_ACTIONS } from "./workflows/webhooks.js";
-import { USER_GROUP_ACTIONS } from "./workflows/users.js";
 import { REPORT_ACTIONS } from "./workflows/reports.js";
 import { AUDIT_ACTIONS } from "./workflows/audit.js";
 import { WORKSPACE_ACTIONS } from "./workflows/workspace.js";
@@ -84,6 +84,7 @@ const ASSEMBLED_ACTIONS: ReadonlyArray<ActionDefinition> = [
   ...APPROVAL_ACTIONS,
   ...WEBHOOK_ACTIONS,
   ...USER_GROUP_ACTIONS,
+  ...USER_API_ACTIONS,
   ...REPORT_ACTIONS,
   ...AUDIT_ACTIONS,
   ...WORKSPACE_ACTIONS,

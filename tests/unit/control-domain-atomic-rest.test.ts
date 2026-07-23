@@ -25,7 +25,8 @@ describe("phase 5 control-domain atomic REST primitives", () => {
       [makeApprovalRest(core(fetchImpl), "ws-1"), ["submitApprovalAtomic", "setApprovalStateAtomic", "resubmitApprovalAtomic"]],
       [makeWebhookRest(core(fetchImpl), "ws-1"), ["createWebhookAtomic", "updateWebhookAtomic", "deleteWebhookAtomic"]],
       [makeUserRest(core(fetchImpl), "ws-1"), [
-        "inviteUserAtomic", "updateUserRoleAtomic", "updateWorkspaceMemberRateAtomic", "deactivateUserAtomic",
+        "inviteUserAtomic", "updateUserRoleAtomic", "updateWorkspaceMemberRateAtomic",
+        "updateWorkspaceMemberHourlyRateAtomic", "updateWorkspaceMemberCostRateAtomic", "deactivateUserAtomic",
         "createGroupAtomic", "updateGroupAtomic", "deleteGroupAtomic", "addUserToGroupAtomic", "removeUserFromGroupAtomic",
       ]],
     ] as const;

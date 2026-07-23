@@ -494,6 +494,8 @@ const USER_GROUP_ENDPOINT = {
     invite: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users", "users.ts"),
     role: adapterEndpointKey("write", "api", "POST", "/workspaces/{workspaceId}/users/{userId}/roles", "users.ts"),
     rate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}/{kind}", "users.ts"),
+    hourlyRate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}/hourly-rate", "users.ts"),
+    costRate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}/cost-rate", "users.ts"),
     status: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/users/{userId}", "users.ts"),
   },
   groups: {
@@ -2165,6 +2167,27 @@ const USER_GROUP_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     primaryMutationCount: 1,
     compensationCount: 0,
   },
+  ...([
+    ["clockify_users_hourly_rate_update", "setHourlyRateForUser", "/workspaces/{workspaceId}/users/{userId}/hourly-rate", USER_GROUP_ENDPOINT.users.hourlyRate, "Hourly rate"] as const,
+    ["clockify_users_cost_rate_update", "setCostRateForUser", "/workspaces/{workspaceId}/users/{userId}/cost-rate", USER_GROUP_ENDPOINT.users.costRate, "Cost rate"] as const,
+  ].map(([name, operationId, path, primary, rateLabel]) => ({
+    ...apiAnnotation({
+      name,
+      operationId,
+      method: "PUT",
+      path,
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/userId", "Member", "entity", true),
+        materialField("/amountMinor", rateLabel, "money-minor", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  }))),
   {
     ...apiAnnotation({
       name: "clockify_users_deactivate",
@@ -3222,12 +3245,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 152,
-      rawAdapterCallSites: 146,
-      rawAdapterShapes: 122,
+      actions: 154,
+      rawAdapterCallSites: 148,
+      rawAdapterShapes: 124,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 98, composite: 23, generic: 27, local: 4 },
+      exposures: { api: 100, composite: 23, generic: 27, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

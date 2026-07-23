@@ -290,6 +290,40 @@ describe("v2 client structure API actions", () => {
   });
 });
 
+describe("v2 workspace member rate API actions", () => {
+  it("exposes hourly and cost rate actions on MODEL_API and hides the generic chooser", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    expect(modelNames.has("clockify_users_hourly_rate_update")).toBe(true);
+    expect(modelNames.has("clockify_users_cost_rate_update")).toBe(true);
+    expect(modelNames.has("clockify_users_rate_update")).toBe(false);
+    expect(getAction("clockify_users_rate_update")?.apiExposure).toBe("generic");
+  });
+
+  it("routes hourly and cost workspace member rate actions through distinct fake REST ports", async () => {
+    const fake = createFakeWorkspace({
+      users: [{ id: "u2", name: "Bob", email: "bob@example.com", status: "ACTIVE" }],
+    });
+    const hourlyPreview = await executeAction({
+      actionName: "clockify_users_hourly_rate_update",
+      args: { userName: "Bob", amount: 60 },
+      context: makeContext(fake),
+    });
+    if (hourlyPreview.kind !== "preview") throw new Error("expected hourly preview");
+    await commitConfirmedOperation(makeContext(fake), hourlyPreview.operation);
+    expect(fake.counts.updateWorkspaceMemberHourlyRateAtomic).toBe(1);
+    expect(fake.counts.updateWorkspaceMemberCostRateAtomic ?? 0).toBe(0);
+
+    const costPreview = await executeAction({
+      actionName: "clockify_users_cost_rate_update",
+      args: { userName: "Bob", amount: 25 },
+      context: makeContext(fake),
+    });
+    if (costPreview.kind !== "preview") throw new Error("expected cost preview");
+    await commitConfirmedOperation(makeContext(fake), costPreview.operation);
+    expect(fake.counts.updateWorkspaceMemberCostRateAtomic).toBe(1);
+  });
+});
+
 const TAG_API_ACTIONS = [
   "clockify_tags_list",
   "clockify_tags_get",

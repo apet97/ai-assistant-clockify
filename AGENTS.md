@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 152 typed
+the full test/build suite, and circular-dependency/duplication gates. 154 typed
 actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 (volume-backed SQLite at `/data`); deploy only through the checked transaction in
 `DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
@@ -31,7 +31,8 @@ here; this file is the execution map.
 - T06-PROJECTS CLOSED: atomic project API actions (`delete_archived`/`deleteProject`, member hourly `addUsersHourlyRate`, member cost `addUsersCostRate`, `memberships_replace`/`updateMemberships`, closed `estimate_update`/`updateEstimate`). v1 composite/generic project wrappers stay internal.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
 - T06-CLIENTS CLOSED at `9880859`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
-- T06-TAGS CLOSED: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file. `MODEL_API` = 98; `ACTION_CATALOG` = 152. Live: `live_not_run_missing_credentials`. Next: `T06-USER-RATES`.
+- T06-TAGS CLOSED at `e87a255`: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file.
+- T06-USER-RATES CLOSED: split workspace member rates into `clockify_users_hourly_rate_update` (`setHourlyRateForUser`) and `clockify_users_cost_rate_update` (`setCostRateForUser`) with literal REST paths; v1 `clockify_users_rate_update` stays internal generic. `MODEL_API` = 100; `ACTION_CATALOG` = 154. Live: `live_not_run_missing_credentials`. Next: `T06-ENTRY-READS`.
 
 ## Non-negotiable invariants
 

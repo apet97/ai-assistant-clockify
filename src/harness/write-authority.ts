@@ -202,6 +202,8 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_users_invite: single("invite-user", { defaults: ["operation.sendEmail"] }),
   clockify_users_role_update: single("update-user-role", { derivedIds: ["operation.groupId", "operation.projectId", "operation.userId", "operation.granteeId", "operation.entityId"] }),
   clockify_users_rate_update: single("update-user-rate", { derivedIds: ["operation.userId"], defaults: ["operation.amountUnit"] }),
+  clockify_users_hourly_rate_update: single("update-user-hourly-rate", { derivedIds: ["operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_users_cost_rate_update: single("update-user-cost-rate", { derivedIds: ["operation.userId"], authenticatedSelfLiterals: ["userId"] }),
   clockify_users_deactivate: single("deactivate-user", { derivedIds: ["operation.userId"] }),
   clockify_groups_create: single("create-group"),
   clockify_groups_update: single("update-group", { derivedIds: ["operation.groupId", "operation.id"] }),

@@ -355,23 +355,34 @@ const updateUserRole: Handler = async (input) => {
   });
 };
 
+const updateUserHourlyRate = userWorkspaceRateReconciler("HOURLY");
+const updateUserCostRate = userWorkspaceRateReconciler("COST");
+
+function userWorkspaceRateReconciler(rateKind: "HOURLY" | "COST"): Handler {
+  return async (input) => {
+    const payload = payloadOf(input.candidate);
+    const userId = typeof payload?.userId === "string" ? payload.userId : undefined;
+    const amountMinor = typeof payload?.amountMinor === "number" ? payload.amountMinor : undefined;
+    const since = typeof payload?.since === "string" ? payload.since : undefined;
+    if (!userId || amountMinor === undefined) return invalidInput(input);
+    return singleReadHandler(input, {
+      strategy: "update",
+      async read() {
+        const row = await input.clockify.getWorkspaceMemberRate(userId, rateKind);
+        return { truncated: false, rows: row ? [{ ref: { type: "user-rate", id: userId }, projection: row }] : [] };
+      },
+      matches: (candidate) => !!candidate.projection && typeof candidate.projection === "object" &&
+        (candidate.projection as { amountMinor?: unknown }).amountMinor === amountMinor &&
+        (since === undefined || (candidate.projection as { since?: unknown }).since === since),
+    });
+  };
+}
+
 const updateUserRate: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
-  const userId = typeof payload?.userId === "string" ? payload.userId : undefined;
   const rateKind = payload?.rateKind === "HOURLY" || payload?.rateKind === "COST" ? payload.rateKind : undefined;
-  const amountMinor = typeof payload?.amountMinor === "number" ? payload.amountMinor : undefined;
-  const since = typeof payload?.since === "string" ? payload.since : undefined;
-  if (!userId || !rateKind || amountMinor === undefined) return invalidInput(input);
-  return singleReadHandler(input, {
-    strategy: "update",
-    async read() {
-      const row = await input.clockify.getWorkspaceMemberRate(userId, rateKind);
-      return { truncated: false, rows: row ? [{ ref: { type: "user-rate", id: userId }, projection: row }] : [] };
-    },
-    matches: (candidate) => !!candidate.projection && typeof candidate.projection === "object" &&
-      (candidate.projection as { amountMinor?: unknown }).amountMinor === amountMinor &&
-      (since === undefined || (candidate.projection as { since?: unknown }).since === since),
-  });
+  if (!rateKind) return invalidInput(input);
+  return userWorkspaceRateReconciler(rateKind)(input);
 };
 
 const deactivateUser: Handler = async (input) => {
@@ -525,6 +536,8 @@ const handlers = new Map<string, Handler>([
   ["clockify_onboard_user\0add-user-to-group-*", onboardGroupMembership],
   ["clockify_users_role_update\0update-user-role", updateUserRole],
   ["clockify_users_rate_update\0update-user-rate", updateUserRate],
+  ["clockify_users_hourly_rate_update\0update-user-hourly-rate", updateUserHourlyRate],
+  ["clockify_users_cost_rate_update\0update-user-cost-rate", updateUserCostRate],
   ["clockify_users_deactivate\0deactivate-user", deactivateUser],
   ["clockify_groups_create\0create-group", createGroup],
   ["clockify_groups_update\0update-group", updateGroup],

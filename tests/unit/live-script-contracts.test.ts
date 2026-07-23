@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const script = (name: string): string => readFileSync(resolve("scripts", name), "utf8");
-const ENDPOINT_SCOPE_CONTRACT_SHA256 = "cc08327c2b23bc7fcf50360b4ddf7ec40c2d3f21c53f5ecc2976370c46871190";
+const ENDPOINT_SCOPE_CONTRACT_SHA256 = "e3aec653500e7e10ca5db49975ac5fa7d418df00eee08f3e878a5b57faf6d09f";
 
 describe("production HTTP smoke script contracts", () => {
   it("keeps the generated endpoint scope contract byte-for-byte stable", () => {
