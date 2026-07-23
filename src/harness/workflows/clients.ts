@@ -7,41 +7,26 @@ import {
   defineReadAction,
   defineRiskyAction,
   type ActionDefinition,
-  type SemanticLiteralAlias,
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
-import { describePatch, resolveEntityRef } from "./resolve.js";
+import { resolveEntityRef } from "./resolve.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
-import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
+import { executeDurableRiskyStep } from "../durable-risky-write.js";
 import { executeCompensationStep, isJournalDegradedStep } from "../mutation-workflow.js";
 import { errorReceipt } from "../receipts.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
-import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
+import { captureStructureSnapshot, dispatchWithReconciliation, mutationPlan, reconcileDelete, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import { sanitizedFingerprint } from "../safe-json.js";
-import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
 import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
-
-/** Resolve a currency code or exact id to its workspace currencyId, or clarify. */
-async function resolveCurrencyId(
-  ctx: ActionContext,
-  currency: string,
-): Promise<{ ok: true; id: string } | { ok: false; message: string }> {
-  const currencies = await ctx.clockify.listCurrencies();
-  const raw = currency.trim();
-  const exactId = currencies.rows.find((candidate) => candidate.id === raw);
-  if (exactId) return { ok: true, id: exactId.id };
-  const want = raw.toUpperCase();
-  const match = currencies.rows.find((c) => c.code.toUpperCase() === want);
-  if (currencies.truncated) {
-    return {
-      ok: false,
-      message: `Clockify returned an incomplete currency list, so I can't prove that "${currency}" identifies one currency. Provide the exact currency id or retry with a complete lookup.`,
-    };
-  }
-  if (match) return { ok: true, id: match.id };
-  const codes = currencies.rows.map((c) => c.code).join(", ");
-  return { ok: false, message: `I don't see a "${currency}" currency in this workspace. Available: ${codes || "(none configured)"}.` };
-}
+import {
+  clientClosedUpdateSchema,
+  commitArchiveClient,
+  commitClientClosedUpdate,
+  previewArchiveClient,
+  previewClientClosedUpdate,
+  reconcileCreatedClient,
+  resolveCurrencyId,
+} from "./client-action-shared.js";
 
 /**
  * Typed client workflows (goclmcp §2.4). Reads + create execute immediately;
@@ -63,26 +48,6 @@ type ClientCreateOperation = {
   enrichment: { ccEmails?: string[]; currencyId?: string };
   beforeIds: string[];
 };
-
-async function reconcileCreatedClient(
-  ctx: ActionContext,
-  beforeIds: readonly string[],
-  expected: Record<string, unknown>,
-) {
-  const after = await ctx.clockify.listClients({ archived: false });
-  if (after.truncated) return undefined;
-  const before = new Set(beforeIds);
-  const candidates = after.rows.filter((row) => !before.has(row.id) && row.name === expected.name);
-  if (candidates.length > STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX) return undefined;
-  const matches = [];
-  for (const candidate of candidates) {
-    const raw = await ctx.clockify.getClientMutationState(candidate.id);
-    if (raw && Object.entries(expected).every(([key, value]) => JSON.stringify(raw[key]) === JSON.stringify(value))) {
-      matches.push(candidate);
-    }
-  }
-  return matches.length === 1 ? matches[0] : undefined;
-}
 
 async function prepareClientCreate(
   ctx: ActionContext,
@@ -330,104 +295,32 @@ const updateClient = defineRiskyAction({
   name: "clockify_clients_update",
   ...STRUCTURE_API_METADATA.clockify_clients_update,
   description:
-    'Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR" or exact id). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.',
+    'Update a client (rename, unarchive, set billing `ccEmails`, set `currency` by code e.g. "EUR" or exact id). Pass the client\'s `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. For archive, use clockify_clients_archive. Elevated write — previews and requires confirmation.',
   group: WORK,
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
-  semanticLiteralAliases: Object.freeze([
-    { path: "archived", value: false, authoredPhrases: Object.freeze(["active", "restore", "unarchive", "unarchived"]) },
-    { path: "archived", value: true, authoredPhrases: Object.freeze(["archive", "archived"]) },
-  ] satisfies readonly SemanticLiteralAlias[]),
-  argumentOpenPaths: ["fields"],
+  schema: clientClosedUpdateSchema,
+  preview: (ctx, args) => previewClientClosedUpdate(ctx, args),
+  commit: (ctx, payload, operation) => commitClientClosedUpdate(ctx, payload, operation, "clockify_clients_update"),
+});
+
+const archiveClient = defineRiskyAction({
+  name: "clockify_clients_archive",
+  ...STRUCTURE_API_METADATA.clockify_clients_archive,
+  description:
+    "Archive a client (hides it from active lists). Pass the client id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
+  group: WORK,
+  risks: ["destructive"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] }),
   schema: z
-    .object({
-      id: z.string().min(1).optional(),
-      /** The client's existing name, resolved to an id server-side (rename-by-name). */
-      currentName: z.string().min(1).optional(),
-      name: z.string().optional(),
-      archived: z.boolean().optional(),
-      /** Billing CC recipients (Clockify `ccEmails`); update sticks via getThenPut. */
-      ccEmails: z.array(z.string().email()).optional(),
-      /** Currency code (e.g. "EUR") or exact id, resolved server-side. */
-      currency: z.string().min(1).optional(),
-      fields: z.record(z.string(), z.unknown()).optional(),
-    })
-    .refine((v) => v.id !== undefined || v.currentName !== undefined, {
-      message: "Provide the client id or its exact currentName.",
-    })
-    .refine(
-      (v) =>
-        v.name !== undefined ||
-        v.archived !== undefined ||
-        v.ccEmails !== undefined ||
-        v.currency !== undefined ||
-        v.fields !== undefined,
-      { message: "Provide at least one field to change." },
-    ),
-  async preview(ctx, args) {
-    const resolved = await resolveEntityRef(
-      { id: args.id, name: args.currentName },
-      {
-        noun: "client",
-        verb: "update",
-        list: (filter) => ctx.clockify.listClients(filter),
-        // Unarchiving targets an entity that is archived by definition.
-        includeArchived: args.archived === false,
-        verifyId: true,
-      },
-    );
-    if (!resolved.ok) return resolved.clarify;
-    let currencyId: string | undefined;
-    if (args.currency !== undefined) {
-      const cur = await resolveCurrencyId(ctx, args.currency);
-      if (!cur.ok) return { clarify: cur.message };
-      currencyId = cur.id;
-    }
-    const patch: Record<string, unknown> = {
-      ...(args.name !== undefined ? { name: args.name } : {}),
-      ...(args.archived !== undefined ? { archived: args.archived } : {}),
-      ...(args.ccEmails !== undefined ? { ccEmails: args.ccEmails } : {}),
-      ...(currencyId !== undefined ? { currencyId } : {}),
-      ...(args.fields ?? {}),
-    };
-    const current = await ctx.clockify.getClient(resolved.id);
-    if (!current) return { clarify: "The requested client no longer exists. Refresh and try again." };
-    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "client", current);
-    const body = await ctx.clockify.prepareClientUpdate(resolved.id, patch);
-    return {
-      actionLabel: "Update client",
-      targets: [{ type: "client", id: resolved.id, name: resolved.name ?? args.name }],
-      expectedChanges: describePatch(patch),
-      reversibility: "You can update the client again to revert most fields.",
-      warnings: ["Updating a client changes live workspace data."],
-      payload: { id: resolved.id, patch, body },
-      targetSnapshots: [targetSnapshot],
-      mutationPlan: mutationPlan([{ id: "update-client", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
-    };
-  },
-  async commit(ctx, payload, operation) {
-    const { id, body } = payload as { id: string; body: Record<string, unknown> };
-    let updated: Awaited<ReturnType<typeof ctx.clockify.getClient>>;
-    return commitSingleDurableRiskyStep({
-      ctx, operation, planStepId: "update-client", name: "Update client",
-      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
-      dispatch: async () => {
-        const result = await dispatchWithReconciliation({
-          dispatch: () => ctx.clockify.updateClientAtomic(id, body),
-          reconcile: async () => {
-            const raw = await ctx.clockify.getClientMutationState(id);
-            return raw && sanitizedFingerprint(raw) === sanitizedFingerprint(body)
-              ? raw as unknown as Awaited<ReturnType<typeof ctx.clockify.updateClientAtomic>>
-              : undefined;
-          },
-        });
-        updated = result.value;
-        return { externalId: result.value.id, effect: { updated: { type: "client", id } }, detail: { reconciled: result.reconciled } };
-      },
-      success: () => successReceipt({ action: "clockify_clients_update", entity: "client", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "client", id, name: updated?.name }] } }),
-    });
-  },
+    .object({ id: z.string().min(1).optional(), name: z.string().min(1).optional() })
+    .refine((v) => v.id !== undefined || v.name !== undefined, {
+      message: "Provide the client id or its exact name.",
+    }),
+  preview: (ctx, args) => previewArchiveClient(ctx, args),
+  commit: (ctx, payload, operation) => commitArchiveClient(ctx, payload, operation, "clockify_clients_archive"),
 });
 
 const deleteClient = defineRiskyAction({
@@ -556,5 +449,6 @@ export const CLIENT_ACTIONS: ActionDefinition[] = [
   getClient,
   createClient,
   updateClient,
+  archiveClient,
   deleteClient,
 ];

@@ -115,7 +115,6 @@ describe("Task 7 reviewer remediation", () => {
       id: "client-1",
       ccEmails: ["new@example.com"],
       currency: "EUR",
-      fields: { opaque: { retained: true, revision: 2 } },
     }, clockify);
 
     const result = await commitConfirmedOperation(context(fake, clockify), operation);

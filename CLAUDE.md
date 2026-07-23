@@ -17,9 +17,10 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
 - Node 22 proof on the repair SHA: focused Task 4 suite 223 passed; full `npm run verify` 272 files / 3,394 tests passed. No live, deployment, or external action ran.
 - Task 5 CLOSED: `src/harness/api-catalog.ts` exports `INTERNAL_ACTION_CATALOG`, `MODEL_API_ACTION_CATALOG`, and `LOCAL_ASSISTANT_ACTIONS`. Compatibility identity is `registryId + registry.hash()`. `catalogForModel`/`toolsForModel` require an exact registry; v1 callers pass `INTERNAL_ACTION_CATALOG`. No confirmation discriminator migration (Task 11).
-- T06-PROJECTS CLOSED at `61e18157969fb508eaf184a2e5e1c92bf07c8083`: `delete_archived` (`deleteProject`), member hourly/cost rates (`addUsersHourlyRate`/`addUsersCostRate`), `memberships_replace` (`updateMemberships`), closed `estimate_update` (`updateEstimate`). v1 composites/generics remain internal. Current counts: `ACTION_CATALOG` 144, `MODEL_API` 87, local 4. Live: `live_not_run_missing_credentials`.
-- T06-TASKS CLOSED: `delete_completed` (`deleteTask`), `status_update`/`assignees_replace`/`update` (`updateTask`), bounded `create` (`createTask`), hourly/cost rates (`setTaskHourlyRate`/`setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` remain internal composites/generics. Current counts: `ACTION_CATALOG` 149, `MODEL_API` 94, local 4. Live: `live_not_run_missing_credentials`.
-- Next: `T06-CLIENTS`.
+- T06-PROJECTS CLOSED at `61e18157969fb508eaf184a2e5e1c92bf07c8083`: `delete_archived` (`deleteProject`), member hourly/cost rates (`addUsersHourlyRate`/`addUsersCostRate`), `memberships_replace` (`updateMemberships`), closed `estimate_update` (`updateEstimate`).
+- T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: `delete_completed` (`deleteTask`), `status_update`/`assignees_replace`/closed `update` (`updateTask`), bounded `create` (`createTask`), hourly/cost (`setTaskHourlyRate`/`setTaskCostRate`).
+- T06-CLIENTS CLOSED at `3cb8586`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites. Current counts: `ACTION_CATALOG` 152, `MODEL_API` 98, local 4. Live: `live_not_run_missing_credentials`.
+- Next: `T06-TAGS`.
 
 ## Start here
 
@@ -55,7 +56,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 149 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 152 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

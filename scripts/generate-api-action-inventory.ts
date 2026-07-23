@@ -45,6 +45,7 @@ import { INVOICE_ACTIONS } from "../src/harness/workflows/invoices.js";
 import { PROJECT_ACTIONS } from "../src/harness/workflows/projects.js";
 import { PROJECT_API_ACTIONS } from "../src/harness/api-actions/projects.js";
 import { TASK_API_ACTIONS } from "../src/harness/api-actions/tasks.js";
+import { CLIENT_API_ACTIONS } from "../src/harness/api-actions/clients.js";
 import { REPORT_ACTIONS } from "../src/harness/workflows/reports.js";
 import { SCHEDULING_ACTIONS } from "../src/harness/workflows/scheduling.js";
 import { SETUP_PROJECT_ACTIONS } from "../src/harness/workflows/setup-project.js";
@@ -180,6 +181,7 @@ const WORKFLOW_OWNERS: readonly WorkflowOwner[] = [
   { workflowModule: "tasks.ts", definitions: TASK_ACTIONS },
   { workflowModule: "api-actions/tasks.ts", definitions: TASK_API_ACTIONS },
   { workflowModule: "clients.ts", definitions: CLIENT_ACTIONS },
+  { workflowModule: "api-actions/clients.ts", definitions: CLIENT_API_ACTIONS },
   { workflowModule: "tags.ts", definitions: TAG_ACTIONS },
   { workflowModule: "invoices.ts", definitions: INVOICE_ACTIONS },
   { workflowModule: "expenses.ts", definitions: EXPENSE_ACTIONS },

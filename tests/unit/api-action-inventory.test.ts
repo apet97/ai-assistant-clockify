@@ -1072,13 +1072,48 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     support: [STRUCTURE_ENDPOINT.clients.currencies, STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
-  internalAnnotation({
+  apiAnnotation({
+    name: "clockify_clients_create_base",
+    operationId: "createClient",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/clients",
+    access: "write",
+    sourceModule: "clients.ts",
+    support: [STRUCTURE_ENDPOINT.clients.list],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [materialField("/body/name", "Client name", "text", true)],
+  }),
+  apiAnnotation({
     name: "clockify_clients_update",
-    exposure: "generic",
-    reason: "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-    primary: [STRUCTURE_ENDPOINT.clients.update],
+    operationId: "updateClient",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    sourceModule: "clients.ts",
     support: [STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get, STRUCTURE_ENDPOINT.clients.currencies],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Client", "entity", true),
+      materialField("/patch/name", "Client name", "text", false),
+      materialField("/patch/archived", "Archived", "boolean", false),
+      materialField("/patch/ccEmails", "Billing CC emails", "text", false),
+      materialField("/patch/currencyId", "Currency", "entity", false),
+    ],
+  }),
+  apiAnnotation({
+    name: "clockify_clients_archive",
+    operationId: "updateClient",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    sourceModule: "clients.ts",
+    support: [STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Client", "entity", true),
+      materialField("/name", "Client name", "text", false),
+      materialField("/body/archived", "Archived", "boolean", true),
+    ],
   }),
   internalAnnotation({
     name: "clockify_clients_delete",
@@ -1087,6 +1122,20 @@ const STRUCTURE_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     primary: [STRUCTURE_ENDPOINT.clients.update, STRUCTURE_ENDPOINT.clients.delete],
     support: [STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_clients_delete_archived",
+    operationId: "deleteClient",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    sourceModule: "clients.ts",
+    support: [STRUCTURE_ENDPOINT.clients.list, STRUCTURE_ENDPOINT.clients.get],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Client", "entity", true),
+      materialField("/name", "Client name", "text", false),
+    ],
   }),
   apiAnnotation({
     name: "clockify_tags_list",
@@ -3173,12 +3222,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 149,
+      actions: 152,
       rawAdapterCallSites: 146,
       rawAdapterShapes: 122,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 94, composite: 23, generic: 28, local: 4 },
+      exposures: { api: 98, composite: 23, generic: 27, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

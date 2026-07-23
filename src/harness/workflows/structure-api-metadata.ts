@@ -36,8 +36,11 @@ type StructureActionName =
   | "clockify_clients_list"
   | "clockify_clients_get"
   | "clockify_clients_create"
+  | "clockify_clients_create_base"
   | "clockify_clients_update"
+  | "clockify_clients_archive"
   | "clockify_clients_delete"
+  | "clockify_clients_delete_archived"
   | "clockify_tags_list"
   | "clockify_tags_get"
   | "clockify_tags_create"
@@ -559,12 +562,47 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     support: [endpoint.clients.currencies, endpoint.clients.list, endpoint.clients.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
-  clockify_clients_update: internalMetadata({
-    exposure: "generic",
-    reason: "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-    primary: [endpoint.clients.update],
+  clockify_clients_create_base: apiMetadata({
+    actionName: "clockify_clients_create_base",
+    operationId: "createClient",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/clients",
+    access: "write",
+    primary: endpoint.clients.create,
+    support: [endpoint.clients.list],
+    materialFields: [
+      valueField("/body/name", "Client name", "text", true),
+    ],
+  }),
+  clockify_clients_update: apiMetadata({
+    actionName: "clockify_clients_update",
+    operationId: "updateClient",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    primary: endpoint.clients.update,
     support: [endpoint.clients.list, endpoint.clients.get, endpoint.clients.currencies],
-    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      valueField("/id", "Client", "entity", true),
+      valueField("/patch/name", "Client name", "text", false),
+      valueField("/patch/archived", "Archived", "boolean", false),
+      valueField("/patch/ccEmails", "Billing CC emails", "text", false),
+      valueField("/patch/currencyId", "Currency", "entity", false),
+    ],
+  }),
+  clockify_clients_archive: apiMetadata({
+    actionName: "clockify_clients_archive",
+    operationId: "updateClient",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    primary: endpoint.clients.update,
+    support: [endpoint.clients.list, endpoint.clients.get],
+    materialFields: [
+      valueField("/id", "Client", "entity", true),
+      valueField("/name", "Client name", "text", false),
+      valueField("/body/archived", "Archived", "boolean", true),
+    ],
   }),
   clockify_clients_delete: internalMetadata({
     exposure: "composite",
@@ -572,6 +610,19 @@ export const STRUCTURE_API_METADATA = Object.freeze({
     primary: [endpoint.clients.update, endpoint.clients.delete],
     support: [endpoint.clients.list, endpoint.clients.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  clockify_clients_delete_archived: apiMetadata({
+    actionName: "clockify_clients_delete_archived",
+    operationId: "deleteClient",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/clients/{id}",
+    access: "write",
+    primary: endpoint.clients.delete,
+    support: [endpoint.clients.list, endpoint.clients.get],
+    materialFields: [
+      valueField("/id", "Client", "entity", true),
+      valueField("/name", "Client name", "text", false),
+    ],
   }),
   clockify_tags_list: apiMetadata({
     actionName: "clockify_tags_list",

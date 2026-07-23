@@ -59,7 +59,7 @@ describe("manifest", () => {
     const contractPath = fileURLToPath(new URL("../../docs/ENDPOINT_SCOPE_CONTRACT.md", import.meta.url));
     const contract = readFileSync(contractPath, "utf8");
 
-    expect(contract).toContain("Generated inventory: **122 distinct adapter request shapes**, **149 catalog actions**");
+    expect(contract).toContain("Generated inventory: **122 distinct adapter request shapes**, **152 catalog actions**");
     expect(contract).toContain("`API GET /workspaces/{workspaceId}/invoices/{id}/export`");
   });
 

@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 149 typed
+the full test/build suite, and circular-dependency/duplication gates. 152 typed
 actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 (volume-backed SQLite at `/data`); deploy only through the checked transaction in
 `DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
@@ -29,7 +29,8 @@ here; this file is the execution map.
 - Official OpenAPI snapshot is repository-owned under `evidence/openapi/`; material contracts and schema maxima are fail-closed before registry insertion; adapter identities include `sourceColumn`.
 - Task 5 CLOSED: explicit `INTERNAL`/`MODEL_API`/`LOCAL` registries; `catalogForModel`/`toolsForModel` require a registry; v1 callers pass `INTERNAL_ACTION_CATALOG`.
 - T06-PROJECTS CLOSED: atomic project API actions (`delete_archived`/`deleteProject`, member hourly `addUsersHourlyRate`, member cost `addUsersCostRate`, `memberships_replace`/`updateMemberships`, closed `estimate_update`/`updateEstimate`). v1 composite/generic project wrappers stay internal.
-- T06-TASKS CLOSED: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal. `MODEL_API_ACTION_CATALOG` = 94; `ACTION_CATALOG` = 149. Live: `live_not_run_missing_credentials`. Next: `T06-CLIENTS`.
+- T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
+- T06-CLIENTS CLOSED at `3cb8586`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites. `MODEL_API_ACTION_CATALOG` = 98; `ACTION_CATALOG` = 152. Live: `live_not_run_missing_credentials`. Next: `T06-TAGS`.
 
 ## Non-negotiable invariants
 

@@ -136,11 +136,14 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_tasks_hourly_rate_update: single("update-task-hourly-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
   clockify_tasks_cost_rate_update: single("update-task-cost-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
   clockify_clients_create: fixed(2, [plan("single", step("create-client")), plan("curated", step("create-client"), step("enrich-client"))], { derivedIds: ["operation.enrichment.currencyId"] }),
+  clockify_clients_create_base: single("create-client-base"),
   clockify_clients_update: single("update-client", { derivedIds: ["operation.clientId", "operation.id", "operation.body.currencyId", "operation.patch.currencyId"] }),
+  clockify_clients_archive: single("archive-client", { derivedIds: ["operation.id"] }),
   clockify_clients_delete: fixed(3, [
     plan("single", step("delete-client")),
     plan("curated", step("archive-client"), step("delete-client"), step("restore-client", "compensation")),
   ], { derivedIds: ["operation.clientId", "operation.id"] }),
+  clockify_clients_delete_archived: single("delete-archived-client", { derivedIds: ["operation.id"] }),
   clockify_tags_create: single("create-tag"),
   clockify_tags_update: single("update-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
   clockify_tags_delete: single("delete-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
@@ -402,6 +405,18 @@ const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
       "(?<value>\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b)",
     ], ["\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b"]),
   ], ["\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b"], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
+
+  clockify_clients_create_base: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\b(?:client|customer)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|using)\\b|[,.;!?]|$)`,
+    ]),
+  ], [
+    "\\b(?:cc|billing)\\s*(?:e-?mails?|recipients?)\\b|[\\w.+-]+@[\\w.-]+\\.[a-z]{2,}\\b",
+    "\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b",
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b",
+  ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
 
   clockify_tags_create: authoredIntent([
     "\\b(?:(?:create|make)(?:\\s+(?:a\\s+new|a|the|new|one))?|add\\s+(?:a\\s+new|a|the|new|one))\\s+(?:tag|label)\\b",

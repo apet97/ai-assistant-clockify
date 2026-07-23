@@ -4,7 +4,7 @@ import { fakeListResult, type FakeContext } from "./state.js";
 export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listClients" | "getClient" | "getClientMutationState" | "createClient" | "updateClient" | "deleteClient" | "listCurrencies" |
-  "createClientBaseAtomic" | "prepareClientUpdate" | "updateClientAtomic" | "deleteClientAtomic"
+  "createClientBaseAtomic" | "prepareClientUpdate" | "updateClientAtomic" | "archiveClientAtomic" | "deleteClientAtomic"
 > {
   const createBaseAtomic: WorkspaceClient["createClientBaseAtomic"] = async ({ name }) => {
     bump("createClientBaseAtomic");
@@ -76,6 +76,10 @@ export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pic
     },
     prepareClientUpdate: prepareUpdate,
     updateClientAtomic: updateAtomic,
+    archiveClientAtomic: async (id, body) => {
+      bump("archiveClientAtomic");
+      return updateAtomic(id, body);
+    },
     async deleteClient(id) {
       bump("deleteClient");
       state.clients = state.clients.filter((c) => c.id !== id);

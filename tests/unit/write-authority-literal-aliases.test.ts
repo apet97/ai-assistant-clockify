@@ -96,7 +96,9 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   "clockify_projects_estimate_update\0timeEstimate.includeNonBillable": {
     excluded: "Estimate non-billable inclusion is a structured API flag; only exact true/false literals may authorize it.",
   },
-  "clockify_clients_update\0archived": { aliases: ARCHIVED },
+  "clockify_clients_update\0archived": {
+    excluded: "Client lifecycle archiving uses clockify_clients_archive; only exact archived=false literals may authorize unarchive on update.",
+  },
   "clockify_tags_update\0archived": { aliases: ARCHIVED },
   "clockify_expenses_create\0billable": { aliases: BILLABLE },
   "clockify_expenses_update\0billable": { aliases: BILLABLE },

@@ -115,4 +115,32 @@ describe("client rest", () => {
     expect(putBody.name).toBe("Acme");
     expect(calls[2][0]).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/clients/c1");
   });
+
+  it("createClientBaseAtomic POSTs only the name", async () => {
+    const f = vi.fn(async () => jsonResponse({ id: "c9", name: "New" }));
+    const clientRest = rest(f as unknown as typeof fetch);
+    const created = await clientRest.createClientBaseAtomic({ name: "New" });
+    expect(created).toEqual({ id: "c9", name: "New", archived: undefined });
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["POST"]);
+    expect(JSON.parse((f as any).mock.calls[0][1].body)).toEqual({ name: "New" });
+  });
+
+  it("deleteClientAtomic issues a single DELETE", async () => {
+    const f = vi.fn(async () => jsonResponse(null, 204));
+    await rest(f as unknown as typeof fetch).deleteClientAtomic("c1");
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["DELETE"]);
+  });
+
+  it("archiveClientAtomic issues a single PUT with the prepared body", async () => {
+    const f = vi.fn(async (_url: string, init: any) =>
+      init.method === "PUT"
+        ? jsonResponse({ id: "c1", name: "Acme", archived: true })
+        : jsonResponse({ id: "c1", name: "Acme", archived: false }),
+    );
+    const clientRest = rest(f as unknown as typeof fetch);
+    const body = { id: "c1", name: "Acme", archived: true };
+    await clientRest.archiveClientAtomic("c1", body);
+    expect((f as any).mock.calls.map((c: any) => c[1].method)).toEqual(["PUT"]);
+    expect(JSON.parse((f as any).mock.calls[0][1].body).archived).toBe(true);
+  });
 });

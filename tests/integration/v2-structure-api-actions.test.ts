@@ -210,3 +210,82 @@ describe("v2 task structure API actions", () => {
     expect(altered).not.toBe(baseline);
   });
 });
+
+const NEW_CLIENT_API_ACTIONS = [
+  "clockify_clients_create_base",
+  "clockify_clients_delete_archived",
+] as const;
+
+const INTERNAL_ONLY_CLIENT_ACTIONS = [
+  "clockify_clients_create",
+  "clockify_clients_delete",
+] as const;
+
+describe("v2 client structure API actions", () => {
+  it("exposes atomic client actions on MODEL_API and hides v1 composites", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of NEW_CLIENT_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    for (const name of INTERNAL_ONLY_CLIENT_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).not.toBe("api");
+    }
+    expect(modelNames.has("clockify_clients_list")).toBe(true);
+    expect(modelNames.has("clockify_clients_get")).toBe(true);
+    expect(modelNames.has("clockify_clients_update")).toBe(true);
+    expect(modelNames.has("clockify_clients_archive")).toBe(true);
+  });
+
+  it("refuses delete_archived preview for an active client", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme", archived: false }] });
+    const result = await executeAction({
+      actionName: "clockify_clients_delete_archived",
+      args: { id: "c1" },
+      context: makeContext(fake),
+    });
+    expect(result.kind).toBe("clarify");
+    if (result.kind === "clarify") {
+      expect(result.message).toContain("still active");
+    }
+    expect(fake.counts.deleteClientAtomic ?? 0).toBe(0);
+  });
+
+  it("delete_archived commits with a single DELETE for an archived client", async () => {
+    const fake = createFakeWorkspace({ clients: [{ id: "c1", name: "Acme", archived: true }] });
+    const preview = await executeAction({
+      actionName: "clockify_clients_delete_archived",
+      args: { id: "c1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteClientAtomic).toBe(1);
+    expect(fake.counts.archiveClientAtomic ?? 0).toBe(0);
+  });
+
+  it("create_base executes with a single POST and no enrichment PUT", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_clients_create_base",
+      args: { name: "AIASSIST_SMOKE_c" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.createClientBaseAtomic).toBe(1);
+    expect(fake.counts.updateClientAtomic ?? 0).toBe(0);
+  });
+
+  it("changes the catalog fingerprint when client API presentation metadata changes", () => {
+    const action = getAction("clockify_clients_delete_archived");
+    if (!action) throw new Error("missing delete_archived action");
+    const baseline = actionFingerprintForDefinition(action);
+    const altered = actionFingerprintForDefinition({
+      ...action,
+      presentation: { presenterId: action.presentation!.presenterId, version: action.presentation!.version + 1 },
+    });
+    expect(altered).not.toBe(baseline);
+  });
+});

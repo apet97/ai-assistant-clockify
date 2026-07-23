@@ -67,8 +67,11 @@ const metadata = {
   clockify_tasks_hourly_rate_update: { "update-task-hourly-rate": "update" },
   clockify_tasks_cost_rate_update: { "update-task-cost-rate": "update" },
   clockify_clients_create: { "create-client": "create", "enrich-client": "update" },
+  clockify_clients_create_base: { "create-client-base": "create" },
   clockify_clients_update: { "update-client": "update" },
+  clockify_clients_archive: { "archive-client": "state-command" },
   clockify_clients_delete: { "archive-client": "state-command", "delete-client": "delete" },
+  clockify_clients_delete_archived: { "delete-archived-client": "delete" },
   clockify_tags_create: { "create-tag": "create" },
   clockify_tags_update: { "update-tag": "update" },
   clockify_tags_delete: { "delete-tag": "delete" },
@@ -595,6 +598,23 @@ const updateTaskCostRate: Handler = async (input) => {
   });
 };
 
+const createClientBase: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const body = record(payload?.body);
+  const beforeIds = stringArray(payload?.beforeIds) ?? baselineIds(input);
+  if (!body || typeof body.name !== "string" || !beforeIds) return invalidInput(input);
+  return createClient({
+    ...input,
+    candidate: {
+      ...input.candidate,
+      operation: {
+        ...(record(input.candidate.operation) ?? {}),
+        payload: { base: body, beforeIds },
+      },
+    },
+  });
+};
+
 const createClient: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
   const base = record(payload?.base);
@@ -880,9 +900,12 @@ const handlers = new Map<string, Handler>([
   ["clockify_tasks_cost_rate_update\0update-task-cost-rate", updateTaskCostRate],
   ["clockify_clients_create\0create-client", createClient],
   ["clockify_clients_create\0enrich-client", enrichClient],
+  ["clockify_clients_create_base\0create-client-base", createClientBase],
   ["clockify_clients_update\0update-client", updateClient],
+  ["clockify_clients_archive\0archive-client", clientArchived],
   ["clockify_clients_delete\0archive-client", clientArchived],
   ["clockify_clients_delete\0delete-client", deleteClient],
+  ["clockify_clients_delete_archived\0delete-archived-client", deleteClient],
   ["clockify_tags_create\0create-tag", createTag],
   ["clockify_tags_update\0update-tag", updateTag],
   ["clockify_tags_delete\0delete-tag", deleteTag],

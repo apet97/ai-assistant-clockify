@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "069eb1160111b527dc20033f1a5601bdbb2582164458370630a0ffaec57bc749",
+  "catalogHash": "9ec88417f0e62cea5ff847f988cff6a2b7a724fa5bce41779e14970cc86ac748",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 149,
+    "actions": 152,
     "rawAdapterCallSites": 146,
     "rawAdapterShapes": 122,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 94,
+      "api": 98,
       "composite": 23,
-      "generic": 28,
+      "generic": 27,
       "local": 4
     }
   },
@@ -97,73 +97,6 @@
         "name"
       ],
       "primaryMutationCount": 2,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
-      "name": "clockify_clients_update",
-      "description": "Update a client (rename, archive/unarchive, set billing `ccEmails`, set `currency` by code e.g. \"EUR\" or exact id). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
-      "kind": "risky_write",
-      "featureGroup": "work_structure",
-      "workflowModule": "clients.ts",
-      "actionFingerprint": "2ce103efea581eb8a44170dc5a981aa855424527bdd50226cb58adc3a15d1613",
-      "exposure": "generic",
-      "decisionReason": "Accepts an open fields dictionary; Task 6 must replace it with a closed operation schema.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": true
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}\u0000clients.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}",
-          "sourceModule": "clients.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/clients",
-          "sourceModule": "clients.ts"
-        },
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/clients/{id}",
-          "sourceModule": "clients.ts"
-        },
-        {
-          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "PUT",
-          "path": "/workspaces/{workspaceId}/clients/{id}",
-          "sourceModule": "clients.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "open",
-      "openSchemaDetail": "legacy_open_argument_paths:clockify_clients_update",
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [],
-      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -1857,6 +1790,178 @@
     },
     {
       "sourceSurface": "v1-internal",
+      "name": "clockify_clients_create_base",
+      "description": "Create a client with only its name (POST /clients). Billing fields such as ccEmails and currency are silently dropped on create — apply them afterward with clockify_clients_update. Safe write — executes immediately when policy allows.",
+      "kind": "safe_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "api-actions/clients.ts",
+      "actionFingerprint": "6c45f346a9defd2b2d1a70796e971dfd87ee4a0dc1db06ff218b6ca2e9e725d9",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/clients (createClient).",
+      "operation": {
+        "operationId": "createClient",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/clients",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/body/name",
+          "label": "Client name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/body/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_clients_create_base",
+        "version": 1
+      },
+      "requiredArguments": [
+        "name"
+      ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_clients_delete_archived",
+      "description": "Delete an already-archived client with a single DELETE (Clockify rejects deleting an active client). Pass the client id or its exact name. Previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "api-actions/clients.ts",
+      "actionFingerprint": "a8d04fa7e442338a1d9f63dd7eaed988f23e5f99d0514e0b775485617f4edfee",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/clients/{id} (deleteClient).",
+      "operation": {
+        "operationId": "deleteClient",
+        "host": "api",
+        "method": "DELETE",
+        "path": "/workspaces/{workspaceId}/clients/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "DELETE",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Client",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Client name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_clients_delete_archived",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
       "name": "clockify_clients_get",
       "description": "Fetch a single client by id, or by its exact `name` (resolved server-side).",
       "kind": "read",
@@ -2010,6 +2115,259 @@
         "id"
       ],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_clients_archive",
+      "description": "Archive a client (hides it from active lists). Pass the client id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "clients.ts",
+      "actionFingerprint": "5547591bda191270a64e132b9490531fadc3ecf288210f31ef6dc2fc26191d76",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/clients/{id} (updateClient).",
+      "operation": {
+        "operationId": "updateClient",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/clients/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Client",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Client name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/body/archived",
+          "label": "Archived",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/body/archived",
+          "scalarType": "boolean"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_clients_archive",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_clients_update",
+      "description": "Update a client (rename, unarchive, set billing `ccEmails`, set `currency` by code e.g. \"EUR\" or exact id). Pass the client's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. For archive, use clockify_clients_archive. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "work_structure",
+      "workflowModule": "clients.ts",
+      "actionFingerprint": "351b623ae313f0346df6a5362d74e182930a8148381be1973197f2cb6b6ee49e",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/clients/{id} (updateClient).",
+      "operation": {
+        "operationId": "updateClient",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/clients/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/clients/{id}",
+          "sourceModule": "clients.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Client",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/patch/name",
+          "label": "Client name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/archived",
+          "label": "Archived",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/ccEmails",
+          "label": "Billing CC emails",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/patch/currencyId",
+          "label": "Currency",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/archived",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/ccEmails",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/patch/currencyId",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_clients_update",
+        "version": 1
+      },
+      "requiredArguments": [],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -12363,7 +12721,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "clients.ts",
-          "sourceLine": 74,
+          "sourceLine": 76,
           "sourceColumn": 26,
           "pagination": "none"
         }
@@ -12589,7 +12947,7 @@
       "sourceCallSites": [
         {
           "sourceModule": "clients.ts",
-          "sourceLine": 36,
+          "sourceLine": 37,
           "sourceColumn": 28,
           "pagination": "plain"
         }
@@ -12598,8 +12956,11 @@
         "clockify_clients_list"
       ],
       "internalSupportConsumers": [
+        "clockify_clients_archive",
         "clockify_clients_create",
+        "clockify_clients_create_base",
         "clockify_clients_delete",
+        "clockify_clients_delete_archived",
         "clockify_clients_get",
         "clockify_clients_update",
         "clockify_create_work_package",
@@ -12638,7 +12999,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_clients_create_base"
+      ],
       "internalSupportConsumers": [
         "clockify_clients_create",
         "clockify_create_work_package"
@@ -12651,8 +13014,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
@@ -12664,12 +13027,14 @@
       "sourceCallSites": [
         {
           "sourceModule": "clients.ts",
-          "sourceLine": 28,
+          "sourceLine": 29,
           "sourceColumn": 11,
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_clients_delete_archived"
+      ],
       "internalSupportConsumers": [
         "clockify_clients_delete",
         "clockify_delete_entity"
@@ -12682,8 +13047,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/clients/{id}\u0000clients.ts",
@@ -12701,13 +13066,13 @@
         },
         {
           "sourceModule": "clients.ts",
-          "sourceLine": 40,
+          "sourceLine": 41,
           "sourceColumn": 23,
           "pagination": "none"
         },
         {
           "sourceModule": "clients.ts",
-          "sourceLine": 44,
+          "sourceLine": 45,
           "sourceColumn": 20,
           "pagination": "none"
         }
@@ -12716,8 +13081,10 @@
         "clockify_clients_get"
       ],
       "internalSupportConsumers": [
+        "clockify_clients_archive",
         "clockify_clients_create",
         "clockify_clients_delete",
+        "clockify_clients_delete_archived",
         "clockify_clients_update",
         "clockify_create_work_package",
         "clockify_delete_entity",
@@ -12754,11 +13121,13 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_clients_archive",
+        "clockify_clients_update"
+      ],
       "internalSupportConsumers": [
         "clockify_clients_create",
         "clockify_clients_delete",
-        "clockify_clients_update",
         "clockify_delete_entity",
         "clockify_update_entity"
       ],
@@ -12770,8 +13139,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/custom-fields\u0000custom-fields.ts",
