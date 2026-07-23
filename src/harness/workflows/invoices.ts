@@ -68,7 +68,10 @@ type InvoiceActionName =
   | "clockify_invoices_payments_list"
   | "clockify_invoices_export"
   | "clockify_invoices_create"
+  | "clockify_invoices_create_base"
   | "clockify_invoices_update"
+  | "clockify_invoices_fields_update"
+  | "clockify_invoices_status_update"
   | "clockify_invoices_delete"
   | "clockify_invoices_items_add"
   | "clockify_invoices_items_delete"
@@ -114,7 +117,9 @@ function invoiceApiMetadata(input: {
   access: ApiAccess;
   support: readonly string[];
   materialFields: readonly MaterialFieldMetadata[];
+  sourceModule?: string;
 }): ApiActionMetadataCarrier {
+  const sourceModule = input.sourceModule ?? "invoices.ts";
   return Object.freeze({
     apiExposure: "api",
     apiOperation: Object.freeze({
@@ -127,7 +132,7 @@ function invoiceApiMetadata(input: {
     }),
     adapterEndpoints: Object.freeze({
       primary: Object.freeze([
-        invoiceEndpointKey(input.access, input.method, input.path),
+        invoiceEndpointKey(input.access, input.method, input.path, sourceModule),
       ]),
       support: Object.freeze([...input.support]),
     }),
@@ -190,14 +195,11 @@ const INVOICE_API_METADATA = Object.freeze({
     support: [invoiceEndpoint.list],
     materialFields: [],
   }),
-  clockify_invoices_items_list: invoiceApiMetadata({
-    actionName: "clockify_invoices_items_list",
-    operationId: "getInvoice",
-    method: "GET",
-    path: "/workspaces/{workspaceId}/invoices/{id}",
-    access: "read",
+  clockify_invoices_items_list: invoiceInternalMetadata({
+    exposure: "generic",
+    reason: "Line items are embedded in GET /invoices/{id}; this convenience read does not map to a separate host operation.",
+    primary: [invoiceEndpoint.get],
     support: [invoiceEndpoint.list],
-    materialFields: [],
   }),
   clockify_invoices_payments_list: invoiceApiMetadata({
     actionName: "clockify_invoices_payments_list",
@@ -219,15 +221,63 @@ const INVOICE_API_METADATA = Object.freeze({
   }),
   clockify_invoices_create: invoiceInternalMetadata({
     exposure: "composite",
-    reason: "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; Task 6 must expose the atomic operations separately.",
+    reason: "Creates the base invoice, then may update enrichment fields and add up to 25 items for a maximum of 27 primary mutations; use the atomic create_base, fields_update, and items_add operations instead.",
     primary: [invoiceEndpoint.create, invoiceEndpoint.update, invoiceEndpoint.addItem],
     support: [invoiceEndpoint.clientsList, invoiceEndpoint.list, invoiceEndpoint.get],
   }),
+  clockify_invoices_create_base: invoiceApiMetadata({
+    actionName: "clockify_invoices_create_base",
+    operationId: "createInvoice",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/invoices",
+    access: "write",
+    support: [invoiceEndpoint.clientsList, invoiceEndpoint.list],
+    materialFields: [
+      invoiceValueField("/base/clientId", "Client", "entity", true),
+      invoiceValueField("/base/number", "Invoice number", "text", true),
+      invoiceValueField("/base/issuedDate", "Issued date", "text", true),
+      invoiceValueField("/base/dueDate", "Due date", "text", true),
+      invoiceValueField("/base/currency", "Currency", "text", true),
+    ],
+  }),
   clockify_invoices_update: invoiceInternalMetadata({
     exposure: "composite",
-    reason: "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; Task 6 must expose those operations separately.",
+    reason: "May dispatch both the invoice fields PUT and the status PATCH for a maximum of two primary mutations; use clockify_invoices_fields_update and clockify_invoices_status_update instead.",
     primary: [invoiceEndpoint.update, invoiceEndpoint.status],
     support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.clientsList, invoiceEndpoint.clientsGet],
+  }),
+  clockify_invoices_fields_update: invoiceApiMetadata({
+    actionName: "clockify_invoices_fields_update",
+    operationId: "updateInvoice",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/invoices/{id}",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.clientsList, invoiceEndpoint.clientsGet],
+    materialFields: [
+      invoiceValueField("/id", "Invoice", "entity", true),
+      invoiceValueField("/patch/number", "Invoice number", "text", false),
+      invoiceValueField("/patch/issuedDate", "Issued date", "text", false),
+      invoiceValueField("/patch/dueDate", "Due date", "text", false),
+      invoiceValueField("/patch/currency", "Currency", "text", false),
+      invoiceValueField("/patch/note", "Note", "text", false),
+      invoiceValueField("/patch/subject", "Subject", "text", false),
+      invoiceValueField("/patch/clientId", "Client", "entity", false),
+      invoiceValueField("/patch/taxPercent", "Tax percent", "number", false),
+      invoiceValueField("/patch/tax2Percent", "Tax 2 percent", "number", false),
+      invoiceValueField("/patch/discountPercent", "Discount percent", "number", false),
+    ],
+  }),
+  clockify_invoices_status_update: invoiceApiMetadata({
+    actionName: "clockify_invoices_status_update",
+    operationId: "changeInvoiceStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/invoices/{id}/status",
+    access: "write",
+    support: [invoiceEndpoint.list, invoiceEndpoint.get],
+    materialFields: [
+      invoiceValueField("/id", "Invoice", "entity", true),
+      invoiceValueField("/status", "Status", "text", true),
+    ],
   }),
   clockify_invoices_delete: invoiceApiMetadata({
     actionName: "clockify_invoices_delete",
@@ -299,13 +349,32 @@ const INVOICE_API_METADATA = Object.freeze({
       invoiceValueField("/paymentSnapshot/note", "Payment note", "text", false),
     ],
   }),
-  clockify_invoices_import_time: invoiceInternalMetadata({
-    exposure: "generic",
-    reason: "The one-request import accepts up to 54 project ids, exceeding the 22-fact material presentation limit; Task 6 must expose a narrower import operation.",
-    primary: [invoiceEndpoint.importTime],
+  clockify_invoices_import_time: invoiceApiMetadata({
+    actionName: "clockify_invoices_import_time",
+    operationId: "importTimeEntriesAndExpenses",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/invoices/{id}/items/import",
+    access: "write",
     support: [invoiceEndpoint.list, invoiceEndpoint.get, invoiceEndpoint.projectsGet],
+    materialFields: [
+      invoiceValueField("/invoiceId", "Invoice", "entity", true),
+      invoiceValueField("/from", "From date", "text", true),
+      invoiceValueField("/to", "To date", "text", true),
+      {
+        kind: "array_item",
+        containerPath: "/projectIds",
+        itemPath: "/projectId",
+        labelTemplate: "Project {index}",
+        maxItems: INVOICE_IMPORT_PROJECT_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
 } satisfies Readonly<Record<InvoiceActionName, ApiActionMetadataCarrier>>);
+
+export { INVOICE_API_METADATA };
 
 const invoiceCreateContract = durableMutationContract({
   source: "confirmed",
@@ -323,7 +392,7 @@ const invoiceSnapshotContract = (
   strategy: "create" | "update" | "delete" | "state-command" | "composed",
 ) => durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations }, strategies: [strategy] });
 
-async function captureInvoiceSnapshot(ctx: ActionContext, id: string, relation: "target" | "parent" = "target"): Promise<TargetSnapshot | undefined> {
+export async function captureInvoiceSnapshot(ctx: ActionContext, id: string, relation: "target" | "parent" = "target"): Promise<TargetSnapshot | undefined> {
   const invoice = await ctx.clockify.getInvoice(id);
   return invoice ? captureTargetSnapshot(relation, { type: "invoice", id: invoice.id, name: invoice.number }, invoice) : undefined;
 }
@@ -362,7 +431,7 @@ async function verifyInvoiceMutationSnapshots(ctx: ActionContext, snapshots: rea
 }
 
 /** Live invoice statuses (DRAFT is rejected by Clockify; use UNSENT for draft-like). */
-const invoiceStatusSchema = z.enum(["UNSENT", "SENT", "PAID", "PARTIALLY_PAID", "VOID", "OVERDUE"]);
+export const invoiceStatusSchema = z.enum(["UNSENT", "SENT", "PAID", "PARTIALLY_PAID", "VOID", "OVERDUE"]);
 
 function nowDate(ctx: ActionContext): Date {
   return (ctx.now ?? (() => new Date()))();
@@ -437,7 +506,7 @@ type ResolvedInvoice =
  * confirmed-then-failed commit. Resolve either form (id, number, or a number in
  * the id slot) against the workspace's invoices at preview time.
  */
-async function resolveInvoiceRef(
+export async function resolveInvoiceRef(
   ctx: ActionContext,
   ref: { id?: string; number?: string },
   verb: string,
