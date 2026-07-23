@@ -27,7 +27,7 @@ here; this file is the execution map.
 - Task 4 CLOSED at `6184efa80a95be06020635540185bae01ba1299e`: 140 actions (82 `api`, 23 `composite`, 31 `generic`, 4 `local`), 142 call sites / 118 shapes, inventory schema/generator v2, catalog hash `9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c`.
 - T04-R3 remediated the four accepted findings from reviews on `776eb081…`; re-reviews on `6184efa…` accepted zero HIGH/MEDIUM.
 - Official OpenAPI snapshot is repository-owned under `evidence/openapi/`; material contracts and schema maxima are fail-closed before registry insertion; adapter identities include `sourceColumn`.
-- T05-A: `src/harness/api-catalog.ts` exports `INTERNAL_ACTION_CATALOG` (140), `MODEL_API_ACTION_CATALOG` (82), and `LOCAL_ASSISTANT_ACTIONS` (4); identity is `registryId + hash()`. Next: `T05-B`.
+- Task 5 CLOSED: explicit `INTERNAL`/`MODEL_API`/`LOCAL` registries; `catalogForModel`/`toolsForModel` require a registry; v1 callers pass `INTERNAL_ACTION_CATALOG`. Next: `T06-PROJECTS`.
 - V1 remains default and v2 remains `not_ready`; no live/external action ran.
 
 ## Non-negotiable invariants

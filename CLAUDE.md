@@ -16,8 +16,8 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - Classification and availability are required on every raw definition, participate in fingerprints, and receive no normalization defaults.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
 - Node 22 proof on the repair SHA: focused Task 4 suite 223 passed; full `npm run verify` 272 files / 3,394 tests passed. No live, deployment, or external action ran.
-- T05-A adds explicit registries in `src/harness/api-catalog.ts`: `INTERNAL_ACTION_CATALOG` (`v1-internal`, 140), `MODEL_API_ACTION_CATALOG` (`v2-api`, 82 metadata-selected `api` actions), and `LOCAL_ASSISTANT_ACTIONS` (`v2-local`, 4 `local` actions). Compatibility identity is `registryId + registry.hash()` (hashes include fingerprints + `availabilityByAuthClass`). Named composites/generics stay internal-only; assistant local actions stay out of the model API registry. Tool helpers and v1 callers are unchanged until T05-B/C.
-- Next: `T05-B` (registry-explicit `catalogForModel` / `toolsForModel`).
+- Task 5 CLOSED: `src/harness/api-catalog.ts` exports `INTERNAL_ACTION_CATALOG` (`v1-internal`, 140), `MODEL_API_ACTION_CATALOG` (`v2-api`, 82), and `LOCAL_ASSISTANT_ACTIONS` (`v2-local`, 4). Compatibility identity is `registryId + registry.hash()` (fingerprints + `availabilityByAuthClass`). `catalogForModel(registry, names?)` and `toolsForModel(registry, names?)` require an exact registry (runtime rejection without one); v1 callers pass `INTERNAL_ACTION_CATALOG` explicitly and keep the full 140-tool snapshot. No global full-catalog default; no confirmation/operation discriminator migration (Task 11).
+- Next: `T06-PROJECTS` (first atomic API domain split).
 
 ## Start here
 

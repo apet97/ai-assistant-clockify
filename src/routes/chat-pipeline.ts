@@ -42,6 +42,7 @@ import {
 import type { AtomicIdempotencyLedger } from "../harness/idempotency.js";
 import { reversibleCreations } from "../harness/undo.js";
 import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../harness/api-catalog.js";
 import { actionStatusLabel } from "../harness/action-labels.js";
 import { canWrite, type AdminPolicy } from "../harness/permissions.js";
 import {
@@ -1593,20 +1594,20 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     fullIntentCatalog: ReturnType<typeof catalogForModel>;
   } {
     const fullIntentCatalog = intentCapability
-      ? filterCatalogByIntentCapability(catalogForModel(), intentCapability.capability)
-      : catalogForModel();
+      ? filterCatalogByIntentCapability(catalogForModel(INTERNAL_ACTION_CATALOG), intentCapability.capability)
+      : catalogForModel(INTERNAL_ACTION_CATALOG);
     const fullIntentNames = new Set(fullIntentCatalog.map((entry) => entry.name));
     const selectedNames = deps.config.llmToolSelect
       ? new Set(selectActionsForMessage(message).filter((name) => fullIntentNames.has(name)))
       : fullIntentNames;
     return {
-      subsetTools: toolsForModel(selectedNames),
-      subsetCatalog: catalogForModel(selectedNames),
+      subsetTools: toolsForModel(INTERNAL_ACTION_CATALOG, selectedNames),
+      subsetCatalog: catalogForModel(INTERNAL_ACTION_CATALOG, selectedNames),
       // A focused composite is intentionally closed over one action. Widening
       // after a text-only provider turn would reintroduce the exact competing
       // existing-project reads this route removes.
       subsetNarrowed: selectedNames.size < fullIntentNames.size && !isNewProjectSetupRequest(message),
-      fullIntentTools: toolsForModel(fullIntentNames),
+      fullIntentTools: toolsForModel(INTERNAL_ACTION_CATALOG, fullIntentNames),
       fullIntentCatalog,
     };
   }
@@ -1833,7 +1834,7 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     const effectiveRequestId = requestId ?? randomUUID();
     let intentCapability: IntentCapabilityRecord | undefined;
     if (intentCapabilitiesEnforced) {
-      const allWriteActionNames = catalogForModel()
+      const allWriteActionNames = catalogForModel(INTERNAL_ACTION_CATALOG)
         .filter((entry) => entry.risks.some((risk) => risk !== "read"))
         .map((entry) => entry.name);
       const writeActionNames = isNewProjectSetupRequest(selectionContext)

@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildSystemPrompt, buildToolSystemPrompt } from "../../src/assistant/prompts.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 describe("buildSystemPrompt", () => {
   const prompt = buildSystemPrompt({
-    actionCatalog: catalogForModel(),
+    actionCatalog: catalogForModel(INTERNAL_ACTION_CATALOG),
     policy: defaultAdminPolicy(),
   });
 

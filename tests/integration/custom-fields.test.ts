@@ -3,6 +3,7 @@ import { commitConfirmedOperation, executeAction } from "../../src/harness/actio
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
 
 const NOW = new Date("2026-06-06T00:00:00.000Z");
@@ -50,7 +51,7 @@ describe("custom field actions", () => {
   });
 
   it("the create description NAMES the add-on restriction so 'why can't you create custom fields?' answers truthfully (live item 186)", async () => {
-    const entry = catalogForModel().find((a) => a.name === "clockify_custom_fields_create");
+    const entry = catalogForModel(INTERNAL_ACTION_CATALOG).find((a) => a.name === "clockify_custom_fields_create");
     expect(entry?.description).toContain("add-ons");
   });
 

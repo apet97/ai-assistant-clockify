@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { planConversation } from "../../src/assistant/planner.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 function fakeModel(responses: string[]): ModelClient {
@@ -21,7 +22,7 @@ function baseInput(modelClient: ModelClient) {
   return {
     modelClient,
     messages: [{ role: "user" as const, content: "start a timer" }],
-    actionCatalog: catalogForModel(),
+    actionCatalog: catalogForModel(INTERNAL_ACTION_CATALOG),
     policy: defaultAdminPolicy(),
   };
 }

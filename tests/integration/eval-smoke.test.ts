@@ -6,6 +6,7 @@ import type { AgentState } from "../../src/assistant/agent-state.js";
 import type { ActionContext, ActionResult } from "../../src/harness/action.js";
 import { commitConfirmedOperation, executeAction } from "../../src/harness/actions.js";
 import { getAction } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { errorReceipt } from "../../src/harness/receipts.js";
 import { requiresConfirmation } from "../../src/harness/risk.js";
@@ -89,7 +90,7 @@ async function runScripted(
     };
     const messages = persistAndResume(state, receipt);
     if (!messages) break;
-    turn = await runAgentTurn({ modelClient: model, messages, tools: toolsForModel(), runAction });
+    turn = await runAgentTurn({ modelClient: model, messages, tools: toolsForModel(INTERNAL_ACTION_CATALOG), runAction });
   }
   return { executed, committed, safety, kind: turn.kind };
 }

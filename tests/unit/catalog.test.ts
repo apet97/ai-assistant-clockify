@@ -335,7 +335,7 @@ describe("catalog", () => {
   });
 
   it("catalogForModel exposes name/description/featureGroup/risks/args (no schema or handler)", () => {
-    const entries = catalogForModel();
+    const entries = catalogForModel(INTERNAL_ACTION_CATALOG);
     expect(entries.length).toBe(ACTION_CATALOG.length);
     for (const entry of entries) {
       expect(entry).not.toHaveProperty("schema");
@@ -352,6 +352,6 @@ describe("catalog", () => {
     // The catalog is built once at module load and summarizeArgs is deterministic,
     // so the model-view is invariant; recomputing it every JSON-mode turn is wasted
     // allocation + 137 schema summaries. Mirror toolsForModel's memoization.
-    expect(catalogForModel()).toBe(catalogForModel());
+    expect(catalogForModel(INTERNAL_ACTION_CATALOG)).toBe(catalogForModel(INTERNAL_ACTION_CATALOG));
   });
 });

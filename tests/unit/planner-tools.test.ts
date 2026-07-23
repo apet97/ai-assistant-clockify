@@ -4,6 +4,7 @@ import type { ModelClient, ToolCompletion, ToolDefinition } from "../../src/assi
 import type { ActionResult } from "../../src/harness/action.js";
 import { successReceipt } from "../../src/harness/receipts.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 
@@ -24,7 +25,7 @@ function input(modelClient: ModelClient, extra: Record<string, unknown> = {}) {
   return {
     modelClient,
     messages: [{ role: "user" as const, content: "start a timer" }],
-    actionCatalog: catalogForModel(),
+    actionCatalog: catalogForModel(INTERNAL_ACTION_CATALOG),
     policy: defaultAdminPolicy(),
     ...extra,
   };
