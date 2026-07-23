@@ -289,3 +289,56 @@ describe("v2 client structure API actions", () => {
     expect(altered).not.toBe(baseline);
   });
 });
+
+const TAG_API_ACTIONS = [
+  "clockify_tags_list",
+  "clockify_tags_get",
+  "clockify_tags_create",
+  "clockify_tags_update",
+  "clockify_tags_delete",
+] as const;
+
+describe("v2 tag structure API actions", () => {
+  it("exposes all five atomic tag actions on MODEL_API with official operation IDs", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    const expectedOperationIds: Record<(typeof TAG_API_ACTIONS)[number], string> = {
+      clockify_tags_list: "getTags",
+      clockify_tags_get: "getTag",
+      clockify_tags_create: "createNewTag",
+      clockify_tags_update: "updateTag",
+      clockify_tags_delete: "deleteTag",
+    };
+    for (const name of TAG_API_ACTIONS) {
+      const action = getAction(name);
+      expect(modelNames.has(name), name).toBe(true);
+      expect(action?.apiExposure).toBe("api");
+      expect(action?.apiOperation?.operationId).toBe(expectedOperationIds[name]);
+      expect(action?.availabilityByAuthClass.addon.available).toBe(true);
+      expect(action?.availabilityByAuthClass.api_key.available).toBe(true);
+    }
+  });
+
+  it("create executes immediately with a single POST", async () => {
+    const fake = createFakeWorkspace();
+    const result = await executeAction({
+      actionName: "clockify_tags_create",
+      args: { name: "AIASSIST_SMOKE_tag" },
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.createTag).toBe(1);
+  });
+
+  it("delete commits with a single DELETE after preview", async () => {
+    const fake = createFakeWorkspace({ tags: [{ id: "t1", name: "Urgent", archived: false }] });
+    const preview = await executeAction({
+      actionName: "clockify_tags_delete",
+      args: { id: "t1" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
+    expect(receipt.ok).toBe(true);
+    expect(fake.counts.deleteTagAtomic ?? fake.counts.deleteTag).toBe(1);
+  });
+});

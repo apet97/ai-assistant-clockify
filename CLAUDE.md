@@ -19,8 +19,9 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - Task 5 CLOSED: `src/harness/api-catalog.ts` exports `INTERNAL_ACTION_CATALOG`, `MODEL_API_ACTION_CATALOG`, and `LOCAL_ASSISTANT_ACTIONS`. Compatibility identity is `registryId + registry.hash()`. `catalogForModel`/`toolsForModel` require an exact registry; v1 callers pass `INTERNAL_ACTION_CATALOG`. No confirmation discriminator migration (Task 11).
 - T06-PROJECTS CLOSED at `61e18157969fb508eaf184a2e5e1c92bf07c8083`: `delete_archived` (`deleteProject`), member hourly/cost rates (`addUsersHourlyRate`/`addUsersCostRate`), `memberships_replace` (`updateMemberships`), closed `estimate_update` (`updateEstimate`).
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: `delete_completed` (`deleteTask`), `status_update`/`assignees_replace`/closed `update` (`updateTask`), bounded `create` (`createTask`), hourly/cost (`setTaskHourlyRate`/`setTaskCostRate`).
-- T06-CLIENTS CLOSED at `3cb8586`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites. Current counts: `ACTION_CATALOG` 152, `MODEL_API` 98, local 4. Live: `live_not_run_missing_credentials`.
-- Next: `T06-TAGS`.
+- T06-CLIENTS CLOSED at `9880859`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
+- T06-TAGS CLOSED: all five tag operations (`getTags`, `getTag`, `createNewTag`, `updateTag`, `deleteTag`) already exposed as atomic `api` actions in `workflows/tags.ts` with closed schemas and addon+api_key availability — verified, no empty split file. Current counts: `ACTION_CATALOG` 152, `MODEL_API` 98, local 4. Live: `live_not_run_missing_credentials`.
+- Next: `T06-USER-RATES`.
 
 ## Start here
 
