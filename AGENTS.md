@@ -72,6 +72,7 @@ here; this file is the execution map.
 - **T12-A CLOSED:** 17/17 structure (`work_structure`) writes in `v2-write-parity-structure.test.ts`; prepare denies policy/auth cleanly; one-primary button confirm; default engine stays v1. Live: `not_run`. Next: `T12-B`.
 - **T12-B CLOSED:** time write parity matrix + auth-class prepare gate + Atomic mutation counting. Live: `not_run`. Next: `T12-C`.
 - **T12-C CLOSED:** reporting/admin write parity incl. webhook auth-class gate. Live: `not_run`. Next: `T12-D`.
+- **T12-D CLOSED:** invoice write parity matrix. Live: `not_run`. Next: `T12-E`.
 
 ## Non-negotiable invariants
 
