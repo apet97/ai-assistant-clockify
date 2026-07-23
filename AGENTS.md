@@ -57,6 +57,7 @@ here; this file is the execution map.
 - **T09-C CLOSED / Task 9 green:** durable v2 run events (schema v10), scoped hydrated views, cursor-safe UI restoration; default engine stays v1. Next: `T10-A`.
 - **T10-A CLOSED:** structure read port + 10/10 generated parity rows green; live `not_run`. Next: `T10-B`.
 - **T10-B CLOSED:** time reads 2/2 parity green; live `not_run`. Next: `T10-C`.
+- **T10-C CLOSED:** reporting/admin reads 10/10 parity green; webhooks auth-filtered; live `not_run`. Next: `T10-D`.
 
 ## Non-negotiable invariants
 
