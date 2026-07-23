@@ -38,6 +38,7 @@ here; this file is the execution map.
 - T06-CUSTOM-FIELDS CLOSED: bounded create/update/set_value_project/set_value_entry on MODEL_API; legacy unbounded handlers off-catalog; get stays composite. Counts: `MODEL_API` 120; `ACTION_CATALOG` 166. Live: `live_not_run_missing_credentials`.
 - T06-USERS CLOSED: invite, deactivate, and role_update verified on MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-GROUPS CLOSED: group create/update/delete and remove_user verified on MODEL_API; get stays composite. Live: `live_not_run_missing_credentials`.
+- T06-GROUP-MEMBERSHIP CLOSED: `clockify_groups_add_member` on MODEL_API; v1 `clockify_groups_add_user` stays internal. Counts: `MODEL_API` 121; `ACTION_CATALOG` 167. Live: `live_not_run_missing_credentials`.
 
 ## Non-negotiable invariants
 

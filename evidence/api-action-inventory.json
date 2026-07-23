@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "f8d3c3f821f65e969dd1bf7d422bff5011c3feeef17f2cee3f6f9595855ba2fd",
+  "catalogHash": "62d38705b5bb32d337cc0de243047281093e7c94b7996b4fba94ec3e7bcc7d05",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 166,
+    "actions": 167,
     "rawAdapterCallSites": 150,
     "rawAdapterShapes": 126,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 120,
+      "api": 121,
       "composite": 24,
       "generic": 18,
       "local": 4
@@ -12761,9 +12761,9 @@
       "kind": "risky_write",
       "featureGroup": "users_groups",
       "workflowModule": "users.ts",
-      "actionFingerprint": "7cfe1e3cd870fa0fa51af52dc938e7053237fae576011e8809c2ced6c4639aec",
+      "actionFingerprint": "c923cc7118d153aed974d228bc3bb38727677fbfc301bf1353f597be78f18464",
       "exposure": "composite",
-      "decisionReason": "May add up to 14 users through independent membership POSTs, so the current bounded loop is not one atomic API operation; Task 6 must expose a single-user add.",
+      "decisionReason": "May add up to 14 users through independent membership POSTs; use clockify_groups_add_member for a single-user add.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -13044,6 +13044,102 @@
       "requiredArguments": [
         "name"
       ],
+      "primaryMutationCount": 1,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_groups_add_member",
+      "description": "Add one member to a group. Pass the group by `groupId`/`groupName` and the user by `userId`/`userName` (or 'me'). For multiple members use the internal clockify_groups_add_user composite. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "users_groups",
+      "workflowModule": "api-actions/users.ts",
+      "actionFingerprint": "e1a489734761cc0c9ff9617caece60b80852d9ae997690f4339b8ca337c10910",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/user-groups/{groupId}/users (addUser).",
+      "operation": {
+        "operationId": "addUser",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/user-groups/{groupId}/users",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/user-groups\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/user-groups",
+          "sourceModule": "users.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/user-groups/{groupId}/users\u0000users.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/user-groups/{groupId}/users",
+          "sourceModule": "users.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/users\u0000users.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/users",
+          "sourceModule": "users.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/groupId",
+          "label": "Group",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "label": "User",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/groupId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/userId",
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_groups_add_member",
+        "version": 1
+      },
+      "requiredArguments": [],
       "primaryMutationCount": 1,
       "compensationCount": 0
     },
@@ -13862,7 +13958,7 @@
       "description": "Set a workspace member's default cost rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or \"me\"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
       "kind": "risky_write",
       "featureGroup": "invoices",
-      "workflowModule": "users.ts",
+      "workflowModule": "api-actions/users.ts",
       "actionFingerprint": "3ac94b917100b320e2f6eef63143162dbdaf94f76be5253004239ec91075a850",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/users/{userId}/cost-rate (setCostRateForUser).",
@@ -13951,7 +14047,7 @@
       "description": "Set a workspace member's default hourly rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or \"me\"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is 'minor'. Billing action — previews and requires confirmation.",
       "kind": "risky_write",
       "featureGroup": "invoices",
-      "workflowModule": "users.ts",
+      "workflowModule": "api-actions/users.ts",
       "actionFingerprint": "944ec54d0f75a75186133ec3074fcc5c110722b0fee2181e18d78e59f7768fb9",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/users/{userId}/hourly-rate (setHourlyRateForUser).",
@@ -18636,6 +18732,7 @@
       ],
       "internalSupportConsumers": [
         "clockify_delete_entity",
+        "clockify_groups_add_member",
         "clockify_groups_add_user",
         "clockify_groups_create",
         "clockify_groups_delete",
@@ -18703,7 +18800,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_groups_add_member"
+      ],
       "internalSupportConsumers": [
         "clockify_groups_add_user",
         "clockify_onboard_user"
@@ -18716,8 +18815,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}\u0000users.ts",
@@ -18928,6 +19027,7 @@
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_get_entity",
+        "clockify_groups_add_member",
         "clockify_groups_add_user",
         "clockify_groups_remove_user",
         "clockify_holidays_create",
@@ -19621,10 +19721,12 @@
       ],
       "operations": [
         {
+          "operationId": "createClient",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/clients",
-          "operationId": "createClient"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19635,10 +19737,12 @@
       ],
       "operations": [
         {
+          "operationId": "deleteClient",
           "host": "api",
           "method": "DELETE",
           "path": "/workspaces/{workspaceId}/clients/{id}",
-          "operationId": "deleteClient"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19665,10 +19769,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateClient",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/clients/{id}",
-          "operationId": "updateClient"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20823,10 +20929,12 @@
       ],
       "operations": [
         {
+          "operationId": "createTimeEntry",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/time-entries",
-          "operationId": "createTimeEntry"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20837,10 +20945,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateInvoicedStatus",
           "host": "api",
           "method": "PATCH",
           "path": "/workspaces/{workspaceId}/time-entries/invoiced",
-          "operationId": "updateInvoicedStatus"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20899,10 +21009,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateTimeEntry",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/time-entries/{id}",
-          "operationId": "updateTimeEntry"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20913,10 +21025,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateTimeEntry",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/time-entries/{id}",
-          "operationId": "updateTimeEntry"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -21129,10 +21243,12 @@
       ],
       "operations": [
         {
+          "operationId": "addUser",
           "host": "api",
           "method": "POST",
-          "path": "/workspaces/{workspaceId}/user-groups/{userGroupId}/users",
-          "operationId": "addUser"
+          "path": "/workspaces/{workspaceId}/user-groups/{groupId}/users",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },

@@ -218,6 +218,7 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_groups_update: single("update-group", { derivedIds: ["operation.groupId", "operation.id"] }),
   clockify_groups_delete: single("delete-group", { derivedIds: ["operation.groupId", "operation.id"] }),
   clockify_groups_add_user: repeated(GROUP_MEMBER_BATCH_MAX, "members[]", [plan("single", step("add-user-to-group-*")), plan("batch", step("add-user-to-group-*", "primary", 2, GROUP_MEMBER_BATCH_MAX))], { derivedIds: ["operation.groupId", "operation.userIds[]"] }),
+  clockify_groups_add_member: single("add-user-to-group", { derivedIds: ["operation.groupId", "operation.userId"] }),
   clockify_groups_remove_user: single("remove-user-from-group", { derivedIds: ["operation.groupId", "operation.userId"] }),
   clockify_delete_entity: fixed(3, [
     ...["project", "client"].flatMap((entity) => [

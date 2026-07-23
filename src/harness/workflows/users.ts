@@ -310,7 +310,7 @@ const USER_GROUP_API_METADATA = Object.freeze({
   }),
   clockify_groups_add_user: userGroupInternalMetadata({
     exposure: "composite",
-    reason: "May add up to 14 users through independent membership POSTs, so the current bounded loop is not one atomic API operation; Task 6 must expose a single-user add.",
+    reason: "May add up to 14 users through independent membership POSTs; use clockify_groups_add_member for a single-user add.",
     primary: [userGroupEndpoint.groupsAddUser],
     support: [userGroupEndpoint.groupsList, userGroupEndpoint.usersList],
   }),
@@ -1320,7 +1320,7 @@ const removeUser = defineRiskyAction({
   },
 });
 
-function defineWorkspaceMemberRateAction(input: {
+export function defineWorkspaceMemberRateAction(input: {
   name: "clockify_users_hourly_rate_update" | "clockify_users_cost_rate_update";
   metadataKey: "clockify_users_hourly_rate_update" | "clockify_users_cost_rate_update";
   rateKind: "HOURLY" | "COST";
@@ -1359,28 +1359,6 @@ function defineWorkspaceMemberRateAction(input: {
   });
 }
 
-const hourlyRateUpdate = defineWorkspaceMemberRateAction({
-  name: "clockify_users_hourly_rate_update",
-  metadataKey: "clockify_users_hourly_rate_update",
-  rateKind: "HOURLY",
-  planStepId: "update-user-hourly-rate",
-  stepName: "Update workspace member hourly rate",
-  rateLabel: "hourly",
-  dispatchKey: "updateWorkspaceMemberHourlyRateAtomic",
-});
-
-const costRateUpdate = defineWorkspaceMemberRateAction({
-  name: "clockify_users_cost_rate_update",
-  metadataKey: "clockify_users_cost_rate_update",
-  rateKind: "COST",
-  planStepId: "update-user-cost-rate",
-  stepName: "Update workspace member cost rate",
-  rateLabel: "cost",
-  dispatchKey: "updateWorkspaceMemberCostRateAtomic",
-});
-
-export const USER_API_ACTIONS: ActionDefinition[] = [hourlyRateUpdate, costRateUpdate];
-
 export const USER_GROUP_ACTIONS: ActionDefinition[] = [
   listUsers, inviteUser, updateRole, rateUpdate, deactivateUser,
   listGroups, getGroup, createGroup, updateGroup, deleteGroup, addUser, removeUser,
@@ -1398,5 +1376,6 @@ export const USER_GROUP_STARTUP_RECONCILIATION = Object.freeze({
   clockify_groups_update: { "update-group": "update" },
   clockify_groups_delete: { "delete-group": "delete" },
   clockify_groups_add_user: { "add-user-to-group-*": "update" },
+  clockify_groups_add_member: { "add-user-to-group": "update" },
   clockify_groups_remove_user: { "remove-user-from-group": "update" },
 } as const);

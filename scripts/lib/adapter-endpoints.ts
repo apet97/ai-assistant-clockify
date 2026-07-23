@@ -29,20 +29,13 @@ export interface CanonicalOpenApiOperation {
  * model-visible before Task 6.
  */
 export const INTERNAL_OPENAPI_OPERATIONS = [
-  { host: "api", method: "DELETE", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "deleteClient" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/created", operationId: "getCreatedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/deleted", operationId: "getDeletedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/entities/updated", operationId: "getUpdatedEntityInfo" },
   { host: "api", method: "GET", path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals/{projectId}", operationId: "getProjectTotalsForSingleProject" },
-  { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-entries/invoiced", operationId: "updateInvoicedStatus" },
   { host: "api", method: "PATCH", path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}", operationId: "updateBalance" },
-  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/clients", operationId: "createClient" },
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/scheduling/assignments/projects/totals", operationId: "getFilteredProjectTotals" },
-  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-entries", operationId: "createTimeEntry" },
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-off/policies", operationId: "createPolicy" },
-  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/user-groups/{userGroupId}/users", operationId: "addUser" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "updateClient" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-entries/{id}", operationId: "updateTimeEntry" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-off/policies/{id}", operationId: "updatePolicy" },
 ] as const satisfies readonly CanonicalOpenApiOperation[];
 

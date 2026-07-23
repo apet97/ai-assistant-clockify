@@ -466,6 +466,24 @@ const addUserToGroup: Handler = async (input) => {
   });
 };
 
+const addMemberToGroup: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const groupId = typeof payload?.groupId === "string" ? payload.groupId : undefined;
+  const userId = typeof payload?.userId === "string" ? payload.userId : undefined;
+  const baseline = targetSnapshotProjection(input.candidate, "parent");
+  const baselineUserIds = Array.isArray(baseline?.userIds) && baseline.userIds.every((id) => typeof id === "string") ? baseline.userIds as string[] : undefined;
+  if (!groupId || !userId || !baselineUserIds) return invalidInput(input);
+  const expected = sanitizedFingerprint([...baselineUserIds, userId].sort());
+  return singleReadHandler(input, {
+    strategy: "update",
+    async read() {
+      const listed = await input.clockify.listGroups();
+      return { truncated: listed.truncated, rows: listed.rows.filter((row) => row.id === groupId).map((row) => ({ ref: { type: "group", id: groupId }, projection: [...(row.userIds ?? [])].sort() })) };
+    },
+    matches: (candidate) => sanitizedFingerprint(candidate.projection) === expected,
+  });
+};
+
 const removeUserFromGroup: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
   const groupId = typeof payload?.groupId === "string" ? payload.groupId : undefined;
@@ -543,6 +561,7 @@ const handlers = new Map<string, Handler>([
   ["clockify_groups_update\0update-group", updateGroup],
   ["clockify_groups_delete\0delete-group", deleteGroup],
   ["clockify_groups_add_user\0add-user-to-group-*", addUserToGroup],
+  ["clockify_groups_add_member\0add-user-to-group", addMemberToGroup],
   ["clockify_groups_remove_user\0remove-user-from-group", removeUserFromGroup],
 ]);
 

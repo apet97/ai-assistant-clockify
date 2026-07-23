@@ -12,6 +12,9 @@ const EXPECTED_BINDINGS = [
   ["clockify_expenses_update", "update-expense", "update"],
   ["clockify_expenses_delete", "delete-expense", "delete"],
   ["clockify_expenses_categories_create", "create-expense-category", "create"],
+  ["clockify_expenses_categories_rename", "rename-expense-category", "update"],
+  ["clockify_expenses_categories_status_update", "set-expense-category-status", "state-command"],
+  ["clockify_expenses_categories_delete_archived", "delete-expense-category", "delete"],
   ["clockify_expenses_categories_update", "rename-expense-category", "update"],
   ["clockify_expenses_categories_update", "set-expense-category-status", "state-command"],
   ["clockify_expenses_categories_delete", "archive-expense-category", "state-command"],
@@ -19,6 +22,8 @@ const EXPECTED_BINDINGS = [
   ["clockify_custom_fields_create", "create-custom-field", "create"],
   ["clockify_custom_fields_update", "update-custom-field", "update"],
   ["clockify_custom_fields_delete", "delete-custom-field", "delete"],
+  ["clockify_custom_fields_set_value_project", "set-project-custom-field", "update"],
+  ["clockify_custom_fields_set_value_entry", "set-entry-custom-field", "update"],
   ["clockify_time_off_policies_create", "create-time-off-policy", "create"],
   ["clockify_time_off_policies_update", "update-time-off-policy", "update"],
   ["clockify_time_off_policies_archive", "archive-time-off-policy", "state-command"],
@@ -98,7 +103,7 @@ describe("leave/billing startup reconciliation", () => {
       Object.entries(steps).map(([planStepId, strategy]) => [actionName, planStepId, strategy]),
     );
     expect(actual).toEqual(EXPECTED_BINDINGS);
-    expect(LEAVE_BILLING_STARTUP_RECONCILIATION_HANDLER_COUNT).toBe(50);
+    expect(LEAVE_BILLING_STARTUP_RECONCILIATION_HANDLER_COUNT).toBe(55);
     expect(Object.isFrozen(LEAVE_BILLING_STARTUP_RECONCILIATION)).toBe(true);
     for (const [actionName, steps] of Object.entries(LEAVE_BILLING_STARTUP_RECONCILIATION)) {
       expect(Object.isFrozen(steps), actionName).toBe(true);
@@ -109,7 +114,7 @@ describe("leave/billing startup reconciliation", () => {
     expect(hasLeaveBillingStartupReconciliationHandler("clockify_invoices_create", "add-invoice-item-19")).toBe(true);
     expect(hasLeaveBillingStartupReconciliationHandler("clockify_invoices_create", "add-invoice-item-x")).toBe(false);
     expect(hasLeaveBillingStartupReconciliationHandler("clockify_invoices_import_time", "import-invoice-time")).toBe(false);
-    expect(hasLeaveBillingStartupReconciliationHandler("clockify_custom_fields_set_value_project", "set-project-custom-field")).toBe(false);
+    expect(hasLeaveBillingStartupReconciliationHandler("clockify_custom_fields_set_value_project", "set-project-custom-field")).toBe(true);
   });
 
   it("exposes no Clockify mutation method to a startup handler", () => {

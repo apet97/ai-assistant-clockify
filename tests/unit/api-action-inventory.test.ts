@@ -472,8 +472,8 @@ const EXPENSE_CUSTOM_FIELD_ENDPOINT = {
     update: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/custom-fields/{id}", "custom-fields.ts"),
     delete: adapterEndpointKey("write", "api", "DELETE", "/workspaces/{workspaceId}/custom-fields/{id}", "custom-fields.ts"),
     projectValue: adapterEndpointKey("write", "api", "PATCH", "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}", "custom-fields.ts"),
-    entryRead: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/time-entries/{entryId}", "custom-fields.ts"),
-    entryUpdate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/time-entries/{entryId}", "custom-fields.ts"),
+    entryRead: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "custom-fields.ts"),
+    entryUpdate: adapterEndpointKey("write", "api", "PUT", "/workspaces/{workspaceId}/time-entries/{id}", "custom-fields.ts"),
   },
   projects: {
     list: adapterEndpointKey("read", "api", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
@@ -2303,7 +2303,7 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     ...internalAnnotation({
       name: "clockify_expenses_categories_update",
       exposure: "composite",
-      reason: "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; Task 6 must expose the atomic operations separately.",
+      reason: "May dispatch the category-name PUT, the archive-status PATCH, or both primary mutations; use clockify_expenses_categories_rename and clockify_expenses_categories_status_update instead.",
       primary: [
         EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesUpdate,
         EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesStatus,
@@ -2318,7 +2318,7 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     ...internalAnnotation({
       name: "clockify_expenses_categories_delete",
       exposure: "composite",
-      reason: "Archives an active category before deletion, so one invocation can contain two primary mutations; Task 6 must expose delete of an already archived category separately.",
+      reason: "Archives an active category before deletion, so one invocation can contain two primary mutations; use clockify_expenses_categories_status_update and clockify_expenses_categories_delete_archived instead.",
       primary: [
         EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesStatus,
         EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesDelete,
@@ -2327,6 +2327,60 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
     }),
     primaryMutationCount: 2,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_expenses_categories_rename",
+      operationId: "updateCategory",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/expenses/categories/{id}",
+      access: "write",
+      sourceModule: "expenses.ts",
+      support: [EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesList],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Category", "entity", true),
+        materialField("/name", "Category name", "text", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_expenses_categories_status_update",
+      operationId: "updateExpenseCategoryStatus",
+      method: "PATCH",
+      path: "/workspaces/{workspaceId}/expenses/categories/{id}/status",
+      access: "write",
+      sourceModule: "expenses.ts",
+      support: [EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesList],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Category", "entity", true),
+        materialField("/archived", "Archived", "boolean", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
+    ...apiAnnotation({
+      name: "clockify_expenses_categories_delete_archived",
+      operationId: "deleteCategory",
+      method: "DELETE",
+      path: "/workspaces/{workspaceId}/expenses/categories/{id}",
+      access: "write",
+      sourceModule: "expenses.ts",
+      support: [EXPENSE_CUSTOM_FIELD_ENDPOINT.expenses.categoriesList],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Category", "entity", true),
+        materialField("/name", "Category name", "text", false),
+      ],
+    }),
+    primaryMutationCount: 1,
     compensationCount: 0,
   },
   apiAnnotation({
@@ -2349,25 +2403,62 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
   }),
   {
-    ...internalAnnotation({
+    ...apiAnnotation({
       name: "clockify_custom_fields_create",
-      exposure: "generic",
-      reason: "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
-      primary: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.create],
+      operationId: "create",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/custom-fields",
+      access: "write",
+      sourceModule: "custom-fields.ts",
       support: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.list],
       availability: API_KEY_ONLY,
+      materialFields: [
+        materialField("/name", "Field name", "text", true),
+        materialField("/fieldType", "Field type", "text", true),
+        {
+          kind: "array_item",
+          containerPath: "/allowedValues",
+          itemPath: "/value",
+          labelTemplate: "Allowed value {index}",
+          maxItems: 17,
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: false,
+        },
+        materialField("/required", "Required", "boolean", false),
+        materialField("/status", "Status", "text", false),
+      ],
     }),
     primaryMutationCount: 1,
     compensationCount: 0,
   },
   {
-    ...internalAnnotation({
+    ...apiAnnotation({
       name: "clockify_custom_fields_update",
-      exposure: "generic",
-      reason: "The allowedValues array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
-      primary: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.update],
+      operationId: "editCustomField",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/custom-fields/{id}",
+      access: "write",
+      sourceModule: "custom-fields.ts",
       support: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.list],
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/id", "Custom field", "entity", true),
+        materialField("/name", "Field name", "text", false),
+        materialField("/fieldType", "Field type", "text", false),
+        {
+          kind: "array_item",
+          containerPath: "/allowedValues",
+          itemPath: "/value",
+          labelTemplate: "Allowed value {index}",
+          maxItems: 17,
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: false,
+        },
+        materialField("/required", "Required", "boolean", false),
+        materialField("/status", "Status", "text", false),
+      ],
     }),
     primaryMutationCount: 1,
     compensationCount: 0,
@@ -2391,31 +2482,63 @@ const EXPENSE_CUSTOM_FIELD_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     compensationCount: 0,
   },
   {
-    ...internalAnnotation({
+    ...apiAnnotation({
       name: "clockify_custom_fields_set_value_project",
-      exposure: "generic",
-      reason: "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded project-value operation.",
-      primary: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.projectValue],
+      operationId: "editProjectCustomFieldDefaultValue",
+      method: "PATCH",
+      path: "/workspaces/{workspaceId}/projects/{projectId}/custom-fields/{fieldId}",
+      access: "write",
+      sourceModule: "custom-fields.ts",
       support: [
         EXPENSE_CUSTOM_FIELD_ENDPOINT.projects.get,
         EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.list,
       ],
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/projectId", "Project", "entity", true),
+        materialField("/fieldId", "Custom field", "entity", true),
+        {
+          kind: "array_item",
+          containerPath: "/value",
+          itemPath: "/item",
+          labelTemplate: "Value {index}",
+          maxItems: 19,
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: false,
+        },
+      ],
     }),
     primaryMutationCount: 1,
     compensationCount: 0,
   },
   {
-    ...internalAnnotation({
+    ...apiAnnotation({
       name: "clockify_custom_fields_set_value_entry",
-      exposure: "generic",
-      reason: "The custom-field value accepts an unbounded string array, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a bounded entry-value operation.",
-      primary: [EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.entryUpdate],
+      operationId: "updateTimeEntry",
+      method: "PUT",
+      path: "/workspaces/{workspaceId}/time-entries/{id}",
+      access: "write",
+      sourceModule: "custom-fields.ts",
       support: [
         EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.entryRead,
         EXPENSE_CUSTOM_FIELD_ENDPOINT.customFields.list,
       ],
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/entryId", "Time entry", "entity", true),
+        materialField("/fieldId", "Custom field", "entity", true),
+        {
+          kind: "array_item",
+          containerPath: "/value",
+          itemPath: "/item",
+          labelTemplate: "Value {index}",
+          maxItems: 19,
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: false,
+        },
+      ],
     }),
     primaryMutationCount: 1,
     compensationCount: 0,
@@ -2597,10 +2720,28 @@ const USER_GROUP_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     compensationCount: 0,
   },
   {
+    ...apiAnnotation({
+      name: "clockify_groups_add_member",
+      operationId: "addUser",
+      method: "POST",
+      path: "/workspaces/{workspaceId}/user-groups/{groupId}/users",
+      access: "write",
+      sourceModule: "users.ts",
+      support: [USER_GROUP_ENDPOINT.groups.list, USER_GROUP_ENDPOINT.users.list],
+      availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/groupId", "Group", "entity", true),
+        materialField("/userId", "User", "entity", true),
+      ],
+    }),
+    primaryMutationCount: 1,
+    compensationCount: 0,
+  },
+  {
     ...internalAnnotation({
       name: "clockify_groups_add_user",
       exposure: "composite",
-      reason: "May add up to 14 users through independent membership POSTs, so the current bounded loop is not one atomic API operation; Task 6 must expose a single-user add.",
+      reason: "May add up to 14 users through independent membership POSTs; use clockify_groups_add_member for a single-user add.",
       primary: [USER_GROUP_ENDPOINT.groups.addUser],
       support: [USER_GROUP_ENDPOINT.groups.list, USER_GROUP_ENDPOINT.users.list],
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
@@ -3568,12 +3709,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 163,
+      actions: 167,
       rawAdapterCallSites: 150,
       rawAdapterShapes: 126,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 113, composite: 24, generic: 22, local: 4 },
+      exposures: { api: 121, composite: 24, generic: 18, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

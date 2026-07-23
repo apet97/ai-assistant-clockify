@@ -33,6 +33,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-CUSTOM-FIELDS CLOSED: bounded `clockify_custom_fields_create`/`update`/`set_value_project`/`set_value_entry` on MODEL_API; legacy unbounded handlers stay off-catalog; `clockify_custom_fields_get` stays composite/off MODEL_API. Counts: `ACTION_CATALOG` 166, `MODEL_API` 120. Live: `live_not_run_missing_credentials`.
 - T06-USERS CLOSED: atomic `clockify_users_invite` (`addUsers`), `clockify_users_deactivate`, and `clockify_users_role_update` (`createUserRole`) verified on MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-GROUPS CLOSED: atomic `clockify_groups_create`/`update`/`delete` and `clockify_groups_remove_user` verified on MODEL_API; `clockify_groups_get` stays composite/off MODEL_API. Live: `live_not_run_missing_credentials`.
+- T06-GROUP-MEMBERSHIP CLOSED: atomic `clockify_groups_add_member` (`addUser`, one userId per call); v1 `clockify_groups_add_user` stays internal composite (up to 14). Counts: `ACTION_CATALOG` 167, `MODEL_API` 121. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
@@ -68,7 +69,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 163 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 167 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

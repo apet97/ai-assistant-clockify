@@ -106,6 +106,7 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   "clockify_expenses_create\0billable": { aliases: BILLABLE },
   "clockify_expenses_update\0billable": { aliases: BILLABLE },
   "clockify_expenses_categories_update\0archived": { aliases: ARCHIVED },
+  "clockify_expenses_categories_status_update\0archived": { aliases: ARCHIVED },
   "clockify_custom_fields_create\0required": { aliases: [
     alias("required", false, ["optional", "not required"]),
     alias("required", true, ["required"]),

@@ -50,7 +50,8 @@ import { PROJECT_API_ACTIONS } from "../src/harness/api-actions/projects.js";
 import { TASK_API_ACTIONS } from "../src/harness/api-actions/tasks.js";
 import { CLIENT_API_ACTIONS } from "../src/harness/api-actions/clients.js";
 import { ENTRY_API_ACTIONS } from "../src/harness/api-actions/time-entries.js";
-import { USER_GROUP_ACTIONS, USER_API_ACTIONS } from "../src/harness/workflows/users.js";
+import { USER_GROUP_ACTIONS } from "../src/harness/workflows/users.js";
+import { USER_API_ACTIONS } from "../src/harness/api-actions/users.js";
 import { REPORT_ACTIONS } from "../src/harness/workflows/reports.js";
 import { SCHEDULING_ACTIONS } from "../src/harness/workflows/scheduling.js";
 import { SETUP_PROJECT_ACTIONS } from "../src/harness/workflows/setup-project.js";
@@ -199,7 +200,8 @@ const WORKFLOW_OWNERS: readonly WorkflowOwner[] = [
   { workflowModule: "scheduling.ts", definitions: SCHEDULING_ACTIONS },
   { workflowModule: "approvals.ts", definitions: APPROVAL_ACTIONS },
   { workflowModule: "webhooks.ts", definitions: WEBHOOK_ACTIONS },
-  { workflowModule: "users.ts", definitions: [...USER_GROUP_ACTIONS, ...USER_API_ACTIONS] },
+  { workflowModule: "users.ts", definitions: USER_GROUP_ACTIONS },
+  { workflowModule: "api-actions/users.ts", definitions: USER_API_ACTIONS },
   { workflowModule: "reports.ts", definitions: REPORT_ACTIONS },
   { workflowModule: "audit.ts", definitions: AUDIT_ACTIONS },
   { workflowModule: "workspace.ts", definitions: WORKSPACE_ACTIONS },
