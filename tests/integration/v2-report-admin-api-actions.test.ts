@@ -154,7 +154,10 @@ describe("v2 holiday API actions", () => {
     }
     expect(modelNames.has("clockify_holidays_get")).toBe(false);
     expect(getAction("clockify_holidays_get")?.apiExposure).toBe("composite");
-    expect(getAction("clockify_holidays_create")?.materialFields?.find((field) => field.kind === "array_item" && field.containerPath === "/userIds")?.maxItems).toBe(8);
+    expect(getAction("clockify_holidays_create")?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/userIds",
+    )?.maxItems).toBe(8);
   });
 
   it("clockify_holidays_create executes with one POST and bounded scope arrays", async () => {
@@ -169,5 +172,41 @@ describe("v2 holiday API actions", () => {
     });
     if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
     expect(fake.counts.createHolidayAtomic).toBe(1);
+  });
+});
+
+describe("v2 webhook API actions", () => {
+  it("exposes bounded create/update/list/get/logs/delete on MODEL_API and keeps events local", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of [
+      "clockify_webhooks_list",
+      "clockify_webhooks_get",
+      "clockify_webhooks_logs",
+      "clockify_webhooks_create",
+      "clockify_webhooks_update",
+      "clockify_webhooks_delete",
+    ] as const) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+      expect(getAction(name)?.availabilityByAuthClass.addon.available).toBe(false);
+      expect(getAction(name)?.availabilityByAuthClass.addon.reason).toBe("unsupported_auth_class");
+    }
+    expect(modelNames.has("clockify_webhooks_events")).toBe(false);
+    expect(getAction("clockify_webhooks_events")?.apiExposure).toBe("local");
+    expect(getAction("clockify_webhooks_create")?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/triggerSource",
+    )?.maxItems).toBe(17);
+  });
+
+  it("clockify_webhooks_list parses the workspaceWebhookCount envelope", async () => {
+    const fake = createFakeWorkspace({ webhooks: [{ id: "wh-1", name: "Notify", url: "https://example.com/h", webhookEvent: "TIME_ENTRY_CREATED" }] });
+    const result = await executeAction({
+      actionName: "clockify_webhooks_list",
+      args: {},
+      context: makeContext(fake),
+    });
+    if (result.kind !== "receipt" || !result.receipt.ok) throw new Error("expected receipt");
+    expect(fake.counts.listWebhooks).toBe(1);
   });
 });

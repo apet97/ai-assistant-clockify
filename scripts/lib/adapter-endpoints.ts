@@ -48,16 +48,12 @@ export const INTERNAL_OPENAPI_OPERATIONS = [
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-entries", operationId: "createTimeEntry" },
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/time-off/policies", operationId: "createPolicy" },
   { host: "api", method: "POST", path: "/workspaces/{workspaceId}/user-groups/{userGroupId}/users", operationId: "addUser" },
-  { host: "api", method: "POST", path: "/workspaces/{workspaceId}/webhooks", operationId: "createWebhook" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/clients/{id}", operationId: "updateClient" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/custom-fields/{customFieldId}", operationId: "editCustomField" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/expenses/categories/{categoryId}", operationId: "updateCategory" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/invoices/{invoiceId}", operationId: "updateInvoice" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-entries/{id}", operationId: "updateTimeEntry" },
   { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/time-off/policies/{id}", operationId: "updatePolicy" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/users/{userId}/cost-rate", operationId: "setCostRateForUser" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/users/{userId}/hourly-rate", operationId: "setHourlyRateForUser" },
-  { host: "api", method: "PUT", path: "/workspaces/{workspaceId}/webhooks/{webhookId}", operationId: "updateWebhook" },
 ] as const satisfies readonly CanonicalOpenApiOperation[];
 
 export interface NonActionAdapterDisposition {

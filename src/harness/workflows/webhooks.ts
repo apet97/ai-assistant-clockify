@@ -13,6 +13,7 @@ import { sanitizedFingerprint } from "../safe-json.js";
 import { describePatch } from "./resolve.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { WEBHOOK_TRIGGER_SOURCE_BATCH_MAX } from "../safety-limits.js";
 import type { PreparedWebhookUpdateInput, WebhookSummary } from "../../clockify/ports/webhooks.js";
 import type {
   ApiAccess,
@@ -121,23 +122,6 @@ function webhookApiMetadata(input: {
   });
 }
 
-function webhookInternalMetadata(input: {
-  reason: string;
-  primary: string;
-  support: readonly string[];
-}): ApiActionMetadataCarrier {
-  return Object.freeze({
-    apiExposure: "generic",
-    apiExposureReason: input.reason,
-    adapterEndpoints: Object.freeze({
-      primary: Object.freeze([input.primary]),
-      support: Object.freeze([...input.support]),
-    }),
-    availabilityByAuthClass: WEBHOOK_API_KEY_ONLY,
-    boundedArgumentDictionaries: Object.freeze([]),
-  });
-}
-
 const webhookEndpoint = Object.freeze({
   list: webhookEndpointKey("read", "GET", "/workspaces/{workspaceId}/webhooks"),
   get: webhookEndpointKey("read", "GET", "/workspaces/{workspaceId}/webhooks/{id}"),
@@ -184,15 +168,56 @@ const WEBHOOK_API_METADATA = Object.freeze({
     support: [],
     materialFields: [],
   }),
-  clockify_webhooks_create: webhookInternalMetadata({
-    reason: "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
+  clockify_webhooks_create: webhookApiMetadata({
+    actionName: "clockify_webhooks_create",
+    operationId: "createWebhook",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/webhooks",
+    access: "write",
     primary: webhookEndpoint.create,
     support: [webhookEndpoint.list],
+    materialFields: [
+      webhookValueField("/name", "Webhook name", "text", true),
+      webhookValueField("/url", "Webhook URL", "text", true),
+      webhookValueField("/webhookEvent", "Event type", "text", true),
+      webhookValueField("/triggerSourceType", "Trigger source type", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/triggerSource",
+        itemPath: "/sourceId",
+        labelTemplate: "Trigger source {index}",
+        maxItems: WEBHOOK_TRIGGER_SOURCE_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
-  clockify_webhooks_update: webhookInternalMetadata({
-    reason: "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
+  clockify_webhooks_update: webhookApiMetadata({
+    actionName: "clockify_webhooks_update",
+    operationId: "updateWebhook",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "write",
     primary: webhookEndpoint.update,
     support: [webhookEndpoint.get],
+    materialFields: [
+      webhookValueField("/id", "Webhook", "entity", true),
+      webhookValueField("/name", "Webhook name", "text", false),
+      webhookValueField("/url", "Webhook URL", "text", false),
+      webhookValueField("/webhookEvent", "Event type", "text", false),
+      webhookValueField("/triggerSourceType", "Trigger source type", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/triggerSource",
+        itemPath: "/sourceId",
+        labelTemplate: "Trigger source {index}",
+        maxItems: WEBHOOK_TRIGGER_SOURCE_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
   clockify_webhooks_delete: webhookApiMetadata({
     actionName: "clockify_webhooks_delete",
@@ -315,7 +340,7 @@ const createWebhook = defineRiskyAction({
   name: "clockify_webhooks_create",
   ...WEBHOOK_API_METADATA.clockify_webhooks_create,
   description:
-    "Create a webhook (HTTPS url, a webhookEvent type). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+    "Create a webhook (HTTPS url, a webhookEvent type, up to 17 triggerSource ids). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
   group: WH,
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
@@ -324,7 +349,7 @@ const createWebhook = defineRiskyAction({
     name: z.string().min(1),
     url: httpsUrl,
     webhookEvent: z.string().min(1),
-    triggerSource: z.array(z.string().min(1)).optional(),
+    triggerSource: z.array(z.string().min(1)).max(WEBHOOK_TRIGGER_SOURCE_BATCH_MAX).optional(),
     triggerSourceType: z.string().optional(),
   }),
   async preview(ctx, args) {
@@ -388,7 +413,7 @@ const updateWebhook = defineRiskyAction({
   name: "clockify_webhooks_update",
   ...WEBHOOK_API_METADATA.clockify_webhooks_update,
   description:
-    "Update a webhook (name/url/event/trigger source). External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+    "Update a webhook (name/url/event/trigger source). Up to 17 triggerSource ids. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
   group: WH,
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
@@ -399,7 +424,7 @@ const updateWebhook = defineRiskyAction({
       name: z.string().optional(),
       url: httpsUrl.optional(),
       webhookEvent: z.string().optional(),
-      triggerSource: z.array(z.string().min(1)).optional(),
+      triggerSource: z.array(z.string().min(1)).max(WEBHOOK_TRIGGER_SOURCE_BATCH_MAX).optional(),
       triggerSourceType: z.string().optional(),
     })
     .refine(

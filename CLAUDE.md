@@ -26,7 +26,8 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-REPORTS CLOSED: `clockify_reports_summary` (`generateSummaryReport`), `clockify_reports_detailed` (`generateDetailedReport`), and `clockify_reports_weekly` (`generateWeeklyReport`) with server-resolved date ranges on the reports host; `clockify_period_report` stays composite/off MODEL_API.
 - T06-AUDIT CLOSED: `clockify_entity_changes_created`/`updated`/`deleted` (`getCreatedEntityInfo`/`getUpdatedEntityInfo`/`getDeletedEntityInfo`) on the api host; `clockify_audit_logs_search` stays generic with `official_operation_id_missing`; legacy `clockify_entity_changes_list` stays generic/off MODEL_API.
 - T06-WORKSPACE CLOSED: `clockify_workspace_get` (`getWorkspaceOfUser`), `clockify_templates_list`/`get` (`getProjects`/`getProject` on project endpoints).
-- T06-HOLIDAYS CLOSED: bounded `clockify_holidays_create`/`update` (`createHoliday`/`updateHoliday`, max 8 users + 8 groups); list/in_period/delete stay or promote as before; `clockify_holidays_get` stays composite/off MODEL_API. Next: `T06-WEBHOOKS`. Current counts: `ACTION_CATALOG` 160, `MODEL_API` 108. Live: `live_not_run_missing_credentials`.
+- T06-HOLIDAYS CLOSED: bounded `clockify_holidays_create`/`update` (`createHoliday`/`updateHoliday`, max 8 users + 8 groups); list/in_period/delete stay or promote as before; `clockify_holidays_get` stays composite/off MODEL_API.
+- T06-WEBHOOKS CLOSED: `clockify_webhooks_list`/`get`/`logs`/`create`/`update`/`delete` on MODEL_API with api_key-only availability and bounded triggerSource (max 17); `clockify_webhooks_events` stays local/static. Next: `T06-INVOICE-READS`. Current counts: `ACTION_CATALOG` 160, `MODEL_API` 110. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
@@ -62,7 +63,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 157 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 160 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

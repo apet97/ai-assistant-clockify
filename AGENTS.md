@@ -32,7 +32,7 @@ here; this file is the execution map.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
 - T06-CLIENTS CLOSED at `9880859`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file.
-- T06-HOLIDAYS CLOSED: bounded `clockify_holidays_create`/`update` on MODEL_API (max 8 users + 8 groups); `clockify_holidays_get` stays composite. `MODEL_API` = 108; `ACTION_CATALOG` = 160. Live: `live_not_run_missing_credentials`. Next: `T06-WEBHOOKS`.
+- T06-WEBHOOKS CLOSED: webhook list/get/logs/create/update/delete on MODEL_API (api_key-only, max 17 triggerSource); `clockify_webhooks_events` stays local. `MODEL_API` = 110; `ACTION_CATALOG` = 160. Live: `live_not_run_missing_credentials`. Next: `T06-INVOICE-READS`.
 
 ## Non-negotiable invariants
 

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "25856a5ba9ac668dc8bb117932d6ea7aa23dbb5503939866b6b7c9bdc464eb51",
+  "catalogHash": "e365a4d24c5b3d6dca4f8005275d43c4683d44bb777fb6e05de43d017556cea1",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,9 +14,9 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 108,
+      "api": 110,
       "composite": 24,
-      "generic": 24,
+      "generic": 22,
       "local": 4
     }
   },
@@ -13112,60 +13112,6 @@
     },
     {
       "sourceSurface": "v1-internal",
-      "name": "clockify_webhooks_create",
-      "description": "Create a webhook (HTTPS url, a webhookEvent type). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
-      "kind": "risky_write",
-      "featureGroup": "webhooks",
-      "workflowModule": "webhooks.ts",
-      "actionFingerprint": "43e425c203c2b89811f686d198b0fd16db3b33c6aa9be56100f7d63870d6f71a",
-      "exposure": "generic",
-      "decisionReason": "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed create operation.",
-      "operation": null,
-      "availabilityByAuthClass": {
-        "addon": {
-          "available": false,
-          "reason": "unsupported_auth_class"
-        },
-        "api_key": {
-          "available": true
-        }
-      },
-      "adapterShapes": [
-        {
-          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/webhooks\u0000webhooks.ts",
-          "role": "support",
-          "access": "read",
-          "host": "api",
-          "method": "GET",
-          "path": "/workspaces/{workspaceId}/webhooks",
-          "sourceModule": "webhooks.ts"
-        },
-        {
-          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/webhooks\u0000webhooks.ts",
-          "role": "primary",
-          "access": "write",
-          "host": "api",
-          "method": "POST",
-          "path": "/workspaces/{workspaceId}/webhooks",
-          "sourceModule": "webhooks.ts"
-        }
-      ],
-      "boundedArgumentDictionaries": [],
-      "openSchemaVerdict": "closed",
-      "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
-      "requiredArguments": [
-        "name",
-        "url",
-        "webhookEvent"
-      ],
-      "primaryMutationCount": 1,
-      "compensationCount": 0
-    },
-    {
-      "sourceSurface": "v1-internal",
       "name": "clockify_webhooks_list",
       "description": "List webhooks in the workspace.",
       "kind": "read",
@@ -13213,6 +13159,141 @@
       },
       "requiredArguments": [],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_webhooks_create",
+      "description": "Create a webhook (HTTPS url, a webhookEvent type, up to 17 triggerSource ids). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+      "kind": "risky_write",
+      "featureGroup": "webhooks",
+      "workflowModule": "webhooks.ts",
+      "actionFingerprint": "dbfc62fcd7f95be38b31e64f34e6514eb9ac85385b6d2cbf01ea54b2561ff097",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: POST /workspaces/{workspaceId}/webhooks (createWebhook).",
+      "operation": {
+        "operationId": "createWebhook",
+        "host": "api",
+        "method": "POST",
+        "path": "/workspaces/{workspaceId}/webhooks",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": false,
+          "reason": "unsupported_auth_class"
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/webhooks\u0000webhooks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/webhooks",
+          "sourceModule": "webhooks.ts"
+        },
+        {
+          "key": "write\u0000api\u0000POST\u0000/workspaces/{workspaceId}/webhooks\u0000webhooks.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "POST",
+          "path": "/workspaces/{workspaceId}/webhooks",
+          "sourceModule": "webhooks.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Webhook name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/url",
+          "label": "Webhook URL",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/webhookEvent",
+          "label": "Event type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/triggerSourceType",
+          "label": "Trigger source type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/triggerSource",
+          "itemPath": "/sourceId",
+          "labelTemplate": "Trigger source {index}",
+          "maxItems": 17,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/url",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/webhookEvent",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/triggerSourceType",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/triggerSource",
+          "itemPath": "/sourceId",
+          "maxItems": 17,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_webhooks_create",
+        "version": 1
+      },
+      "requiredArguments": [
+        "name",
+        "url",
+        "webhookEvent"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -13370,14 +13451,21 @@
     {
       "sourceSurface": "v1-internal",
       "name": "clockify_webhooks_update",
-      "description": "Update a webhook (name/url/event/trigger source). External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+      "description": "Update a webhook (name/url/event/trigger source). Up to 17 triggerSource ids. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
       "kind": "risky_write",
       "featureGroup": "webhooks",
       "workflowModule": "webhooks.ts",
-      "actionFingerprint": "80774fd068adecd43c7571875c7d3305c9d262cb53b6292f0c1dcb7dbc8fddeb",
-      "exposure": "generic",
-      "decisionReason": "The triggerSource array is unbounded, so material expansion cannot be statically capped at 22 facts; Task 6 must expose a narrowed update operation.",
-      "operation": null,
+      "actionFingerprint": "4381bbfe0d29aeb98ef8339a069e44afa4ac33e81c6fcb176c451574f21cf273",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/webhooks/{id} (updateWebhook).",
+      "operation": {
+        "operationId": "updateWebhook",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/webhooks/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
       "availabilityByAuthClass": {
         "addon": {
           "available": false,
@@ -13410,9 +13498,96 @@
       "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Webhook",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "label": "Webhook name",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/url",
+          "label": "Webhook URL",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/webhookEvent",
+          "label": "Event type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/triggerSourceType",
+          "label": "Trigger source type",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/triggerSource",
+          "itemPath": "/sourceId",
+          "labelTemplate": "Trigger source {index}",
+          "maxItems": 17,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/name",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/url",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/webhookEvent",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/triggerSourceType",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/triggerSource",
+          "itemPath": "/sourceId",
+          "maxItems": 17,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_webhooks_update",
+        "version": 1
+      },
       "requiredArguments": [
         "id"
       ],
@@ -17930,10 +18105,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_webhooks_create"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": false,
@@ -17943,8 +18118,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000DELETE\u0000/workspaces/{workspaceId}/webhooks/{id}\u0000webhooks.ts",
@@ -18036,10 +18211,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_webhooks_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": false,
@@ -18049,8 +18224,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000POST\u0000/workspaces/{workspaceId}/webhooks/{id}/logs\u0000webhooks.ts",
@@ -19978,10 +20153,12 @@
       ],
       "operations": [
         {
+          "operationId": "setCostRateForUser",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
-          "operationId": "setCostRateForUser"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -19992,10 +20169,12 @@
       ],
       "operations": [
         {
+          "operationId": "setHourlyRateForUser",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
-          "operationId": "setHourlyRateForUser"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20023,16 +20202,20 @@
       ],
       "operations": [
         {
+          "operationId": "setCostRateForUser",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/users/{userId}/cost-rate",
-          "operationId": "setCostRateForUser"
+          "access": "write",
+          "exposure": "api"
         },
         {
+          "operationId": "setHourlyRateForUser",
           "host": "api",
           "method": "PUT",
           "path": "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
-          "operationId": "setHourlyRateForUser"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20059,10 +20242,12 @@
       ],
       "operations": [
         {
+          "operationId": "createWebhook",
           "host": "api",
           "method": "POST",
           "path": "/workspaces/{workspaceId}/webhooks",
-          "operationId": "createWebhook"
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
@@ -20105,10 +20290,12 @@
       ],
       "operations": [
         {
+          "operationId": "updateWebhook",
           "host": "api",
           "method": "PUT",
-          "path": "/workspaces/{workspaceId}/webhooks/{webhookId}",
-          "operationId": "updateWebhook"
+          "path": "/workspaces/{workspaceId}/webhooks/{id}",
+          "access": "write",
+          "exposure": "api"
         }
       ]
     },
