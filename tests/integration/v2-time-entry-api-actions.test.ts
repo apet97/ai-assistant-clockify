@@ -163,3 +163,51 @@ describe("v2 time entry create and timer API actions", () => {
     expect(fake.counts.stopTimeEntryAtomic).toBe(1);
   });
 });
+
+describe("v2 time entry update delete and invoiced API actions", () => {
+  const ENTRY_UPDATE_API_ACTIONS = [
+    "clockify_entries_update",
+    "clockify_entries_delete",
+    "clockify_entries_mark_invoiced",
+  ] as const;
+
+  const INTERNAL_ONLY_ENTRY_UPDATE_ACTIONS = [
+    "clockify_fix_entry",
+  ] as const;
+
+  it("exposes atomic update/delete/invoiced actions and hides clockify_fix_entry", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    for (const name of ENTRY_UPDATE_API_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(true);
+      expect(getAction(name)?.apiExposure).toBe("api");
+    }
+    expect(getAction("clockify_entries_update")?.apiOperation?.operationId).toBe("updateTimeEntry");
+    expect(getAction("clockify_entries_delete")?.apiOperation?.operationId).toBe("deleteTimeEntry");
+    expect(getAction("clockify_entries_mark_invoiced")?.apiOperation?.operationId).toBe("updateInvoicedStatus");
+    for (const name of INTERNAL_ONLY_ENTRY_UPDATE_ACTIONS) {
+      expect(modelNames.has(name), name).toBe(false);
+      expect(getAction(name)?.apiExposure).toBe("generic");
+    }
+  });
+
+  it("clockify_entries_update previews with GET support then commits one PUT", async () => {
+    const fake = createFakeWorkspace({
+      entries: [{ id: "e1", description: "Before", start: "2026-06-05T09:00:00Z", end: "2026-06-05T10:00:00Z" }],
+    });
+    const preview = await executeAction({
+      actionName: "clockify_entries_update",
+      args: { id: "e1", description: "After" },
+      context: makeContext(fake),
+    });
+    if (preview.kind !== "preview") throw new Error("expected preview");
+    expect(fake.counts.updateTimeEntryAtomic ?? 0).toBe(0);
+  });
+
+  it("clockify_entries_mark_invoiced accepts at most 21 entry ids", () => {
+    const action = getAction("clockify_entries_mark_invoiced");
+    if (!action) throw new Error("missing mark_invoiced");
+    const ids = Array.from({ length: 22 }, (_, index) => `e-${index}`);
+    expect(action.schema.safeParse({ ids, invoiced: true }).success).toBe(false);
+    expect(action.schema.safeParse({ ids: ids.slice(0, 21), invoiced: true }).success).toBe(true);
+  });
+});

@@ -1,17 +1,20 @@
-import { type ActionDefinition } from "../action.js";
-import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
+import { defineRiskyAction, type ActionDefinition } from "../action.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
+import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
 import { defineStructureDurableSafeWriteAction } from "../workflows/structure-durable.js";
 import { ENTRY_API_METADATA } from "../workflows/entry-api-metadata.js";
 import {
   TIME_ENTRY_BILLABLE_LITERAL_ALIASES,
+  commitEntriesUpdate,
   dispatchEntriesCreate,
   dispatchEntriesStart,
   entriesCreateSchema,
   entriesStartSchema,
+  entriesUpdateSchema,
   prepareEntriesCreate,
   prepareEntriesCreateDispatch,
   prepareEntriesStart,
+  previewEntriesUpdate,
 } from "../workflows/entry-action-shared.js";
 
 const TIME = "time_tracking" as const;
@@ -55,7 +58,27 @@ const start = defineDurableSafeWriteAction({
   dispatch: (ctx, operation) => dispatchEntriesStart(ctx, operation, "clockify_entries_start"),
 });
 
+const update = defineRiskyAction({
+  name: "clockify_entries_update",
+  ...ENTRY_API_METADATA.clockify_entries_update,
+  description:
+    "Update an existing time entry with one GET-then-PUT. Pass the project/task by id or exact name — resolved server-side. Up to 14 tag ids/names in `tagIds`. Elevated write — previews and requires confirmation.",
+  group: TIME,
+  risks: ["high_risk_write"],
+  mutationWorkflow: "durable",
+  mutationContract: durableMutationContract({
+    source: "confirmed",
+    targeting: { mode: "snapshots", relations: ["target", "parent"] },
+    strategies: ["update"],
+  }),
+  semanticLiteralAliases: TIME_ENTRY_BILLABLE_LITERAL_ALIASES,
+  schema: entriesUpdateSchema,
+  preview: (ctx, args) => previewEntriesUpdate(ctx, args),
+  commit: (ctx, payload, operation) => commitEntriesUpdate(ctx, payload, operation, "clockify_entries_update"),
+});
+
 export const ENTRY_API_ACTIONS: ActionDefinition[] = [
   create,
   start,
+  update,
 ];

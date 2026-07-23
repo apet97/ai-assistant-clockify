@@ -1428,7 +1428,7 @@ const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
   internalAnnotation({
     name: "clockify_fix_entry",
     exposure: "generic",
-    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed update operation.",
+    reason: "Superseded on MODEL_API by clockify_entries_update, which bounds tagIds for material expansion; retained for legacy planner paths.",
     primary: [STRUCTURE_ENDPOINT.timeEntries.update],
     support: [
       STRUCTURE_ENDPOINT.timeEntries.get,
@@ -1439,6 +1439,40 @@ const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
       STRUCTURE_ENDPOINT.tags.list,
     ],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+  }),
+  apiAnnotation({
+    name: "clockify_entries_update",
+    operationId: "updateTimeEntry",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/time-entries/{id}",
+    access: "write",
+    sourceModule: "time-entries.ts",
+    support: [
+      STRUCTURE_ENDPOINT.timeEntries.get,
+      STRUCTURE_ENDPOINT.projects.list,
+      STRUCTURE_ENDPOINT.projects.get,
+      STRUCTURE_ENDPOINT.tasks.list,
+      STRUCTURE_ENDPOINT.tasks.get,
+      STRUCTURE_ENDPOINT.tags.list,
+    ],
+    availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/id", "Time entry", "entity", true),
+      materialField("/description", "Description", "text", false),
+      materialField("/projectId", "Project", "entity", false),
+      materialField("/taskId", "Task", "entity", false),
+      materialField("/billable", "Billable", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/tagIds",
+        itemPath: "",
+        labelTemplate: "Tag {index}",
+        maxItems: 14,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
   }),
   apiAnnotation({
     name: "clockify_entries_list",
@@ -1480,13 +1514,28 @@ const TIME_ENTRY_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
       materialField("/description", "Description", "text", false),
     ],
   }),
-  internalAnnotation({
+  apiAnnotation({
     name: "clockify_entries_mark_invoiced",
-    exposure: "generic",
-    reason: "The current batch maximum exceeds the 22-fact material presentation limit; Task 6 must narrow the invoiced-state operation.",
-    primary: [STRUCTURE_ENDPOINT.timeEntries.invoiced],
+    operationId: "updateInvoicedStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-entries/invoiced",
+    access: "write",
+    sourceModule: "time-entries.ts",
     support: [STRUCTURE_ENDPOINT.timeEntries.get],
     availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+    materialFields: [
+      materialField("/invoiced", "Invoiced", "boolean", true),
+      {
+        kind: "array_item",
+        containerPath: "/ids",
+        itemPath: "",
+        labelTemplate: "Entry {index}",
+        maxItems: 21,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
+    ],
   }),
 ];
 
@@ -3310,12 +3359,12 @@ describe("API action inventory normalization", () => {
       corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
     });
     expect(evidence.counts).toEqual({
-      actions: 156,
+      actions: 157,
       rawAdapterCallSites: 148,
       rawAdapterShapes: 124,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 101, composite: 24, generic: 27, local: 4 },
+      exposures: { api: 103, composite: 24, generic: 26, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

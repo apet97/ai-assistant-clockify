@@ -275,10 +275,26 @@ export const ENTRY_API_METADATA = Object.freeze({
       valueField("/description", "Description", "text", false),
     ],
   }),
-  clockify_entries_mark_invoiced: buildTimeEntryInternalMetadata({
-    exposure: "generic",
-    reason: "The current batch maximum exceeds the 22-fact material presentation limit; Task 6 must narrow the invoiced-state operation.",
-    primary: [endpoint.timeEntries.invoiced],
+  clockify_entries_mark_invoiced: apiMetadata({
+    actionName: "clockify_entries_mark_invoiced",
+    operationId: "updateInvoicedStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-entries/invoiced",
+    access: "write",
+    primary: endpoint.timeEntries.invoiced,
     support: [endpoint.timeEntries.get],
+    materialFields: [
+      valueField("/invoiced", "Invoiced", "boolean", true),
+      Object.freeze({
+        kind: "array_item",
+        containerPath: "/ids",
+        itemPath: "",
+        labelTemplate: "Entry {index}",
+        maxItems: 21,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      }),
+    ],
   }),
 } satisfies Readonly<Record<EntryApiActionName, ApiActionMetadataCarrier>>);

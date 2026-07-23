@@ -58,6 +58,7 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   "clockify_entries_create\0billable": { aliases: BILLABLE },
   "clockify_entries_start\0billable": { aliases: BILLABLE },
   "clockify_log_work\0billable": { aliases: BILLABLE },
+  "clockify_entries_update\0billable": { aliases: BILLABLE },
   "clockify_fix_entry\0billable": { aliases: BILLABLE },
   "clockify_entries_mark_invoiced\0invoiced": { aliases: [
     alias("invoiced", false, ["not invoiced", "uninvoiced", "unmark as invoiced"]),

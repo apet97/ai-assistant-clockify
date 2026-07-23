@@ -22,7 +22,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-CLIENTS CLOSED at `9880859`: `create_base` (`createClient`), closed `update`/`archive` (`updateClient`), `delete_archived` (`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations already exposed as atomic `api` actions in `workflows/tags.ts` — verified, no empty split file.
 - T06-ENTRY-READS CLOSED: exact `clockify_entries_list` (`getTimeEntries`) and `clockify_entries_get` (`getTimeEntry`) with server-resolved dates and `truncated` list receipts; `clockify_status`, review-day/week, and work-package convenience stay off MODEL_API. Live: `live_not_run_missing_credentials`.
-- T06-ENTRY-CREATE-TIMER CLOSED: `clockify_entries_create` and `clockify_entries_start` (`createTimeEntry`) plus existing `clockify_stop_timer` (`stopRunningTimeEntry`); v1 `clockify_log_work`, `clockify_start_timer`, and work-package convenience stay internal. Next: `T06-ENTRY-UPDATE`. Current counts: `ACTION_CATALOG` 156, `MODEL_API` 101. Live: `live_not_run_missing_credentials`.
+- T06-ENTRY-UPDATE CLOSED: `clockify_entries_update` (`updateTimeEntry`, GET-then-PUT), existing `clockify_entries_delete`, and bounded `clockify_entries_mark_invoiced` (`updateInvoicedStatus`, max 21 ids); `clockify_fix_entry` stays generic/off MODEL_API. Next: `T06-REPORTS`. Current counts: `ACTION_CATALOG` 157, `MODEL_API` 103. Live: `live_not_run_missing_credentials`.
 
 ## Start here
 
@@ -58,7 +58,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 156 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 157 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

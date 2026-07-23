@@ -1,22 +1,22 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "6732f9e483a9781a5fe8fd49c4fc2d46798d333f0de536dfdc98eb3d02e0e307",
+  "catalogHash": "44b9d6ced5cf007a5c4e61a16a90141fd1c3ae4dbfd3bb84e3769db65c64ac71",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
     "corroborationPath": "evidence/openapi/clockify.official.openapi.yaml"
   },
   "counts": {
-    "actions": 156,
+    "actions": 157,
     "rawAdapterCallSites": 148,
     "rawAdapterShapes": 124,
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 101,
+      "api": 103,
       "composite": 24,
-      "generic": 27,
+      "generic": 26,
       "local": 4
     }
   },
@@ -5077,9 +5077,9 @@
       "kind": "risky_write",
       "featureGroup": "time_tracking",
       "workflowModule": "time-tracking.ts",
-      "actionFingerprint": "13907749916ccd87881b94caef6c3dddc305ef6832ed85b714b36ba4038187e9",
+      "actionFingerprint": "9e86d6493c4f95fe56fb0e018ceb2741f98a1b7194a2d8b444665c7994668ebe",
       "exposure": "generic",
-      "decisionReason": "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed update operation.",
+      "decisionReason": "Superseded on MODEL_API by clockify_entries_update, which bounds tagIds for material expansion; retained for legacy planner paths.",
       "operation": null,
       "availabilityByAuthClass": {
         "addon": {
@@ -9829,10 +9829,17 @@
       "kind": "risky_write",
       "featureGroup": "invoices",
       "workflowModule": "entries.ts",
-      "actionFingerprint": "4746ec5ed1693162182d06b624412c7c7a5fe0b313cfdfceccb556c224bbecfb",
-      "exposure": "generic",
-      "decisionReason": "The current batch maximum exceeds the 22-fact material presentation limit; Task 6 must narrow the invoiced-state operation.",
-      "operation": null,
+      "actionFingerprint": "5cbd72512427b355a54268fbda3783851deccbfc1baef4ab92feb60cb659ef2b",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/time-entries/invoiced (updateInvoicedStatus).",
+      "operation": {
+        "operationId": "updateInvoicedStatus",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/time-entries/invoiced",
+        "access": "write",
+        "exposure": "api"
+      },
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -9864,9 +9871,44 @@
       "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/invoiced",
+          "label": "Invoiced",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/ids",
+          "itemPath": "",
+          "labelTemplate": "Entry {index}",
+          "maxItems": 21,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/invoiced",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/ids",
+          "itemPath": "",
+          "maxItems": 21,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_entries_mark_invoiced",
+        "version": 1
+      },
       "requiredArguments": [
         "ids",
         "invoiced"
@@ -10013,6 +10055,196 @@
         "id"
       ],
       "primaryMutationCount": 0,
+      "compensationCount": 0
+    },
+    {
+      "sourceSurface": "v1-internal",
+      "name": "clockify_entries_update",
+      "description": "Update an existing time entry with one GET-then-PUT. Pass the project/task by id or exact name — resolved server-side. Up to 14 tag ids/names in `tagIds`. Elevated write — previews and requires confirmation.",
+      "kind": "risky_write",
+      "featureGroup": "time_tracking",
+      "workflowModule": "api-actions/time-entries.ts",
+      "actionFingerprint": "70522a702ee23d3a8cb5c1d8e9195881ea75a6eb5cbf1148c5b915c659131b24",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/time-entries/{id} (updateTimeEntry).",
+      "operation": {
+        "operationId": "updateTimeEntry",
+        "host": "api",
+        "method": "PUT",
+        "path": "/workspaces/{workspaceId}/time-entries/{id}",
+        "access": "write",
+        "exposure": "api"
+      },
+      "availabilityByAuthClass": {
+        "addon": {
+          "available": true
+        },
+        "api_key": {
+          "available": true
+        }
+      },
+      "adapterShapes": [
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{id}\u0000projects.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{id}",
+          "sourceModule": "projects.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}\u0000tasks.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/projects/{projectId}/tasks/{id}",
+          "sourceModule": "tasks.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/tags\u0000tags.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/tags",
+          "sourceModule": "tags.ts"
+        },
+        {
+          "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000time-entries.ts",
+          "role": "support",
+          "access": "read",
+          "host": "api",
+          "method": "GET",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "sourceModule": "time-entries.ts"
+        },
+        {
+          "key": "write\u0000api\u0000PUT\u0000/workspaces/{workspaceId}/time-entries/{id}\u0000time-entries.ts",
+          "role": "primary",
+          "access": "write",
+          "host": "api",
+          "method": "PUT",
+          "path": "/workspaces/{workspaceId}/time-entries/{id}",
+          "sourceModule": "time-entries.ts"
+        }
+      ],
+      "boundedArgumentDictionaries": [],
+      "openSchemaVerdict": "closed",
+      "openSchemaDetail": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "label": "Time entry",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/description",
+          "label": "Description",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "label": "Project",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "label": "Task",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "label": "Billable",
+          "formatterId": "boolean",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "labelTemplate": "Tag {index}",
+          "maxItems": 14,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/id",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/description",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/projectId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/taskId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/billable",
+          "scalarType": "boolean"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/tagIds",
+          "itemPath": "",
+          "maxItems": 14,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_entries_update",
+        "version": 1
+      },
+      "requiredArguments": [
+        "id"
+      ],
+      "primaryMutationCount": 1,
       "compensationCount": 0
     },
     {
@@ -14817,6 +15049,7 @@
         "clockify_entries_create",
         "clockify_entries_list",
         "clockify_entries_start",
+        "clockify_entries_update",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -14994,6 +15227,7 @@
         "clockify_delete_entity",
         "clockify_entries_create",
         "clockify_entries_start",
+        "clockify_entries_update",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -15288,6 +15522,7 @@
         "clockify_entries_create",
         "clockify_entries_list",
         "clockify_entries_start",
+        "clockify_entries_update",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -15410,6 +15645,7 @@
         "clockify_create_work_package",
         "clockify_entries_create",
         "clockify_entries_start",
+        "clockify_entries_update",
         "clockify_expenses_create",
         "clockify_expenses_update",
         "clockify_fix_entry",
@@ -15922,6 +16158,7 @@
         "clockify_delete_entity",
         "clockify_entries_create",
         "clockify_entries_start",
+        "clockify_entries_update",
         "clockify_fix_entry",
         "clockify_list_entities",
         "clockify_log_work",
@@ -16138,10 +16375,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_entries_mark_invoiced"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -16150,8 +16387,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-entries/{entryId}\u0000custom-fields.ts",
@@ -16273,6 +16510,7 @@
         "clockify_delete_entity",
         "clockify_entries_delete",
         "clockify_entries_mark_invoiced",
+        "clockify_entries_update",
         "clockify_fix_entry",
         "clockify_stop_timer"
       ],
@@ -16302,7 +16540,9 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
+      "mappedModelActionNames": [
+        "clockify_entries_update"
+      ],
       "internalSupportConsumers": [
         "clockify_fix_entry"
       ],
@@ -16314,8 +16554,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "write\u0000api\u0000PATCH\u0000/workspaces/{workspaceId}/time-off/balance/policy/{policyId}\u0000time-off.ts",

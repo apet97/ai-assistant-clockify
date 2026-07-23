@@ -104,6 +104,7 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_stop_timer: single("stop-timer", { derivedIds: ["operation.entryId", "operation.userId"] }),
   clockify_log_work: single("log-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
   clockify_fix_entry: single("update-time-entry", { derivedIds: ["operation.entryId", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
+  clockify_entries_update: single("update-time-entry", { derivedIds: ["operation.id", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
   clockify_entries_delete: single("delete-time-entry", { derivedIds: ["operation.id"] }),
   clockify_entries_mark_invoiced: repeated(1, "ids[]", [plan("single", step("mark-entries-invoiced"))], { derivedIds: ["operation.entryIds[]"] }, MARK_INVOICED_ENTRY_BATCH_MAX),
   clockify_create_work_package: fixed(5, [

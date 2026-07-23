@@ -1,18 +1,15 @@
 import { z } from "zod";
-import { zStringList } from "../arg-shapes.js";
 import { defineAction, defineRiskyAction, type ActionDefinition } from "../action.js";
 import type { ApiAccess, ApiActionMetadataCarrier, ApiMethod, MaterialFieldMetadata } from "../api-operation.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { defineDurableSafeWriteAction } from "../durable-safe-write.js";
-import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import type { TimeEntrySummary } from "../../clockify/client.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import {
-  resolveProjectTaskRefs,
   resolveUserFilter,
 } from "./resolve.js";
 import { DAY_MS, SEVEN_DAYS_MS, nowIso } from "../../durations.js";
-import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, requireFreshSnapshots, snapshot } from "./structure-durable.js";
+import { captureStructureSnapshot, defineStructureDurableSafeWriteAction, dispatchWithReconciliation, mutationPlan, requireFreshSnapshots, snapshot } from "./structure-durable.js";
 import {
   TIME_ENTRY_BILLABLE_LITERAL_ALIASES,
   DATE_CLARIFY,
@@ -20,9 +17,12 @@ import {
   dispatchEntriesStart,
   entriesCreateGenericSchema,
   entriesStartGenericSchema,
+  entriesUpdateGenericSchema,
   prepareEntriesCreate,
   prepareEntriesCreateDispatch,
   prepareEntriesStart,
+  previewEntriesUpdate,
+  commitEntriesUpdate,
   resolveDay,
   resolveEntryTagsUnbounded,
 } from "./entry-action-shared.js";
@@ -136,7 +136,7 @@ const TIME_TRACKING_API_METADATA = Object.freeze({
   }),
   clockify_fix_entry: internalMetadata({
     exposure: "generic",
-    reason: "The tagIds and tagNames inputs are unbounded, so leaf-level material expansion cannot be statically bounded; Task 6 must expose a narrowed update operation.",
+    reason: "Superseded on MODEL_API by clockify_entries_update, which bounds tagIds for material expansion; retained for legacy planner paths.",
     primary: [endpoint.timeEntries.update],
     support: [
       endpoint.timeEntries.get,
@@ -407,123 +407,9 @@ const fixEntry = defineRiskyAction({
     strategies: ["update"],
   }),
   semanticLiteralAliases: BILLABLE_LITERAL_ALIASES,
-  schema: z
-    .object({
-      id: z.string().min(1),
-      description: z.string().optional(),
-      projectId: z.string().optional(),
-      projectName: z.string().optional(),
-      taskId: z.string().optional(),
-      taskName: z.string().optional(),
-      tagIds: zStringList(z.array(z.string())).optional(),
-      /** Tag names (or use tagIds) — resolved to verified ids server-side. */
-      tagNames: zStringList(z.array(z.string())).optional(),
-      billable: z.boolean().optional(),
-    })
-    .refine(
-      (v) =>
-        v.description !== undefined ||
-        v.projectId !== undefined ||
-        v.projectName !== undefined ||
-        v.taskId !== undefined ||
-        v.taskName !== undefined ||
-        v.tagIds !== undefined ||
-        v.tagNames !== undefined ||
-        v.billable !== undefined,
-      { message: "Provide at least one field to change." },
-    ),
-  async preview(ctx, args) {
-    const current = await ctx.clockify.getEntry(args.id);
-    if (!current) return { clarify: "The requested time entry does not exist. Provide a current entry id." };
-    // Resolve identity at PREVIEW time: a name in either project/task slot becomes
-    // a verified id, and a mistaken identity clarifies here — it never reaches the
-    // wire (and never gets stored in the confirmable payload).
-    const refs = await resolveProjectTaskRefs(args, {
-      verb: "move the entry to",
-      listProjects: (f) => ctx.clockify.listProjects(f),
-      listTasks: (projectId) => ctx.clockify.listTasks(projectId),
-    });
-    if (!refs.ok) return refs.clarify;
-    const tags = await resolveEntryTagsUnbounded(ctx, args);
-    if (!tags.ok) return { clarify: tags.message, options: tags.options };
-
-    // Human-readable change list for the preview (resolved NAMES, not raw ids).
-    const expectedChanges: string[] = [];
-    if (args.description !== undefined) expectedChanges.push(`Description → "${args.description}"`);
-    if (refs.projectId !== undefined) expectedChanges.push(`Project → ${refs.projectName ?? refs.projectId}`);
-    if (refs.taskId !== undefined) expectedChanges.push(`Task → ${refs.taskName ?? refs.taskId}`);
-    if (tags.tagIds !== undefined) expectedChanges.push(`Tags → ${tags.tagIds.length} tag(s)`);
-    if (args.billable !== undefined) expectedChanges.push(`Billable → ${args.billable ? "billable" : "non-billable"}`);
-
-    const targetSnapshots = [await captureStructureSnapshot(ctx, "target", "time_entry", current)];
-    if (refs.projectId) {
-      const parent = await ctx.clockify.getProject(refs.projectId);
-      if (!parent) return { clarify: "The selected project no longer exists. Refresh and try again." };
-      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "project", parent));
-    }
-    if (refs.taskId && refs.projectId) {
-      const parent = await ctx.clockify.getTask(refs.projectId, refs.taskId);
-      if (!parent) return { clarify: "The selected task no longer exists. Refresh and try again." };
-      targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "task", parent, { projectId: refs.projectId }));
-    }
-    const normalized = {
-      id: args.id,
-      description: args.description,
-      projectId: refs.projectId,
-      taskId: refs.taskId,
-      tagIds: tags.tagIds,
-      billable: args.billable,
-    };
-    const body = await ctx.clockify.prepareTimeEntryUpdate(normalized);
-    return {
-      actionLabel: "Update time entry",
-      targets: [{ type: "time_entry", id: args.id }],
-      expectedChanges,
-      reversibility: "Editing replaces these fields on the existing entry; there is no automatic undo — re-edit to change them back.",
-      warnings: ["Updating a time entry changes live workspace data and can affect billing and reports."],
-      payload: { ...normalized, body },
-      targetSnapshots,
-      mutationPlan: mutationPlan([{ id: "update-time-entry", strategy: "update", fingerprint: targetSnapshots[0]!.fingerprint }]),
-    };
-  },
-  async commit(ctx, payload, operation) {
-    const p = payload as {
-      id: string;
-      description?: string;
-      projectId?: string;
-      taskId?: string;
-      tagIds?: string[];
-      billable?: boolean;
-      body: Record<string, unknown>;
-    };
-    let entry: Awaited<ReturnType<typeof ctx.clockify.getEntry>>;
-    return commitSingleDurableRiskyStep({
-      ctx,
-      operation,
-      planStepId: "update-time-entry",
-      name: "Update time entry",
-      verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
-      dispatch: async () => {
-        const result = await dispatchWithReconciliation({
-          dispatch: () => ctx.clockify.updateTimeEntryAtomic(p.id, p.body),
-          reconcile: async () => {
-            const row = await ctx.clockify.getEntry(p.id);
-            if (!row) return undefined;
-            const expected = { description: p.description, projectId: p.projectId, taskId: p.taskId, tagIds: p.tagIds, billable: p.billable };
-            return Object.entries(expected).every(([key, value]) => value === undefined || JSON.stringify((row as unknown as Record<string, unknown>)[key]) === JSON.stringify(value)) ? row : undefined;
-          },
-        });
-        entry = result.value;
-        return { externalId: result.value.id, effect: { updated: { type: "time_entry", id: p.id } }, detail: { reconciled: result.reconciled } };
-      },
-      success: () => successReceipt({
-        action: "clockify_fix_entry",
-        entity: "time_entry",
-        ids: { workspaceId: ctx.workspaceId },
-        changed: { updated: [{ type: "time_entry", id: p.id, name: entry?.description }] },
-      }),
-    });
-  },
+  schema: entriesUpdateGenericSchema,
+  preview: (ctx, args) => previewEntriesUpdate(ctx, args, { boundedTags: false }),
+  commit: (ctx, payload, operation) => commitEntriesUpdate(ctx, payload, operation, "clockify_fix_entry"),
 });
 
 export const TIME_TRACKING_ACTIONS: ActionDefinition[] = [

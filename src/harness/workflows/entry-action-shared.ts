@@ -3,6 +3,7 @@ import { zNumberLike, zStringList } from "../arg-shapes.js";
 import type { ActionContext, ClarifyOption, SemanticLiteralAlias } from "../action.js";
 import { nowDate, nowIso } from "../../durations.js";
 import { TIME_ENTRY_TAG_BATCH_MAX } from "../safety-limits.js";
+import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import {
   resolveInstant,
   resolveProjectTaskRefs,
@@ -13,6 +14,7 @@ import {
 import {
   captureStructureSnapshot,
   dispatchWithReconciliation,
+  fetchStructureSnapshot,
   mutationPlan,
   reconcileCreate,
   requireFreshSnapshots,
@@ -357,4 +359,140 @@ export async function dispatchEntriesStart(
     effect: { created },
     detail: { reconciled: result.reconciled },
   };
+}
+
+const entriesUpdateFields = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
+  projectId: z.string().optional(),
+  projectName: z.string().optional(),
+  taskId: z.string().optional(),
+  taskName: z.string().optional(),
+  tagIds: boundedTagIds,
+  billable: z.boolean().optional(),
+}).strict();
+
+function refineEntriesUpdateShape(
+  args: z.infer<typeof entriesUpdateFields> & { tagNames?: string[] },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    args.description === undefined &&
+    args.projectId === undefined &&
+    args.projectName === undefined &&
+    args.taskId === undefined &&
+    args.taskName === undefined &&
+    args.tagIds === undefined &&
+    args.tagNames === undefined &&
+    args.billable === undefined
+  ) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Provide at least one field to change." });
+  }
+}
+
+export const entriesUpdateSchema = entriesUpdateFields.superRefine(refineEntriesUpdateShape);
+
+export const entriesUpdateGenericSchema = entriesUpdateFields.extend({
+  tagNames: zStringList(z.array(z.string())).optional(),
+}).strict().superRefine(refineEntriesUpdateShape);
+
+type EntriesUpdateArgs = z.infer<typeof entriesUpdateSchema>;
+type EntriesUpdateGenericArgs = z.infer<typeof entriesUpdateGenericSchema>;
+
+async function resolveUpdateTags(
+  ctx: ActionContext,
+  args: EntriesUpdateGenericArgs,
+  bounded: boolean,
+) {
+  return bounded
+    ? resolveBoundedEntryTags(ctx, args.tagIds)
+    : resolveEntryTagsUnbounded(ctx, args);
+}
+
+export async function previewEntriesUpdate(
+  ctx: ActionContext,
+  args: EntriesUpdateGenericArgs,
+  options?: { boundedTags?: boolean },
+) {
+  const current = await ctx.clockify.getEntry(args.id);
+  if (!current) return { clarify: "The requested time entry does not exist. Provide a current entry id." };
+  const refs = await resolveEntryProjectTask(ctx, args, "move the entry to");
+  if (!refs.ok) return refs.clarify;
+  const tags = await resolveUpdateTags(ctx, args, options?.boundedTags ?? true);
+  if (!tags.ok) return { clarify: tags.message, options: tags.options };
+
+  const expectedChanges: string[] = [];
+  if (args.description !== undefined) expectedChanges.push(`Description → "${args.description}"`);
+  if (refs.projectId !== undefined) expectedChanges.push(`Project → ${refs.projectName ?? refs.projectId}`);
+  if (refs.taskId !== undefined) expectedChanges.push(`Task → ${refs.taskName ?? refs.taskId}`);
+  if (tags.tagIds !== undefined) expectedChanges.push(`Tags → ${tags.tagIds.length} tag(s)`);
+  if (args.billable !== undefined) expectedChanges.push(`Billable → ${args.billable ? "billable" : "non-billable"}`);
+
+  const targetSnapshots = [await captureStructureSnapshot(ctx, "target", "time_entry", current)];
+  if (refs.projectId) {
+    const parent = await ctx.clockify.getProject(refs.projectId);
+    if (!parent) return { clarify: "The selected project no longer exists. Refresh and try again." };
+    targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "project", parent));
+  }
+  if (refs.taskId && refs.projectId) {
+    const parent = await ctx.clockify.getTask(refs.projectId, refs.taskId);
+    if (!parent) return { clarify: "The selected task no longer exists. Refresh and try again." };
+    targetSnapshots.push(await captureStructureSnapshot(ctx, "parent", "task", parent, { projectId: refs.projectId }));
+  }
+  const normalized = {
+    id: args.id,
+    description: args.description,
+    projectId: refs.projectId,
+    taskId: refs.taskId,
+    tagIds: tags.tagIds,
+    billable: args.billable,
+  };
+  const body = await ctx.clockify.prepareTimeEntryUpdate(normalized);
+  return {
+    actionLabel: "Update time entry",
+    targets: [{ type: "time_entry", id: args.id }],
+    expectedChanges,
+    reversibility: "Editing replaces these fields on the existing entry; there is no automatic undo — re-edit to change them back.",
+    warnings: ["Updating a time entry changes live workspace data and can affect billing and reports."],
+    payload: { ...normalized, body },
+    targetSnapshots,
+    mutationPlan: mutationPlan([{ id: "update-time-entry", strategy: "update", fingerprint: targetSnapshots[0]!.fingerprint }]),
+  };
+}
+
+export async function commitEntriesUpdate(
+  ctx: ActionContext,
+  payload: unknown,
+  operation: Parameters<typeof commitSingleDurableRiskyStep>[0]["operation"],
+  actionName: "clockify_entries_update" | "clockify_fix_entry",
+) {
+  const p = payload as EntriesUpdateArgs & { body: Record<string, unknown> };
+  let entry: Awaited<ReturnType<typeof ctx.clockify.getEntry>>;
+  return commitSingleDurableRiskyStep({
+    ctx,
+    operation,
+    planStepId: "update-time-entry",
+    name: "Update time entry",
+    verification: { snapshots: operation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
+    dispatch: async () => {
+      const result = await dispatchWithReconciliation({
+        dispatch: () => ctx.clockify.updateTimeEntryAtomic(p.id, p.body),
+        reconcile: async () => {
+          const row = await ctx.clockify.getEntry(p.id);
+          if (!row) return undefined;
+          const expected = { description: p.description, projectId: p.projectId, taskId: p.taskId, tagIds: p.tagIds, billable: p.billable };
+          return Object.entries(expected).every(([key, value]) =>
+            value === undefined || JSON.stringify((row as unknown as Record<string, unknown>)[key]) === JSON.stringify(value)) ? row : undefined;
+        },
+      });
+      entry = result.value;
+      return { externalId: result.value.id, effect: { updated: { type: "time_entry", id: p.id } }, detail: { reconciled: result.reconciled } };
+    },
+    success: () => successReceipt({
+      action: actionName,
+      entity: "time_entry",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: [{ type: "time_entry", id: p.id, name: entry?.description }] },
+    }),
+  });
 }

@@ -118,9 +118,12 @@ export const SETUP_PROJECT_RATE_BATCH_MAX = deriveMaximumBatchSize(
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
 /** Keep public schemas and authority metadata on the same cold-request bound. */
-export const MARK_INVOICED_ENTRY_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => 2 * count + 2,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+export const MARK_INVOICED_ENTRY_BATCH_MAX = Math.min(
+  21,
+  deriveMaximumBatchSize(
+    (count) => 2 * count + 2,
+    CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+  ),
 );
 export const INVOICE_IMPORT_PROJECT_BATCH_MAX = deriveMaximumBatchSize(
   (count) => count + 3,
