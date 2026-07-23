@@ -32,7 +32,8 @@ here; this file is the execution map.
 - T06-TASKS CLOSED at `7b96f12fce1394a96f08eca79672d9021a14451d`: atomic task API actions (`delete_completed`/`deleteTask`, `status_update`/`assignees_replace`/closed `update`/`updateTask`, bounded `create`/`createTask`, hourly `setTaskHourlyRate`, cost `setTaskCostRate`). v1 `clockify_tasks_delete` and `clockify_tasks_rate_update` stay internal.
 - T06-CLIENTS CLOSED at `9880859`: atomic client API actions (`create_base`/`createClient`, closed `update`/`archive`/`updateClient`, `delete_archived`/`deleteClient`). v1 `clockify_clients_create` and `clockify_clients_delete` stay internal composites.
 - T06-TAGS CLOSED at `e87a255`: all five tag operations (`getTags`/`getTag`/`createNewTag`/`updateTag`/`deleteTag`) were already `apiExposure: "api"` with closed schemas and addon+api_key availability — verified, no split file.
-- T06-INVOICE CLOSED: atomic invoice reads/export; embedded items (no items GET); `create_base`; split `fields_update`/`status_update`; one-item add/delete; atomic payments; bounded `import_time`. Composites `clockify_invoices_create`/`update` stay internal. `MODEL_API` = 113; `ACTION_CATALOG` = 163. Live: `live_not_run_missing_credentials`. Next: `T06-EXPENSES`.
+- T06-INVOICE CLOSED: atomic invoice reads/export; embedded items (no items GET); `create_base`; split `fields_update`/`status_update`; one-item add/delete; atomic payments; bounded `import_time`. Composites `clockify_invoices_create`/`update` stay internal. Next: `T06-EXPENSES` category splits.
+- T06-EXPENSES RECORDS CLOSED: atomic expense list/get/create/update/delete plus categories list/create on MODEL_API (`workflows/expenses.ts`). Counts unchanged: `MODEL_API` 113; `ACTION_CATALOG` 163. Live: `live_not_run_missing_credentials`.
 
 ## Non-negotiable invariants
 
