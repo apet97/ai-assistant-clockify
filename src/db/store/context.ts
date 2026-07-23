@@ -384,6 +384,9 @@ export interface EraseCounts {
   idempotencyKeys: number;
   turnRunResultLinks: number;
   chatMessageResultLinks: number;
+  assistantRunResultLinks: number;
+  assistantRunRequestLinks: number;
+  assistantRuns: number;
 }
 
 export type { InstallationAttestationRecord };

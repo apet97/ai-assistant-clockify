@@ -59,6 +59,7 @@ import {
   type RetentionRunMetric,
 } from "./store/retention.js";
 import { buildTurnRunStore } from "./store/turn-runs.js";
+import { buildAssistantRunStore } from "./store/runs.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import {
@@ -551,6 +552,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
+    ...buildAssistantRunStore(ctx),
     ...buildIntentCapabilityStore(ctx),
     ...operationRunStore,
     startUndoOperation(id, input) {

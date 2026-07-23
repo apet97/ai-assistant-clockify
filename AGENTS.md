@@ -50,6 +50,7 @@ here; this file is the execution map.
 - **T07-A CLOSED:** deterministic discovery index/search (`src/assistant-v2/discovery/`); NFKC tokenization, weights 40/30/20/10, trigram ≥0.34, auth pre-filter + notice, cap 12. Gate: 36 focused tests green. Next: `T07-B`.
 - **T07-B CLOSED:** bounded dynamic discovery seam — meta-tool only at init, loaded-tool validation, startup index injection; max 12 API tools + discovery. Gate: `npm run verify` green. Next: `T08-B`.
 - **T08-A CLOSED:** v2 budgets/protocol/state/prompt contracts; shared 24,000-byte tool-result cap; model-client native-tool preflight/accounting. Gate: budgets/state/cap/model-client/agent-loop tests green. Next: `T08-B`.
+- **T08-B CLOSED:** schema v9 (`assistant_runs`, request/result links, scoped FKs, one active run/session); `src/db/store/runs.ts`; retention/erasure/restore wiring. Gate: v2-runner-persistence + migration/retention/tombstone tests green. Next: `T08-C`.
 
 ## Non-negotiable invariants
 

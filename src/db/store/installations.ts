@@ -280,6 +280,13 @@ export function buildInstallationStore(ctx: StoreContext): {
       const chatMessageResultLinks = del(
         "DELETE FROM chat_message_result_links WHERE message_id IN (SELECT id FROM chat_messages WHERE workspace_id = ?)",
       );
+      const assistantRunResultLinks = del(
+        "DELETE FROM assistant_run_result_links WHERE session_id IN (SELECT session_id FROM assistant_runs WHERE workspace_id = ?)",
+      );
+      const assistantRunRequestLinks = del(
+        "DELETE FROM assistant_run_request_links WHERE workspace_id = ?",
+      );
+      const assistantRuns = del("DELETE FROM assistant_runs WHERE workspace_id = ?");
       const turnRunResultLinks = del(
         "DELETE FROM turn_run_result_links WHERE session_id IN (SELECT session_id FROM turn_runs WHERE workspace_id = ?)",
       );
@@ -318,6 +325,9 @@ export function buildInstallationStore(ctx: StoreContext): {
         idempotencyKeys,
         turnRunResultLinks,
         chatMessageResultLinks,
+        assistantRunResultLinks,
+        assistantRunRequestLinks,
+        assistantRuns,
       };
     });
     const erased = run();

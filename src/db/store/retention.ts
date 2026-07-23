@@ -23,6 +23,7 @@ export interface PruneCounts {
   intentCapabilities: number;
   actionResults: number;
   turnRuns: number;
+  assistantRuns: number;
   chatSessions: number;
   retentionRuns: number;
   expiredConfirmations: number;
@@ -68,6 +69,7 @@ type PruneTable =
   | "intentCapabilities"
   | "actionResults"
   | "turnRuns"
+  | "assistantRuns"
   | "chatSessions"
   | "retentionRuns";
 
@@ -130,6 +132,7 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
       AND NOT EXISTS (SELECT 1 FROM intent_capability_usage WHERE capability_id = intent_capabilities.id)`)],
   },
   { table: "turnRuns", cutoff: "iso", sqls: [batched("turn_runs", "updated_at < ?")] },
+  { table: "assistantRuns", cutoff: "iso", sqls: [batched("assistant_runs", "updated_at < ?")] },
   {
     table: "actionResults",
     cutoff: "iso",
@@ -192,6 +195,7 @@ export function buildRetentionStore(
         intentCapabilities: operationCutoff,
         actionResults: isoCutoff(chatAuditRetentionMs),
         turnRuns: isoCutoff(chatAuditRetentionMs),
+        assistantRuns: isoCutoff(chatAuditRetentionMs),
         chatSessions: nowIsoArg,
         retentionRuns: isoCutoff(chatAuditRetentionMs),
       };
@@ -208,6 +212,7 @@ export function buildRetentionStore(
         intentCapabilities: 0,
         actionResults: 0,
         turnRuns: 0,
+        assistantRuns: 0,
         chatSessions: 0,
         retentionRuns: 0,
       };

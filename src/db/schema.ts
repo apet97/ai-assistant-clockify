@@ -233,7 +233,113 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON retention_runs(recorded_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 8;
+const CREATE_ASSISTANT_RUNS = `CREATE TABLE IF NOT EXISTS assistant_runs (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  admin_user_id TEXT NOT NULL,
+  installation_generation INTEGER NOT NULL CHECK (installation_generation >= 0),
+  auth_class TEXT NOT NULL CHECK (auth_class IN ('addon', 'api_key')),
+  original_request TEXT NOT NULL
+    CHECK (length(CAST(original_request AS BLOB)) <= 16000),
+  request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+  phase TEXT NOT NULL CHECK (phase IN (
+    'model', 'discovering', 'executing_reads', 'preparing_writes',
+    'awaiting_confirmation', 'awaiting_clarification', 'completed', 'failed'
+  )),
+  registry_id TEXT NOT NULL CHECK (registry_id = 'v2-api'),
+  catalog_hash TEXT NOT NULL CHECK (length(catalog_hash) = 64),
+  loaded_tool_names_json TEXT NOT NULL
+    CHECK (json_valid(loaded_tool_names_json)
+      AND length(CAST(loaded_tool_names_json AS BLOB)) <= 8192),
+  used_tool_names_json TEXT NOT NULL
+    CHECK (json_valid(used_tool_names_json)
+      AND length(CAST(used_tool_names_json AS BLOB)) <= 8192),
+  continuation_json TEXT NOT NULL
+    CHECK (json_valid(continuation_json)
+      AND length(CAST(continuation_json AS BLOB)) <= 65536),
+  budget_json TEXT NOT NULL
+    CHECK (json_valid(budget_json)
+      AND length(CAST(budget_json AS BLOB)) <= 4096),
+  unfinished_operations_json TEXT NOT NULL
+    CHECK (json_valid(unfinished_operations_json)
+      AND length(CAST(unfinished_operations_json AS BLOB)) <= 16384),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, run_id),
+  UNIQUE (session_id, run_id, workspace_id, admin_user_id),
+  FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+    REFERENCES turn_runs(session_id, request_id, workspace_id, admin_user_id)
+    ON DELETE CASCADE
+)`;
+
+const SCHEMA_V9_STATEMENTS: readonly string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_turn_runs_request_scope
+    ON turn_runs(session_id, request_id, workspace_id, admin_user_id)`,
+  CREATE_ASSISTANT_RUNS,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_scope_updated
+    ON assistant_runs(
+      workspace_id, admin_user_id, session_id,
+      installation_generation, auth_class, updated_at DESC
+    )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_phase_updated
+    ON assistant_runs(phase, updated_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_runs_one_active_per_session
+    ON assistant_runs(session_id)
+    WHERE phase NOT IN ('completed', 'failed')`,
+  `CREATE TABLE IF NOT EXISTS assistant_run_request_links (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('initial', 'free_text_continuation')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, request_id),
+    CHECK (
+      (kind = 'initial' AND request_id = run_id)
+      OR (kind = 'free_text_continuation' AND request_id <> run_id)
+    ),
+    FOREIGN KEY (session_id, request_id, workspace_id, admin_user_id)
+      REFERENCES turn_runs(session_id, request_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_run_request_links_run
+    ON assistant_run_request_links(
+      workspace_id, admin_user_id, session_id, run_id, created_at
+    )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_results_id_scope
+    ON action_results(id, session_id, workspace_id, admin_user_id)`,
+  `CREATE TABLE IF NOT EXISTS assistant_run_result_links (
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL
+      CHECK (length(CAST(tool_call_id AS BLOB)) BETWEEN 1 AND 256),
+    action_name TEXT NOT NULL
+      CHECK (length(CAST(action_name AS BLOB)) BETWEEN 1 AND 256),
+    action_result_id TEXT NOT NULL,
+    PRIMARY KEY (session_id, run_id, sequence),
+    UNIQUE (session_id, run_id, tool_call_id),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_run_result_links_result
+    ON assistant_run_result_links(action_result_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_prune_updated
+    ON assistant_runs(updated_at)`,
+];
+
+export const LATEST_SCHEMA_VERSION = 9;
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -403,6 +509,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 6, statements: [] },
   { version: 7, statements: [] },
   { version: 8, statements: [CREATE_LIFECYCLE_AUTHORITY_WATERMARKS] },
+  { version: 9, statements: SCHEMA_V9_STATEMENTS },
 ];
 
 export function migrate(db: Database.Database): void {
