@@ -3028,11 +3028,13 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
     materialFields: [],
   }),
   {
-    ...internalAnnotation({
+    ...apiAnnotation({
       name: "clockify_time_off_balance_update",
-      exposure: "generic",
-      reason: "The current 27-user batch maximum exceeds the 22-fact material presentation limit; Task 6 must expose a narrower balance update operation.",
-      primary: [TIME_OFF_APPROVAL_ENDPOINT.balance.update],
+      operationId: "updateBalance",
+      method: "PATCH",
+      path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}",
+      access: "write",
+      sourceModule: "time-off.ts",
       support: [
         TIME_OFF_APPROVAL_ENDPOINT.policies.list,
         TIME_OFF_APPROVAL_ENDPOINT.policies.get,
@@ -3040,6 +3042,21 @@ const TIME_OFF_APPROVAL_ANNOTATIONS: readonly ExpectedActionAnnotation[] = [
         TIME_OFF_APPROVAL_ENDPOINT.balance.get,
       ],
       availability: AVAILABLE_TO_BOTH_AUTH_CLASSES,
+      materialFields: [
+        materialField("/policyId", "Policy", "entity", true),
+        materialField("/value", "Balance change", "number", true),
+        materialField("/note", "Note", "text", false),
+        {
+          kind: "array_item",
+          containerPath: "/userIds",
+          itemPath: "/userId",
+          labelTemplate: "User {index}",
+          maxItems: 8,
+          formatterId: "entity",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+      ],
     }),
     primaryMutationCount: 1,
     compensationCount: 0,
@@ -3811,7 +3828,7 @@ describe("API action inventory normalization", () => {
       rawAdapterShapes: 126,
       unclassifiedActions: 0,
       unclassifiedAdapterShapes: 0,
-      exposures: { api: 124, composite: 24, generic: 17, local: 4 },
+      exposures: { api: 125, composite: 24, generic: 16, local: 4 },
     });
     expect(evidence.actions).toHaveLength(evidence.counts.actions);
     expect(evidence.adapterRequestShapes).toHaveLength(evidence.counts.rawAdapterShapes);

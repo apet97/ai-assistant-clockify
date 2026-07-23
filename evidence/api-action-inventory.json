@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "2a2a0efbc334a7a35ae1186bbf0bd429e548bfa02aecf1dec6f5889bcf9dbee5",
+  "catalogHash": "7d410c4511e859a0e586b238b2d0a2a1c492e21bea6a98da68a905a22b1d13c3",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -14,9 +14,9 @@
     "unclassifiedActions": 0,
     "unclassifiedAdapterShapes": 0,
     "exposures": {
-      "api": 124,
+      "api": 125,
       "composite": 24,
-      "generic": 17,
+      "generic": 16,
       "local": 4
     }
   },
@@ -11688,10 +11688,17 @@
       "kind": "risky_write",
       "featureGroup": "time_off_approvals",
       "workflowModule": "time-off.ts",
-      "actionFingerprint": "091d5724a625f92cc27a947785ee486b27cdecb001375e8f1b5ea80910ba263f",
-      "exposure": "generic",
-      "decisionReason": "The current 27-user batch maximum exceeds the 22-fact material presentation limit; Task 6 must expose a narrower balance update operation.",
-      "operation": null,
+      "actionFingerprint": "77fc3d90e3cf597cb93338964e92f34ef6c47e17a0ad69ece554ae07f8ddef04",
+      "exposure": "api",
+      "decisionReason": "One logical Clockify operation: PATCH /workspaces/{workspaceId}/time-off/balance/policy/{policyId} (updateBalance).",
+      "operation": {
+        "operationId": "updateBalance",
+        "host": "api",
+        "method": "PATCH",
+        "path": "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}",
+        "access": "write",
+        "exposure": "api"
+      },
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -11750,9 +11757,70 @@
       "boundedArgumentDictionaries": [],
       "openSchemaVerdict": "closed",
       "openSchemaDetail": null,
-      "materialFields": [],
-      "normalizedOperationMaterialContract": [],
-      "presentation": null,
+      "materialFields": [
+        {
+          "kind": "value",
+          "path": "/policyId",
+          "label": "Policy",
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/value",
+          "label": "Balance change",
+          "formatterId": "number",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        },
+        {
+          "kind": "value",
+          "path": "/note",
+          "label": "Note",
+          "formatterId": "text",
+          "formatterVersion": 1,
+          "requiredInPreview": false
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "labelTemplate": "User {index}",
+          "maxItems": 8,
+          "formatterId": "entity",
+          "formatterVersion": 1,
+          "requiredInPreview": true
+        }
+      ],
+      "normalizedOperationMaterialContract": [
+        {
+          "kind": "value",
+          "path": "/policyId",
+          "scalarType": "string"
+        },
+        {
+          "kind": "value",
+          "path": "/value",
+          "scalarType": "number"
+        },
+        {
+          "kind": "value",
+          "path": "/note",
+          "scalarType": "string"
+        },
+        {
+          "kind": "array_item",
+          "containerPath": "/userIds",
+          "itemPath": "/userId",
+          "maxItems": 8,
+          "scalarType": "string"
+        }
+      ],
+      "presentation": {
+        "presenterId": "clockify_time_off_balance_update",
+        "version": 1
+      },
       "requiredArguments": [
         "policyId",
         "userIds",
@@ -18769,10 +18837,10 @@
           "pagination": "none"
         }
       ],
-      "mappedModelActionNames": [],
-      "internalSupportConsumers": [
+      "mappedModelActionNames": [
         "clockify_time_off_balance_update"
       ],
+      "internalSupportConsumers": [],
       "availabilityByAuthClass": {
         "addon": {
           "available": true
@@ -18781,8 +18849,8 @@
           "available": true
         }
       },
-      "decision": "internal_support",
-      "decisionReason": "Used only by support reads or by a composite, generic, or otherwise internal action."
+      "decision": "model_api",
+      "decisionReason": "At least one atomic API action binds this raw shape as its reviewed primary endpoint."
     },
     {
       "key": "read\u0000api\u0000GET\u0000/workspaces/{workspaceId}/time-off/balance/user/{userId}\u0000time-off.ts",

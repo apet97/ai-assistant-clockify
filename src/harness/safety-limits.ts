@@ -111,6 +111,8 @@ export const HOLIDAY_SCOPE_GROUP_BATCH_MAX = 8;
 /** Policy scope arrays share the holiday 22-fact material presentation cap. */
 export const TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX = 8;
 export const TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX = 8;
+/** One PATCH accepts the exact userIds array; cap matches material facts. */
+export const TIME_OFF_BALANCE_USER_MATERIAL_MAX = 8;
 /** Webhook triggerSource entries must fit the 22-fact preview ceiling with scalar fields. */
 export const WEBHOOK_TRIGGER_SOURCE_BATCH_MAX = 17;
 export const ONBOARD_GROUP_BATCH_MAX = deriveMaximumBatchSize(
@@ -144,9 +146,12 @@ export const SETUP_TASK_ASSIGNEE_BATCH_MAX = deriveMaximumBatchSize(
   (count) => 3 * count + 11,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
-export const TIME_OFF_BALANCE_USER_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => 2 * count + 3,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+export const TIME_OFF_BALANCE_USER_BATCH_MAX = Math.min(
+  TIME_OFF_BALANCE_USER_MATERIAL_MAX,
+  deriveMaximumBatchSize(
+    (count) => 2 * count + 3,
+    CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+  ),
 );
 export const APPROVAL_PENDING_BATCH_MAX = deriveMaximumBatchSize(
   estimateApprovePendingBatchHostCalls,

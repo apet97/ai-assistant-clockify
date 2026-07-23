@@ -415,15 +415,33 @@ export const TIME_OFF_API_METADATA = Object.freeze({
     support: [timeOffEndpoint.usersList],
     materialFields: [],
   }),
-  clockify_time_off_balance_update: timeOffInternalMetadata({
-    exposure: "generic",
-    reason: "The current 27-user batch maximum exceeds the 22-fact material presentation limit; Task 6 must expose a narrower balance update operation.",
-    primary: [timeOffEndpoint.balanceUpdate],
+  clockify_time_off_balance_update: timeOffApiMetadata({
+    actionName: "clockify_time_off_balance_update",
+    operationId: "updateBalance",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}",
+    access: "write",
+    primary: timeOffEndpoint.balanceUpdate,
     support: [
       timeOffEndpoint.policiesList,
       timeOffEndpoint.policiesGet,
       timeOffEndpoint.usersList,
       timeOffEndpoint.balanceGet,
+    ],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/value", "Balance change", "number", true),
+      timeOffMaterialField("/note", "Note", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_BALANCE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
     ],
   }),
 } satisfies Readonly<Record<TimeOffActionName, ApiActionMetadataCarrier>>);

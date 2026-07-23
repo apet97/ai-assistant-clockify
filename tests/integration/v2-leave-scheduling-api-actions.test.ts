@@ -6,6 +6,8 @@ import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import {
+  TIME_OFF_BALANCE_USER_BATCH_MAX,
+  TIME_OFF_BALANCE_USER_MATERIAL_MAX,
   TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
   TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
 } from "../../src/harness/safety-limits.js";
@@ -114,5 +116,20 @@ describe("v2 time off request API actions", () => {
     const receipt = await commitConfirmedOperation(makeContext(fake), preview.operation);
     expect(receipt.ok).toBe(true);
     if (receipt.ok) expect(receipt.action).toBe("clockify_time_off_requests_create_days");
+  });
+});
+
+describe("v2 time off balance API actions", () => {
+  it("exposes bounded balance read/update on MODEL_API", () => {
+    const modelNames = new Set(MODEL_API_ACTION_CATALOG.actions.map((action) => action.name));
+    expect(modelNames.has("clockify_time_off_balance_get")).toBe(true);
+    expect(modelNames.has("clockify_time_off_balance_update")).toBe(true);
+    const update = getAction("clockify_time_off_balance_update");
+    const userIdsField = update?.materialFields?.find(
+      (field): field is Extract<typeof field, { kind: "array_item" }> =>
+        field.kind === "array_item" && field.containerPath === "/userIds",
+    );
+    expect(userIdsField?.maxItems).toBe(TIME_OFF_BALANCE_USER_BATCH_MAX);
+    expect(TIME_OFF_BALANCE_USER_BATCH_MAX).toBeLessThanOrEqual(TIME_OFF_BALANCE_USER_MATERIAL_MAX);
   });
 });
