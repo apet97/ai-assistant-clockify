@@ -76,6 +76,7 @@ here; this file is the execution map.
 
 - **T12-E CLOSED:** expense/custom-field write parity. Live: `not_run`. Next: `T12-F`.
 ## Non-negotiable invariants
+- **T12-F CLOSED:** user/group write parity matrix. Live: `not_run`. Next: `T12-G`.
 
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) governs the v2 rewrite. V2 coexists
   under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` will be the sole rewrite

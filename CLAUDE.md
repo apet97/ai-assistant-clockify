@@ -73,6 +73,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 
 - **T12-E CLOSED:** expense and custom-field write parity; archived category delete fixture seeds `archived: true`. Gate: expenses write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-F`.
 ## Start here
+- **T12-F CLOSED:** user/group write parity matrix. Gate: users write matrix + preview-first + inventory green. Live: `live_not_run_missing_credentials`. Next: `T12-G`.
 
 - Product behavior and local setup: `README.md`.
 - Code changes: read "Safety & planner invariants", then the relevant entry in
