@@ -165,6 +165,7 @@ describe("Phase 6 write authority enforcement", () => {
       "clockify_tasks_create",
       "clockify_clients_create",
       "clockify_clients_create_base",
+      "clockify_invoices_create_base",
       "clockify_tags_create",
       "clockify_holidays_create",
       "clockify_scheduling_assignments_create",

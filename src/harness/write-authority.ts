@@ -153,9 +153,12 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_invoices_create: repeated(INVOICE_CREATE_MUTATION_STEP_MAX, "items[]", [
     plan("curated", step("create-invoice"), step("enrich-invoice", "primary", 0, 1), step("add-invoice-item-*", "primary", 0, INVOICE_ITEM_BATCH_MAX)),
   ], { derivedIds: ["operation.clientId", "operation.base.clientId", "operation.items[].itemType", "operation.items[].itemTypeId"], defaults: ["operation.number", "operation.base.number", "operation.issuedDate", "operation.base.issuedDate", "operation.dueDate", "operation.base.dueDate", "operation.currency", "operation.base.currency", "operation.items[].description", "operation.items[].quantity", "operation.items[].amountUnit", "operation.items[].applyTaxes"] }, INVOICE_ITEM_BATCH_MAX),
+  clockify_invoices_create_base: single("create-invoice-base", { derivedIds: ["operation.base.clientId"], defaults: ["operation.base.number", "operation.base.issuedDate", "operation.base.dueDate", "operation.base.currency"] }),
   clockify_invoices_update: fixed(2, [
     plan("curated", step("update-invoice-fields", "primary", 0, 1), step("update-invoice-status", "primary", 0, 1)),
   ], { derivedIds: ["operation.invoiceId", "operation.id", "operation.clientId", "operation.patch.clientId", "operation.updateBody.clientId"] }),
+  clockify_invoices_fields_update: single("update-invoice-fields", { derivedIds: ["operation.id", "operation.clientId", "operation.patch.clientId", "operation.updateBody.clientId"] }),
+  clockify_invoices_status_update: single("update-invoice-status", { derivedIds: ["operation.id"] }),
   clockify_invoices_delete: single("delete-invoice", { derivedIds: ["operation.invoiceId", "operation.id"] }),
   clockify_invoices_items_add: single("add-invoice-item", { derivedIds: ["operation.invoiceId", "operation.itemTypeId"], defaults: ["operation.unitPriceUnit"] }),
   clockify_invoices_items_delete: single("delete-invoice-item", { derivedIds: ["operation.invoiceId"] }),
@@ -482,6 +485,18 @@ const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
     "\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b",
     "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b",
   ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
+
+  clockify_invoices_create_base: authoredIntent([
+    "\\b(?:create|make|issue)(?:\\s+(?:a|the|new|one))?\\s+invoice\\b",
+  ], [
+    boundObligation(["clientName", "clientId"], [
+      `\\b(?:for|to)\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|number|dated|due)\\b|[,.;!?]|$)`,
+      `\\b(?:client|customer)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|number|dated|due)\\b|[,.;!?]|$)`,
+    ]),
+  ], [
+    "\\b(?:note|subject|tax|discount|line\\s+item|items?)\\b",
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:item|payment|import)\\b",
+  ], ["issuedDate", "dueDate", "currency", "number"], ["\\b(?:creating|making|issuing)(?:\\s+(?:a|the|new|one))?\\s+invoice\\b"]),
 
   clockify_tags_create: authoredIntent([
     "\\b(?:(?:create|make)(?:\\s+(?:a\\s+new|a|the|new|one))?|add\\s+(?:a\\s+new|a|the|new|one))\\s+(?:tag|label)\\b",
