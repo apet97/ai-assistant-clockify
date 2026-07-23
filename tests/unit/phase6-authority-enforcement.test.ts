@@ -310,6 +310,8 @@ describe("Phase 6 write authority enforcement", () => {
       availabilityByAuthClass: action.availabilityByAuthClass ?? null,
       boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
       materialFields: action.materialFields ?? [],
+      normalizedOperationMaterialContract:
+        action.normalizedOperationMaterialContract ?? [],
       presentation: action.presentation ?? null,
     })).digest("hex");
     expect(actionFingerprint(action.name)).toBe(expected);

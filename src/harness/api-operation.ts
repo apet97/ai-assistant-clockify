@@ -70,6 +70,29 @@ export type MaterialFieldMetadata =
       requiredInPreview: boolean;
     };
 
+export type MaterialScalarType = "string" | "number" | "boolean" | "null";
+
+export type NormalizedOperationMaterialContractEntry =
+  | {
+      kind: "value";
+      path: string;
+      scalarType: MaterialScalarType;
+    }
+  | {
+      kind: "array_item";
+      containerPath: string;
+      itemPath: string;
+      maxItems: number;
+      scalarType: MaterialScalarType;
+    }
+  | {
+      kind: "dictionary_entry";
+      containerPath: string;
+      valuePath: string;
+      maxEntries: number;
+      scalarType: MaterialScalarType;
+    };
+
 export interface ActionPresentationMetadata {
   presenterId: string;
   version: number;
@@ -84,15 +107,66 @@ export interface ApiActionMetadataCarrier {
   availabilityByAuthClass: AvailabilityByAuthClass;
   boundedArgumentDictionaries?: readonly BoundedDictionaryMetadata[];
   materialFields?: readonly MaterialFieldMetadata[];
+  normalizedOperationMaterialContract?: readonly NormalizedOperationMaterialContractEntry[];
   presentation?: ActionPresentationMetadata;
 }
 
 export type ActionRegistryId = "v1-internal" | "v2-api" | "v2-local";
 
+export function materialScalarTypeForFormatter(formatterId: string): MaterialScalarType {
+  switch (formatterId) {
+    case "text":
+    case "entity":
+      return "string";
+    case "number":
+    case "money-minor":
+      return "number";
+    case "boolean":
+      return "boolean";
+    default:
+      throw new Error(`unknown_material_formatter:${formatterId}`);
+  }
+}
+
+export function normalizedOperationMaterialContractFor(
+  fields: readonly MaterialFieldMetadata[],
+): readonly NormalizedOperationMaterialContractEntry[] {
+  return Object.freeze(fields.map((field): NormalizedOperationMaterialContractEntry => {
+    const scalarType = materialScalarTypeForFormatter(field.formatterId);
+    switch (field.kind) {
+      case "value":
+        return Object.freeze({ kind: field.kind, path: field.path, scalarType });
+      case "array_item":
+        return Object.freeze({
+          kind: field.kind,
+          containerPath: field.containerPath,
+          itemPath: field.itemPath,
+          maxItems: field.maxItems,
+          scalarType,
+        });
+      case "dictionary_entry":
+        return Object.freeze({
+          kind: field.kind,
+          containerPath: field.containerPath,
+          valuePath: field.valuePath,
+          maxEntries: field.maxEntries,
+          scalarType,
+        });
+    }
+  }));
+}
+
 /** Copy required metadata and only explicitly supplied exposure-specific fields. */
 export function apiActionMetadataFields(
   source: ApiActionMetadataCarrier,
 ): ApiActionMetadataCarrier {
+  const normalizedOperationMaterialContract =
+    source.normalizedOperationMaterialContract
+    ?? (source.apiExposure === "api"
+      && source.apiOperation?.access === "write"
+      && source.materialFields
+      ? normalizedOperationMaterialContractFor(source.materialFields)
+      : undefined);
   return {
     apiExposure: source.apiExposure,
     availabilityByAuthClass: source.availabilityByAuthClass,
@@ -107,6 +181,9 @@ export function apiActionMetadataFields(
       ? {}
       : { boundedArgumentDictionaries: source.boundedArgumentDictionaries }),
     ...(source.materialFields === undefined ? {} : { materialFields: source.materialFields }),
+    ...(normalizedOperationMaterialContract === undefined
+      ? {}
+      : { normalizedOperationMaterialContract }),
     ...(source.presentation === undefined ? {} : { presentation: source.presentation }),
   };
 }

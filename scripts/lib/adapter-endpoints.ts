@@ -12,7 +12,7 @@ import type {
 export const OFFICIAL_OPENAPI_SOURCE = Object.freeze({
   version: "v1",
   sha256: "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
-  corroborationPath: "../clockify-ts-sdk/spec/official/clockify.official.openapi.yaml",
+  corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
 });
 
 export interface CanonicalOpenApiOperation {
@@ -129,6 +129,7 @@ export interface AdapterEndpoint {
   rawPath: string;
   sourceModule: string;
   sourceLine: number;
+  sourceColumn: number;
   pagination: AdapterEndpointPagination;
 }
 
@@ -250,6 +251,7 @@ export function adapterEndpointKey(endpoint: AdapterEndpoint): string {
   return [
     adapterRequestShapeKey(endpoint),
     endpoint.sourceLine,
+    endpoint.sourceColumn,
     endpoint.pagination,
   ].join("\u0000");
 }
@@ -260,8 +262,8 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
   assertNoEscapedRestCoreCallsites(repositoryRoot, clockifyRoot, restRoot);
 
   const extracted: AdapterEndpoint[] = [];
-  for (const filename of readdirSync(restRoot).filter((name) => name.endsWith(".ts")).sort()) {
-    const absolutePath = resolve(restRoot, filename);
+  for (const absolutePath of typescriptFiles(restRoot).sort()) {
+    const sourceModule = relative(restRoot, absolutePath);
     const source = ts.createSourceFile(
       absolutePath,
       readFileSync(absolutePath, "utf8"),
@@ -273,6 +275,7 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
       if (isRestCoreCall(node, source)) {
         const operation = node.expression.name.text;
         const direct = operation === "call" || operation === "mutate";
+        const sourcePosition = source.getLineAndCharacterOfPosition(node.getStart(source));
         const host = stringArgument(node.arguments[0], source, "host");
         const method = operation === "postQuery"
           ? "POST"
@@ -291,8 +294,9 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
           host,
           method,
           rawPath: normalizedPath(pathNode, source),
-          sourceModule: filename,
-          sourceLine: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+          sourceModule,
+          sourceLine: sourcePosition.line + 1,
+          sourceColumn: sourcePosition.character + 1,
           pagination: paginationFor(operation),
         });
       }
@@ -307,7 +311,10 @@ export function extractAdapterEndpoints(repositoryRoot: string): AdapterEndpoint
     compareText(
       `${left.sourceModule}\0${left.host}\0${left.method}\0${left.rawPath}`,
       `${right.sourceModule}\0${right.host}\0${right.method}\0${right.rawPath}`,
-    ) || left.sourceLine - right.sourceLine || compareText(left.pagination, right.pagination));
+    )
+    || left.sourceLine - right.sourceLine
+    || left.sourceColumn - right.sourceColumn
+    || compareText(left.pagination, right.pagination));
 }
 
 export function canonicalOpenApiPath(path: string): string {

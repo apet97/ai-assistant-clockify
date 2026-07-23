@@ -181,6 +181,7 @@ function fingerprintContract(action: ActionDefinition) {
     || action.availabilityByAuthClass !== undefined
     || action.boundedArgumentDictionaries !== undefined
     || action.materialFields !== undefined
+    || action.normalizedOperationMaterialContract !== undefined
     || action.presentation !== undefined;
   return {
     name: action.name,
@@ -203,6 +204,8 @@ function fingerprintContract(action: ActionDefinition) {
           availabilityByAuthClass: action.availabilityByAuthClass ?? null,
           boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
           materialFields: action.materialFields ?? [],
+          normalizedOperationMaterialContract:
+            action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
         }
       : {}),

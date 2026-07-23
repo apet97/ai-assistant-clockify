@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -23,7 +23,9 @@ function fixtureRepositoryFrom(modules: readonly FixtureModule[]): string {
   const restRoot = join(repositoryRoot, "src/clockify/rest");
   mkdirSync(restRoot, { recursive: true });
   for (const module of modules) {
-    writeFileSync(join(restRoot, module.sourceModule), module.lines.join("\n"));
+    const modulePath = join(restRoot, module.sourceModule);
+    mkdirSync(dirname(modulePath), { recursive: true });
+    writeFileSync(modulePath, module.lines.join("\n"));
   }
   return repositoryRoot;
 }
@@ -176,6 +178,25 @@ describe("raw adapter endpoint extraction", () => {
     if (!first || !second) throw new Error("duplicate fixture call sites were not extracted");
     expect(adapterEndpointKey(first)).not.toBe(adapterEndpointKey(second));
     expect(adapterRequestShapeKey(first)).toBe(adapterRequestShapeKey(second));
+  });
+
+  it("recurses into nested modules and keeps same-line calls distinct", () => {
+    const endpoints = extractAdapterEndpoints(fixtureRepositoryFrom([
+      {
+        sourceModule: "nested/rates.ts",
+        lines: [
+          "const ws = `/workspaces/${workspaceId}`;",
+          'core.call("api", "GET", `${ws}/users/${userId}/hourly-rate`); core.call("api", "GET", `${ws}/users/${userId}/cost-rate`);',
+        ],
+      },
+    ]));
+
+    expect(endpoints.map(({ sourceModule, sourceLine, rawPath }) =>
+      [sourceModule, sourceLine, rawPath])).toEqual([
+      ["nested/rates.ts", 2, "/workspaces/{workspaceId}/users/{userId}/cost-rate"],
+      ["nested/rates.ts", 2, "/workspaces/{workspaceId}/users/{userId}/hourly-rate"],
+    ]);
+    expect(new Set(endpoints.map(adapterEndpointKey))).toHaveLength(2);
   });
 
   it("classifies every RestCore pagination variant", () => {

@@ -1,4 +1,6 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { z } from "zod";
@@ -28,6 +30,7 @@ interface InventoryActionRow {
   boundedArgumentDictionaries: readonly { path: string }[];
   openSchemaVerdict: "closed" | "open" | "not_applicable";
   materialFields: readonly { kind: "value" | "array_item" | "dictionary_entry" }[];
+  normalizedOperationMaterialContract: readonly TestMaterialContractEntry[];
   presentation: { presenterId: string; version: number } | null;
   operation: {
     host: "api" | "reports" | "audit";
@@ -50,7 +53,11 @@ interface InventoryAdapterRow {
   decision: "model_api" | "internal_support" | "unavailable";
   mappedModelActionNames: readonly string[];
   internalSupportConsumers: readonly string[];
-  sourceCallSites: readonly { sourceModule: string; sourceLine: number }[];
+  sourceCallSites: readonly {
+    sourceModule: string;
+    sourceLine: number;
+    sourceColumn: number;
+  }[];
 }
 
 interface InventoryCorrelationRow {
@@ -63,6 +70,11 @@ interface ApiActionInventoryEvidence {
   schemaVersion: number;
   generatorVersion: number;
   catalogHash: string;
+  officialOpenApi: {
+    version: string;
+    sha256: string;
+    corroborationPath: string;
+  };
   counts: {
     actions: number;
     rawAdapterCallSites: number;
@@ -85,6 +97,10 @@ interface InventoryArtifacts {
 interface InventoryGeneratorModule {
   buildApiActionInventoryEvidence(repositoryRoot: string): ApiActionInventoryEvidence;
   renderApiActionInventoryArtifacts(evidence: ApiActionInventoryEvidence): InventoryArtifacts;
+  verifyOfficialOpenApiSnapshot?(
+    repositoryRoot: string,
+    operations: readonly never[],
+  ): void;
 }
 
 function isInventoryGeneratorModule(value: unknown): value is InventoryGeneratorModule {
@@ -146,6 +162,27 @@ interface AvailabilityDecision {
   reason?: "unsupported_auth_class" | "unavailable_endpoint" | "official_operation_id_missing";
 }
 
+type TestMaterialContractEntry =
+  | {
+      kind: "value";
+      path: string;
+      scalarType: "string" | "number" | "boolean" | "null";
+    }
+  | {
+      kind: "array_item";
+      containerPath: string;
+      itemPath: string;
+      maxItems: number;
+      scalarType: "string" | "number" | "boolean" | "null";
+    }
+  | {
+      kind: "dictionary_entry";
+      containerPath: string;
+      valuePath: string;
+      maxEntries: number;
+      scalarType: "string" | "number" | "boolean" | "null";
+    };
+
 interface TestApiMetadata {
   apiExposure: "api" | "composite" | "generic" | "local";
   apiExposureReason?: string;
@@ -192,6 +229,7 @@ interface TestApiMetadata {
     formatterVersion: number;
     requiredInPreview: boolean;
   })[];
+  normalizedOperationMaterialContract?: readonly TestMaterialContractEntry[];
   presentation?: { presenterId: string; version: number };
 }
 
@@ -2541,6 +2579,7 @@ function withoutApiMetadata(definition: ActionDefinition): object {
     availabilityByAuthClass: _availabilityByAuthClass,
     boundedArgumentDictionaries: _boundedArgumentDictionaries,
     materialFields: _materialFields,
+    normalizedOperationMaterialContract: _normalizedOperationMaterialContract,
     presentation: _presentation,
     ...legacyDefinition
   } = definition;
@@ -2548,6 +2587,22 @@ function withoutApiMetadata(definition: ActionDefinition): object {
 }
 
 describe("API action inventory normalization", () => {
+  it("fails closed when the repository-owned official OpenAPI snapshot is missing", async () => {
+    const generator = await loadInventoryGeneratorModule();
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "missing-official-openapi-"));
+    try {
+      const verifySnapshot = generator.verifyOfficialOpenApiSnapshot;
+      expect(verifySnapshot).toBeTypeOf("function");
+      if (!verifySnapshot) {
+        throw new Error("missing_official_openapi_verifier");
+      }
+      expect(() => verifySnapshot(repositoryRoot, []))
+        .toThrowError("official_openapi_source_missing");
+    } finally {
+      rmSync(repositoryRoot, { recursive: true, force: true });
+    }
+  });
+
   it("keeps undo as a local service outside the action-definition inventory", () => {
     expect(getAction("undo")).toBeUndefined();
     expect(ACTION_CATALOG.some((definition) => definition.name === "undo")).toBe(false);
@@ -2600,6 +2655,9 @@ describe("API action inventory normalization", () => {
         expect(definition.apiOperation).toEqual(expected.operation);
         expect(definition.apiExposureReason).toBeUndefined();
         expect(definition.materialFields).toEqual(expected.materialFields);
+        expect(definition.normalizedOperationMaterialContract ?? []).toHaveLength(
+          definition.kind === "read" ? 0 : expected.materialFields.length,
+        );
         expect(definition.presentation).toEqual(expected.presentation);
       } else {
         expect(definition.apiOperation).toBeUndefined();
@@ -2646,6 +2704,65 @@ describe("API action inventory normalization", () => {
       cardinality: { mode: "single", maxExecutions: 1 },
       mutationPlans: [{ mode: "single", minSteps: 1, maxSteps: 1 }],
     });
+  });
+
+  it("freezes a scalar normalized-operation contract for every material write field", () => {
+    expect(fixtureAction("clockify_tags_create")).toMatchObject({
+      normalizedOperationMaterialContract: [{
+        kind: "value",
+        path: "/body/name",
+        scalarType: "string",
+      }],
+    });
+  });
+
+  it("rejects a material pointer outside the frozen normalized-operation contract", async () => {
+    const registry = await loadRegistryModule();
+    expect(() => registry.normalizeRegistryAction({
+      ...fixtureAction("clockify_tags_create"),
+      ...TAG_METADATA,
+      normalizedOperationMaterialContract: [{
+        kind: "value",
+        path: "/body/name",
+        scalarType: "string",
+      }],
+      materialFields: [{
+        kind: "value",
+        path: "/definitely/not/in/the/prepared-operation",
+        label: "Invented",
+        formatterId: "text",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      }],
+    }, "v2-api")).toThrowError(
+      "undeclared_material_pointer:clockify_tags_create:/definitely/not/in/the/prepared-operation",
+    );
+  });
+
+  it("rejects incomplete or scalar-incompatible normalized-operation contracts", async () => {
+    const registry = await loadRegistryModule();
+    const definition = fixtureAction("clockify_tags_create");
+    expect(() => registry.normalizeRegistryAction({
+      ...definition,
+      ...TAG_METADATA,
+      normalizedOperationMaterialContract: [
+        { kind: "value", path: "/body/name", scalarType: "string" },
+        { kind: "value", path: "/body/color", scalarType: "string" },
+      ],
+    }, "v2-api")).toThrowError(
+      "missing_material_field:clockify_tags_create:/body/color",
+    );
+    expect(() => registry.normalizeRegistryAction({
+      ...definition,
+      ...TAG_METADATA,
+      normalizedOperationMaterialContract: [{
+        kind: "value",
+        path: "/body/name",
+        scalarType: "number",
+      }],
+    }, "v2-api")).toThrowError(
+      "material_scalar_type_mismatch:clockify_tags_create:/body/name",
+    );
   });
 
   it.each([
@@ -2713,6 +2830,81 @@ describe("API action inventory normalization", () => {
       .toThrowError("unreviewed_open_schema:clockify_tags_create:/fields");
   });
 
+  it("rejects material array maxima that differ from the strict action schema", async () => {
+    const registry = await loadRegistryModule();
+    expect(() => registry.normalizeRegistryAction({
+      ...fixtureAction("clockify_tags_create"),
+      ...TAG_METADATA,
+      schema: z.object({
+        name: z.string().min(1),
+        tagIds: z.array(z.string()).max(2),
+      }).strict(),
+      materialFields: [
+        {
+          kind: "value",
+          path: "/name",
+          label: "Name",
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+        {
+          kind: "array_item",
+          containerPath: "/tagIds",
+          itemPath: "",
+          labelTemplate: "Tag {index}",
+          maxItems: 3,
+          formatterId: "entity",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+      ],
+    }, "v2-api")).toThrowError(
+      "material_array_max_mismatch:clockify_tags_create:/tagIds",
+    );
+  });
+
+  it("rejects bounded dictionaries without an equal strict schema maximum", async () => {
+    const registry = await loadRegistryModule();
+    expect(() => registry.normalizeRegistryAction({
+      ...fixtureAction("clockify_tags_create"),
+      ...TAG_METADATA,
+      schema: z.object({
+        name: z.string().min(1),
+        attributes: z.record(z.string().regex(/^[a-z]+$/u), z.string()),
+      }).strict(),
+      boundedArgumentDictionaries: [{
+        path: "/attributes",
+        keyPattern: "^[a-z]+$",
+        maxKeyUtf8Bytes: 16,
+        maxEntries: 1,
+        valueSchemaFingerprint: "00404e686415370f1711c4d7acfa2905444d3cf23cef2e10c47d445ebe690f96",
+      }],
+      materialFields: [
+        {
+          kind: "value",
+          path: "/name",
+          label: "Name",
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+        {
+          kind: "dictionary_entry",
+          containerPath: "/attributes",
+          valuePath: "",
+          labelTemplate: "Attribute {key}",
+          maxEntries: 1,
+          formatterId: "text",
+          formatterVersion: 1,
+          requiredInPreview: true,
+        },
+      ],
+    }, "v2-api")).toThrowError(
+      "bounded_dictionary_schema_max_missing:clockify_tags_create:/attributes",
+    );
+  });
+
   it("rejects a reviewed write plan with more than one primary mutation", async () => {
     const registry = await loadRegistryModule();
     const projectDelete = fixtureAction("clockify_projects_delete");
@@ -2742,6 +2934,11 @@ describe("API action inventory normalization", () => {
         formatterId: "entity",
         formatterVersion: 1,
         requiredInPreview: true,
+      }],
+      normalizedOperationMaterialContract: [{
+        kind: "value",
+        path: "/projectId",
+        scalarType: "string",
       }],
       presentation: { presenterId: "project-delete", version: 1 },
     }, "v2-api")).toThrowError("multiple_primary_mutations:clockify_projects_delete");
@@ -2776,10 +2973,15 @@ describe("API action inventory normalization", () => {
 
     expect(evidence).toEqual(secondEvidence);
     expect(artifacts).toEqual(secondArtifacts);
-    expect(evidence.schemaVersion).toBe(1);
-    expect(evidence.generatorVersion).toBe(1);
+    expect(evidence.schemaVersion).toBe(2);
+    expect(evidence.generatorVersion).toBe(2);
     expect(evidence.catalogHash).toBe(catalogHash());
     expect(evidence.catalogHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(evidence.officialOpenApi).toEqual({
+      version: "v1",
+      sha256: "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
+      corroborationPath: "evidence/openapi/clockify.official.openapi.yaml",
+    });
     expect(evidence.counts).toEqual({
       actions: 140,
       rawAdapterCallSites: 142,
@@ -2813,6 +3015,9 @@ describe("API action inventory normalization", () => {
       if (action.exposure === "api") {
         expect(action.operation).not.toBeNull();
         expect(action.presentation).not.toBeNull();
+        expect(action.normalizedOperationMaterialContract).toHaveLength(
+          action.kind === "read" ? 0 : action.materialFields.length,
+        );
       }
     }
 
@@ -2828,6 +3033,10 @@ describe("API action inventory normalization", () => {
       (sum, row) => sum + row.sourceCallSites.length,
       0,
     )).toBe(evidence.counts.rawAdapterCallSites);
+    expect(evidence.adapterRequestShapes.every((row) =>
+      row.sourceCallSites.every((site) =>
+        Number.isSafeInteger(site.sourceColumn) && site.sourceColumn > 0)))
+      .toBe(true);
     expect(evidence.adapterRequestShapes.every((row) =>
       ["model_api", "internal_support", "unavailable"].includes(row.decision)))
       .toBe(true);

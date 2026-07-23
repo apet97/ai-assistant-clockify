@@ -16,7 +16,10 @@ import {
   type AvailabilityByAuthClass,
   type AvailabilityReason,
   type BoundedDictionaryMetadata,
+  materialScalarTypeForFormatter,
   type MaterialFieldMetadata,
+  type MaterialScalarType,
+  type NormalizedOperationMaterialContractEntry,
 } from "./api-operation.js";
 import {
   ACTION_CATALOG,
@@ -335,6 +338,7 @@ function assertClosedSchema(
   pointer: string,
   dictionaries: ReadonlyMap<string, BoundedDictionaryMetadata>,
   matchedDictionaries: Set<string>,
+  arrayMaxItems: Map<string, number | null>,
 ): void {
   if (!isObject(node)) {
     throw new Error(`unreviewed_open_schema:${actionName}:${pointer || "/"}`);
@@ -349,7 +353,14 @@ function assertClosedSchema(
     }
     const branches: unknown[] = anyOf;
     for (const branch of branches) {
-      assertClosedSchema(actionName, branch, pointer, dictionaries, matchedDictionaries);
+      assertClosedSchema(
+        actionName,
+        branch,
+        pointer,
+        dictionaries,
+        matchedDictionaries,
+        arrayMaxItems,
+      );
     }
     return;
   }
@@ -360,7 +371,14 @@ function assertClosedSchema(
     }
     const branches: unknown[] = allOf;
     for (const branch of branches) {
-      assertClosedSchema(actionName, branch, pointer, dictionaries, matchedDictionaries);
+      assertClosedSchema(
+        actionName,
+        branch,
+        pointer,
+        dictionaries,
+        matchedDictionaries,
+        arrayMaxItems,
+      );
     }
     return;
   }
@@ -384,6 +402,7 @@ function assertClosedSchema(
           childPointer(pointer, key),
           dictionaries,
           matchedDictionaries,
+          arrayMaxItems,
         );
       }
       return;
@@ -403,6 +422,13 @@ function assertClosedSchema(
       || schemaFingerprint(additional) !== dictionary.valueSchemaFingerprint) {
       throw new Error(`bounded_dictionary_schema_mismatch:${actionName}:${pointer}`);
     }
+    const schemaMaxEntries = "maxProperties" in node ? node.maxProperties : undefined;
+    if (!isPositiveInteger(schemaMaxEntries)) {
+      throw new Error(`bounded_dictionary_schema_max_missing:${actionName}:${pointer}`);
+    }
+    if (schemaMaxEntries !== dictionary.maxEntries) {
+      throw new Error(`bounded_dictionary_schema_max_mismatch:${actionName}:${pointer}`);
+    }
     matchedDictionaries.add(pointer);
     assertClosedSchema(
       actionName,
@@ -410,6 +436,7 @@ function assertClosedSchema(
       `${pointer}/*`,
       dictionaries,
       matchedDictionaries,
+      arrayMaxItems,
     );
     return;
   }
@@ -418,12 +445,15 @@ function assertClosedSchema(
     if (types.length !== 1 || !("items" in node) || !node.items) {
       throw new Error(`unreviewed_open_schema:${actionName}:${pointer || "/"}`);
     }
+    const schemaMaxItems = "maxItems" in node ? node.maxItems : undefined;
+    arrayMaxItems.set(pointer, isPositiveInteger(schemaMaxItems) ? schemaMaxItems : null);
     assertClosedSchema(
       actionName,
       node.items,
       `${pointer}/0`,
       dictionaries,
       matchedDictionaries,
+      arrayMaxItems,
     );
     return;
   }
@@ -441,7 +471,7 @@ function assertClosedSchema(
 function validateClosedWriteSchema(
   action: ActionDefinition,
   dictionaries: NormalizedDictionaries,
-): void {
+): ReadonlyMap<string, number | null> {
   if ((action.argumentOpenPaths?.length ?? 0) > 0) {
     throw new Error(`legacy_open_argument_paths:${action.name}`);
   }
@@ -450,12 +480,21 @@ function validateClosedWriteSchema(
     target: "jsonSchema7",
   });
   const matched = new Set<string>();
-  assertClosedSchema(action.name, schema, "", dictionaries.byPath, matched);
+  const arrayMaxItems = new Map<string, number | null>();
+  assertClosedSchema(
+    action.name,
+    schema,
+    "",
+    dictionaries.byPath,
+    matched,
+    arrayMaxItems,
+  );
   for (const dictionary of dictionaries.values) {
     if (!matched.has(dictionary.path)) {
       throw new Error(`unmatched_bounded_dictionary:${action.name}:${dictionary.path}`);
     }
   }
+  return arrayMaxItems;
 }
 
 export type ActionArgumentSchemaVerdict =
@@ -467,6 +506,8 @@ const OPEN_SCHEMA_ERROR_PREFIXES = [
   "legacy_open_argument_paths:",
   "unreviewed_open_schema:",
   "bounded_dictionary_schema_mismatch:",
+  "bounded_dictionary_schema_max_missing:",
+  "bounded_dictionary_schema_max_mismatch:",
   "unmatched_bounded_dictionary:",
 ] as const;
 
@@ -502,11 +543,176 @@ function validateFormatter(
   }
 }
 
+const MATERIAL_SCALAR_TYPES: readonly MaterialScalarType[] = [
+  "string",
+  "number",
+  "boolean",
+  "null",
+];
+
+function isMaterialScalarType(value: unknown): value is MaterialScalarType {
+  return typeof value === "string"
+    && MATERIAL_SCALAR_TYPES.some((candidate) => candidate === value);
+}
+
+function hasExactKeys(value: object, keys: readonly string[]): boolean {
+  const actual = Object.keys(value);
+  return actual.length === keys.length && actual.every((key) => keys.includes(key));
+}
+
+function materialContractIdentity(
+  field: MaterialFieldMetadata | NormalizedOperationMaterialContractEntry,
+): string {
+  switch (field.kind) {
+    case "value":
+      return `${field.kind}\0${field.path}`;
+    case "array_item":
+      return `${field.kind}\0${field.containerPath}\0${field.itemPath}`;
+    case "dictionary_entry":
+      return `${field.kind}\0${field.containerPath}\0${field.valuePath}`;
+  }
+}
+
+function materialContractPointer(
+  field: MaterialFieldMetadata | NormalizedOperationMaterialContractEntry,
+): string {
+  switch (field.kind) {
+    case "value":
+      return field.path;
+    case "array_item":
+      return `${field.containerPath}${field.itemPath}`;
+    case "dictionary_entry":
+      return `${field.containerPath}${field.valuePath}`;
+  }
+}
+
+function normalizeMaterialContract(
+  actionName: string,
+  value: unknown,
+  required: boolean,
+): readonly NormalizedOperationMaterialContractEntry[] | undefined {
+  if (value === undefined) {
+    if (required) throw new Error(`missing_normalized_operation_material_contract:${actionName}`);
+    return undefined;
+  }
+  if (!Array.isArray(value) || (required && value.length === 0)) {
+    throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+  }
+
+  const normalized: NormalizedOperationMaterialContractEntry[] = [];
+  const identities = new Set<string>();
+  for (const rawField of value) {
+    if (!isObject(rawField) || !("kind" in rawField) || !("scalarType" in rawField)
+      || !isMaterialScalarType(rawField.scalarType)) {
+      throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+    }
+    let field: NormalizedOperationMaterialContractEntry;
+    if (rawField.kind === "value") {
+      if (!hasExactKeys(rawField, ["kind", "path", "scalarType"])
+        || !("path" in rawField) || !isRfc6901Pointer(rawField.path)) {
+        throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+      }
+      field = Object.freeze({
+        kind: rawField.kind,
+        path: rawField.path,
+        scalarType: rawField.scalarType,
+      });
+    } else if (rawField.kind === "array_item") {
+      if (!hasExactKeys(rawField, [
+        "kind",
+        "containerPath",
+        "itemPath",
+        "maxItems",
+        "scalarType",
+      ])
+        || !("containerPath" in rawField) || !isRfc6901Pointer(rawField.containerPath)
+        || !("itemPath" in rawField) || !isRelativeRfc6901Pointer(rawField.itemPath)
+        || !("maxItems" in rawField) || !isPositiveInteger(rawField.maxItems)) {
+        throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+      }
+      field = Object.freeze({
+        kind: rawField.kind,
+        containerPath: rawField.containerPath,
+        itemPath: rawField.itemPath,
+        maxItems: rawField.maxItems,
+        scalarType: rawField.scalarType,
+      });
+    } else if (rawField.kind === "dictionary_entry") {
+      if (!hasExactKeys(rawField, [
+        "kind",
+        "containerPath",
+        "valuePath",
+        "maxEntries",
+        "scalarType",
+      ])
+        || !("containerPath" in rawField) || !isRfc6901Pointer(rawField.containerPath)
+        || !("valuePath" in rawField) || !isRelativeRfc6901Pointer(rawField.valuePath)
+        || !("maxEntries" in rawField) || !isPositiveInteger(rawField.maxEntries)) {
+        throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+      }
+      field = Object.freeze({
+        kind: rawField.kind,
+        containerPath: rawField.containerPath,
+        valuePath: rawField.valuePath,
+        maxEntries: rawField.maxEntries,
+        scalarType: rawField.scalarType,
+      });
+    } else {
+      throw new Error(`invalid_normalized_operation_material_contract:${actionName}`);
+    }
+    const identity = materialContractIdentity(field);
+    if (identities.has(identity)) {
+      throw new Error(`duplicate_normalized_operation_material_contract:${actionName}`);
+    }
+    identities.add(identity);
+    normalized.push(field);
+  }
+  return Object.freeze(normalized);
+}
+
+function validateMaterialContractCoverage(
+  actionName: string,
+  fields: readonly MaterialFieldMetadata[],
+  contract: readonly NormalizedOperationMaterialContractEntry[],
+): void {
+  const contractByIdentity = new Map(
+    contract.map((entry) => [materialContractIdentity(entry), entry]),
+  );
+  const matched = new Set<string>();
+  for (const field of fields) {
+    const identity = materialContractIdentity(field);
+    const contractEntry = contractByIdentity.get(identity);
+    const pointer = materialContractPointer(field);
+    if (!contractEntry) {
+      throw new Error(`undeclared_material_pointer:${actionName}:${pointer}`);
+    }
+    if (materialScalarTypeForFormatter(field.formatterId) !== contractEntry.scalarType) {
+      throw new Error(`material_scalar_type_mismatch:${actionName}:${pointer}`);
+    }
+    if ((field.kind === "array_item" && contractEntry.kind === "array_item"
+        && field.maxItems !== contractEntry.maxItems)
+      || (field.kind === "dictionary_entry" && contractEntry.kind === "dictionary_entry"
+        && field.maxEntries !== contractEntry.maxEntries)) {
+      throw new Error(`material_contract_max_mismatch:${actionName}:${pointer}`);
+    }
+    matched.add(identity);
+  }
+  for (const contractEntry of contract) {
+    const identity = materialContractIdentity(contractEntry);
+    if (!matched.has(identity)) {
+      throw new Error(
+        `missing_material_field:${actionName}:${materialContractPointer(contractEntry)}`,
+      );
+    }
+  }
+}
+
 function validateMaterialFields(
   actionName: string,
   value: unknown,
   dictionaries: ReadonlyMap<string, BoundedDictionaryMetadata>,
   required: boolean,
+  schemaArrayMaxItems?: ReadonlyMap<string, number | null>,
 ): readonly MaterialFieldMetadata[] | undefined {
   if (value === undefined) {
     if (required) throw new Error(`missing_material_fields:${actionName}`);
@@ -563,6 +769,19 @@ function validateMaterialFields(
       );
       if (Buffer.byteLength(worstCaseLabel, "utf8") > MATERIAL_LABEL_MAX_UTF8_BYTES) {
         throw new Error(`material_label_limit_exceeded:${actionName}`);
+      }
+      if (schemaArrayMaxItems) {
+        const schemaMaxItems = schemaArrayMaxItems.get(rawField.containerPath);
+        if (schemaMaxItems === undefined || schemaMaxItems === null) {
+          throw new Error(
+            `material_array_schema_max_missing:${actionName}:${rawField.containerPath}`,
+          );
+        }
+        if (schemaMaxItems !== rawField.maxItems) {
+          throw new Error(
+            `material_array_max_mismatch:${actionName}:${rawField.containerPath}`,
+          );
+        }
       }
       const field = Object.freeze({
         kind: rawField.kind,
@@ -706,16 +925,21 @@ export function normalizeRegistryAction(
     if (!availability.addon.available && !availability.api_key.available) {
       throw new Error(`api_action_unavailable:${definition.name}`);
     }
-    const materialFields = validateMaterialFields(
-      definition.name,
-      definition.materialFields,
-      dictionaries.byPath,
-      definition.kind !== "read",
-    );
     if (definition.kind === "read") {
       if (definition.writeAuthority !== undefined) {
         throw new Error(`unexpected_write_authority:${definition.name}`);
       }
+      if (definition.normalizedOperationMaterialContract !== undefined) {
+        throw new Error(
+          `unexpected_normalized_operation_material_contract:${definition.name}`,
+        );
+      }
+      const materialFields = validateMaterialFields(
+        definition.name,
+        definition.materialFields,
+        dictionaries.byPath,
+        false,
+      );
       return Object.freeze({
         ...definition,
         apiExposure: exposure,
@@ -727,7 +951,24 @@ export function normalizeRegistryAction(
         presentation,
       });
     }
-    validateClosedWriteSchema(definition, dictionaries);
+    const schemaArrayMaxItems = validateClosedWriteSchema(definition, dictionaries);
+    const normalizedOperationMaterialContract = normalizeMaterialContract(
+      definition.name,
+      definition.normalizedOperationMaterialContract,
+      true,
+    );
+    const materialFields = validateMaterialFields(
+      definition.name,
+      definition.materialFields,
+      dictionaries.byPath,
+      true,
+      schemaArrayMaxItems,
+    );
+    validateMaterialContractCoverage(
+      definition.name,
+      materialFields ?? [],
+      normalizedOperationMaterialContract ?? [],
+    );
     const writeAuthority = assertAtomicWriteAuthority(definition.name, definition);
     return Object.freeze({
       ...definition,
@@ -737,6 +978,7 @@ export function normalizeRegistryAction(
       availabilityByAuthClass: availability,
       boundedArgumentDictionaries: dictionaries.values,
       materialFields,
+      normalizedOperationMaterialContract,
       presentation,
       writeAuthority,
     });
@@ -744,6 +986,9 @@ export function normalizeRegistryAction(
 
   if (definition.apiOperation !== undefined) {
     throw new Error(`unexpected_api_operation:${definition.name}`);
+  }
+  if (definition.normalizedOperationMaterialContract !== undefined) {
+    throw new Error(`unexpected_normalized_operation_material_contract:${definition.name}`);
   }
   if ((exposure === "composite" || exposure === "generic")
     && !isNonemptyString(definition.apiExposureReason)) {

@@ -79,6 +79,27 @@ const BASE_METADATA: readonly (readonly [string, unknown])[] = [
       requiredInPreview: true,
     },
   ]],
+  ["normalizedOperationMaterialContract", [
+    {
+      kind: "value",
+      path: "/body/name",
+      scalarType: "string",
+    },
+    {
+      kind: "array_item",
+      containerPath: "/body/tagIds",
+      itemPath: "",
+      maxItems: 2,
+      scalarType: "string",
+    },
+    {
+      kind: "dictionary_entry",
+      containerPath: "/attributes",
+      valuePath: "/value",
+      maxEntries: 3,
+      scalarType: "string",
+    },
+  ]],
   ["presentation", { presenterId: "tag-write", version: 1 }],
 ];
 
@@ -365,6 +386,23 @@ describe("API operation metadata fingerprints", () => {
       formatterId: "text",
       formatterVersion: 1,
       requiredInPreview: false,
+    }]]]],
+    ["normalized operation material path", [["normalizedOperationMaterialContract", [{
+      kind: "value",
+      path: "/body/title",
+      scalarType: "string",
+    }]]]],
+    ["normalized operation scalar type", [["normalizedOperationMaterialContract", [{
+      kind: "value",
+      path: "/body/name",
+      scalarType: "number",
+    }]]]],
+    ["normalized operation material maximum", [["normalizedOperationMaterialContract", [{
+      kind: "array_item",
+      containerPath: "/body/tagIds",
+      itemPath: "",
+      maxItems: 3,
+      scalarType: "string",
     }]]]],
     ["presenter id", [["presentation", { presenterId: "tag-write-v2", version: 1 }]]],
     ["presenter version", [["presentation", { presenterId: "tag-write", version: 2 }]]],

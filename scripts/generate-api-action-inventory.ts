@@ -25,6 +25,7 @@ import type {
   AvailabilityByAuthClass,
   BoundedDictionaryMetadata,
   MaterialFieldMetadata,
+  NormalizedOperationMaterialContractEntry,
 } from "../src/harness/api-operation.js";
 import {
   actionFingerprintForDefinition,
@@ -68,8 +69,8 @@ import {
   type CanonicalOpenApiOperation,
 } from "./lib/adapter-endpoints.js";
 
-const INVENTORY_SCHEMA_VERSION = 1;
-const INVENTORY_GENERATOR_VERSION = 1;
+const INVENTORY_SCHEMA_VERSION = 2;
+const INVENTORY_GENERATOR_VERSION = 2;
 
 type ActionExposure = "api" | "composite" | "generic" | "local";
 type AdapterDecision = "model_api" | "internal_support" | "unavailable";
@@ -102,6 +103,8 @@ interface InventoryActionRow {
   openSchemaVerdict: "closed" | "open" | "not_applicable";
   openSchemaDetail: string | null;
   materialFields: readonly MaterialFieldMetadata[];
+  normalizedOperationMaterialContract:
+    readonly NormalizedOperationMaterialContractEntry[];
   presentation: { presenterId: string; version: number } | null;
   requiredArguments: readonly string[];
   primaryMutationCount: number;
@@ -111,6 +114,7 @@ interface InventoryActionRow {
 interface AdapterSourceCallSite {
   sourceModule: string;
   sourceLine: number;
+  sourceColumn: number;
   pagination: AdapterEndpointPagination;
 }
 
@@ -279,8 +283,10 @@ function rawAdapterShapes(repositoryRoot: string): {
       sourceCallSites: group.map((endpoint) => ({
         sourceModule: endpoint.sourceModule,
         sourceLine: endpoint.sourceLine,
+        sourceColumn: endpoint.sourceColumn,
         pagination: endpoint.pagination,
       })).sort((left, right) => left.sourceLine - right.sourceLine
+        || left.sourceColumn - right.sourceColumn
         || compareText(left.pagination, right.pagination)),
     };
   });
@@ -398,6 +404,8 @@ function buildActionRows(
       openSchemaVerdict: schemaVerdict.verdict,
       openSchemaDetail: schemaVerdict.verdict === "open" ? schemaVerdict.detail : null,
       materialFields: normalized.materialFields ?? [],
+      normalizedOperationMaterialContract:
+        normalized.normalizedOperationMaterialContract ?? [],
       presentation: normalized.presentation ?? null,
       requiredArguments: requiredArgumentsFor(normalized),
       primaryMutationCount: mutationCount(normalized, "primary"),
@@ -537,12 +545,14 @@ function correlatedOperations(
     .sort((left, right) => compareText(operationKey(left), operationKey(right)));
 }
 
-function verifyOfficialOpenApiSnapshot(
+export function verifyOfficialOpenApiSnapshot(
   repositoryRoot: string,
   operations: readonly CanonicalOpenApiOperation[],
 ): void {
   const sourcePath = resolve(repositoryRoot, OFFICIAL_OPENAPI_SOURCE.corroborationPath);
-  if (!existsSync(sourcePath)) return;
+  if (!existsSync(sourcePath)) {
+    throw new Error(`official_openapi_source_missing:${sourcePath}`);
+  }
   const source = readFileSync(sourcePath, "utf8");
   const digest = createHash("sha256").update(source).digest("hex");
   if (digest !== OFFICIAL_OPENAPI_SOURCE.sha256) {
@@ -737,7 +747,10 @@ function inventoryMarkdown(evidence: ApiActionInventoryEvidence): string {
     const operation = action.operation;
     const anchor = operation ?? action.adapterShapes[0];
     const dictionaries = markdownText(JSON.stringify(action.boundedArgumentDictionaries));
-    const materialFields = markdownText(JSON.stringify(action.materialFields));
+    const materialFields = markdownText(JSON.stringify({
+      fields: action.materialFields,
+      normalizedOperationContract: action.normalizedOperationMaterialContract,
+    }));
     const presenter = action.presentation === null
       ? "—"
       : `${action.presentation.presenterId}@${action.presentation.version}`;
@@ -745,7 +758,8 @@ function inventoryMarkdown(evidence: ApiActionInventoryEvidence): string {
   });
   const adapterRows = evidence.adapterRequestShapes.map((row) => {
     const callSites = row.sourceCallSites
-      .map((site) => `\`${site.sourceModule}:${site.sourceLine}:${site.pagination}\``)
+      .map((site) =>
+        `\`${site.sourceModule}:${site.sourceLine}:${site.sourceColumn}:${site.pagination}\``)
       .join("<br>");
     return `| ${row.host} | \`${row.path}\` | ${row.method} | \`${row.key.replaceAll("\0", " ␀ ")}\` | ${callSites} | ${row.mappedModelActionNames.map((name) => `\`${name}\``).join("<br>") || "—"} | ${row.internalSupportConsumers.map((name) => `\`${name}\``).join("<br>") || "—"} | ${authSummary(row.availabilityByAuthClass)} | ${row.decision} | ${markdownText(row.decisionReason)} |`;
   });

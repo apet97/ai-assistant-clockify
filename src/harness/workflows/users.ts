@@ -24,13 +24,14 @@ import { RATE_FIELDS, buildRatePreview } from "./rate.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import type { UserRoleAssignment } from "../../clockify/ports/users.js";
 import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
-import type {
-  ApiAccess,
-  ApiActionMetadataCarrier,
-  ApiExposure,
-  ApiMethod,
-  AvailabilityByAuthClass,
-  MaterialFieldMetadata,
+import {
+  apiActionMetadataFields,
+  type ApiAccess,
+  type ApiActionMetadataCarrier,
+  type ApiExposure,
+  type ApiMethod,
+  type AvailabilityByAuthClass,
+  type MaterialFieldMetadata,
 } from "../api-operation.js";
 
 /**
@@ -686,7 +687,7 @@ const rateUpdate = defineRiskyAction({
 // defineAction to keep the guard byte-identical.
 const deactivateUser = defineAction({
   name: "clockify_users_deactivate",
-  ...USER_GROUP_API_METADATA.clockify_users_deactivate,
+  ...apiActionMetadataFields(USER_GROUP_API_METADATA.clockify_users_deactivate),
   description:
     "Deactivate a workspace user (removes their access). Pass the member by `userId`/`userName` — an id or the exact name, resolved + verified server-side. Elevated write — previews and requires confirmation.",
   featureGroup: UG,

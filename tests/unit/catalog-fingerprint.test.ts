@@ -11,6 +11,7 @@ const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
     || action.availabilityByAuthClass !== undefined
     || action.boundedArgumentDictionaries !== undefined
     || action.materialFields !== undefined
+    || action.normalizedOperationMaterialContract !== undefined
     || action.presentation !== undefined;
   return {
     name: action.name,
@@ -33,6 +34,8 @@ const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
           availabilityByAuthClass: action.availabilityByAuthClass ?? null,
           boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
           materialFields: action.materialFields ?? [],
+          normalizedOperationMaterialContract:
+            action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
         }
       : {}),
