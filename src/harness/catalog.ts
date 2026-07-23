@@ -33,8 +33,11 @@ import { writeAuthorityActionNames, writeAuthorityFor } from "./write-authority.
  * classification. The harness — not the model — validates and executes.
  *
  * Action contracts and `defineAction` live in ./action.ts; this module assembles
- * the registry from the workflow modules and exposes lookup + the model-visible
- * view. Re-exported here so `./catalog.js` remains the public entry point.
+ * the raw ACTION_CATALOG from the workflow modules and exposes lookup + the
+ * model-visible view. Explicit registry surfaces (`INTERNAL_ACTION_CATALOG`,
+ * `MODEL_API_ACTION_CATALOG`, `LOCAL_ASSISTANT_ACTIONS`) live in
+ * `./api-catalog.ts` and are re-exported below after assembly completes.
+ * Re-exported here so `./catalog.js` remains the public entry point.
  */
 export * from "./action.js";
 

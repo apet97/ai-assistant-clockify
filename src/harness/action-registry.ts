@@ -1044,6 +1044,24 @@ export function registryHashForActions(actions: readonly NormalizedRegistryActio
   })))).digest("hex");
 }
 
+/**
+ * Metadata-derived source slice for a registry. Model/local selection uses
+ * reviewed `apiExposure` only — never a duplicated action-name allowlist.
+ */
+export function definitionsForRegistry(
+  definitions: readonly ActionDefinition[],
+  registryId: ActionRegistryId,
+): readonly ActionDefinition[] {
+  switch (registryId) {
+    case "v1-internal":
+      return definitions;
+    case "v2-api":
+      return definitions.filter((definition) => definition.apiExposure === "api");
+    case "v2-local":
+      return definitions.filter((definition) => definition.apiExposure === "local");
+  }
+}
+
 /** Duplicate-safe inventory boundary; future split definitions join here. */
 export function inventoryActionDefinitions(): readonly InventoryActionDefinition[] {
   const entries: InventoryActionDefinition[] = [];

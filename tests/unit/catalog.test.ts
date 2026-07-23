@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_ACTION_CATALOG,
+  MODEL_API_ACTION_CATALOG,
+} from "../../src/harness/api-catalog.js";
 import { ACTION_CATALOG, catalogForModel, getAction } from "../../src/harness/catalog.js";
 import { requiresConfirmation } from "../../src/harness/risk.js";
 
 describe("catalog", () => {
+  it("keeps ACTION_CATALOG as the assembled source for the internal registry", () => {
+    expect(INTERNAL_ACTION_CATALOG.actions).toHaveLength(ACTION_CATALOG.length);
+    expect(MODEL_API_ACTION_CATALOG.actions.every((action) => action.apiExposure === "api")).toBe(true);
+  });
+
   it("every action has metadata, schema, and exactly the executor required by its discriminant", () => {
     expect(ACTION_CATALOG.length).toBeGreaterThan(0);
     for (const action of ACTION_CATALOG) {
