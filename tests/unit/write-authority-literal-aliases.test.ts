@@ -138,6 +138,10 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
     alias("halfDay", false, ["full day", "full-day"]),
     alias("halfDay", true, ["half day", "half-day"]),
   ] },
+  "clockify_time_off_requests_create_days\0halfDay": { aliases: [
+    alias("halfDay", false, ["full day", "full-day"]),
+    alias("halfDay", true, ["half day", "half-day"]),
+  ] },
   "clockify_holidays_create\0occursAnnually": { aliases: [
     alias("occursAnnually", false, ["one-time", "one time", "does not repeat"]),
     alias("occursAnnually", true, ["annually", "annual", "yearly", "every year"]),

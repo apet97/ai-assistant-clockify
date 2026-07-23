@@ -11,7 +11,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - Task 4 is CLOSED at product SHA `6184efa80a95be06020635540185bae01ba1299e` (`fix: resolve atomic API inventory review findings`).
 - T04-K classified all 140 definitions as 82 `api`, 23 `composite`, 31 `generic`, and 4 `local` (zero unclassified actions/shapes).
 - T04-R1/R2 on `776eb081bcee3e693903d972d8205d69dc1605a9` accepted four findings (material-contract binding; schema maxima; fatal official OpenAPI corroboration; recursive/columnar adapter identity). T04-R3 remediated them; re-reviews on `6184efa80a95be06020635540185bae01ba1299e` returned zero HIGH/MEDIUM (LOW candidates explicitly rejected with evidence).
-- Inventory schema/generator version 2 emits `api-catalog.generated.ts`, JSON evidence, and Markdown from one model with catalog hash `9e14ae30ce3731b847e3500db7976220734ed4867cd3000ab32fa14632faa82c`.
+- Inventory schema/generator version 2 emits `api-catalog.generated.ts`, JSON evidence, and Markdown from one model with catalog hash `7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab`.
 - Evidence covers 142 raw call sites / 118 shapes (each site carries `sourceColumn`), repository-owned `evidence/openapi/clockify.official.openapi.yaml` (SHA-256 `044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2`), canonical official correlations, per-auth availability, material fields plus fingerprinted `normalizedOperationMaterialContract`, presenters, and primary/compensation counts; the audit POST alone records `official_operation_id_missing`.
 - Classification and availability are required on every raw definition, participate in fingerprints, and receive no normalization defaults.
 - V1 remains the unchanged default; v2 new turns return deterministic `not_ready`, model resume is disabled, and confirmation execution remains available. No v2 runner or cutover exists.
@@ -34,6 +34,14 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - T06-USERS CLOSED: atomic `clockify_users_invite` (`addUsers`), `clockify_users_deactivate`, and `clockify_users_role_update` (`createUserRole`) verified on MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-GROUPS CLOSED: atomic `clockify_groups_create`/`update`/`delete` and `clockify_groups_remove_user` verified on MODEL_API; `clockify_groups_get` stays composite/off MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-GROUP-MEMBERSHIP CLOSED: atomic `clockify_groups_add_member` (`addUser`, one userId per call); v1 `clockify_groups_add_user` stays internal composite (up to 14). Counts: `ACTION_CATALOG` 167, `MODEL_API` 121. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-POLICIES CLOSED at `c3274dc`: bounded `clockify_time_off_policies_create`/`update` (`createTimeOffPolicy`/`updateTimeOffPolicy`, max 8 users + 8 groups); list/get/archive stay atomic; `clockify_time_off_policies_get` stays composite/off MODEL_API. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-REQUESTS CLOSED at `1a5fa1a`: unit-specific `clockify_time_off_requests_create_days`/`create_hours` (`createTimeOffRequest` with closed DAYS/HOURS bodies); v1 `clockify_time_off_requests_create` stays generic/internal; list/delete stay atomic; `clockify_time_off_requests_get` stays composite/off MODEL_API. Counts: `ACTION_CATALOG` 169, `MODEL_API` 124. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-BALANCE CLOSED at `577eeb6`: bounded `clockify_time_off_balance_update` (`updateTimeOffBalance`, max 8 userIds); `clockify_time_off_balance_get` stays atomic. Counts: `MODEL_API` 125. Live: `live_not_run_missing_credentials`.
+- T06-APPROVALS CLOSED at `f3f2d59`: single-request `clockify_approvals_list`/`submit`/`approve`/`reject`/`withdraw`/`resubmit` verified on MODEL_API; `clockify_approvals_get` and `clockify_approvals_approve_pending` stay composite/off MODEL_API. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-ASSIGNMENTS CLOSED at `3a55ffa`: assignment list/create/update/delete verified on MODEL_API; `clockify_scheduling_assignments_get` stays composite/off MODEL_API. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-TOTALS CLOSED at `af7797d`: split `clockify_scheduling_project_totals_all` (`getFilteredProjectTotals`, POST) and `clockify_scheduling_project_totals_one` (`getProjectTotalsForSingleProject`, GET); `clockify_scheduling_user_totals` stays atomic; v1 `clockify_scheduling_project_totals` stays generic/off MODEL_API. Counts: `ACTION_CATALOG` 171, `MODEL_API` 127. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-PUBLISH CLOSED at `b66e140`: `clockify_scheduling_publish` (`publishAssignments`, one PUT primary) verified on MODEL_API with optional `userFilter`. Live: `live_not_run_missing_credentials`.
+- **Task 6 CLOSED (T06-FINAL):** full inventory/scope/model-registry parity gate green; `ACTION_CATALOG` 171, `MODEL_API` 127, catalog hash `7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab`. Node verify green. Live domains: `live_not_run_missing_credentials`. Next: `T07-A` (deterministic API discovery index).
 
 ## Start here
 
@@ -69,7 +77,7 @@ deployment evidence. V2 requires fresh evidence after its authorized cutover wor
   advisory policy; `npm run license:prod` applies the production-license policy
   and rewrites deterministic JSON evidence; `npm run eval:smoke` runs the
   offline scripted-model safety corpus without credentials.
-- **Coverage:** 167 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
+- **Coverage:** 171 typed catalog actions, 16 areas, 3 Clockify hosts (incl. the
   single-approval composites `clockify_setup_project` (create + members + rates)
   and `clockify_setup_task` (create-in-project + assignees + task rate): each is
   one preview → one Confirm → atomic `runComposition`, mirroring `onboard_user`).

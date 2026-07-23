@@ -10,7 +10,7 @@ A Clockify add-on: an **admin-only** embedded chat backed by an internal,
 MCP-shaped action harness. The model proposes named actions; a deterministic
 harness validates policy/schema/risk and executes; the backend owns all state and
 secrets. `npm run verify` runs both TypeScript projects, zero-warning typed ESLint,
-the full test/build suite, and circular-dependency/duplication gates. 154 typed
+the full test/build suite, and circular-dependency/duplication gates. 171 typed
 actions, 16 areas, 3 Clockify hosts. Railway is the private-production target
 (volume-backed SQLite at `/data`); deploy only through the checked transaction in
 `DEPLOYMENT.md`, never a bare `railway up`. Data handling/retention: `PRIVACY.md`.
@@ -39,6 +39,14 @@ here; this file is the execution map.
 - T06-USERS CLOSED: invite, deactivate, and role_update verified on MODEL_API. Live: `live_not_run_missing_credentials`.
 - T06-GROUPS CLOSED: group create/update/delete and remove_user verified on MODEL_API; get stays composite. Live: `live_not_run_missing_credentials`.
 - T06-GROUP-MEMBERSHIP CLOSED: `clockify_groups_add_member` on MODEL_API; v1 `clockify_groups_add_user` stays internal. Counts: `MODEL_API` 121; `ACTION_CATALOG` 167. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-POLICIES CLOSED: bounded policy create/update on MODEL_API; get stays composite. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-REQUESTS CLOSED: unit-specific create_days/create_hours on MODEL_API; generic create and composite get stay internal. Counts: `ACTION_CATALOG` 169, `MODEL_API` 124. Live: `live_not_run_missing_credentials`.
+- T06-TIME-OFF-BALANCE CLOSED: bounded balance update on MODEL_API. Counts: `MODEL_API` 125. Live: `live_not_run_missing_credentials`.
+- T06-APPROVALS CLOSED: single-request approval actions on MODEL_API; get and approve_pending stay internal. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-ASSIGNMENTS CLOSED: assignment CRUD/list on MODEL_API; get stays composite. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-TOTALS CLOSED: split project_totals_all/one plus user_totals on MODEL_API; generic project_totals stays internal. Counts: `ACTION_CATALOG` 171, `MODEL_API` 127. Live: `live_not_run_missing_credentials`.
+- T06-SCHEDULING-PUBLISH CLOSED: atomic publish on MODEL_API. Live: `live_not_run_missing_credentials`.
+- **Task 6 CLOSED (T06-FINAL):** inventory/scope/registry parity gate green; `ACTION_CATALOG` 171, `MODEL_API` 127, catalog hash `7cc50023d83c1517dfc0306b7732db239e4b3b909bffd3e9519e7350dbebaeab`. Next: `T07-A`.
 
 ## Non-negotiable invariants
 
