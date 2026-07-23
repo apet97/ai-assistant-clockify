@@ -55,6 +55,7 @@ here; this file is the execution map.
 - **T08-D CLOSED:** bounded four-worker reads, provider-order results, ordered write prep, persisted host-call budget. Gate: concurrency/cancellation tests green. Next: `T08-E`.
 - **T08-E CLOSED / Task 8 green:** provider-independent suspension/replay/startup recovery; v2 pipeline never falls through to v1; default engine stays v1. Next: `T09-A`.
 - **T09-C CLOSED / Task 9 green:** durable v2 run events (schema v10), scoped hydrated views, cursor-safe UI restoration; default engine stays v1. Next: `T10-A`.
+- **T10-A CLOSED:** structure read port + 10/10 generated parity rows green; live `not_run`. Next: `T10-B`.
 
 ## Non-negotiable invariants
 

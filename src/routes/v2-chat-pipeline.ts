@@ -3,6 +3,7 @@ import type { AppDeps } from "./deps.js";
 import type { ChatPipeline, ChatTurnOutcome } from "./chat-pipeline.js";
 import { createChatPipeline } from "./chat-pipeline.js";
 import { runAssistantV2 } from "../assistant-v2/runner.js";
+import { createReadExecutionPort } from "../assistant-v2/read-execution.js";
 import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
 import { assertNativeToolClient, type NativeToolModelClient } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
@@ -62,13 +63,19 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
             return runDiscoverySearch(deps.apiOperationIndex, input, scope.authClass);
           },
         },
-        reads: {
-          execute: async () => ({
-            kind: "failed",
-            code: "read_port_not_ready",
-            actionResultId: "read-not-ready",
-          }),
-        },
+        reads: createReadExecutionPort({
+          registry: MODEL_API_ACTION_CATALOG,
+          store: deps.store,
+          clockifyForScope: () => deps.clockifyForWorkspace(installation, { signal }),
+          now: deps.now,
+          loadCalendarContext: async (scope) => {
+            try {
+              return await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(scope.adminUserId);
+            } catch {
+              return {};
+            }
+          },
+        }),
         preparations: {
           prepare: async () => ({
             kind: "not_ready",

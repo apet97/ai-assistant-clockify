@@ -52,6 +52,7 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 - **T09-A CLOSED:** schema v10 `run_events` with transactional allowlisted state+event methods, closed Zod payloads, monotonic sequence, cascade/retention/restore ownership. Gate: run-event store/transactionality/migration tests green. Next: `T09-B`.
 - **T09-B CLOSED:** scoped `GET /api/runs/:id/events` paging/hydration, non-production inspector, history `activeRun`. Gate: route/restoration/inspector/NDJSON/history tests green. Next: `T09-C`.
 - **T09-C CLOSED / Task 9 green:** cursor-safe UI run-event restoration (dedupe, gap paging, reload/second-tab); `ASSISTANT_ENGINE` default remains v1. Gate: Task 9 Vitest + `npm run verify` green. Live: N/A. Next: `T10-A`.
+- **T10-A CLOSED:** v2 read execution port (`src/assistant-v2/read-execution.ts`) wired in `v2-chat-pipeline.ts`; generated structure read parity matrix covers all 10 catalog `access:"read"` rows in `work_structure` (projects/tasks/clients/tags/templates list+get). Gate: `v2-read-parity-structure` + Task 6A structure gates + inventory check green. Live: `live_not_run_missing_credentials`. Next: `T10-B`.
 
 ## Start here
 
