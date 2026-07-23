@@ -7,7 +7,8 @@ import {
   registryCompatibilityIdentity,
   type ActionRegistry,
 } from "../../src/harness/api-catalog.js";
-import { ACTION_CATALOG } from "../../src/harness/catalog.js";
+import { ACTION_CATALOG, catalogForModel } from "../../src/harness/catalog.js";
+import { toolsForModel } from "../../src/harness/tools.js";
 
 const INTERNAL_ONLY_EXCLUSIONS = [
   "clockify_period_report",
@@ -165,5 +166,32 @@ describe("explicit ActionRegistry surfaces", () => {
       .sort();
     expect(namesOf(MODEL_API_ACTION_CATALOG).sort()).toEqual(expected);
     expect(MODEL_API_ACTION_CATALOG.actions).toHaveLength(82);
+  });
+
+  it("rejects catalog/tool construction without an exact registry", () => {
+    expect(() => catalogForModel(undefined as never)).toThrowError(
+      "catalog_for_model_registry_required",
+    );
+    expect(() => toolsForModel(undefined as never)).toThrowError(
+      "tools_for_model_registry_required",
+    );
+    expect(() => catalogForModel({ id: "v2-api" } as never)).toThrowError(
+      "catalog_for_model_registry_required",
+    );
+  });
+
+  it("keeps local and non-api definitions out of the model API tool schemas", () => {
+    const modelTools = toolsForModel(MODEL_API_ACTION_CATALOG);
+    const modelNames = new Set(modelTools.map((tool) => tool.name));
+    expect(modelTools).toHaveLength(82);
+    for (const name of LOCAL_ASSISTANT_NAMES) {
+      expect(modelNames.has(name)).toBe(false);
+    }
+    for (const name of INTERNAL_ONLY_EXCLUSIONS) {
+      expect(modelNames.has(name)).toBe(false);
+    }
+    expect(toolsForModel(LOCAL_ASSISTANT_ACTIONS).map((tool) => tool.name).sort()).toEqual(
+      [...LOCAL_ASSISTANT_NAMES, "clockify_webhooks_events"].sort(),
+    );
   });
 });

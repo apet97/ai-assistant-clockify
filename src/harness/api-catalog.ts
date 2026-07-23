@@ -13,9 +13,10 @@ import type {
 import {
   ACTION_CATALOG,
   actionFingerprintForDefinition,
+  type CatalogRegistry,
 } from "./catalog.js";
 
-export interface ActionRegistry {
+export interface ActionRegistry extends CatalogRegistry {
   readonly id: ActionRegistryId;
   readonly actions: readonly ActionDefinition[];
   get(name: string): ActionDefinition | undefined;

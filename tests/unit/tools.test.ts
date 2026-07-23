@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { actionParametersSchema, toolsForModel } from "../../src/harness/tools.js";
 import { ACTION_CATALOG, getAction } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 
 function paramsFor(name: string): Record<string, unknown> {
-  const tool = toolsForModel().find((t) => t.name === name);
+  const tool = toolsForModel(INTERNAL_ACTION_CATALOG).find((t) => t.name === name);
   if (!tool) throw new Error(`no tool ${name}`);
   return tool.parameters;
 }
@@ -29,7 +30,7 @@ describe("actionParametersSchema", () => {
 
 describe("toolsForModel", () => {
   it("returns one tool per catalog action with a non-empty description and an object schema", () => {
-    const tools = toolsForModel();
+    const tools = toolsForModel(INTERNAL_ACTION_CATALOG);
     expect(tools.length).toBe(ACTION_CATALOG.length);
     for (const tool of tools) {
       expect(tool.name).toBeTruthy();
@@ -69,14 +70,14 @@ describe("toolsForModel", () => {
   });
 
   it("the tool definitions carry no secret-bearing field names", () => {
-    const serialized = JSON.stringify(toolsForModel());
+    const serialized = JSON.stringify(toolsForModel(INTERNAL_ACTION_CATALOG));
     expect(serialized).not.toContain("addonToken");
     expect(serialized).not.toContain("sessionSecret");
     expect(serialized.toLowerCase()).not.toContain("apikey");
   });
 
   it("getAction stays the source of truth (every tool maps to a real action)", () => {
-    for (const tool of toolsForModel()) {
+    for (const tool of toolsForModel(INTERNAL_ACTION_CATALOG)) {
       expect(getAction(tool.name)).toBeDefined();
     }
   });

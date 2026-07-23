@@ -1,6 +1,6 @@
 import type { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import { ACTION_CATALOG } from "./catalog.js";
+import type { CatalogRegistry } from "./catalog.js";
 import type { ToolDefinition } from "../assistant/model-client.js";
 
 /**
@@ -49,21 +49,38 @@ export function actionParametersSchema(schema: z.ZodTypeAny): Record<string, unk
   return pruneSchemaNoise(rest) as Record<string, unknown>;
 }
 
-let cached: ToolDefinition[] | undefined;
+const REGISTRY_IDS = new Set(["v1-internal", "v2-api", "v2-local"]);
+const cachedByRegistry = new WeakMap<CatalogRegistry, ToolDefinition[]>();
+
+function assertToolRegistry(registry: unknown): asserts registry is CatalogRegistry {
+  if (!registry || typeof registry !== "object"
+    || !("id" in registry) || typeof registry.id !== "string"
+    || !REGISTRY_IDS.has(registry.id)
+    || !("actions" in registry) || !Array.isArray(registry.actions)
+    || !("hash" in registry) || typeof registry.hash !== "function") {
+    throw new Error("tools_for_model_registry_required");
+  }
+}
 
 /**
- * The model-visible tool catalog — one tool per action. Memoized (catalog is
- * static). With `actionNames`, returns the SUBSET in catalog order (Phase 1 tool
- * subsetting); without it, the full list, byte-identical to before. The full list
- * is memoized once and merely filtered — the subset is a cheap view, not a rebuild.
+ * The model-visible tool catalog — one tool per registry action. Requires an
+ * exact ActionRegistry; names alone are never sufficient and there is no global
+ * full-catalog default. Memoized per registry. With `actionNames`, returns the
+ * SUBSET in registry order.
  */
-export function toolsForModel(actionNames?: ReadonlySet<string>): ToolDefinition[] {
+export function toolsForModel(
+  registry: CatalogRegistry,
+  actionNames?: ReadonlySet<string>,
+): ToolDefinition[] {
+  assertToolRegistry(registry);
+  let cached = cachedByRegistry.get(registry);
   if (!cached) {
-    cached = ACTION_CATALOG.map((action) => ({
+    cached = registry.actions.map((action) => ({
       name: action.name,
       description: action.description,
       parameters: actionParametersSchema(action.schema),
     }));
+    cachedByRegistry.set(registry, cached);
   }
   return actionNames ? cached.filter((tool) => actionNames.has(tool.name)) : cached;
 }

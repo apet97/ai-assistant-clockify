@@ -1,6 +1,7 @@
 import type { ActionCatalogEntry, ActionDefinition } from "./action.js";
 import { summarizeArgs } from "./arg-summary.js";
 import { nearestNames } from "./action-suggest.js";
+import type { ActionRegistryId } from "./api-operation.js";
 import { TIME_TRACKING_ACTIONS } from "./workflows/time-tracking.js";
 import { ENTRY_ACTIONS } from "./workflows/entries.js";
 import { WORK_STRUCTURE_ACTIONS } from "./workflows/work-structure.js";
@@ -26,6 +27,25 @@ import { SETUP_PROJECT_ACTIONS } from "./workflows/setup-project.js";
 import { SETUP_TASK_ACTIONS } from "./workflows/setup-task.js";
 import { createHash } from "node:crypto";
 import { writeAuthorityActionNames, writeAuthorityFor } from "./write-authority.js";
+
+/** Structural registry view — avoids importing api-catalog (cycle with ACTION_CATALOG). */
+export interface CatalogRegistry {
+  readonly id: ActionRegistryId;
+  readonly actions: readonly ActionDefinition[];
+  hash(): string;
+}
+
+const REGISTRY_IDS: readonly ActionRegistryId[] = ["v1-internal", "v2-api", "v2-local"];
+
+function assertCatalogRegistry(registry: unknown): asserts registry is CatalogRegistry {
+  if (!registry || typeof registry !== "object"
+    || !("id" in registry) || typeof registry.id !== "string"
+    || !REGISTRY_IDS.some((id) => id === registry.id)
+    || !("actions" in registry) || !Array.isArray(registry.actions)
+    || !("hash" in registry) || typeof registry.hash !== "function") {
+    throw new Error("catalog_for_model_registry_required");
+  }
+}
 
 /**
  * MCP-shaped action catalog (SPEC "Action Catalog Strategy"). Each action maps
@@ -101,22 +121,28 @@ export function suggestActionNames(query: string, limit = 3): string[] {
   return nearestNames(query, [...CATALOG_BY_NAME.keys()], limit);
 }
 
-let cachedModelView: ActionCatalogEntry[] | undefined;
+const cachedModelViewByRegistry = new WeakMap<CatalogRegistry, ActionCatalogEntry[]>();
 
 /**
- * The model-visible catalog view (the JSON-mode prompt listing). Memoized. With
- * `actionNames`, returns the SUBSET in catalog order (Phase 1 tool subsetting);
- * without it, the full list, byte-identical to before.
+ * The model-visible catalog view (the JSON-mode prompt listing). Requires an
+ * exact ActionRegistry — names alone are never sufficient. Memoized per registry.
+ * With `actionNames`, returns the SUBSET in registry order.
  */
-export function catalogForModel(actionNames?: ReadonlySet<string>): ActionCatalogEntry[] {
+export function catalogForModel(
+  registry: CatalogRegistry,
+  actionNames?: ReadonlySet<string>,
+): ActionCatalogEntry[] {
+  assertCatalogRegistry(registry);
+  let cachedModelView = cachedModelViewByRegistry.get(registry);
   if (!cachedModelView) {
-    cachedModelView = ACTION_CATALOG.map((action) => ({
+    cachedModelView = registry.actions.map((action) => ({
       name: action.name,
       description: action.description,
       featureGroup: action.featureGroup,
       risks: action.risks,
       args: summarizeArgs(action.schema),
     }));
+    cachedModelViewByRegistry.set(registry, cachedModelView);
   }
   return actionNames ? cachedModelView.filter((entry) => actionNames.has(entry.name)) : cachedModelView;
 }

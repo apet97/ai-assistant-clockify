@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { toolsForModel } from "../../src/harness/tools.js";
 import { ACTION_CATALOG } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 
 /**
  * Tool schema diet (model-perf, exact ~11.7% byte cut): the model-visible JSON Schema
@@ -20,7 +21,7 @@ function walk(node: unknown, visit: (o: Record<string, unknown>) => void): void 
 }
 
 describe("tool schema diet", () => {
-  const tools = toolsForModel();
+  const tools = toolsForModel(INTERNAL_ACTION_CATALOG);
 
   it("keeps closed object schemas while stripping minLength:1 and defaults", () => {
     let closedObjects = 0;
