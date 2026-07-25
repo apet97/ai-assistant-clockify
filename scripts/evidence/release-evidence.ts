@@ -4,9 +4,20 @@ import { resolve } from "node:path";
 import { writeDeterministicJson } from "./write-json.js";
 import type { ColdVerifyEvidence } from "./cold-verify-evidence.js";
 import type { ReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
+import { V2_AUTHORITY_NOT_EVALUATED_SENTINEL, type V2AuthorityEvidenceReport } from "./v2-authority-evidence.js";
 
 export { buildColdVerifyEvidence } from "./cold-verify-evidence.js";
 export { validateReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
+export {
+  buildV2AuthorityEvidenceReport,
+  deriveV2AuthorityConclusions,
+  validateV2AuthorityEvidence,
+  V2_AUTHORITY_CONCLUSIONS,
+  V2_AUTHORITY_NOT_EVALUATED_SENTINEL,
+  type V2AuthorityConclusion,
+  type V2AuthorityEvidence,
+  type V2AuthorityEvidenceReport,
+} from "./v2-authority-evidence.js";
 
 export type EvidenceTargetAssistantEngine = "v1" | "v2";
 
@@ -159,6 +170,55 @@ export function buildReleaseEvidence(
     reviewedPullRequest: input.reviewedPullRequest,
     coldVerifies: input.coldVerifies,
     humanGates,
+  };
+}
+
+export interface ReleaseEvidenceV2Input {
+  sourceCandidateSha: string;
+  evidenceCommitSha: string;
+  machineConclusions: Partial<Record<MachineGate, unknown>>;
+  v2Authority: V2AuthorityEvidenceReport;
+}
+
+export interface ReleaseEvidenceV2 {
+  assistantEngine: "v2";
+  sourceCandidateSha: string;
+  evidenceCommitSha: string;
+  machineGates: Record<MachineGate, MachineStatus>;
+  v2Authority: V2AuthorityEvidenceReport;
+}
+
+/**
+ * The v2 counterpart to {@link buildReleaseEvidence}. Never accepts v1
+ * evidence (the caller supplies an already-built {@link V2AuthorityEvidenceReport},
+ * so a v1 `ReleaseEvidence`/`HistoricalV1EvidenceClassification` object cannot
+ * type-check in its place). Stays `not_evaluated_until_pr15` until Task 17
+ * supplies a complete, validated artifact — never marks a v2 release passing
+ * before then.
+ */
+export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEvidenceV2 {
+  if (!/^[0-9a-f]{40}$/.test(input.sourceCandidateSha)) {
+    throw new Error("v2 release evidence requires a full lowercase source candidate SHA");
+  }
+  if (!/^[0-9a-f]{40}$/.test(input.evidenceCommitSha)) {
+    throw new Error("v2 release evidence requires a full lowercase evidence commit SHA");
+  }
+  if (
+    input.v2Authority?.status !== V2_AUTHORITY_NOT_EVALUATED_SENTINEL &&
+    input.v2Authority?.status !== "complete"
+  ) {
+    throw new Error("v2 release evidence requires a valid V2AuthorityEvidenceReport");
+  }
+  const machineGates = Object.fromEntries(MACHINE_GATE_KEYS.map((gate) => [
+    gate,
+    machineStatus(input.machineConclusions[gate]),
+  ])) as Record<MachineGate, MachineStatus>;
+  return {
+    assistantEngine: "v2",
+    sourceCandidateSha: input.sourceCandidateSha,
+    evidenceCommitSha: input.evidenceCommitSha,
+    machineGates,
+    v2Authority: input.v2Authority,
   };
 }
 

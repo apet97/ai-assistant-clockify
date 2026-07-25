@@ -2,6 +2,13 @@
 
 Status: **HISTORICAL V1 TEMPLATE - NO ROW IMPLIES A PASS; NOT VALID FOR V2**
 
+The v2 authority-conclusion schema (`V2AuthorityEvidence`, `scripts/evidence/v2-authority-evidence.ts`)
+is a separate, exact-SHA artifact — never a row in this v1 document. It reports the sentinel
+`not_evaluated_until_pr15` during v1/v2 coexistence (Tasks 13-16); Task 17 supplies the first
+complete artifact, still gated on zero mutation/dispatch/capability counts and a nonzero
+assistant-write case count. The release-evidence workflow uploads it as a separate
+`release-v2-authority-evidence-<run>` artifact alongside this v1 record.
+
 This checked-in document preserves the historical v1 release-evidence schema/index.
 In that v1 process, final values belonged in the immutable GitHub Actions
 `release-evidence` artifact or PR attachment; committing the final SHA here would

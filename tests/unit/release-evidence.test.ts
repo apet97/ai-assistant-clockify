@@ -423,3 +423,74 @@ describe("release evidence", () => {
     expect(actions).toContain("page.waitForEvent(\"download\")");
   });
 });
+
+describe("v2 release evidence", () => {
+  const { buildV2ReleaseEvidence, buildV2AuthorityEvidenceReport, V2_AUTHORITY_NOT_EVALUATED_SENTINEL } = releaseEvidenceModule;
+  const V2_CANDIDATE_SHA = "c".repeat(40);
+  const V2_EVIDENCE_SHA = "d".repeat(40);
+  const V2_CATALOG_HASH = "e".repeat(64);
+
+  function build(overrides: Partial<Parameters<typeof buildV2ReleaseEvidence>[0]> = {}) {
+    return buildV2ReleaseEvidence({
+      sourceCandidateSha: V2_CANDIDATE_SHA,
+      evidenceCommitSha: V2_EVIDENCE_SHA,
+      machineConclusions: {},
+      v2Authority: buildV2AuthorityEvidenceReport(V2_AUTHORITY_NOT_EVALUATED_SENTINEL),
+      ...overrides,
+    });
+  }
+
+  it("stays not_evaluated_until_pr15 during v1/v2 coexistence", () => {
+    const evidence = build();
+    expect(evidence.assistantEngine).toBe("v2");
+    expect(evidence.v2Authority).toEqual({ status: "not_evaluated_until_pr15" });
+  });
+
+  it("accepts a complete v2 authority evidence report once one is supplied", () => {
+    const evidence = build({
+      v2Authority: buildV2AuthorityEvidenceReport({
+        schemaVersion: 1,
+        engine: "v2",
+        candidateSha: V2_CANDIDATE_SHA,
+        registryId: "v2-api",
+        catalogHash: V2_CATALOG_HASH,
+        assistantWriteCases: 127,
+        assistantWritesPreviewOnly: true,
+        exactOperationBindingMismatches: 0,
+        preparationMutationCount: 0,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+      }),
+    });
+    expect(evidence.v2Authority.status).toBe("complete");
+  });
+
+  it("rejects a stale source candidate SHA", () => {
+    expect(() => build({ sourceCandidateSha: "not-a-sha" })).toThrow(/source candidate SHA/);
+  });
+
+  it("rejects a stale evidence commit SHA", () => {
+    expect(() => build({ evidenceCommitSha: "not-a-sha" })).toThrow(/evidence commit SHA/);
+  });
+
+  it("rejects v1 evidence substituted for the v2Authority field", () => {
+    // A v1 HistoricalV1EvidenceClassification has no `status` field at all.
+    expect(() => build({ v2Authority: { assistantEngine: "v1", evidenceStatus: "historical", validForV2: false } as never }))
+      .toThrow(/V2AuthorityEvidenceReport/);
+  });
+
+  it("wires a v2 authority evidence generation step into the release-evidence workflow", () => {
+    const release = readFileSync(resolve(".github/workflows/release-evidence.yml"), "utf8");
+    expect(release).toContain("Record v2 authority evidence");
+    expect(release).toContain("v2-authority-evidence.json");
+    expect(release).toContain('status: "not_evaluated_until_pr15"');
+    expect(release).toContain("release-v2-authority-evidence-");
+    // The record job stays checkout/npm-free (see workflow-contracts.test.ts) —
+    // this step must duplicate the sentinel inline, never shell out to tsx.
+    expect(release).not.toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+  });
+});
