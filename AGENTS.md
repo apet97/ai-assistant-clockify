@@ -77,6 +77,7 @@ here; this file is the execution map.
 - **T12-F CLOSED:** user/group write parity matrix. Live: `not_run`. Next: `T12-G`.
 - **T12-G CLOSED:** leave/approval/scheduling write parity. Live: `not_run`. Next: `T12-H`.
 - **T12-H CLOSED / Task 12 green:** compound dependent/independent journeys + exit gate green; default engine stays v1. Live: `not_run`. Next: `T13-A`.
+- **T13-A CLOSED:** `v2-no-intent-declaration.test.ts` proves one real prepare→confirm write (`clockify_tags_create`) makes zero declaration/capability calls and stores `authorityModel: "preview_confirmation_v2"` with no capability id/hash; passed immediately, no production change. Gate: 228 tests green + type-check. Live: `not_run`. Next: `T13-B`.
 
 ## Non-negotiable invariants
 
