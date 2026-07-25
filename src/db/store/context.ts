@@ -485,6 +485,8 @@ export interface EraseCounts {
   assistantRuns: number;
   confirmationBatchItems: number;
   confirmationBatches: number;
+  entityReferences: number;
+  pendingClarifications: number;
 }
 
 export type { InstallationAttestationRecord };

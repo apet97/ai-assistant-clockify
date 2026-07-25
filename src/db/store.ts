@@ -84,6 +84,8 @@ import {
   type IntentCapabilityOperationScope,
   type IntentCapabilityScope,
 } from "./store/intent-capabilities.js";
+import { buildEntityReferenceStore } from "./store/entity-references.js";
+import { buildPendingClarificationStore } from "./store/pending-clarifications.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
@@ -352,6 +354,59 @@ export interface Store {
   bindIntentCapabilityOperation(input: BindIntentCapabilityOperationInput): BindIntentCapabilityOperationResult;
   consumeIntentCapabilityExecution(input: BindIntentCapabilityOperationInput): ConsumeIntentCapabilityExecutionResult;
   consumeIntentCapabilityForOperation(input: IntentCapabilityOperationScope): ConsumeIntentCapabilityExecutionResult;
+  upsertEntityReference(
+    input: import("./store/entity-references.js").UpsertEntityReferenceInput,
+  ): import("./store/entity-references.js").EntityReferenceRecord;
+  getEntityReference(
+    id: string,
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+  ): import("./store/entity-references.js").EntityReferenceRecord | undefined;
+  listRecentActiveEntityReferences(
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+    limit?: number,
+  ): import("./store/entity-references.js").EntityReferenceRecord[];
+  markEntityReferenceStatus(
+    id: string,
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+    status: import("./store/entity-references.js").EntityReferenceStatus,
+  ): import("./store/entity-references.js").EntityReferenceRecord;
+  createPendingClarification(
+    input: import("./store/pending-clarifications.js").CreatePendingClarificationInput,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  getPendingClarification(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord | undefined;
+  getActiveClarificationForRun(
+    scope: Pick<
+      import("./store/pending-clarifications.js").ClarificationScope,
+      "sessionId" | "runId" | "workspaceId" | "adminUserId"
+    >,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord | undefined;
+  claimClarificationResolving(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resetClarificationToPending(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resolveClarificationWithOption(input: {
+    id: string;
+    scope: import("./store/pending-clarifications.js").ClarificationScope;
+    selectedOptionId: string;
+    actionResultId: string;
+    operationId?: string;
+  }): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  cancelClarification(input: {
+    id: string;
+    scope: import("./store/pending-clarifications.js").ClarificationScope;
+    reason: import("./store/pending-clarifications.js").ClarificationCancelReason;
+  }): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  continueClarificationWithFreeText(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
   prepareOperationRun(input: PrepareOperationRunInput): string;
   prepareAssistantWriteWithEvent(input: {
     scope: import("./store/runs.js").AssistantRunScope;
@@ -726,6 +781,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       };
     })(),
     ...buildIntentCapabilityStore(ctx),
+    ...buildEntityReferenceStore(ctx),
+    ...buildPendingClarificationStore(ctx),
     ...operationRunStore,
     ...assistantWritePreparationStore,
     startUndoOperation(id, input) {

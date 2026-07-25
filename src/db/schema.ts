@@ -369,7 +369,120 @@ const SCHEMA_V10_STATEMENTS: readonly string[] = [
     ON run_events(created_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 11;
+export const LATEST_SCHEMA_VERSION = 12;
+
+const SCHEMA_V12_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS entity_references (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL
+      CHECK (length(CAST(entity_type AS BLOB)) BETWEEN 1 AND 128),
+    external_id TEXT NOT NULL
+      CHECK (length(CAST(external_id AS BLOB)) BETWEEN 1 AND 256),
+    display_name TEXT NOT NULL
+      CHECK (length(CAST(display_name AS BLOB)) BETWEEN 1 AND 512),
+    bindings_json TEXT NOT NULL
+      CHECK (json_valid(bindings_json)
+        AND length(CAST(bindings_json AS BLOB)) <= 8192),
+    binding_fingerprint TEXT NOT NULL CHECK (length(binding_fingerprint) = 64),
+    source_run_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'stale', 'deleted')),
+    verified_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (session_id, workspace_id, admin_user_id, entity_type, external_id),
+    FOREIGN KEY (session_id, source_run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_entity_references_scope_recent
+    ON entity_references(
+      workspace_id, admin_user_id, session_id, status, verified_at DESC
+    )`,
+  `CREATE TABLE IF NOT EXISTS pending_clarifications (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    original_tool_name TEXT NOT NULL
+      CHECK (length(CAST(original_tool_name AS BLOB)) BETWEEN 1 AND 256),
+    partial_arguments_json TEXT NOT NULL
+      CHECK (json_valid(partial_arguments_json)
+        AND length(CAST(partial_arguments_json AS BLOB)) <= 16384),
+    missing_field TEXT NOT NULL
+      CHECK (length(CAST(missing_field AS BLOB)) BETWEEN 1 AND 256),
+    candidates_json TEXT NOT NULL
+      CHECK (json_valid(candidates_json)
+        AND length(CAST(candidates_json AS BLOB)) <= 16384),
+    status TEXT NOT NULL CHECK (status IN (
+      'pending', 'resolving', 'resolved', 'continued', 'expired', 'cancelled'
+    )),
+    selected_option_id TEXT,
+    terminal_reason TEXT CHECK (terminal_reason IS NULL OR terminal_reason IN (
+      'selected_option', 'free_text_continuation', 'expired', 'superseded',
+      'stale_replaced', 'user_cancelled'
+    )),
+    action_result_id TEXT,
+    operation_id TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT,
+    CHECK (
+      (status IN ('pending', 'resolving')
+        AND selected_option_id IS NULL AND terminal_reason IS NULL
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NULL)
+      OR
+      (status = 'resolved'
+        AND selected_option_id IS NOT NULL
+        AND terminal_reason = 'selected_option'
+        AND action_result_id IS NOT NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'continued'
+        AND selected_option_id IS NULL
+        AND terminal_reason = 'free_text_continuation'
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'expired'
+        AND selected_option_id IS NULL
+        AND terminal_reason = 'expired'
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'cancelled'
+        AND selected_option_id IS NULL
+        AND terminal_reason IN ('superseded', 'stale_replaced', 'user_cancelled')
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+    ),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id, session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES operation_runs(id, session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_clarifications_one_active_per_run
+    ON pending_clarifications(session_id, run_id)
+    WHERE status IN ('pending', 'resolving')`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_scope_expires
+    ON pending_clarifications(
+      workspace_id, admin_user_id, session_id, status, expires_at
+    )`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_result
+    ON pending_clarifications(action_result_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_operation
+    ON pending_clarifications(operation_id)`,
+];
 
 const SCHEMA_V11_STATEMENTS: readonly string[] = [
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_confirmations_id_operation_scope
@@ -616,6 +729,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 9, statements: SCHEMA_V9_STATEMENTS },
   { version: 10, statements: SCHEMA_V10_STATEMENTS },
   { version: 11, statements: [] },
+  { version: 12, statements: SCHEMA_V12_STATEMENTS },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -664,6 +778,7 @@ export function migrate(db: Database.Database): void {
       else if (migration.version === 6) migrateToV6(db);
       else if (migration.version === 7) migrateToV7(db);
       else if (migration.version === 11) migrateToV11(db);
+      else if (migration.version === 12) migrateToV12(db);
       else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
@@ -696,6 +811,10 @@ export function migrate(db: Database.Database): void {
   // behind in operation_runs. Install them only after the additive canonical-
   // result ownership column above is guaranteed to exist.
   ensureConfirmationOperationTerminalTriggers(db);
+  // Repairs a v12 database opened by an earlier build before the terminal-scrub
+  // triggers were added; idempotent (DROP TRIGGER IF EXISTS + recreate) so a
+  // normal migration rerun is a no-op.
+  ensureClarificationTerminalScrubTriggers(db);
   // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
   // in its final (rebuilt) shape, so indexing those columns can't throw.
   for (const statement of PRUNE_INDEX_STATEMENTS) {
@@ -1962,6 +2081,43 @@ function migrateToV11(db: Database.Database): void {
   }
 
   ensureDiscriminatorMatrixTriggers(db);
+}
+
+/**
+ * New tables only (no additive columns on existing tables), so the migration
+ * is the plain statement list plus the scrub triggers SQLite's CHECK
+ * constraints cannot express (terminal-row JSON scrubbing spans an
+ * INSERT/UPDATE-time comparison, not a static per-row shape).
+ */
+function migrateToV12(db: Database.Database): void {
+  for (const statement of SCHEMA_V12_STATEMENTS) {
+    db.prepare(statement).run();
+  }
+  ensureClarificationTerminalScrubTriggers(db);
+}
+
+function ensureClarificationTerminalScrubTriggers(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS pending_clarifications_terminal_scrub_insert;
+    DROP TRIGGER IF EXISTS pending_clarifications_terminal_scrub_update;
+
+    CREATE TRIGGER pending_clarifications_terminal_scrub_insert
+      BEFORE INSERT ON pending_clarifications
+      WHEN NEW.status IN ('resolved', 'continued', 'expired', 'cancelled')
+       AND (NEW.partial_arguments_json <> '{}' OR NEW.candidates_json <> '[]')
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_clarification_not_scrubbed');
+      END;
+
+    CREATE TRIGGER pending_clarifications_terminal_scrub_update
+      BEFORE UPDATE OF status, partial_arguments_json, candidates_json
+      ON pending_clarifications
+      WHEN NEW.status IN ('resolved', 'continued', 'expired', 'cancelled')
+       AND (NEW.partial_arguments_json <> '{}' OR NEW.candidates_json <> '[]')
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_clarification_not_scrubbed');
+      END;
+  `);
 }
 
 function ensureDiscriminatorMatrixTriggers(db: Database.Database): void {

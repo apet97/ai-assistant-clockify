@@ -290,6 +290,11 @@ export function buildInstallationStore(ctx: StoreContext): {
         "DELETE FROM confirmation_batch_items WHERE workspace_id = ?",
       );
       const confirmationBatches = del("DELETE FROM confirmation_batches WHERE workspace_id = ?");
+      // Both reference assistant_runs (entity_references CASCADE,
+      // pending_clarifications CASCADE) and pending_clarifications additionally
+      // RESTRICTs to action_results/operation_runs: delete before all three.
+      const pendingClarifications = del("DELETE FROM pending_clarifications WHERE workspace_id = ?");
+      const entityReferences = del("DELETE FROM entity_references WHERE workspace_id = ?");
       const assistantRuns = del("DELETE FROM assistant_runs WHERE workspace_id = ?");
       const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
       const turnRunResultLinks = del(
@@ -317,6 +322,8 @@ export function buildInstallationStore(ctx: StoreContext): {
         chatMessages,
         confirmationBatchItems,
         confirmationBatches,
+        entityReferences,
+        pendingClarifications,
         pendingConfirmations,
         auditEvents,
         undoRecords,

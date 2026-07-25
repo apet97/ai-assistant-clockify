@@ -4,6 +4,8 @@ import type { StoreContext } from "./context.js";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const CONFIRMATION_RETENTION_MS = 30 * DAY_MS;
 const UNDO_RETENTION_MS = 30 * DAY_MS;
+/** Bounded terminal clarification metadata may remain for 30 days (Task 14). */
+const CLARIFICATION_RETENTION_MS = 30 * DAY_MS;
 export const IDEMPOTENCY_RETENTION_MS = 60 * 60 * 1000;
 const TELEMETRY_RETENTION_MS = 30 * DAY_MS;
 const OPERATION_RETENTION_MS = 30 * DAY_MS;
@@ -29,6 +31,7 @@ export interface PruneCounts {
   expiredConfirmations: number;
   expiredConfirmationBatches: number;
   expiredUndoRecords: number;
+  expiredClarifications: number;
   deletedTotal: number;
   expiredTotal: number;
   total: number;
@@ -61,6 +64,8 @@ type PruneTable =
   | "pendingConfirmations"
   | "confirmationBatchItems"
   | "confirmationBatches"
+  | "pendingClarifications"
+  | "entityReferences"
   | "idempotencyKeys"
   | "undoRecords"
   | "turnTelemetry"
@@ -118,6 +123,21 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
     ],
   },
   {
+    table: "pendingClarifications",
+    cutoff: "iso",
+    sqls: [
+      batched(
+        "pending_clarifications",
+        "status IN ('resolved', 'continued', 'expired', 'cancelled') AND created_at < ?",
+      ),
+    ],
+  },
+  {
+    table: "entityReferences",
+    cutoff: "iso",
+    sqls: [batched("entity_references", "updated_at < ?")],
+  },
+  {
     table: "idempotencyKeys",
     cutoff: "epoch",
     sqls: [
@@ -146,7 +166,9 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
   {
     table: "operationRuns",
     cutoff: "iso",
-    sqls: [batched("operation_runs", "updated_at < ? AND NOT EXISTS (SELECT 1 FROM operation_steps WHERE operation_id = operation_runs.id)")],
+    sqls: [batched("operation_runs", `updated_at < ?
+      AND NOT EXISTS (SELECT 1 FROM operation_steps WHERE operation_id = operation_runs.id)
+      AND NOT EXISTS (SELECT 1 FROM pending_clarifications WHERE operation_id = operation_runs.id)`)],
   },
   {
     table: "intentCapabilities",
@@ -170,7 +192,8 @@ const PRUNE_DELETES: readonly PruneDelete[] = [
       AND NOT EXISTS (SELECT 1 FROM idempotency_keys WHERE action_result_id = action_results.id)
       AND NOT EXISTS (SELECT 1 FROM operation_runs WHERE action_result_id = action_results.id)
       AND NOT EXISTS (SELECT 1 FROM chat_message_result_links WHERE action_result_id = action_results.id)
-      AND NOT EXISTS (SELECT 1 FROM turn_run_result_links WHERE action_result_id = action_results.id)`)],
+      AND NOT EXISTS (SELECT 1 FROM turn_run_result_links WHERE action_result_id = action_results.id)
+      AND NOT EXISTS (SELECT 1 FROM pending_clarifications WHERE action_result_id = action_results.id)`)],
   },
   {
     table: "chatSessions",
@@ -214,6 +237,8 @@ export function buildRetentionStore(
         pendingConfirmations: isoCutoff(CONFIRMATION_RETENTION_MS),
         confirmationBatchItems: isoCutoff(CONFIRMATION_RETENTION_MS),
         confirmationBatches: isoCutoff(CONFIRMATION_RETENTION_MS),
+        pendingClarifications: isoCutoff(CLARIFICATION_RETENTION_MS),
+        entityReferences: isoCutoff(chatAuditRetentionMs),
         idempotencyKeys: nowMs - IDEMPOTENCY_RETENTION_MS,
         undoRecords: isoCutoff(UNDO_RETENTION_MS),
         turnTelemetry: isoCutoff(TELEMETRY_RETENTION_MS),
@@ -233,6 +258,8 @@ export function buildRetentionStore(
         pendingConfirmations: 0,
         confirmationBatchItems: 0,
         confirmationBatches: 0,
+        pendingClarifications: 0,
+        entityReferences: 0,
         idempotencyKeys: 0,
         undoRecords: 0,
         turnTelemetry: 0,
@@ -252,6 +279,7 @@ export function buildRetentionStore(
       let expiredConfirmations = 0;
       let expiredConfirmationBatches = 0;
       let expiredUndoRecords = 0;
+      let expiredClarifications = 0;
       let batches = 0;
       let changed = true;
 
@@ -284,6 +312,14 @@ export function buildRetentionStore(
           SELECT rowid FROM undo_records
            WHERE status = 'available' AND expires_at <= ? LIMIT ?
         )`;
+      const expireClarifications = `UPDATE pending_clarifications
+        SET status = 'expired', terminal_reason = 'expired',
+            partial_arguments_json = '{}', candidates_json = '[]',
+            updated_at = ?, resolved_at = ?
+        WHERE rowid IN (
+          SELECT rowid FROM pending_clarifications
+           WHERE status = 'pending' AND expires_at <= ? LIMIT ?
+        )`;
 
       while (changed && total < MAX_ROWS_PER_PASS) {
         changed = false;
@@ -315,6 +351,17 @@ export function buildRetentionStore(
           changed ||= undoChanges > 0;
         }
 
+        if (total < MAX_ROWS_PER_PASS) {
+          limit = Math.min(BATCH_SIZE, MAX_ROWS_PER_PASS - total);
+          const clarificationChanges = await runMutation(
+            expireClarifications,
+            [nowIsoArg, nowIsoArg, nowIsoArg, limit],
+          );
+          expiredClarifications += clarificationChanges;
+          total += clarificationChanges;
+          changed ||= clarificationChanges > 0;
+        }
+
         for (const { table, sqls } of PRUNE_DELETES) {
           for (const sql of sqls) {
             if (total >= MAX_ROWS_PER_PASS) break;
@@ -328,7 +375,8 @@ export function buildRetentionStore(
         }
       }
       const deletedTotal = Object.values(counts).reduce((sum, count) => sum + count, 0);
-      const expiredTotal = expiredConfirmations + expiredConfirmationBatches + expiredUndoRecords;
+      const expiredTotal =
+        expiredConfirmations + expiredConfirmationBatches + expiredUndoRecords + expiredClarifications;
       const backlog = total >= MAX_ROWS_PER_PASS;
       const checkpointRow = (db.pragma("wal_checkpoint(PASSIVE)") as Array<{
         busy: number;
@@ -347,6 +395,7 @@ export function buildRetentionStore(
         expiredConfirmations,
         expiredConfirmationBatches,
         expiredUndoRecords,
+        expiredClarifications,
         deletedTotal,
         expiredTotal,
         total,
@@ -371,7 +420,7 @@ export function buildRetentionStore(
           walCheckpoint.busy,
           walCheckpoint.log,
           walCheckpoint.checkpointed,
-          JSON.stringify({ ...counts, expiredConfirmations, expiredUndoRecords }),
+          JSON.stringify({ ...counts, expiredConfirmations, expiredUndoRecords, expiredClarifications }),
         ],
       );
       return result;
