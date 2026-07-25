@@ -1,3 +1,17 @@
+/**
+ * The four "tampered ... field" cases below (action fingerprint, registry ID,
+ * catalog hash, operation payload) construct a `PendingConfirmationRecord` by
+ * spreading a real stored row and overwriting one field in memory, then call
+ * `confirmSingle` directly with it. In production `src/routes/api.ts` always
+ * refetches `record` fresh from `store.getPendingConfirmation(id)` immediately
+ * before calling `confirmSingle` — a client can never supply or influence this
+ * object. These cases therefore do NOT simulate an externally reachable
+ * attack; they lock `confirmSingle`'s own defense-in-depth field checks as a
+ * regression guard (e.g. against a future caller that reconstructs a record
+ * without refetching, or a corrupted in-process cache). They prove nothing
+ * about SQL-level row tampering, which is outside this service's trust
+ * boundary.
+ */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -211,7 +225,7 @@ describe("v2 confirmation authority matrix", () => {
     expect(mutationCallTotal(h.fake.counts) - before).toBe(0);
   });
 
-  it("rejects a tampered action fingerprint", async () => {
+  it("defends in depth against a tampered action fingerprint (not client-reachable; see file header)", async () => {
     const h = harness();
     const before = mutationCallTotal(h.fake.counts);
     const { confirmationId } = await prepareTagCreate(h);
@@ -231,7 +245,7 @@ describe("v2 confirmation authority matrix", () => {
     expect(mutationCallTotal(h.fake.counts) - before).toBe(0);
   });
 
-  it("rejects a wrong registry ID", async () => {
+  it("defends in depth against a wrong registry ID (not client-reachable; see file header)", async () => {
     const h = harness();
     const before = mutationCallTotal(h.fake.counts);
     const { confirmationId } = await prepareTagCreate(h);
@@ -251,7 +265,7 @@ describe("v2 confirmation authority matrix", () => {
     expect(mutationCallTotal(h.fake.counts) - before).toBe(0);
   });
 
-  it("rejects a wrong catalog hash", async () => {
+  it("defends in depth against a wrong catalog hash (not client-reachable; see file header)", async () => {
     const h = harness();
     const before = mutationCallTotal(h.fake.counts);
     const { confirmationId } = await prepareTagCreate(h);
@@ -271,7 +285,7 @@ describe("v2 confirmation authority matrix", () => {
     expect(mutationCallTotal(h.fake.counts) - before).toBe(0);
   });
 
-  it("rejects a tampered operation payload (wrong operation hash)", async () => {
+  it("defends in depth against a tampered operation payload / wrong operation hash (not client-reachable; see file header)", async () => {
     const h = harness();
     const before = mutationCallTotal(h.fake.counts);
     const { confirmationId } = await prepareTagCreate(h);
