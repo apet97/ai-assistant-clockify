@@ -255,6 +255,15 @@ here; this file is the execution map.
   a write stops at the preview) with a machine-readable map naming the suites that prove them, never
   faked. Credential-free: sentinel, 127 cases, 0/0, exit 2. Gate: type-check:scripts + 9 tests + lint,
   all 0. Eval: `not_evaluated_missing_credentials`. Live: `not_run`. Next: `T17-D`.
+- **T17-D CLOSED:** write-safety accountant (`scripts/eval-write-safety.ts` +
+  `tests/integration/v2-write-safety-matrix.test.ts`): 84 writes × 9 invariants = 756 derived checks,
+  proving every write carries every invariant, that the seven shipped domain matrices account for all
+  84 (no write covered by nothing), and that a write's expected terminal state is never an executed
+  mutation. Aggregation into T13 `V2AuthorityEvidence` is fail-closed with a real test per rejection —
+  partial (`invariant_not_observed`), any violation, sentinel/blocked, zero-case, wrong SHA, wrong
+  catalog hash all yield `not_evaluated_until_pr15`; only a complete 100% report yields `complete` with
+  four `passed` conclusions and all counters 0. Bare script run = blocked status, exit 2. Gate: 49
+  tests + type-check + type-check:scripts + lint + dup, all 0. Live: `not_run`. Next: `T17-E`.
 
 ## Non-negotiable invariants
 

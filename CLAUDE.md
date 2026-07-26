@@ -455,6 +455,28 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `npx vitest run tests/unit/eval-consistency.test.ts tests/unit/ordered-eval-cohorts.test.ts`
   (9 passed) + `lint`, all exit 0. Eval status: `not_evaluated_missing_credentials`. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-D`.
+- **T17-D CLOSED:** `scripts/eval-write-safety.ts` + `tests/integration/v2-write-safety-matrix.test.ts`
+  are the write-safety **accountant**, deliberately not a re-implementation of the proofs: the nine
+  invariants per write are already proven by the seven shipped `v2-write-parity-*` domain matrices plus
+  `v2-preview-first-matrix`, `v2-confirmation-authority`, `v2-typed-consent`,
+  `v2-prompt-injection-write`, `v2-confirmation-batch` and `mutation-workflow`. The matrix derives 84
+  cases × 9 invariants = **756 checks** from the catalog and proves the three things those suites
+  cannot prove about themselves: every atomic model write carries every invariant; the seven domain
+  matrices between them account for all 84 writes (so no write is safety-covered by nothing); and a
+  write's expected terminal state is never an executed mutation. Aggregation into the T13
+  `V2AuthorityEvidence` is fail-closed and each rejection is a real test: a **partial** report
+  (an unobserved invariant scores `invariant_not_observed`, never a skip), a report with **any**
+  violation, a **sentinel/blocked** report, a **zero-case** report, a **wrong candidate SHA**, and a
+  **wrong catalog hash** all yield `not_evaluated_until_pr15` instead of an artifact; only a complete
+  100% report produces `status: "complete"` with all four conclusions `passed`, `assistantWriteCases`
+  84, and every mutation/dispatch/capability counter 0. Every observation is counted exactly once (no
+  invariant double-credited). Running the script alone reports the matrix shape with an explicit
+  blocked status and **exit 2** (`caseCount` 84, `expectedChecks` 756, `authority`
+  `not_evaluated_until_pr15`) — the proofs live in vitest, so a bare script run can never be a pass.
+  Gate: `npx vitest run tests/integration/v2-write-safety-matrix.test.ts
+  tests/unit/v2-authority-evidence.test.ts tests/unit/release-evidence.test.ts` (49 passed) +
+  `type-check` + `type-check:scripts` + `lint` + `dup`, all exit 0. Counts: unchanged. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-E`.
 
 ## Start here
 
