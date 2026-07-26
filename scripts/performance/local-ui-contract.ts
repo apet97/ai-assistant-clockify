@@ -10,7 +10,11 @@ export const LOCAL_UI_THRESHOLDS = {
   warmShellP95Ms: 1_000,
   coldFast4gShellP95Ms: 2_000,
   historyHydrationP95Ms: 250,
-  uiGzipBytes: 20 * 1_024,
+  // T15-E: structured v2 result rendering (facts/warnings/references/recovery/
+  // diagnostic disclosure across all six PresentedResult statuses) added real
+  // decode + render logic that the prior 20 KiB ceiling had no headroom for
+  // (baseline was ~19.75 KiB already); raised by 1 KiB with user sign-off.
+  uiGzipBytes: 21 * 1_024,
 } as const;
 
 export const FAST_4G_PROFILE = {

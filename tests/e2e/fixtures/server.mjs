@@ -118,8 +118,114 @@ function remember(state, message, results, reply) {
   state.messages.push({ role: "assistant", content: reply, results });
 }
 
+/**
+ * T15-E: a run_event frame carrying a structured `PresentedResult` envelope —
+ * the same wire shape a real v2 run would stream, but fabricated directly by
+ * this fixture. Production's own `chatResultToPresentation` doesn't yet
+ * populate facts/references/recovery for any real domain (flagged for the
+ * T14-T16 review gate), so this is how the render layer gets real coverage of
+ * the full envelope without wiring server-side production code — exactly what
+ * this fixture exists for (T15-E's own modify list names it explicitly).
+ */
+let structuredSequence = 0;
+function structuredRunEvent(runId, presentation, extra = {}) {
+  structuredSequence += 1;
+  const kind = presentation.status === "pending_confirmation" ? "pending_confirmation" : "presented_result";
+  const envelope = {
+    presentation,
+    ...(kind === "presented_result" ? { diagnostic: { kind: "sanitized_receipt", byteLength: 2, value: { ok: true } } } : {}),
+    ...(kind === "pending_confirmation" ? { confirmation: { id: "structured-1", nonce: "structured-nonce-1", expiresAt } } : {}),
+  };
+  return {
+    type: "run_event",
+    runId,
+    sequence: structuredSequence,
+    event: { eventType: kind === "pending_confirmation" ? "operation.prepared" : "tool.completed", payload: {}, createdAt: "2026-07-18T10:00:00.000Z" },
+    attachment: kind === "presented_result"
+      ? { kind, actionResultId: "structured-result-1", envelope }
+      : { kind, confirmationId: "structured-1", envelope },
+    ...extra,
+  };
+}
+
+const STRUCTURED_PRESENTATIONS = {
+  "structured-succeeded": {
+    status: "succeeded",
+    title: "Create a tag",
+    summary: "The tag was created.",
+    facts: [{ label: "Tag name", value: "Billable" }],
+    warnings: [],
+    references: [{
+      id: "ref-1",
+      conversationId: "current-session",
+      entityType: "tag",
+      externalId: "tag-1",
+      displayName: "Billable",
+      sourceRunId: "structured-run-succeeded",
+      bindings: {},
+      status: "active",
+      verifiedAt: "2026-07-18T10:00:00.000Z",
+    }],
+  },
+  "structured-failed": {
+    status: "failed",
+    title: "Create a tag",
+    summary: "The tag could not be created.",
+    facts: [],
+    warnings: [{ code: "clockify_error", message: "A tag with that name already exists." }],
+    references: [],
+  },
+  "structured-partial": {
+    status: "partial",
+    title: "Set up a new project",
+    summary: "The project was created, but one member could not be added.",
+    facts: [{ label: "Project", value: "Website relaunch" }],
+    warnings: [{ code: "member_add_failed", message: "Could not add one member." }],
+    references: [],
+    recovery: { kind: "retry_read", label: "Check the project's current members", readAttemptId: "retry-1" },
+  },
+  "structured-cancelled": {
+    status: "cancelled",
+    title: "Update a project",
+    summary: "This change was cancelled before it ran.",
+    facts: [],
+    warnings: [],
+    references: [],
+  },
+  "structured-outcome-unknown": {
+    status: "outcome_unknown",
+    title: "Delete a tag",
+    summary: "The connection was lost after the request was sent.",
+    facts: [],
+    warnings: [],
+    references: [],
+    recovery: { kind: "view_operation", label: "View this operation's status", operationId: "operation-structured-1" },
+  },
+  "structured-pending": {
+    status: "pending_confirmation",
+    title: "Delete an archived project",
+    summary: "This will permanently remove the project.",
+    facts: [{ label: "Project", value: "Old sandbox" }],
+    warnings: [],
+    references: [],
+  },
+};
+
 async function streamChat(request, response, state) {
   const { message = "" } = await body(request);
+  const structured = STRUCTURED_PRESENTATIONS[message];
+  if (structured) {
+    const runEvent = structuredRunEvent(`structured-run-${message}`, structured);
+    state.messages.push({ role: "user", content: message });
+    // A structured attachment carries its own rendering; the transcript keeps
+    // only the human bubble (mirrors how run_event-only turns behave for real).
+    ndjson(response, [
+      runEvent,
+      { type: "reply", kind: "final", text: "" },
+      { type: "done" },
+    ]);
+    return;
+  }
   let results;
   let reply;
   const requirement = fixtureActionPolicy[message];

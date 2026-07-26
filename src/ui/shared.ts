@@ -34,6 +34,53 @@ export function featureGroupRows(policy: PolicyShape): Array<{ group: string; le
   return Object.entries(policy.groups).map(([group, level]) => ({ group, level }));
 }
 
+/** A single labeled material fact surfaced by a v2 presenter (T15-B/T15-E). */
+export interface PresentedFactView {
+  label: string;
+  value: string;
+}
+
+/** A grounded reference to a prior entity sighting (T14-A), rendered read-only. */
+export interface PresentedReferenceView {
+  id: string;
+  conversationId: string;
+  entityType: string;
+  externalId: string;
+  displayName: string;
+  sourceRunId: string;
+  bindings: Record<string, string>;
+  status: "active" | "stale" | "deleted";
+  verifiedAt: string;
+}
+
+/** A render-only recovery affordance. None of these are live controls in the
+ * envelope sense — `view_operation` links to the existing scoped operation-status
+ * route, `start_new_chat` reuses the existing New-chat path, and an absent
+ * `retry_read` handler renders as plain text (T15-E is UI-only; it does not
+ * invent a new route). */
+export type PresentedRecoveryView =
+  | { kind: "view_operation"; label: string; operationId: string }
+  | { kind: "retry_read"; label: string; readAttemptId: string }
+  | { kind: "start_new_chat"; label: string };
+
+/** The collapsible technical disclosure: the exact sanitized receipt JSON, never
+ * used to derive a human-visible label. */
+export interface PresentedDiagnosticView {
+  kind: "sanitized_receipt";
+  byteLength: number;
+  value: unknown;
+}
+
+/** The full v2 `PresentedResult` status enum (T15-A); a legacy v1 result never
+ * sets this field and keeps its existing ok-boolean-derived rendering. */
+export type PresentedStatus =
+  | "succeeded"
+  | "failed"
+  | "partial"
+  | "pending_confirmation"
+  | "cancelled"
+  | "outcome_unknown";
+
 export interface PreviewResult {
   kind: "preview";
   previewId: string;
@@ -48,7 +95,11 @@ export interface PreviewResult {
     featureGroup?: string;
     riskLabels?: string[];
     targets?: Array<{ type: string; id: string; name?: string }>;
+    /** Present-only material facts from a v2 presenter; absent for a legacy v1 preview. */
+    facts?: PresentedFactView[];
   };
+  /** Present-only grounded references from a v2 presenter; absent for a legacy v1 preview. */
+  references?: PresentedReferenceView[];
 }
 
 export interface ReceiptResult {
@@ -61,6 +112,19 @@ export interface ReceiptResult {
     warnings?: Array<{ code?: string; message: string }>;
     /** Short-lived, same-origin invoice PDF created by the authenticated artifact route. */
     artifact?: ArtifactDescriptor;
+    /** The exact v2 status this receipt was derived from (T15-A); distinguishes
+     * partial/cancelled/outcome_unknown from a plain success/failure. Absent for
+     * a legacy v1 receipt, which keeps its existing ok-boolean rendering. */
+    presentedStatus?: PresentedStatus;
+    /** Present-only material facts from a v2 presenter. */
+    facts?: PresentedFactView[];
+    /** Present-only grounded references from a v2 presenter. */
+    references?: PresentedReferenceView[];
+    /** Present-only render-only recovery affordance from a v2 presenter. */
+    recovery?: PresentedRecoveryView;
+    /** Present-only technical disclosure content from a v2 presenter; when
+     * absent the existing raw-receipt JSON disclosure is used instead. */
+    diagnostic?: PresentedDiagnosticView;
   };
   /** Present when the action can be reversed (a one-use undo handle). */
   undo?: { id: string };
@@ -217,23 +281,27 @@ function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
   if (attachment.kind === "pending_confirmation") {
     const confirmation = attachment.envelope.confirmation;
     if (!confirmation) return [];
+    const presentation = attachment.envelope.presentation;
     return [{
       kind: "preview",
       previewId: confirmation.id,
       nonce: confirmation.nonce,
       expiresAt: confirmation.expiresAt,
       preview: {
-        actionLabel: attachment.envelope.presentation.title,
-        expectedChanges: attachment.envelope.presentation.summary
-          ? [attachment.envelope.presentation.summary]
+        actionLabel: presentation.title,
+        expectedChanges: presentation.summary
+          ? [presentation.summary]
           : [],
         reversibility: "",
-        warnings: attachment.envelope.presentation.warnings.map((w) => w.message),
+        warnings: presentation.warnings.map((w) => w.message),
+        ...(presentation.facts.length > 0 ? { facts: presentation.facts } : {}),
       },
+      ...(presentation.references.length > 0 ? { references: presentation.references } : {}),
     }];
   }
   if (attachment.kind === "presented_result") {
-    const status = attachment.envelope.presentation.status;
+    const presentation = attachment.envelope.presentation;
+    const status = presentation.status;
     if (status === "pending_confirmation") return attachmentToResults({
       kind: "pending_confirmation",
       confirmationId: attachment.envelope.confirmation?.id ?? attachment.actionResultId,
@@ -243,9 +311,14 @@ function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
       kind: "receipt",
       receipt: {
         ok: status === "succeeded" || status === "partial",
-        action: attachment.envelope.presentation.title,
-        message: attachment.envelope.presentation.summary,
-        ...(attachment.envelope.undo ? { undo: attachment.envelope.undo } : {}),
+        action: presentation.title,
+        message: presentation.summary,
+        presentedStatus: status,
+        ...(presentation.warnings.length > 0 ? { warnings: presentation.warnings } : {}),
+        ...(presentation.facts.length > 0 ? { facts: presentation.facts } : {}),
+        ...(presentation.references.length > 0 ? { references: presentation.references } : {}),
+        ...(presentation.recovery ? { recovery: presentation.recovery } : {}),
+        ...(attachment.envelope.diagnostic ? { diagnostic: attachment.envelope.diagnostic } : {}),
       },
       ...(attachment.envelope.undo ? { undo: attachment.envelope.undo } : {}),
     }];

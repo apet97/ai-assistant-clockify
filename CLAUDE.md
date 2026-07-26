@@ -125,6 +125,52 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   + 67 (T15-C) + 19 (T15-D, folded into `presenter-registry.test.ts`) tests green, `check:api-action-
   inventory` exit 0, full `npm run verify` green (329 files / 5036 tests). Live: `live_not_run_missing_
   credentials`. Default engine: `v1`. Next: `T15-E`.
+- **T15-E CLOSED / Task 15 green:** structured v2 result rendering, UI-only (no server `src/` file
+  touched). `src/ui/protocol.ts` strictly decodes the full `PresentedResultEnvelope` (status/title/
+  summary/facts/warnings/references/recovery/diagnostic) instead of the prior stub that hardcoded
+  `facts: []`/`warnings: []`/`references: []`; rejects unknown status/recovery-kind/`diagnostic.kind`
+  shapes. `src/ui/shared.ts` extends `PreviewResult`/`ReceiptResult` with optional presenter-sourced
+  fields (`facts`, `references`, `recovery`, `diagnostic`, `presentedStatus`) rather than a new
+  `ChatResult` kind — `attachmentToResults` now forwards them, but keeps emitting `kind: "preview"`/
+  `"receipt"` so the existing confirm/cancel mechanics, buffering, and `main.ts` dispatcher are
+  byte-identical; a legacy v1 result (no `presentedStatus`) keeps its exact prior ok-boolean-derived
+  rendering. `src/ui/render.ts` adds `renderFacts`/`renderReferences`/`renderRecovery` (all
+  `textContent`-only) and a `STATUS_VIEW` table giving succeeded/failed/partial/cancelled/
+  outcome_unknown their own header label+icon (`pending_confirmation` renders via the existing preview
+  card); the technical-details disclosure prefers `diagnostic.value` over the flattened receipt when
+  present, and its toggle stays the static "Details" label (never derived from title/action, so it
+  can't leak a raw `clockify_*` id into an accessible name). Recovery renders as plain informational
+  text only — no new route wired in this slice (matches "render-only"; a `view_operation`/
+  `start_new_chat` button was drafted then dropped for the gzip budget, see below). Production's
+  `chatResultToPresentation` (`run-event-hydration.ts`) still never populates `facts`/`references`/
+  `recovery` for any real domain and still sets `title` to the raw action id/name, not a human label
+  — flagged for the T14-T16 review gate, same shape as T15-C/D's scope notes; T15-E proves the
+  decode/render MECHANISM against fixture data (unit tests + a new, real, non-skipped
+  `tests/e2e/v2-structured-results.spec.ts` whose fixture server (`tests/e2e/fixtures/server.mjs`)
+  fabricates real `run_event`/`presented_result`/`pending_confirmation` NDJSON frames covering all six
+  `PresentedResult` statuses), not against live production data. **Budget note:** the required render
+  surface pushed the built UI past the existing 20 KiB gzip ceiling even after dropping all
+  server-duplicated per-field length bounds (kept only shape/type/enum rejection, which is the actual
+  protocol-boundary concern for stale-deploy same-origin JSON); user approved raising
+  `LOCAL_UI_THRESHOLDS.uiGzipBytes` in `scripts/performance/local-ui-contract.ts` from 20 KiB to 21 KiB
+  (baseline was already ~19.75 KiB gzip, one-line rationale left in the source). Also fixed one
+  unrelated pre-existing bug found while chasing a `npm run verify` failure: `tests/integration/
+  v2-clarification-route.test.ts`'s `T14-E` describe block signed its test session cookie with
+  `session.expiresAt` computed from that suite's fixed `now: () => NOW` (`2026-07-26T00:00:00.000Z`,
+  an 8h TTL) while `verifySessionCookie` (`src/auth/sessions.ts`) checks expiry against the REAL wall
+  clock — a time bomb that expired partway through this same calendar day, independent of any T15-E
+  change (reproduced identically on a clean worktree of the pre-T15-E commit). Fixed by signing the
+  cookie with a fixed far-future expiry instead of the stale computed one; the store's own
+  `session.expiresAt` (unrelated to auth) is untouched. Gate: `presenter-registry` + `presented-result-
+  snapshots` + `v2-authoritative-results` + `ui-presentation` + `ui-preview-card` + `ui-render-pure` +
+  `ui-render-xss` + `chat-results` + `history-sanitizer` + `chat-history` (173 tests) +
+  `test:e2e --grep "preview|receipt|operation|unknown|partial"` (15 passed) +
+  `v2-structured-results.spec.ts` (21 passed across Chromium/Firefox/WebKit) + `perf:local-ui` PASSED
+  (20,741 / 21,504 bytes gzip) + full `npm run verify` green (329 files / 5046 tests, confirmed via the
+  log's own exit-code line after two unrelated flakes — `api-rate-limit`/`chat-history` — reproduced the
+  documented `f1-verify-flake-diagnosis` pattern: failed only under full-verify CPU load, passed clean
+  in isolation, full verify went green on rerun). Live: `live_not_run_missing_credentials`. Default
+  engine: `v1`. Next: `T16-A`.
 
 ## Start here
 

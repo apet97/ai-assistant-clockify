@@ -209,4 +209,150 @@ describe("render-XSS: attacker-named entities render as inert text (r2-injection
     expect(card.allTags()).not.toContain("img");
     expect(card.allTags()).not.toContain("button");
   });
+
+  it("renderReceipt facts/references/recovery stay textContent-only (T15-E)", () => {
+    const receipt: ReceiptResult = {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: `Create tag ${XSS}`,
+        message: `Created ${XSS}`,
+        presentedStatus: "succeeded",
+        facts: [{ label: `Name ${XSS}`, value: `Value ${XSS}` }],
+        references: [{
+          id: "ref-1",
+          conversationId: "conv-1",
+          entityType: "tag",
+          externalId: "ext-1",
+          displayName: `Reference ${XSS}`,
+          sourceRunId: "run-1",
+          bindings: {},
+          status: "active",
+          verifiedAt: "2026-01-01T00:00:00.000Z",
+        }],
+        recovery: { kind: "start_new_chat", label: `Start over ${XSS}` },
+      },
+    };
+    const card = renderReceipt(receipt, { controller: {} as never, showError: () => {} }) as unknown as StubNode;
+    const text = card.allText();
+    expect(text.some((t) => t.includes(`Name ${XSS}`))).toBe(true);
+    expect(text.some((t) => t.includes(`Value ${XSS}`))).toBe(true);
+    expect(text.some((t) => t.includes(`Reference ${XSS}`))).toBe(true);
+    expect(text.some((t) => t.includes(`Start over ${XSS}`))).toBe(true);
+    const tags = card.allTags();
+    expect(tags).not.toContain("img");
+    expect(tags).not.toContain("script");
+  });
+
+  it("renderPreview facts/references stay textContent-only (T15-E)", () => {
+    const preview: PreviewResult = {
+      kind: "preview",
+      previewId: "p1",
+      nonce: "n1",
+      preview: {
+        actionLabel: "Create tag",
+        expectedChanges: ["Add a tag"],
+        reversibility: "Reversible",
+        warnings: [],
+        facts: [{ label: `Name ${XSS}`, value: `Value ${XSS}` }],
+      },
+      references: [{
+        id: "ref-1",
+        conversationId: "conv-1",
+        entityType: "tag",
+        externalId: "ext-1",
+        displayName: `Reference ${XSS}`,
+        sourceRunId: "run-1",
+        bindings: {},
+        status: "stale",
+        verifiedAt: "2026-01-01T00:00:00.000Z",
+      }],
+    };
+    const card = renderPreview([preview], {
+      controller: {} as never,
+      showError: () => {},
+      appendMessage: () => {},
+      renderResults: () => {},
+    }) as unknown as StubNode;
+    const text = card.allText();
+    expect(text.some((t) => t.includes(`Name ${XSS}`))).toBe(true);
+    expect(text.some((t) => t.includes(`Value ${XSS}`))).toBe(true);
+    expect(text.some((t) => t.includes(`Reference ${XSS}`))).toBe(true);
+    const tags = card.allTags();
+    expect(tags).not.toContain("img");
+    expect(tags).not.toContain("script");
+  });
+});
+
+/**
+ * T15-E: structured v2 status rendering. Production doesn't yet emit every
+ * status (`run-event-hydration.ts`'s `chatResultToPresentation` currently
+ * produces only succeeded/failed/pending_confirmation — flagged for the
+ * T14-T16 review gate), so this drives the render layer directly with
+ * fixture data covering all six `PresentedResult` statuses, proving the MECHANISM
+ * renders each distinctly and never derives an accessible name from a raw
+ * `clockify_*` action id.
+ */
+describe("T15-E: structured result statuses render distinctly, never exposing a raw action id", () => {
+  const CLOCKIFY_ID_PATTERN = /clockify_[a-z_]+/;
+  const HUMAN_TITLE = "Create a tag";
+
+  function receiptFor(presentedStatus: NonNullable<ReceiptResult["receipt"]["presentedStatus"]>): ReceiptResult {
+    return {
+      kind: "receipt",
+      receipt: {
+        ok: presentedStatus === "succeeded" || presentedStatus === "partial",
+        action: HUMAN_TITLE,
+        message: "A human-readable summary.",
+        presentedStatus,
+      },
+    };
+  }
+
+  const statuses = ["succeeded", "failed", "partial", "cancelled", "outcome_unknown"] as const;
+  const labels: Record<(typeof statuses)[number], string> = {
+    succeeded: "Done",
+    failed: "Failed",
+    partial: "Partial — review needed",
+    cancelled: "Cancelled",
+    outcome_unknown: "Outcome unknown — verify in Clockify",
+  };
+
+  for (const status of statuses) {
+    it(`renders a distinct label for "${status}" with no raw action id in any text`, () => {
+      const card = renderReceipt(receiptFor(status), {
+        controller: {} as never,
+        showError: () => {},
+      }) as unknown as StubNode;
+      const text = card.allText();
+      expect(text).toContain(labels[status]);
+      for (const rendered of text) expect(rendered).not.toMatch(CLOCKIFY_ID_PATTERN);
+      const ariaLabel = card.getAttribute("aria-label") ?? "";
+      expect(ariaLabel).not.toMatch(CLOCKIFY_ID_PATTERN);
+    });
+  }
+
+  it("renders pending_confirmation via renderPreview with no raw action id in any text", () => {
+    const preview: PreviewResult = {
+      kind: "preview",
+      previewId: "p1",
+      nonce: "n1",
+      preview: {
+        actionLabel: HUMAN_TITLE,
+        expectedChanges: ["A human-readable summary."],
+        reversibility: "",
+        warnings: [],
+      },
+    };
+    const card = renderPreview([preview], {
+      controller: {} as never,
+      showError: () => {},
+      appendMessage: () => {},
+      renderResults: () => {},
+    }) as unknown as StubNode;
+    const text = card.allText();
+    for (const rendered of text) expect(rendered).not.toMatch(CLOCKIFY_ID_PATTERN);
+    const ariaLabel = card.getAttribute("aria-label") ?? "";
+    expect(ariaLabel).not.toMatch(CLOCKIFY_ID_PATTERN);
+  });
 });

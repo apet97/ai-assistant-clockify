@@ -319,3 +319,29 @@ describe("renderPreview — countdown a11y", () => {
     expect(createdNodes.map((node) => node.textContent)).toContain(`Target: ${value}, ${value}`);
   });
 });
+
+describe("renderReceipt — technical details disclosure (T15-E)", () => {
+  it("prefers the v2 diagnostic value over the flattened receipt when present", () => {
+    const withDiagnostic: ReceiptResult = {
+      kind: "receipt",
+      receipt: {
+        ok: true,
+        action: "Create a tag",
+        presentedStatus: "succeeded",
+        diagnostic: { kind: "sanitized_receipt", byteLength: 2, value: { onlyIn: "diagnostic" } },
+      },
+    };
+    renderReceipt(withDiagnostic, { controller: controller(), showError: vi.fn() });
+    const pre = createdNodes.find((node) => node.tagName === "pre");
+    expect(pre?.textContent).toContain("onlyIn");
+    expect(pre?.textContent).not.toContain("presentedStatus");
+  });
+
+  it("falls back to the flattened receipt when no diagnostic is present (legacy v1 shape unchanged)", () => {
+    createdNodes = [];
+    const legacy: ReceiptResult = { kind: "receipt", receipt: { ok: true, action: "clockify_tags_create" } };
+    renderReceipt(legacy, { controller: controller(), showError: vi.fn() });
+    const pre = createdNodes.find((node) => node.tagName === "pre");
+    expect(pre?.textContent).toContain("clockify_tags_create");
+  });
+});

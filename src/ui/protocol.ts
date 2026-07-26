@@ -669,6 +669,73 @@ export function decodeNdjsonEvent(value: unknown): StreamEvent {
   throw new ProtocolError("stream event.type is unknown");
 }
 
+function presentedFactsFrom(value: unknown, name: string): Array<{ label: string; value: string }> {
+  return array(value, name, (item, n) => {
+    const r = record(item, n);
+    return { label: string(r.label, `${n}.label`), value: string(r.value, `${n}.value`) };
+  });
+}
+
+function presentedWarningsFrom(value: unknown, name: string): Array<{ code: string; message: string }> {
+  return array(value, name, (item, n) => {
+    const r = record(item, n);
+    return { code: string(r.code, `${n}.code`), message: string(r.message, `${n}.message`) };
+  });
+}
+
+function presentedReferencesFrom(
+  value: unknown,
+  name: string,
+): import("../shared/contracts.js").PresentedResult["references"] {
+  return array(value, name, (item, n) => {
+    const r = record(item, n);
+    const status = string(r.status, `${n}.status`);
+    if (status !== "active" && status !== "stale" && status !== "deleted") throw new ProtocolError(`${n}.status is unknown`);
+    const bindingsRaw = record(r.bindings, `${n}.bindings`);
+    const bindings: Record<string, string> = {};
+    for (const [key, entry] of Object.entries(bindingsRaw)) bindings[key] = string(entry, `${n}.bindings.${key}`);
+    return {
+      id: string(r.id, `${n}.id`),
+      conversationId: string(r.conversationId, `${n}.conversationId`),
+      entityType: string(r.entityType, `${n}.entityType`),
+      externalId: string(r.externalId, `${n}.externalId`),
+      displayName: string(r.displayName, `${n}.displayName`),
+      sourceRunId: string(r.sourceRunId, `${n}.sourceRunId`),
+      bindings,
+      status,
+      verifiedAt: string(r.verifiedAt, `${n}.verifiedAt`),
+    };
+  });
+}
+
+function presentedRecoveryFrom(
+  value: unknown,
+  name: string,
+): import("../shared/contracts.js").PresentedResult["recovery"] {
+  if (value === undefined) return undefined;
+  const recovery = record(value, name);
+  const kind = string(recovery.kind, `${name}.kind`);
+  const label = string(recovery.label, `${name}.label`);
+  if (kind === "view_operation") return { kind, label, operationId: string(recovery.operationId, `${name}.operationId`) };
+  if (kind === "retry_read") return { kind, label, readAttemptId: string(recovery.readAttemptId, `${name}.readAttemptId`) };
+  if (kind === "start_new_chat") return { kind, label };
+  throw new ProtocolError(`${name}.kind is unknown`);
+}
+
+function presentedDiagnosticFrom(
+  value: unknown,
+  name: string,
+): import("../shared/contracts.js").PresentedResultEnvelope["diagnostic"] {
+  if (value === undefined) return undefined;
+  const diagnostic = record(value, name);
+  if (diagnostic.kind !== "sanitized_receipt") throw new ProtocolError(`${name}.kind must be sanitized_receipt`);
+  return {
+    kind: "sanitized_receipt",
+    byteLength: nonNegativeInteger(diagnostic.byteLength, `${name}.byteLength`),
+    value: diagnostic.value as import("../shared/contracts.js").JsonValue,
+  };
+}
+
 function decodeRunEventAttachment(value: unknown): import("../shared/contracts.js").RunEventAttachment {
   const attachment = record(value, "stream event.attachment");
   const kind = string(attachment.kind, "stream event.attachment.kind");
@@ -682,14 +749,19 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
   if (kind === "presented_result" || kind === "pending_confirmation") {
     const envelope = record(attachment.envelope, "stream event.attachment.envelope");
     const presentation = record(envelope.presentation, "stream event.attachment.envelope.presentation");
+    const status = string(presentation.status, "stream event.attachment.envelope.presentation.status");
+    const allowedStatuses = new Set(["succeeded", "failed", "partial", "pending_confirmation", "cancelled", "outcome_unknown"]);
+    if (!allowedStatuses.has(status)) throw new ProtocolError("stream event.attachment.envelope.presentation.status is unknown");
+    const recovery = presentedRecoveryFrom(presentation.recovery, "stream event.attachment.envelope.presentation.recovery");
     const decodedEnvelope = {
       presentation: {
-        status: string(presentation.status, "stream event.attachment.envelope.presentation.status") as import("../shared/contracts.js").PresentedResult["status"],
+        status: status as import("../shared/contracts.js").PresentedResult["status"],
         title: string(presentation.title, "stream event.attachment.envelope.presentation.title"),
         summary: string(presentation.summary, "stream event.attachment.envelope.presentation.summary"),
-        facts: [],
-        warnings: [],
-        references: [],
+        facts: presentedFactsFrom(presentation.facts, "stream event.attachment.envelope.presentation.facts"),
+        warnings: presentedWarningsFrom(presentation.warnings, "stream event.attachment.envelope.presentation.warnings"),
+        references: presentedReferencesFrom(presentation.references, "stream event.attachment.envelope.presentation.references"),
+        ...(recovery ? { recovery } : {}),
       },
       ...(typeof envelope.actionResultId === "string" ? { actionResultId: envelope.actionResultId } : {}),
       ...(envelope.confirmation && typeof envelope.confirmation === "object"
@@ -700,6 +772,9 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
               expiresAt: isoString((envelope.confirmation as Record<string, unknown>).expiresAt, "stream event.attachment.envelope.confirmation.expiresAt"),
             },
           }
+        : {}),
+      ...(envelope.diagnostic !== undefined
+        ? { diagnostic: presentedDiagnosticFrom(envelope.diagnostic, "stream event.attachment.envelope.diagnostic") }
         : {}),
     };
     if (kind === "presented_result") {

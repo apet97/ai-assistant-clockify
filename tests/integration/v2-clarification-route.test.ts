@@ -374,8 +374,16 @@ describe("T14-E: free-text continuation and new-run supersession (HTTP)", () => 
   const ADDON_KEY = "ai-assistant";
 
   function cookieForSession(session: { id: string; expiresAt: string }, sessionSecret: string): string {
+    // `verifySessionCookie` checks this expiry against the REAL wall clock
+    // (src/auth/sessions.ts), while `session.expiresAt` is computed from this
+    // suite's fixed `now: () => NOW` (midnight of "today") plus an 8h TTL —
+    // real time keeps advancing past that fixed instant, so the cookie goes
+    // stale hours after it was written regardless of the store's own clock.
+    // Sign a safely-far-future expiry for the COOKIE only; the store's own
+    // `session.expiresAt` (used for session-store bookkeeping, not auth) is
+    // unaffected.
     const value = signSessionCookie(
-      { sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", workspaceRole: "ADMIN", expiresAt: session.expiresAt },
+      { sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", workspaceRole: "ADMIN", expiresAt: "2099-01-01T00:00:00.000Z" },
       sessionSecret,
     );
     return buildSessionCookie(value, false).split(";")[0]!;

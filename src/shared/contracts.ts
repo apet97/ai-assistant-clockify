@@ -2,6 +2,7 @@
 
 import type {
   DoneFrame,
+  JsonValue,
   PresentedResult,
   PresentedResultEnvelope,
   RunEventAttachment,
@@ -11,6 +12,7 @@ import type {
 } from "../assistant-v2/events.js";
 
 export type {
+  JsonValue,
   PresentedResult,
   PresentedResultEnvelope,
   RunEventAttachment,
