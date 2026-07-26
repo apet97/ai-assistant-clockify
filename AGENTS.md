@@ -233,6 +233,19 @@ here; this file is the execution map.
   `eval:*` script would have crashed — moved down into the pure fixture modules and re-exported
   (also collapsing the duplicate `discoveryQueriesForWrite`). Gate: 30 focused + 521 with parity
   regression + type-check + type-check:scripts + lint + dup, all 0. Live: `not_run`. Next: `T17-B`.
+- **T17-B CLOSED:** `scripts/eval-api-discovery.ts` scores discovery through the REAL runner via a
+  shared `scripts/eval-v2/runner-harness.ts` that assembles the same dependency set
+  `buildV2RunnerDependencies` builds for a live turn (real runner/discovery index/read port/preparation
+  service, fresh fake workspace, throwaway SQLite) and scores only durable
+  `api.operations_loaded`/`tool.requested`/terminal-phase evidence — no direct search call, no
+  scripted provider, no pre-loaded catalog. Thresholds: 3/3 canonical, ≥2/3 paraphrase, ≥2/3 typo, ≤12
+  tools, 0/3 unrelated destructive loads. Harness smoke-verified (12 loaded = the cap, target
+  included, read executed, run completed). Without credentials it emits
+  `not_evaluated_missing_credentials` with the real 127 case count and exits 2. Note: identity's
+  `catalogHash` is the 127-action MODEL_API registry hash (`3872950503…`), legitimately distinct from
+  the inventory evidence hash (`fb3c3b5c…`) and the internal registry hash (`d899cc15…`). Gate:
+  type-check:scripts + 21 coverage tests + type-check + lint + dup, all 0. Eval:
+  `not_evaluated_missing_credentials`. Live: `not_run`. Next: `T17-C`.
 
 ## Non-negotiable invariants
 

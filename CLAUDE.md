@@ -410,6 +410,32 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   as a refactor regression check (521 passed total) + `npm run type-check` + `type-check:scripts` +
   `lint` + `dup` all exit 0. Counts: unchanged. Live: `live_not_run_missing_credentials`. Default
   engine: `v1`. Next: `T17-B`.
+- **T17-B CLOSED:** `scripts/eval-api-discovery.ts` scores API discovery through the **real** runner.
+  A shared `scripts/eval-v2/runner-harness.ts` (second deliberate extra file, same dup-gate reason as
+  `case-model.ts`; T17-C/D reuse it) assembles the identical dependency set
+  `buildV2RunnerDependencies` builds for a live HTTP turn — real `runAssistantV2`, real
+  `buildApiOperationIndex` + `runDiscoverySearch`, real `createReadExecutionPort`, real
+  `OperationPreparationService` — against a fresh `createFakeWorkspace` and a throwaway SQLite file,
+  then scores ONLY what the run durably journaled (`api.operations_loaded` /
+  `tool.requested` / the `assistant_runs` terminal phase). Discovery is never called directly, the
+  provider is never scripted in the shipped path, and the run starts with the discovery meta-tool
+  alone. Per case: 3/3 canonical, ≥2/3 paraphrase, ≥2/3 typo, ≤12 API tools ever offered in one
+  completion, and 0/3 loads of a DELETE operation from an unrelated feature group. Smoke-verified the
+  harness really drives a run (scripted-client override, local only, not committed as a shipped path):
+  outcome `completed`, terminal phase `completed`, 12 operations loaded — the exact cap — target
+  included, and the read executed. Credential-free behavior verified by running the script:
+  `status: "not_evaluated_missing_credentials"`, `modelConfiguration` the same sentinel,
+  `numerator`/`denominator` 0, real `caseCount` 127, real candidate SHA and catalog hash, **exit 2** —
+  a sentinel can never be mistaken for a pass by exit code. No `.env.server` is sourced and no key was
+  used. Hash note for reviewers: the identity's `catalogHash` is
+  `MODEL_API_ACTION_CATALOG.hash()` = `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`
+  (the 127-action model-facing registry), which is legitimately NOT the inventory evidence hash
+  `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce` nor
+  `INTERNAL_ACTION_CATALOG.hash()` `d899cc15482e6085afa29d96fce7cba7aa951f480be008b88cf50e9178b14f56`;
+  `check:api-action-inventory` stays green, so nothing drifted. Gate: `npm run type-check:scripts` +
+  `npx vitest run tests/unit/v2-eval-coverage.test.ts` (21 passed) + `type-check` + `lint` + `dup`,
+  all exit 0. Eval status: `not_evaluated_missing_credentials`. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-C`.
 
 ## Start here
 
