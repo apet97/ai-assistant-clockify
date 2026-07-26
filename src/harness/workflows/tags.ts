@@ -252,6 +252,10 @@ const deleteTag = defineRiskyAction({
     .refine((v) => v.id !== undefined || v.name !== undefined, {
       message: "Provide the tag id or its exact name.",
     }),
+  referenceSelector: {
+    entityType: "tag",
+    bindings: [{ referenceField: "externalId", argumentPath: "/id" }],
+  },
   async preview(ctx, args) {
     // Resolve a name → id (including a name passed in the id slot), so a delete
     // never dead-ends or commits a doomed id. Ambiguous identity stops and asks.

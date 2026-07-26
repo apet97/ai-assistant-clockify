@@ -36,6 +36,10 @@ const deleteArchived = defineRiskyAction({
     .refine((v) => v.id !== undefined || v.name !== undefined, {
       message: "Provide the project id or its exact name.",
     }),
+  referenceSelector: {
+    entityType: "project",
+    bindings: [{ referenceField: "externalId", argumentPath: "/id" }],
+  },
   preview: (ctx, args) => previewDeleteArchivedProject(ctx, args),
   commit: (ctx, payload, operation) => commitDeleteArchivedProject(ctx, payload, operation, "clockify_projects_delete_archived"),
 });

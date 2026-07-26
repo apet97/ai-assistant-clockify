@@ -28,6 +28,13 @@ const deleteCompleted = defineRiskyAction({
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["parent", "target"] }, strategies: ["delete"] }),
   schema: taskTargetRefSchema,
+  referenceSelector: {
+    entityType: "task",
+    bindings: [
+      { referenceField: "externalId", argumentPath: "/id" },
+      { referenceField: "scope.projectId", argumentPath: "/projectId" },
+    ],
+  },
   preview: (ctx, args) => previewDeleteCompletedTask(ctx, args),
   commit: (ctx, payload, operation) => commitDeleteCompletedTask(ctx, payload, operation, "clockify_tasks_delete_completed"),
 });

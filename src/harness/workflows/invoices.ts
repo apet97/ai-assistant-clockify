@@ -1102,6 +1102,10 @@ const deleteInvoice = defineRiskyAction({
     .refine((v) => v.id !== undefined || v.number !== undefined, {
       message: "Provide the invoice id or its number.",
     }),
+  referenceSelector: {
+    entityType: "invoice",
+    bindings: [{ referenceField: "externalId", argumentPath: "/id" }],
+  },
   async preview(ctx, args) {
     const resolved = await resolveInvoiceRef(ctx, args, "delete");
     if (!resolved.ok) return resolved.clarify;

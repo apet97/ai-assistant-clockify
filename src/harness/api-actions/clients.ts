@@ -82,6 +82,10 @@ const deleteArchived = defineRiskyAction({
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["delete"] }),
   schema: clientTargetRefSchema,
+  referenceSelector: {
+    entityType: "client",
+    bindings: [{ referenceField: "externalId", argumentPath: "/id" }],
+  },
   preview: (ctx, args) => previewDeleteArchivedClient(ctx, args),
   commit: (ctx, payload, operation) => commitDeleteArchivedClient(ctx, payload, operation, "clockify_clients_delete_archived"),
 });

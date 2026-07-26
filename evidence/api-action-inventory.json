@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "generatorVersion": 2,
-  "catalogHash": "e97d4b74275d72d8b6c7afecf4585e13bb50f76822cb07757f30248368c4bea7",
+  "catalogHash": "fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce",
   "officialOpenApi": {
     "version": "v1",
     "sha256": "044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2",
@@ -1871,7 +1871,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "api-actions/clients.ts",
-      "actionFingerprint": "058d93bd0c2db8a66f4bd46a31a82e8288b32f25174d04098590fb7877f9c81f",
+      "actionFingerprint": "ed8d8ad18da0b8d651db9d040b9206105b8cea163f8ff62f36e1f6a513695824",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/clients/{id} (deleteClient).",
       "operation": {
@@ -3804,7 +3804,7 @@
       "kind": "risky_write",
       "featureGroup": "expenses",
       "workflowModule": "expenses.ts",
-      "actionFingerprint": "c6b04349861626b3115d59a6fa94cb7e98af5b8ca83bb1101ca11bb98d2eecfe",
+      "actionFingerprint": "bb0fca4b25135017054e7b6454e5be1b24d77ddd87d2eae4e4f6a4f492bd3e6b",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/expenses/{id} (deleteExpense).",
       "operation": {
@@ -4989,7 +4989,7 @@
       "kind": "risky_write",
       "featureGroup": "invoices",
       "workflowModule": "invoices.ts",
-      "actionFingerprint": "2cacf4a7bcf5c49ed0451b836f94d151dcd258b35561009e94a62c223e99bfac",
+      "actionFingerprint": "d9c0a80b7b618cd920189df420f0be34f7f7c9c529a8262085fecad0c397ceb4",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/invoices/{id} (deleteInvoice).",
       "operation": {
@@ -8178,7 +8178,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "api-actions/projects.ts",
-      "actionFingerprint": "7b7794938a46aa9a596c2dd75e764487bcb0786c843a3b5cc3d9f8e9632a342b",
+      "actionFingerprint": "d0e54173d6af3cc7c17d1a46199e8076283cef6ce2358b6a278111ac915cfb01",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/projects/{projectId} (deleteProject).",
       "operation": {
@@ -8568,7 +8568,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "api-actions/tasks.ts",
-      "actionFingerprint": "b73ef169733fb06810c3a27e921fd6bc44330f7186f9cfd0f56ea9f469a6e76b",
+      "actionFingerprint": "8ce9ac1d091410822cbc11ddc14e9d00a47b9ae993316f9808523b8c7083a00e",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/projects/{projectId}/tasks/{id} (deleteTask).",
       "operation": {
@@ -10639,7 +10639,7 @@
       "kind": "risky_write",
       "featureGroup": "work_structure",
       "workflowModule": "tags.ts",
-      "actionFingerprint": "a2bae518701d9f40ce6ecd1b4c626b34b9d3ba704911471abb870258a9ae03c5",
+      "actionFingerprint": "c9024ae785ec26f1d81b4084217fda6f3f212c2a9b2285a7886aabbf77d8ae4d",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: DELETE /workspaces/{workspaceId}/tags/{id} (deleteTag).",
       "operation": {
@@ -14493,7 +14493,7 @@
       "kind": "risky_write",
       "featureGroup": "users_groups",
       "workflowModule": "users.ts",
-      "actionFingerprint": "2e5c4665e863667105ad683f4d8bd328a1048ae729e80a7e344629fa74d6d705",
+      "actionFingerprint": "a71273c7fc46948190f7333e62666c6b254442260d90b8fe799e51f006520e2a",
       "exposure": "api",
       "decisionReason": "One logical Clockify operation: PUT /workspaces/{workspaceId}/users/{userId} (updateUserStatus).",
       "operation": {

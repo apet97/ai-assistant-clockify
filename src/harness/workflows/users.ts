@@ -824,6 +824,10 @@ const deactivateUser = defineAction({
     .refine((v) => v.userId !== undefined || v.userName !== undefined, {
       message: "Provide the member (id or exact name).",
     }),
+  referenceSelector: {
+    entityType: "user",
+    bindings: [{ referenceField: "externalId", argumentPath: "/userId" }],
+  },
   async handler(ctx, args) {
     // Resolve + VERIFY the member first (a name in either slot, a wrong-typed
     // 24-hex id ⇒ clarify) so the self-deactivation guard below holds on the

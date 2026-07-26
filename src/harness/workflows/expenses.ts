@@ -818,6 +818,10 @@ const deleteExpense = defineRiskyAction({
   mutationWorkflow: "durable",
   mutationContract: targetContract(["delete"]),
   schema: z.object({ id: z.string().min(1), notes: z.string().optional() }),
+  referenceSelector: {
+    entityType: "expense",
+    bindings: [{ referenceField: "externalId", argumentPath: "/id" }],
+  },
   async preview(ctx, args) {
     const target = await expenseTarget(ctx, args.id);
     if (!target) return { clarify: `Expense ${args.id} could not be verified.` };
