@@ -494,3 +494,107 @@ describe("v2 release evidence", () => {
     expect(release).not.toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
   });
 });
+
+describe("T17-G: v2 release evidence requires all three complete evaluations", () => {
+  const { buildV2ReleaseEvidence } = releaseEvidenceModule;
+  const SHA = "a".repeat(40);
+  const HASH = "b".repeat(64);
+
+  function report(overrides: Record<string, unknown> = {}) {
+    return {
+      status: "passed",
+      numerator: 10,
+      denominator: 10,
+      caseCount: 5,
+      identity: { candidateSha: SHA, catalogHash: HASH },
+      ...overrides,
+    };
+  }
+
+  function build(evaluations: Record<string, unknown> | undefined, authorityComplete = true) {
+    return buildV2ReleaseEvidence({
+      sourceCandidateSha: SHA,
+      evidenceCommitSha: "c".repeat(40),
+      machineConclusions: {},
+      v2Authority: authorityComplete
+        ? {
+            status: "complete",
+            evidence: {
+              schemaVersion: 1,
+              engine: "v2",
+              candidateSha: SHA,
+              registryId: "v2-api",
+              catalogHash: HASH,
+              assistantWriteCases: 84,
+              assistantWritesPreviewOnly: true,
+              exactOperationBindingMismatches: 0,
+              preparationMutationCount: 0,
+              typedConsentDispatchCount: 0,
+              promptInjectionDispatchCount: 0,
+              intentDeclarationCallCount: 0,
+              intentCapabilityRecordCount: 0,
+              intentCapabilityClaimCount: 0,
+              duplicateConfirmationDispatchViolations: 0,
+            },
+            conclusions: {
+              all_assistant_writes_preview_only: "passed",
+              exact_operation_binding: "passed",
+              zero_mutation_before_confirmation: "passed",
+              prompt_injection_drafts_cannot_execute: "passed",
+            },
+          }
+        : { status: "not_evaluated_until_pr15" },
+      ...(evaluations ? { evaluations } : {}),
+    } as never);
+  }
+
+  it("marks the release complete only when authority AND all three evaluations pass", () => {
+    const evidence = build({
+      apiDiscovery: report(),
+      assistantTerminal: report(),
+      writeSafety: report(),
+    });
+    expect(evidence.evaluations).toEqual({
+      apiDiscovery: "passed",
+      assistantTerminal: "passed",
+      writeSafety: "passed",
+    });
+    expect(evidence.v2EvaluationComplete).toBe(true);
+  });
+
+  it("rejects a MISSING evaluation", () => {
+    const evidence = build({ apiDiscovery: report(), assistantTerminal: report() });
+    expect(evidence.evaluations.writeSafety).toBe("rejected");
+    expect(evidence.v2EvaluationComplete).toBe(false);
+  });
+
+  it("keeps a SENTINEL evaluation non-passing without calling it rejected", () => {
+    const evidence = build({
+      apiDiscovery: { status: "not_evaluated_missing_credentials", numerator: 0, denominator: 0, caseCount: 127 },
+      assistantTerminal: report(),
+      writeSafety: report(),
+    });
+    expect(evidence.evaluations.apiDiscovery).toBe("not_evaluated_missing_credentials");
+    expect(evidence.v2EvaluationComplete).toBe(false);
+  });
+
+  it("rejects a PARTIAL score, a ZERO denominator, and a zero case count", () => {
+    expect(build({ apiDiscovery: report({ numerator: 9 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: report({ numerator: 0, denominator: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: report({ caseCount: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects a report bound to the wrong candidate SHA", () => {
+    const evidence = build({ apiDiscovery: report({ identity: { candidateSha: "d".repeat(40), catalogHash: HASH } }) });
+    expect(evidence.evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("never marks the release complete while authority evidence is the sentinel", () => {
+    const evidence = build({
+      apiDiscovery: report(),
+      assistantTerminal: report(),
+      writeSafety: report(),
+    }, false);
+    expect(evidence.v2EvaluationComplete).toBe(false);
+  });
+});

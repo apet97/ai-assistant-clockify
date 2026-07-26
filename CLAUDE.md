@@ -524,6 +524,31 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `npx vitest run tests/unit/live-v2-full.test.ts tests/unit/live-sweep.test.ts` (31 passed, plus
   `workflow-contracts` 36 total) + `type-check:scripts` + `lint` + `dup`, all exit 0. **No Clockify
   write ran.** Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-G`.
+- **T17-G CLOSED / Task 17 deterministic work CLOSED:** the five exact npm scripts exist
+  (`eval:api-discovery`, `eval:assistant-terminal`, `eval:write-safety`, `live:v2-full`, `live:sweep`
+  — none pre-existed; `live:sweep` landed one slice early in T17-F because the harness needed it, and
+  the other four here). `scripts/evidence/release-evidence.ts` gained `classifyV2Evaluation` plus
+  `ReleaseEvidenceV2.evaluations` / `v2EvaluationComplete`: a v2 release conclusion is fail-closed and
+  requires complete authority evidence AND all three evaluations `passed`, where `passed` means
+  complete + fully scored + non-empty + bound to the exact candidate SHA. Six new tests prove a
+  MISSING evaluation is `rejected`, a SENTINEL stays `not_evaluated_missing_credentials` (non-passing
+  without being mislabelled as rejected), a partial score / zero denominator / zero case count is
+  `rejected`, a stale candidate SHA is `rejected`, and sentinel authority evidence keeps
+  `v2EvaluationComplete: false` even with three passing evaluations. **Credential-dependent status,
+  recorded verbatim as the plan requires:** all three `eval:*` commands emit
+  `not_evaluated_missing_credentials` and **exit 2** with real case counts (discovery 127, terminal
+  127, write-safety 84) and `0/0` scores — that is the correct result and does NOT invalidate
+  deterministic local closure. No key was used and no dotenv file was sourced. Gate: the printed
+  8-file vitest list (**99 passed**) + the three `eval:*` commands + **`npm run verify` VERIFY_EXIT=0
+  (340 files / 5,201 tests, first run, zero flakes)**. **Exact remaining blockers for Task 17:**
+  (1) the three eval reports need model credentials to become complete exact-SHA artifacts;
+  (2) `live:v2-full` is built and refuses without its four preconditions — executing it needs T18-H;
+  (3) `npm run test:e2e` still needs a quiet machine (see CP-D: four attempts, every failure in an
+  untouched spec, zero clarification failures). Counts: `ACTION_CATALOG` 171 / `MODEL_API` 127;
+  inventory evidence hash `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`,
+  model-API registry hash `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`.
+  Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: **`T18-A` — operator-blocked;
+  T18 requires new, explicit, per-step authority and was NOT started.**
 
 ## Start here
 

@@ -178,6 +178,50 @@ export interface ReleaseEvidenceV2Input {
   evidenceCommitSha: string;
   machineConclusions: Partial<Record<MachineGate, unknown>>;
   v2Authority: V2AuthorityEvidenceReport;
+  /** T17-G: the three v2 evaluation reports, when they exist. */
+  evaluations?: {
+    apiDiscovery?: V2EvaluationInput;
+    assistantTerminal?: V2EvaluationInput;
+    writeSafety?: V2EvaluationInput;
+  };
+}
+
+/** The bounded shape a v2 evaluation report contributes to release evidence. */
+export interface V2EvaluationInput {
+  status: unknown;
+  numerator: unknown;
+  denominator: unknown;
+  caseCount: unknown;
+  identity?: { candidateSha?: unknown; catalogHash?: unknown };
+}
+
+export type V2EvaluationStatus = "passed" | "not_evaluated_missing_credentials" | "rejected";
+
+/**
+ * T17-G: classify ONE v2 evaluation report for release evidence. A report is
+ * `passed` only when it is complete, fully scored, non-empty, and bound to the
+ * exact candidate SHA; an explicit missing-credential sentinel stays
+ * `not_evaluated_missing_credentials`; anything else — a partial score, a zero
+ * denominator, a stale SHA, a malformed shape — is `rejected`. There is no path
+ * from a partial or sentinel report to a passing v2 release conclusion.
+ */
+export function classifyV2Evaluation(
+  report: V2EvaluationInput | undefined,
+  expected: { candidateSha: string; catalogHash?: string },
+): V2EvaluationStatus {
+  if (!report || typeof report !== "object") return "rejected";
+  if (report.status === "not_evaluated_missing_credentials") return "not_evaluated_missing_credentials";
+  if (report.status !== "passed") return "rejected";
+  const { numerator, denominator, caseCount } = report;
+  if (typeof numerator !== "number" || typeof denominator !== "number" || typeof caseCount !== "number") {
+    return "rejected";
+  }
+  if (denominator <= 0 || caseCount <= 0 || numerator !== denominator) return "rejected";
+  if (report.identity?.candidateSha !== expected.candidateSha) return "rejected";
+  if (expected.catalogHash !== undefined && report.identity?.catalogHash !== expected.catalogHash) {
+    return "rejected";
+  }
+  return "passed";
 }
 
 export interface ReleaseEvidenceV2 {
@@ -186,6 +230,10 @@ export interface ReleaseEvidenceV2 {
   evidenceCommitSha: string;
   machineGates: Record<MachineGate, MachineStatus>;
   v2Authority: V2AuthorityEvidenceReport;
+  /** Per-evaluation classification; every entry must be `passed` for a v2 release. */
+  evaluations: Record<"apiDiscovery" | "assistantTerminal" | "writeSafety", V2EvaluationStatus>;
+  /** True only when authority evidence is complete AND all three evaluations passed. */
+  v2EvaluationComplete: boolean;
 }
 
 /**
@@ -213,12 +261,23 @@ export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEv
     gate,
     machineStatus(input.machineConclusions[gate]),
   ])) as Record<MachineGate, MachineStatus>;
+  const expected = { candidateSha: input.sourceCandidateSha };
+  const evaluations = {
+    apiDiscovery: classifyV2Evaluation(input.evaluations?.apiDiscovery, expected),
+    assistantTerminal: classifyV2Evaluation(input.evaluations?.assistantTerminal, expected),
+    writeSafety: classifyV2Evaluation(input.evaluations?.writeSafety, expected),
+  };
   return {
     assistantEngine: "v2",
     sourceCandidateSha: input.sourceCandidateSha,
     evidenceCommitSha: input.evidenceCommitSha,
     machineGates,
     v2Authority: input.v2Authority,
+    evaluations,
+    // Fail-closed: a missing, partial, or sentinel evaluation can never produce a
+    // complete v2 release conclusion.
+    v2EvaluationComplete: input.v2Authority.status === "complete"
+      && Object.values(evaluations).every((status) => status === "passed"),
   };
 }
 

@@ -288,6 +288,18 @@ here; this file is the execution map.
   stays a direct `npx tsx` call because `workflow-contracts.test.ts` pins it so `timeout --signal=TERM`
   hits the sweep process, not an npm wrapper. Gate: 31 (+36 with workflow contracts) tests +
   type-check:scripts + lint + dup, all 0. No live write ran. Live: `not_run`. Next: `T17-G`.
+- **T17-G CLOSED / Task 17 deterministic work CLOSED:** the five npm scripts exist
+  (`eval:api-discovery`, `eval:assistant-terminal`, `eval:write-safety`, `live:v2-full`, `live:sweep`).
+  `release-evidence.ts` gained `classifyV2Evaluation` + `evaluations`/`v2EvaluationComplete`: a v2
+  release conclusion needs complete authority evidence AND three `passed` evaluations (complete, fully
+  scored, non-empty, exact-SHA-bound); six tests prove missing → rejected, sentinel → non-passing
+  sentinel, partial/zero-denominator/zero-case → rejected, stale SHA → rejected, and sentinel authority
+  keeps completion false. All three `eval:*` commands emit `not_evaluated_missing_credentials`, exit 2,
+  with real case counts (127/127/84) and 0/0 — the correct credential-free result. Gate: 99 tests +
+  three eval commands + `npm run verify` VERIFY_EXIT=0 (340 files / 5,201 tests, zero flakes).
+  Remaining blockers: model credentials for the three eval artifacts; `live:v2-full` execution needs
+  T18-H; full e2e needs a quiet machine (CP-D). Live: `not_run`. Default engine: `v1`.
+  Next: `T18-A` — **operator-blocked, requires new per-step authority.**
 
 ## Non-negotiable invariants
 
