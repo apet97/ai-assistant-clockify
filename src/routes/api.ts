@@ -578,6 +578,7 @@ export function apiRouter(
         undefined,
         requestAbort.signal,
         pre.requestId,
+        pre.continuationRunId,
       ));
     } finally {
       requestAbort.dispose();
@@ -627,6 +628,7 @@ export function apiRouter(
         (status) => write({ type: "status", ...status }),
         signal,
         pre.requestId,
+        pre.continuationRunId,
       ));
       const status = turn.ok ? 200 : 502;
       const body = turn.ok

@@ -17,6 +17,7 @@ export function buildResumeUserMessage(input: {
   originalRequest: string;
   structuredSummaries: string[];
   unfinishedNote?: string;
+  adminFollowUp?: string;
 }): string {
   const parts = [
     "Continue the admin request below using only the structured results provided.",
@@ -25,6 +26,9 @@ export function buildResumeUserMessage(input: {
   ];
   if (input.structuredSummaries.length > 0) {
     parts.push("", "Completed results:", ...input.structuredSummaries.map((s) => `- ${s}`));
+  }
+  if (input.adminFollowUp) {
+    parts.push("", `Admin follow-up: ${input.adminFollowUp}`);
   }
   if (input.unfinishedNote) {
     parts.push("", input.unfinishedNote);

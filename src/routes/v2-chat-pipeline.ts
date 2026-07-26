@@ -116,7 +116,9 @@ export function buildV2RunnerDependencies(
       },
     },
     requestGovernor: requestGovernorFor(deps, scope),
-    clock: { now: () => new Date(), monotonicMs: () => performance.now() },
+    // `model.completed`'s `latencyMs` is a strict integer (events.ts); round the
+    // fractional `performance.now()` reading here rather than at every call site.
+    clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
   };
 }
 
@@ -134,6 +136,7 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
       _onStatus,
       signal,
       requestId,
+      continuationRunId,
     ): Promise<ChatTurnOutcome> => {
       try {
         assertNativeToolClient(deps.modelClient as NativeToolModelClient);
@@ -144,7 +147,6 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           message: "Assistant engine v2 requires a native tool-calling model client.",
         };
       }
-      const runId = requestId ?? randomUUID();
       const scope = {
         sessionId: claims.sessionId,
         workspaceId: claims.workspaceId,
@@ -152,6 +154,84 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         installationGeneration: installation.generation,
         authClass: "addon" as const,
       };
+
+      // T14-E: an explicit continuationRunId resumes the exact scoped run's
+      // single `pending` clarification with admin-authored free text — never
+      // an implicit "latest clarification" and never a second assistant run.
+      if (continuationRunId) {
+        const continuationScope = { ...scope, runId: continuationRunId };
+        const clarification = deps.store.getActiveClarificationForRun(continuationScope);
+        if (!clarification || clarification.status !== "pending") {
+          return {
+            ok: false,
+            code: "clarification_not_pending",
+            message: "That clarification is no longer pending.",
+          };
+        }
+        const newRequestId = requestId ?? randomUUID();
+        try {
+          deps.store.continueClarificationWithFreeTextAndLink({
+            clarificationId: clarification.id,
+            scope: continuationScope,
+            requestId: newRequestId,
+            messageContent: message,
+          });
+        } catch (error) {
+          return {
+            ok: false,
+            code: error instanceof Error ? error.message : "clarification_continuation_failed",
+            message: "That clarification could not be continued.",
+          };
+        }
+        const runnerDeps = buildV2RunnerDependencies(deps, installation, continuationScope, signal);
+        const outcome = await runAssistantV2({
+          runId: continuationRunId,
+          scope,
+          continuationMessage: message,
+          signal,
+        }, runnerDeps);
+        return v2OutcomeToTurn(outcome);
+      }
+
+      // New-run supersession: a session has at most one nonterminal run
+      // (`idx_assistant_runs_one_active_per_session`). An ordinary new message
+      // while that run awaits clarification supersedes it (cancelled +
+      // superseded, run failed). While it awaits confirmation, refuse instead
+      // of guessing a cancellation path for a pending write preview (T16-C/E
+      // own building that safely) — the admin must confirm or cancel it first.
+      const active = deps.store.getActiveRunForSession(claims.sessionId, claims.workspaceId, claims.adminUserId);
+      if (active) {
+        if (active.phase === "awaiting_confirmation") {
+          return {
+            ok: false,
+            code: "run_awaiting_confirmation",
+            message: "A previous action is awaiting your confirmation. Confirm or cancel it before starting something new.",
+          };
+        }
+        if (active.phase === "awaiting_clarification") {
+          const activeScope = { ...scope, runId: active.runId };
+          const clarification = deps.store.getActiveClarificationForRun(activeScope);
+          const activeState = deps.store.getRun(activeScope);
+          if (clarification && activeState) {
+            deps.store.supersedeClarificationForNewRun({
+              clarificationId: clarification.id,
+              scope: activeScope,
+              state: activeState,
+            });
+          }
+        }
+      }
+
+      // A fresh v2 run's own identity is always independently minted — it
+      // must never equal the HTTP request's `requestId`. `chatPreconditions`
+      // already claims a `turn_runs` row for `requestId`; `runAssistantV2`'s
+      // `eventService.startRun` claims its OWN `turn_runs`/
+      // `assistant_run_request_links` row keyed on `runId` (kind='initial',
+      // request_id=run_id — a self-referential link, not the HTTP request).
+      // Reusing `requestId` here collided both claims on the same primary key
+      // (only reachable once a real HTTP turn drove a fresh v2 run end to end,
+      // which no test did before T14-E).
+      const runId = randomUUID();
       const runnerDeps = buildV2RunnerDependencies(deps, installation, { ...scope, runId }, signal);
       const outcome = await runAssistantV2({
         runId,
@@ -159,32 +239,35 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         originalRequest: message,
         signal,
       }, runnerDeps);
-
-      if (outcome.kind === "completed") {
-        return {
-          ok: true,
-          replyKind: "final",
-          replyText: "Completed.",
-          results: [],
-          resultLinks: [],
-        };
-      }
-      if (outcome.kind === "suspended") {
-        return {
-          ok: true,
-          replyKind: "preview",
-          replyText: outcome.reason === "awaiting_confirmation"
-            ? "Review the preview and click Confirm."
-            : "Choose a clarification option to continue.",
-          results: [],
-          resultLinks: [],
-        };
-      }
-      return {
-        ok: false,
-        code: outcome.code,
-        message: `Assistant run failed: ${outcome.code}`,
-      };
+      return v2OutcomeToTurn(outcome);
     },
+  };
+}
+
+function v2OutcomeToTurn(outcome: Awaited<ReturnType<typeof runAssistantV2>>): ChatTurnOutcome {
+  if (outcome.kind === "completed") {
+    return {
+      ok: true,
+      replyKind: "final",
+      replyText: "Completed.",
+      results: [],
+      resultLinks: [],
+    };
+  }
+  if (outcome.kind === "suspended") {
+    return {
+      ok: true,
+      replyKind: "preview",
+      replyText: outcome.reason === "awaiting_confirmation"
+        ? "Review the preview and click Confirm."
+        : "Choose a clarification option to continue.",
+      results: [],
+      resultLinks: [],
+    };
+  }
+  return {
+    ok: false,
+    code: outcome.code,
+    message: `Assistant run failed: ${outcome.code}`,
   };
 }

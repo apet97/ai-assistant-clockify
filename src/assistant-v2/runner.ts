@@ -149,11 +149,12 @@ function seedCacheFromPriorRun(
   return initialV2ToolSet(registry, ordered);
 }
 
-function buildFreshMessages(state: RunState, resumeSummaries: string[] = []): ModelMessage[] {
-  const userContent = resumeSummaries.length > 0
+function buildFreshMessages(state: RunState, resumeSummaries: string[] = [], adminFollowUp?: string): ModelMessage[] {
+  const userContent = resumeSummaries.length > 0 || adminFollowUp
     ? buildResumeUserMessage({
         originalRequest: state.originalRequest,
         structuredSummaries: resumeSummaries,
+        adminFollowUp,
       })
     : state.originalRequest;
   return [
@@ -434,8 +435,9 @@ export async function runAssistantV2(
     const resumeSummaries = firstModelCallOfInvocation && resumingExistingRun && state.completedResults.length > 0
       ? state.completedResults.map((r) => `${r.actionName} completed (result ${r.actionResultId}).`)
       : [];
+    const adminFollowUp = firstModelCallOfInvocation ? input.continuationMessage : undefined;
     firstModelCallOfInvocation = false;
-    const messages = buildFreshMessages(state, resumeSummaries);
+    const messages = buildFreshMessages(state, resumeSummaries, adminFollowUp);
     const tools = toolsForState(deps.actionRegistry, state);
     let completion;
     try {

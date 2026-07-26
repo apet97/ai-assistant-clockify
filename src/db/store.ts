@@ -420,6 +420,22 @@ export interface Store {
     clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
     event: import("../assistant-v2/events.js").SequencedRunEvent;
   };
+  continueClarificationWithFreeTextAndLink(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    requestId: string;
+    messageContent: string;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+  };
+  supersedeClarificationForNewRun(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    event: import("../assistant-v2/events.js").SequencedRunEvent;
+  };
   prepareOperationRun(input: PrepareOperationRunInput): string;
   prepareAssistantWriteWithEvent(input: {
     scope: import("./store/runs.js").AssistantRunScope;
@@ -735,6 +751,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const operationRunStore = buildOperationRunStore(ctx);
   const runEventStore = buildRunEventStore(ctx);
   const pendingClarificationStore = buildPendingClarificationStore(ctx);
+  const messageStore = buildMessageStore(ctx);
   const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
     prepareOperationRun: (input) => operationRunStore.prepareOperationRun(input),
     savePendingConfirmation: (record) => confirmationStore.savePendingConfirmation(record),
@@ -775,7 +792,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildAdminPolicyStore(ctx),
     ...buildTelemetryStore(ctx),
     ...buildAuditMetricsStore(ctx),
-    ...buildMessageStore(ctx),
+    ...messageStore,
     ...buildSessionStore(ctx),
     ...undoStore,
     ...buildInstallationStore(ctx),
@@ -823,6 +840,87 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           input.scope,
           { ...input.state, continuation: { kind: "none" }, phase: "model" },
           { toolCallId: input.toolCallId, actionName: input.actionName, actionResultId: input.actionResultId },
+        );
+        return { clarification, event };
+      })();
+    },
+    continueClarificationWithFreeTextAndLink(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      requestId: string;
+      messageContent: string;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.continueClarificationWithFreeText(
+          input.clarificationId,
+          {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+        );
+        const timestamp = nowIso();
+        db.prepare(
+          `INSERT INTO assistant_run_request_links (
+             session_id, request_id, run_id, workspace_id, admin_user_id, kind, created_at
+           ) VALUES (?, ?, ?, ?, ?, 'free_text_continuation', ?)`,
+        ).run(
+          input.scope.sessionId,
+          input.requestId,
+          input.scope.runId,
+          input.scope.workspaceId,
+          input.scope.adminUserId,
+          timestamp,
+        );
+        messageStore.addMessage({
+          sessionId: input.scope.sessionId,
+          workspaceId: input.scope.workspaceId,
+          adminUserId: input.scope.adminUserId,
+          role: "user",
+          content: input.messageContent,
+        });
+        db.prepare(
+          `UPDATE assistant_runs SET phase = 'model', continuation_json = '{"kind":"none"}', updated_at = ?
+            WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+              AND installation_generation = ? AND auth_class = ?`,
+        ).run(
+          timestamp,
+          input.scope.sessionId,
+          input.scope.runId,
+          input.scope.workspaceId,
+          input.scope.adminUserId,
+          input.scope.installationGeneration,
+          input.scope.authClass,
+        );
+        return { clarification };
+      })();
+    },
+    supersedeClarificationForNewRun(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      state: import("../assistant-v2/state.js").RunState;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+      event: import("../assistant-v2/events.js").SequencedRunEvent;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.cancelClarification({
+          id: input.clarificationId,
+          scope: {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+          reason: "superseded",
+        });
+        const event = runEventStore.failRunWithEvent(
+          input.scope,
+          { ...input.state, continuation: { kind: "none" } },
+          { code: "clarification_superseded" },
         );
         return { clarification, event };
       })();

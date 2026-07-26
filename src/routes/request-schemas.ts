@@ -24,6 +24,9 @@ export const chatBodySchema = z
   .object({
     message: z.string().min(1).max(4000),
     requestId: z.string().uuid().optional(),
+    // v2-only (T14-E): resumes an existing suspended run with admin-authored
+    // free text instead of starting a new run. Ignored by v1 (byte-identical).
+    continuationRunId: z.string().uuid().optional(),
   })
   .strict();
 export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) }).strict();

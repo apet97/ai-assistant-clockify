@@ -20,6 +20,8 @@ import { createFakeWorkspace } from "../helpers/fake-clockify.js";
 import { makeTestConfig } from "../helpers/config.js";
 import { testKeys } from "../helpers/test-keys.js";
 import { mintAdminCookie } from "../helpers/session.js";
+import { signSessionCookie } from "../../src/auth/sessions.js";
+import { buildSessionCookie } from "../../src/routes/deps.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
 import { scriptedToolModel } from "../helpers/scripted-model.js";
 
@@ -365,5 +367,179 @@ describe("POST /api/clarifications/:id/resolve (HTTP wiring)", () => {
       .set("Cookie", cookie)
       .send({ optionId: "opt-1" });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("T14-E: free-text continuation and new-run supersession (HTTP)", () => {
+  const ADDON_KEY = "ai-assistant";
+
+  function cookieForSession(session: { id: string; expiresAt: string }, sessionSecret: string): string {
+    const value = signSessionCookie(
+      { sessionId: session.id, workspaceId: "ws-1", adminUserId: "admin-1", workspaceRole: "ADMIN", expiresAt: session.expiresAt },
+      sessionSecret,
+    );
+    return buildSessionCookie(value, false).split(";")[0]!;
+  }
+
+  async function makeV2App(script: ToolCompletion[] = []): Promise<{ app: Express; store: Store; config: ReturnType<typeof makeTestConfig> }> {
+    const keys = await testKeys();
+    const config = makeTestConfig({ clockifyAddonPublicKeyPem: keys.pem, clockifyAddonKey: ADDON_KEY, assistantEngine: "v2" });
+    const store = createStore(":memory:", { encryptionKey: "test-key", now: () => NOW });
+    stores.push(store);
+    store.saveInstallation({ workspaceId: "ws-1", addonId: "addon-1", addonUserId: "addon-user-1", addonToken: "addon-token" });
+    const app = createApp({
+      config,
+      store,
+      parser: createSignatureParser(ADDON_KEY, keys.pem),
+      modelClient: scriptedToolModel(script),
+      clockifyForWorkspace: () => createFakeWorkspace({ tags: [] }).client,
+    });
+    return { app, store, config };
+  }
+
+  function seedAwaitingClarification(store: Store, sessionId: string, runId: string, phase: "awaiting_clarification" | "awaiting_confirmation" = "awaiting_clarification") {
+    const scope = { sessionId, runId, workspaceId: "ws-1", adminUserId: "admin-1", installationGeneration: 1, authClass: "addon" as const };
+    const originalRequest = "create the tag urgent";
+    store.startRunWithTurn({
+      scope, originalRequest, requestHash: computeRequestHash(originalRequest),
+      catalogHash: MODEL_API_ACTION_CATALOG.hash(), loadedToolNames: [DISCOVERY_META_TOOL_NAME, "clockify_tags_create"], intentHash: runId,
+    });
+    store.suspendRunWithEvent(scope, store.getRun(scope)!, { reason: phase === "awaiting_clarification" ? "awaiting_clarification" : "awaiting_confirmation" });
+    if (phase === "awaiting_clarification") {
+      const clarification = store.createPendingClarification({
+        sessionId, runId, workspaceId: "ws-1", adminUserId: "admin-1",
+        originalToolName: "clockify_tags_create", partialArguments: {}, missingField: "name",
+        candidates: [{ optionId: "opt-urgent", externalId: "urgent", label: "urgent" }],
+      });
+      return { scope, clarification };
+    }
+    return { scope, clarification: undefined };
+  }
+
+  it("resumes the same run from free-text continuation, never creating a second run", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const { scope, clarification } = seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111");
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "use the urgent one instead", continuationRunId: "11111111-1111-4111-8111-111111111111" });
+
+    expect(res.status).toBe(200);
+    const resolved = store.getPendingClarification(clarification!.id, scope);
+    expect(resolved?.status).toBe("continued");
+    expect(resolved?.terminalReason).toBe("free_text_continuation");
+    // Same run resumed — no second nonterminal run exists for the session.
+    const active = store.getActiveRunForSession(session.id, "ws-1", "admin-1");
+    expect(active).toBeUndefined(); // the run completed (scripted model returned no tool calls)
+  });
+
+  it("rejects continuation for a clarification that is no longer pending", async () => {
+    const { app, store, config } = await makeV2App();
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const { scope, clarification } = seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111");
+    store.claimClarificationResolving(clarification!.id, scope);
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "urgent", continuationRunId: "11111111-1111-4111-8111-111111111111" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("clarification_not_pending");
+  });
+
+  it("never picks an implicit latest clarification: continuationRunId scoped to a foreign session is rejected", async () => {
+    const { app, store, config } = await makeV2App();
+    const sessionA = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const sessionB = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    seedAwaitingClarification(store, sessionB.id, "22222222-2222-4222-8222-222222222222");
+    const cookieForA = cookieForSession(sessionA, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookieForA)
+      .send({ message: "urgent", continuationRunId: "22222222-2222-4222-8222-222222222222" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("clarification_not_pending");
+  });
+
+  it("duplicate requestId replay for a continuation does not consume the clarification twice", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const { clarification } = seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111");
+    const cookie = cookieForSession(session, config.sessionSecret);
+    const requestId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: "11111111-1111-4111-8111-111111111111", requestId });
+    expect(first.status).toBe(200);
+
+    const replay = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: "11111111-1111-4111-8111-111111111111", requestId });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
+
+    const resolved = store.getPendingClarification(clarification!.id, {
+      sessionId: session.id, runId: "11111111-1111-4111-8111-111111111111", workspaceId: "ws-1", adminUserId: "admin-1",
+    });
+    expect(resolved?.status).toBe("continued");
+  });
+
+  it("a mismatched replay (same requestId, different text) is rejected as a conflict", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111");
+    const cookie = cookieForSession(session, config.sessionSecret);
+    const requestId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    const first = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "urgent please", continuationRunId: "11111111-1111-4111-8111-111111111111", requestId });
+    expect(first.status).toBe(200);
+
+    const mismatched = await request(app).post("/api/chat/messages").set("Cookie", cookie)
+      .send({ message: "a totally different message", continuationRunId: "11111111-1111-4111-8111-111111111111", requestId });
+    expect(mismatched.status).toBe(409);
+    expect(mismatched.body.code).toBe("operation_id_conflict");
+  });
+
+  it("an ordinary new message while a run awaits clarification supersedes it (cancelled, run failed)", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const { scope, clarification } = seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111");
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "actually, list my projects instead" });
+
+    expect(res.status).toBe(200);
+    const resolved = store.getPendingClarification(clarification!.id, scope);
+    expect(resolved?.status).toBe("cancelled");
+    expect(resolved?.terminalReason).toBe("superseded");
+    const oldRun = store.getRun(scope);
+    expect(oldRun?.phase).toBe("failed");
+  });
+
+  it("an ordinary new message while a run awaits confirmation is refused, leaving the pending preview untouched", async () => {
+    const { app, store, config } = await makeV2App();
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    const { scope } = seedAwaitingClarification(store, session.id, "11111111-1111-4111-8111-111111111111", "awaiting_confirmation");
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "actually, list my projects instead" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe("run_awaiting_confirmation");
+    const untouched = store.getRun(scope);
+    expect(untouched?.phase).toBe("awaiting_confirmation");
   });
 });

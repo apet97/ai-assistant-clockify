@@ -168,6 +168,8 @@ export type ChatPreconditions = {
   message: string;
   requestId: string;
   replay?: { status: number; body: unknown };
+  /** v2-only (T14-E). v1 ignores this field — its `executeChatTurn` never reads it. */
+  continuationRunId?: string;
 };
 
 /** A validated-and-committed confirmation, or the structured rejection to surface. */
@@ -224,6 +226,7 @@ export interface ChatPipeline {
     onStatus?: (status: { action: string; label: string }) => void,
     signal?: AbortSignal,
     requestId?: string,
+    continuationRunId?: string,
   ) => Promise<ChatTurnOutcome>;
   chatPreconditions: (req: Request, res: Response) => Promise<ChatPreconditions | undefined>;
 }
@@ -2188,7 +2191,13 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
       };
     }
     deps.store.markTurnRunExecuting(claims.sessionId, requestId);
-    return { claims, installation, message: parsed.data.message, requestId };
+    return {
+      claims,
+      installation,
+      message: parsed.data.message,
+      requestId,
+      ...(parsed.data.continuationRunId ? { continuationRunId: parsed.data.continuationRunId } : {}),
+    };
   }
 
   return {

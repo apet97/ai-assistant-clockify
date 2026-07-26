@@ -210,7 +210,9 @@ export interface RunAssistantInput {
   runId: string;
   scope: RunScope;
   originalRequest?: string;
-  resumeResultId?: string;
+  /** Admin-authored free text answering a clarification, surfaced to the model
+   * only on the first model call of a resumed invocation (T14-E). */
+  continuationMessage?: string;
   signal?: AbortSignal;
 }
 
