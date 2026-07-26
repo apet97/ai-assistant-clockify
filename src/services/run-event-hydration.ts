@@ -190,6 +190,13 @@ function hydrateAttachment(
         adminUserId: scope.adminUserId,
       });
       if (!row || (row.status !== "pending" && row.status !== "resolving")) return undefined;
+      // Status alone is not liveness. Expiry is enforced at claim time and only
+      // lazily by the retention sweep, so an expired-but-unswept row would
+      // render live chips that 410 on click. `operation.prepared` already gets
+      // this via rotatePendingNonce -> checkConfirmationGate({now}); mirror
+      // `claimClarificationResolving`'s comparison exactly (expired when
+      // expiresAt <= now) so a row this drops could not have resolved anyway.
+      if (Date.parse(row.expiresAt) <= now.getTime()) return undefined;
       const question = clarifyQuestionFromActionResult(store, event.payload.actionResultId);
       // The question lives only in the canonical `action_results` row. Without it
       // there is nothing truthful to ask, so drop the attachment rather than

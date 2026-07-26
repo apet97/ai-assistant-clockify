@@ -67,6 +67,10 @@ async function makeV2App(script: ToolCompletion[]): Promise<{
   store: Store;
   cookie: string;
   session: ReturnType<Store["createSession"]>;
+  /** Advance the one shared store + app clock. This ages an existing row exactly
+   * the way wall-clock time does in production, without waiting or touching the
+   * row. */
+  setClock: (value: Date) => void;
 }> {
   const keys = await testKeys();
   const config = makeTestConfig({
@@ -74,7 +78,12 @@ async function makeV2App(script: ToolCompletion[]): Promise<{
     clockifyAddonKey: ADDON_KEY,
     assistantEngine: "v2",
   });
-  const store = createStore(":memory:", { encryptionKey: "test-key", now: () => NOW });
+  // ONE clock for the store and the app, as in production. Left unset the app
+  // clock defaults to the REAL wall clock while the store writes rows at the
+  // fixed `NOW`, so every row is born "expired" — the same skew class as the
+  // T15-E session-cookie bug.
+  let clock = NOW;
+  const store = createStore(":memory:", { encryptionKey: "test-key", now: () => clock });
   stores.push(store);
   store.saveInstallation({
     workspaceId: WORKSPACE_ID,
@@ -89,6 +98,7 @@ async function makeV2App(script: ToolCompletion[]): Promise<{
     parser: createSignatureParser(ADDON_KEY, keys.pem),
     modelClient: scriptedToolModel(script),
     clockifyForWorkspace: () => fake.client,
+    now: () => clock,
   });
   const session = store.createSession({ workspaceId: WORKSPACE_ID, adminUserId: ADMIN_ID });
   // `verifySessionCookie` checks expiry against the REAL wall clock, so the
@@ -104,7 +114,15 @@ async function makeV2App(script: ToolCompletion[]): Promise<{
     },
     config.sessionSecret,
   );
-  return { app, store, session, cookie: buildSessionCookie(value, false).split(";")[0]! };
+  return {
+    app,
+    store,
+    session,
+    cookie: buildSessionCookie(value, false).split(";")[0]!,
+    setClock: (value_: Date) => {
+      clock = value_;
+    },
+  };
 }
 
 /** The v2 runner's first completion may only call the discovery meta-tool; the
@@ -300,6 +318,39 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     const required = after.find((e) => e.event.eventType === "clarification.required");
     expect(required).toBeDefined();
     expect(required!.attachment).toBeUndefined();
+  });
+
+  it("stops rendering an expired but unswept clarification as live", async () => {
+    // Expiry is enforced at claim time and only LAZILY by the retention sweep,
+    // so a still-`pending` row can outlive its TTL in the database. Hydrating on
+    // status alone rendered live chips that 410 on click.
+    const { app, store, cookie, session, setClock } = await makeV2App(
+      discoverThenCall("list time entries", {
+        name: "clockify_entries_list",
+        arguments: { userId: "Alice" },
+      }),
+    );
+    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list Alice's entries" });
+    const runId = await activeRunId(store, session.id);
+    const row = clarificationRowsFor(store, session.id, runId)!;
+    const scope = { sessionId: session.id, runId, workspaceId: WORKSPACE_ID, adminUserId: ADMIN_ID };
+
+    // Live at creation time.
+    const live = await readEvents(app, cookie, runId);
+    expect(live.find((e) => e.event.eventType === "clarification.required")?.attachment).toBeDefined();
+
+    // Past the 5-minute TTL, with NO sweep and NO status change.
+    setClock(new Date(Date.parse(row.expiresAt) + 1));
+    expect(store.getPendingClarification(row.id, scope)?.status).toBe("pending");
+
+    const after = await readEvents(app, cookie, runId);
+    const required = after.find((e) => e.event.eventType === "clarification.required");
+    expect(required).toBeDefined();
+    expect(required!.attachment).toBeUndefined();
+
+    // ...and the row it would have offered really is unclaimable, so nothing
+    // truthful was withheld.
+    expect(() => store.claimClarificationResolving(row.id, scope)).toThrow(/clarification_expired/);
   });
 
   it("creates a candidate-free row for a clarification with no single owning argument", async () => {
