@@ -50,4 +50,6 @@ export function createRunEventViewService(
   };
 }
 
+export type RunEventViewService = RunEventViewPort;
+
 export { hydrateRunEventAttachments } from "./run-event-hydration.js";

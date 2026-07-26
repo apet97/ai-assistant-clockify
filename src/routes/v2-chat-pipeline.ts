@@ -15,6 +15,7 @@ import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js
 import { createRunEventService } from "../services/run-event-service.js";
 import { createRunEventViewService } from "../services/run-event-view-service.js";
 import { createOperationPreparationService } from "../services/operation-preparation-service.js";
+import { createClarificationService } from "../services/clarification-service.js";
 import type { Installation } from "../db/store.js";
 import {
   persistRunHostCallAllowance,
@@ -120,6 +121,78 @@ export function buildV2RunnerDependencies(
     clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
   };
 }
+
+export interface ClarificationResolutionResult {
+  ok: boolean;
+  status: number;
+  code?: string;
+  message?: string;
+  page?: ReturnType<ReturnType<typeof createRunEventViewService>["list"]>;
+}
+
+/**
+ * The clarification-resolve seam for the transport route (T16-F): owns the
+ * installation/active-run lookups, per-request runner-dependency assembly, the
+ * exact-option resolution, and the post-resolution event page. The route only
+ * decodes, authorizes, calls this, and streams the returned frames.
+ */
+export function createClarificationResolutionPort(deps: AppDeps) {
+  const eventViews = createRunEventViewService(deps.store, { sessionSecret: deps.config.sessionSecret, now: deps.now });
+  return {
+    async resolve(input: {
+      claims: { sessionId: string; workspaceId: string; adminUserId: string; installationGeneration: number };
+      clarificationId: string;
+      optionId: string;
+      signal?: AbortSignal;
+    }): Promise<ClarificationResolutionResult> {
+      const { claims } = input;
+      const installation = deps.store.getInstallation(claims.workspaceId);
+      if (!installation || installation.status !== "active") {
+        return { ok: false, status: 404, code: "not_found", message: "No active installation for this workspace." };
+      }
+      const active = deps.store.getActiveRunForSession(claims.sessionId, claims.workspaceId, claims.adminUserId);
+      if (!active) {
+        return { ok: false, status: 404, code: "not_found", message: "No active run in this chat." };
+      }
+      const scope = {
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        installationGeneration: claims.installationGeneration,
+        authClass: "addon" as const,
+      };
+      const runScope = { ...scope, runId: active.runId };
+      const lastSequenceBefore = deps.store.getLastRunEventSequence(runScope);
+      const runnerDeps = buildV2RunnerDependencies(deps, installation, runScope, input.signal);
+      const clarificationService = createClarificationService({
+        store: deps.store,
+        registry: MODEL_API_ACTION_CATALOG,
+        reads: runnerDeps.reads,
+        preparations: runnerDeps.preparations,
+        runner: {
+          resume: (resumeInput: { runId: string; scope: RunScope; signal?: AbortSignal }) => runAssistantV2(
+            { runId: resumeInput.runId, scope: resumeInput.scope, signal: resumeInput.signal },
+            runnerDeps,
+          ),
+        },
+      });
+      const result = await clarificationService.resolveOption({
+        clarificationId: input.clarificationId,
+        scope,
+        runId: active.runId,
+        optionId: input.optionId,
+        signal: input.signal,
+      });
+      if (!result.ok) {
+        return { ok: false, status: result.status, code: result.code, message: result.message };
+      }
+      const page = eventViews.list({ scope, runId: active.runId, after: lastSequenceBefore, limit: 200 });
+      return { ok: true, status: 200, page };
+    },
+  };
+}
+
+export type ClarificationResolutionPort = ReturnType<typeof createClarificationResolutionPort>;
 
 /** V2 chat pipeline: native-tool runner only — never falls through to v1 planner. */
 export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {

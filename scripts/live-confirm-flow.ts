@@ -187,10 +187,17 @@ async function main(): Promise<void> {
     return { status: r.status, body: (await r.json()) as { ok?: boolean; code?: string } };
   }
   async function setPermission(level: "read" | "read_write"): Promise<void> {
-    await fetch(`${BASE_URL}/api/permissions/confirm`, {
+    // Preview-first save (T16-E): confirm accepts only the minted preview token.
+    const preview = await fetch(`${BASE_URL}/api/permissions/preview`, {
       method: "POST",
       headers: appHeaders,
       body: JSON.stringify({ groups: { work_structure: level } }),
+    });
+    const previewBody = (await preview.json()) as { preview?: { previewToken?: string } };
+    await fetch(`${BASE_URL}/api/permissions/confirm`, {
+      method: "POST",
+      headers: appHeaders,
+      body: JSON.stringify({ previewToken: previewBody.preview?.previewToken ?? "" }),
     });
   }
 

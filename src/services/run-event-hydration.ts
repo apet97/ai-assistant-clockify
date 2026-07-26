@@ -91,7 +91,9 @@ function envelopeFromActionResult(
     actionResultId,
     diagnostic: {
       kind: "sanitized_receipt",
-      byteLength: JSON.stringify(result ?? null).length,
+      // diagnosticViewSchema requires the EXACT UTF-8 byte length of `value`
+      // (T15-E flagged the prior UTF-16 code-unit count as a latent mismatch).
+      byteLength: Buffer.byteLength(JSON.stringify(result ?? null), "utf8"),
       value: (result ?? null) as JsonValue,
     },
   };

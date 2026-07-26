@@ -40,6 +40,13 @@ export const chatBodySchema = z
   .strict();
 export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) }).strict();
 
+// T16-E: the permission confirm step accepts ONLY the preview token minted by
+// POST /permissions/preview — never a replacement groups object. The token is
+// HMAC-bound to scope + current-policy hash + exact patch with a 5-minute TTL.
+export const permissionConfirmBodySchema = z.object({
+  previewToken: z.string().min(1).max(4096),
+}).strict();
+
 // Strict `{optionId}` body for POST /api/clarifications/:id/resolve (T14-D):
 // the label is never submitted, only the exact candidate id.
 export const resolveClarificationBodySchema = z.object({

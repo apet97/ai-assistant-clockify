@@ -177,6 +177,47 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   documented `f1-verify-flake-diagnosis` pattern: failed only under full-verify CPU load, passed clean
   in isolation, full verify went green on rerun). Live: `live_not_run_missing_credentials`. Default
   engine: `v1`. Next: `T16-A`.
+- **Task 16 CLOSED (T16-A through T16-G):** narrow services + transport-only routes.
+  T16-A/B froze the service contracts (`runScopeSchema` strict/required security fields,
+  `StartRunInput`/`ResumeRunInput`, `uuidIdSchema`, type-only cross-boundary view DTOs in
+  `src/shared/contracts.ts` — pinned type-only by asserting an EMPTY runtime module namespace so the
+  UI gzip budget can never regress from it; dead `RunnerDependencies.eventStore` removed) and pinned
+  `RunEventService` as named-composite-transitions-only with payload validation before any store write
+  plus the provider-attempt-2 same-logical-call budget rule (`tests/unit/v2-service-contracts.test.ts`).
+  T16-C extracted the runner (**634 → 202 lines**, well under the 500 gate): model-call machinery/
+  budget charging/lifecycle outcomes → `services/run-service.ts`; exact-scope cache seed + bounded
+  discovery refinement → `services/api-discovery-service.ts`; tool-call validation/partitioning,
+  governor-pooled reads, write preparation, denial journaling → `services/action-execution-service.ts`
+  (verbatim ports; T16-C parity gate + injection/clarification/preview-first suites green unchanged).
+  T16-D/E added `history-service` (rotated-nonce restore view), `session-context-service` (/me,
+  session list/new/open claims — cookie signing stays transport), `permission-service`,
+  `metrics-service`, `artifact-service`, `undo-service`. **Permission confirm is now token-only
+  (T16-E):** preview mints a 5-minute HMAC token bound to workspace+admin+session, the canonical
+  hash of the CURRENT policy, and the exact patch; confirm accepts ONLY `{previewToken}` (a groups
+  object 400s), authority recheck still runs BEFORE body decode (role-recheck pins hold verbatim),
+  and applying a patch changes the base-policy hash so replay of an effective change fails closed as
+  `stale_preview`. UI `savePermissions` does preview→confirm internally (ChatApi surface unchanged;
+  +61 bytes gzip, 20,802/21,504), e2e fixture + `live-chat-tour`/`live-confirm-flow` updated to the
+  two-step. T16-F/G split `routes/api.ts` (1049 → 309 lines, composition root only: engine selection,
+  service wiring, rate-limit + CSRF middleware, router mounting) into transport-only route files —
+  `me` 18 · `metrics` 19 · `undo` 27 · `artifacts` 29 · `runs` 53 · `operations` 55 · `permissions`
+  68 · `clarifications` 81 · `confirmation-batches` 118 · `confirmations` 163 · `chat` 193 — every
+  file under the 250 gate, each decode→authorize→one-service-call→encode/stream, store access only
+  via injected scoped ports (never `AppDeps`/`deps.store`), shared `request-abort.ts`/`route-ports.ts`
+  helpers; per-request clarification assembly moved behind `createClarificationResolutionPort`
+  (v2-chat-pipeline). New gates: `tests/unit/v2-layer-boundaries.test.ts` (runtime imports from
+  model/store/harness/presenter/audit/workflow layers rejected per route file; `import type` allowed;
+  api.ts/pipelines documented as the composition exception), `tests/integration/v2-route-parity.test.ts`
+  (literal body fixtures for deterministic paths incl. every not-found/invalid-decode branch),
+  `tests/integration/me-route.test.ts` (sanitized context, no token/session leakage). Also fixed the
+  T15-E-flagged `diagnostic.byteLength` UTF-16-vs-UTF-8 mismatch at its source
+  (`run-event-hydration.ts` now uses `Buffer.byteLength(..., "utf8")`). Gate: T16-G vitest list (117)
+  + cycles 0 + lint 0 + full `npm run verify` green (333 files / 5096 tests, VERIFY_EXIT=0 from the
+  log's own exit line; first run showed 3 load-flake failures — `api-headers` + `run-events-route` —
+  which passed in isolation and on the green rerun, the documented `f1-verify-flake-diagnosis`
+  pattern) + `perf:local-ui` PASSED + `onboarding-keyboard.spec.ts` 9/9 (Chromium/Firefox/WebKit).
+  Counts: `ACTION_CATALOG`/`MODEL_API` unchanged. Live: `live_not_run_missing_credentials`. Default
+  engine: `v1`. Next: T14-T16 independent review gate, then `T17-A`.
 
 ## Start here
 

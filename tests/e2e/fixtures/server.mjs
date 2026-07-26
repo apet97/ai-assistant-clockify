@@ -393,10 +393,31 @@ const server = createServer(async (request, response) => {
       featureGroups: Object.keys(policy.groups),
     });
   }
+  if (pathname === "/api/permissions/preview" && request.method === "POST") {
+    const submitted = await body(request);
+    // Mirror T16-E: the preview mints a token binding the exact patch; confirm
+    // accepts only that token. The fixture encodes the patch in the token.
+    const previewToken = `fixture-preview.${Buffer.from(JSON.stringify(submitted.groups ?? {})).toString("base64url")}`;
+    return json(response, 200, {
+      ok: true,
+      preview: {
+        current: state.policy,
+        next: { version: state.policy.version, groups: { ...state.policy.groups, ...submitted.groups } },
+        changedGroups: Object.keys(submitted.groups ?? {}),
+        previewToken,
+        expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      },
+    });
+  }
   if (pathname === "/api/permissions/confirm" && request.method === "POST") {
     const submitted = await body(request);
+    const token = typeof submitted.previewToken === "string" ? submitted.previewToken : "";
+    if (!token.startsWith("fixture-preview.")) {
+      return json(response, 400, { ok: false, code: "invalid_args", message: "A permission preview token is required." });
+    }
+    const groups = JSON.parse(Buffer.from(token.slice("fixture-preview.".length), "base64url").toString("utf8"));
     state.permissionsSaved = true;
-    state.policy = { version: state.policy.version + 1, groups: { ...submitted.groups } };
+    state.policy = { version: state.policy.version + 1, groups: { ...state.policy.groups, ...groups } };
     const policy = state.policy;
     return json(response, 200, {
       ok: true,

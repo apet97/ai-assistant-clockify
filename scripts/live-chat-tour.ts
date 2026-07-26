@@ -257,10 +257,17 @@ async function main(): Promise<void> {
     Object.keys(originalGroups).length === FEATURE_GROUPS.length
       ? originalGroups
       : Object.fromEntries(FEATURE_GROUPS.map((g) => [g, "read_write"]));
-  const rr = await fetch(`${BASE_URL}/api/permissions/confirm`, {
+  // Preview-first save (T16-E): confirm accepts only the minted preview token.
+  const rp = await fetch(`${BASE_URL}/api/permissions/preview`, {
     method: "POST",
     headers: appHeaders,
     body: JSON.stringify({ groups: restoreGroups }),
+  });
+  const rpBody = (await rp.json()) as { preview?: { previewToken?: string } };
+  const rr = await fetch(`${BASE_URL}/api/permissions/confirm`, {
+    method: "POST",
+    headers: appHeaders,
+    body: JSON.stringify({ previewToken: rpBody.preview?.previewToken ?? "" }),
   });
   console.log(`  permissions restored: ${rr.ok ? "✓" : `✗ (${rr.status})`}`);
 

@@ -20,6 +20,7 @@ import {
   decodeNdjsonEvent,
   decodeOperationResponse,
   decodePermissionsResponse,
+  decodePermissionPreviewTokenResponse,
   decodePermissionSaveResponse,
   decodeSessionsResponse,
   decodeSimpleMutationResponse,
@@ -274,12 +275,21 @@ export function createFetchApi(): ChatApi {
       if (!body.ok) throw new ApiError(500, body.message ?? "Could not load permissions.");
       return body;
     },
-    savePermissions: (groups) =>
-      mutation(
-        "/api/permissions/confirm",
+    // Preview-first save (T16-E): confirm accepts ONLY the preview token, so
+    // the server applies exactly the previewed patch — never a groups object.
+    savePermissions: async (groups) => {
+      const preview = await mutation(
+        "/api/permissions/preview",
         { method: "POST", body: JSON.stringify({ groups }) },
+        decodePermissionPreviewTokenResponse,
+      );
+      if (!preview.ok) return preview;
+      return mutation(
+        "/api/permissions/confirm",
+        { method: "POST", body: JSON.stringify({ previewToken: preview.previewToken }) },
         decodePermissionSaveResponse,
-      ),
+      );
+    },
     getHistory: async () => {
       const body = await json("/api/chat/history", undefined, decodeHistoryResponse, true);
       if (!body.ok) throw new ApiError(500, body.message ?? "Could not load history.");

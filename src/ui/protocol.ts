@@ -253,6 +253,15 @@ export function decodePermissionsResponse(value: unknown): PermissionsResponse |
   };
 }
 
+/** Decode only what the save flow needs from the permission preview response:
+ * the confirm-binding token (T16-E — confirm never accepts a groups object). */
+export function decodePermissionPreviewTokenResponse(value: unknown): { ok: true; previewToken: string } | ApiFailure {
+  const envelope = decodeApiEnvelope(value);
+  if (!envelope.ok) return failureFrom(envelope);
+  const preview = record(envelope.preview, "API response.preview");
+  return { ok: true, previewToken: string(preview.previewToken, "API response.preview.previewToken") };
+}
+
 function artifactFrom(data: unknown): NonNullable<ReceiptResult["receipt"]["artifact"]> {
   const payload = record(data, "receipt.data");
   if (payload.contentType !== "application/pdf") {

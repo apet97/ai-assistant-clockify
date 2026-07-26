@@ -13,6 +13,11 @@ import {
 import { createRunEventService } from "../../src/services/run-event-service.js";
 import { createStore } from "../../src/db/store.js";
 import { computeRequestHash } from "../../src/assistant-v2/state.js";
+import {
+  createPermissionService,
+  PERMISSION_PREVIEW_TTL_MS,
+} from "../../src/services/permission-service.js";
+import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 
 /**
  * T16-A/T16-B: the frozen v2 service contracts.
@@ -191,6 +196,66 @@ describe("RunEventService is closed to named transitions (T16-B)", () => {
       }),
     ).toThrow();
     expect(store.call).not.toHaveBeenCalled();
+  });
+});
+
+describe("permission preview token binding (T16-E)", () => {
+  function service(nowRef: { value: Date }) {
+    const saved: unknown[] = [];
+    const svc = createPermissionService({
+      store: {
+        getAdminPolicy: () => undefined,
+        upsertAdminPolicy: (_w: string, _a: string, policy: unknown) => { saved.push(policy); },
+        recordActionResult: () => ({ id: "result-1" }),
+        addAuditEvent: () => undefined,
+        getInstallation: () => ({ status: "active", generation: 1 }),
+      } as never,
+      loadPolicy: () => defaultAdminPolicy(),
+      sessionSecret: "secret-1",
+      now: () => nowRef.value,
+    });
+    return { svc, saved };
+  }
+
+  const claims = {
+    sessionId: "s-1",
+    workspaceId: "ws-1",
+    adminUserId: "admin-1",
+    workspaceRole: "ADMIN",
+    expiresAt: "2027-01-01T00:00:00.000Z",
+  };
+
+  it("confirm applies exactly the previewed patch and rejects the token after the 5-minute TTL", () => {
+    const nowRef = { value: new Date("2026-07-26T12:00:00.000Z") };
+    const { svc, saved } = service(nowRef);
+    const preview = svc.preview(claims, { invoices: "off" });
+    if (!preview.ok) throw new Error("preview failed");
+
+    // One second before expiry: applies.
+    nowRef.value = new Date(nowRef.value.getTime() + PERMISSION_PREVIEW_TTL_MS - 1000);
+    const confirmed = svc.confirm(claims, preview.view.previewToken, 1);
+    expect(confirmed.ok).toBe(true);
+    expect(saved).toHaveLength(1);
+
+    // A second, fresh token left to expire: rejected with no write.
+    const late = svc.preview(claims, { invoices: "off" });
+    if (!late.ok) throw new Error("preview failed");
+    nowRef.value = new Date(nowRef.value.getTime() + PERMISSION_PREVIEW_TTL_MS + 1000);
+    const expired = svc.confirm(claims, late.view.previewToken, 1);
+    expect(expired.ok).toBe(false);
+    if (!expired.ok) expect(expired.code).toBe("invalid_preview_token");
+    expect(saved).toHaveLength(1);
+  });
+
+  it("rejects a token minted for a different session/admin scope", () => {
+    const nowRef = { value: new Date("2026-07-26T12:00:00.000Z") };
+    const { svc, saved } = service(nowRef);
+    const preview = svc.preview(claims, { invoices: "off" });
+    if (!preview.ok) throw new Error("preview failed");
+    const foreign = svc.confirm({ ...claims, sessionId: "s-2" }, preview.view.previewToken, 1);
+    expect(foreign.ok).toBe(false);
+    if (!foreign.ok) expect(foreign.code).toBe("invalid_preview_token");
+    expect(saved).toHaveLength(0);
   });
 });
 
