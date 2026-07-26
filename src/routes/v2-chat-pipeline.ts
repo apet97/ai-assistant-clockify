@@ -5,11 +5,17 @@ import { createChatPipeline } from "./chat-pipeline.js";
 import { runAssistantV2 } from "../assistant-v2/runner.js";
 import { createReadExecutionPort } from "../assistant-v2/read-execution.js";
 import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
-import { assertNativeToolClient, type NativeToolModelClient, type RunScope } from "../assistant-v2/protocol.js";
+import {
+  assertNativeToolClient,
+  type NativeToolModelClient,
+  type RunnerDependencies,
+  type RunScope,
+} from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
 import { createRunEventService } from "../services/run-event-service.js";
 import { createRunEventViewService } from "../services/run-event-view-service.js";
 import { createOperationPreparationService } from "../services/operation-preparation-service.js";
+import type { Installation } from "../db/store.js";
 import {
   persistRunHostCallAllowance,
   remainingHostCallsFromRunBudget,
@@ -43,11 +49,80 @@ function requestGovernorFor(deps: AppDeps, scope: RunScope & { runId: string }) 
   };
 }
 
+/**
+ * The one place that assembles `runAssistantV2`'s full dependency set for a
+ * given installation/scope. Used by the chat pipeline (starts/continues a turn)
+ * and by the clarification-resolve route (resumes a suspended run) so both
+ * construct the identical read/write/discovery/governor wiring.
+ */
+export function buildV2RunnerDependencies(
+  deps: AppDeps,
+  installation: Installation,
+  scope: RunScope & { runId: string },
+  signal?: AbortSignal,
+): RunnerDependencies {
+  const eventService = createRunEventService(deps.store);
+  const eventViews = createRunEventViewService(deps.store, { sessionSecret: deps.config.sessionSecret, now: deps.now });
+  const preparationService = createOperationPreparationService({
+    store: deps.store,
+    registry: MODEL_API_ACTION_CATALOG,
+    sessionSecret: deps.config.sessionSecret,
+    clockifyForScope: () => deps.clockifyForWorkspace(installation, { signal }),
+    now: deps.now,
+    getAdminPolicy: (workspaceId, adminUserId) => deps.store.getAdminPolicy(workspaceId, adminUserId),
+    loadCalendarContext: async (readScope) => {
+      try {
+        return (await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(readScope.adminUserId)) ?? {};
+      } catch {
+        return {};
+      }
+    },
+  });
+  return {
+    modelClient: deps.modelClient as NativeToolModelClient,
+    runStore: deps.store,
+    eventStore: deps.store,
+    eventService,
+    eventViews,
+    actionRegistry: MODEL_API_ACTION_CATALOG,
+    discovery: {
+      search: async (input, discoveryScope) => {
+        if (!deps.apiOperationIndex) {
+          return { kind: "notice", code: "no_available_operation_for_auth_class", authClass: discoveryScope.authClass };
+        }
+        return runDiscoverySearch(deps.apiOperationIndex, input, discoveryScope.authClass);
+      },
+    },
+    reads: createReadExecutionPort({
+      registry: MODEL_API_ACTION_CATALOG,
+      store: deps.store,
+      clockifyForScope: () => deps.clockifyForWorkspace(installation, { signal }),
+      now: deps.now,
+      loadCalendarContext: async (readScope) => {
+        try {
+          return (await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(readScope.adminUserId)) ?? {};
+        } catch {
+          return {};
+        }
+      },
+    }),
+    preparations: preparationService,
+    installationGuard: {
+      assertCurrent: () => {
+        const current = deps.store.getInstallation(installation.workspaceId);
+        if (!current || current.status !== "active" || current.generation !== installation.generation) {
+          throw new Error("installation_not_current");
+        }
+      },
+    },
+    requestGovernor: requestGovernorFor(deps, scope),
+    clock: { now: () => new Date(), monotonicMs: () => performance.now() },
+  };
+}
+
 /** V2 chat pipeline: native-tool runner only — never falls through to v1 planner. */
 export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
   const controlPlane = createChatPipeline(deps);
-  const eventService = createRunEventService(deps.store);
-  const eventViews = createRunEventViewService(deps.store, { sessionSecret: deps.config.sessionSecret, now: deps.now });
   return {
     ...controlPlane,
     runResume: async () => undefined,
@@ -77,66 +152,13 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         installationGeneration: installation.generation,
         authClass: "addon" as const,
       };
-      const preparationService = createOperationPreparationService({
-        store: deps.store,
-        registry: MODEL_API_ACTION_CATALOG,
-        sessionSecret: deps.config.sessionSecret,
-        clockifyForScope: () => deps.clockifyForWorkspace(installation, { signal }),
-        now: deps.now,
-        getAdminPolicy: (workspaceId, adminUserId) => deps.store.getAdminPolicy(workspaceId, adminUserId),
-        loadCalendarContext: async (readScope) => {
-          try {
-            return (await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(readScope.adminUserId)) ?? {};
-          } catch {
-            return {};
-          }
-        },
-      });
+      const runnerDeps = buildV2RunnerDependencies(deps, installation, { ...scope, runId }, signal);
       const outcome = await runAssistantV2({
         runId,
         scope,
         originalRequest: message,
         signal,
-      }, {
-        modelClient: deps.modelClient as NativeToolModelClient,
-        runStore: deps.store,
-        eventStore: deps.store,
-        eventService,
-        eventViews,
-        actionRegistry: MODEL_API_ACTION_CATALOG,
-        discovery: {
-          search: async (input, discoveryScope) => {
-            if (!deps.apiOperationIndex) {
-              return { kind: "notice", code: "no_available_operation_for_auth_class", authClass: discoveryScope.authClass };
-            }
-            return runDiscoverySearch(deps.apiOperationIndex, input, discoveryScope.authClass);
-          },
-        },
-        reads: createReadExecutionPort({
-          registry: MODEL_API_ACTION_CATALOG,
-          store: deps.store,
-          clockifyForScope: () => deps.clockifyForWorkspace(installation, { signal }),
-          now: deps.now,
-          loadCalendarContext: async (readScope) => {
-            try {
-              return (await deps.clockifyForWorkspace(installation, { signal }).getCalendarContext(readScope.adminUserId)) ?? {};
-            } catch {
-              return {};
-            }
-          },
-        }),
-        preparations: preparationService,
-        installationGuard: {
-          assertCurrent: () => {
-            const current = deps.store.getInstallation(claims.workspaceId);
-            if (!current || current.status !== "active" || current.generation !== installation.generation) {
-              throw new Error("installation_not_current");
-            }
-          },
-        },
-        requestGovernor: requestGovernorFor(deps, { ...scope, runId }),
-        clock: { now: () => new Date(), monotonicMs: () => performance.now() },
-      });
+      }, runnerDeps);
 
       if (outcome.kind === "completed") {
         return {

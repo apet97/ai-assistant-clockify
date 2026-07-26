@@ -28,6 +28,12 @@ export const chatBodySchema = z
   .strict();
 export const confirmBodySchema = z.object({ nonce: z.string().min(1).max(256) }).strict();
 
+// Strict `{optionId}` body for POST /api/clarifications/:id/resolve (T14-D):
+// the label is never submitted, only the exact candidate id.
+export const resolveClarificationBodySchema = z.object({
+  optionId: z.string().min(1).max(256),
+}).strict();
+
 export const confirmBatchBodySchema = z.object({
   items: z.array(z.object({
     confirmationId: z.string().uuid(),

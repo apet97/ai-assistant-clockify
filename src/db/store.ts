@@ -407,6 +407,19 @@ export interface Store {
     id: string,
     scope: import("./store/pending-clarifications.js").ClarificationScope,
   ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resolveClarificationOption(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    selectedOptionId: string;
+    actionResultId: string;
+    operationId?: string;
+    toolCallId: string;
+    actionName: string;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    event: import("../assistant-v2/events.js").SequencedRunEvent;
+  };
   prepareOperationRun(input: PrepareOperationRunInput): string;
   prepareAssistantWriteWithEvent(input: {
     scope: import("./store/runs.js").AssistantRunScope;
@@ -720,6 +733,8 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   const confirmationBatchStore = buildConfirmationBatchStore(ctx);
   const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
+  const runEventStore = buildRunEventStore(ctx);
+  const pendingClarificationStore = buildPendingClarificationStore(ctx);
   const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
     prepareOperationRun: (input) => operationRunStore.prepareOperationRun(input),
     savePendingConfirmation: (record) => confirmationStore.savePendingConfirmation(record),
@@ -771,18 +786,47 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
     ...buildAssistantRunStore(ctx),
-    ...(() => {
-      const runEventStore = buildRunEventStore(ctx);
-      return {
-        ...runEventStore,
-        listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
-          return runEventStore.listEvents(input);
-        },
-      };
-    })(),
+    ...runEventStore,
+    listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
+      return runEventStore.listEvents(input);
+    },
     ...buildIntentCapabilityStore(ctx),
     ...buildEntityReferenceStore(ctx),
-    ...buildPendingClarificationStore(ctx),
+    ...pendingClarificationStore,
+    resolveClarificationOption(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      state: import("../assistant-v2/state.js").RunState;
+      selectedOptionId: string;
+      actionResultId: string;
+      operationId?: string;
+      toolCallId: string;
+      actionName: string;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+      event: import("../assistant-v2/events.js").SequencedRunEvent;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.resolveClarificationWithOption({
+          id: input.clarificationId,
+          scope: {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+          selectedOptionId: input.selectedOptionId,
+          actionResultId: input.actionResultId,
+          operationId: input.operationId,
+        });
+        const event = runEventStore.completeToolWithEvent(
+          input.scope,
+          { ...input.state, continuation: { kind: "none" }, phase: "model" },
+          { toolCallId: input.toolCallId, actionName: input.actionName, actionResultId: input.actionResultId },
+        );
+        return { clarification, event };
+      })();
+    },
     ...operationRunStore,
     ...assistantWritePreparationStore,
     startUndoOperation(id, input) {

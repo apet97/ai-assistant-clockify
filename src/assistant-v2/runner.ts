@@ -346,6 +346,12 @@ export async function runAssistantV2(
     installationGeneration: scope.installationGeneration,
     authClass: scope.authClass,
   });
+  // A durable run reloaded mid-flight (e.g. after a clarification resolve
+  // committed its result and cleared the suspension) has no in-memory message
+  // history to resume from — the next model call must summarize what already
+  // completed instead of repeating a bare original request (§14-D "resume the
+  // same run and event sequence").
+  const resumingExistingRun = state !== undefined;
 
   if (state && isTerminalPhase(state.phase)) {
     if (state.phase === "failed") {
@@ -419,12 +425,17 @@ export async function runAssistantV2(
   }
 
   let modelCall = state.budget.modelCallsUsed;
+  let firstModelCallOfInvocation = true;
   while (canReserveModelCall(state.budget) && !isTokenBudgetExceeded(state.budget) && !isActiveWallBudgetExceeded(state.budget)) {
     if (signalAborted(input.signal)) {
       return failRun(deps, state, "cancelled");
     }
     modelCall += 1;
-    const messages = buildFreshMessages(state);
+    const resumeSummaries = firstModelCallOfInvocation && resumingExistingRun && state.completedResults.length > 0
+      ? state.completedResults.map((r) => `${r.actionName} completed (result ${r.actionResultId}).`)
+      : [];
+    firstModelCallOfInvocation = false;
+    const messages = buildFreshMessages(state, resumeSummaries);
     const tools = toolsForState(deps.actionRegistry, state);
     let completion;
     try {

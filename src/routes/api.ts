@@ -30,6 +30,7 @@ import {
 } from "./chat-pipeline.js";
 import { createV2RunnerPipeline } from "./v2-chat-pipeline.js";
 import { runsRouter } from "./runs.js";
+import { clarificationsRouter } from "./clarifications.js";
 import { devRunInspectorRouter } from "./dev-run-inspector.js";
 import { createCsrfToken, CSRF_HEADER, verifyCsrfToken } from "../auth/csrf.js";
 import { resolveSession } from "./deps.js";
@@ -1038,6 +1039,7 @@ export function apiRouter(
   }));
 
   router.use("/runs", runsRouter(deps));
+  router.use("/clarifications", clarificationsRouter(deps));
   const inspector = devRunInspectorRouter(deps);
   if (inspector) router.use("/dev/runs", inspector);
 
