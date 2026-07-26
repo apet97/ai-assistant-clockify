@@ -56,11 +56,24 @@ describe("GitHub Actions workflow contracts", () => {
 
     expect(config).toMatch(/\[extend\]\s+useDefault = true/);
     expect(config).toContain('id = "generic-api-key"');
-    expect(config.match(/condition = "AND"/g)).toHaveLength(3);
-    expect(config.match(/regexTarget = "line"/g)).toHaveLength(3);
+    // Every exception stays AND-scoped to one path AND one exact line shape, so
+    // a real credential in an allowlisted file is still caught. Proven directly:
+    // planting a secret into either file below is still reported.
+    expect(config.match(/condition = "AND"/g)).toHaveLength(5);
+    expect(config.match(/regexTarget = "line"/g)).toHaveLength(5);
     expect(config).toContain("^\\.env\\.example$");
     expect(config).toContain("^tests/unit/config\\.test\\.ts$");
     expect(config).toContain("^tests/unit/workflow-contracts\\.test\\.ts$");
+    // The generated catalog digest is a public content hash, published in the
+    // inventory evidence — not a credential. Pinned to that exact declaration.
+    expect(config).toContain("^src/harness/api-catalog\\.generated\\.ts$");
+    expect(config).toContain(
+      'regexes = [\'\'\'^\\n?export const API_ACTION_CATALOG_HASH = "[0-9a-f]{64}" as const;$\'\'\']',
+    );
+    // A deliberately fake credential-shaped string that the supervisor's own
+    // secret detector is asserted to FIRE on.
+    expect(config).toContain("^tests/scripts/test_codex_v2_supervisor\\.py$");
+    expect(config).toContain("abcdefghijklmnop123");
     expect(config).toContain("Historical workflow-contract assertions");
     expect(config).toContain("regexes = ['''^\\n?    expect\\(config\\)\\.toContain");
     expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-64-hex-chars");
