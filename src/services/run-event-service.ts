@@ -41,6 +41,7 @@ type RunEventServiceStore = Pick<Store,
   | "denyToolWithEvent"
   | "startToolWithEvent"
   | "completeToolWithEvent"
+  | "requireClarificationWithEvent"
   | "suspendRunWithEvent"
   | "completeRunWithEvent"
   | "failRunWithEvent"
@@ -86,6 +87,10 @@ export function createRunEventService(store: RunEventServiceStore) {
     completeTool(input: RunEventCommand<"tool.completed">): SequencedRunEvent {
       parseRunEventPayload("tool.completed", input.payload);
       return store.completeToolWithEvent(toAssistantScope(input.scope), input.state, input.payload);
+    },
+    requireClarification(input: RunEventCommand<"clarification.required">): SequencedRunEvent {
+      parseRunEventPayload("clarification.required", input.payload);
+      return store.requireClarificationWithEvent(toAssistantScope(input.scope), input.state, input.payload);
     },
     suspendRun(input: RunEventCommand<"run.suspended">): SequencedRunEvent {
       parseRunEventPayload("run.suspended", input.payload);

@@ -108,7 +108,13 @@ export const runEventPayloadSchemas = {
     operationId: boundedString(),
     actionResultId: boundedString(),
   }).strict(),
-  "clarification.required": z.object({ clarificationId: boundedString() }).strict(),
+  // `actionResultId` references the canonical clarify `action_results` row that
+  // owns the admin-visible question text. Events keep bounded links, never the
+  // prose (which carries Clockify entity names).
+  "clarification.required": z.object({
+    clarificationId: boundedString(),
+    actionResultId: boundedString(),
+  }).strict(),
   "run.suspended": z.object({
     reason: z.enum(["awaiting_confirmation", "awaiting_clarification"]),
   }).strict(),

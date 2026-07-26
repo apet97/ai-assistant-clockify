@@ -57,7 +57,10 @@ export type RunOutcome =
 
 export type ReadExecutionOutcome =
   | { kind: "succeeded"; actionResultId: string }
-  | { kind: "clarification"; clarificationId: string }
+  /** A durable `pending_clarifications` row exists (CP-A). `actionResultId`
+   * links the canonical clarify result that owns the admin-visible question —
+   * events carry the reference, never the prose. */
+  | { kind: "clarification"; clarificationId: string; actionResultId: string }
   | { kind: "denied"; code: string; actionResultId: string }
   | { kind: "validation_failed"; code: string; actionResultId: string }
   | { kind: "failed"; code: string; actionResultId: string };
@@ -177,6 +180,7 @@ export interface RunEventServicePort {
   denyTool(input: RunEventCommand<"tool.denied">): SequencedRunEvent;
   startTool(input: RunEventCommand<"tool.started">): SequencedRunEvent;
   completeTool(input: RunEventCommand<"tool.completed">): SequencedRunEvent;
+  requireClarification(input: RunEventCommand<"clarification.required">): SequencedRunEvent;
   suspendRun(input: RunEventCommand<"run.suspended">): SequencedRunEvent;
   completeRun(input: RunEventCommand<"run.completed">): SequencedRunEvent;
   failRun(input: RunEventCommand<"run.failed">): SequencedRunEvent;
@@ -192,7 +196,9 @@ export interface RunnerDependencies {
     search(input: FindApiOperationsInput, scope: RunScope): Promise<ApiSearchResult>;
   };
   reads: {
-    execute(call: ToolCall, scope: RunScope): Promise<ReadExecutionOutcome>;
+    /** `runId` is REQUIRED: a clarify outcome persists a run-scoped
+     * `pending_clarifications` row, so the producer must know its run. */
+    execute(call: ToolCall, scope: RunScope & { runId: string }): Promise<ReadExecutionOutcome>;
   };
   preparations: {
     prepare(calls: ToolCall[], scope: RunScope): Promise<WritePreparationOutcome>;

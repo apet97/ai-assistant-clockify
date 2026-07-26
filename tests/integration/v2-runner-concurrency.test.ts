@@ -25,7 +25,7 @@ describe("v2 runner read concurrency integration", () => {
       arguments: {},
     }));
     const order: string[] = [];
-    await executeReadsConcurrently(calls, scope(), deps, undefined, (call) => {
+    await executeReadsConcurrently(calls, { ...scope(), runId: "run-1" }, deps, undefined, (call) => {
       order.push(call.id);
     });
     expect(maxActive).toBeLessThanOrEqual(4);

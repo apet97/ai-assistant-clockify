@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { ToolCall } from "../assistant/model-client.js";
 import { executeAction } from "../harness/actions.js";
 import type { ActionContext, ActionResult } from "../harness/action.js";
@@ -7,6 +6,12 @@ import { defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js"
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "../harness/receipts.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionResultRef } from "../db/action-results.js";
+import {
+  PendingClarificationStoreError,
+  type ClarificationScope,
+  type CreatePendingClarificationInput,
+  type PendingClarificationRecord,
+} from "../db/store/pending-clarifications.js";
 import type { ReadExecutionOutcome, RunScope } from "./protocol.js";
 import { buildV2ActionContext } from "./action-context.js";
 
@@ -21,6 +26,8 @@ export interface ReadExecutionStore {
   }): ActionResultRef;
   getActionResult(id: string): unknown | undefined;
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
+  createPendingClarification(input: CreatePendingClarificationInput): PendingClarificationRecord;
+  getActiveClarificationForRun(scope: ClarificationScope): PendingClarificationRecord | undefined;
 }
 
 export interface ReadExecutionDeps {
@@ -55,6 +62,66 @@ function persistResult(
   });
 }
 
+/**
+ * CP-A: the ONE runtime producer of `pending_clarifications` rows.
+ *
+ * `missingField` is the exact raw-argument key the clarify names (`result.field`)
+ * so the T14-D resolve side can inject the chosen candidate's `externalId` back
+ * into that one argument. A clarify with no single owning argument (a date
+ * range, a multi-slot project/task pair) stores the inert `"selection"` marker:
+ * exact-option resolve then correctly never matches an argument, and the admin
+ * answers by free-text continuation (T14-E) instead.
+ *
+ * `externalId` is the resolver's grounded option id (a 24-hex Clockify entity
+ * id — see `suggestOptions`/`manyMatchClarify` in `workflows/resolve.ts`), which
+ * is exactly what the resolve side injects.
+ */
+function createClarificationRow(
+  deps: ReadExecutionDeps,
+  scope: RunScope & { runId: string },
+  call: ToolCall,
+  result: Extract<ActionResult, { kind: "clarify" }>,
+): string {
+  const clarificationScope: ClarificationScope = {
+    sessionId: scope.sessionId,
+    runId: scope.runId,
+    workspaceId: scope.workspaceId,
+    adminUserId: scope.adminUserId,
+  };
+  try {
+    const row = deps.store.createPendingClarification({
+      ...clarificationScope,
+      originalToolName: call.name,
+      partialArguments: call.arguments,
+      missingField: result.field ?? "selection",
+      candidates: (result.options ?? []).map((option) => ({
+        optionId: option.id,
+        externalId: option.id,
+        label: option.label,
+      })),
+    });
+    return row.id;
+  } catch (error) {
+    // `idx_pending_clarifications_one_active_per_run` allows exactly one
+    // pending/resolving row per run. Two reachable collisions: two ambiguous
+    // reads in ONE provider batch (the read pool resolves every call before any
+    // outcome suspends the run), and a re-clarify inside `resolveOption` (which
+    // holds its row in `resolving`). Both must land on the run's EXISTING open
+    // question rather than crash — the caller then suspends on / resets a row
+    // that really exists.
+    const alreadyActive = error instanceof PendingClarificationStoreError
+      && error.code === "clarification_already_active";
+    if (!alreadyActive) throw error;
+    const existing = deps.store.getActiveClarificationForRun(clarificationScope);
+    // Synchronous single-instance SQLite: the row that just rejected the insert
+    // cannot have gone terminal between the two statements, so this is
+    // unreachable rather than a tolerated race. Rethrow instead of inventing an
+    // id the resolve side could never find.
+    if (!existing) throw error;
+    return existing.id;
+  }
+}
+
 async function buildContext(scope: RunScope, deps: ReadExecutionDeps): Promise<ActionContext> {
   return buildV2ActionContext({
     scope,
@@ -68,7 +135,7 @@ async function buildContext(scope: RunScope, deps: ReadExecutionDeps): Promise<A
 
 export async function executeV2Read(
   call: ToolCall,
-  scope: RunScope,
+  scope: RunScope & { runId: string },
   deps: ReadExecutionDeps,
 ): Promise<ReadExecutionOutcome> {
   const action = deps.registry.get(call.name);
@@ -109,7 +176,15 @@ export async function executeV2Read(
   });
 
   if (result.kind === "clarify") {
-    return { kind: "clarification", clarificationId: randomUUID() };
+    // Persist the question as a canonical `action_results` row FIRST: it is the
+    // sole owner of the admin-visible clarify prose, and the durable
+    // `clarification.required` event references it by id.
+    const clarifyRef = persistResult(deps, scope, call.name, result);
+    return {
+      kind: "clarification",
+      clarificationId: createClarificationRow(deps, scope, call, result),
+      actionResultId: clarifyRef.id,
+    };
   }
 
   const ref = persistResult(deps, scope, call.name, result);
@@ -133,7 +208,7 @@ export async function executeV2Read(
 }
 
 export function createReadExecutionPort(deps: ReadExecutionDeps): {
-  execute(call: ToolCall, scope: RunScope): Promise<ReadExecutionOutcome>;
+  execute(call: ToolCall, scope: RunScope & { runId: string }): Promise<ReadExecutionOutcome>;
 } {
   return {
     execute: (call, scope) => executeV2Read(call, scope, deps),

@@ -102,6 +102,21 @@ here; this file is the execution map.
   flagged for T14-T16 review: per-domain read fact population not wired; terminal-side real DB read not
   wired (mechanism proven correct given any terminal list, not yet called with real data). Gate: 46+67+19
   tests + check:api-action-inventory + full verify green (329/5036). Live: `not_run`. Next: `T15-E`.
+- **CP-A CLOSED:** `read-execution.ts` is the ONE runtime producer of `pending_clarifications` rows
+  (the recorded v2-cutover blocker): the clarify branch persists the question as a canonical
+  `action_results` row, creates the durable row, and returns
+  `{kind:"clarification", clarificationId, actionResultId}`. New named transition
+  `clarification.required` (`requireClarificationWithEvent` / `RunEventService.requireClarification`,
+  `NAMED_TRANSITIONS` 13) is emitted AFTER `state.continuation` is set and before `suspendRun`, which
+  still solely owns the phase. Reads-port scope widened to `RunScope & {runId}` everywhere. Owner
+  authorized three scope-widening fixes for plan-vs-code contradictions: an optional `field?: string`
+  on the clarify `ActionResult` (12 single-slot read call sites pass the exact argument key; the inert
+  `"selection"` fallback stays for the 13 no-single-argument sites, which resolve by free-text
+  continuation only); a `clarification_already_active` catch that returns the run's existing open
+  question (two ambiguous reads in one batch; a re-clarify inside `resolveOption`); and
+  `actionResultId` on the `clarification.required` payload so the question text stays in
+  `action_results` and the event keeps a bounded link. Gate: 51 focused tests + type-check + lint +
+  check:api-action-inventory all exit 0. Counts unchanged. Live: `not_run`. Next: `CP-B`.
 
 ## Non-negotiable invariants
 

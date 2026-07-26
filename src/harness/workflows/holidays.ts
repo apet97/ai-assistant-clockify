@@ -380,7 +380,7 @@ const listInPeriod = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "assignedTo");
     const dates = resolveDateRange(nowDate(ctx), {
       start: { raw: args.start },
       end: { raw: args.end },

@@ -59,7 +59,7 @@ const getTag = defineAction({
       list: () => ctx.clockify.listTags(),
     });
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options, field: "id" };
     }
     const entity = await ctx.clockify.getTag(resolved.id);
     return {

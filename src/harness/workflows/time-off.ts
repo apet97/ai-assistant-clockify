@@ -547,7 +547,7 @@ const getPolicy = defineAction({
       verb: "fetch",
       list: () => ctx.clockify.listTimeOffPolicies(),
     });
-    if (!resolved.ok) return clarifyResult(resolved.clarify);
+    if (!resolved.ok) return clarifyResult(resolved.clarify, "id");
     const entity = await ctx.clockify.getTimeOffPolicy(resolved.id);
     return {
       kind: "receipt",
@@ -796,7 +796,7 @@ const listRequests = defineAction({
       adminUserId: ctx.adminUserId,
       listUsers: () => ctx.clockify.listUsers(),
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const { rows, truncated } = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
     return {
       kind: "receipt",
@@ -1333,7 +1333,7 @@ const getBalance = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const { rows, truncated } = await ctx.clockify.getTimeOffBalance(user.userId);
     return {
       kind: "receipt",

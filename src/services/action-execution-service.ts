@@ -82,7 +82,7 @@ export function validateCompletionToolCalls(
 
 export async function executeReadsConcurrently(
   calls: ToolCall[],
-  scope: RunScope,
+  scope: RunScope & { runId: string },
   deps: Pick<RunnerDependencies, "requestGovernor" | "reads">,
   signal: AbortSignal | undefined,
   onResult: (call: ToolCall, outcome: ReadExecutionOutcome) => void,
@@ -192,9 +192,15 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       }
       readCallsToRun.push(call);
     }
-    await executeReadsConcurrently(readCallsToRun, scope, deps, signal, (call, outcome) => {
-      readOutcomes.push({ call, outcome });
-    });
+    await executeReadsConcurrently(
+      readCallsToRun,
+      { ...scope, runId: state.runId },
+      deps,
+      signal,
+      (call, outcome) => {
+        readOutcomes.push({ call, outcome });
+      },
+    );
 
     for (const { call, outcome } of readOutcomes) {
       deps.eventService.requestTool({
@@ -226,6 +232,20 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
       } else if (outcome.kind === "clarification") {
+        // Order matters: the continuation must be set BEFORE any event commits,
+        // because `commitStateEvent` persists `state.continuation` — journaling
+        // first and then reloading would write back `{kind:"none"}` and lose the
+        // clarification id the resolve route restores from.
+        state.continuation = { kind: "awaiting_clarification", clarificationId: outcome.clarificationId };
+        deps.eventService.requireClarification({
+          scope: scopedRun(state),
+          state,
+          payload: {
+            clarificationId: outcome.clarificationId,
+            actionResultId: outcome.actionResultId,
+          },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
         state.continuation = { kind: "awaiting_clarification", clarificationId: outcome.clarificationId };
         deps.eventService.suspendRun({
           scope: scopedRun(state),

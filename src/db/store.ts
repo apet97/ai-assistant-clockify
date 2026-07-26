@@ -327,6 +327,11 @@ export interface Store {
     state: import("../assistant-v2/state.js").RunState,
     payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.completed"],
   ): import("../assistant-v2/events.js").SequencedRunEvent;
+  requireClarificationWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["clarification.required"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
   suspendRunWithEvent(
     scope: import("./store/runs.js").AssistantRunScope,
     state: import("../assistant-v2/state.js").RunState,

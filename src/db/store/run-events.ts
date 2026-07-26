@@ -403,6 +403,16 @@ export function buildRunEventStore(ctx: StoreContext) {
         eventType: "tool.completed",
       });
     },
+    /** CP-A: journal that a read resolved to a durable clarification. This
+     * carries NO phase change — `suspendRunWithEvent` still owns the single
+     * `awaiting_clarification` transition, so the two can never disagree. */
+    requireClarificationWithEvent(
+      scope: AssistantRunScope,
+      state: RunState,
+      payload: RunEventPayloadMap["clarification.required"],
+    ): SequencedRunEvent {
+      return commitStateEvent({ scope, state, payload, eventType: "clarification.required" });
+    },
     suspendRunWithEvent(
       scope: AssistantRunScope,
       state: RunState,

@@ -124,7 +124,7 @@ const getTemplate = defineAction({
       list: () => ctx.clockify.listTemplates(),
     });
     if (!resolved.ok) {
-      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options };
+      return { kind: "clarify", message: resolved.clarify.clarify, options: resolved.clarify.options, field: "id" };
     }
     const entity = await ctx.clockify.getTemplate(resolved.id);
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_templates_get", entity: "template", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };

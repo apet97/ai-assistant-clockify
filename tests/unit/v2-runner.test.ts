@@ -38,6 +38,7 @@ function fakeEventLayer() {
     denyToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.denied")),
     startToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.started")),
     completeToolWithEvent: vi.fn((_s, _st, _p) => next("run", "tool.completed")),
+    requireClarificationWithEvent: vi.fn((_s, _st, _p) => next("run", "clarification.required")),
     suspendRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.suspended")),
     completeRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.completed")),
     failRunWithEvent: vi.fn((_s, _st, _p) => next("run", "run.failed")),
@@ -53,6 +54,7 @@ function fakeEventLayer() {
     denyTool: vi.fn((input) => eventStore.denyToolWithEvent({}, input.state, input.payload)),
     startTool: vi.fn((input) => eventStore.startToolWithEvent({}, input.state, input.payload)),
     completeTool: vi.fn((input) => eventStore.completeToolWithEvent({}, input.state, input.payload)),
+    requireClarification: vi.fn((input) => eventStore.requireClarificationWithEvent({}, input.state, input.payload)),
     suspendRun: vi.fn((input) => eventStore.suspendRunWithEvent({}, input.state, input.payload)),
     completeRun: vi.fn((input) => eventStore.completeRunWithEvent({}, input.state, input.payload)),
     failRun: vi.fn((input) => eventStore.failRunWithEvent({}, input.state, input.payload)),
@@ -352,7 +354,7 @@ describe("executeReadsConcurrently", () => {
       arguments: {},
     }));
     const order: string[] = [];
-    await executeReadsConcurrently(calls, baseScope(), deps, undefined, (call) => {
+    await executeReadsConcurrently(calls, { ...baseScope(), runId: "run-1" }, deps, undefined, (call) => {
       order.push(call.id);
     });
     expect(maxActive).toBeLessThanOrEqual(4);

@@ -59,7 +59,7 @@ const projectTotalsOne = defineAction({
       { id: args.projectId, name: args.projectName },
       { noun: "project", verb: "total", list: (filter) => ctx.clockify.listProjects(filter) },
     );
-    if (!project.ok) return clarifyResult(project.clarify);
+    if (!project.ok) return clarifyResult(project.clarify, "projectId");
     const { rows, truncated } = await ctx.clockify.getOneProjectScheduleTotals({
       projectId: project.id,
       start: window.start as string,

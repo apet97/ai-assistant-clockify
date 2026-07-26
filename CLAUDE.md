@@ -250,6 +250,42 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   (333 files / 5099 tests, VERIFY_EXIT=0; one `chat-new` load-timeout flake passed in isolation and
   on the green rerun, per `f1-verify-flake-diagnosis`). Live: `live_not_run_missing_credentials`.
   Default engine: `v1`. Next: `T17-A`.
+- **CP-A CLOSED:** `src/assistant-v2/read-execution.ts` is now the ONE runtime producer of
+  `pending_clarifications` rows — the recorded v2-cutover blocker. The clarify branch persists the
+  question as a canonical `action_results` row, creates the durable row, and returns
+  `{kind:"clarification", clarificationId, actionResultId}`; `action-execution-service.ts` journals a
+  new named transition `clarification.required` (store `requireClarificationWithEvent` +
+  `RunEventService.requireClarification`, `NAMED_TRANSITIONS` now 13) **after** setting
+  `state.continuation` and before `suspendRun`, which still solely owns the phase change. The reads
+  port scope is now `RunScope & {runId}` at every call site. **Three plan-vs-code contradictions found
+  by reading the real code and fixed with owner-authorized scope widening (see the STOP record):**
+  (1) the plan's literal `missingField: "selection"` can never resolve, because
+  `clarification-service.ts` rebuilds arguments as `{...partialArguments, [missingField]: externalId}`
+  and `"selection"` is no action's argument key — the clarify `ActionResult` gained an optional
+  `field?: string` (plus an optional 2nd param on `clarifyResult`) that 12 single-slot read call sites
+  now pass (`id` for clients/projects/tags/templates/time-off-policy get; `userId` for
+  entries_list/scheduling assignments+user_totals/time-off requests+balance; `assignedTo` for
+  holidays_in_period; `projectId` for scheduling project_totals_one). `"selection"` survives as the
+  correct INERT fallback for the 13 clarify sites with no single owning argument (11 date/window
+  clarifies, which carry no options at all, plus `entries_list`'s project/task pair and `tasks_get`'s
+  project-or-task ambiguity) — those resolve by T14-E free-text continuation only, never by guessing
+  an argument. (2) `idx_pending_clarifications_one_active_per_run` makes a second create throw
+  `clarification_already_active` on two reachable paths (two ambiguous reads in ONE provider batch —
+  the read pool resolves every call before any outcome suspends the run — and a re-clarify inside
+  `resolveOption`, which holds its row in `resolving`); the producer catches exactly that code and
+  returns the run's existing open question, so the run suspends on / resets a row that really exists
+  instead of crashing. (3) the `clarification.required` payload gained `actionResultId` so the
+  admin-visible question stays in `action_results` and the event keeps only a bounded link (CP-B
+  hydrates from it). Gate: `npx vitest run tests/unit/v2-service-contracts.test.ts
+  tests/unit/v2-runner.test.ts tests/unit/run-events-store.test.ts
+  tests/integration/v2-runner-persistence.test.ts tests/integration/v2-clarification-route.test.ts`
+  (51 passed) + `npm run type-check` + `npm run lint` + `npm run check:api-action-inventory` all exit
+  0. Environment note: `node_modules/better-sqlite3` was compiled for Node 26 and had to be
+  `npm rebuild`-ed for the mandated Node 22 before any DB-backed test could run. Counts: unchanged
+  (`ACTION_CATALOG` 171 / `MODEL_API` 127, catalog hash
+  `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce` — no metadata field changed).
+  Runtime proof of the produced row/event/attachment/resolve round trip lands in CP-B. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `CP-B`.
 
 ## Start here
 

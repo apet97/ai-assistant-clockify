@@ -119,9 +119,10 @@ export function makeV1Context(
   };
 }
 
-export function baseScope(authClass: "addon" | "api_key" = "addon"): RunScope {
+export function baseScope(authClass: "addon" | "api_key" = "addon"): RunScope & { runId: string } {
   return {
     sessionId: "session-1",
+    runId: "run-1",
     workspaceId: "ws-1",
     adminUserId: "admin-1",
     installationGeneration: 1,
@@ -163,7 +164,7 @@ export async function runV2ReadReceipt(
   actionName: string,
   args: Record<string, unknown>,
   deps: ReadExecutionDeps,
-  scope: RunScope,
+  scope: RunScope & { runId: string },
 ): Promise<{ outcome: ReadExecutionOutcome; receipt: SuccessReceipt | ErrorReceipt }> {
   const call: ToolCall = { id: "tool-1", name: actionName, arguments: args };
   const outcome = await executeV2Read(call, scope, deps);
@@ -240,7 +241,7 @@ export function assertCanonicalLinkPreserved(
 export async function assertConcurrentReadsPreserveOrder(
   actionNames: readonly string[],
   deps: ReadExecutionDeps,
-  scope: RunScope,
+  scope: RunScope & { runId: string },
 ): Promise<void> {
   let active = 0;
   let maxActive = 0;

@@ -8,7 +8,7 @@ import { successReceipt } from "../harness/receipts.js";
 export interface ClarificationServiceDeps {
   store: Store;
   registry: ActionRegistry;
-  reads: { execute(call: ToolCall, scope: RunScope): Promise<ReadExecutionOutcome> };
+  reads: { execute(call: ToolCall, scope: RunScope & { runId: string }): Promise<ReadExecutionOutcome> };
   preparations: { prepare(calls: ToolCall[], scope: RunScope & { runId: string }): Promise<WritePreparationOutcome> };
   runner: { resume(input: { runId: string; scope: RunScope; signal?: AbortSignal }): Promise<RunOutcome> };
 }

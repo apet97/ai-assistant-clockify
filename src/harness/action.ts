@@ -362,7 +362,16 @@ export type ActionResult = (
       options?: ClarifyOption[];
       recovery: RecoveryHint;
     }
-  | { kind: "clarify"; message: string; options?: ClarifyOption[] }
+  /**
+   * `field` is the EXACT raw-argument key the clarification is about, supplied
+   * only where the call site knows it with certainty (a single-slot resolver).
+   * The v2 clarification producer stores it as `missingField` so an exact-option
+   * resolve can inject the chosen entity id back into that one argument. A
+   * clarify with no single owning argument (a date range, a multi-slot
+   * project/task pair) deliberately leaves it undefined and resolves by
+   * free-text continuation instead — never by guessing an argument.
+   */
+  | { kind: "clarify"; message: string; options?: ClarifyOption[]; field?: string }
   | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation }
 ) & { operationId?: string };
 
@@ -627,9 +636,12 @@ export interface RiskyClarifyResult {
  * Map a {@link RiskyClarifyResult} to the clarify {@link ActionResult} variant.
  * Workflows return the `{ clarify, options? }` shape; this is the one place that
  * renames `clarify` → `message` so the spelling lives once.
+ *
+ * `field` is optional and names the exact raw-argument key this clarification is
+ * about — pass it only where the call site knows the single owning argument.
  */
-export function clarifyResult(c: RiskyClarifyResult): ActionResult {
-  return { kind: "clarify", message: c.clarify, options: c.options };
+export function clarifyResult(c: RiskyClarifyResult, field?: string): ActionResult {
+  return { kind: "clarify", message: c.clarify, options: c.options, ...(field ? { field } : {}) };
 }
 
 /**

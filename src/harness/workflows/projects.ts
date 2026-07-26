@@ -122,7 +122,7 @@ const getProject = defineAction({
       list: () => ctx.clockify.listProjects(),
     });
     if (!resolved.ok) {
-      return clarifyResult(resolved.clarify);
+      return clarifyResult(resolved.clarify, "id");
     }
     const entity = await ctx.clockify.getProject(resolved.id);
     return {

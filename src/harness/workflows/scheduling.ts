@@ -365,7 +365,7 @@ const listAssignments = defineAction({
       adminUserId: ctx.adminUserId,
       listUsers: () => ctx.clockify.listUsers(),
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const { rows, truncated } = await ctx.clockify.listAssignments({ ...args, userId: user.userId, start: window.start, end: window.end });
     return {
       kind: "receipt",
@@ -851,7 +851,7 @@ const userTotals = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const data = await ctx.clockify.getUserScheduleTotals(user.userId, {
       start: window.start as string,
       end: window.end as string,

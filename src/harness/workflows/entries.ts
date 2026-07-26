@@ -49,7 +49,7 @@ const listEntries = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const userId = user.userId;
     // The wire wants yyyy-MM-ddThh:mm:ssZ instants; the live loop sent
     // `?start=today` 12× (400 every time). Both edges are optional with no
