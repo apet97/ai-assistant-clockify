@@ -14,6 +14,15 @@ export const groupsPatchSchema = z
   .record(z.enum(FEATURE_GROUPS as [FeatureGroup, ...FeatureGroup[]]), permissionLevelSchema)
   .optional();
 
+/**
+ * Every server-minted resource id in this app is a UUID (`randomUUID()` across
+ * `src/db/store/*` and `harness/confirmations.ts`) — the one ID class request
+ * DTOs validate where a body field names a resource (T16-A). Route `:id` path
+ * params stay opaque strings on purpose: the scoped store lookup already fails
+ * closed, and an unknown-vs-malformed id must be indistinguishable (404).
+ */
+export const uuidIdSchema = z.string().uuid();
+
 // Cap the inputs at parse, before anything is persisted. The body parser caps
 // the whole payload (server.ts); these cap the fields. A whitespace-only message
 // is intentionally NOT rejected here — it stays length>=1 and flows to the

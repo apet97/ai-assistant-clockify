@@ -103,7 +103,6 @@ describe("v2 refuses to execute prompt-injected instructions from Clockify data"
     }, {
       modelClient: model,
       runStore: store,
-      eventStore: store,
       eventService,
       eventViews,
       actionRegistry: MODEL_API_ACTION_CATALOG,

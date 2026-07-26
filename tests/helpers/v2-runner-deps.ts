@@ -52,7 +52,6 @@ export function mockRunnerDeps(overrides: Partial<RunnerDependencies> = {}): Run
       recoverOrphanedActiveRuns: vi.fn(() => 0),
       failActiveRunsForSession: vi.fn(() => 0),
     },
-    eventStore: eventStore as unknown as RunnerDependencies["eventStore"],
     eventService: eventService as unknown as RunnerDependencies["eventService"],
     eventViews: { list: vi.fn(() => ({ runId: "run", events: [], nextAfter: 0, hasMore: false, lastSequence: 0 })) },
     actionRegistry: MODEL_API_ACTION_CATALOG,

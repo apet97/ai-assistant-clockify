@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { ModelClient, ToolCall } from "../assistant/model-client.js";
 import type {
   ApiSearchResult,
@@ -13,7 +14,6 @@ import type {
   RunEventViewPort,
   SequencedRunEvent,
 } from "./events.js";
-import type { RunEventStore } from "../db/store/run-events.js";
 
 export type { ListRunEventsInput, RunEventPage, RunEventViewPort, SequencedRunEvent };
 
@@ -24,6 +24,19 @@ export interface RunScope {
   installationGeneration: number;
   authClass: AuthClass;
 }
+
+/**
+ * The one runtime validator for a run scope (T16-A). Every security-scoping
+ * field is REQUIRED and unknown keys are rejected: a service can never receive
+ * a scope that silently dropped its tenant binding.
+ */
+export const runScopeSchema = z.object({
+  sessionId: z.string().min(1),
+  workspaceId: z.string().min(1),
+  adminUserId: z.string().min(1),
+  installationGeneration: z.number().int().nonnegative(),
+  authClass: z.enum(["addon", "api_key"]),
+}).strict();
 
 export type PresentationRef =
   | { kind: "action_result"; id: string }
@@ -139,22 +152,6 @@ export interface RunStateStore {
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 }
 
-export type RunEventStorePort = Pick<
-  RunEventStore,
-  | "reserveModelCallWithEvent"
-  | "completeModelCallWithEvent"
-  | "reserveDiscoveryCallWithEvent"
-  | "loadOperationsWithEvent"
-  | "requestToolWithEvent"
-  | "denyToolWithEvent"
-  | "startToolWithEvent"
-  | "completeToolWithEvent"
-  | "suspendRunWithEvent"
-  | "completeRunWithEvent"
-  | "failRunWithEvent"
-  | "getLastRunEventSequence"
->;
-
 export interface RunEventCommand<K extends RunEventType = RunEventType> {
   scope: RunScope & { runId: string };
   state: import("./state.js").RunState;
@@ -188,7 +185,6 @@ export interface RunEventServicePort {
 export interface RunnerDependencies {
   modelClient: NativeToolModelClient;
   runStore: RunStateStore;
-  eventStore: RunEventStorePort;
   eventService: RunEventServicePort;
   eventViews: RunEventViewPort;
   actionRegistry: ActionRegistry;
@@ -215,6 +211,12 @@ export interface RunAssistantInput {
   continuationMessage?: string;
   signal?: AbortSignal;
 }
+
+/** T16-A frozen start/resume DTOs: the two legal shapes of `RunAssistantInput`.
+ * A start ALWAYS carries the admin's original request; a resume NEVER invents
+ * one (the durable run row already owns it). */
+export type StartRunInput = RunAssistantInput & { originalRequest: string };
+export type ResumeRunInput = Omit<RunAssistantInput, "originalRequest">;
 
 export function assertNativeToolClient(client: ModelClient): asserts client is NativeToolModelClient {
   if (typeof client.completeWithTools !== "function") {

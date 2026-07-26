@@ -114,7 +114,6 @@ function harness(): {
     runAssistantV2({ runId: input.runId, scope: input.scope }, {
       modelClient: { complete: vi.fn(), completeWithTools: vi.fn(async () => ({ text: "done", toolCalls: [] })) },
       runStore: store,
-      eventStore: store,
       eventService,
       eventViews,
       actionRegistry: MODEL_API_ACTION_CATALOG,

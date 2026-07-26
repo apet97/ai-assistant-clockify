@@ -81,7 +81,6 @@ export function buildV2RunnerDependencies(
   return {
     modelClient: deps.modelClient as NativeToolModelClient,
     runStore: deps.store,
-    eventStore: deps.store,
     eventService,
     eventViews,
     actionRegistry: MODEL_API_ACTION_CATALOG,

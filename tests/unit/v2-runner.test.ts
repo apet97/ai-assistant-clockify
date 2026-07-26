@@ -78,7 +78,6 @@ function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependenci
   return {
     modelClient,
     runStore: store as unknown as RunnerDependencies["runStore"],
-    eventStore: eventStore as unknown as RunnerDependencies["eventStore"],
     eventService: eventService as unknown as RunnerDependencies["eventService"],
     eventViews: { list: vi.fn(() => ({ runId: "run", events: [], nextAfter: 0, hasMore: false, lastSequence: 0 })) },
     actionRegistry: MODEL_API_ACTION_CATALOG,
