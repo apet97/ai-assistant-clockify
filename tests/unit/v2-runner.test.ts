@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { runAssistantV2 } from "../../src/assistant-v2/runner.js";
 import {
   executeReadsConcurrently,
-  runAssistantV2,
-  seedCacheFromPriorRun,
   validateCompletionToolCalls,
-} from "../../src/assistant-v2/runner.js";
+} from "../../src/services/action-execution-service.js";
+import { seedCacheFromPriorRun } from "../../src/services/api-discovery-service.js";
 import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { RunnerDependencies, RunScope } from "../../src/assistant-v2/protocol.js";
@@ -64,7 +64,7 @@ function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependenci
     complete: vi.fn(),
     completeWithTools: vi.fn(async () => ({ text: "done", toolCalls: [] })),
   };
-  const { eventStore, eventService } = fakeEventLayer();
+  const { eventService } = fakeEventLayer();
   const store = {
     startRunWithTurn: vi.fn(),
     startRunWithEvent: vi.fn(),

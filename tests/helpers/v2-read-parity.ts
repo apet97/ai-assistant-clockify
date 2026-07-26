@@ -2,7 +2,7 @@ import { expect } from "vitest";
 import { buildApiOperationIndex } from "../../src/assistant-v2/discovery/api-index.js";
 import { searchApiOperations } from "../../src/assistant-v2/discovery/api-search.js";
 import { executeV2Read, type ReadExecutionDeps } from "../../src/assistant-v2/read-execution.js";
-import { executeReadsConcurrently } from "../../src/assistant-v2/runner.js";
+import { executeReadsConcurrently } from "../../src/services/action-execution-service.js";
 import type { ReadExecutionOutcome, RunScope } from "../../src/assistant-v2/protocol.js";
 import { capToolResultForModel, TOOL_RESULT_MAX_BYTES } from "../../src/assistant/tool-results.js";
 import { executeAction } from "../../src/harness/actions.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { executeReadsConcurrently } from "../../src/assistant-v2/runner.js";
+import { executeReadsConcurrently } from "../../src/services/action-execution-service.js";
 import { mockRunnerDeps, baseRunScope as scope } from "../helpers/v2-runner-deps.js";
 
 describe("v2 runner read concurrency integration", () => {
