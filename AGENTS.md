@@ -276,6 +276,18 @@ here; this file is the execution map.
   test. Absent tokens stay absent (never zero); tests assert no request text, action names, or
   session/run ids in the serialized block, and that another admin's runs are invisible. Gate: 51 tests
   + type-check(+scripts) + lint + cycles 0 + dup, all 0. Live: `not_run`. Next: `T17-F`.
+- **T17-F CLOSED (built, NOT executed):** `scripts/live-v2-full.ts` refuses unless all four
+  preconditions hold (`LIVE_CLOCKIFY=1`, the literal sacrificial marker — a workspace id is not proof,
+  credentials+workspace, explicit cleanup registry) and lists every missing one; verified by running it
+  (`refused`, all five failures, exit 2, zero Clockify calls). The registry rejects non-`AIASSIST_V2_`
+  names and cleans in reverse dependency order; the report passes only with zero leftovers, zero
+  preparation mutations, zero trusted-bypass calls and ≥1 prepared AND confirmed write, carrying a
+  4-char workspace suffix rather than any id or key. `live-sweep.ts` now sweeps both prefixes through
+  one `isSweepableName` predicate + exported `sweepIsClean`/`sweepLeftovers` (a scan failure never
+  proves absence). Five npm scripts added. Reverted my own unnecessary workflow change: the sweep step
+  stays a direct `npx tsx` call because `workflow-contracts.test.ts` pins it so `timeout --signal=TERM`
+  hits the sweep process, not an npm wrapper. Gate: 31 (+36 with workflow contracts) tests +
+  type-check:scripts + lint + dup, all 0. No live write ran. Live: `not_run`. Next: `T17-G`.
 
 ## Non-negotiable invariants
 

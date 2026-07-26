@@ -500,6 +500,30 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   tests/unit/v2-layer-boundaries.test.ts tests/integration/metrics-route.test.ts` (51 passed) +
   `type-check` + `type-check:scripts` + `lint` + `cycles` (0) + `dup`, all exit 0. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-F`.
+- **T17-F CLOSED (built, NOT executed):** `scripts/live-v2-full.ts` refuses to act unless ALL FOUR
+  preconditions hold — `LIVE_CLOCKIFY=1`, the literal sacrificial marker
+  (`clockify-live-smoke-sacrificial`; a workspace id is explicitly NOT accepted as proof a workspace is
+  disposable), credentials + workspace id, and an explicit cleanup-registry path — and reports EVERY
+  missing one, not just the first. Verified by running it: `status: "refused"` listing all five
+  failures, **exit 2**, zero Clockify calls. `LiveCleanupRegistry` rejects any resource whose name
+  lacks the `AIASSIST_V2_` prefix (`live_resource_not_fixture_owned`), so the harness can only ever
+  delete its own fixtures, and `cleanupOrder()` returns reverse dependency order (task before project
+  before client, newest-first within a kind). `buildLiveV2Report` passes ONLY a run with zero
+  leftovers, zero preparation mutations, **zero `trustedBypassCalls`** (the trusted immediate-write
+  bypass may never stand in for a confirmed assistant write) and at least one prepared AND confirmed
+  write — an empty run is a failure, and the report carries a 4-character workspace suffix rather than
+  the raw id or any key (asserted). `scripts/live-sweep.ts` now sweeps **both** prefixes through one
+  shared `isSweepableName` predicate (every per-entity `startsWith` call site routed through it) plus
+  exported `sweepIsClean`/`sweepLeftovers`; a SCAN failure can never prove absence. `package.json`
+  gained the five exact scripts (`eval:api-discovery`, `eval:assistant-terminal`, `eval:write-safety`,
+  `live:v2-full`, `live:sweep`); none pre-existed. `live-smoke.yml`'s fail-closed cleanup evidence now
+  claims both prefixes. **Reverted an unnecessary change of my own:** I first rewrote the workflow's
+  sweep step to `npm run live:sweep`, which broke `workflow-contracts.test.ts`'s deliberate pin — the
+  step must stay a direct `npx tsx` invocation so `timeout --signal=TERM` signals the sweep process
+  itself instead of an npm wrapper. Restored the pinned command with a comment recording why. Gate:
+  `npx vitest run tests/unit/live-v2-full.test.ts tests/unit/live-sweep.test.ts` (31 passed, plus
+  `workflow-contracts` 36 total) + `type-check:scripts` + `lint` + `dup`, all exit 0. **No Clockify
+  write ran.** Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-G`.
 
 ## Start here
 
