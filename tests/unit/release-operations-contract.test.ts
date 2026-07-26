@@ -36,6 +36,50 @@ describe("release operations contract", () => {
     expect(transaction.slice(variableSet, upload)).toContain('"--skip-deploys"');
   });
 
+  it("asserts the real nine-key deployed version payload and the engine it is actually serving", () => {
+    // `/version.modelConfiguration` emits the frozen binding's eight keys PLUS
+    // `assistantEngine`. Both runbooks previously sized the deployed payload
+    // against the binding key count, so the documented identity assertion
+    // exited 1 on a CORRECT deployment and nothing checked the engine at all.
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      const versionProbe = runbook.indexOf('curl --fail --silent --show-error "$BASE_URL/version"');
+      expect(versionProbe, `${path} deployed version probe`).toBeGreaterThanOrEqual(0);
+      const assertion = runbook.slice(versionProbe, versionProbe + 2_000);
+
+      expect(assertion, `${path} deployed key list`).toContain(
+        'const deployedModelKeys = bindingModelKeys.concat(["assistantEngine"]);',
+      );
+      expect(assertion, `${path} deployed key count`).toContain(
+        "Object.keys(actualModel).length !== deployedModelKeys.length",
+      );
+      expect(assertion, `${path} every deployed key present`).toContain(
+        "deployedModelKeys.some((key) => !(key in actualModel))",
+      );
+      expect(assertion, `${path} binding values compared by value`).toContain(
+        "bindingModelKeys.some((key) => actualModel[key] !== expectedModel[key])",
+      );
+      expect(assertion, `${path} engine identity`).toContain(
+        "actualModel.assistantEngine !== process.env.EXPECTED_ASSISTANT_ENGINE",
+      );
+      // The deployed payload must never be sized against the binding list.
+      expect(assertion, `${path} no binding-sized deployed check`).not.toContain(
+        "Object.keys(actualModel).length !== bindingModelKeys.length",
+      );
+
+      // The intended engine is selected by the operator, never read from the
+      // frozen binding artifact, which does not carry the key.
+      expect(runbook, `${path} intended engine export`).toContain(
+        'EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"',
+      );
+      expect(runbook, `${path} intended engine exported`).toContain("export EXPECTED_ASSISTANT_ENGINE");
+      expect(
+        runbook.indexOf('EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"'),
+        `${path} engine selected before the assertion`,
+      ).toBeLessThan(versionProbe);
+    }
+  });
+
   it("pins deploy commands to exact Railway ids without weakening DeepSeek run isolation", () => {
     const runbook = read("DEPLOYMENT.md");
     const projectId = "fb1fa3c6-cc28-40d8-b985-2a7ee7051304";

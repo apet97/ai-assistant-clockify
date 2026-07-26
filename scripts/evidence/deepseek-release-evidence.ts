@@ -400,18 +400,49 @@ function endpointDigest(value: unknown, label: string): string {
   return digest;
 }
 
+/** The historical `deepseek-release-binding.json` artifact. Frozen for v1
+ * rollback — never widen it. */
+const BINDING_MODEL_CONFIGURATION_KEYS = [
+  "provider",
+  "model",
+  "endpointSha256",
+  "mode",
+  "agentic",
+  "toolSelect",
+  "reasoningEffort",
+  "thinkingMode",
+] as const;
+
+/** The live `/version` payload carries one key the frozen binding artifact does
+ * not: `assistantEngine`. Validating both against one key list made a CORRECT
+ * deployment fail the documented identity assertion, so the two schemas are
+ * checked separately. */
+const DEPLOYED_MODEL_CONFIGURATION_KEYS = [
+  ...BINDING_MODEL_CONFIGURATION_KEYS,
+  "assistantEngine",
+] as const;
+
 function modelConfiguration(value: unknown, expectedThinking: ThinkingMode, label: string): ModelConfiguration {
   const config = object(value, label);
-  exactKeys(config, [
-    "provider",
-    "model",
-    "endpointSha256",
-    "mode",
-    "agentic",
-    "toolSelect",
-    "reasoningEffort",
-    "thinkingMode",
-  ], label);
+  exactKeys(config, BINDING_MODEL_CONFIGURATION_KEYS, label);
+  return modelConfigurationValues(config, expectedThinking, label);
+}
+
+function deployedModelConfiguration(
+  value: unknown,
+  expectedThinking: ThinkingMode,
+  label: string,
+): ModelConfiguration {
+  const config = object(value, label);
+  exactKeys(config, DEPLOYED_MODEL_CONFIGURATION_KEYS, label);
+  return modelConfigurationValues(config, expectedThinking, label);
+}
+
+function modelConfigurationValues(
+  config: JsonObject,
+  expectedThinking: ThinkingMode,
+  label: string,
+): ModelConfiguration {
   const expected: ModelConfiguration = {
     provider: "http",
     model: "deepseek-v4-pro",
@@ -1620,6 +1651,7 @@ function verifyDeployedVersion(
   value: unknown,
   candidateSha: string,
   expectedConfiguration: ModelConfiguration,
+  expectedAssistantEngine: EvidenceTargetAssistantEngine,
 ): void {
   const deployed = object(value, "deployed version metadata");
   assertSecretFree(deployed, "deployed version metadata");
@@ -1655,7 +1687,7 @@ function verifyDeployedVersion(
     throw new Error("deployed source binding must be null for an exact-head build");
   }
   try {
-    modelConfiguration(
+    deployedModelConfiguration(
       deployed.modelConfiguration,
       expectedConfiguration.thinkingMode,
       "deployed model configuration",
@@ -1664,6 +1696,13 @@ function verifyDeployedVersion(
     throw new Error("deployed model configuration does not match the selected DeepSeek setting");
   }
   const actual = object(deployed.modelConfiguration, "deployed model configuration");
+  // The engine a deployment is actually serving is the single value the v2
+  // cutover most needs proven at the deploy boundary, and nothing asserted it
+  // before. It is checked separately so an engine mismatch cannot be reported
+  // as a DeepSeek setting mismatch.
+  if (actual.assistantEngine !== expectedAssistantEngine) {
+    throw new Error("deployed assistant engine does not match the intended engine");
+  }
   for (const [key, expected] of Object.entries(expectedConfiguration)) {
     if (actual[key] !== expected) {
       throw new Error("deployed model configuration does not match the selected DeepSeek setting");
@@ -1707,7 +1746,12 @@ export function validateDeepSeekReleaseEvidence(
     classification,
     true,
   );
-  verifyDeployedVersion(input.deployedVersion, benchmark.testedCandidateSha, benchmark.modelConfiguration);
+  verifyDeployedVersion(
+    input.deployedVersion,
+    benchmark.testedCandidateSha,
+    benchmark.modelConfiguration,
+    classification.assistantEngine,
+  );
   return { ...benchmark, deployedConfigurationVerified: true };
 }
 

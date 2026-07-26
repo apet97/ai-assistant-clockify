@@ -331,10 +331,14 @@ function fixture(candidateModelMs = 900) {
       serverArtifactSha256: SERVER_ARTIFACT_HASH,
       sourceRelationship: "exact_head",
       sourceBindingSha256: null,
+      // The live `/version` payload carries `assistantEngine`; the frozen
+      // binding artifact above does not. Hand-writing this fixture with the
+      // binding's 8 keys was what hid the deploy-identity blocker.
       modelConfiguration: {
         provider: "http",
         model: "deepseek-v4-pro",
         endpointSha256: ENDPOINT_HASH,
+        assistantEngine: "v1",
         mode: "tool",
         agentic: true,
         toolSelect: true,
@@ -995,5 +999,37 @@ describe("DeepSeek release evidence", () => {
     bound.deployedVersion.sourceRelationship = "source_bound_builder" as never;
     bound.deployedVersion.sourceBindingSha256 = SOURCE_BINDING_HASH as never;
     expect(() => validateDeepSeekReleaseEvidence(bound as never)).not.toThrow();
+  });
+
+  it("accepts the real nine-key deployed model configuration and still freezes the eight-key binding", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+
+    // The regression: `/version` really emits `assistantEngine`, so a CORRECT
+    // deployment must validate. The whole fixture already carries nine keys.
+    const deployed = fixture();
+    expect(Object.keys(deployed.deployedVersion.modelConfiguration)).toHaveLength(9);
+    expect(() => validateDeepSeekReleaseEvidence(deployed as never)).not.toThrow();
+
+    // A deployment that omits the engine is no longer identifiable.
+    const missingEngine = fixture();
+    delete (missingEngine.deployedVersion.modelConfiguration as Record<string, unknown>).assistantEngine;
+    expect(() => validateDeepSeekReleaseEvidence(missingEngine as never))
+      .toThrow(/deployed model configuration does not match/i);
+
+    // The frozen v1 rollback artifact must NOT gain the key.
+    const widenedBinding = fixture();
+    (widenedBinding.binding.modelConfiguration as Record<string, unknown>).assistantEngine = "v1";
+    expect(() => validateDeepSeekReleaseEvidence(widenedBinding as never)).toThrow(/exact schema/i);
+  });
+
+  it("rejects a deployment serving an engine other than the intended one", async () => {
+    const { validateDeepSeekReleaseEvidence } = await validator();
+
+    for (const engine of ["v2", "V1", ""]) {
+      const mismatched = fixture();
+      (mismatched.deployedVersion.modelConfiguration as Record<string, unknown>).assistantEngine = engine;
+      expect(() => validateDeepSeekReleaseEvidence(mismatched as never))
+        .toThrow(/deployed assistant engine does not match the intended engine/i);
+    }
   });
 });
