@@ -54,6 +54,8 @@ export interface EvalReport {
   cohorts: EvalCohortScore[];
   /** Every failed attempt, in attempt order. Never summarized away. */
   failures: Array<Required<Pick<EvalAttempt, "caseId" | "cohort" | "repeat">> & { failureCode: string }>;
+  /** Distinct case ids that received at least one attempt — the completeness proof. */
+  scoredCaseIds: string[];
   /** Present only for a non-passing missing-credential report. */
   blockedReason?: string;
 }
@@ -114,6 +116,7 @@ export function buildEvalReport(input: {
     denominator,
     cohorts: cohortScores(input.attempts),
     failures,
+    scoredCaseIds: [...new Set(input.attempts.map((attempt) => attempt.caseId))].sort(),
   };
 }
 
@@ -137,17 +140,32 @@ export function buildMissingCredentialReport(input: {
     denominator: 0,
     cohorts: [],
     failures: [],
+    scoredCaseIds: [],
     blockedReason: input.blockedReason,
   };
 }
 
-/** A report is releasable only when it is complete, scored, and fully passing. */
+/**
+ * A report is releasable only when it is complete, scored, and fully passing —
+ * where COMPLETE means it attempted at least one scored attempt per case in its
+ * own derived set. A short attempt set was previously accepted as "passed"
+ * because `denominator` and `caseCount` were never compared (pre-T18 review).
+ */
 export function isReleasableReport(report: EvalReport): boolean {
   return report.status === "passed"
     && report.denominator > 0
     && report.numerator === report.denominator
     && report.failures.length === 0
-    && report.caseCount > 0;
+    && report.caseCount > 0
+    && report.denominator >= report.caseCount
+    && scoredCaseCount(report) === report.caseCount;
+}
+
+/** Distinct cases with at least one attempt. */
+export function scoredCaseCount(report: EvalReport): number {
+  return report.cohorts.reduce((total, cohort) => total + cohort.denominator, 0) > 0
+    ? new Set(report.scoredCaseIds ?? []).size
+    : 0;
 }
 
 /** Exact ratio for a cohort, or `undefined` when the cohort was never attempted. */

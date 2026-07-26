@@ -35,6 +35,11 @@ import {
  *  - cancellation must stop before dispatch; budget exhaustion must deny rather
  *    than partially execute.
  *
+ * Cohorts without a real scenario driver are reported in `unscoredCohorts` with
+ * the exact missing scenario rather than graded (see `UNSCORED_COHORTS`), so this
+ * report never claims to have proven a denial or a hostile-data outcome it did
+ * not actually drive.
+ *
  * `partial_outcome` and `unknown_outcome` are NOT reachable from a model turn:
  * a v2 assistant write stops at an unconfirmed preview, so a partial or
  * ambiguous host settlement can only arise after a button confirmation. Rather
@@ -44,6 +49,38 @@ import {
  */
 
 const KIND = "v2_assistant_terminal";
+
+/**
+ * Cohorts this evaluator actually DRIVES today. A cohort needs a real scenario —
+ * a policy that denies, an auth class that withholds, hostile seed data, an
+ * ambiguous argument — before its terminal state means anything. The pre-T18
+ * review found the earlier version running plain canonical requests for
+ * `denial`, `hostile_data` and `clarification` and scoring them against a
+ * terminal state they could never reach, which made a `passed` report
+ * unreachable AND the docstring untrue. Those cohorts are now reported as
+ * UNSCORED with their reason instead of being graded on a scenario that does not
+ * exist yet.
+ */
+export const DRIVEN_COHORTS: readonly string[] = [
+  "single_read",
+  "multi_read",
+  "single_write",
+  "independent_writes",
+  "dependent_writes",
+  "references",
+  "truncation",
+  "unicode",
+  "cancellation",
+  "budget_exhaustion",
+];
+
+/** Cohorts declared but not yet driven, with the exact missing scenario. */
+export const UNSCORED_COHORTS: Readonly<Record<string, string>> = {
+  denial: "needs an admin policy with the operation's feature group set to off",
+  unavailable_auth_class: "needs an api_key-only operation driven under addon auth",
+  hostile_data: "needs a fake workspace seeded with injected instruction text",
+  clarification: "needs an argument that is genuinely ambiguous in the seeded workspace",
+};
 
 /** Cohorts proven on the confirm path, with the exact suites that prove them. */
 export const DELEGATED_COHORTS: Readonly<Record<string, readonly string[]>> = {
@@ -130,11 +167,12 @@ function scenarioOptions(cohort: CohortName): { aborted?: boolean; maxHostCalls?
 
 export async function runTerminalEvaluation(): Promise<EvalReport & {
   delegatedCohorts: typeof DELEGATED_COHORTS;
+  unscoredCohorts: typeof UNSCORED_COHORTS;
   aggregateThreshold: number;
   strictCohortViolations: string[];
 }> {
   const cohorts = buildTerminalCohorts(MODEL_API_ACTION_CATALOG).filter(
-    (cohort) => !(cohort.cohort in DELEGATED_COHORTS),
+    (cohort) => !(cohort.cohort in DELEGATED_COHORTS) && DRIVEN_COHORTS.includes(cohort.cohort),
   );
   const cases = caseByName(buildEvalCases(MODEL_API_ACTION_CATALOG));
   const caseIds = [...cases.keys()];
@@ -157,6 +195,7 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
           + "no provider call was made and no terminal state was scored.",
       }),
       delegatedCohorts: DELEGATED_COHORTS,
+      unscoredCohorts: UNSCORED_COHORTS,
       aggregateThreshold: TERMINAL_AGGREGATE_THRESHOLD,
       strictCohortViolations: [],
     };
@@ -182,6 +221,7 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
   return {
     ...report,
     delegatedCohorts: DELEGATED_COHORTS,
+    unscoredCohorts: UNSCORED_COHORTS,
     aggregateThreshold: TERMINAL_AGGREGATE_THRESHOLD,
     strictCohortViolations,
   };

@@ -818,7 +818,7 @@ const projectTotals = defineAction({
         { noun: "project", verb: "total", list: (f) => ctx.clockify.listProjects(f) },
       );
       if (!project.ok) {
-        return clarifyResult(project.clarify);
+        return clarifyResult(project.clarify, "projectId");
       }
       projectId = project.id;
     }

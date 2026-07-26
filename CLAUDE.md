@@ -549,6 +549,54 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   model-API registry hash `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`.
   Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: **`T18-A` — operator-blocked;
   T18 requires new, explicit, per-step authority and was NOT started.**
+- **Pre-T18 review gate CLOSED (with remediation):** two independent read-only reviews of the frozen
+  `34ea91c..8862d73` range (11 commits, 61 files, +4,982/-183): one on complete API/eval parity, one on
+  backup/deploy/rollback readiness for T18. Review 1 explicitly cleared: all 12 original `field` values
+  are real Zod argument keys, injection round-trips cleanly (a 24-hex id is trusted without a list call,
+  so a leftover ambiguous `name` cannot re-clarify), no `externalId`/`partialArguments` leak, a settled
+  clarification cannot re-render as live, no IDOR (all four scope fields asserted; the resolve route
+  derives `runId` server-side), and `buildEvalReport` can neither vacuously pass nor grade foreign work.
+  **Findings accepted and remediated at HEAD:** (HIGH) five structurally identical single-slot READ
+  clarify sites were missed by CP-A and stored `missingField: "selection"` while still carrying option
+  chips — for `clockify_invoices_get`/`payments_list`/`export` (live MODEL_API reads, all through the
+  shared `defineInvoiceRead`) those chips were a DEAD BUTTON: click -> `selection` stripped by the
+  non-strict Zod object -> re-clarify -> 409 forever, burning host calls on each click. Fixed by passing
+  the exact key at all five sites (`invoices.ts` `id`, `custom-fields.ts` `id`, `holidays.ts` `id`,
+  `users.ts` `id`, `scheduling.ts` `projectId`; the latter four are composite/generic and off MODEL_API
+  today, fixed for correctness and future promotion). (MEDIUM) the `clarification_already_active`
+  fallback ADOPTED the winning row's id while returning THIS read's prose, so two ambiguous reads in one
+  batch could render one read's question above the other read's chips and resolve the wrong action; it
+  now returns `undefined` and the read reports a truthful `failed: clarification_already_active`,
+  leaving the run to suspend on the row's real owner (the earlier adopt-the-row design, chosen to avoid
+  a half-journaled tool, was simply wrong). (MEDIUM) `isReleasableReport` never compared `denominator`
+  to `caseCount`, so a 5-of-127 report passed — reports now carry `scoredCaseIds` and releasability
+  requires one scored attempt per case, with a regression test. (MEDIUM) `classifyV2Evaluation`'s
+  catalog-hash check was dead at its only call site — now threaded from the authority evidence.
+  (MEDIUM) the terminal evaluator graded `denial`/`hostile_data`/`clarification`/
+  `unavailable_auth_class` against terminal states they could never reach with no scenario driver,
+  making `passed` unreachable and the docstring untrue — those four are now reported as
+  `unscoredCohorts` with the exact missing scenario instead of being graded. (MEDIUM) the coverage gate
+  could not see an ORPHAN fixture (both sides derived from the catalog) — added an explicit
+  fixture-to-catalog check. (LOW) the discovery evaluator's threshold function was arithmetically dead
+  and its "attempt is omitted" comment was false while the code returned `passed: true` — both fixed.
+  **Accepted and deliberately NOT fixed here, recorded as T18 entry requirements:** Review 2's twelve
+  items are T18-A/T18-B scope by design, plus one PRE-EXISTING branch blocker that must be fixed before
+  any deploy verification can run — `/version.modelConfiguration` emits 9 keys (`assistantEngine` was
+  added by `9652309`) while `scripts/evidence/deepseek-release-evidence.ts` and `DEPLOYMENT.md` enforce
+  exactly 8, so the documented deploy identity assertion exits 1 on a CORRECT deployment. Also:
+  `ASSISTANT_ENGINE` and `DATABASE_PATH` sit outside the deploy transaction's snapshot and
+  `ROLLBACK_KEYS`; no backup records which database it came from; the runbook still pins schema v8
+  against `LATEST_SCHEMA_VERSION` 12; nothing proves the v2 target path is unused; and the token
+  denylist/lifecycle watermark/generation are per-database, so the v1 and v2 files share no authority
+  history. Review 2 confirmed the backup/restore machinery is the strongest part of the repo (40 tests
+  across recovery/restore/readiness/gate) and that the engine switch itself is sound with no silent
+  fallback. Gate: clarification suites (48) + eval/evidence suites (78) + `check:api-action-inventory` +
+  `type-check` + `type-check:scripts` + `lint` + `cycles` (0) + `dup` + **`npm run verify`
+  VERIFY_EXIT=0 (340 files / 5,203 tests)** on the rerun; the first run showed two `run-events-route`
+  `invalid_query` failures that passed in isolation and on the green rerun — the documented
+  `f1-verify-flake-diagnosis` pattern. Live: `live_not_run_missing_credentials`. Default engine: `v1`.
+  Next: **`T18-A` — STOPPED for operator authorization; T18 requires new, explicit, per-step authority
+  and was NOT started.**
 
 ## Start here
 

@@ -244,7 +244,7 @@ const getCustomField = defineAction({
       list: () => ctx.clockify.listCustomFields(),
     });
     if (!resolved.ok) {
-      return clarifyResult(resolved.clarify);
+      return clarifyResult(resolved.clarify, "id");
     }
     const entity = await ctx.clockify.getCustomField(resolved.id);
     return {

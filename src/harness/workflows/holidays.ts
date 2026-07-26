@@ -349,7 +349,7 @@ const getHoliday = defineAction({
       verb: "fetch",
       list: () => ctx.clockify.listHolidays(),
     });
-    if (!resolved.ok) return clarifyResult(resolved.clarify);
+    if (!resolved.ok) return clarifyResult(resolved.clarify, "id");
     const entity = await ctx.clockify.getHoliday(resolved.id);
     return {
       kind: "receipt",

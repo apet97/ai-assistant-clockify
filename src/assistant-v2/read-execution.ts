@@ -27,7 +27,6 @@ export interface ReadExecutionStore {
   getActionResult(id: string): unknown | undefined;
   getAdminPolicy(workspaceId: string, adminUserId: string): AdminPolicy | undefined;
   createPendingClarification(input: CreatePendingClarificationInput): PendingClarificationRecord;
-  getActiveClarificationForRun(scope: ClarificationScope): PendingClarificationRecord | undefined;
 }
 
 export interface ReadExecutionDeps {
@@ -81,7 +80,7 @@ function createClarificationRow(
   scope: RunScope & { runId: string },
   call: ToolCall,
   result: Extract<ActionResult, { kind: "clarify" }>,
-): string {
+): string | undefined {
   const clarificationScope: ClarificationScope = {
     sessionId: scope.sessionId,
     runId: scope.runId,
@@ -106,19 +105,18 @@ function createClarificationRow(
     // pending/resolving row per run. Two reachable collisions: two ambiguous
     // reads in ONE provider batch (the read pool resolves every call before any
     // outcome suspends the run), and a re-clarify inside `resolveOption` (which
-    // holds its row in `resolving`). Both must land on the run's EXISTING open
-    // question rather than crash — the caller then suspends on / resets a row
-    // that really exists.
+    // holds its row in `resolving`).
+    //
+    // This must NOT adopt the winning row's id: the caller pairs the returned
+    // clarificationId with THIS read's clarify prose, so adopting another read's
+    // row would render one read's question above the other read's chips and
+    // resolve the wrong action (pre-T18 review, MEDIUM). Returning `undefined`
+    // makes this read a truthful non-clarification; the ordered outcome loop
+    // still suspends the run on the read that really owns the open question.
     const alreadyActive = error instanceof PendingClarificationStoreError
       && error.code === "clarification_already_active";
     if (!alreadyActive) throw error;
-    const existing = deps.store.getActiveClarificationForRun(clarificationScope);
-    // Synchronous single-instance SQLite: the row that just rejected the insert
-    // cannot have gone terminal between the two statements, so this is
-    // unreachable rather than a tolerated race. Rethrow instead of inventing an
-    // id the resolve side could never find.
-    if (!existing) throw error;
-    return existing.id;
+    return undefined;
   }
 }
 
@@ -180,11 +178,14 @@ export async function executeV2Read(
     // sole owner of the admin-visible clarify prose, and the durable
     // `clarification.required` event references it by id.
     const clarifyRef = persistResult(deps, scope, call.name, result);
-    return {
-      kind: "clarification",
-      clarificationId: createClarificationRow(deps, scope, call, result),
-      actionResultId: clarifyRef.id,
-    };
+    const clarificationId = createClarificationRow(deps, scope, call, result);
+    if (clarificationId === undefined) {
+      // The run already owns an open question (another read in this same batch,
+      // or the one being resolved). Report this read truthfully rather than
+      // attaching its question to someone else's row.
+      return { kind: "failed", code: "clarification_already_active", actionResultId: clarifyRef.id };
+    }
+    return { kind: "clarification", clarificationId, actionResultId: clarifyRef.id };
   }
 
   const ref = persistResult(deps, scope, call.name, result);

@@ -85,12 +85,14 @@ async function attempt(
   cohort: Cohort,
   repeat: number,
   seed: Record<string, unknown>,
-): Promise<EvalAttempt> {
+): Promise<EvalAttempt | undefined> {
   const request = requestFor(entry, cohort);
   if (request === undefined) {
-    // No typo phrasing exists for this operation: there is nothing to score, so
-    // the attempt is omitted rather than counted as a free pass.
-    return { caseId: entry.actionName, cohort, repeat, passed: true, failureCode: undefined };
+    // No phrasing exists for this cohort, so there is nothing to score. Return
+    // `undefined` and let the caller OMIT the attempt — an earlier version
+    // returned `passed: true` here, which would have inflated the numerator
+    // (pre-T18 review; currently unreachable, since all 127 cases have a typo).
+    return undefined;
   }
   try {
     const run = await runRealAssistantTurn({
@@ -145,32 +147,40 @@ export async function runApiDiscoveryEvaluation(): Promise<EvalReport> {
     for (const entry of cases) {
       const seed = seeds.get(entry.actionName)?.fakeSeed ?? {};
       for (let repeat = 0; repeat < DISCOVERY_REPEATS; repeat += 1) {
-        attempts.push(await attempt(entry, cohort, repeat, seed as Record<string, unknown>));
+        const scored = await attempt(entry, cohort, repeat, seed as Record<string, unknown>);
+        if (scored) attempts.push(scored);
       }
     }
   }
   return buildEvalReport({ kind: KIND, identity, caseIds, attempts });
 }
 
-/** Per-case threshold enforcement on top of the aggregate report. */
+/**
+ * Per-CASE threshold enforcement. The aggregate report already requires every
+ * attempt to pass, so this exists to name the exact cases that fell below their
+ * cohort floor rather than to relax anything: a cohort average could otherwise
+ * mask one case at 0/3 behind others at 3/3 (pre-T18 review).
+ */
 export function discoveryThresholdViolations(report: EvalReport): string[] {
-  const violations: string[] = [];
+  const perCase = new Map<string, { cohort: string; passed: number }>();
   for (const cohort of report.cohorts) {
-    const required = cohort.cohort === "canonical"
-      ? DISCOVERY_THRESHOLDS.canonicalRequired
-      : DISCOVERY_THRESHOLDS.paraphraseRequired;
-    const perCase = cohort.denominator / Math.max(1, report.caseCount);
-    const achieved = cohort.numerator / Math.max(1, report.caseCount);
-    if (perCase > 0 && achieved < required * (perCase / DISCOVERY_REPEATS)) {
-      violations.push(`${cohort.cohort}_below_threshold:${cohort.numerator}/${cohort.denominator}`);
+    for (const caseId of cohort.failedCaseIds) {
+      perCase.set(`${caseId}|${cohort.cohort}`, { cohort: cohort.cohort, passed: 0 });
     }
   }
-  return violations;
+  const violations: string[] = [];
+  for (const [key, entry] of perCase) {
+    const required = entry.cohort === "canonical"
+      ? DISCOVERY_THRESHOLDS.canonicalRequired
+      : DISCOVERY_THRESHOLDS.paraphraseRequired;
+    violations.push(`${key.split("|")[0]}:${entry.cohort}_below_${required}_of_${DISCOVERY_REPEATS}`);
+  }
+  return violations.sort();
 }
 
 async function main(): Promise<void> {
   const report = await runApiDiscoveryEvaluation();
-  const violations = report.status === "passed" ? discoveryThresholdViolations(report) : [];
+  const violations = discoveryThresholdViolations(report);
   process.stdout.write(`${JSON.stringify({ ...report, thresholdViolations: violations }, null, 2)}\n`);
   if (report.status !== "passed" || violations.length > 0 || !isReleasableReport(report)) {
     process.exitCode = 2;

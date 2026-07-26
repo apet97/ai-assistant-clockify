@@ -300,6 +300,24 @@ here; this file is the execution map.
   Remaining blockers: model credentials for the three eval artifacts; `live:v2-full` execution needs
   T18-H; full e2e needs a quiet machine (CP-D). Live: `not_run`. Default engine: `v1`.
   Next: `T18-A` — **operator-blocked, requires new per-step authority.**
+- **Pre-T18 review gate CLOSED (with remediation):** two independent read-only reviews of
+  `34ea91c..8862d73`. Cleared: the 12 original `field` keys, the injection round-trip, no
+  `externalId`/`partialArguments` leak, no re-render of settled clarifications, no IDOR, no vacuous
+  pass. Remediated: (HIGH) five missed single-slot READ clarify sites stored `"selection"` with live
+  chips — `clockify_invoices_get`/`payments_list`/`export` had a dead button (409 forever); all five now
+  pass their exact key. (MEDIUM) the `clarification_already_active` fallback adopted another read's row
+  while returning this read's prose — it now returns a truthful `failed: clarification_already_active`.
+  (MEDIUM) `isReleasableReport` ignored `caseCount` — reports carry `scoredCaseIds` and require one
+  attempt per case. (MEDIUM) `classifyV2Evaluation`'s catalog-hash check was dead — now threaded.
+  (MEDIUM) the terminal evaluator graded four undriven cohorts — now `unscoredCohorts`. (MEDIUM)
+  orphan-fixture detection added. (LOW) discovery threshold function + false free-pass comment fixed.
+  Recorded as T18 entry requirements (not fixed here): Review 2's twelve readiness items, including the
+  PRE-EXISTING 9-key `/version` vs 8-key validator mismatch that blocks deploy verification,
+  `ASSISTANT_ENGINE`/`DATABASE_PATH` outside the rollback boundary, backups not bound to their source
+  database, the runbook's stale schema-v8 assertion, no unused-path proof, and the per-database
+  authority history. Gate: 48 + 78 focused + inventory + type-check(+scripts) + lint + cycles 0 + dup +
+  `npm run verify` VERIFY_EXIT=0 (340 / 5,203) on the rerun after one documented load flake. Live:
+  `not_run`. Default engine: `v1`. Next: `T18-A` — **STOPPED for operator authorization.**
 
 ## Non-negotiable invariants
 

@@ -349,8 +349,11 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
   it("suspends on the run's one open question when a single batch produces two ambiguous reads", async () => {
     // `idx_pending_clarifications_one_active_per_run` allows exactly one active
     // row per run, and the read pool resolves EVERY call in a batch before any
-    // outcome suspends the run — so the second create collides. CP-A returns the
-    // run's existing open question instead of throwing.
+    // outcome suspends the run — so the second create collides. The colliding
+    // read must NOT adopt the winner's row (that would render one read's question
+    // above the other read's chips — pre-T18 review MEDIUM); it reports
+    // `clarification_already_active` and the run suspends on the row's real
+    // owner, so exactly one question and one event exist.
     const { app, store, cookie, session } = await makeV2App([
       { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: "list time entries" } }] },
       {

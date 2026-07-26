@@ -261,7 +261,14 @@ export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEv
     gate,
     machineStatus(input.machineConclusions[gate]),
   ])) as Record<MachineGate, MachineStatus>;
-  const expected = { candidateSha: input.sourceCandidateSha };
+  // The catalog hash MUST be threaded, or `classifyV2Evaluation`'s hash check is
+  // dead code at its only call site (pre-T18 review).
+  const expected = {
+    candidateSha: input.sourceCandidateSha,
+    ...(input.v2Authority.status === "complete"
+      ? { catalogHash: input.v2Authority.evidence.catalogHash }
+      : {}),
+  };
   const evaluations = {
     apiDiscovery: classifyV2Evaluation(input.evaluations?.apiDiscovery, expected),
     assistantTerminal: classifyV2Evaluation(input.evaluations?.assistantTerminal, expected),

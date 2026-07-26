@@ -927,7 +927,7 @@ const getGroup = defineAction({
       list: () => ctx.clockify.listGroups(),
     });
     if (!resolved.ok) {
-      return clarifyResult(resolved.clarify);
+      return clarifyResult(resolved.clarify, "id");
     }
     const entity = await ctx.clockify.getGroup(resolved.id);
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_groups_get", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };

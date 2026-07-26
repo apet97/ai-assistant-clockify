@@ -570,7 +570,7 @@ function defineInvoiceRead(def: {
     async handler(ctx, args): Promise<ActionResult> {
       const typed = args as { id?: string; number?: string };
       const resolved = await resolveInvoiceRef(ctx, typed, "fetch");
-      if (!resolved.ok) return clarifyResult(resolved.clarify);
+      if (!resolved.ok) return clarifyResult(resolved.clarify, "id");
       return { kind: "receipt", receipt: await def.read(ctx, resolved.id, args as Record<string, unknown>) };
     },
   });

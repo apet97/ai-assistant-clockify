@@ -245,8 +245,9 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
             actionResultId: outcome.actionResultId,
           },
         });
+        // The reload above returns the persisted state, which already carries the
+        // continuation set before the event; no re-assignment is needed.
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
-        state.continuation = { kind: "awaiting_clarification", clarificationId: outcome.clarificationId };
         deps.eventService.suspendRun({
           scope: scopedRun(state),
           state,

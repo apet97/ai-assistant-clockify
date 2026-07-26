@@ -7,6 +7,8 @@ import {
   evalOperationNames,
   type EvalCase,
 } from "../../scripts/eval-v2/case-model.js";
+import { READ_PARITY_FIXTURES } from "../helpers/v2-read-parity-fixtures.js";
+import { WRITE_PREVIEW_FIXTURES } from "../helpers/v2-write-preview-fixtures.js";
 import {
   buildDiscoveryEvalCases,
   DISCOVERY_THRESHOLDS,
@@ -72,6 +74,18 @@ describe("T17-A: v2 evaluation fixtures cover every model-API operation exactly 
     expect(new Set(caseNames).size).toBe(caseNames.length); // no duplicate fixture
     expect(caseNames).toEqual(evalOperationNames());
     expect(cases.length).toBe(MODEL_API_ACTION_CATALOG.actions.filter((a) => a.apiOperation).length);
+  });
+
+  it("detects an ORPHAN fixture: a shipped fixture key with no catalog operation", () => {
+    // The catalog-to-fixture direction alone cannot see a fixture left behind by a
+    // renamed action (pre-T18 review). Check the reverse direction explicitly.
+    const catalogNames = new Set(
+      MODEL_API_ACTION_CATALOG.actions.filter((action) => action.apiOperation).map((action) => action.name),
+    );
+    const readOrphans = Object.keys(READ_PARITY_FIXTURES).filter((name) => !catalogNames.has(name));
+    const writeOrphans = Object.keys(WRITE_PREVIEW_FIXTURES).filter((name) => !catalogNames.has(name));
+    expect(readOrphans, "orphan read fixtures").toEqual([]);
+    expect(writeOrphans, "orphan write fixtures").toEqual([]);
   });
 
   it("splits the case set into reads and writes exactly as the catalog does", () => {
@@ -326,6 +340,21 @@ describe("T17-A: the report builder never hard-codes a numerator or denominator"
     expect(report.numerator).toBe(0);
     expect(report.denominator).toBe(0);
     expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("rejects a SHORT attempt set: passing 5 of 127 cases is not releasable", () => {
+    const all = buildEvalCases().map((entry) => entry.actionName);
+    const short = buildEvalReport({
+      kind: "k",
+      identity: IDENTITY,
+      caseIds: all,
+      attempts: attemptsFor(all.slice(0, 5), true),
+    });
+    // Internally consistent (5/5) but it covered 5 of 127 cases.
+    expect(short.status).toBe("passed");
+    expect(short.numerator).toBe(short.denominator);
+    expect(short.scoredCaseIds).toHaveLength(5);
+    expect(isReleasableReport(short)).toBe(false);
   });
 
   it("only calls a complete, fully passing report releasable", () => {
