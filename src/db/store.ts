@@ -163,6 +163,14 @@ export interface StoreOptions {
   now?: () => Date;
   /** Retention (days) for chat_messages + audit_events; defaults to 90. */
   retentionDays?: number;
+  /**
+   * Refuse to CREATE the database file. `new Database(path)` happily creates a
+   * missing file, which then migrates to the latest schema and presents as a
+   * perfectly healthy but EMPTY install -- so a typo'd `DATABASE_PATH` looks
+   * identical to a correct one. Deploys that expect to reopen an existing
+   * database set this so the mistake fails at open instead.
+   */
+  mustExist?: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -720,7 +728,9 @@ export interface TestStore extends Store {
 }
 
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
-  const db = new Database(databasePath);
+  const db = options.mustExist === true
+    ? new Database(databasePath, { fileMustExist: true })
+    : new Database(databasePath);
   migrate(db);
 
   const now = options.now ?? (() => new Date());

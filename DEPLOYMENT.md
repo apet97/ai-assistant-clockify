@@ -1063,8 +1063,9 @@ do not use `ssh-keyscan`, `StrictHostKeyChecking=no`, `accept-new`, or a first-s
 this database. Open project `ai-assistant-clockify`, environment `production`, service
 `ai-assistant`, substitute the resolved `DRILL_ID` below, and enter each line separately.
 Never run `env`, `set`, `printenv`, or `sh -lc`. The command integrity-checks the source
-and snapshot, then creates `.sha256` and `.json` sidecars. The current v7 build emits
-format-1 metadata; the candidate binds it to the captured boundary after transport:
+and snapshot, then creates `.sha256` and `.json` sidecars. A deployment still running
+a pre-format-2 build emits format-1 metadata, which the candidate binds to the captured
+boundary after transport; a current build already emits format-2 directly:
 
 ```bash
 mkdir -p /data/backups
@@ -1203,10 +1204,13 @@ node -e '
       evidence.checks.applicationReadiness.shutdownVerification?.writerLock !== "available" ||
       evidence.checks.integrity.sourceResult !== "ok" ||
       evidence.checks.integrity.migratedResult !== "ok" ||
-      ![7, 8].includes(evidence.checks.schema.sourceUserVersion) ||
-      evidence.checks.schema.userVersion !== 8 ||
+      // LATEST_SCHEMA_VERSION (src/db/schema.ts) is 12. Pinning 8 here made a
+      // CORRECT restore of a current database fail the drill assertion.
+      !(evidence.checks.schema.sourceUserVersion >= 7 &&
+        evidence.checks.schema.sourceUserVersion <= 12) ||
+      evidence.checks.schema.userVersion !== 12 ||
       evidence.checks.schema.migration !==
-        (evidence.checks.schema.sourceUserVersion === 8 ? "not_required" : "candidate_private_clone") ||
+        (evidence.checks.schema.sourceUserVersion === 12 ? "not_required" : "candidate_private_clone") ||
       evidence.checks.metadata.format !== 2 ||
       !Number.isFinite(Date.parse(evidence.checks.metadata.dataAsOf)) ||
       !Number.isFinite(drillStarted) || !Number.isFinite(ready) ||

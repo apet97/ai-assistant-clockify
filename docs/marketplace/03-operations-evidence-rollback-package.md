@@ -234,10 +234,13 @@ node -e '
       evidence.checks.applicationReadiness.shutdownVerification?.writerLock !== "available" ||
       evidence.checks.integrity.sourceResult !== "ok" ||
       evidence.checks.integrity.migratedResult !== "ok" ||
-      ![7, 8].includes(evidence.checks.schema.sourceUserVersion) ||
-      evidence.checks.schema.userVersion !== 8 ||
+      // LATEST_SCHEMA_VERSION (src/db/schema.ts) is 12. Pinning 8 here made a
+      // CORRECT restore of a current database fail the drill assertion.
+      !(evidence.checks.schema.sourceUserVersion >= 7 &&
+        evidence.checks.schema.sourceUserVersion <= 12) ||
+      evidence.checks.schema.userVersion !== 12 ||
       evidence.checks.schema.migration !==
-        (evidence.checks.schema.sourceUserVersion === 8 ? "not_required" : "candidate_private_clone") ||
+        (evidence.checks.schema.sourceUserVersion === 12 ? "not_required" : "candidate_private_clone") ||
       evidence.checks.metadata.format !== 2 ||
       !Number.isFinite(drillStarted) || !Number.isFinite(ready) ||
       !Number.isFinite(incident) || !Number.isFinite(dataAsOf) ||

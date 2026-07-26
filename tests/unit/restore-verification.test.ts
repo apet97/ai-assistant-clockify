@@ -14,6 +14,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   formatRestoreVerificationFailure,
+  verifyFreshDatabase,
   verifyRestoredDatabase,
 } from "../../src/db/restore-verification.js";
 import { backupDatabase, restoreDatabase } from "../../src/db/recovery.js";
@@ -541,5 +542,46 @@ describe("restored database verification", () => {
 
     expect(caught).toMatchObject({ check: "installation", code: "invalid_service_url" });
     expect(JSON.stringify(formatRestoreVerificationFailure(caught))).not.toContain(privateUrl);
+  });
+});
+
+describe("fresh database verification (T18-A)", () => {
+  const made: string[] = [];
+  function freshPath(name: string): string {
+    const directory = mkdtempSync(join(tmpdir(), "fresh-db-"));
+    made.push(directory);
+    return join(directory, name);
+  }
+
+  it("passes only for an existing, current-schema, genuinely empty database", () => {
+    const path = freshPath("v2.sqlite");
+    // Never creates the file: doing so would make this pass on exactly the
+    // mistyped path it exists to catch.
+    expect(() => verifyFreshDatabase(path)).toThrow(/fresh_database_missing/u);
+    expect(existsSync(path)).toBe(false);
+
+    const store = createStore(path, { encryptionKey: "test-key" });
+    store.close();
+
+    const evidence = verifyFreshDatabase(path);
+    expect(evidence.conclusion).toBe("passed");
+    expect(evidence.userVersion).toBe(LATEST_SCHEMA_VERSION);
+    expect(evidence.installations).toBe(0);
+  });
+
+  it("refuses a database that silently adopted live data", () => {
+    // The failure mode a cutover must never ship: the new path resolved to a
+    // database that already holds an install, so v2 would quietly serve v1 data.
+    const path = freshPath("adopted.sqlite");
+    const store = createStore(path, { encryptionKey: "test-key" });
+    store.saveInstallation({
+      workspaceId: "ws-1",
+      addonId: "addon-1",
+      addonUserId: "addon-user-1",
+      addonToken: "addon-token",
+    });
+    store.close();
+
+    expect(() => verifyFreshDatabase(path)).toThrow(/fresh_database_not_empty/u);
   });
 });

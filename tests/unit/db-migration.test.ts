@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { decryptSecret, encryptSecret } from "../../src/db/encryption.js";
 import { LATEST_SCHEMA_VERSION, migrate } from "../../src/db/schema.js";
+import { createStore } from "../../src/db/store.js";
 
 const LEGACY_V1_CONFIRMATION_DISCRIMINATOR_COLUMNS =
   "origin, registry_id, authority_model, executor_kind, run_id, batch_id";
@@ -1051,4 +1054,29 @@ describe("checked historical schema fixtures", () => {
       db.close();
     });
   }
+
+  it("refuses to create a database that a deploy expects to already exist", () => {
+    // `new Database(path)` CREATES a missing file, which then migrates to the
+    // latest schema and presents as a perfectly healthy but EMPTY install -- so
+    // a typo'd DATABASE_PATH is indistinguishable from a correct one. A deploy
+    // reopening an existing database must fail at open instead.
+    const directory = mkdtempSync(join(tmpdir(), "store-must-exist-"));
+    const missing = join(directory, "definitely-absent.sqlite");
+
+    expect(() => createStore(missing, { encryptionKey: "test-key", mustExist: true })).toThrow();
+    expect(existsSync(missing), "a refused open must not leave a database behind").toBe(false);
+
+    // The default remains create-on-open, which is what a genuinely new
+    // database (and every test fixture) relies on.
+    const created = createStore(missing, { encryptionKey: "test-key" });
+    expect(existsSync(missing)).toBe(true);
+    created.close();
+
+    // Now that it exists, the fail-closed mode opens it and it carries the real
+    // migrated schema rather than an empty file.
+    const reopened = createStore(missing, { encryptionKey: "test-key", mustExist: true });
+    expect(new Database(missing, { readonly: true }).pragma("user_version", { simple: true }))
+      .toBe(LATEST_SCHEMA_VERSION);
+    reopened.close();
+  });
 });

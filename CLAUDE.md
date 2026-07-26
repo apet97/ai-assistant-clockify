@@ -642,6 +642,68 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `lint` + `cycles` (0), all exit 0. Counts: unchanged. Live: `live_not_run_missing_credentials`.
   Default engine: `v1`. Next: full `npm run verify`, then **`A1` — push/merge, owner-authorized but
   BLOCKED on host load for `test:e2e`.**
+- **A0 gate CLOSED / A1 PARTIAL (pushed, PR open, NOT merged):** `npm run verify` VERIFY_EXIT=0 on
+  `2b26e28` (340 files / 5,208 tests, zero flakes on the first run); `npm run test:e2e` exit 0
+  (120 passed across Chromium/Firefox/WebKit) once host load fell from 11.75 to ~3 on 8 cores —
+  confirming CP-D's four red full-suite attempts were the external-load artifact, not a product bug;
+  `audit:prod` and `license:prod` exit 0 with the worktree still clean. Branch pushed and **PR #19**
+  opened against `main`. **NOT merged — two red checks, neither a code defect.** (1) `secret-scan`
+  failed on 25 gitleaks findings, all false positives, remediated in `627f874`
+  (`ci: allowlist two proven secret-scan false positives`): `API_ACTION_CATALOG_HASH` (a published
+  content digest, 24 hits = one per commit that changed it) and
+  `"password: abcdefghijklmnop123"` (a NEGATIVE test input the supervisor's own detector is asserted
+  to FIRE on). Both exceptions are AND-scoped to one exact path + line shape like the three already
+  in `.gitleaks.toml`, `useDefault` stays true, and the scoping was verified ADVERSARIALLY —
+  planting a real credential into each of those two files is still reported at the planted line.
+  `workflow-contracts` pins the exception count, moved 3 -> 5 in the same commit. Git-mode scans of
+  the PR range (145 commits) and full history (754 commits) now both report no leaks.
+  (2) **The required `verify` check fails at step 11, "Bind reviewed Marketplace media to the exact
+  source candidate" — and fails IDENTICALLY on `main`, which has been red since 21 July.** CI step 7
+  `npm run verify` itself PASSES, as do `audit:prod`, `license:prod`, the perf gate, workflow
+  validation, `browser-e2e`, `dependency-review`, and CodeQL analyze. The step's gate
+  (`marketplace-media-binding.ts:181`) requires every change between the frozen v1 release candidate
+  `0b1c6794` and HEAD to touch only allowlisted `evidence/` paths; this branch has 391 non-evidence
+  files changed, as any v2 rewrite must. It is therefore structurally unpassable on any commit that
+  is not the frozen v1 candidate or an evidence-only descendant, and it also blocks T18-C's
+  expectation of re-running candidate gates on a commit on `main`. Left for the owner: it needs a CI
+  decision (make step 11 conditional, drop it from the required check, or accept an explicit
+  bypass), which rule 5 forbids me from taking unilaterally. Live: `live_not_run_missing_credentials`.
+  Default engine: `v1`. Next: `T18-A`.
+- **T18-A CLOSED:** the deploy transaction now proves candidate, rollback, and database-instance
+  identity before any Railway mutation. (1) `ASSISTANT_ENGINE` and `DATABASE_PATH` joined
+  `ROLLBACK_KEYS`, the read-only snapshot, and the desired set — restoring only `RELEASE_*`/`LLM_*`
+  after a failed upload would have left the PRIOR code serving with the NEW engine and database, i.e.
+  v1 code on an empty v2 database with engine v2. (2) The staged bytes are bound to the candidate:
+  `verifyReleaseSourceBinding` rehashes the real staged tree against `RELEASE_SHA` +
+  `RELEASE_BUILD_HASH` before the first variable mutation, replacing a bare
+  `statSync(staging).isDirectory()` whose real binding lived only in procedural runbook shell; a
+  `ROLLBACK_SOURCE_DIR` must exist and must not be the staging directory. The verifier is injectable
+  ONLY so the ordering tests need not materialize an archive — the default is the real one and a
+  rejecting verifier is proven to stop the transaction with zero uploads. (3) Unused-path proof:
+  `SELECTED_DATABASE_PATH` must be an exact absolute path under `/data`, and
+  `SELECTED_DATABASE_PATH_DISPOSITION` (`new_unused` | `existing_expected`) is checked against
+  Railway's own pre-mutation snapshot in BOTH directions, so a cutover cannot claim a fresh database
+  while pointing at the live one, nor claim an existing one while introducing a new path. Paired with
+  a fail-closed `StoreOptions.mustExist` (`new Database(path, {fileMustExist: true})`), because plain
+  `new Database(path)` creates a missing file that then migrates and presents as a perfectly healthy
+  EMPTY install. (4) `validatePredeployBackupGate` now requires `metadata.source` and matches it to
+  the deploy's `expectedSourceDatabasePath` — `backupDatabase` always recorded the source but no gate
+  read it, so with two databases on the volume a backup of the WRONG one passed every other check
+  (correct checksum, bytes, integrity, schema, freshness). (5) New `verifyFreshDatabase` verifies a
+  database the cutover just CREATED, which the restore verifier structurally cannot: it needs
+  checksum/metadata sidecars a fresh file never had and hard-fails on `no_active_installation`, since
+  the reinstall happens AFTER the deploy. It opens `fileMustExist` (creating the file would make it
+  pass on the very typo it catches), requires integrity, `LATEST_SCHEMA_VERSION`, and genuine
+  emptiness — emptiness being the assertion that distinguishes a correctly provisioned database from
+  one that silently adopted live data. (6) `syntheticProbeEnvironment` gained `assistantEngine`
+  (default `v1`, preserving existing behavior), so the release path can finally prove a v2 deployment
+  boots against a real database file. (7) Both runbooks' schema assertions corrected from a hardcoded
+  8 to `LATEST_SCHEMA_VERSION` 12 with a 7..12 source range, and DEPLOYMENT.md's stale "current v7
+  build" prose rewritten. Gate: `npx vitest run` over deploy-private-production · predeploy-backup-gate
+  · restore-verification · restored-app-readiness · db-migration · release-operations-contract ·
+  workflow-contracts · private-production-release-evidence · db-recovery (109 passed) +
+  `type-check` + `type-check:scripts` + `lint`, all exit 0. **No Railway call and no Clockify call.**
+  Counts: unchanged. Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T18-B`.
 
 ## Start here
 

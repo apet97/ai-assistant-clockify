@@ -334,6 +334,26 @@ here; this file is the execution map.
   item, and no terminal report can pass without `LLM_*` credentials anyway). Gate: 83 focused +
   type-check(+scripts) + lint + cycles 0, all exit 0. Live: `not_run`. Default engine: `v1`.
   Next: full `verify`, then `A1` — **BLOCKED on host load for `test:e2e`.**
+- **A0 gate CLOSED / A1 PARTIAL:** `verify` exit 0 on `2b26e28` (340 / 5,208, zero flakes), `test:e2e`
+  exit 0 (120 passed, three engines) once host load fell from 11.75 to ~3 — CP-D's red e2e really was
+  the load artifact. `audit:prod` + `license:prod` exit 0. Pushed; **PR #19 open, NOT merged.**
+  `secret-scan` fixed in `627f874` (two AND-scoped gitleaks allowlist entries for a published catalog
+  digest and a negative-test credential string; scoping proven adversarially — planted secrets in the
+  same files are still reported; exception-count pin 3 -> 5). The required `verify` check fails at
+  step 11 (Marketplace media binding) **identically on `main`, red since 21 July**: CI's own
+  `npm run verify` step PASSES: step 11 requires all post-`0b1c6794` changes to be evidence-only, and
+  a v2 rewrite has 391 non-evidence files. Needs an owner CI decision; rule 5 forbids taking it here.
+- **T18-A CLOSED:** deploy transaction proves candidate/rollback/database identity before any Railway
+  mutation. `ASSISTANT_ENGINE` + `DATABASE_PATH` are now rollback keys (else a failed upload leaves v1
+  code on an empty v2 database with engine v2); staged bytes are rehashed against `RELEASE_SHA` +
+  `RELEASE_BUILD_HASH` and a `ROLLBACK_SOURCE_DIR` is required before the first mutation;
+  `SELECTED_DATABASE_PATH` (+ `_DISPOSITION`) is proven unused/existing against Railway's own
+  snapshot, paired with a fail-closed `StoreOptions.mustExist`; the predeploy gate now binds a backup
+  to its `metadata.source`; new `verifyFreshDatabase` verifies a just-created database (fail-closed
+  open, current schema, genuinely empty) which the restore verifier structurally cannot; the readiness
+  probe takes `assistantEngine`; both runbooks' schema assertions moved 8 -> 12. Gate: 109 focused +
+  type-check(+scripts) + lint, exit 0. **No Railway or Clockify call.** Live: `not_run`. Default
+  engine: `v1`. Next: `T18-B`.
 
 ## Non-negotiable invariants
 
