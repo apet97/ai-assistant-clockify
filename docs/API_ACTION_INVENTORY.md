@@ -3,7 +3,7 @@
 
 Schema version: **2**. Generator version: **2**.
 
-Catalog hash: `0742474f346d1f534f453d426cfb3f88bf5acfe7bea61df3560460e772874738`
+Catalog hash: `e97d4b74275d72d8b6c7afecf4585e13bb50f76822cb07757f30248368c4bea7`
 
 Official OpenAPI: v1, SHA-256 `044e2d2e3de91325c0ac26ab84dfe676d6a36432d678cced8ea8f37a3a640de2`.
 

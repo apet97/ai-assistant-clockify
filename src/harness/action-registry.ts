@@ -20,6 +20,8 @@ import {
   type MaterialFieldMetadata,
   type MaterialScalarType,
   type NormalizedOperationMaterialContractEntry,
+  type ReferenceSelectorBinding,
+  type ReferenceSelectorMetadata,
 } from "./api-operation.js";
 import {
   ACTION_CATALOG,
@@ -260,6 +262,37 @@ function normalizePresentation(
     throw new Error(`invalid_action_presentation:${actionName}`);
   }
   return Object.freeze({ presenterId: value.presenterId, version: value.version });
+}
+
+function normalizeReferenceSelector(
+  actionName: string,
+  value: unknown,
+): ReferenceSelectorMetadata {
+  if (!isObject(value)
+    || !("entityType" in value) || !isNonemptyString(value.entityType)
+    || !("bindings" in value) || !Array.isArray(value.bindings)
+    || value.bindings.length === 0) {
+    throw new Error(`invalid_reference_selector:${actionName}`);
+  }
+  const bindings: ReferenceSelectorBinding[] = [];
+  const seenFields = new Set<string>();
+  for (const entry of value.bindings) {
+    if (!isObject(entry)
+      || !("referenceField" in entry)
+      || (entry.referenceField !== "externalId" && entry.referenceField !== "scope.projectId")
+      || !("argumentPath" in entry) || !isRfc6901Pointer(entry.argumentPath)) {
+      throw new Error(`invalid_reference_selector_binding:${actionName}`);
+    }
+    if (seenFields.has(entry.referenceField)) {
+      throw new Error(`duplicate_reference_selector_field:${actionName}`);
+    }
+    seenFields.add(entry.referenceField);
+    bindings.push(Object.freeze({
+      referenceField: entry.referenceField,
+      argumentPath: entry.argumentPath,
+    }));
+  }
+  return Object.freeze({ entityType: value.entityType, bindings: Object.freeze(bindings) });
 }
 
 function normalizeDictionaries(
@@ -922,6 +955,9 @@ export function normalizeRegistryAction(
       operation,
     );
     const presentation = normalizePresentation(definition.name, definition.presentation);
+    const referenceSelector = definition.referenceSelector === undefined
+      ? undefined
+      : normalizeReferenceSelector(definition.name, definition.referenceSelector);
     if (!availability.addon.available && !availability.api_key.available) {
       throw new Error(`api_action_unavailable:${definition.name}`);
     }
@@ -949,6 +985,7 @@ export function normalizeRegistryAction(
         boundedArgumentDictionaries: dictionaries.values,
         ...(materialFields === undefined ? {} : { materialFields }),
         presentation,
+        ...(referenceSelector === undefined ? {} : { referenceSelector }),
       });
     }
     const schemaArrayMaxItems = validateClosedWriteSchema(definition, dictionaries);
@@ -980,6 +1017,7 @@ export function normalizeRegistryAction(
       materialFields,
       normalizedOperationMaterialContract,
       presentation,
+      ...(referenceSelector === undefined ? {} : { referenceSelector }),
       writeAuthority,
     });
   }
@@ -989,6 +1027,11 @@ export function normalizeRegistryAction(
   }
   if (definition.normalizedOperationMaterialContract !== undefined) {
     throw new Error(`unexpected_normalized_operation_material_contract:${definition.name}`);
+  }
+  if (definition.referenceSelector !== undefined) {
+    // Reference resolution injects into the v2 model-facing tool schema; only
+    // `api`-exposed actions are ever loaded into that catalog (Task 7-B).
+    throw new Error(`unexpected_reference_selector:${definition.name}`);
   }
   if ((exposure === "composite" || exposure === "generic")
     && !isNonemptyString(definition.apiExposureReason)) {

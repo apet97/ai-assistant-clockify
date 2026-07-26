@@ -13,7 +13,8 @@ const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
     || action.boundedArgumentDictionaries !== undefined
     || action.materialFields !== undefined
     || action.normalizedOperationMaterialContract !== undefined
-    || action.presentation !== undefined;
+    || action.presentation !== undefined
+    || action.referenceSelector !== undefined;
   return {
     name: action.name,
     args: summarizeArgs(action.schema),
@@ -39,6 +40,7 @@ const contractFor = (action: (typeof ACTION_CATALOG)[number]) => {
             action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
           presentationRulesVersion: PRESENTATION_RULES_VERSION,
+          referenceSelector: action.referenceSelector ?? null,
         }
       : {}),
   };

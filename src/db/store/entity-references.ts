@@ -7,9 +7,17 @@ export interface EntityReferenceScope {
   adminUserId: string;
 }
 
-export interface EntityReferenceBinding {
-  referenceField: "externalId" | "scope.projectId";
-  argumentPath: string;
+/**
+ * A captured scope VALUE for this specific reference instance (e.g. the
+ * parent project id a task reference was verified under) — not an action's
+ * argument-path metadata. `externalId` needs no entry here; it already has
+ * its own column. Extensible only to the reviewed non-`externalId` reference
+ * fields an action's `ReferenceSelectorMetadata` may bind
+ * (`src/harness/api-operation.ts`).
+ */
+export interface EntityReferenceScopeBinding {
+  field: "scope.projectId";
+  value: string;
 }
 
 export type EntityReferenceStatus = "active" | "stale" | "deleted";
@@ -19,7 +27,7 @@ export interface UpsertEntityReferenceInput extends EntityReferenceScope {
   entityType: string;
   externalId: string;
   displayName: string;
-  bindings: readonly EntityReferenceBinding[];
+  bindings: readonly EntityReferenceScopeBinding[];
   bindingFingerprint: string;
   sourceRunId: string;
 }
@@ -29,7 +37,7 @@ export interface EntityReferenceRecord extends EntityReferenceScope {
   entityType: string;
   externalId: string;
   displayName: string;
-  bindings: EntityReferenceBinding[];
+  bindings: EntityReferenceScopeBinding[];
   bindingFingerprint: string;
   sourceRunId: string;
   status: EntityReferenceStatus;
@@ -75,7 +83,7 @@ function toRecord(row: EntityReferenceRow): EntityReferenceRecord {
     entityType: row.entity_type,
     externalId: row.external_id,
     displayName: row.display_name,
-    bindings: JSON.parse(row.bindings_json) as EntityReferenceBinding[],
+    bindings: JSON.parse(row.bindings_json) as EntityReferenceScopeBinding[],
     bindingFingerprint: row.binding_fingerprint,
     sourceRunId: row.source_run_id,
     status: row.status,

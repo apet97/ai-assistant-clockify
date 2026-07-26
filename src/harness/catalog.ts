@@ -181,7 +181,8 @@ function actionFingerprintContract(action: ActionDefinition) {
     || action.boundedArgumentDictionaries !== undefined
     || action.materialFields !== undefined
     || action.normalizedOperationMaterialContract !== undefined
-    || action.presentation !== undefined;
+    || action.presentation !== undefined
+    || action.referenceSelector !== undefined;
   return {
     name: action.name,
     args: summarizeArgs(action.schema),
@@ -207,6 +208,7 @@ function actionFingerprintContract(action: ActionDefinition) {
             action.normalizedOperationMaterialContract ?? [],
           presentation: action.presentation ?? null,
           presentationRulesVersion: PRESENTATION_RULES_VERSION,
+          referenceSelector: action.referenceSelector ?? null,
         }
       : {}),
   };

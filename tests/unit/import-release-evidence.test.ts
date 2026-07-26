@@ -15,6 +15,7 @@ import {
 } from "../../scripts/evidence/import-release-evidence.js";
 import { buildPrivateProductionEvidence } from "../../scripts/performance/private-production-contract.js";
 import { hashCanonicalJson } from "../../scripts/lib/live-evidence.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const SHA = {
   candidate: "a".repeat(40),
@@ -88,7 +89,7 @@ function releaseInputs() {
       schema: {
         status: "passed",
         sourceUserVersion: 7,
-        userVersion: 11,
+        userVersion: LATEST_SCHEMA_VERSION,
         migration: "candidate_private_clone",
         requiredTables: 11,
         requiredColumns: 43,

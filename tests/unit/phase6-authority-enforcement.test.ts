@@ -319,6 +319,7 @@ describe("Phase 6 write authority enforcement", () => {
         action.normalizedOperationMaterialContract ?? [],
       presentation: action.presentation ?? null,
       presentationRulesVersion: PRESENTATION_RULES_VERSION,
+      referenceSelector: action.referenceSelector ?? null,
     })).digest("hex");
     expect(actionFingerprint(action.name)).toBe(expected);
   });

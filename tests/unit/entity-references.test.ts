@@ -5,7 +5,12 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStore } from "../../src/db/store.js";
 import { computeRequestHash } from "../../src/assistant-v2/state.js";
-import { EntityReferenceStoreError } from "../../src/db/store/entity-references.js";
+import { EntityReferenceStoreError, type EntityReferenceRecord } from "../../src/db/store/entity-references.js";
+import { resolveEntityReference } from "../../src/assistant-v2/references/entity-reference.js";
+import type { ReferenceSelectorMetadata } from "../../src/harness/api-operation.js";
+import { normalizeRegistryAction } from "../../src/harness/action-registry.js";
+import { getAction } from "../../src/harness/catalog.js";
+import type { RiskLabel } from "../../src/harness/risk.js";
 
 function baseScope(sessionId: string, runId: string) {
   return {
@@ -53,14 +58,14 @@ describe("entity references store", () => {
       entityType: "project",
       externalId: "64abc1",
       displayName: "Marketing Site",
-      bindings: [{ referenceField: "externalId", argumentPath: "/projectId" }],
+      bindings: [{ field: "scope.projectId", value: "64parent1" }],
       bindingFingerprint: "a".repeat(64),
       sourceRunId: "run-1",
     });
 
     expect(record.status).toBe("active");
     expect(record.entityType).toBe("project");
-    expect(record.bindings).toEqual([{ referenceField: "externalId", argumentPath: "/projectId" }]);
+    expect(record.bindings).toEqual([{ field: "scope.projectId", value: "64parent1" }]);
 
     const fetched = store.getEntityReference(record.id, {
       sessionId: session.id,
@@ -124,7 +129,7 @@ describe("entity references store", () => {
       entityType: "project",
       externalId: "64abc1",
       displayName: "Marketing Site (renamed)",
-      bindings: [{ referenceField: "externalId", argumentPath: "/projectId" }],
+      bindings: [{ field: "scope.projectId", value: "64parent1" }],
       bindingFingerprint: "b".repeat(64),
       sourceRunId: "run-2",
     });
@@ -269,5 +274,193 @@ describe("entity references store", () => {
     expect(counts.entityReferences).toBe(1);
     expect(store.getEntityReference(record.id, scope)).toBeUndefined();
     store.close();
+  });
+});
+
+const TASK_SELECTOR: ReferenceSelectorMetadata = {
+  entityType: "task",
+  bindings: [
+    { referenceField: "externalId", argumentPath: "/taskId" },
+    { referenceField: "scope.projectId", argumentPath: "/projectId" },
+  ],
+};
+
+function fixtureRecord(overrides: Partial<EntityReferenceRecord> = {}): EntityReferenceRecord {
+  return {
+    id: "ref-1",
+    sessionId: "session-1",
+    workspaceId: "ws-1",
+    adminUserId: "admin-1",
+    entityType: "task",
+    externalId: "64task1",
+    displayName: "Fix bug",
+    bindings: [{ field: "scope.projectId", value: "64project1" }],
+    bindingFingerprint: "a".repeat(64),
+    sourceRunId: "run-1",
+    status: "active",
+    verifiedAt: "2026-07-26T00:00:00.000Z",
+    createdAt: "2026-07-26T00:00:00.000Z",
+    updatedAt: "2026-07-26T00:00:00.000Z",
+    ...overrides,
+  };
+}
+
+describe("resolveEntityReference", () => {
+  it("injects the reviewed binding values and strips referenceId", () => {
+    const record = fixtureRecord();
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1", description: "Fixed the login bug" },
+      selector: TASK_SELECTOR,
+      lookup: (entityType, referenceId) =>
+        entityType === "task" && referenceId === "ref-1" ? record : undefined,
+    });
+    expect(result).toEqual({
+      ok: true,
+      reference: record,
+      args: { description: "Fixed the login bug", taskId: "64task1", projectId: "64project1" },
+    });
+  });
+
+  it("fails when referenceId is absent, empty, or not a string", () => {
+    for (const rawArgs of [{}, { referenceId: "" }, { referenceId: 42 }]) {
+      const result = resolveEntityReference({
+        rawArgs,
+        selector: TASK_SELECTOR,
+        lookup: () => fixtureRecord(),
+      });
+      expect(result).toEqual({ ok: false, code: "reference_not_supplied" });
+    }
+  });
+
+  it("fails closed on a foreign/unknown reference id", () => {
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "does-not-exist" },
+      selector: TASK_SELECTOR,
+      lookup: () => undefined,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_not_found" });
+  });
+
+  it.each(["stale", "deleted"] as const)("fails closed on a %s reference", (status) => {
+    const record = fixtureRecord({ status });
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_not_active" });
+  });
+
+  it("fails closed when the reference's entity type does not match the selector", () => {
+    const record = fixtureRecord({ entityType: "project", bindings: [] });
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_wrong_entity_type" });
+  });
+
+  it("fails closed when a required scope binding is missing on the reference", () => {
+    const record = fixtureRecord({ bindings: [] });
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_wrong_entity_type" });
+  });
+
+  it("resolves when an explicit id already present agrees with the reference", () => {
+    const record = fixtureRecord();
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1", taskId: "64task1" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails closed on a conflicting explicit id (never silently overwrites)", () => {
+    const record = fixtureRecord();
+    const result = resolveEntityReference({
+      rawArgs: { referenceId: "ref-1", taskId: "some-other-task-id" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_conflicts_with_explicit_id" });
+  });
+
+  it("does not guess a reference from an arbitrary 'id'-shaped property", () => {
+    // Only `referenceId` is ever consulted; a raw `id` field must pass through
+    // untouched (no recursive/implicit reference guessing, per the plan).
+    const record = fixtureRecord();
+    const result = resolveEntityReference({
+      rawArgs: { id: "ref-1", taskId: "explicit-task-id" },
+      selector: TASK_SELECTOR,
+      lookup: () => record,
+    });
+    expect(result).toEqual({ ok: false, code: "reference_not_supplied" });
+  });
+
+  it("does not mutate the caller's rawArgs object", () => {
+    const record = fixtureRecord();
+    const rawArgs = { referenceId: "ref-1" };
+    resolveEntityReference({ rawArgs, selector: TASK_SELECTOR, lookup: () => record });
+    expect(rawArgs).toEqual({ referenceId: "ref-1" });
+  });
+});
+
+describe("referenceSelector registry normalization", () => {
+  it("rejects referenceSelector on a non-api-exposed action", () => {
+    const carrier = {
+      apiExposure: "local" as const,
+      availabilityByAuthClass: {
+        addon: { available: true as const },
+        api_key: { available: true as const },
+      },
+      referenceSelector: TASK_SELECTOR,
+    };
+    const definition = {
+      name: "metadata_reference_fixture",
+      description: "fixture",
+      featureGroup: "time_tracking" as const,
+      risks: ["read"] as RiskLabel[],
+      schema: {} as never,
+      kind: "read" as const,
+      async handler() {
+        return { kind: "receipt" as const, receipt: { ok: true as const, action: "metadata_reference_fixture" } };
+      },
+      ...carrier,
+    };
+    expect(() => normalizeRegistryAction(definition, "v2-local"))
+      .toThrow("unexpected_reference_selector:metadata_reference_fixture");
+  });
+
+  it("accepts a valid referenceSelector on a real api-exposed action and participates in its fingerprint", () => {
+    const base = getAction("clockify_tags_create");
+    if (!base) throw new Error("clockify_tags_create fixture missing");
+    const withSelector = { ...base, referenceSelector: TASK_SELECTOR };
+    const normalized = normalizeRegistryAction(withSelector, "v2-api");
+    expect(normalized.referenceSelector).toEqual(TASK_SELECTOR);
+
+    const withoutSelector = normalizeRegistryAction(base, "v2-api");
+    expect(withoutSelector.referenceSelector).toBeUndefined();
+  });
+
+  it.each([
+    ["missing entityType", { entityType: "", bindings: [{ referenceField: "externalId", argumentPath: "/taskId" }] }],
+    ["empty bindings", { entityType: "task", bindings: [] }],
+    ["unknown referenceField", { entityType: "task", bindings: [{ referenceField: "bogus", argumentPath: "/taskId" }] }],
+    ["non-pointer argumentPath", { entityType: "task", bindings: [{ referenceField: "externalId", argumentPath: "taskId" }] }],
+    ["duplicate referenceField", { entityType: "task", bindings: [
+      { referenceField: "externalId", argumentPath: "/taskId" },
+      { referenceField: "externalId", argumentPath: "/otherTaskId" },
+    ] }],
+  ] as const)("rejects an invalid referenceSelector: %s", (_label, badSelector) => {
+    const base = getAction("clockify_tags_create");
+    if (!base) throw new Error("clockify_tags_create fixture missing");
+    const withSelector = { ...base, referenceSelector: badSelector as unknown as ReferenceSelectorMetadata };
+    expect(() => normalizeRegistryAction(withSelector, "v2-api")).toThrow(/reference_selector/);
   });
 });

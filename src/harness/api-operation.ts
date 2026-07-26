@@ -145,6 +145,23 @@ export interface ActionPresentationMetadata {
   version: number;
 }
 
+/** One reviewed entity-reference field the model may supply in place of a raw
+ * argument. `argumentPath` is an RFC 6901 pointer into the action's raw
+ * (pre-Zod) arguments; `referenceField` names which value on the resolved
+ * `EntityReference` narrows it. */
+export interface ReferenceSelectorBinding {
+  referenceField: "externalId" | "scope.projectId";
+  argumentPath: string;
+}
+
+/** Attached only when every target/scope binding for an action is unambiguous
+ * (Task 14). Participates in the action fingerprint/registry hash/generated
+ * catalog/inventory exactly like {@link ActionPresentationMetadata}. */
+export interface ReferenceSelectorMetadata {
+  entityType: string;
+  bindings: readonly ReferenceSelectorBinding[];
+}
+
 /** Metadata supplied by every raw action definition before registry validation. */
 export interface ApiActionMetadataCarrier {
   apiExposure: ApiExposure;
@@ -156,6 +173,7 @@ export interface ApiActionMetadataCarrier {
   materialFields?: readonly MaterialFieldMetadata[];
   normalizedOperationMaterialContract?: readonly NormalizedOperationMaterialContractEntry[];
   presentation?: ActionPresentationMetadata;
+  referenceSelector?: ReferenceSelectorMetadata;
 }
 
 export type ActionRegistryId = "v1-internal" | "v2-api" | "v2-local";
@@ -232,5 +250,8 @@ export function apiActionMetadataFields(
       ? {}
       : { normalizedOperationMaterialContract }),
     ...(source.presentation === undefined ? {} : { presentation: source.presentation }),
+    ...(source.referenceSelector === undefined
+      ? {}
+      : { referenceSelector: source.referenceSelector }),
   };
 }

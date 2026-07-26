@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { validatePredeployBackupGate } from "../../scripts/evidence/predeploy-backup-gate.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const RELEASE_SHA = "a".repeat(40);
 const BUILD_HASH = "b".repeat(64);
@@ -38,7 +39,7 @@ function gateInput() {
         schema: {
           status: "passed",
           sourceUserVersion: 7,
-          userVersion: 11,
+          userVersion: LATEST_SCHEMA_VERSION,
           migration: "candidate_private_clone",
           requiredTables: 11,
           requiredColumns: 43,
