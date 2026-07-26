@@ -60,12 +60,18 @@ function chatResultToPresentation(result: unknown, actionName: string): Presente
       };
     }
     if (row.kind === "clarify") {
+      // A clarify payload means the action did NOT execute — it resolved to a
+      // question. Live clarifications render through the dedicated
+      // pending_clarification attachment (T14-F), never this path, so a stored
+      // clarify reaching a presented_result card must degrade truthfully:
+      // "succeeded" here would present an unexecuted action as done
+      // (T14-T16 review gate, Finding 2 coupling).
       return {
-        status: "succeeded",
+        status: "failed",
         title: actionName,
         summary: typeof row.message === "string" ? row.message : "",
         facts: [],
-        warnings: [],
+        warnings: [{ code: "clarification_required", message: "The action needs clarification and was not performed." }],
         references: [],
       };
     }

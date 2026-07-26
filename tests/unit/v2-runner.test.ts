@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAssistantV2 } from "../../src/assistant-v2/runner.js";
 import {
+  createActionExecutionService,
   executeReadsConcurrently,
   validateCompletionToolCalls,
 } from "../../src/services/action-execution-service.js";
@@ -244,6 +245,84 @@ describe("runAssistantV2", () => {
     const outcome = await runAssistantV2({ runId: "run-1", scope: baseScope() }, deps);
     expect(outcome.kind).toBe("completed");
     expect(deps.modelClient.completeWithTools).not.toHaveBeenCalled();
+  });
+});
+
+describe("prepareWrites denial journaling (review-gate HIGH-2)", () => {
+  function stateForWrites(): RunState {
+    return {
+      version: 2,
+      runId: "run-1",
+      sessionId: "session-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon",
+      originalRequest: "delete the tag urgent",
+      requestHash: "h".repeat(64),
+      phase: "model",
+      registryId: "v2-api",
+      catalogHash: MODEL_API_ACTION_CATALOG.hash(),
+      loadedToolNames: [DISCOVERY_META_TOOL_NAME, "clockify_tags_delete"],
+      usedToolNames: [],
+      completedResults: [],
+      pendingOperationIds: [],
+      unfinishedOperations: [],
+      continuation: { kind: "none" },
+      budget: {
+        modelCallsUsed: 1,
+        discoveryCallsUsed: 0,
+        apiCallsUsed: 0,
+        hostCallsUsed: 0,
+        hostCallsReserved: 0,
+        promptTokensUsed: 0,
+        completionTokensUsed: 0,
+        estimatedTokensUsed: 0,
+        activeWallMsUsed: 0,
+      },
+      createdAt: "t",
+      updatedAt: "t",
+    };
+  }
+
+  it("journals every call of a denied preparation as tool.denied with the denial code", async () => {
+    const state = stateForWrites();
+    const deps = fakeDeps({
+      preparations: {
+        prepare: vi.fn(async () => ({
+          kind: "denied" as const,
+          code: "policy_denied",
+          actionResultId: "result-denied",
+        })),
+      },
+      runStore: {
+        startRunWithTurn: vi.fn(),
+        startRunWithEvent: vi.fn(),
+        getRun: vi.fn(() => state),
+        saveRun: vi.fn(),
+        getLastRunEventSequence: vi.fn(() => 1),
+        findLatestEligibleRunForCache: vi.fn(() => undefined),
+        recoverOrphanedActiveRuns: vi.fn(() => 0),
+        failActiveRunsForSession: vi.fn(() => 0),
+      } as unknown as RunnerDependencies["runStore"],
+    });
+    const service = createActionExecutionService(deps);
+    const calls: ToolCall[] = [
+      { id: "w1", name: "clockify_tags_delete", arguments: { id: "a".repeat(24) } },
+      { id: "w2", name: "clockify_tags_delete", arguments: { id: "b".repeat(24) } },
+    ];
+    const result = await service.prepareWrites(state, calls, baseScope(), "fallback");
+    // A denied preparation never suspends and never claims completion — but it
+    // must not vanish: each call is durably denied with the preparation's code.
+    expect(result.suspended).toBeUndefined();
+    const denyTool = deps.eventService.denyTool as ReturnType<typeof vi.fn>;
+    expect(denyTool).toHaveBeenCalledTimes(2);
+    expect(denyTool.mock.calls.map((c) => (c[0] as { payload: { toolCallId: string; code: string } }).payload)).toEqual([
+      { toolCallId: "w1", actionName: "clockify_tags_delete", code: "policy_denied" },
+      { toolCallId: "w2", actionName: "clockify_tags_delete", code: "policy_denied" },
+    ]);
+    expect(deps.eventService.completeTool).not.toHaveBeenCalled();
+    expect(deps.eventService.suspendRun).not.toHaveBeenCalled();
   });
 });
 

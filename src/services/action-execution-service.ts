@@ -290,6 +290,25 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
       }
     }
+    if (preparation.kind === "denied") {
+      // T14-T16 review gate HIGH-2: a denied preparation (policy, validation,
+      // auth-class, clarification_required, budget) must never vanish from the
+      // durable journal. Record it with the same tool.denied vocabulary the
+      // validation layer uses — the canonical action_results row the
+      // preparation already wrote stays the full audit record.
+      for (const call of writeCalls) {
+        deps.eventService.denyTool({
+          scope: scopedRun(state),
+          state,
+          payload: {
+            toolCallId: call.id,
+            actionName: call.name,
+            code: preparation.code,
+          },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      }
+    }
     return { state };
   }
 

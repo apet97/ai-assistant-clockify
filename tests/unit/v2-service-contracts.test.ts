@@ -259,6 +259,55 @@ describe("permission preview token binding (T16-E)", () => {
   });
 });
 
+describe("stored clarify results hydrate truthfully (review-gate Finding 2 coupling)", () => {
+  it("presents a clarify action result as NOT performed — never as succeeded", async () => {
+    const { hydrateRunEventAttachments } = await import("../../src/services/run-event-hydration.js");
+    const store = createStore(":memory:", { encryptionKey: "k" });
+    try {
+      const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+      const ref = store.recordActionResult({
+        workspaceId: "ws-1",
+        adminUserId: "admin-1",
+        sessionId: session.id,
+        actionName: "clockify_tags_delete",
+        status: "definitive_failed",
+        result: { kind: "clarify", message: "Which tag did you mean?" },
+      });
+      const hydrated = hydrateRunEventAttachments(
+        {
+          store,
+          scope: {
+            sessionId: session.id,
+            runId: "run-1",
+            workspaceId: "ws-1",
+            adminUserId: "admin-1",
+            installationGeneration: 1,
+            authClass: "addon",
+          },
+          sessionSecret: "secret",
+          now: new Date(),
+        },
+        [{
+          runId: "run-1",
+          sequence: 1,
+          event: {
+            eventType: "tool.completed",
+            payload: { toolCallId: "t1", actionName: "clockify_tags_delete", actionResultId: ref.id },
+            createdAt: new Date().toISOString(),
+          },
+        }],
+      );
+      const attachment = hydrated[0]?.attachment;
+      if (attachment?.kind !== "presented_result") throw new Error("expected presented_result attachment");
+      expect(attachment.envelope.presentation.status).toBe("failed");
+      expect(attachment.envelope.presentation.warnings.map((w) => w.code)).toContain("clarification_required");
+      expect(attachment.envelope.presentation.summary).toBe("Which tag did you mean?");
+    } finally {
+      store.close();
+    }
+  });
+});
+
 describe("provider attempt 2 shares the logical model call (T16-B)", () => {
   it("appends a second model.started event without incrementing modelCallsUsed", () => {
     const store = createStore(":memory:", { encryptionKey: "k" });

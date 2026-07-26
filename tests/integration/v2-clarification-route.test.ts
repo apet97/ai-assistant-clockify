@@ -533,6 +533,36 @@ describe("T14-E: free-text continuation and new-run supersession (HTTP)", () => 
     expect(oldRun?.phase).toBe("failed");
   });
 
+  it("an ordinary new message recovers a run stuck awaiting_clarification with NO clarification row (review-gate HIGH-1)", async () => {
+    const { app, store, config } = await makeV2App([{ text: "Done.", toolCalls: [] }]);
+    const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
+    // Orphaned suspension: the run is durably awaiting_clarification but no
+    // pending_clarifications row was ever created (the read-execution producer
+    // gap). Without the recovery arm, the next turn would violate
+    // idx_assistant_runs_one_active_per_session and 500 forever.
+    const runId = "33333333-3333-4333-8333-333333333333";
+    const scope = { sessionId: session.id, runId, workspaceId: "ws-1", adminUserId: "admin-1", installationGeneration: 1, authClass: "addon" as const };
+    const originalRequest = "list entries for Alice";
+    store.startRunWithTurn({
+      scope, originalRequest, requestHash: computeRequestHash(originalRequest),
+      catalogHash: MODEL_API_ACTION_CATALOG.hash(), loadedToolNames: [DISCOVERY_META_TOOL_NAME], intentHash: runId,
+    });
+    store.suspendRunWithEvent(scope, store.getRun(scope)!, { reason: "awaiting_clarification" });
+    expect(store.getRun(scope)?.phase).toBe("awaiting_clarification");
+    const cookie = cookieForSession(session, config.sessionSecret);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "never mind, just say hello" });
+
+    // The session recovered: the orphaned run failed, the new turn succeeded.
+    expect(res.status).toBe(200);
+    const oldRun = store.getRun(scope);
+    expect(oldRun?.phase).toBe("failed");
+    expect(store.getActiveRunForSession(session.id, "ws-1", "admin-1")).toBeUndefined();
+  });
+
   it("an ordinary new message while a run awaits confirmation is refused, leaving the pending preview untouched", async () => {
     const { app, store, config } = await makeV2App();
     const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });

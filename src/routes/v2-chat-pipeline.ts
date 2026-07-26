@@ -290,6 +290,19 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
               scope: activeScope,
               state: activeState,
             });
+          } else {
+            // T14-T16 review gate HIGH-1: a run suspended awaiting_clarification
+            // with NO live pending_clarifications row (e.g. the read-execution
+            // producer gap, or a row that expired) can never be superseded by
+            // the branch above, and `idx_assistant_runs_one_active_per_session`
+            // would then reject every future run in this session. Fail the
+            // orphaned run here so the session stays usable.
+            deps.store.failActiveRunsForSession(
+              claims.sessionId,
+              claims.workspaceId,
+              claims.adminUserId,
+              "clarification_missing",
+            );
           }
         }
       }

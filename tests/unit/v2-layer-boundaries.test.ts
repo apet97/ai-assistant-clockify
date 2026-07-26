@@ -53,13 +53,21 @@ interface ParsedImport {
 
 function parseImports(source: string): ParsedImport[] {
   const imports: ParsedImport[] = [];
-  const pattern = /import\s+(type\s+)?[^;]*?from\s+"([^"]+)"/g;
+  // Static imports AND re-exports (`export { x } from`, `export * from`) —
+  // a re-export reaches the layer at runtime exactly like an import.
+  const pattern = /(?:import|export)\s+(type\s+)?[^;]*?from\s+"([^"]+)"/g;
   for (const match of source.matchAll(pattern)) {
     imports.push({
       typeOnly: match[1] !== undefined,
       specifier: match[2],
       statement: match[0],
     });
+  }
+  // Dynamic `import("...")` call expressions evade the static pattern but are
+  // runtime by definition (review-gate MEDIUM finding).
+  const dynamicPattern = /import\(\s*["'`]([^"'`]+)["'`]\s*\)/g;
+  for (const match of source.matchAll(dynamicPattern)) {
+    imports.push({ typeOnly: false, specifier: match[1], statement: match[0] });
   }
   return imports;
 }
