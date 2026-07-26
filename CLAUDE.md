@@ -317,6 +317,35 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `npm run type-check` exit 0 + UI decode/render suites (71 passed) + `npm run perf:local-ui` PASSED
   (UI gzip 20,812 / 21,504). Counts: unchanged. Live: `live_not_run_missing_credentials`. Default
   engine: `v1`. Next: `CP-C`.
+- **CP-C CLOSED:** `tests/e2e/v2-clarification.spec.ts` is un-skipped and implemented (its header now
+  records why it was skipped from T14-F to CP-B and what changed). `tests/e2e/fixtures/server.mjs`
+  gained two scenarios — `clarification` (a `pending` question) and `clarification-resolving` (a
+  claimed one) — serving history `activeRun{phase:"awaiting_clarification"}`, a
+  `/api/runs/:runId/events` page whose `clarification.required` frame carries the EXACT
+  `pending_clarification` attachment shape CP-B hydrates (copied from the passing producer test, not
+  invented), a `POST /api/clarifications/:id/resolve` that **rejects any value that is not a stored
+  candidate id** (mirroring the real route, which is what makes "the chip submits the id, never the
+  label" a real assertion) and streams a `presented_result` echoing the id the SERVER received, plus a
+  fixture-only read-back for exact assertions. Six cases × three browsers: question + grounded chips
+  restored (and the bubble is the question, not `userId`); chip click resolves by exact id with the
+  server-echoed id rendered; chips disable after one click; page reload restores the pending chips
+  from history+events exactly once; a second tab restores and resolves them; a `resolving`
+  clarification renders every chip disabled with zero resolves recorded. The file sets
+  `test.describe.configure({ timeout: 60_000 })` — a time budget only, no assertion or polling change
+  — because each case drives a page load plus durable restoration (two pages in the second-tab case)
+  and the config's 20s default is sized for lighter specs. Gate: `npm run build` exit 0 +
+  `npx playwright test tests/e2e/v2-clarification.spec.ts` **18/18 passed** (Chromium + Firefox +
+  WebKit). **`npm run test:e2e` is NOT green on this machine and is deliberately not recorded as
+  green:** three runs (3-worker ×2, then 1-worker) failed 21 → 16 → 7 tests, every one of them a
+  Firefox timeout in a spec file this slice never touched (`action-journeys`, `onboarding-keyboard`,
+  `product-protocol`, `responsive-accessibility`, `run-restoration`, `v2-structured-results`), with
+  ZERO `v2-clarification` failures in any run. Attribution is definitive rather than assumed: the
+  untouched `action-journeys.spec.ts` passes 6/6 in isolation at 1 worker both before and after those
+  runs, yet failed 5/6 inside the same 1-worker full-suite pass, while this host's load average ran
+  7.7 → 24.7 on 8 cores from external processes (46-day uptime, 6 users). That is the documented
+  `f1-verify-flake-diagnosis` pattern on the Playwright side — full-suite e2e must be re-attempted on
+  a quiet machine before any release claim. Counts: unchanged. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `CP-D`.
 
 ## Start here
 

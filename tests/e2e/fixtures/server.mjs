@@ -211,6 +211,82 @@ const STRUCTURED_PRESENTATIONS = {
   },
 };
 
+/**
+ * CP-C: a v2 run suspended on a REAL-shaped durable clarification.
+ *
+ * The frame below is the exact wire shape `run-event-hydration.ts` produces for
+ * a `clarification.required` event now that CP-A/CP-B landed: `question` carries
+ * the resolver's own sentence, `missingField` is the raw-argument key, and each
+ * candidate is display-only (`optionId` + `label`, never `externalId`). Labels
+ * deliberately differ from ids so a spec can prove the chip submits the id.
+ */
+const CLARIFICATION_RUN_ID = "11111111-1111-4111-8111-111111111111";
+const CLARIFICATION_ID = "22222222-2222-4222-8222-222222222222";
+const CLARIFICATION_QUESTION = 'Several workspace users match "Alice". Which one should I list entries for?';
+const CLARIFICATION_CANDIDATES = [
+  { optionId: "aaaaaaaaaaaaaaaaaaaaaaa1", label: "Alice (alice.one@example.com)" },
+  { optionId: "aaaaaaaaaaaaaaaaaaaaaaa2", label: "Alice (alice.two@example.com)" },
+];
+
+function clarificationEventsPage(state) {
+  const settled = state.clarificationStatus !== "pending" && state.clarificationStatus !== "resolving";
+  return {
+    ok: true,
+    runId: CLARIFICATION_RUN_ID,
+    events: [{
+      runId: CLARIFICATION_RUN_ID,
+      sequence: 1,
+      event: {
+        eventType: "clarification.required",
+        payload: { clarificationId: CLARIFICATION_ID, actionResultId: "clarify-result-1" },
+        createdAt: "2026-07-18T10:00:00.000Z",
+      },
+      // A settled clarification loses its attachment entirely — the production
+      // rule CP-B pins, so a resolved question can never re-render as live.
+      ...(settled ? {} : {
+        attachment: {
+          kind: "pending_clarification",
+          clarificationId: CLARIFICATION_ID,
+          status: state.clarificationStatus,
+          question: CLARIFICATION_QUESTION,
+          missingField: "userId",
+          candidates: CLARIFICATION_CANDIDATES,
+          expiresAt,
+        },
+      }),
+    }],
+    nextAfter: 1,
+    hasMore: false,
+    lastSequence: 1,
+  };
+}
+
+/** The resolved read, streamed back exactly as the real resume would: a
+ * `presented_result` whose fact echoes the id the SERVER received. */
+function clarificationResolvedFrame(optionId) {
+  return {
+    type: "run_event",
+    runId: CLARIFICATION_RUN_ID,
+    sequence: 2,
+    event: { eventType: "tool.completed", payload: {}, createdAt: "2026-07-18T10:01:00.000Z" },
+    attachment: {
+      kind: "presented_result",
+      actionResultId: "clarify-read-1",
+      envelope: {
+        presentation: {
+          status: "succeeded",
+          title: "List time entries",
+          summary: "Loaded time entries for the selected member.",
+          facts: [{ label: "Resolved user id", value: optionId }],
+          warnings: [],
+          references: [],
+        },
+        diagnostic: { kind: "sanitized_receipt", byteLength: 2, value: { ok: true } },
+      },
+    },
+  };
+}
+
 async function streamChat(request, response, state) {
   const { message = "" } = await body(request);
   const structured = STRUCTURED_PRESENTATIONS[message];
@@ -285,9 +361,15 @@ function initialState(scenario, theme) {
     scenario,
     theme,
     permissionsSaved: false,
+    // CP-C: `clarification` serves a pending question (actionable chips);
+    // `clarification-resolving` serves a claimed one (chips present, disabled).
+    clarificationStatus: scenario === "clarification-resolving" ? "resolving" : "pending",
+    clarificationResolves: [],
     policy: scenario === "restricted" ? structuredClone(restrictedPolicy) : structuredClone(fullPolicy),
     activeView: "current",
-    messages: scenario === "history"
+    messages: scenario.startsWith("clarification")
+      ? [{ role: "user", content: "list Alice's time entries" }]
+      : scenario === "history"
       ? [
           { role: "user", content: "What did I track yesterday?" },
           {
@@ -437,7 +519,43 @@ const server = createServer(async (request, response) => {
         pendingPreviews: [],
       });
     }
+    if (state.scenario.startsWith("clarification")) {
+      return json(response, 200, {
+        ok: true,
+        messages: state.messages,
+        pendingPreviews: [],
+        activeRun: {
+          runId: CLARIFICATION_RUN_ID,
+          phase: "awaiting_clarification",
+          lastSequence: 1,
+          updatedAt: "2026-07-18T10:00:00.000Z",
+        },
+      });
+    }
     return json(response, 200, { ok: true, messages: state.messages, pendingPreviews: [] });
+  }
+  if (pathname === `/api/runs/${CLARIFICATION_RUN_ID}/events` && request.method === "GET") {
+    return json(response, 200, clarificationEventsPage(state));
+  }
+  if (pathname === `/api/clarifications/${CLARIFICATION_ID}/resolve` && request.method === "POST") {
+    const submitted = await body(request);
+    const optionId = typeof submitted.optionId === "string" ? submitted.optionId : "";
+    state.clarificationResolves.push(optionId);
+    // The real route matches `optionId` against stored candidates only — a label
+    // (or anything else) can never resolve. Mirroring that here is what makes
+    // "the chip submits the id, never the label" a real assertion.
+    if (!CLARIFICATION_CANDIDATES.some((candidate) => candidate.optionId === optionId)) {
+      return json(response, 400, { ok: false, code: "unknown_option", message: "That option is no longer available." });
+    }
+    state.clarificationStatus = "resolved";
+    return ndjson(response, [
+      clarificationResolvedFrame(optionId),
+      { type: "done" },
+    ]);
+  }
+  if (pathname === "/api/e2e/clarification-resolves" && request.method === "GET") {
+    // Fixture-only read-back so a spec can assert the EXACT value submitted.
+    return json(response, 200, { ok: true, resolves: state.clarificationResolves });
   }
   if (pathname === "/api/chat/sessions" && request.method === "GET") {
     return json(response, 200, { ok: true, sessions: sessionSummaries() });

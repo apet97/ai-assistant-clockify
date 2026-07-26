@@ -130,6 +130,20 @@ here; this file is the execution map.
   `400 unknown_option`, free-text continuation still works), and two ambiguous reads in one batch
   landing on the run's single open question. Gate: 55 focused + type-check + 71 UI decode/render +
   `perf:local-ui` PASSED (gzip 20,812/21,504). Counts unchanged. Live: `not_run`. Next: `CP-C`.
+- **CP-C CLOSED:** `tests/e2e/v2-clarification.spec.ts` un-skipped and implemented; the fixture server
+  gained `clarification` / `clarification-resolving` scenarios serving an `awaiting_clarification`
+  `activeRun`, a run-events page carrying CP-B's exact attachment shape, and a resolve route that
+  rejects anything that is not a stored candidate id (so "submits the id, never the label" is a real
+  assertion) and echoes the received id back. Six cases × three browsers: restored question + chips,
+  resolve-by-exact-id, one-use chip disabling, reload restoration (rendered exactly once), second-tab
+  restoration + resolve, and a `resolving` clarification with every chip disabled. Per-file timeout
+  raised to 60s (time budget only — these cases each drive a page load plus durable restoration).
+  Gate: `npm run build` + `npx playwright test tests/e2e/v2-clarification.spec.ts` 18/18 across
+  Chromium/Firefox/WebKit. **`npm run test:e2e` NOT green here and not claimed as green** — 21/16/7
+  Firefox timeouts in untouched spec files across three runs, zero clarification failures; the
+  untouched `action-journeys.spec.ts` passes 6/6 in isolation before and after while host load ran
+  7.7 → 24.7 on 8 cores, so it is `f1-verify-flake-diagnosis` load starvation. Re-attempt full e2e on
+  a quiet machine before any release claim. Counts unchanged. Live: `not_run`. Next: `CP-D`.
 
 ## Non-negotiable invariants
 
