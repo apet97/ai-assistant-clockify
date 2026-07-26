@@ -55,11 +55,15 @@ export interface ChatApi {
   /** Scoped durable v2 run-event pages for reload/second-tab restoration. */
   getRunEvents?(runId: string, after: number): Promise<import("./shared.js").RunEventPageResponse>;
   sendMessage(message: string): Promise<ChatResponse | ApiFailure>;
-  /** Streaming send: harness results arrive incrementally, then the truthful reply. */
-  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
+  /** Streaming send: harness results arrive incrementally, then the truthful reply.
+   * `continuationRunId` (T14-F): resumes that exact v2 run's pending clarification
+   * with this free text instead of starting a new run. */
+  streamMessage(message: string, onEvent: (event: StreamEvent) => void, continuationRunId?: string): Promise<void>;
   confirmPreview(previewId: string, nonce: string): Promise<ConfirmResponse>;
   /** Streaming single confirm: the receipt arrives first, then the resume streams. */
   confirmStream(ref: { previewId: string; nonce: string }, onEvent: (event: StreamEvent) => void): Promise<void>;
+  /** v2 exact clarification resolve (T14-F): streams the resumed run's events. */
+  resolveClarificationOption(clarificationId: string, optionId: string, onEvent: (event: StreamEvent) => void): Promise<void>;
   cancelPreview(previewId: string): Promise<SimpleMutationResponse>;
   undo(id: string): Promise<UndoResponse>;
 }
@@ -313,14 +317,14 @@ export function createFetchApi(): ChatApi {
       );
       return send().catch(() => send());
     },
-    streamMessage: async (message, onEvent) => {
+    streamMessage: async (message, onEvent, continuationRunId) => {
       let res: Response;
       const requestId = newRequestId();
       try {
         const send = () => mutationFetch("/api/chat/stream", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ message, requestId }),
+          body: JSON.stringify({ message, requestId, ...(continuationRunId ? { continuationRunId } : {}) }),
         });
         try {
           res = await send();
@@ -367,6 +371,28 @@ export function createFetchApi(): ChatApi {
         // through (withCode) so a stale-nonce 400 (a cross-tab nonce rotation)
         // can re-arm this tab instead of dead-ending — see submitConfirmStream/onStale.
         await surfaceStreamHttpError(res, onEvent, "Confirmation failed.", { withCode: true });
+        return;
+      }
+      await pumpNdjson(res, onEvent);
+    },
+    resolveClarificationOption: async (clarificationId, optionId, onEvent) => {
+      let res: Response;
+      try {
+        res = await mutationFetch(`/api/clarifications/${encodeURIComponent(clarificationId)}/resolve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ optionId }),
+        });
+      } catch (error) {
+        onEvent({
+          type: "error",
+          ...(error instanceof ApiError && error.status === 401 ? { code: "unauthorized" } : {}),
+          message: error instanceof ApiError ? error.message : "That option could not be resolved.",
+        });
+        return;
+      }
+      if (!res.ok || !res.body) {
+        await surfaceStreamHttpError(res, onEvent, "That option could not be resolved.", { withCode: true });
         return;
       }
       await pumpNdjson(res, onEvent);

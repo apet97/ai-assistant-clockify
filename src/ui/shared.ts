@@ -70,6 +70,13 @@ export interface ClarifyResult {
   kind: "clarify";
   message: string;
   options?: Array<{ id: string; label: string }>;
+  /** Present only for a v2 durable clarification (T14-F). When set, a chip
+   * click must call `resolveOption(clarificationId, optionId)` — never send
+   * the label as chat text (the v1 clarify path, which has no clarificationId,
+   * keeps sending the label; this field is what distinguishes the two). */
+  clarificationId?: string;
+  /** Only a `pending` clarification is actionable; `resolving` renders disabled. */
+  status?: "pending" | "resolving";
 }
 
 export interface PartialResult {
@@ -248,6 +255,8 @@ function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
       kind: "clarify",
       message: attachment.missingField,
       options: attachment.candidates.map((c) => ({ id: c.optionId, label: c.label })),
+      clarificationId: attachment.clarificationId,
+      status: attachment.status,
     }];
   }
   return [];

@@ -318,18 +318,30 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
 export interface ClarifyDeps {
   /** Send text through the NORMAL chat path (same function the composer uses). */
   sendText: (text: string) => void;
+  /** v2 durable clarification (T14-F): resolve by exact id, never the label. */
+  resolveOption?: (clarificationId: string, optionId: string) => void;
 }
 
 /**
  * A clarify turn: the question bubble plus the grounded "did you mean?" options
- * as one-use chips. A chip click sends the option LABEL as an ordinary chat
- * message — it goes through the same send path as typed text, so nothing here
- * can reach a confirmation endpoint (the option id is never sent).
+ * as one-use chips.
+ *
+ * Two distinct mechanisms share this renderer, distinguished by
+ * `result.clarificationId`:
+ *  - v1 (no `clarificationId`): a chip click sends the option LABEL as an
+ *    ordinary chat message — it goes through the same send path as typed
+ *    text, so nothing here can reach a confirmation endpoint.
+ *  - v2 (`clarificationId` set, T14-F): a chip click calls
+ *    `resolveOption(clarificationId, optionId)` — the label is NEVER
+ *    submitted, only the exact candidate id. Only a `pending` clarification is
+ *    actionable; a restored `resolving` one renders with every chip disabled.
  */
 export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLElement {
   const wrap = el("div", "clarify");
   wrap.appendChild(el("div", "message assistant", result.message));
   const options = result.options ?? [];
+  const clarificationId = result.clarificationId;
+  const actionable = clarificationId === undefined || result.status === "pending";
   if (options.length > 0) {
     const row = el("div", "chip-row");
     row.setAttribute("role", "group");
@@ -337,6 +349,7 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
     for (const option of options) {
       const chip = el("button", "chip", option.label);
       chip.type = "button";
+      if (!actionable) chip.disabled = true;
       chip.addEventListener("click", () => {
         // One-use: the whole row disables; the chosen chip stays highlighted
         // as a record of what was picked.
@@ -344,7 +357,8 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
           (button as HTMLButtonElement).disabled = true;
         }
         chip.classList.add("chip-selected");
-        deps.sendText(option.label);
+        if (clarificationId !== undefined) deps.resolveOption?.(clarificationId, option.id);
+        else deps.sendText(option.label);
       });
       row.appendChild(chip);
     }

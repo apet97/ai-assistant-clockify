@@ -78,7 +78,7 @@ export async function submitMessage(api: ChatApiLike, message: string, hooks: Co
 // --- NDJSON streaming (POST /api/chat/stream) ------------------------------
 
 export interface StreamingApi {
-  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
+  streamMessage(message: string, onEvent: (event: StreamEvent) => void, continuationRunId?: string): Promise<void>;
 }
 
 /**
@@ -86,18 +86,62 @@ export interface StreamingApi {
  * are buffered and flushed together (so a batch keeps its single "Confirm all"
  * card) when the truthful reply arrives. Same responsiveness contract as
  * `submitMessage`: working is announced before and always cleared after.
+ *
+ * `continuationRunId` (T14-F): when the admin types a free-text answer to a
+ * still-`pending` v2 clarification instead of clicking a chip, the host passes
+ * the tracked active run id so the server resumes that SAME run instead of
+ * starting a new one — see `renderClarify`'s `resolveOption` for the
+ * chip-click path, which never goes through this flow at all.
  */
-export async function submitStreaming(api: StreamingApi, message: string, hooks: ComposerHooks): Promise<void> {
+export async function submitStreaming(
+  api: StreamingApi,
+  message: string,
+  hooks: ComposerHooks,
+  continuationRunId?: string,
+): Promise<void> {
   hooks.onWorking(true);
   const buffer = new PreviewBuffer((results) => hooks.onResults(results));
   try {
     await api.streamMessage(message, (event) => {
       dispatchStreamEvent(event, hooks, buffer, "Message failed.");
-    });
+    }, continuationRunId);
   } catch {
     hooks.onError("Message failed to send.");
   } finally {
     buffer.flush(); // flush any previews if the stream ended without a reply
+    hooks.onWorking(false);
+  }
+}
+
+// --- v2 clarification resolve (POST /api/clarifications/:id/resolve) -------
+
+export interface ClarificationResolveApiLike {
+  resolveClarificationOption(clarificationId: string, optionId: string, onEvent: (event: StreamEvent) => void): Promise<void>;
+}
+
+/**
+ * The exact-option resolve flow (T14-F). Mirrors `submitStreaming`'s
+ * responsiveness/truthful-preview-batching contract, but never sends a chat
+ * message — the server resumes the SAME run from the caller-supplied
+ * `clarificationId`/`optionId` alone. A chip click is the only caller; the
+ * label is never part of this request.
+ */
+export async function submitClarificationResolve(
+  api: ClarificationResolveApiLike,
+  clarificationId: string,
+  optionId: string,
+  hooks: ComposerHooks,
+): Promise<void> {
+  hooks.onWorking(true);
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
+  try {
+    await api.resolveClarificationOption(clarificationId, optionId, (event) => {
+      dispatchStreamEvent(event, hooks, buffer, "That option could not be resolved.");
+    });
+  } catch {
+    hooks.onError("That option could not be resolved.");
+  } finally {
+    buffer.flush();
     hooks.onWorking(false);
   }
 }

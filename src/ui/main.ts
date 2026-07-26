@@ -19,7 +19,7 @@ import {
   createFetchApi,
   type ChatApi,
 } from "./api-client.js";
-import { submitStreaming, switchToSession } from "./composer-flow.js";
+import { submitClarificationResolve, submitStreaming, switchToSession } from "./composer-flow.js";
 import {
   applyUiPreferences,
   firstRunDisclosure,
@@ -50,10 +50,11 @@ import type { PermissionsResponse, SessionsResponse } from "./protocol.js";
 // main (which imports their builders) — that back-edge would be a circular dep.
 export { createFetchApi, ApiError, SESSION_EXPIRED_MESSAGE, httpErrorMessage, createNdjsonParser } from "./api-client.js";
 export type { ChatApi } from "./api-client.js";
-export { submitMessage, submitStreaming, switchToSession, SWITCH_FAILED_MESSAGE } from "./composer-flow.js";
+export { submitMessage, submitStreaming, submitClarificationResolve, switchToSession, SWITCH_FAILED_MESSAGE } from "./composer-flow.js";
 export type {
   ChatResponse,
   ChatApiLike,
+  ClarificationResolveApiLike,
   ComposerHooks,
   StreamingApi,
   SwitchApiLike,
@@ -311,9 +312,23 @@ function mount(root: HTMLElement, api: ChatApi): void {
     if (typing.isConnected) messages.appendChild(typing);
   }
 
-  // Assigned in renderChat; clarify chips send their label through this SAME
-  // path as typed text — never to a confirmation endpoint.
+  // Assigned in renderChat; SUGGESTION chips send their label through this SAME
+  // path as typed text — never to a confirmation endpoint. v2 clarification
+  // chips use `resolveOption` instead (never the label).
   let sendText: (text: string) => Promise<void> = async () => {};
+
+  // T14-F: the current chat's active v2 run while it awaits a clarification,
+  // hydrated from `HistoryResponse.activeRun` on restore/switch. Forwarded as
+  // `continuationRunId` on the NEXT free-text send so a typed follow-up resumes
+  // the SAME run instead of starting a new one. Cleared on durable evidence
+  // only: a resolved/superseded clarification, a chat switch, or starting a
+  // new chat — never on a local guess.
+  let activeClarificationRunId: string | undefined;
+
+  // Assigned in renderChat (needs the local `busy`/`applyComposerWorking`
+  // guard); v2 exact clarification resolve (T14-F) — a chip click, never the
+  // label.
+  let resolveOption: (clarificationId: string, optionId: string) => Promise<void> = async () => {};
 
   // The empty-chat welcome card lives OUTSIDE the message log (insertBefore the
   // `messages` live region) so it is never announced as a turn, and is bound to
@@ -406,7 +421,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
         messages.appendChild(renderReceipt(result, { controller, showError, returnFocus: () => focusComposer() }));
       else if (result.kind === "clarify")
         messages.appendChild(
-          renderClarify(result, { sendText: (text) => runUiTask(sendText(text), "Message failed to send.") }),
+          renderClarify(result, {
+            sendText: (text) => runUiTask(sendText(text), "Message failed to send."),
+            resolveOption: (clarificationId, optionId) =>
+              runUiTask(resolveOption(clarificationId, optionId), "That option could not be resolved."),
+          }),
         );
     }
     bumpTyping();
@@ -457,13 +476,40 @@ function mount(root: HTMLElement, api: ChatApi): void {
       messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
       clearError();
       // Streaming: harness results render as they arrive, then the truthful reply.
-      await submitStreaming(api, text, {
-        onWorking: applyComposerWorking,
-        onAssistant: (assistantText) => appendMessage("assistant", assistantText),
-        onResults: (results) => renderResults(results),
-        onError: (message) => showError(message),
-        onStatus: (label) => setStatusLabel(label),
-      });
+      // T14-F: a typed free-text answer to a still-`pending` v2 clarification
+      // resumes that SAME run when one is tracked; settlement (success or
+      // error) is durable evidence the run either advanced or the stale id no
+      // longer applies, so it is cleared unconditionally either way.
+      const continuationRunId = activeClarificationRunId;
+      try {
+        await submitStreaming(api, text, {
+          onWorking: applyComposerWorking,
+          onAssistant: (assistantText) => appendMessage("assistant", assistantText),
+          onResults: (results) => renderResults(results),
+          onError: (message) => showError(message),
+          onStatus: (label) => setStatusLabel(label),
+        }, continuationRunId);
+      } finally {
+        if (continuationRunId) activeClarificationRunId = undefined;
+      }
+    };
+    resolveOption = async (clarificationId: string, optionId: string): Promise<void> => {
+      if (busy) return;
+      clearError();
+      try {
+        await submitClarificationResolve(api, clarificationId, optionId, {
+          onWorking: applyComposerWorking,
+          onAssistant: (text) => appendMessage("assistant", text),
+          onResults: (results) => renderResults(results),
+          onError: (message) => showError(message),
+          onStatus: (label) => setStatusLabel(label),
+        });
+      } finally {
+        // Durable evidence the clarification is no longer live either way:
+        // resolved (success), or already-settled/expired/foreign (error) — a
+        // rejected resolve never re-arms this tab's stale tracked run id.
+        activeClarificationRunId = undefined;
+      }
     };
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -597,6 +643,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     clearError();
     setWorking(false);
     messages.replaceChildren(); // drop the transcript + any pending preview cards
+    activeClarificationRunId = undefined; // new chat: no run/clarification carries over
     dropWelcome();
     showWelcome();
     runUiTask(refreshChatsMenu(), "Could not load your conversations.");
@@ -614,6 +661,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
   async function restoreHistory(historyRequest?: Promise<HistoryResponse & { ok: true }>): Promise<void> {
     try {
       const history = await (historyRequest ?? api.getHistory());
+      // T14-F: only an `awaiting_clarification` active run is a valid free-text
+      // continuation target — restoring mid-loop/awaiting-confirmation phases
+      // never sets it (an ordinary message there is new-run supersession, not
+      // a continuation).
+      activeClarificationRunId = history.activeRun?.phase === "awaiting_clarification"
+        ? history.activeRun.runId
+        : undefined;
       const items = historyRestoreItems(history);
       if (items.length === 0 && !history.activeRun) return;
       dropWelcome(); // the conversation already started
