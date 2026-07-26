@@ -94,7 +94,8 @@ export interface PermissionsSaveView {
 
 /** GET /api/metrics — caller-scoped aggregates only. */
 export interface MetricsView {
-  metrics: MetricsReport & { usage: UsageMetrics };
+  /** `runs` is the additive T17-E v2 run-metrics block; v1 fields are unchanged. */
+  metrics: MetricsReport & { usage: UsageMetrics; runs: import("../metrics/run-metrics.js").RunMetrics };
 }
 
 /** One restored still-live preview card (GET /api/chat/history). The nonce is

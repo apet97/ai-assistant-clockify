@@ -305,8 +305,50 @@ export function buildRunEventStore(ctx: StoreContext) {
     return allocateAndInsertEvent(db, command.scope, command.eventType, command.payload, timestamp).event;
   });
 
+  /**
+   * T17-E: a bounded, workspace+admin-scoped run-event feed for metrics. This
+   * returns rows ONLY — every formula lives in `src/metrics/run-metrics.ts`.
+   */
+  const listEventsForMetrics = (input: {
+    workspaceId: string;
+    adminUserId: string;
+    since: string;
+    limit: number;
+  }): Array<{
+    sessionId: string;
+    runId: string;
+    sequence: number;
+    eventType: RunEventType;
+    payload: RunEventPayloadMap[RunEventType];
+    createdAt: string;
+  }> => {
+    const rows = db.prepare(
+      `SELECT session_id, run_id, sequence, event_type, payload_json, created_at
+         FROM run_events
+        WHERE workspace_id = ? AND admin_user_id = ? AND created_at >= ?
+        ORDER BY created_at ASC, session_id ASC, run_id ASC, sequence ASC
+        LIMIT ?`,
+    ).all(input.workspaceId, input.adminUserId, input.since, input.limit) as Array<{
+      session_id: string;
+      run_id: string;
+      sequence: number;
+      event_type: RunEventType;
+      payload_json: string;
+      created_at: string;
+    }>;
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      runId: row.run_id,
+      sequence: row.sequence,
+      eventType: row.event_type,
+      payload: parseRunEventPayload(row.event_type, JSON.parse(row.payload_json)),
+      createdAt: row.created_at,
+    }));
+  };
+
   return {
     listEvents,
+    listEventsForMetrics,
     getLastRunEventSequence(scope: Pick<AssistantRunScope, "sessionId" | "runId" | "workspaceId" | "adminUserId">): number {
       return getLastSequence(scope);
     },

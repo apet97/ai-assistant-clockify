@@ -280,6 +280,13 @@ export interface Store {
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
   startRunWithEvent(input: import("./store/runs.js").StartAssistantRunInput): import("../assistant-v2/events.js").SequencedRunEvent;
   listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput): import("./store/run-events.js").RunEventPageStoreResult;
+  /** T17-E: bounded scoped run-event rows for metrics; no formulas in the store. */
+  listRunEventsForMetrics(input: {
+    workspaceId: string;
+    adminUserId: string;
+    since: string;
+    limit: number;
+  }): import("../metrics/run-metrics.js").RunMetricsEvent[];
   getLastRunEventSequence(scope: import("./store/runs.js").AssistantRunScope): number;
   getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
     runId: string;
@@ -811,6 +818,9 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...runEventStore,
     listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
       return runEventStore.listEvents(input);
+    },
+    listRunEventsForMetrics(input: { workspaceId: string; adminUserId: string; since: string; limit: number }) {
+      return runEventStore.listEventsForMetrics(input);
     },
     ...buildIntentCapabilityStore(ctx),
     ...buildEntityReferenceStore(ctx),

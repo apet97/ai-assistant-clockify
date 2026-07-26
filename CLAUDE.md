@@ -477,6 +477,29 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   tests/unit/v2-authority-evidence.test.ts tests/unit/release-evidence.test.ts` (49 passed) +
   `type-check` + `type-check:scripts` + `lint` + `dup`, all exit 0. Counts: unchanged. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-E`.
+- **T17-E CLOSED:** `src/metrics/run-metrics.ts` owns **every** v2 run-metrics formula; the store gained
+  one bounded scoped primitive (`listRunEventsForMetrics`, `LIMIT` 10,000, workspace+admin+since,
+  rows only) and computes nothing, and `MetricsService` calls the one module so
+  `src/routes/metrics.ts` stays transport-only (`v2-layer-boundaries` still green). The block is
+  ADDITIVE on `GET /api/metrics` (`metrics.runs`); every v1 field is untouched. Accounting: the
+  denominator is unique `(sessionId, runId, modelCall)` **attempt-1** groups — a provider attempt 2 is
+  the SAME logical call (matching the store's own skipped budget increment) but a separate
+  `providerAttempts` count; incomplete calls are reported separately, never dropped. Covered:
+  searches · per-run refinements · loaded tools + per-completion maximum · cache hits · validation
+  failures by code · repeated argument hashes (per run, never across runs) · abandonment ·
+  latency p50/p95/max from completed calls only · attempts · calls · clarifications · all four
+  operation lifecycle stages · tokens · completion ratio. **Corrupt groups are reported, never
+  normalized away:** six anomaly codes (`model_call_without_start`,
+  `duplicate_attempt_for_model_call`, `attempt_two_without_attempt_one`, `model_call_never_completed`,
+  `run_terminal_event_missing`, `multiple_terminal_events`), each with a real failing-input test.
+  Privacy: absent token usage stays ABSENT rather than becoming zero (a provider reporting nothing
+  must not drag a total down); two tests assert the serialized block contains no request text, no
+  action names outside the denial-code map, and no session/run identifier at all; a second admin's
+  runs in the same workspace are invisible to the caller. Gate: `npx vitest run
+  tests/unit/run-metrics.test.ts tests/integration/v2-metrics-route.test.ts
+  tests/unit/v2-layer-boundaries.test.ts tests/integration/metrics-route.test.ts` (51 passed) +
+  `type-check` + `type-check:scripts` + `lint` + `cycles` (0) + `dup`, all exit 0. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-F`.
 
 ## Start here
 

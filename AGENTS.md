@@ -264,6 +264,18 @@ here; this file is the execution map.
   catalog hash all yield `not_evaluated_until_pr15`; only a complete 100% report yields `complete` with
   four `passed` conclusions and all counters 0. Bare script run = blocked status, exit 2. Gate: 49
   tests + type-check + type-check:scripts + lint + dup, all 0. Live: `not_run`. Next: `T17-E`.
+- **T17-E CLOSED:** `src/metrics/run-metrics.ts` owns every v2 run-metrics formula; the store gained
+  one bounded scoped rows-only primitive (`listRunEventsForMetrics`, limit 10,000) and computes
+  nothing; `MetricsService` calls the module so `routes/metrics.ts` stays transport-only. Additive
+  `metrics.runs` on `GET /api/metrics`, v1 fields untouched. Denominator is unique
+  `(session, run, modelCall)` attempt-1 groups; attempt 2 is the same logical call but a separate
+  provider attempt; incomplete calls reported separately. Covers searches, per-run refinements, loaded
+  tools + max, cache hits, validation failures by code, repeated argument hashes, abandonment,
+  latency p50/p95/max, attempts, calls, clarifications, all four operation stages, tokens, completion
+  ratio. Six anomaly codes report corrupt groups instead of normalizing them, each with a failing-input
+  test. Absent tokens stay absent (never zero); tests assert no request text, action names, or
+  session/run ids in the serialized block, and that another admin's runs are invisible. Gate: 51 tests
+  + type-check(+scripts) + lint + cycles 0 + dup, all 0. Live: `not_run`. Next: `T17-F`.
 
 ## Non-negotiable invariants
 
