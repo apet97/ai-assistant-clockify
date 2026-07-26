@@ -105,6 +105,17 @@ function envelopeFromActionResult(
   };
 }
 
+/** The clarify question is owned by the canonical `action_results` row the
+ * `clarification.required` event references — the event itself carries only the
+ * bounded link, never Clockify-derived prose. */
+function clarifyQuestionFromActionResult(store: Store, actionResultId: string): string | undefined {
+  const stored = store.getActionResult(actionResultId);
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return undefined;
+  const row = stored as Record<string, unknown>;
+  if (row.kind !== "clarify" || typeof row.message !== "string" || row.message.length === 0) return undefined;
+  return row.message;
+}
+
 function findAssistantMessage(
   store: Store,
   scope: AssistantRunScope,
@@ -169,8 +180,37 @@ function hydrateAttachment(
         },
       };
     }
-    case "clarification.required":
-      return undefined;
+    case "clarification.required": {
+      // Mirror `operation.prepared`: a SETTLED clarification must never render as
+      // live again. Only `pending`/`resolving` rows produce an attachment.
+      const row = store.getPendingClarification(event.payload.clarificationId, {
+        sessionId: scope.sessionId,
+        runId: scope.runId,
+        workspaceId: scope.workspaceId,
+        adminUserId: scope.adminUserId,
+      });
+      if (!row || (row.status !== "pending" && row.status !== "resolving")) return undefined;
+      const question = clarifyQuestionFromActionResult(store, event.payload.actionResultId);
+      // The question lives only in the canonical `action_results` row. Without it
+      // there is nothing truthful to ask, so drop the attachment rather than
+      // invent copy (a 5-minute-lived row cannot outlive 30-day retention, so
+      // this is a fail-closed guard, not an expected path).
+      if (question === undefined) return undefined;
+      return {
+        kind: "pending_clarification",
+        clarificationId: row.id,
+        status: row.status,
+        question,
+        missingField: row.missingField,
+        // Never `externalId`, never `partialArguments` — display data only.
+        candidates: row.candidates.map(({ optionId, label, referenceId }) => ({
+          optionId,
+          label,
+          ...(referenceId ? { referenceId } : {}),
+        })),
+        expiresAt: row.expiresAt,
+      };
+    }
     default:
       return undefined;
   }

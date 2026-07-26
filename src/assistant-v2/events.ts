@@ -152,7 +152,15 @@ export type RunEventAttachment =
       kind: "pending_clarification";
       clarificationId: string;
       status: "pending" | "resolving";
+      /** The admin-visible question, read from the canonical clarify
+       * `action_results` row the event references (CP-B). */
+      question: string;
+      /** The exact raw-argument key an option resolves into, or the inert
+       * `"selection"` marker for a clarify with no single owning argument.
+       * Diagnostic only — the UI renders `question`. */
       missingField: string;
+      /** Display data ONLY: `externalId` and the stored partial arguments never
+       * leave the server. A chip submits `optionId`, never the label. */
       candidates: Array<{ optionId: string; label: string; referenceId?: string }>;
       expiresAt: string;
     };

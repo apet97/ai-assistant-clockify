@@ -286,6 +286,37 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce` — no metadata field changed).
   Runtime proof of the produced row/event/attachment/resolve round trip lands in CP-B. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `CP-B`.
+- **CP-B CLOSED:** `hydrateAttachment`'s `clarification.required` arm now returns the real
+  `pending_clarification` attachment (it previously returned `undefined`): it loads the row through
+  the FULL scope tuple, drops the attachment unless the status is `pending`/`resolving` (a settled
+  clarification never re-renders as live — same rule `operation.prepared` uses for confirmations),
+  and reads the admin-visible question from the canonical clarify `action_results` row the event
+  links to. The attachment carries `question` + `missingField` + `{optionId,label,referenceId?}`
+  candidates and `expiresAt` — **never `externalId`, never `partialArguments`**. Fixed the T14-F
+  placeholder this exposed: `attachmentToResults` rendered the clarify bubble as
+  `attachment.missingField`, so an admin would have seen `userId` instead of the real question; it
+  now renders `attachment.question` (decoded strictly in `ui/protocol.ts`). New
+  `tests/integration/v2-clarification-producer.test.ts` (6 cases, all through REAL HTTP against
+  `createApp` with `assistantEngine: "v2"`, a scripted discovery-then-read model, and a fake
+  workspace seeded with TWO members named exactly "Alice"): one durable row with `missingField:
+  "userId"`/two 24-hex candidates and the run suspended on it; exactly one `clarification.required`
+  event whose hydrated attachment carries the real question, leaks no `externalId`, and precedes
+  `run.suspended`; resolve-by-exact-`optionId` over the real route settles the row `resolved`,
+  scrubs it, and stores a `clockify_entries_list` receipt whose `data.userId` is the CHOSEN id;
+  a settled clarification's event loses its attachment; a no-owning-argument date clarify
+  (`start: "not-a-real-date"`) produces `candidates: []` + `missingField: "selection"`, rejects
+  resolve-by-option `400 unknown_option` while staying answerable, and still resumes through T14-E
+  free-text continuation; and two ambiguous reads in ONE provider batch suspend on the run's single
+  open question (the CP-A `clarification_already_active` path) with exactly one event. Plan
+  deviation recorded: CP-B case 5 as printed cannot produce a no-options clarify — `suggestOptions`
+  falls back to the whole candidate pool when nothing contains the query, so a zero-match NAME
+  yields non-empty did-you-mean options; the date-range clarify above is the real no-options path.
+  Gate: `npx vitest run tests/integration/v2-clarification-producer.test.ts
+  tests/integration/v2-clarification-route.test.ts tests/integration/v2-clarification-ui.test.ts
+  tests/unit/v2-service-contracts.test.ts tests/integration/run-events-route.test.ts` (55 passed) +
+  `npm run type-check` exit 0 + UI decode/render suites (71 passed) + `npm run perf:local-ui` PASSED
+  (UI gzip 20,812 / 21,504). Counts: unchanged. Live: `live_not_run_missing_credentials`. Default
+  engine: `v1`. Next: `CP-C`.
 
 ## Start here
 

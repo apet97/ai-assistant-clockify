@@ -326,7 +326,7 @@ function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
   if (attachment.kind === "pending_clarification") {
     return [{
       kind: "clarify",
-      message: attachment.missingField,
+      message: attachment.question,
       options: attachment.candidates.map((c) => ({ id: c.optionId, label: c.label })),
       clarificationId: attachment.clarificationId,
       status: attachment.status,

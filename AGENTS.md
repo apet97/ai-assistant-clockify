@@ -117,6 +117,19 @@ here; this file is the execution map.
   `actionResultId` on the `clarification.required` payload so the question text stays in
   `action_results` and the event keeps a bounded link. Gate: 51 focused tests + type-check + lint +
   check:api-action-inventory all exit 0. Counts unchanged. Live: `not_run`. Next: `CP-B`.
+- **CP-B CLOSED:** `hydrateAttachment`'s `clarification.required` arm returns the real
+  `pending_clarification` attachment — full-scope row load, `pending`/`resolving` only (a settled
+  clarification never re-renders as live), question read from the canonical clarify `action_results`
+  row the event links to, and display-only candidates (**never `externalId`/`partialArguments`**).
+  Fixed the T14-F placeholder it exposed: the clarify bubble rendered `missingField` (`userId`) rather
+  than the question; `ui/shared.ts` now renders `attachment.question`, decoded strictly in
+  `ui/protocol.ts`. New `tests/integration/v2-clarification-producer.test.ts`: 6 real-HTTP cases —
+  durable row + suspension, one journaled event with a leak-free hydrated attachment ordered before
+  `run.suspended`, exact-`optionId` resolve running the read with the CHOSEN 24-hex id, settled rows
+  losing their attachment, a no-owning-argument date clarify (`candidates: []`/`"selection"`,
+  `400 unknown_option`, free-text continuation still works), and two ambiguous reads in one batch
+  landing on the run's single open question. Gate: 55 focused + type-check + 71 UI decode/render +
+  `perf:local-ui` PASSED (gzip 20,812/21,504). Counts unchanged. Live: `not_run`. Next: `CP-C`.
 
 ## Non-negotiable invariants
 

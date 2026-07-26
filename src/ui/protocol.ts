@@ -804,6 +804,7 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
       kind,
       clarificationId: string(attachment.clarificationId, "stream event.attachment.clarificationId"),
       status: string(attachment.status, "stream event.attachment.status") as "pending" | "resolving",
+      question: string(attachment.question, "stream event.attachment.question"),
       missingField: string(attachment.missingField, "stream event.attachment.missingField"),
       candidates: array(attachment.candidates, "stream event.attachment.candidates", (candidate, name) => {
         const item = record(candidate, name);
