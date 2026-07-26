@@ -144,7 +144,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `start_new_chat` button was drafted then dropped for the gzip budget, see below). Production's
   `chatResultToPresentation` (`run-event-hydration.ts`) still never populates `facts`/`references`/
   `recovery` for any real domain and still sets `title` to the raw action id/name, not a human label
-  — flagged for the T14-T16 review gate, same shape as T15-C/D's scope notes; T15-E proves the
+  — flagged for the T14-T16 review gate, same shape as T15-C/D's scope notes. Also flagged for that
+  gate: `envelopeFromActionResult` (`run-event-hydration.ts`) computes `diagnostic.byteLength` as
+  `JSON.stringify(result ?? null).length` (UTF-16 code units), while `diagnosticViewSchema`'s own
+  `.refine` requires `Buffer.byteLength(..., "utf8")` — for any non-ASCII receipt the two disagree; the
+  UI decoder no longer bound-checks `byteLength` at all (dropped with the other redundant client-side
+  length bounds), so nothing currently depends on this number being correct, but it should be fixed at
+  the source before anything does. T15-E proves the
   decode/render MECHANISM against fixture data (unit tests + a new, real, non-skipped
   `tests/e2e/v2-structured-results.spec.ts` whose fixture server (`tests/e2e/fixtures/server.mjs`)
   fabricates real `run_event`/`presented_result`/`pending_confirmation` NDJSON frames covering all six
