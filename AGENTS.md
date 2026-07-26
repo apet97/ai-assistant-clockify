@@ -102,6 +102,68 @@ here; this file is the execution map.
   flagged for T14-T16 review: per-domain read fact population not wired; terminal-side real DB read not
   wired (mechanism proven correct given any terminal list, not yet called with real data). Gate: 46+67+19
   tests + check:api-action-inventory + full verify green (329/5036). Live: `not_run`. Next: `T15-E`.
+- **T15-E CLOSED / Task 15 green:** structured v2 result rendering, UI-only (no server `src/` file
+  touched). `ui/protocol.ts` strictly decodes the full `PresentedResultEnvelope` (the prior stub
+  hardcoded empty facts/warnings/references); `ui/shared.ts` extends `PreviewResult`/`ReceiptResult`
+  with optional presenter fields while still emitting `kind: "preview"`/`"receipt"`, so confirm/cancel
+  mechanics and a legacy v1 result render byte-identically; `ui/render.ts` adds
+  `renderFacts`/`renderReferences`/`renderRecovery` (textContent-only) and a `STATUS_VIEW` table
+  giving each terminal status its own label+icon, with the details disclosure preferring
+  `diagnostic.value` and keeping a static "Details" toggle name. Recovery is informational text only
+  (no new route). Proven against fixture data (unit tests + a real, non-skipped
+  `tests/e2e/v2-structured-results.spec.ts` whose fixture fabricates frames for all six statuses),
+  not against live production data. User approved raising `LOCAL_UI_THRESHOLDS.uiGzipBytes` 20 -> 21
+  KiB. Also fixed a pre-existing time bomb: `v2-clarification-route.test.ts`'s T14-E cookie expiry was
+  computed from the suite's fixed clock while `verifySessionCookie` checks the real wall clock.
+  Flagged for the T14-T16 gate: `chatResultToPresentation` still populates no facts/references/recovery
+  and titles from the raw action id; `diagnostic.byteLength` counted UTF-16 units against a UTF-8
+  refine (fixed at source in Task 16). Gate: 173 focused + e2e grep 15 + v2-structured-results 21
+  (3 browsers) + `perf:local-ui` PASSED (20,741/21,504) + verify green (329/5046). Live: `not_run`.
+  Next: `T16-A`.
+- **Task 16 CLOSED (T16-A..G):** narrow services + transport-only routes. T16-A/B froze the contracts
+  (strict `runScopeSchema` with every security field required, `StartRunInput`/`ResumeRunInput`,
+  `uuidIdSchema`, type-only cross-boundary DTOs in `src/shared/contracts.ts` pinned type-only by
+  asserting an EMPTY runtime module namespace, dead `RunnerDependencies.eventStore` removed) and
+  pinned `RunEventService` as named-composite-transitions-only with payload validation before any
+  store write plus the provider-attempt-2 same-logical-call budget rule. T16-C extracted the runner
+  **634 -> 202 lines** (`run-service.ts`, `api-discovery-service.ts`, `action-execution-service.ts`;
+  verbatim ports, parity gate green). T16-D/E added history / session-context / permission / metrics /
+  artifact / undo services. **Permission confirm is token-only:** preview mints a 5-minute HMAC token
+  bound to workspace+admin+session + the current policy hash + the exact patch; confirm accepts ONLY
+  `{previewToken}` (a groups object 400s), authority recheck still runs BEFORE body decode, and
+  applying a patch changes the base hash so replay fails closed as `stale_preview`; the UI does
+  preview->confirm internally (+61 bytes gzip). T16-F/G split `routes/api.ts` **1049 -> 309 lines**
+  (composition root only) into 11 transport-only route files, each under 250 lines, each
+  decode -> authorize -> one service call -> encode, with store access only through injected scoped
+  ports. New gates: `v2-layer-boundaries` (forbidden-layer runtime imports per route file),
+  `v2-route-parity` (literal body fixtures incl. every not-found/invalid-decode branch), `me-route`
+  (no token/session leakage). Also fixed the T15-E-flagged `byteLength` UTF-16-vs-UTF-8 mismatch at
+  its source. Gate: 117 focused + cycles 0 + lint 0 + verify green (333/5096) + `perf:local-ui` +
+  `onboarding-keyboard.spec.ts` 9/9. Counts unchanged. Live: `not_run`. Next: T14-T16 review gate.
+- **T14-T16 independent review gate CLOSED:** one independent read-only review of the frozen
+  `b56ad80..2971645` diff (13 commits, 108 files — all of T14-A..T16-G) covering reference/
+  clarification IDOR, structured truth, service boundaries, the new permission preview token, XSS,
+  accessibility, import cycles/layering, and the previously flagged gaps. Clean confirmations on IDOR
+  (every id-bearing lookup resolves through the full scope tuple with indistinguishable 404s), the
+  permission-token design (domain-separated HMAC, timing-safe compare, scope + base-policy-hash + TTL
+  binding), XSS (textContent-only throughout), accessibility, and the byteLength fix. **Two HIGH + one
+  MEDIUM accepted and remediated in `102ced4`:** (HIGH-1) a run durably suspended
+  `awaiting_clarification` with NO live `pending_clarifications` row permanently bricked its session —
+  the supersession branch silently no-opped and every later turn tripped
+  `idx_assistant_runs_one_active_per_session` into a 500; fixed with an `else` arm that fails the
+  orphaned run (`clarification_missing`) before a new run is minted, pinned by an HTTP regression
+  test. (HIGH-2) a `denied` write preparation fell through `prepareWrites` with no event at all — now
+  journaled as one `tool.denied` per call with the denial code, and the dormant clarify -> "succeeded"
+  hydration mapping fixed at source (clarify -> `failed` + `clarification_required` warning).
+  (MEDIUM) the layer-boundary gate now also rejects re-exports and dynamic `import("...")` of
+  forbidden layers. Re-review: ADDRESSED / ADDRESSED / ADDRESSED, "no unrecovered HIGH remains at
+  HEAD". Residual non-blocking observation: in the generation-mismatch corner of the new recovery arm
+  a real dangling clarification row is left to its 5-minute TTL instead of an explicit cancel (audit
+  hygiene only). **Recorded v2-cutover blocker — now CLOSED by CP-A/CP-B/CP-C below:**
+  `read-execution.ts` had no runtime producer of clarification rows, so live v2 read clarifications
+  could not be resolved end to end and `tests/e2e/v2-clarification.spec.ts` stayed skipped. Gate:
+  remediation vitest files + verify green (333/5099). Live: `not_run`. Next: `T17-A` (superseded by
+  slice `CP`).
 - **CP-A CLOSED:** `read-execution.ts` is the ONE runtime producer of `pending_clarifications` rows
   (the recorded v2-cutover blocker): the clarify branch persists the question as a canonical
   `action_results` row, creates the durable row, and returns
@@ -144,6 +206,19 @@ here; this file is the execution map.
   untouched `action-journeys.spec.ts` passes 6/6 in isolation before and after while host load ran
   7.7 → 24.7 on 8 cores, so it is `f1-verify-flake-diagnosis` load starvation. Re-attempt full e2e on
   a quiet machine before any release claim. Counts unchanged. Live: `not_run`. Next: `CP-D`.
+- **CP-D CLOSED / slice CP green — the recorded v2-cutover blocker is fixed:** a v2 read that
+  clarifies now creates a durable `pending_clarifications` row, journals `clarification.required`
+  referencing the canonical clarify `action_results` row, hydrates a display-only attachment, and is
+  resolvable by exact `optionId` or answerable with free text. Gate: **`npm run verify` VERIFY_EXIT=0
+  (334 files / 5,105 tests, zero flakes)** + `perf:local-ui` PASSED (gzip 20,812/21,504). Docs sync:
+  this checkpoint list was three entries behind and now carries T15-E, Task 16, and the T14-T16 review
+  gate (condensed to this file's voice, not copied verbatim — the header forbids duplicating
+  `CLAUDE.md`); the review-gate blocker paragraph in `CLAUDE.md` now records it CLOSED by
+  `7a0e745`/`f168023`/`cb815ba`. **Not closed:** `npm run test:e2e` failed on this host in four
+  attempts (21/16/7/20), every failure in an untouched spec file, zero `v2-clarification` failures;
+  measured as host load starvation (untouched spec passes 6/6 in isolation either side of a failing
+  full run; load 7.6–24.7 on 8 cores). Re-run full e2e on a quiet machine before any release claim.
+  Counts unchanged. Live: `not_run`. Default engine: `v1`. Next: `T17-A`.
 
 ## Non-negotiable invariants
 

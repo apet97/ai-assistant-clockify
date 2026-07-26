@@ -242,11 +242,13 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   ADDRESSED; "no unrecovered HIGH remains at HEAD." One residual non-blocking observation recorded:
   in the generation-mismatch corner of the new recovery arm, a real dangling clarification row is
   left to its 5-minute TTL instead of an explicit cancel (audit hygiene only). **Recorded v2-cutover
-  blocker (not owned by any T13-T19 slice):** `read-execution.ts`'s clarify branch still never calls
-  `store.createPendingClarification` — no runtime producer of clarification rows exists, so live v2
-  read clarifications cannot yet be resolved end to end; the deadlock consequence is now recovered,
-  but the producer must be built (and `tests/e2e/v2-clarification.spec.ts` un-skipped) before
-  `ASSISTANT_ENGINE=v2` ships. Gate: remediation vitest files green + full `npm run verify` green
+  blocker — CLOSED by slice CP (`7a0e745` CP-A, `f168023` CP-B, `cb815ba` CP-C):**
+  `read-execution.ts`'s clarify branch never called `store.createPendingClarification`, so no runtime
+  producer of clarification rows existed and live v2 read clarifications could not be resolved end to
+  end (`tests/e2e/v2-clarification.spec.ts` stayed skipped for exactly that reason). The deadlock
+  consequence was recovered here; the producer itself, its hydration, and the un-skipped E2E all
+  landed in slice CP below, so this is no longer a `ASSISTANT_ENGINE=v2` blocker.
+  Gate: remediation vitest files green + full `npm run verify` green
   (333 files / 5099 tests, VERIFY_EXIT=0; one `chat-new` load-timeout flake passed in isolation and
   on the green rerun, per `f1-verify-flake-diagnosis`). Live: `live_not_run_missing_credentials`.
   Default engine: `v1`. Next: `T17-A`.
@@ -346,6 +348,29 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `f1-verify-flake-diagnosis` pattern on the Playwright side — full-suite e2e must be re-attempted on
   a quiet machine before any release claim. Counts: unchanged. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `CP-D`.
+- **CP-D CLOSED / slice CP green — the recorded v2-cutover blocker is fixed:** a v2 read that resolves
+  to a clarification now creates a durable `pending_clarifications` row, journals
+  `clarification.required` referencing the canonical clarify `action_results` row, hydrates a
+  display-only `pending_clarification` attachment for the UI, and can be resolved by exact `optionId`
+  or answered with free text — proven by real-HTTP integration coverage and by browser coverage on
+  three engines. Gate: **`npm run verify` VERIFY_EXIT=0 (334 files / 5,105 tests, zero flakes on the
+  first run)** + `npm run perf:local-ui` PASSED (UI gzip 20,812 / 21,504; status max 15.5ms, warm p95
+  168.2ms, cold fast-4G p95 1,137.6ms, history p95 240.2ms). Docs sync: `AGENTS.md`'s checkpoint list
+  was three entries behind and now carries T15-E, Task 16, and the T14-T16 review gate (condensed to
+  that file's established one-entry-per-slice voice rather than copied verbatim, since its own header
+  forbids duplicating `CLAUDE.md` wholesale — the plan's "verbatim" wording was read as "do not lose
+  the content"); the review-gate entry's blocker paragraph now records the blocker as CLOSED by
+  `7a0e745` / `f168023` / `cb815ba`. **Known environment condition, NOT closed:** `npm run test:e2e`
+  did not pass on this host in four attempts (3-worker ×2, 1-worker, and one more after load dipped):
+  21 / 16 / 7 / 20 failures, every one a timeout in a spec file slice CP never touched, and zero
+  `v2-clarification` failures in any of the four runs. Attribution is measured, not assumed — the
+  untouched `action-journeys.spec.ts` passes 6/6 in isolation immediately before and after failing 5/6
+  inside a full run, while this host's load average moved between 7.6 and 24.7 on 8 cores from
+  external processes. Full-suite e2e must be re-run on a quiet machine before any release claim; the
+  clarification spec itself is green 18/18 across Chromium, Firefox, and WebKit. Counts: unchanged
+  (`ACTION_CATALOG` 171 / `MODEL_API` 127, catalog hash
+  `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`). Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-A`.
 
 ## Start here
 
