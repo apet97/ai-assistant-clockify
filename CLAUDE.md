@@ -218,6 +218,38 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   pattern) + `perf:local-ui` PASSED + `onboarding-keyboard.spec.ts` 9/9 (Chromium/Firefox/WebKit).
   Counts: `ACTION_CATALOG`/`MODEL_API` unchanged. Live: `live_not_run_missing_credentials`. Default
   engine: `v1`. Next: T14-T16 independent review gate, then `T17-A`.
+- **T14-T16 independent review gate CLOSED:** one independent read-only review of the frozen
+  `b56ad80..2971645` diff (13 commits, 108 files — all of T14-A..T16-G) covering reference/
+  clarification IDOR, structured truth, service boundaries, the new permission preview token, XSS,
+  accessibility, import cycles/layering, and the previously flagged gaps. Clean confirmations on
+  IDOR (every id-bearing lookup resolves through the full scope tuple with indistinguishable 404s),
+  the permission-token design (domain-separated HMAC, timing-safe compare, scope + base-policy-hash +
+  TTL binding; confirm can never apply an un-previewed patch), XSS (textContent-only throughout),
+  accessibility, and the byteLength fix. **Two HIGH + one MEDIUM accepted and remediated in
+  `102ced4`:** (HIGH-1) a run durably suspended `awaiting_clarification` with NO live
+  `pending_clarifications` row (reachable via the read-execution producer gap) permanently bricked
+  its session — the supersession branch silently no-opped and every later turn tripped
+  `idx_assistant_runs_one_active_per_session` into a 500; fixed with an `else` arm in
+  `v2-chat-pipeline.ts` that fails the orphaned run (`clarification_missing`) before a new run is
+  minted, pinned by an HTTP regression test seeding the exact orphaned state. (HIGH-2) a `denied`
+  write preparation (policy/validation/auth-class/clarification_required/budget) fell through
+  `prepareWrites` with no event at all — now journaled as one `tool.denied` per call with the
+  denial code (the validation layer's existing vocabulary; deliberately NOT `completeTool`, which
+  would have surfaced the dormant clarify→"succeeded" hydration mapping as a false success card);
+  that mapping itself was fixed at the source (`run-event-hydration.ts` clarify → `failed` +
+  `clarification_required` warning). (MEDIUM) the layer-boundary gate now also rejects re-exports
+  and dynamic `import("...")` of forbidden layers. Re-review verdicts: ADDRESSED / ADDRESSED /
+  ADDRESSED; "no unrecovered HIGH remains at HEAD." One residual non-blocking observation recorded:
+  in the generation-mismatch corner of the new recovery arm, a real dangling clarification row is
+  left to its 5-minute TTL instead of an explicit cancel (audit hygiene only). **Recorded v2-cutover
+  blocker (not owned by any T13-T19 slice):** `read-execution.ts`'s clarify branch still never calls
+  `store.createPendingClarification` — no runtime producer of clarification rows exists, so live v2
+  read clarifications cannot yet be resolved end to end; the deadlock consequence is now recovered,
+  but the producer must be built (and `tests/e2e/v2-clarification.spec.ts` un-skipped) before
+  `ASSISTANT_ENGINE=v2` ships. Gate: remediation vitest files green + full `npm run verify` green
+  (333 files / 5099 tests, VERIFY_EXIT=0; one `chat-new` load-timeout flake passed in isolation and
+  on the green rerun, per `f1-verify-flake-diagnosis`). Live: `live_not_run_missing_credentials`.
+  Default engine: `v1`. Next: `T17-A`.
 
 ## Start here
 
