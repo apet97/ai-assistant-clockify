@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { FEATURE_GROUPS, type FeatureGroup } from "../harness/permissions.js";
+import type {
+  PresentedResult,
+  DiagnosticView,
+  PresentedResultEnvelope,
+} from "./presentation/presented-result.js";
 
 export const RUN_EVENT_TYPES = [
   "run.started",
@@ -156,52 +161,12 @@ export type JsonValue =
 
 export type JsonObject = { [key: string]: JsonValue };
 
-export interface PresentedResult {
-  status:
-    | "succeeded"
-    | "failed"
-    | "partial"
-    | "pending_confirmation"
-    | "cancelled"
-    | "outcome_unknown";
-  title: string;
-  summary: string;
-  facts: Array<{ label: string; value: string }>;
-  warnings: Array<{ code: string; message: string }>;
-  references: Array<{
-    id: string;
-    conversationId: string;
-    entityType: string;
-    externalId: string;
-    displayName: string;
-    sourceRunId: string;
-    bindings: Readonly<Record<string, string>>;
-    status: "active" | "stale" | "deleted";
-    verifiedAt: string;
-  }>;
-  recovery?:
-    | { kind: "view_operation"; label: string; operationId: string }
-    | { kind: "retry_read"; label: string; readAttemptId: string }
-    | { kind: "start_new_chat"; label: string };
-}
-
-export interface DiagnosticView {
-  kind: "sanitized_receipt";
-  byteLength: number;
-  value: JsonValue;
-}
-
-export interface PresentedResultEnvelope {
-  presentation: PresentedResult;
-  actionResultId?: string;
-  confirmation?: {
-    id: string;
-    nonce: string;
-    expiresAt: string;
-  };
-  undo?: { id: string };
-  diagnostic?: DiagnosticView;
-}
+// The ONE authoritative v2 result envelope is defined in
+// `./presentation/presented-result.ts` (T15-A) — re-exported here so every
+// existing `../assistant-v2/events.js` import path is unchanged. Do not
+// redefine `PresentedResult`/`DiagnosticView`/`PresentedResultEnvelope`
+// anywhere else.
+export type { PresentedResult, DiagnosticView, PresentedResultEnvelope };
 
 export type RunEventFrame = {
   type: "run_event";
