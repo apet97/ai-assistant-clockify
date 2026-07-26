@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "../../src/harness/action.js";
 import type { FakeWorkspaceSeed } from "./fake-clockify.js";
 import { READ_PARITY_BASE_SEED } from "./v2-read-parity-fixtures.js";
 
@@ -158,4 +159,10 @@ export const WRITE_PREVIEW_FIXTURES: Record<string, WritePreviewFixture> = {
 
 export function catalogWriteActionNames(): string[] {
   return Object.keys(WRITE_PREVIEW_FIXTURES).sort();
+}
+
+/** Pure availability predicate (no `vitest` import) so evaluation scripts can read it. */
+export function isAddonUnavailableWrite(action: ActionDefinition): boolean {
+  const addon = action.availabilityByAuthClass?.addon;
+  return !!addon && typeof addon === "object" && "available" in addon && addon.available === false;
 }

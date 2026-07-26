@@ -1,3 +1,4 @@
+import type { ActionDefinition } from "../../src/harness/action.js";
 import type { FakeWorkspaceSeed } from "./fake-clockify.js";
 import type { FakeListFamily } from "./fake/state.js";
 
@@ -150,4 +151,32 @@ export function expectedUnicodeSubstring(actionName: string): string | undefined
     default:
       return undefined;
   }
+}
+
+/**
+ * Canonical / paraphrase / one-character-typo request phrasings for an action.
+ * Lives in this PURE module (no `vitest` import) so `scripts/eval-v2` can derive
+ * evaluation cases from it in a plain `tsx` run; `v2-read-parity.ts` and
+ * `v2-write-parity.ts` re-export it so their own callers are unchanged.
+ */
+export function discoveryQueriesForAction(action: ActionDefinition): {
+  canonical: string;
+  paraphrase: string;
+  typo: string;
+} {
+  const canonical = action.name.replace(/^clockify_/, "").replace(/_/g, " ");
+  const descriptionLead = action.description
+    .replace(/\([^)]*\)/gu, "")
+    .split(/[.;]/u)[0]
+    ?.trim();
+  const paraphrase = descriptionLead && descriptionLead.length >= 8
+    ? descriptionLead.slice(0, 80)
+    : canonical;
+  const words = canonical.split(" ").filter(Boolean);
+  const target = words.reduce((longest, word) => (word.length > longest.length ? word : longest), words[0] ?? "list");
+  const typoWord = target.length > 4
+    ? `${target.slice(0, 2)}${target.slice(3)}`
+    : `${target}x`;
+  const typo = canonical.replace(target, typoWord);
+  return { canonical, paraphrase, typo };
 }

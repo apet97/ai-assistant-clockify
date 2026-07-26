@@ -371,6 +371,45 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   (`ACTION_CATALOG` 171 / `MODEL_API` 127, catalog hash
   `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`). Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T17-A`.
+- **T17-A CLOSED:** `scripts/eval-v2/` derives the v2 evaluation case set from
+  `MODEL_API_ACTION_CATALOG` — **exactly 127 cases (43 reads + 84 writes), zero hand-written
+  per-operation tables and no hard-coded count anywhere.** Key finding that shaped the slice: the
+  request arguments and fake seeds needed per operation already ship as `READ_PARITY_FIXTURES` (43)
+  and `WRITE_PREVIEW_FIXTURES` (84), and `tsconfig.scripts.json` already includes
+  `tests/helpers/**/*.ts` — so the cases are DERIVED from fixtures the parity suites already prove
+  against the real actions, not authored a second time. `case-model.ts` is the one derivation
+  (canonical/paraphrase/one-character-typo phrasings, seed, expected arguments, terminal state,
+  cohort membership); `api-discovery-cases.ts`, `assistant-terminal-cases.ts` and
+  `write-safety-cases.ts` are thin projections; `report.ts` is the one report builder. Terminal
+  cohorts: `single_read` 43 · `multi_read` 40 · `single_write` 84 · `independent_writes` 84 ·
+  `dependent_writes` 10 · `clarification` 16 · `references` 7 · `denial` 127 ·
+  `unavailable_auth_class` 7 · `truncation` 23 · `unicode` 6 · `hostile_data` 43 · plus four
+  runtime-scenario cohorts (cancellation / budget exhaustion / partial / unknown outcome) with one
+  deterministically chosen representative each. Write safety: 84 cases × 9 invariants = 756 checks.
+  **Three deliberate deviations from the printed plan, all to avoid fabricated evidence (rule
+  19/20):** (1) a sixth file `case-model.ts` was added inside `scripts/eval-v2/` because three
+  projections deriving the same way is exactly what `npm run dup` flags — the shared derivation lives
+  once; (2) `liveCase` stays absent on every case until T17-F defines a real guarded one, and the four
+  runtime cohorts are declared as SCENARIOS rather than per-operation properties, because neither is
+  derivable from shipped facts; (3) `expectedTerminalState` for a write is `pending_confirmation`
+  (or `denied` where the parity fixture proves preparation legitimately stops short) — never
+  "executed", since a v2 assistant write can only ever reach an unconfirmed preview from a model turn.
+  Also fixed a real defect found while wiring: `case-model.ts` initially imported
+  `discoveryQueriesForAction`/`isAddonUnavailableWrite` from `v2-read-parity.ts`/`v2-write-parity.ts`,
+  which `import { expect } from "vitest"` — so any `npm run eval:*` script would have crashed on
+  import. Both pure functions moved down into the pure `v2-read-parity-fixtures.ts` /
+  `v2-write-preview-fixtures.ts` modules and are re-exported from the vitest-importing helpers, which
+  also collapsed the pre-existing byte-identical `discoveryQueriesForWrite` duplicate into the one
+  shared implementation; the case model now runs standalone under plain `tsx`. The coverage test
+  computes BOTH sides of every assertion from the live catalog and fails on a missing fixture
+  (synthesized invented action), a duplicate, a stale/extra entry, a journey step that is not a
+  catalog write, an attempt scoring a case outside the derived set, an empty attempt set treated as a
+  pass, and a hard-coded numerator or denominator (a 5-case report must report 5). Gate:
+  `npx vitest run tests/unit/v2-eval-coverage.test.ts tests/unit/eval-consistency.test.ts
+  tests/unit/ordered-eval-cohorts.test.ts` (30 passed) + the structure/leave read+write parity suites
+  as a refactor regression check (521 passed total) + `npm run type-check` + `type-check:scripts` +
+  `lint` + `dup` all exit 0. Counts: unchanged. Live: `live_not_run_missing_credentials`. Default
+  engine: `v1`. Next: `T17-B`.
 
 ## Start here
 

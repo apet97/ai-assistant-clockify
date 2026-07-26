@@ -19,10 +19,12 @@ import { createStore, type Store } from "../../src/db/store.js";
 import { TYPED_CONSENT } from "../../src/routes/consent-guard.js";
 import type { FakeWorkspace } from "./fake-clockify.js";
 import {
+  isAddonUnavailableWrite,
   WRITE_PREVIEW_BASE_SEED,
   WRITE_PREVIEW_FIXTURES,
   type WritePreviewFixture,
 } from "./v2-write-preview-fixtures.js";
+import { discoveryQueriesForAction } from "./v2-read-parity-fixtures.js";
 import { READ_PARITY_DOMAIN_GROUPS } from "./v2-read-parity.js";
 
 export const WRITE_PARITY_DOMAIN_GROUPS = READ_PARITY_DOMAIN_GROUPS;
@@ -84,32 +86,10 @@ export function mutationCallTotal(counts: Record<string, number>): number {
   }, 0);
 }
 
-export function isAddonUnavailableWrite(action: ActionDefinition): boolean {
-  const addon = action.availabilityByAuthClass?.addon;
-  return !!addon && typeof addon === "object" && "available" in addon && addon.available === false;
-}
+export { isAddonUnavailableWrite };
 
-export function discoveryQueriesForWrite(action: ActionDefinition): {
-  canonical: string;
-  paraphrase: string;
-  typo: string;
-} {
-  const canonical = action.name.replace(/^clockify_/, "").replace(/_/g, " ");
-  const descriptionLead = action.description
-    .replace(/\([^)]*\)/gu, "")
-    .split(/[.;]/u)[0]
-    ?.trim();
-  const paraphrase = descriptionLead && descriptionLead.length >= 8
-    ? descriptionLead.slice(0, 80)
-    : canonical;
-  const words = canonical.split(" ").filter(Boolean);
-  const target = words.reduce((longest, word) => (word.length > longest.length ? word : longest), words[0] ?? "create");
-  const typoWord = target.length > 4
-    ? `${target.slice(0, 2)}${target.slice(3)}`
-    : `${target}x`;
-  const typo = canonical.replace(target, typoWord);
-  return { canonical, paraphrase, typo };
-}
+/** Identical to `discoveryQueriesForAction` — one shared pure implementation. */
+export const discoveryQueriesForWrite = discoveryQueriesForAction;
 
 export function assertWriteDiscoveryReturnsAction(
   actionName: string,

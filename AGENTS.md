@@ -219,6 +219,20 @@ here; this file is the execution map.
   measured as host load starvation (untouched spec passes 6/6 in isolation either side of a failing
   full run; load 7.6–24.7 on 8 cores). Re-run full e2e on a quiet machine before any release claim.
   Counts unchanged. Live: `not_run`. Default engine: `v1`. Next: `T17-A`.
+- **T17-A CLOSED:** `scripts/eval-v2/` derives 127 evaluation cases (43 reads + 84 writes) from
+  `MODEL_API_ACTION_CATALOG` plus the shipped `READ_PARITY_FIXTURES`/`WRITE_PREVIEW_FIXTURES` — no
+  hand-written per-operation table and no hard-coded count (`tsconfig.scripts.json` already includes
+  `tests/helpers/**`, which is what makes derivation the intended design). `case-model.ts` is the one
+  derivation; discovery / terminal / write-safety files are projections; `report.ts` is the one report
+  builder. 16 terminal cohorts populated (single/multi read 43/40, writes 84, dependent journeys 10,
+  clarification 16, references 7, denial 127, auth-class 7, truncation 23, unicode 6, hostile 43, plus
+  4 runtime scenarios); write safety = 84 × 9 = 756 checks. Deviations recorded: a shared
+  `case-model.ts` (dup gate), `liveCase` left absent until T17-F, runtime cohorts declared as
+  scenarios, and a write's terminal state is `pending_confirmation`/`denied`, never "executed". Fixed
+  a real defect: the pure query/availability helpers lived in `vitest`-importing modules, so any
+  `eval:*` script would have crashed — moved down into the pure fixture modules and re-exported
+  (also collapsing the duplicate `discoveryQueriesForWrite`). Gate: 30 focused + 521 with parity
+  regression + type-check + type-check:scripts + lint + dup, all 0. Live: `not_run`. Next: `T17-B`.
 
 ## Non-negotiable invariants
 

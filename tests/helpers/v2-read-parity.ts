@@ -20,6 +20,7 @@ import type { ErrorReceipt, SuccessReceipt } from "../../src/harness/receipts.js
 import type { ToolCall } from "../../src/assistant/model-client.js";
 import type { FakeWorkspaceSeed } from "./fake-clockify.js";
 import {
+  discoveryQueriesForAction,
   READ_PARITY_BASE_SEED,
   READ_PARITY_FIXTURES,
   expectedUnicodeSubstring,
@@ -30,6 +31,8 @@ import {
 import { createFakeWorkspace, type FakeWorkspace } from "./fake-clockify.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { mockRunnerDeps } from "./v2-runner-deps.js";
+
+export { discoveryQueriesForAction };
 
 export const READ_PARITY_DOMAIN_GROUPS: Record<string, readonly FeatureGroup[]> = {
   structure: ["work_structure"],
@@ -56,28 +59,6 @@ export function assertDomainFixturesComplete(domain: keyof typeof READ_PARITY_DO
   const missing = reads.filter((action) => !READ_PARITY_FIXTURES[action.name]);
   expect(missing.map((action) => action.name), `missing read parity fixtures for ${domain}`).toEqual([]);
   expect(reads.length).toBeGreaterThan(0);
-}
-
-export function discoveryQueriesForAction(action: ActionDefinition): {
-  canonical: string;
-  paraphrase: string;
-  typo: string;
-} {
-  const canonical = action.name.replace(/^clockify_/, "").replace(/_/g, " ");
-  const descriptionLead = action.description
-    .replace(/\([^)]*\)/gu, "")
-    .split(/[.;]/u)[0]
-    ?.trim();
-  const paraphrase = descriptionLead && descriptionLead.length >= 8
-    ? descriptionLead.slice(0, 80)
-    : canonical;
-  const words = canonical.split(" ").filter(Boolean);
-  const target = words.reduce((longest, word) => (word.length > longest.length ? word : longest), words[0] ?? "list");
-  const typoWord = target.length > 4
-    ? `${target.slice(0, 2)}${target.slice(3)}`
-    : `${target}x`;
-  const typo = canonical.replace(target, typoWord);
-  return { canonical, paraphrase, typo };
 }
 
 export function semanticReceipt(receipt: SuccessReceipt | ErrorReceipt): unknown {
