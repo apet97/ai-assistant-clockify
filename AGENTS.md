@@ -318,6 +318,22 @@ here; this file is the execution map.
   authority history. Gate: 48 + 78 focused + inventory + type-check(+scripts) + lint + cycles 0 + dup +
   `npm run verify` VERIFY_EXIT=0 (340 / 5,203) on the rerun after one documented load flake. Live:
   `not_run`. Default engine: `v1`. Next: `T18-A` — **STOPPED for operator authorization.**
+- **A0 CLOSED (three accepted pre-T18 findings fixed, local only):** three commits. (A0-1 `565cc88`)
+  `/version.modelConfiguration` emits 9 keys while the deployed-payload validator and both runbooks
+  enforced 8 — the documented deploy identity assertion exited 1 on a CORRECT deployment. The shared
+  validator is SPLIT, not widened: the frozen 8-key binding check stays byte-identical for v1
+  rollback, a new `deployedModelConfiguration()` takes the 9-key deployed schema, and no recorded hash
+  changed. It now also asserts the deployed `assistantEngine` equals the intended engine (previously
+  unchecked), from `EXPECTED_ASSISTANT_ENGINE`/`SELECTED_ASSISTANT_ENGINE` so T18-F asserts `v2`.
+  (A0-2 `ef465ba`) clarification hydration filtered on status alone, so an expired-but-unswept row
+  rendered chips that 410 on click; it now mirrors `claimClarificationResolving`'s expiry comparison,
+  and the store/app clock skew the guard exposed is fixed. (A0-3 `<this commit>`) `executeReads`
+  returned at the first clarification, erasing already-executed later reads from the journal; the
+  whole batch is journaled in provider order before the suspension events. A `failed` read outcome
+  still has no terminal event — pre-existing, observed not fixed. **A0-4 DEFERRED** (optional, largest
+  item, and no terminal report can pass without `LLM_*` credentials anyway). Gate: 83 focused +
+  type-check(+scripts) + lint + cycles 0, all exit 0. Live: `not_run`. Default engine: `v1`.
+  Next: full `verify`, then `A1` — **BLOCKED on host load for `test:e2e`.**
 
 ## Non-negotiable invariants
 

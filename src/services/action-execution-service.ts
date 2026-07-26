@@ -202,6 +202,12 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       },
     );
 
+    // The reads have ALL already run (the pool resolves every call before any
+    // outcome can suspend the run), so returning at the first clarification
+    // erased later reads that really made host calls and really persisted
+    // results. Journal the whole batch in provider order first, then suspend on
+    // the first clarification.
+    let firstClarification: { clarificationId: string; actionResultId: string } | undefined;
     for (const { call, outcome } of readOutcomes) {
       deps.eventService.requestTool({
         scope: scopedRun(state),
@@ -231,31 +237,39 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
-      } else if (outcome.kind === "clarification") {
-        // Order matters: the continuation must be set BEFORE any event commits,
-        // because `commitStateEvent` persists `state.continuation` — journaling
-        // first and then reloading would write back `{kind:"none"}` and lose the
-        // clarification id the resolve route restores from.
-        state.continuation = { kind: "awaiting_clarification", clarificationId: outcome.clarificationId };
-        deps.eventService.requireClarification({
-          scope: scopedRun(state),
-          state,
-          payload: {
-            clarificationId: outcome.clarificationId,
-            actionResultId: outcome.actionResultId,
-          },
-        });
-        // The reload above returns the persisted state, which already carries the
-        // continuation set before the event; no re-assignment is needed.
-        state = deps.runStore.getRun(scopedRun(state)) ?? state;
-        deps.eventService.suspendRun({
-          scope: scopedRun(state),
-          state,
-          payload: { reason: "awaiting_clarification" },
-        });
-        state = deps.runStore.getRun(scopedRun(state)) ?? state;
-        return { state, clarification: { clarificationId: outcome.clarificationId } };
+      } else if (outcome.kind === "clarification" && !firstClarification) {
+        firstClarification = {
+          clarificationId: outcome.clarificationId,
+          actionResultId: outcome.actionResultId,
+        };
       }
+    }
+    if (firstClarification) {
+      // Order matters: the continuation must be set BEFORE any event commits,
+      // because `commitStateEvent` persists `state.continuation` — journaling
+      // first and then reloading would write back `{kind:"none"}` and lose the
+      // clarification id the resolve route restores from. The per-tool events
+      // above committed with the continuation still `none`, which is correct:
+      // the run is only awaiting clarification once the whole batch is journaled.
+      state.continuation = {
+        kind: "awaiting_clarification",
+        clarificationId: firstClarification.clarificationId,
+      };
+      deps.eventService.requireClarification({
+        scope: scopedRun(state),
+        state,
+        payload: firstClarification,
+      });
+      // The reload returns the persisted state, which already carries the
+      // continuation set before the event; no re-assignment is needed.
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      deps.eventService.suspendRun({
+        scope: scopedRun(state),
+        state,
+        payload: { reason: "awaiting_clarification" },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      return { state, clarification: { clarificationId: firstClarification.clarificationId } };
     }
     return { state };
   }

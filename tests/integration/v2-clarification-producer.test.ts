@@ -444,4 +444,59 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     });
     expect(run?.continuation).toEqual({ kind: "awaiting_clarification", clarificationId: row!.id });
   });
+
+  it("journals every executed read in a batch that suspends on an earlier clarification", async () => {
+    // The read pool resolves EVERY call before any outcome suspends the run, so
+    // the second read below really executed and really persisted a result.
+    // Returning at the first clarification erased it from the journal entirely.
+    const { app, store, cookie, session } = await makeV2App([
+      { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: "list time entries" } }] },
+      {
+        text: "",
+        toolCalls: [
+          // Ambiguous: two members are named exactly "Alice".
+          { id: "tc-clarify", name: "clockify_entries_list", arguments: { userId: "Alice" } },
+          // Unambiguous: exactly one "Bob".
+          { id: "tc-after", name: "clockify_entries_list", arguments: { userId: "Bob" } },
+        ],
+      },
+      { text: "All done.", toolCalls: [] },
+    ]);
+
+    const res = await request(app)
+      .post("/api/chat/messages")
+      .set("Cookie", cookie)
+      .send({ message: "list entries for Alice and Bob" });
+    expect(res.status).toBe(200);
+
+    const runId = await activeRunId(store, session.id);
+    const events = await readEvents(app, cookie, runId);
+    const forCall = (id: string) =>
+      events.filter((e) => e.event.payload.toolCallId === id).map((e) => e.event.eventType);
+
+    // The clarifying read is requested and started; it has no terminal event
+    // because it produced a question rather than a result.
+    expect(forCall("tc-clarify")).toEqual(["tool.requested", "tool.started"]);
+    // The read AFTER it is journaled in full — this is the regression.
+    expect(forCall("tc-after")).toEqual(["tool.requested", "tool.started", "tool.completed"]);
+
+    // Provider order is preserved, and the suspension is journaled last.
+    const order = events.map((e) => e.event.eventType);
+    expect(order.indexOf("tool.completed")).toBeLessThan(order.indexOf("clarification.required"));
+    expect(order.indexOf("clarification.required")).toBeLessThan(order.indexOf("run.suspended"));
+
+    // The journaled result is the real one the executed read persisted.
+    const completed = events.find((e) => e.event.payload.toolCallId === "tc-after"
+      && e.event.eventType === "tool.completed")!;
+    const stored = store.getActionResult(completed.event.payload.actionResultId as string) as {
+      receipt: { ok: boolean; data?: { userId?: string } };
+    };
+    expect(stored.receipt.ok).toBe(true);
+    expect(stored.receipt.data?.userId).toBe("bbbbbbbbbbbbbbbbbbbbbbb1");
+
+    // The run still suspends on the clarification.
+    const row = clarificationRowsFor(store, session.id, runId)!;
+    expect(row.status).toBe("pending");
+    expect(row.missingField).toBe("userId");
+  });
 });

@@ -597,6 +597,51 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `f1-verify-flake-diagnosis` pattern. Live: `live_not_run_missing_credentials`. Default engine: `v1`.
   Next: **`T18-A` — STOPPED for operator authorization; T18 requires new, explicit, per-step authority
   and was NOT started.**
+- **A0 CLOSED (three accepted pre-T18 review findings fixed, local only):** three focused commits.
+  (A0-1 `565cc88` `fix: make the deployed version contract exact`) `/version.modelConfiguration`
+  emits nine keys — `assistantEngine` was added by `9652309` — while the deployed-payload validator
+  in `scripts/evidence/deepseek-release-evidence.ts`, `DEPLOYMENT.md`, and
+  `docs/marketplace/03-operations-evidence-rollback-package.md` all enforced exactly eight; CI stayed
+  green only because the deployed fixture was hand-written with eight. The documented deploy identity
+  assertion therefore exited 1 on a CORRECT deployment, blocking ALL deploy verification. The frozen
+  `deepseek-release-binding.json` artifact and the live `/version` payload are two different schemas,
+  so the shared validator was SPLIT, never widened: `modelConfiguration()` keeps the eight-key binding
+  check byte-identical for v1 rollback and a new `deployedModelConfiguration()` requires the nine-key
+  deployed schema — no recorded hash or binding value changed. It now also asserts that the deployed
+  `assistantEngine` equals the INTENDED engine (nothing checked this before; it is the single value
+  the v2 cutover most needs proven at the deploy boundary), derived from the evidence classification
+  in the validator and from `EXPECTED_ASSISTANT_ENGINE` (defaulted from `SELECTED_ASSISTANT_ENGINE`,
+  so T18-F's v2 deploy asserts `v2` instead of re-creating this blocker) in both runbooks, with its
+  own error rather than a DeepSeek-setting mismatch; a new `release-operations-contract` case pins
+  both runbook assertions. (A0-2 `ef465ba` `fix: never hydrate an expired clarification as live`)
+  `hydrateAttachment`'s `clarification.required` arm filtered on status ALONE while expiry is enforced
+  at claim time and only lazily by the retention sweep, so an expired-but-unswept row rendered live
+  chips that 410 on click; the guard mirrors `claimClarificationResolving`'s comparison exactly
+  (expired when `expiresAt <= now`) so a dropped row could not have been claimed anyway — the
+  regression test asserts the row is still `pending`, the attachment is gone, AND the claim really
+  throws `clarification_expired`. That guard exposed a fixture skew: `makeV2App` pinned the STORE
+  clock but never passed `AppDeps.now`, so route/hydration code ran on the real wall clock and every
+  row was born "expired" (the T15-E session-cookie skew class); store and app now share one
+  injectable clock, as in production. (A0-3 `<this commit>` `fix: journal every executed read in a
+  suspended batch`) `executeReads` returned at the FIRST clarification outcome, so later reads in the
+  same batch — which the read pool had already fully executed, with real host calls and persisted
+  results — vanished from the journal entirely; the whole batch is now journaled in provider order
+  and the clarification/suspension events are emitted after it, preserving the
+  continuation-set-before-the-event invariant. Verified by removing the fix: the new case fails with
+  `expected [] to deeply equal ['tool.requested','tool.started','tool.completed']`. Observed and
+  deliberately NOT fixed (pre-existing, outside A0-3's stated scope): a `failed` read outcome still
+  journals `tool.requested` + `tool.started` with no terminal event. **A0-4 (drive the four
+  `unscoredCohorts` terminal scenarios) DEFERRED, not done:** it is explicitly optional, is by far the
+  largest A0 item, and nothing in T18 consumes a terminal report — and without `LLM_*` credentials
+  `eval:assistant-terminal` emits `not_evaluated_missing_credentials` regardless, so building the
+  drivers now could not produce a passing report anyway. Gate: `npx vitest run
+  tests/unit/deepseek-release-evidence.test.ts tests/integration/v2-clarification-producer.test.ts
+  tests/unit/release-operations-contract.test.ts tests/integration/run-events-route.test.ts
+  tests/unit/v2-service-contracts.test.ts tests/unit/v2-runner.test.ts
+  tests/integration/v2-runner-persistence.test.ts` (83 passed) + `type-check` + `type-check:scripts` +
+  `lint` + `cycles` (0), all exit 0. Counts: unchanged. Live: `live_not_run_missing_credentials`.
+  Default engine: `v1`. Next: full `npm run verify`, then **`A1` — push/merge, owner-authorized but
+  BLOCKED on host load for `test:e2e`.**
 
 ## Start here
 
