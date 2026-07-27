@@ -266,6 +266,30 @@ describe("release operations contract", () => {
     }
   });
 
+  it("never lets a non-v1 cutover inherit the frozen v1 candidate as its uploaded source", () => {
+    // The frozen DeepSeek binding names the v1 candidate. Deriving RELEASE_SHA from it
+    // during a v2 cutover would stage and upload v1 SOURCE while setting
+    // ASSISTANT_ENGINE=v2 -- v1 code serving engine v2 against the v2 database. Both
+    // runbooks must therefore gate the implicit derivation on the intended engine and
+    // refuse a non-v1 deploy whose RELEASE_SHA still equals the binding's candidate.
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      expect(runbook, `${path} captures the binding candidate separately`)
+        .toContain('BINDING_CANDIDATE_SHA="$(node -e \'');
+      expect(runbook, `${path} only a v1 deploy inherits the binding candidate`)
+        .toContain('test "$EXPECTED_ASSISTANT_ENGINE" = "v1"');
+      expect(runbook, `${path} a non-v1 deploy may not upload the v1 candidate`)
+        .toContain('test "$RELEASE_SHA" != "$BINDING_CANDIDATE_SHA"');
+
+      // The engine check must precede the archive that stages the upload.
+      const guard = runbook.indexOf('test "$RELEASE_SHA" != "$BINDING_CANDIDATE_SHA"');
+      const archive = runbook.indexOf('git archive "$RELEASE_SHA" | tar -xf -');
+      expect(guard, `${path} guard present`).toBeGreaterThanOrEqual(0);
+      expect(archive, `${path} staging archive present`).toBeGreaterThanOrEqual(0);
+      expect(guard, `${path} guard precedes staging`).toBeLessThan(archive);
+    }
+  });
+
   it("binds legacy v7 metadata before restore and uses only the resulting format-2 sidecar", () => {
     for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
       const runbook = read(path);

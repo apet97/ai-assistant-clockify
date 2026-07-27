@@ -415,6 +415,26 @@ here; this file is the execution map.
   21,504). Counts unchanged: `ACTION_CATALOG` 171 · api 127 · composite 24 · generic 16 · local 4;
   catalog hash `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`. No Railway or
   Clockify call. Live: `not_run`. Default engine: `v1`. Next: `D2`, then `D3` (§3.1 blocker).
+- **D3 CLOSED — cutover deploy bound to the v2 candidate (§3.1 = option (i)):** both runbooks
+  (`DEPLOYMENT.md` + `docs/marketplace/03-operations-evidence-rollback-package.md`; the contract
+  test loops over both) now capture `BINDING_CANDIDATE_SHA` separately, permit the implicit
+  binding-derived `RELEASE_SHA` only when `EXPECTED_ASSISTANT_ENGINE` is `v1`, and refuse a non-v1
+  deploy whose `RELEASE_SHA` equals the binding candidate — a guard, so uploading v1 source under
+  engine v2 is impossible, not merely warned about. Option (ii) was rejected because a v2 binding
+  would mean authoring measured benchmark values we cannot measure without `LLM_*` (rule 10). The
+  frozen binding is provably unchanged; `binding.candidate.testedSha` still present and no
+  `RELEASE_SHA="$(git rev-parse HEAD)"` introduced. New contract case pins the guard and its
+  ordering in both files; non-vacuity proven by mutation, file restored from a copy.
+- **D2/D4 constraints discovered in D3:** `PREDEPLOY_EVIDENCE_MAX_AGE_MS` is **one hour** and
+  applies to both `backupCreatedAt` and `readinessConfirmedAt`, so D2+D4 are ONE atomic ≤60-minute
+  transaction; D3 was run before that window (recorded deviation from printed order — order changed,
+  nothing skipped). The restore verifier reads release identity from env but builds from the current
+  checkout, and the runbook asserts `RELEASE_SHA == HEAD`, so the deploy candidate is the **D3
+  commit**, superseding D1's `a369e06` (D3 compiles nothing, so the artifact is unchanged). A
+  v8→v12 migration is supported (`migration: "candidate_private_clone"`), not a failure; production
+  v1 is schema **8** with **4 active installations**. `token_backed_read` on the 21 July backup was
+  **200, not 401** — but D5's reinstall retires the v1 token, so every pre-reinstall backup fails it
+  afterwards: Phase F requires a **post-reinstall** backup.
 
 ## Non-negotiable invariants
 

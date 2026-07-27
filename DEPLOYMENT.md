@@ -584,10 +584,30 @@ SELECTED_REASONING_EFFORT="$(node -e '
 EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"
 export EXPECTED_MODEL_CONFIGURATION SELECTED_LLM_MODEL SELECTED_REASONING_EFFORT SELECTED_THINKING_MODE
 export EXPECTED_ASSISTANT_ENGINE
-RELEASE_SHA="$(node -e '
+# The exact source candidate to stage, hash, and upload. The frozen DeepSeek
+# binding names the v1 candidate, so deriving RELEASE_SHA from it is correct
+# ONLY for a v1 deploy or a v1 rollback. A cutover to any other engine MUST
+# export RELEASE_SHA explicitly as that engine's candidate BEFORE this block:
+# deriving it from the binding would stage and upload v1 SOURCE while setting
+# ASSISTANT_ENGINE=v2, i.e. v1 code serving engine v2 against the v2 database —
+# the exact state the rollback-key work exists to prevent. Everything
+# downstream (verifyReleaseSourceBinding, the staged-tree rehash,
+# release-source-binding.ts) reads both values from the environment, so an
+# explicit override stays internally consistent. Do NOT instead edit the frozen
+# binding: it is v1 rollback evidence and is read by the CI candidate gates.
+BINDING_CANDIDATE_SHA="$(node -e '
   const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(binding.candidate.testedSha);
 ' "$DEEPSEEK_BINDING_PATH")"
+if [ -z "${RELEASE_SHA:-}" ]; then
+  # Only a v1 deploy may inherit the binding's candidate implicitly.
+  test "$EXPECTED_ASSISTANT_ENGINE" = "v1"
+  RELEASE_SHA="$BINDING_CANDIDATE_SHA"
+fi
+if [ "$EXPECTED_ASSISTANT_ENGINE" != "v1" ]; then
+  # Never upload the frozen v1 candidate as a non-v1 engine.
+  test "$RELEASE_SHA" != "$BINDING_CANDIDATE_SHA"
+fi
 printf '%s' "$RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
 git cat-file -e "$RELEASE_SHA^{commit}"
 git merge-base --is-ancestor "$RELEASE_SHA" HEAD

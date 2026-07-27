@@ -839,6 +839,55 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   call, no live write. Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `D2`
   (verified v1 rollback preparation), then `D3` (§3.1 — the runbook still derives `RELEASE_SHA` from
   the frozen **v1** binding `0b1c6794`, which would upload v1 source under `ASSISTANT_ENGINE=v2`).
+- **D3 CLOSED — the v2 cutover deploy is bound to the v2 candidate (§3.1 resolved as option (i)):**
+  the owner delegated the (i)/(ii) choice ("You do everything go"); **(i)** was selected and the
+  reasoning is recorded rather than the choice merely asserted — option (ii) would mean authoring a
+  v2 `deepseek-release-binding.json`, but that artifact carries `rawAggregateSha256` and
+  `thinkingMode` from a **measured** benchmark run, and with no `LLM_*` in the shell the eval
+  reports are `not_evaluated_missing_credentials`, so writing one now would be inventing benchmark
+  evidence (rule 10). Both runbooks (`DEPLOYMENT.md` and
+  `docs/marketplace/03-operations-evidence-rollback-package.md` — the contract test loops over both,
+  so correcting only one would have failed) now capture `BINDING_CANDIDATE_SHA` separately, allow
+  the implicit binding-derived `RELEASE_SHA` **only** when `EXPECTED_ASSISTANT_ENGINE` is `v1`, and
+  hard-refuse a non-v1 deploy whose `RELEASE_SHA` still equals the binding's candidate. This is a
+  guard, not a comment: the v1-source-under-v2-engine upload is now impossible rather than merely
+  documented. `evidence/performance/deepseek-release-binding.json` is **provably unchanged**
+  (`git diff` empty), and the pre-existing pins still hold — `binding.candidate.testedSha` remains
+  present and no `RELEASE_SHA="$(git rev-parse HEAD)"` line was introduced (the contract test
+  forbids exactly that string). One new `release-operations-contract` case pins the guard in both
+  files **and its ordering** (the engine check must precede the staging `git archive`); its
+  non-vacuity was proven by mutation — deleting the guard line failed exactly 1 test, and the file
+  was restored from a copy, never `git checkout --`.
+- **Three findings from D3 that govern D2/D4 — read before starting either:**
+  (1) **`PREDEPLOY_EVIDENCE_MAX_AGE_MS = 60 * 60 * 1_000`** (`scripts/evidence/predeploy-backup-gate.ts`),
+  applied to **both** `backupCreatedAt` and `readinessConfirmedAt` against the gate's clock. D2 and
+  D4 are therefore **not separate tasks** — they are one atomic **≤60-minute** transaction, and if
+  the window lapses the backup must be retaken. D3 was deliberately executed BEFORE that window
+  (a recorded deviation from the printed order): it changes `DEPLOYMENT.md`, needs a full
+  `npm run verify`, and produces a commit, none of which depend on the backup, so running it inside
+  the window would burn a large fraction of the hour on unrelated work. Order was changed; no step
+  was skipped.
+  (2) `validateRestoreEvidence` binds `releaseSha`/`buildHash`/`serverArtifactSha256`, and
+  `db:verify-restore` is `npm run build && tsx scripts/verify-restored-db.ts` — the verifier reads
+  the identity from **env** but builds from the **current checkout**, while `DEPLOYMENT.md`'s
+  evidence block asserts `test "$RELEASE_SHA" = "$(git rev-parse HEAD)"`. So the deploy candidate is
+  **HEAD at deploy time (the D3 commit)**, superseding D1's frozen `a369e06` as the value of
+  `RELEASE_SHA`. D3 changed only two runbooks and one test — nothing compiled — so the built
+  artifact is unchanged; only the source-tree hash moves. The existing 21 July evidence is unusable
+  twice over: 6 days stale, and bound to `releaseSha d0f29bc…`.
+  (3) A **v8 → v12 migration is supported and expected**, not a failure: restore verification
+  reports `migration: "candidate_private_clone"` whenever the source version differs from
+  `LATEST_SCHEMA_VERSION`, then re-checks integrity and schema post-migration. Production v1 is
+  `sourceUserVersion: 8` with **4 active installations**.
+- **D2's flagged `token_backed_read` question, answered from evidence and recorded early:** the
+  review asked whether a restored pre-cutover v1 backup returns **401**. It does **not** — the
+  21 July drill's `restore-verification.json` records `tokenBackedRead: passed, GET /user,
+  httpStatus 200, redirects blocked`. **But the procedure the plan asked for still applies, for a
+  different reason:** D5's reinstall retires the v1 installation token and increments the
+  generation, so **every pre-reinstall v1 backup will fail `token_backed_read` from that moment
+  on**. Consequence, to be applied at Phase F and at any post-cutover deploy: `gate:predeploy-backup`
+  can only be satisfied by a **post-reinstall** backup. Capture one immediately after D5 succeeds;
+  do not plan to rely on a backup taken before the reinstall.
 
 ## Start here
 
