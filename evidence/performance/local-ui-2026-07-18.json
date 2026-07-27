@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "kind": "local_fixture_ui_performance",
+  "generatedAt": "2026-07-26T20:58:14.644Z",
+  "scope": {
+    "classification": "secret-free local Playwright fixture",
+    "productionClaim": false,
+    "fixture": "tests/e2e/fixtures/server.mjs",
+    "note": "Built UI with deterministic local API responses; not Railway, Clockify, DeepSeek, or real-network evidence."
+  },
+  "source": {
+    "commitSha": "cb815bab32aa03c8eae4321a10bb9ee1274d085d",
+    "workingTreeDirty": true
+  },
+  "environment": {
+    "node": "v22.23.1",
+    "platform": "darwin",
+    "architecture": "arm64",
+    "browser": "Chromium",
+    "browserVersion": "149.0.7827.55",
+    "networkProfile": {
+      "latencyMs": 60,
+      "downloadBitsPerSecond": 4000000,
+      "uploadBitsPerSecond": 3000000,
+      "cacheDisabled": true
+    }
+  },
+  "sampleCounts": {
+    "statusFeedback": 30,
+    "warmShell": 25,
+    "coldFast4gShell": 15,
+    "historyHydration": 40
+  },
+  "thresholds": {
+    "statusFeedbackMaxMs": 100,
+    "warmShellP95Ms": 1000,
+    "coldFast4gShellP95Ms": 2000,
+    "historyHydrationP95Ms": 250,
+    "uiGzipBytes": 21504
+  },
+  "metrics": {
+    "statusFeedback": {
+      "samples": 30,
+      "minMs": 1.6,
+      "p50Ms": 3.4,
+      "p95Ms": 13.6,
+      "maxMs": 15.5,
+      "thresholdMaxMs": 100,
+      "passed": true
+    },
+    "warmShellInteractive": {
+      "samples": 25,
+      "minMs": 56,
+      "p50Ms": 96.4,
+      "p95Ms": 168.2,
+      "maxMs": 205.1,
+      "thresholdP95Ms": 1000,
+      "passed": true
+    },
+    "coldFast4gShellInteractive": {
+      "samples": 15,
+      "minMs": 886.8,
+      "p50Ms": 978.3,
+      "p95Ms": 1137.6,
+      "maxMs": 1137.6,
+      "thresholdP95Ms": 2000,
+      "passed": true
+    },
+    "historyHydration": {
+      "samples": 40,
+      "minMs": 45.4,
+      "p50Ms": 136.9,
+      "p95Ms": 240.2,
+      "maxMs": 326.4,
+      "thresholdP95Ms": 250,
+      "supportedMessages": 50,
+      "response": {
+        "samples": 40,
+        "minMs": 13.4,
+        "p50Ms": 40.7,
+        "p95Ms": 116,
+        "maxMs": 128.8
+      },
+      "renderAfterResponse": {
+        "samples": 40,
+        "minMs": 21.5,
+        "p50Ms": 88.3,
+        "p95Ms": 183.7,
+        "maxMs": 197.6
+      },
+      "passed": true
+    },
+    "uiAssets": {
+      "files": [
+        {
+          "path": "dist/ui/index.css",
+          "rawBytes": 16519,
+          "gzipBytes": 3853
+        },
+        {
+          "path": "dist/ui/main.js",
+          "rawBytes": 57148,
+          "gzipBytes": 16959
+        }
+      ],
+      "rawBytes": 73667,
+      "gzipBytes": 20812,
+      "limitBytes": 21504,
+      "passed": true
+    }
+  },
+  "conclusion": "passed",
+  "failures": []
+}

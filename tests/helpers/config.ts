@@ -18,6 +18,7 @@ export function makeTestConfig(overrides: Partial<AppConfig> = {}): AppConfig {
     sessionTtlMs: 2 * 60 * 60 * 1000,
     databasePath: ":memory:",
     llmProvider: "http",
+    assistantEngine: "v1",
     llmMode: "tool",
     llmAgentic: true,
     llmToolSelect: true,

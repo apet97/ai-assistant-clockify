@@ -18,16 +18,21 @@ export interface SessionClaims {
   expiresAt: string;
 }
 
+const sessionUiPreferencesCompatibilitySchema = z.object({
+  theme: z.enum(["system", "light", "dark"]),
+  timeZone: z.string().min(1).max(100).optional(),
+  language: z.enum(["en", "sr"]).optional(),
+}).strict().transform(({ theme, timeZone }) => ({
+  theme,
+  ...(timeZone ? { timeZone } : {}),
+}));
+
 const sessionClaimsSchema = z.object({
   sessionId: z.string().min(1),
   workspaceId: z.string().min(1),
   adminUserId: z.string().min(1),
   workspaceRole: z.string().min(1),
-  uiPreferences: z.object({
-    theme: z.enum(["system", "light", "dark"]),
-    language: z.enum(["en", "sr"]),
-    timeZone: z.string().min(1).max(100).optional(),
-  }).strict().optional(),
+  uiPreferences: sessionUiPreferencesCompatibilitySchema.optional(),
   expiresAt: z.string().min(1),
 });
 

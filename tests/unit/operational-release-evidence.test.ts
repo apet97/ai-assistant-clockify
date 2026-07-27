@@ -7,6 +7,7 @@ import {
 } from "../../scripts/evidence/operational-release-evidence.js";
 import { hashCanonicalJson } from "../../scripts/lib/live-evidence.js";
 import { CLOCKIFY_SCOPE_ENFORCEMENT_SHA256 } from "../../src/addon/scope-contract.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const SHA = {
   candidate: "a".repeat(40),
@@ -71,7 +72,7 @@ function passingInput(): OperationalReleaseEvidenceInput {
         schema: {
           status: "passed",
           sourceUserVersion: 7,
-          userVersion: 8,
+          userVersion: LATEST_SCHEMA_VERSION,
           migration: "candidate_private_clone",
           requiredTables: 11,
           requiredColumns: 43,

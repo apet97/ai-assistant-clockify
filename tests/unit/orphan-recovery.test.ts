@@ -362,8 +362,8 @@ describe("orphaned execution recovery", () => {
       kind: "receipt",
       receipt: { ok: false, action: "undo", code: "commit_outcome_unknown" },
     });
-    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0 });
-    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0 });
+    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0, assistantRuns: 0 });
+    expect(recovered.recoverOrphanedRuns()).toEqual({ turns: 0, operations: 0, confirmations: 0, undos: 0, assistantRuns: 0 });
     recovered.close();
 
     const db = new Database(path, { readonly: true });

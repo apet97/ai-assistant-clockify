@@ -280,11 +280,27 @@ export function buildInstallationStore(ctx: StoreContext): {
       const chatMessageResultLinks = del(
         "DELETE FROM chat_message_result_links WHERE message_id IN (SELECT id FROM chat_messages WHERE workspace_id = ?)",
       );
+      const assistantRunResultLinks = del(
+        "DELETE FROM assistant_run_result_links WHERE session_id IN (SELECT session_id FROM assistant_runs WHERE workspace_id = ?)",
+      );
+      const assistantRunRequestLinks = del(
+        "DELETE FROM assistant_run_request_links WHERE workspace_id = ?",
+      );
+      const confirmationBatchItems = del(
+        "DELETE FROM confirmation_batch_items WHERE workspace_id = ?",
+      );
+      const confirmationBatches = del("DELETE FROM confirmation_batches WHERE workspace_id = ?");
+      // Both reference assistant_runs (entity_references CASCADE,
+      // pending_clarifications CASCADE) and pending_clarifications additionally
+      // RESTRICTs to action_results/operation_runs: delete before all three.
+      const pendingClarifications = del("DELETE FROM pending_clarifications WHERE workspace_id = ?");
+      const entityReferences = del("DELETE FROM entity_references WHERE workspace_id = ?");
+      const assistantRuns = del("DELETE FROM assistant_runs WHERE workspace_id = ?");
+      const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
       const turnRunResultLinks = del(
         "DELETE FROM turn_run_result_links WHERE session_id IN (SELECT session_id FROM turn_runs WHERE workspace_id = ?)",
       );
       const chatMessages = del("DELETE FROM chat_messages WHERE workspace_id = ?");
-      const pendingConfirmations = del("DELETE FROM pending_confirmations WHERE workspace_id = ?");
       const auditEvents = del("DELETE FROM audit_events WHERE workspace_id = ?");
       const undoRecords = del("DELETE FROM undo_records WHERE workspace_id = ?");
       const turnTelemetry = del("DELETE FROM turn_telemetry WHERE workspace_id = ?");
@@ -304,6 +320,10 @@ export function buildInstallationStore(ctx: StoreContext): {
         adminPolicies,
         chatSessions,
         chatMessages,
+        confirmationBatchItems,
+        confirmationBatches,
+        entityReferences,
+        pendingClarifications,
         pendingConfirmations,
         auditEvents,
         undoRecords,
@@ -318,6 +338,9 @@ export function buildInstallationStore(ctx: StoreContext): {
         idempotencyKeys,
         turnRunResultLinks,
         chatMessageResultLinks,
+        assistantRunResultLinks,
+        assistantRunRequestLinks,
+        assistantRuns,
       };
     });
     const erased = run();

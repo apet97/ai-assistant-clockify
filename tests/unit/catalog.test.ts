@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_ACTION_CATALOG,
+  MODEL_API_ACTION_CATALOG,
+} from "../../src/harness/api-catalog.js";
 import { ACTION_CATALOG, catalogForModel, getAction } from "../../src/harness/catalog.js";
 import { requiresConfirmation } from "../../src/harness/risk.js";
 
 describe("catalog", () => {
+  it("keeps ACTION_CATALOG as the assembled source for the internal registry", () => {
+    expect(INTERNAL_ACTION_CATALOG.actions).toHaveLength(ACTION_CATALOG.length);
+    expect(MODEL_API_ACTION_CATALOG.actions.every((action) => action.apiExposure === "api")).toBe(true);
+  });
+
   it("every action has metadata, schema, and exactly the executor required by its discriminant", () => {
     expect(ACTION_CATALOG.length).toBeGreaterThan(0);
     for (const action of ACTION_CATALOG) {
@@ -64,6 +73,8 @@ describe("catalog", () => {
     for (const required of [
       "clockify_entries_list",
       "clockify_entries_get",
+      "clockify_entries_create",
+      "clockify_entries_start",
       "clockify_entries_delete",
       "clockify_entries_mark_invoiced",
     ]) {
@@ -93,7 +104,13 @@ describe("catalog", () => {
 
   it("includes the typed audit actions (Phase 15)", () => {
     const names = ACTION_CATALOG.map((a) => a.name);
-    for (const required of ["clockify_audit_logs_search", "clockify_entity_changes_list"]) {
+    for (const required of [
+      "clockify_audit_logs_search",
+      "clockify_entity_changes_created",
+      "clockify_entity_changes_updated",
+      "clockify_entity_changes_deleted",
+      "clockify_entity_changes_list",
+    ]) {
       expect(names).toContain(required);
     }
   });
@@ -280,6 +297,11 @@ describe("catalog", () => {
       "clockify_tasks_update",
       "clockify_tasks_delete",
       "clockify_tasks_rate_update",
+      "clockify_tasks_delete_completed",
+      "clockify_tasks_status_update",
+      "clockify_tasks_assignees_replace",
+      "clockify_tasks_hourly_rate_update",
+      "clockify_tasks_cost_rate_update",
     ]) {
       expect(names).toContain(required);
     }
@@ -295,9 +317,13 @@ describe("catalog", () => {
       "clockify_projects_update",
       "clockify_projects_archive",
       "clockify_projects_delete",
+      "clockify_projects_delete_archived",
       "clockify_projects_rate_update",
+      "clockify_projects_member_hourly_rate_update",
+      "clockify_projects_member_cost_rate_update",
       "clockify_projects_estimate_update",
       "clockify_projects_memberships_update",
+      "clockify_projects_memberships_replace",
     ]) {
       expect(names).toContain(required);
     }
@@ -326,7 +352,7 @@ describe("catalog", () => {
   });
 
   it("catalogForModel exposes name/description/featureGroup/risks/args (no schema or handler)", () => {
-    const entries = catalogForModel();
+    const entries = catalogForModel(INTERNAL_ACTION_CATALOG);
     expect(entries.length).toBe(ACTION_CATALOG.length);
     for (const entry of entries) {
       expect(entry).not.toHaveProperty("schema");
@@ -343,6 +369,6 @@ describe("catalog", () => {
     // The catalog is built once at module load and summarizeArgs is deterministic,
     // so the model-view is invariant; recomputing it every JSON-mode turn is wasted
     // allocation + 137 schema summaries. Mirror toolsForModel's memoization.
-    expect(catalogForModel()).toBe(catalogForModel());
+    expect(catalogForModel(INTERNAL_ACTION_CATALOG)).toBe(catalogForModel(INTERNAL_ACTION_CATALOG));
   });
 });

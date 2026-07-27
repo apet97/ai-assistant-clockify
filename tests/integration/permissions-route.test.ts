@@ -76,16 +76,26 @@ beforeAll(async () => {
 
 afterAll(() => store.close());
 
+async function previewToken(cookie: string, groups: Record<string, string>): Promise<string> {
+  const preview = await request(app)
+    .post("/api/permissions/preview")
+    .set("Cookie", cookie)
+    .send({ groups });
+  expect(preview.status).toBe(200);
+  expect(typeof preview.body.preview.previewToken).toBe("string");
+  return preview.body.preview.previewToken as string;
+}
+
 describe("POST /api/permissions/confirm (the UI's policy-save path)", () => {
   it("requires a session", async () => {
     const res = await request(app)
       .post("/api/permissions/confirm")
-      .send({ groups: { invoices: "off" } });
+      .send({ previewToken: "x" });
     expect(res.status).toBe(401);
     expect(res.body.code).toBe("unauthorized");
   });
 
-  it("persists a valid patch, writes a permission_change audit event, and the save is EFFECTIVE (a later invoices action is denied)", async () => {
+  it("persists a previewed patch via its token, writes a permission_change audit event, and the save is EFFECTIVE (a later invoices action is denied)", async () => {
     const cookie = await adminCookie();
 
     // Sanity: a fresh admin starts at full read_write — the action would be allowed.
@@ -96,7 +106,7 @@ describe("POST /api/permissions/confirm (the UI's policy-save path)", () => {
     const save = await request(app)
       .post("/api/permissions/confirm")
       .set("Cookie", cookie)
-      .send({ groups: { invoices: "off" } });
+      .send({ previewToken: await previewToken(cookie, { invoices: "off" }) });
     expect(save.status).toBe(200);
     expect(save.body.ok).toBe(true);
 
@@ -129,32 +139,62 @@ describe("POST /api/permissions/confirm (the UI's policy-save path)", () => {
     store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
   });
 
-  it("rejects an unknown feature group with 400 and persists nothing", async () => {
+  it("rejects a replacement groups object on confirm with 400 and persists nothing (token-only contract)", async () => {
     const cookie = await adminCookie();
     const baseline = store.getAdminPolicy("ws-1", "admin-1");
 
     const res = await request(app)
       .post("/api/permissions/confirm")
       .set("Cookie", cookie)
-      .send({ groups: { not_a_group: "off" } });
+      .send({ groups: { invoices: "off" } });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe("invalid_args");
-
-    // Unchanged: the bad patch never reached upsertAdminPolicy.
     expect(store.getAdminPolicy("ws-1", "admin-1")).toEqual(baseline);
   });
 
-  it("rejects an invalid permission level with 400 and persists nothing", async () => {
+  it("rejects a tampered preview token with 400 and persists nothing", async () => {
     const cookie = await adminCookie();
     const baseline = store.getAdminPolicy("ws-1", "admin-1");
+    const token = await previewToken(cookie, { invoices: "off" });
+
+    // Flip the patch inside the signed payload without re-signing.
+    const [payloadB64, signature] = token.split(".");
+    const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
+    payload.groups = { invoices: "read_write", webhooks: "read_write" };
+    const forged = `${Buffer.from(JSON.stringify(payload)).toString("base64url")}.${signature}`;
 
     const res = await request(app)
       .post("/api/permissions/confirm")
       .set("Cookie", cookie)
-      .send({ groups: { invoices: "yes" } });
+      .send({ previewToken: forged });
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe("invalid_args");
+    expect(res.body.code).toBe("invalid_preview_token");
     expect(store.getAdminPolicy("ws-1", "admin-1")).toEqual(baseline);
+  });
+
+  it("rejects a stale preview token with 409 after the policy changed underneath it", async () => {
+    const cookie = await adminCookie();
+    const token = await previewToken(cookie, { invoices: "off" });
+
+    // The policy changes between preview and confirm (another tab, another
+    // preview) — the base-policy hash binding fails closed.
+    const other = await previewToken(cookie, { webhooks: "off" });
+    const applied = await request(app)
+      .post("/api/permissions/confirm")
+      .set("Cookie", cookie)
+      .send({ previewToken: other });
+    expect(applied.status).toBe(200);
+
+    const res = await request(app)
+      .post("/api/permissions/confirm")
+      .set("Cookie", cookie)
+      .send({ previewToken: token });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe("stale_preview");
+    expect(store.getAdminPolicy("ws-1", "admin-1")?.groups.invoices).toBe("read_write");
+
+    // Restore full permissions so later tests start clean.
+    store.upsertAdminPolicy("ws-1", "admin-1", defaultAdminPolicy());
   });
 });
 
@@ -166,7 +206,7 @@ describe("POST /api/permissions/preview", () => {
     expect(res.status).toBe(401);
   });
 
-  it("computes a non-persisting preview: current vs next + the changed groups", async () => {
+  it("computes a non-persisting preview with a bound token: current vs next + the changed groups", async () => {
     const cookie = await adminCookie();
     const before = store.getAdminPolicy("ws-1", "admin-1");
 
@@ -179,8 +219,30 @@ describe("POST /api/permissions/preview", () => {
     expect(res.body.preview.current.groups.invoices).toBe("read_write");
     expect(res.body.preview.next.groups.invoices).toBe("off");
     expect(res.body.preview.changedGroups).toEqual(["invoices"]);
+    expect(typeof res.body.preview.previewToken).toBe("string");
+    expect(Date.parse(res.body.preview.expiresAt)).toBeGreaterThan(Date.now());
 
     // A preview NEVER persists.
     expect(store.getAdminPolicy("ws-1", "admin-1")).toEqual(before);
+  });
+
+  it("rejects an unknown feature group at preview with 400", async () => {
+    const cookie = await adminCookie();
+    const res = await request(app)
+      .post("/api/permissions/preview")
+      .set("Cookie", cookie)
+      .send({ groups: { not_a_group: "off" } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("invalid_args");
+  });
+
+  it("rejects an invalid permission level at preview with 400", async () => {
+    const cookie = await adminCookie();
+    const res = await request(app)
+      .post("/api/permissions/preview")
+      .set("Cookie", cookie)
+      .send({ groups: { invoices: "yes" } });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("invalid_args");
   });
 });

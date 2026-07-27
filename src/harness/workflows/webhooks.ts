@@ -13,7 +13,15 @@ import { sanitizedFingerprint } from "../safe-json.js";
 import { describePatch } from "./resolve.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
+import { WEBHOOK_TRIGGER_SOURCE_BATCH_MAX } from "../safety-limits.js";
 import type { PreparedWebhookUpdateInput, WebhookSummary } from "../../clockify/ports/webhooks.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Clockify refuses the ENTIRE webhooks API for add-on tokens — no manifest
@@ -39,6 +47,193 @@ function addonWebhookRestriction(ctx: ActionContext): { clarify: string } | unde
  */
 
 const WH = "webhooks" as const;
+
+type WebhookActionName =
+  | "clockify_webhooks_list"
+  | "clockify_webhooks_get"
+  | "clockify_webhooks_events"
+  | "clockify_webhooks_logs"
+  | "clockify_webhooks_create"
+  | "clockify_webhooks_update"
+  | "clockify_webhooks_delete";
+
+const WEBHOOK_API_KEY_ONLY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: false, reason: "unsupported_auth_class" }),
+  api_key: Object.freeze({ available: true }),
+});
+
+const WEBHOOK_LOCAL_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function webhookEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+): string {
+  return [access, "api", method, path, "webhooks.ts"].join("\0");
+}
+
+function webhookValueField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function webhookApiMetadata(input: {
+  actionName: WebhookActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: WEBHOOK_API_KEY_ONLY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+const webhookEndpoint = Object.freeze({
+  list: webhookEndpointKey("read", "GET", "/workspaces/{workspaceId}/webhooks"),
+  get: webhookEndpointKey("read", "GET", "/workspaces/{workspaceId}/webhooks/{id}"),
+  logs: webhookEndpointKey("read", "POST", "/workspaces/{workspaceId}/webhooks/{id}/logs"),
+  create: webhookEndpointKey("write", "POST", "/workspaces/{workspaceId}/webhooks"),
+  update: webhookEndpointKey("write", "PUT", "/workspaces/{workspaceId}/webhooks/{id}"),
+  delete: webhookEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/webhooks/{id}"),
+});
+
+const WEBHOOK_API_METADATA = Object.freeze({
+  clockify_webhooks_list: webhookApiMetadata({
+    actionName: "clockify_webhooks_list",
+    operationId: "getWebhooks",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/webhooks",
+    access: "read",
+    primary: webhookEndpoint.list,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_webhooks_get: webhookApiMetadata({
+    actionName: "clockify_webhooks_get",
+    operationId: "getWebhook",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "read",
+    primary: webhookEndpoint.get,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_webhooks_events: Object.freeze({
+    apiExposure: "local",
+    apiExposureReason: "Returns a static reviewed event list because the attempted events routes fail; it performs no Clockify request.",
+    availabilityByAuthClass: WEBHOOK_LOCAL_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  }),
+  clockify_webhooks_logs: webhookApiMetadata({
+    actionName: "clockify_webhooks_logs",
+    operationId: "getLogsForWebhook",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/webhooks/{id}/logs",
+    access: "read",
+    primary: webhookEndpoint.logs,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_webhooks_create: webhookApiMetadata({
+    actionName: "clockify_webhooks_create",
+    operationId: "createWebhook",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/webhooks",
+    access: "write",
+    primary: webhookEndpoint.create,
+    support: [webhookEndpoint.list],
+    materialFields: [
+      webhookValueField("/name", "Webhook name", "text", true),
+      webhookValueField("/url", "Webhook URL", "text", true),
+      webhookValueField("/webhookEvent", "Event type", "text", true),
+      webhookValueField("/triggerSourceType", "Trigger source type", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/triggerSource",
+        itemPath: "/sourceId",
+        labelTemplate: "Trigger source {index}",
+        maxItems: WEBHOOK_TRIGGER_SOURCE_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_webhooks_update: webhookApiMetadata({
+    actionName: "clockify_webhooks_update",
+    operationId: "updateWebhook",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "write",
+    primary: webhookEndpoint.update,
+    support: [webhookEndpoint.get],
+    materialFields: [
+      webhookValueField("/id", "Webhook", "entity", true),
+      webhookValueField("/name", "Webhook name", "text", false),
+      webhookValueField("/url", "Webhook URL", "text", false),
+      webhookValueField("/webhookEvent", "Event type", "text", false),
+      webhookValueField("/triggerSourceType", "Trigger source type", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/triggerSource",
+        itemPath: "/sourceId",
+        labelTemplate: "Trigger source {index}",
+        maxItems: WEBHOOK_TRIGGER_SOURCE_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_webhooks_delete: webhookApiMetadata({
+    actionName: "clockify_webhooks_delete",
+    operationId: "deleteWebhook",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/webhooks/{id}",
+    access: "write",
+    primary: webhookEndpoint.delete,
+    support: [webhookEndpoint.get, webhookEndpoint.list],
+    materialFields: [
+      webhookValueField("/id", "Webhook", "entity", true),
+      webhookValueField("/name", "Webhook name", "text", false),
+    ],
+  }),
+} satisfies Readonly<Record<WebhookActionName, ApiActionMetadataCarrier>>);
+
 const webhookCreateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const webhookTargetContract = (strategy: "update" | "delete") => durableMutationContract({
   source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: [strategy],
@@ -95,6 +290,7 @@ const httpsUrl = z
 
 const listWebhooks = defineReadAction({
   name: "clockify_webhooks_list",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_list,
   description: "List webhooks in the workspace.",
   group: WH,
   schema: z.object({}),
@@ -106,6 +302,7 @@ const listWebhooks = defineReadAction({
 
 const getWebhook = defineReadAction({
   name: "clockify_webhooks_get",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_get,
   description: "Fetch a single webhook by id (the signing secret is never returned).",
   group: WH,
   schema: z.object({ id: z.string().min(1) }),
@@ -117,6 +314,7 @@ const getWebhook = defineReadAction({
 
 const listEvents = defineReadAction({
   name: "clockify_webhooks_events",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_events,
   description: "List the available webhook event types.",
   group: WH,
   schema: z.object({}),
@@ -128,6 +326,7 @@ const listEvents = defineReadAction({
 
 const listLogs = defineReadAction({
   name: "clockify_webhooks_logs",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_logs,
   description: "List delivery logs for a webhook.",
   group: WH,
   schema: z.object({ id: z.string().min(1) }),
@@ -139,8 +338,9 @@ const listLogs = defineReadAction({
 
 const createWebhook = defineRiskyAction({
   name: "clockify_webhooks_create",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_create,
   description:
-    "Create a webhook (HTTPS url, a webhookEvent type). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+    "Create a webhook (HTTPS url, a webhookEvent type, up to 17 triggerSource ids). NOTE: Clockify blocks the whole webhooks API for add-ons (no scope grants it) — inside the embedded add-on this returns an honest restriction notice. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
   group: WH,
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
@@ -149,7 +349,7 @@ const createWebhook = defineRiskyAction({
     name: z.string().min(1),
     url: httpsUrl,
     webhookEvent: z.string().min(1),
-    triggerSource: z.array(z.string().min(1)).optional(),
+    triggerSource: z.array(z.string().min(1)).max(WEBHOOK_TRIGGER_SOURCE_BATCH_MAX).optional(),
     triggerSourceType: z.string().optional(),
   }),
   async preview(ctx, args) {
@@ -211,8 +411,9 @@ const createWebhook = defineRiskyAction({
 
 const updateWebhook = defineRiskyAction({
   name: "clockify_webhooks_update",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_update,
   description:
-    "Update a webhook (name/url/event/trigger source). External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
+    "Update a webhook (name/url/event/trigger source). Up to 17 triggerSource ids. External side effect — previews and requires confirmation. The signing secret is not set through the assistant.",
   group: WH,
   risks: ["external_side_effect"],
   mutationWorkflow: "durable",
@@ -223,7 +424,7 @@ const updateWebhook = defineRiskyAction({
       name: z.string().optional(),
       url: httpsUrl.optional(),
       webhookEvent: z.string().optional(),
-      triggerSource: z.array(z.string().min(1)).optional(),
+      triggerSource: z.array(z.string().min(1)).max(WEBHOOK_TRIGGER_SOURCE_BATCH_MAX).optional(),
       triggerSourceType: z.string().optional(),
     })
     .refine(
@@ -277,6 +478,7 @@ const updateWebhook = defineRiskyAction({
 
 const deleteWebhook = defineRiskyAction({
   name: "clockify_webhooks_delete",
+  ...WEBHOOK_API_METADATA.clockify_webhooks_delete,
   description: "Delete a webhook. Destructive external side effect — previews and requires confirmation.",
   group: WH,
   risks: ["destructive", "external_side_effect"],

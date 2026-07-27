@@ -28,6 +28,14 @@ export interface UpdateProjectRateInput {
   since?: string; // ISO datetime
 }
 
+/** Per-member project rate write without an endpoint chooser (v2 atomic API). */
+export interface UpdateProjectMemberRateInput {
+  projectId: string;
+  userId: string;
+  amountMinor: number;
+  since?: string; // ISO datetime
+}
+
 /**
  * Project slice of the {@link WorkspaceClient} port (goclmcp §2.2). The worked
  * reference area: read+paginate, safe create, risky fetch-then-merge update,
@@ -60,6 +68,8 @@ export interface ProjectPort {
   createProjectFromTemplateAtomic(input: { templateProjectId: string; name: string }): Promise<ProjectSummary>;
   updateProjectRate(input: UpdateProjectRateInput): Promise<void>;
   updateProjectRateAtomic(input: UpdateProjectRateInput): Promise<void>;
+  updateProjectMemberHourlyRateAtomic(input: UpdateProjectMemberRateInput): Promise<void>;
+  updateProjectMemberCostRateAtomic(input: UpdateProjectMemberRateInput): Promise<void>;
   updateProjectEstimate(id: string, patch: Record<string, unknown>): Promise<void>;
   updateProjectEstimateAtomic(id: string, patch: Record<string, unknown>): Promise<void>;
   updateProjectMemberships(id: string, patch: Record<string, unknown>): Promise<void>;

@@ -291,12 +291,20 @@ describe("per-request admin re-check (authz-surface-01)", () => {
       clockifyForWorkspace: () => fake.client,
     });
     const cookie = mintAdminCookie(store, config.sessionSecret, { adminUserId: "admin-1" });
+
+    // Preview-first contract (T16-E): mint the bound token while the
+    // installation is intact, then arm erasure for the confirm request only.
+    const preview = await request(app)
+      .post("/api/permissions/preview")
+      .set("Cookie", cookie)
+      .send({ groups: { invoices: "off" } });
+    expect(preview.status).toBe(200);
     armed = true;
 
     const response = await request(app)
       .post("/api/permissions/confirm")
       .set("Cookie", cookie)
-      .send({ groups: { invoices: "off" } });
+      .send({ previewToken: preview.body.preview.previewToken });
 
     expect(response.status).toBe(409);
     expect(response.body.code).toBe("installation_changed");

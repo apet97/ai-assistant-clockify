@@ -43,6 +43,8 @@ export interface AppConfig {
   databasePath: string;
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
   llmProvider: "http" | "gemini-cli";
+  /** Atomic rewrite switch. V1 remains the default until an authorized cutover. */
+  assistantEngine: "v1" | "v2";
   /** Planner mode: "tool" (native function-calling, default) or "json" (JSON + repair).
    *  EFFECT (re-verified T02): this IS consumed. src/routes/chat-pipeline.ts derives
    *  `useTools = llmMode !== "json"` (chat turn) and gates the agentic resume on
@@ -133,6 +135,7 @@ const envObjectSchema = z.object({
   // (it uses the authenticated CLI), so these are optional here and enforced
   // below only for the http provider.
   LLM_PROVIDER: z.enum(["http", "gemini-cli"]).default("http"),
+  ASSISTANT_ENGINE: z.enum(["v1", "v2"]).default("v1"),
   LLM_MODE: z.enum(["tool", "json"]).default("tool"),
   // Default ON: the durable agentic loop is the proven default (live PASS=10,
   // adversarial review all-HELD). LLM_AGENTIC=0 is the instant rollback.
@@ -262,6 +265,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dataEncryptionKeyPrevious: parsed.DATA_ENCRYPTION_KEY_PREVIOUS,
     databasePath: parsed.DATABASE_PATH,
     llmProvider: parsed.LLM_PROVIDER,
+    assistantEngine: parsed.ASSISTANT_ENGINE,
     llmMode: parsed.LLM_MODE,
     llmAgentic: parsed.LLM_AGENTIC === "1",
     llmToolSelect: parsed.LLM_TOOL_SELECT === "1",

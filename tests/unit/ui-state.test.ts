@@ -49,6 +49,10 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       onEvent({ type: "receipt", receipt: { ok: true, action: "x" } });
       onEvent({ type: "done" });
     },
+    async resolveClarificationOption(_clarificationId, _optionId, onEvent) {
+      bump("resolveClarificationOption");
+      onEvent({ type: "done" });
+    },
     async cancelPreview() {
       bump("cancelPreview");
       return { ok: true };

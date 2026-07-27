@@ -20,10 +20,12 @@ import {
   decodeNdjsonEvent,
   decodeOperationResponse,
   decodePermissionsResponse,
+  decodePermissionPreviewTokenResponse,
   decodePermissionSaveResponse,
   decodeSessionsResponse,
   decodeSimpleMutationResponse,
   decodeUndoResponse,
+  decodeRunEventsResponse,
   protocolErrorMessage,
   type ApiFailure,
   type ChatResponse,
@@ -51,12 +53,18 @@ export interface ChatApi {
   switchSession(id: string): Promise<SimpleMutationResponse>;
   /** Passive, scoped durable-operation status; never a control endpoint. */
   getOperation?(id: string): Promise<Awaited<ReturnType<typeof decodeOperationResponse>>>;
+  /** Scoped durable v2 run-event pages for reload/second-tab restoration. */
+  getRunEvents?(runId: string, after: number): Promise<import("./shared.js").RunEventPageResponse>;
   sendMessage(message: string): Promise<ChatResponse | ApiFailure>;
-  /** Streaming send: harness results arrive incrementally, then the truthful reply. */
-  streamMessage(message: string, onEvent: (event: StreamEvent) => void): Promise<void>;
+  /** Streaming send: harness results arrive incrementally, then the truthful reply.
+   * `continuationRunId` (T14-F): resumes that exact v2 run's pending clarification
+   * with this free text instead of starting a new run. */
+  streamMessage(message: string, onEvent: (event: StreamEvent) => void, continuationRunId?: string): Promise<void>;
   confirmPreview(previewId: string, nonce: string): Promise<ConfirmResponse>;
   /** Streaming single confirm: the receipt arrives first, then the resume streams. */
   confirmStream(ref: { previewId: string; nonce: string }, onEvent: (event: StreamEvent) => void): Promise<void>;
+  /** v2 exact clarification resolve (T14-F): streams the resumed run's events. */
+  resolveClarificationOption(clarificationId: string, optionId: string, onEvent: (event: StreamEvent) => void): Promise<void>;
   cancelPreview(previewId: string): Promise<SimpleMutationResponse>;
   undo(id: string): Promise<UndoResponse>;
 }
@@ -267,15 +275,34 @@ export function createFetchApi(): ChatApi {
       if (!body.ok) throw new ApiError(500, body.message ?? "Could not load permissions.");
       return body;
     },
-    savePermissions: (groups) =>
-      mutation(
-        "/api/permissions/confirm",
+    // Preview-first save (T16-E): confirm accepts ONLY the preview token, so
+    // the server applies exactly the previewed patch — never a groups object.
+    savePermissions: async (groups) => {
+      const preview = await mutation(
+        "/api/permissions/preview",
         { method: "POST", body: JSON.stringify({ groups }) },
+        decodePermissionPreviewTokenResponse,
+      );
+      if (!preview.ok) return preview;
+      return mutation(
+        "/api/permissions/confirm",
+        { method: "POST", body: JSON.stringify({ previewToken: preview.previewToken }) },
         decodePermissionSaveResponse,
-      ),
+      );
+    },
     getHistory: async () => {
       const body = await json("/api/chat/history", undefined, decodeHistoryResponse, true);
       if (!body.ok) throw new ApiError(500, body.message ?? "Could not load history.");
+      return body;
+    },
+    getRunEvents: async (runId, after) => {
+      const body = await json(
+        `/api/runs/${encodeURIComponent(runId)}/events?after=${encodeURIComponent(String(after))}`,
+        undefined,
+        decodeRunEventsResponse,
+        true,
+      );
+      if (!body.ok) throw new ApiError(500, body.message ?? "Could not load run events.");
       return body;
     },
     newChat: () => mutation("/api/chat/new", { method: "POST" }, decodeSimpleMutationResponse),
@@ -300,14 +327,14 @@ export function createFetchApi(): ChatApi {
       );
       return send().catch(() => send());
     },
-    streamMessage: async (message, onEvent) => {
+    streamMessage: async (message, onEvent, continuationRunId) => {
       let res: Response;
       const requestId = newRequestId();
       try {
         const send = () => mutationFetch("/api/chat/stream", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ message, requestId }),
+          body: JSON.stringify({ message, requestId, ...(continuationRunId ? { continuationRunId } : {}) }),
         });
         try {
           res = await send();
@@ -354,6 +381,28 @@ export function createFetchApi(): ChatApi {
         // through (withCode) so a stale-nonce 400 (a cross-tab nonce rotation)
         // can re-arm this tab instead of dead-ending — see submitConfirmStream/onStale.
         await surfaceStreamHttpError(res, onEvent, "Confirmation failed.", { withCode: true });
+        return;
+      }
+      await pumpNdjson(res, onEvent);
+    },
+    resolveClarificationOption: async (clarificationId, optionId, onEvent) => {
+      let res: Response;
+      try {
+        res = await mutationFetch(`/api/clarifications/${encodeURIComponent(clarificationId)}/resolve`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ optionId }),
+        });
+      } catch (error) {
+        onEvent({
+          type: "error",
+          ...(error instanceof ApiError && error.status === 401 ? { code: "unauthorized" } : {}),
+          message: error instanceof ApiError ? error.message : "That option could not be resolved.",
+        });
+        return;
+      }
+      if (!res.ok || !res.body) {
+        await surfaceStreamHttpError(res, onEvent, "That option could not be resolved.", { withCode: true });
         return;
       }
       await pumpNdjson(res, onEvent);

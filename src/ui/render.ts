@@ -11,7 +11,7 @@
  */
 
 import { batchItemOutcomes, expiryView, humanizeGroup, levelLabel } from "./presentation.js";
-import { formatLocalDateTime, intlLocale, promptsForPolicy, welcomeCopyForPolicy, type UiLanguage } from "./product.js";
+import { EN_US_LOCALE, formatLocalDateTime, promptsForPolicy, welcomeCopyForPolicy } from "./product.js";
 import {
   cancelOutcome,
   featureGroupRows,
@@ -27,6 +27,9 @@ import {
   type HistoryResponse,
   type OperationCardData,
   type PolicyShape,
+  type PresentedFactView,
+  type PresentedReferenceView,
+  type PresentedRecoveryView,
   type PreviewRef,
   type PreviewResult,
   type ReceiptResult,
@@ -150,7 +153,6 @@ export interface ChatSessionSummary {
 export interface ChatsMenuDeps {
   /** Switch to the picked conversation (never called for the CURRENT one). */
   onSelect: (id: string) => void;
-  language?: UiLanguage;
 }
 
 const TITLE_MAX = 48;
@@ -162,11 +164,11 @@ function truncateTitle(title: string): string {
 }
 
 /** A coarse "5m ago" / "2h ago" / "3d ago" label for the last-activity time. */
-export function relativeTime(iso: string, nowMs: number, language: UiLanguage = "en"): string {
+export function relativeTime(iso: string, nowMs: number): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
   const sec = Math.max(0, Math.round((nowMs - then) / 1000));
-  const formatter = new Intl.RelativeTimeFormat(intlLocale(language), { numeric: "auto" });
+  const formatter = new Intl.RelativeTimeFormat(EN_US_LOCALE, { numeric: "auto" });
   if (sec < 60) return formatter.format(0, "second");
   const min = Math.round(sec / 60);
   if (min < 60) return formatter.format(-min, "minute");
@@ -279,7 +281,7 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
       }
       // Title and time are untrusted/data — textContent only, never innerHTML.
       item.appendChild(el("span", "chats-title", truncateTitle(s.title)));
-      const when = relativeTime(s.lastMessageAt, now, deps.language);
+      const when = relativeTime(s.lastMessageAt, now);
       if (when) item.appendChild(el("span", "chats-time", when));
 
       const select = (): void => {
@@ -319,18 +321,30 @@ export function renderChatsMenu(sessions: ChatSessionSummary[], deps: ChatsMenuD
 export interface ClarifyDeps {
   /** Send text through the NORMAL chat path (same function the composer uses). */
   sendText: (text: string) => void;
+  /** v2 durable clarification (T14-F): resolve by exact id, never the label. */
+  resolveOption?: (clarificationId: string, optionId: string) => void;
 }
 
 /**
  * A clarify turn: the question bubble plus the grounded "did you mean?" options
- * as one-use chips. A chip click sends the option LABEL as an ordinary chat
- * message — it goes through the same send path as typed text, so nothing here
- * can reach a confirmation endpoint (the option id is never sent).
+ * as one-use chips.
+ *
+ * Two distinct mechanisms share this renderer, distinguished by
+ * `result.clarificationId`:
+ *  - v1 (no `clarificationId`): a chip click sends the option LABEL as an
+ *    ordinary chat message — it goes through the same send path as typed
+ *    text, so nothing here can reach a confirmation endpoint.
+ *  - v2 (`clarificationId` set, T14-F): a chip click calls
+ *    `resolveOption(clarificationId, optionId)` — the label is NEVER
+ *    submitted, only the exact candidate id. Only a `pending` clarification is
+ *    actionable; a restored `resolving` one renders with every chip disabled.
  */
 export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLElement {
   const wrap = el("div", "clarify");
   wrap.appendChild(el("div", "message assistant", result.message));
   const options = result.options ?? [];
+  const clarificationId = result.clarificationId;
+  const actionable = clarificationId === undefined || result.status === "pending";
   if (options.length > 0) {
     const row = el("div", "chip-row");
     row.setAttribute("role", "group");
@@ -338,6 +352,7 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
     for (const option of options) {
       const chip = el("button", "chip", option.label);
       chip.type = "button";
+      if (!actionable) chip.disabled = true;
       chip.addEventListener("click", () => {
         // One-use: the whole row disables; the chosen chip stays highlighted
         // as a record of what was picked.
@@ -345,7 +360,8 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
           (button as HTMLButtonElement).disabled = true;
         }
         chip.classList.add("chip-selected");
-        deps.sendText(option.label);
+        if (clarificationId !== undefined) deps.resolveOption?.(clarificationId, option.id);
+        else deps.sendText(option.label);
       });
       row.appendChild(chip);
     }
@@ -363,7 +379,7 @@ export function renderClarify(result: ClarifyResult, deps: ClarifyDeps): HTMLEle
 export const EXAMPLE_PROMPTS = promptsForPolicy();
 
 /** The empty-chat welcome card. Lives OUTSIDE the message log (never announced as a turn). */
-export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape; language?: UiLanguage }): HTMLElement {
+export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape }): HTMLElement {
   const box = el("div", "welcome");
   box.appendChild(el("h2", undefined, "What can I do for you?"));
   box.appendChild(
@@ -374,7 +390,7 @@ export function renderWelcome(deps: ClarifyDeps & { policy?: PolicyShape; langua
     ),
   );
   const row = el("div", "chip-row");
-  for (const prompt of promptsForPolicy(deps.policy, deps.language)) {
+  for (const prompt of promptsForPolicy(deps.policy)) {
     const chip = el("button", "chip", prompt);
     chip.type = "button";
     chip.addEventListener("click", () => deps.sendText(prompt));
@@ -400,6 +416,49 @@ export interface ReceiptDeps {
 /** Unique ids for the details disclosure (aria-controls). */
 let detailsSeq = 0;
 
+/** Render a v2 presenter's material facts as a definition list — plain text
+ * only, never used to derive a control. */
+function renderFacts(facts: PresentedFactView[]): HTMLElement {
+  const list = el("dl", "receipt-facts");
+  for (const fact of facts) {
+    list.appendChild(el("dt", undefined, fact.label));
+    list.appendChild(el("dd", undefined, fact.value));
+  }
+  return list;
+}
+
+/** Render grounded entity references read-only — display name + status only,
+ * never a raw internal id as the visible label. */
+function renderReferences(references: PresentedReferenceView[]): HTMLElement {
+  const list = el("ul", "receipt-references");
+  for (const reference of references) {
+    const suffix = reference.status === "active" ? "" : ` (${reference.status})`;
+    list.appendChild(el("li", undefined, `${reference.displayName}${suffix}`));
+  }
+  return list;
+}
+
+/** Render a render-only recovery affordance as plain text (T15-E is UI-only —
+ * none of the three recovery kinds gets a new route wired in this slice). */
+function renderRecovery(recovery: PresentedRecoveryView): HTMLElement {
+  return el("p", "recovery", recovery.label);
+}
+
+/** Human-readable header copy for every terminal v2 status, keyed off the
+ * presenter-derived `presentedStatus` (T15-A/T15-E). A legacy v1 receipt never
+ * sets this field and keeps its existing ok-boolean-derived rendering below —
+ * this branch changes nothing about that byte-identical path. */
+const STATUS_VIEW: Record<
+  Exclude<NonNullable<ReceiptResult["receipt"]["presentedStatus"]>, "pending_confirmation">,
+  { label: string; cls: string; icon: string }
+> = {
+  succeeded: { label: "Done", cls: "ok", icon: ICON_CHECK },
+  failed: { label: "Failed", cls: "error", icon: ICON_X },
+  partial: { label: "Partial — review needed", cls: "warn", icon: ICON_ALERT },
+  cancelled: { label: "Cancelled", cls: "warn", icon: ICON_X },
+  outcome_unknown: { label: "Outcome unknown — verify in Clockify", cls: "warn", icon: ICON_ALERT },
+};
+
 export function renderReceipt(result: ReceiptResult | PartialResult, deps: ReceiptDeps): HTMLElement {
   const { controller, showError } = deps;
   const warnings = result.receipt.warnings ?? [];
@@ -407,14 +466,22 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
   // (e.g. an invoice was created but a line item couldn't be added) — never
   // present a partial result as a clean success.
   const isPartial = result.kind === "partial";
-  const status = isPartial ? "Partial — review needed" : result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
-  const card = el("div", `receipt ${isPartial ? "warn" : result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error"}`);
+  const presentedStatus = result.receipt.presentedStatus;
+  const rawView = presentedStatus && presentedStatus !== "pending_confirmation" ? STATUS_VIEW[presentedStatus] : undefined;
+  // A clean success with warnings reads as "with notes", never a plain "Done".
+  const view = rawView && rawView.cls === "ok" && warnings.length
+    ? { label: "Done — with notes", cls: "warn", icon: ICON_ALERT }
+    : rawView;
+  const status = view ? view.label : isPartial ? "Partial — review needed" : result.receipt.ok ? (warnings.length ? "Done — with notes" : "Done") : "Failed";
+  const cardCls = view ? view.cls : isPartial ? "warn" : result.receipt.ok ? (warnings.length ? "warn" : "ok") : "error";
+  const icon = view ? view.icon : isPartial ? ICON_ALERT : result.receipt.ok ? (warnings.length ? ICON_ALERT : ICON_CHECK) : ICON_X;
+  const card = el("div", `receipt ${cardCls}`);
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `${status}: ${result.receipt.action}`);
   const head = el("div", "receipt-head");
-  const icon = el("span", "receipt-icon");
-  icon.appendChild(svgIcon(isPartial ? ICON_ALERT : result.receipt.ok ? (warnings.length ? ICON_ALERT : ICON_CHECK) : ICON_X));
-  head.appendChild(icon);
+  const headIcon = el("span", "receipt-icon");
+  headIcon.appendChild(svgIcon(icon));
+  head.appendChild(headIcon);
   head.appendChild(el("strong", undefined, status));
   head.appendChild(el("span", "action", result.receipt.action));
   card.appendChild(head);
@@ -426,6 +493,9 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
   if (!isPartial && result.receipt.message) card.appendChild(el("p", "receipt-message", result.receipt.message));
   // Surface warnings inline (not buried in Details) so the user sees them.
   for (const w of warnings) card.appendChild(el("p", "warning", w.message));
+  if (result.receipt.facts?.length) card.appendChild(renderFacts(result.receipt.facts));
+  if (result.receipt.references?.length) card.appendChild(renderReferences(result.receipt.references));
+  if (result.receipt.recovery) card.appendChild(renderRecovery(result.receipt.recovery));
   // Invoice PDF bytes remain behind the scoped, authenticated artifact route.
   // The UI receives only its same-origin path, filename, and expiry; a normal
   // anchor preserves the browser's authenticated cookie and avoids copying a
@@ -437,9 +507,8 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
     download.setAttribute("download", artifact.filename);
     download.setAttribute("aria-label", `Download invoice PDF: ${artifact.filename}`);
     card.appendChild(download);
-    const language = document.documentElement?.lang === "sr" ? "sr" : "en";
     const timeZone = document.documentElement?.dataset.timeZone;
-    card.appendChild(el("p", "artifact-meta", `${artifact.filename} · Expires ${formatLocalDateTime(artifact.expiresAt, language, timeZone)}`));
+    card.appendChild(el("p", "artifact-meta", `${artifact.filename} · Expires ${formatLocalDateTime(artifact.expiresAt, timeZone)}`));
   }
   // One-click undo for a reversible creation (deletes what was just created).
   if (result.receipt.ok && result.undo) {
@@ -474,7 +543,7 @@ export function renderReceipt(result: ReceiptResult | PartialResult, deps: Recei
   detailsSeq += 1;
   const body = el("div", "details-body");
   body.id = `receipt-details-${detailsSeq}`;
-  body.appendChild(el("pre", undefined, JSON.stringify(result.receipt, null, 2)));
+  body.appendChild(el("pre", undefined, JSON.stringify(result.receipt.diagnostic?.value ?? result.receipt, null, 2)));
   const toggle = el("button", "link details-toggle");
   toggle.appendChild(svgIcon(ICON_CHEVRON));
   toggle.appendChild(document.createTextNode("Details"));
@@ -867,6 +936,8 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
     for (const warning of preview.preview.warnings ?? []) {
       block.appendChild(el("p", "warning", warning));
     }
+    if (preview.preview.facts?.length) block.appendChild(renderFacts(preview.preview.facts));
+    if (preview.references?.length) block.appendChild(renderReferences(preview.references));
     card.appendChild(block);
   }
 

@@ -193,6 +193,16 @@ async function installNaturalPromptAdapter(page: Page): Promise<void> {
   });
 }
 
+async function assertFixedEnglishInterface(page: Page): Promise<void> {
+  const lang = await page.locator("html").getAttribute("lang");
+  const languageControls = await page.getByRole("combobox", { name: "Language" }).count();
+  if (lang !== "en" || languageControls !== 0) {
+    throw new Error(
+      `marketplace_media_language_contract: expected lang=en and zero language controls; received lang=${lang ?? "missing"}, controls=${languageControls}`,
+    );
+  }
+}
+
 async function openPage(
   browser: Browser,
   query: string,
@@ -222,6 +232,7 @@ async function openPage(
   await installNaturalPromptAdapter(page);
   await page.goto(`${BASE_URL}/?${query}`, { waitUntil: "networkidle" });
   await page.getByRole("heading", { name: "AI Assistant" }).waitFor();
+  await assertFixedEnglishInterface(page);
   await page.evaluate(async () => document.fonts.ready);
   return { context, page };
 }
@@ -418,7 +429,7 @@ async function captureScreenshots(browser: Browser): Promise<void> {
   {
     const { context, page } = await openPage(
       browser,
-      "scenario=first-run&theme=dark&language=en",
+      "scenario=first-run&theme=dark",
     );
     await page.getByRole("heading", { name: "Set up your assistant permissions" }).waitFor();
     await page.getByText("DeepSeek processes chat requests for this assistant.").waitFor();
@@ -429,7 +440,7 @@ async function captureScreenshots(browser: Browser): Promise<void> {
   }
 
   {
-    const { context, page } = await openPage(browser, "scenario=default&theme=light&language=en");
+    const { context, page } = await openPage(browser, "scenario=default&theme=light");
     await sendPrompt(page, prompts.read);
     await page.getByRole("group", { name: "Done: clockify_reports_summary" }).waitFor();
     await page.getByText("Here is your read-only summary.").waitFor();
@@ -438,7 +449,7 @@ async function captureScreenshots(browser: Browser): Promise<void> {
   }
 
   {
-    const { context, page } = await openPage(browser, "scenario=default&theme=dark&language=en");
+    const { context, page } = await openPage(browser, "scenario=default&theme=dark");
     await sendPrompt(page, prompts.risky);
     const preview = page.getByRole("group", { name: "Change awaiting confirmation" });
     await preview.getByText("Change the project name to Website launch v2").waitFor();
@@ -458,7 +469,7 @@ async function captureDemoFrames(browser: Browser, temporaryRoot: string): Promi
   };
 
   {
-    const { context, page } = await openPage(browser, "scenario=first-run&theme=dark&language=en");
+    const { context, page } = await openPage(browser, "scenario=first-run&theme=dark");
     try {
       await page.getByRole("heading", { name: "Set up your assistant permissions" }).waitFor();
       await page.getByText("DeepSeek processes chat requests for this assistant.").waitFor();
@@ -476,7 +487,7 @@ async function captureDemoFrames(browser: Browser, temporaryRoot: string): Promi
   }
 
   {
-    const { context, page } = await openPage(browser, "scenario=default&theme=light&language=en");
+    const { context, page } = await openPage(browser, "scenario=default&theme=light");
     try {
       await sendPrompt(page, prompts.read);
       const readReceipt = page.getByRole("group", { name: "Done: clockify_reports_summary" });
@@ -547,7 +558,7 @@ async function captureDemoFrames(browser: Browser, temporaryRoot: string): Promi
   }
 
   {
-    const { context, page } = await openPage(browser, "scenario=history&theme=dark&language=en");
+    const { context, page } = await openPage(browser, "scenario=history&theme=dark");
     try {
       await page.getByText("You tracked 6 hours yesterday.").waitFor();
       await sendPrompt(page, prompts.pdf);

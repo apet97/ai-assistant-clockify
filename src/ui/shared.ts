@@ -6,7 +6,7 @@
  * `main.ts` re-exports these, so the public/test import surface (e.g.
  * `import { featureGroupRows } from "./main.js"`) is unchanged.
  */
-import type { ArtifactDescriptor, ChatEvent } from "../shared/contracts.js";
+import type { ArtifactDescriptor, ChatEvent, RunEventAttachment, SequencedRunEvent } from "../shared/contracts.js";
 
 export interface PreviewRef {
   previewId: string;
@@ -34,6 +34,53 @@ export function featureGroupRows(policy: PolicyShape): Array<{ group: string; le
   return Object.entries(policy.groups).map(([group, level]) => ({ group, level }));
 }
 
+/** A single labeled material fact surfaced by a v2 presenter (T15-B/T15-E). */
+export interface PresentedFactView {
+  label: string;
+  value: string;
+}
+
+/** A grounded reference to a prior entity sighting (T14-A), rendered read-only. */
+export interface PresentedReferenceView {
+  id: string;
+  conversationId: string;
+  entityType: string;
+  externalId: string;
+  displayName: string;
+  sourceRunId: string;
+  bindings: Record<string, string>;
+  status: "active" | "stale" | "deleted";
+  verifiedAt: string;
+}
+
+/** A render-only recovery affordance. None of these are live controls in the
+ * envelope sense — `view_operation` links to the existing scoped operation-status
+ * route, `start_new_chat` reuses the existing New-chat path, and an absent
+ * `retry_read` handler renders as plain text (T15-E is UI-only; it does not
+ * invent a new route). */
+export type PresentedRecoveryView =
+  | { kind: "view_operation"; label: string; operationId: string }
+  | { kind: "retry_read"; label: string; readAttemptId: string }
+  | { kind: "start_new_chat"; label: string };
+
+/** The collapsible technical disclosure: the exact sanitized receipt JSON, never
+ * used to derive a human-visible label. */
+export interface PresentedDiagnosticView {
+  kind: "sanitized_receipt";
+  byteLength: number;
+  value: unknown;
+}
+
+/** The full v2 `PresentedResult` status enum (T15-A); a legacy v1 result never
+ * sets this field and keeps its existing ok-boolean-derived rendering. */
+export type PresentedStatus =
+  | "succeeded"
+  | "failed"
+  | "partial"
+  | "pending_confirmation"
+  | "cancelled"
+  | "outcome_unknown";
+
 export interface PreviewResult {
   kind: "preview";
   previewId: string;
@@ -48,7 +95,11 @@ export interface PreviewResult {
     featureGroup?: string;
     riskLabels?: string[];
     targets?: Array<{ type: string; id: string; name?: string }>;
+    /** Present-only material facts from a v2 presenter; absent for a legacy v1 preview. */
+    facts?: PresentedFactView[];
   };
+  /** Present-only grounded references from a v2 presenter; absent for a legacy v1 preview. */
+  references?: PresentedReferenceView[];
 }
 
 export interface ReceiptResult {
@@ -61,6 +112,19 @@ export interface ReceiptResult {
     warnings?: Array<{ code?: string; message: string }>;
     /** Short-lived, same-origin invoice PDF created by the authenticated artifact route. */
     artifact?: ArtifactDescriptor;
+    /** The exact v2 status this receipt was derived from (T15-A); distinguishes
+     * partial/cancelled/outcome_unknown from a plain success/failure. Absent for
+     * a legacy v1 receipt, which keeps its existing ok-boolean rendering. */
+    presentedStatus?: PresentedStatus;
+    /** Present-only material facts from a v2 presenter. */
+    facts?: PresentedFactView[];
+    /** Present-only grounded references from a v2 presenter. */
+    references?: PresentedReferenceView[];
+    /** Present-only render-only recovery affordance from a v2 presenter. */
+    recovery?: PresentedRecoveryView;
+    /** Present-only technical disclosure content from a v2 presenter; when
+     * absent the existing raw-receipt JSON disclosure is used instead. */
+    diagnostic?: PresentedDiagnosticView;
   };
   /** Present when the action can be reversed (a one-use undo handle). */
   undo?: { id: string };
@@ -70,6 +134,13 @@ export interface ClarifyResult {
   kind: "clarify";
   message: string;
   options?: Array<{ id: string; label: string }>;
+  /** Present only for a v2 durable clarification (T14-F). When set, a chip
+   * click must call `resolveOption(clarificationId, optionId)` — never send
+   * the label as chat text (the v1 clarify path, which has no clarificationId,
+   * keeps sending the label; this field is what distinguishes the two). */
+  clarificationId?: string;
+  /** Only a `pending` clarification is actionable; `resolving` renders disabled. */
+  status?: "pending" | "resolving";
 }
 
 export interface PartialResult {
@@ -199,7 +270,125 @@ export function dispatchStreamEvent(
     else hooks.onError(message);
   } else if (event.type === "status") {
     hooks.onStatus?.(event.label);
+  } else if (event.type === "run_event") {
+    applyRunEventAttachment(event, hooks, buffer);
+  } else if (event.type === "done" && "lastSequence" in event) {
+    void event;
   }
+}
+
+function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
+  if (attachment.kind === "pending_confirmation") {
+    const confirmation = attachment.envelope.confirmation;
+    if (!confirmation) return [];
+    const presentation = attachment.envelope.presentation;
+    return [{
+      kind: "preview",
+      previewId: confirmation.id,
+      nonce: confirmation.nonce,
+      expiresAt: confirmation.expiresAt,
+      preview: {
+        actionLabel: presentation.title,
+        expectedChanges: presentation.summary
+          ? [presentation.summary]
+          : [],
+        reversibility: "",
+        warnings: presentation.warnings.map((w) => w.message),
+        ...(presentation.facts.length > 0 ? { facts: presentation.facts } : {}),
+      },
+      ...(presentation.references.length > 0 ? { references: presentation.references } : {}),
+    }];
+  }
+  if (attachment.kind === "presented_result") {
+    const presentation = attachment.envelope.presentation;
+    const status = presentation.status;
+    if (status === "pending_confirmation") return attachmentToResults({
+      kind: "pending_confirmation",
+      confirmationId: attachment.envelope.confirmation?.id ?? attachment.actionResultId,
+      envelope: attachment.envelope,
+    });
+    return [{
+      kind: "receipt",
+      receipt: {
+        ok: status === "succeeded" || status === "partial",
+        action: presentation.title,
+        message: presentation.summary,
+        presentedStatus: status,
+        ...(presentation.warnings.length > 0 ? { warnings: presentation.warnings } : {}),
+        ...(presentation.facts.length > 0 ? { facts: presentation.facts } : {}),
+        ...(presentation.references.length > 0 ? { references: presentation.references } : {}),
+        ...(presentation.recovery ? { recovery: presentation.recovery } : {}),
+        ...(attachment.envelope.diagnostic ? { diagnostic: attachment.envelope.diagnostic } : {}),
+      },
+      ...(attachment.envelope.undo ? { undo: attachment.envelope.undo } : {}),
+    }];
+  }
+  if (attachment.kind === "pending_clarification") {
+    return [{
+      kind: "clarify",
+      message: attachment.question,
+      options: attachment.candidates.map((c) => ({ id: c.optionId, label: c.label })),
+      clarificationId: attachment.clarificationId,
+      status: attachment.status,
+    }];
+  }
+  return [];
+}
+
+export function applyRunEventAttachment(
+  event: Extract<StreamEvent, { type: "run_event" }>,
+  hooks: StreamDispatchHooks,
+  buffer: PreviewBuffer,
+): void {
+  if (!event.attachment) return;
+  if (event.attachment.kind === "assistant_message") {
+    if (event.attachment.text.trim()) hooks.onAssistant(event.attachment.text);
+    return;
+  }
+  const results = attachmentToResults(event.attachment);
+  if (results.length === 0) return;
+  for (const result of results) {
+    if (result.kind === "preview") buffer.push(result);
+    else hooks.onResults([result]);
+  }
+}
+
+export interface RunEventPageResponse {
+  ok: true;
+  runId: string;
+  events: SequencedRunEvent[];
+  nextAfter: number;
+  hasMore: boolean;
+  lastSequence: number;
+}
+
+/** Fetch and apply durable run events with cursor-safe dedupe and gap recovery. */
+export async function restoreRunEvents(
+  fetchPage: (runId: string, after: number) => Promise<RunEventPageResponse>,
+  runId: string,
+  cursor: RunEventCursor,
+  hooks: StreamDispatchHooks,
+  startAfter = 0,
+): Promise<number> {
+  const buffer = new PreviewBuffer((results) => hooks.onResults(results));
+  let after = startAfter;
+  for (;;) {
+    const page = await fetchPage(runId, after);
+    for (const entry of page.events) {
+      if (!cursor.accept(entry.sequence)) continue;
+      applyRunEventAttachment({
+        type: "run_event",
+        runId: entry.runId,
+        sequence: entry.sequence,
+        event: entry.event,
+        attachment: entry.attachment,
+      }, hooks, buffer);
+    }
+    if (!page.hasMore) break;
+    after = page.nextAfter;
+  }
+  buffer.flush();
+  return cursor.highestSequence;
 }
 
 /**
@@ -392,6 +581,33 @@ export interface HistoryResponse {
   messages?: HistoryMessage[];
   pendingPreviews?: PreviewResult[];
   operationRuns?: OperationCardData[];
+  activeRun?: { runId: string; phase: string; lastSequence: number; updatedAt: string };
+}
+
+/** In-memory cursor for v2 run-event restoration; never persisted to storage. */
+export class RunEventCursor {
+  private readonly seen = new Set<string>();
+  private highest = 0;
+
+  constructor(private readonly runId: string) {}
+
+  accept(sequence: number): boolean {
+    const key = `${this.runId}:${sequence}`;
+    if (this.seen.has(key)) return false;
+    if (sequence !== this.highest + 1) return false;
+    this.seen.add(key);
+    this.highest = sequence;
+    return true;
+  }
+
+  get highestSequence(): number {
+    return this.highest;
+  }
+
+  reset(lastSequence: number): void {
+    this.seen.clear();
+    this.highest = lastSequence;
+  }
 }
 
 export interface OperationCardData {

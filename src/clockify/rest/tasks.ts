@@ -48,6 +48,18 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
       { amount: input.amountMinor, ...(input.since ? { since: input.since } : {}) },
     );
   };
+  const updateTaskHourlyRateAtomic: TaskPort["updateTaskHourlyRateAtomic"] = async (input) => {
+    await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/tasks/${input.taskId}/hourly-rate`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  };
+  const updateTaskCostRateAtomic: TaskPort["updateTaskCostRateAtomic"] = async (input) => {
+    await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/tasks/${input.taskId}/cost-rate`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  };
 
   return {
     async listTasks(projectId, filter) {
@@ -80,5 +92,7 @@ export function makeTaskRest(core: RestCore, workspaceId: string): TaskPort {
       await updateTaskRateAtomic(input);
     },
     updateTaskRateAtomic,
+    updateTaskHourlyRateAtomic,
+    updateTaskCostRateAtomic,
   };
 }

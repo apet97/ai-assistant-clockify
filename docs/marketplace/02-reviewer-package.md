@@ -36,6 +36,7 @@ engineering evidence record is green.
    host-call budgets, cancellation, demotion, revocation, uninstall, and crash recovery.
 8. Inspect the live private iframe evidence for first run, read, safe write, risky
    confirmation, undo, history, PDF, cleanup, owner/admin success, and member denial.
+   Require: English interface; Unicode workspace data; timezone-aware Intl formatting.
 9. Walk the restore drill and an ambiguous-outcome scenario. Confirm that recovery does
    not retry a dispatched unknown effect, resume prepared work, or promise rollback of a
    known Clockify effect.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { validatePredeployBackupGate } from "../../scripts/evidence/predeploy-backup-gate.js";
+import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const RELEASE_SHA = "a".repeat(40);
 const BUILD_HASH = "b".repeat(64);
@@ -16,12 +17,14 @@ function gateInput() {
     backupSha256: BACKUP_HASH,
     checksumSha256: BACKUP_HASH,
     backupBytes: 42,
+    expectedSourceDatabasePath: "/data/ai-assistant.sqlite",
     metadata: {
       format: 2,
       dataAsOf: "2026-07-18T23:55:00.000Z",
       createdAt: "2026-07-19T00:00:00.000Z",
       bytes: 42,
       sha256: BACKUP_HASH,
+      source: "/data/ai-assistant.sqlite",
     },
     restoreEvidence: {
       format: 1,
@@ -38,7 +41,7 @@ function gateInput() {
         schema: {
           status: "passed",
           sourceUserVersion: 7,
-          userVersion: 8,
+          userVersion: LATEST_SCHEMA_VERSION,
           migration: "candidate_private_clone",
           requiredTables: 11,
           requiredColumns: 43,
@@ -147,5 +150,31 @@ describe("predeploy encrypted-backup stop gate", () => {
     incidentAfterDrillStarted.restoreEvidence.recovery.incidentAt = "2026-07-19T00:00:10.000Z";
     incidentAfterDrillStarted.restoreEvidence.recovery.rpoMs = 310_000;
     expect(() => validatePredeployBackupGate(incidentAfterDrillStarted, { now: GATE_NOW })).toThrow(/timeline/u);
+  });
+
+  it("rejects a valid backup taken from a different database than the deploy protects", () => {
+    // The v2 cutover puts TWO databases on the volume. A backup of the wrong one
+    // is still internally perfect -- correct checksum, correct byte count, clean
+    // integrity, real schema, fresh timestamps -- so only the recorded source
+    // distinguishes it. `backupDatabase` has always written `metadata.source`;
+    // nothing read it until now.
+    const wrongDatabase = gateInput();
+    wrongDatabase.metadata.source = "/data/ai-assistant-v2.sqlite";
+    expect(() => validatePredeployBackupGate(wrongDatabase, { now: GATE_NOW }))
+      .toThrow(/different database than this deploy protects/u);
+
+    // Backing up the new empty target instead of the live database is the exact
+    // mistake this catches, and it must not be satisfiable by relabelling.
+    const relabelled = gateInput();
+    relabelled.expectedSourceDatabasePath = "/data/ai-assistant-v2.sqlite";
+    expect(() => validatePredeployBackupGate(relabelled, { now: GATE_NOW }))
+      .toThrow(/different database than this deploy protects/u);
+
+    for (const source of [undefined, "", 42]) {
+      const unrecorded = gateInput();
+      (unrecorded.metadata as Record<string, unknown>).source = source;
+      expect(() => validatePredeployBackupGate(unrecorded, { now: GATE_NOW }))
+        .toThrow(/does not record its source database/u);
+    }
   });
 });

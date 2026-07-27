@@ -191,15 +191,13 @@ describe("selectionDroppedGroups (telemetry for requests beyond the clamp)", () 
 describe("selectActionsForMessage — fail-open language boundary", () => {
   const ALL = ALL_ACTION_NAMES;
 
-  it("narrows an ASCII Serbian Latin request using scripted domain vocabulary", () => {
-    const selected = selectActionsForMessage("obrisi projekat Apollo");
-    expect(selected).toContain("clockify_projects_delete");
-    expect(selected.length).toBeLessThan(ALL.length);
+  it("fails open when a removed ASCII Serbian token is the only area signal", () => {
+    expect(selectActionsForMessage("obrisi projekat Apollo")).toEqual(ALL);
   });
 
   it.each([
-    ["Serbian Latin with diacritics", "obriši projekat Čukarica"],
-    ["Serbian Cyrillic", "обриши пројекат Чукрица"],
+    ["Latin multibyte workspace data", "delete project Čukarica"],
+    ["Cyrillic workspace data", "delete project Београд"],
   ])("returns the full catalog for %s", (_label, message) => {
     expect(selectActionsForMessage(message)).toEqual(ALL);
   });

@@ -23,6 +23,7 @@ export interface ClientPort {
   updateClient(id: string, patch: Record<string, unknown>): Promise<EntitySummary>;
   prepareClientUpdate(id: string, patch: Record<string, unknown>): Promise<Record<string, unknown>>;
   updateClientAtomic(id: string, body: Record<string, unknown>): Promise<EntitySummary>;
+  archiveClientAtomic(id: string, body: Record<string, unknown>): Promise<EntitySummary>;
   deleteClient(id: string): Promise<void>;
   deleteClientAtomic(id: string): Promise<void>;
   /** Workspace currencies (`{id, code}`), for resolving a currency CODE → id. */

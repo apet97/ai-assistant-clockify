@@ -99,6 +99,22 @@ export const GROUP_MEMBER_BATCH_MAX = deriveMaximumBatchSize(
   estimateGroupMemberBatchHostCalls,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
+/** Tag ids on bounded time-entry create/start/update actions must fit the 22-fact material presentation ceiling alongside other preview fields. */
+export const TIME_ENTRY_TAG_BATCH_MAX = 14;
+/** Dropdown allowedValues on custom-field create/update must fit the 22-fact ceiling with scalar preview fields. */
+export const CUSTOM_FIELD_ALLOWED_VALUES_MAX = 17;
+/** Multi-select custom-field values must fit the 22-fact ceiling with target and field ids. */
+export const CUSTOM_FIELD_VALUE_ARRAY_MAX = 19;
+/** Holiday scope arrays share one POST/PUT body; keep scalar preview fields plus both arrays within 22 facts. */
+export const HOLIDAY_SCOPE_USER_BATCH_MAX = 8;
+export const HOLIDAY_SCOPE_GROUP_BATCH_MAX = 8;
+/** Policy scope arrays share the holiday 22-fact material presentation cap. */
+export const TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX = 8;
+export const TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX = 8;
+/** One PATCH accepts the exact userIds array; cap matches material facts. */
+export const TIME_OFF_BALANCE_USER_MATERIAL_MAX = 8;
+/** Webhook triggerSource entries must fit the 22-fact preview ceiling with scalar fields. */
+export const WEBHOOK_TRIGGER_SOURCE_BATCH_MAX = 17;
 export const ONBOARD_GROUP_BATCH_MAX = deriveMaximumBatchSize(
   estimateOnboardGroupBatchHostCalls,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
@@ -116,21 +132,26 @@ export const SETUP_PROJECT_RATE_BATCH_MAX = deriveMaximumBatchSize(
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
 /** Keep public schemas and authority metadata on the same cold-request bound. */
-export const MARK_INVOICED_ENTRY_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => 2 * count + 2,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+export const MARK_INVOICED_ENTRY_BATCH_MAX = Math.min(
+  21,
+  deriveMaximumBatchSize(
+    (count) => 2 * count + 2,
+    CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+  ),
 );
-export const INVOICE_IMPORT_PROJECT_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => count + 3,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
-);
+/** One-request import batch bound by the 22-fact material presentation cap
+ * (invoiceId + from + to + up to 19 project ids). */
+export const INVOICE_IMPORT_PROJECT_BATCH_MAX = 19;
 export const SETUP_TASK_ASSIGNEE_BATCH_MAX = deriveMaximumBatchSize(
   (count) => 3 * count + 11,
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
 );
-export const TIME_OFF_BALANCE_USER_BATCH_MAX = deriveMaximumBatchSize(
-  (count) => 2 * count + 3,
-  CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+export const TIME_OFF_BALANCE_USER_BATCH_MAX = Math.min(
+  TIME_OFF_BALANCE_USER_MATERIAL_MAX,
+  deriveMaximumBatchSize(
+    (count) => 2 * count + 3,
+    CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
+  ),
 );
 export const APPROVAL_PENDING_BATCH_MAX = deriveMaximumBatchSize(
   estimateApprovePendingBatchHostCalls,

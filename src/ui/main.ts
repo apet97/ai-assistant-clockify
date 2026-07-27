@@ -19,7 +19,7 @@ import {
   createFetchApi,
   type ChatApi,
 } from "./api-client.js";
-import { submitStreaming, switchToSession } from "./composer-flow.js";
+import { submitClarificationResolve, submitStreaming, switchToSession } from "./composer-flow.js";
 import {
   applyUiPreferences,
   firstRunDisclosure,
@@ -32,6 +32,8 @@ import {
 import {
   createRestoreGate,
   historyRestoreItems,
+  RunEventCursor,
+  restoreRunEvents,
   type ChatController,
   type ChatResult,
   type HistoryResponse,
@@ -48,16 +50,17 @@ import type { PermissionsResponse, SessionsResponse } from "./protocol.js";
 // main (which imports their builders) — that back-edge would be a circular dep.
 export { createFetchApi, ApiError, SESSION_EXPIRED_MESSAGE, httpErrorMessage, createNdjsonParser } from "./api-client.js";
 export type { ChatApi } from "./api-client.js";
-export { submitMessage, submitStreaming, switchToSession, SWITCH_FAILED_MESSAGE } from "./composer-flow.js";
+export { submitMessage, submitStreaming, submitClarificationResolve, switchToSession, SWITCH_FAILED_MESSAGE } from "./composer-flow.js";
 export type {
   ChatResponse,
   ChatApiLike,
+  ClarificationResolveApiLike,
   ComposerHooks,
   StreamingApi,
   SwitchApiLike,
   SwitchHooks,
 } from "./composer-flow.js";
-export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream } from "./shared.js";
+export { featureGroupRows, runConfirmStreamLive, settleConfirmOutcome, submitConfirmStream, RunEventCursor, restoreRunEvents, applyRunEventAttachment } from "./shared.js";
 export type {
   PolicyShape,
   ChatController,
@@ -86,7 +89,7 @@ export {
   normalizeUiPreferences,
   promptsForPolicy,
 } from "./product.js";
-export type { UiPreferences, UiTheme, UiLanguage } from "./product.js";
+export type { UiPreferences, UiTheme } from "./product.js";
 export {
   ProtocolError,
   decodeApiEnvelope,
@@ -187,21 +190,10 @@ function mount(root: HTMLElement, api: ChatApi): void {
     theme.appendChild(option);
   }
   themeLabel.appendChild(theme);
-  const languageLabel = el("label", undefined, "Language");
-  const language = document.createElement("select");
-  language.setAttribute("aria-label", "Language");
-  for (const [value, label] of [["en", "English"], ["sr", "Srpski"]] as const) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    option.selected = preferences.language === value;
-    language.appendChild(option);
-  }
-  languageLabel.appendChild(language);
   const timeZoneSummary = el("p", "display-time-zone");
   const refreshTimeZoneSummary = (): void => {
     timeZoneSummary.textContent = preferences.timeZone
-      ? `Clockify time zone: ${formatTimeZoneName(preferences.timeZone, preferences.language)}`
+      ? `Clockify time zone: ${formatTimeZoneName(preferences.timeZone)}`
       : "Clockify time zone is unavailable.";
   };
   refreshTimeZoneSummary();
@@ -211,17 +203,16 @@ function mount(root: HTMLElement, api: ChatApi): void {
     preferences = {
       ...preferences,
       theme: theme.value as UiPreferences["theme"],
-      language: language.value as UiPreferences["language"],
     };
     saveUiPreferences(window.localStorage, preferences);
     applyUiPreferences(document.documentElement, preferences);
     refreshTimeZoneSummary();
-    refreshLocalizedUi();
+    refreshDisplayUi();
     displayPanel.classList.add("hidden");
     displayButton.setAttribute("aria-expanded", "false");
     displayButton.focus();
   });
-  displayPanel.append(themeLabel, languageLabel, timeZoneSummary, saveDisplay);
+  displayPanel.append(themeLabel, timeZoneSummary, saveDisplay);
   root.appendChild(displayPanel);
   displayButton.addEventListener("click", () => {
     const open = displayPanel.classList.toggle("hidden");
@@ -321,9 +312,23 @@ function mount(root: HTMLElement, api: ChatApi): void {
     if (typing.isConnected) messages.appendChild(typing);
   }
 
-  // Assigned in renderChat; clarify chips send their label through this SAME
-  // path as typed text — never to a confirmation endpoint.
+  // Assigned in renderChat; SUGGESTION chips send their label through this SAME
+  // path as typed text — never to a confirmation endpoint. v2 clarification
+  // chips use `resolveOption` instead (never the label).
   let sendText: (text: string) => Promise<void> = async () => {};
+
+  // T14-F: the current chat's active v2 run while it awaits a clarification,
+  // hydrated from `HistoryResponse.activeRun` on restore/switch. Forwarded as
+  // `continuationRunId` on the NEXT free-text send so a typed follow-up resumes
+  // the SAME run instead of starting a new one. Cleared on durable evidence
+  // only: a resolved/superseded clarification, a chat switch, or starting a
+  // new chat — never on a local guess.
+  let activeClarificationRunId: string | undefined;
+
+  // Assigned in renderChat (needs the local `busy`/`applyComposerWorking`
+  // guard); v2 exact clarification resolve (T14-F) — a chip click, never the
+  // label.
+  let resolveOption: (clarificationId: string, optionId: string) => Promise<void> = async () => {};
 
   // The empty-chat welcome card lives OUTSIDE the message log (insertBefore the
   // `messages` live region) so it is never announced as a turn, and is bound to
@@ -339,7 +344,6 @@ function mount(root: HTMLElement, api: ChatApi): void {
     chat.insertBefore(
       renderWelcome({
         policy: activePolicy,
-        language: preferences.language,
         sendText: (text) => runUiTask(sendText(text), "Message failed to send."),
       }),
       messages,
@@ -350,14 +354,13 @@ function mount(root: HTMLElement, api: ChatApi): void {
     cachedSessions = sessions;
     chatsSlot.replaceChildren(
       renderChatsMenu(sessions, {
-        language: preferences.language,
         onSelect: (id) => runUiTask(selectSession(id), "Could not open that conversation. Please try again."),
       }),
     );
   }
 
-  /** Re-render only locale/policy-derived empty-state chrome; never touch turns. */
-  function refreshLocalizedUi(): void {
+  /** Re-render only display/policy-derived empty-state chrome; never touch turns. */
+  function refreshDisplayUi(): void {
     refreshTimeZoneSummary();
     if (chat.querySelector(".composer") && messages.childElementCount === 0) showWelcome();
     if (cachedSessions) renderSessionMenu(cachedSessions);
@@ -418,7 +421,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
         messages.appendChild(renderReceipt(result, { controller, showError, returnFocus: () => focusComposer() }));
       else if (result.kind === "clarify")
         messages.appendChild(
-          renderClarify(result, { sendText: (text) => runUiTask(sendText(text), "Message failed to send.") }),
+          renderClarify(result, {
+            sendText: (text) => runUiTask(sendText(text), "Message failed to send."),
+            resolveOption: (clarificationId, optionId) =>
+              runUiTask(resolveOption(clarificationId, optionId), "That option could not be resolved."),
+          }),
         );
     }
     bumpTyping();
@@ -469,13 +476,40 @@ function mount(root: HTMLElement, api: ChatApi): void {
       messages.scrollTop = messages.scrollHeight; // sending is intent — always jump to the bottom
       clearError();
       // Streaming: harness results render as they arrive, then the truthful reply.
-      await submitStreaming(api, text, {
-        onWorking: applyComposerWorking,
-        onAssistant: (assistantText) => appendMessage("assistant", assistantText),
-        onResults: (results) => renderResults(results),
-        onError: (message) => showError(message),
-        onStatus: (label) => setStatusLabel(label),
-      });
+      // T14-F: a typed free-text answer to a still-`pending` v2 clarification
+      // resumes that SAME run when one is tracked; settlement (success or
+      // error) is durable evidence the run either advanced or the stale id no
+      // longer applies, so it is cleared unconditionally either way.
+      const continuationRunId = activeClarificationRunId;
+      try {
+        await submitStreaming(api, text, {
+          onWorking: applyComposerWorking,
+          onAssistant: (assistantText) => appendMessage("assistant", assistantText),
+          onResults: (results) => renderResults(results),
+          onError: (message) => showError(message),
+          onStatus: (label) => setStatusLabel(label),
+        }, continuationRunId);
+      } finally {
+        if (continuationRunId) activeClarificationRunId = undefined;
+      }
+    };
+    resolveOption = async (clarificationId: string, optionId: string): Promise<void> => {
+      if (busy) return;
+      clearError();
+      try {
+        await submitClarificationResolve(api, clarificationId, optionId, {
+          onWorking: applyComposerWorking,
+          onAssistant: (text) => appendMessage("assistant", text),
+          onResults: (results) => renderResults(results),
+          onError: (message) => showError(message),
+          onStatus: (label) => setStatusLabel(label),
+        });
+      } finally {
+        // Durable evidence the clarification is no longer live either way:
+        // resolved (success), or already-settled/expired/foreign (error) — a
+        // rejected resolve never re-arms this tab's stale tracked run id.
+        activeClarificationRunId = undefined;
+      }
     };
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -546,7 +580,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
             if (firstRun) {
               setup.classList.add("hidden");
               renderChat();
-            } else refreshLocalizedUi();
+            } else refreshDisplayUi();
             return true; // reopen: stay open so the inline "Saved" is visible
           } catch {
             showError("Could not save permissions.");
@@ -609,6 +643,7 @@ function mount(root: HTMLElement, api: ChatApi): void {
     clearError();
     setWorking(false);
     messages.replaceChildren(); // drop the transcript + any pending preview cards
+    activeClarificationRunId = undefined; // new chat: no run/clarification carries over
     dropWelcome();
     showWelcome();
     runUiTask(refreshChatsMenu(), "Could not load your conversations.");
@@ -626,13 +661,33 @@ function mount(root: HTMLElement, api: ChatApi): void {
   async function restoreHistory(historyRequest?: Promise<HistoryResponse & { ok: true }>): Promise<void> {
     try {
       const history = await (historyRequest ?? api.getHistory());
+      // T14-F: only an `awaiting_clarification` active run is a valid free-text
+      // continuation target — restoring mid-loop/awaiting-confirmation phases
+      // never sets it (an ordinary message there is new-run supersession, not
+      // a continuation).
+      activeClarificationRunId = history.activeRun?.phase === "awaiting_clarification"
+        ? history.activeRun.runId
+        : undefined;
       const items = historyRestoreItems(history);
-      if (items.length === 0) return;
+      if (items.length === 0 && !history.activeRun) return;
       dropWelcome(); // the conversation already started
       for (const item of items) {
         if (item.kind === "bubble") appendMessage(item.role, item.text);
         else if (item.kind === "results") renderResults(item.results);
         else messages.appendChild(renderOperationCard(item.operation));
+      }
+      if (history.activeRun && api.getRunEvents) {
+        const cursor = new RunEventCursor(history.activeRun.runId);
+        await restoreRunEvents(
+          (runId, after) => api.getRunEvents!(runId, after),
+          history.activeRun.runId,
+          cursor,
+          {
+            onAssistant: (text) => appendMessage("assistant", text),
+            onResults: (results) => renderResults(results),
+            onError: (message) => showError(message),
+          },
+        );
       }
       messages.scrollTop = messages.scrollHeight;
     } catch (error) {
@@ -720,12 +775,11 @@ function mount(root: HTMLElement, api: ChatApi): void {
         saveUiPreferences(window.localStorage, preferences);
         applyUiPreferences(document.documentElement, preferences);
         theme.value = preferences.theme;
-        language.value = preferences.language;
         refreshTimeZoneSummary();
         for (const key of ["privacy", "support", "security"] as const) {
           footerLinks.get(key)!.href = value.links[key];
         }
-        refreshLocalizedUi();
+        refreshDisplayUi();
       }).catch((error: unknown) => {
         showError(error instanceof ApiError ? error.message : "Could not load this session.");
       });

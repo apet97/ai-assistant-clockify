@@ -1,3 +1,4 @@
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { describe, expect, it } from "vitest";
 import { toolsForModel } from "../../src/harness/tools.js";
 import { buildToolSystemPrompt } from "../../src/assistant/prompts.js";
@@ -13,14 +14,14 @@ import { defaultAdminPolicy } from "../../src/harness/permissions.js";
  * byte-stable across calls (only the server's currentDate is allowed to vary).
  */
 describe("prompt-cache prefix stability", () => {
-  it("toolsForModel() is byte-identical (and the same memoized reference) across calls", () => {
-    expect(toolsForModel()).toBe(toolsForModel()); // memoized: same reference
-    expect(JSON.stringify(toolsForModel())).toBe(JSON.stringify(toolsForModel()));
+  it("toolsForModel(INTERNAL_ACTION_CATALOG) is byte-identical (and the same memoized reference) across calls", () => {
+    expect(toolsForModel(INTERNAL_ACTION_CATALOG)).toBe(toolsForModel(INTERNAL_ACTION_CATALOG)); // memoized: same reference
+    expect(JSON.stringify(toolsForModel(INTERNAL_ACTION_CATALOG))).toBe(JSON.stringify(toolsForModel(INTERNAL_ACTION_CATALOG)));
   });
 
   it("a subset view is byte-identical across calls for the same name set", () => {
     const names = new Set(["clockify_status", "clockify_tags_delete"]);
-    expect(JSON.stringify(toolsForModel(names))).toBe(JSON.stringify(toolsForModel(names)));
+    expect(JSON.stringify(toolsForModel(INTERNAL_ACTION_CATALOG, names))).toBe(JSON.stringify(toolsForModel(INTERNAL_ACTION_CATALOG, names)));
   });
 
   it("buildToolSystemPrompt is deterministic for identical inputs (no hidden per-call data)", () => {

@@ -177,14 +177,26 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
   const updateProjectAtomic: ProjectPort["updateProjectAtomic"] = async (id, body) =>
     map((await core.mutate("api", "PUT", `${ws}/projects/${id}`, body)) as ProjectRow);
   const archiveProjectAtomic: ProjectPort["archiveProjectAtomic"] = updateProjectAtomic;
-  const deleteProjectAtomic: ProjectPort["deleteProjectAtomic"] = async (id) => {
-    await core.mutate("api", "DELETE", `${ws}/projects/${id}`);
+  const deleteProjectAtomic: ProjectPort["deleteProjectAtomic"] = async (projectId) => {
+    await core.mutate("api", "DELETE", `${ws}/projects/${projectId}`);
   };
   const createProjectFromTemplateAtomic: ProjectPort["createProjectFromTemplateAtomic"] = async (input) =>
     map((await core.mutate("api", "POST", `${ws}/projects/from-template`, input)) as ProjectRow);
   const updateProjectRateAtomic: ProjectPort["updateProjectRateAtomic"] = async (input) => {
     const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
     await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/users/${input.userId}/${kind}`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  };
+  const updateProjectMemberHourlyRateAtomic: ProjectPort["updateProjectMemberHourlyRateAtomic"] = async (input) => {
+    await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/users/${input.userId}/hourly-rate`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  };
+  const updateProjectMemberCostRateAtomic: ProjectPort["updateProjectMemberCostRateAtomic"] = async (input) => {
+    await core.mutate("api", "PUT", `${ws}/projects/${input.projectId}/users/${input.userId}/cost-rate`, {
       amount: input.amountMinor,
       ...(input.since ? { since: input.since } : {}),
     });
@@ -238,6 +250,8 @@ export function makeProjectRest(core: RestCore, workspaceId: string): ProjectPor
       await updateProjectRateAtomic(input);
     },
     updateProjectRateAtomic,
+    updateProjectMemberHourlyRateAtomic,
+    updateProjectMemberCostRateAtomic,
     async updateProjectEstimate(id, patch) {
       // PATCH, per the goclmcp reference (the plan's "PUT" predates that check).
       await updateProjectEstimateAtomic(id, patch);

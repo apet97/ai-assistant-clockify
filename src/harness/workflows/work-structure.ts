@@ -23,6 +23,7 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import { dynamicMutationPlan, fetchCompositeSnapshot } from "./composite-durable.js";
 import type { EntityRef } from "../receipts.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * Fold the shapes the planner naturally emits into the canonical nested form
@@ -550,6 +551,7 @@ function workPackagePartial(
 
 const createWorkPackage = defineAction({
   name: "clockify_create_work_package",
+  ...STRUCTURE_API_METADATA.clockify_create_work_package,
   description:
     "Create or reuse a client, project, task, and/or tag by name in one step. Set `startTimer` to also start a timer on the created/reused project in the same step — use this for \"create a project and start a timer on it\" so the new project id is resolved server-side (do not emit a separate start-timer that references an id that does not exist yet).",
   featureGroup: "work_structure",
@@ -599,6 +601,7 @@ const createWorkPackage = defineAction({
 
 const listEntities = defineAction({
   name: "clockify_list_entities",
+  ...STRUCTURE_API_METADATA.clockify_list_entities,
   description:
     "List entities of a given type (tag, project, client, task, user, expense, webhook). Tasks require a projectId.",
   featureGroup: "work_structure",
@@ -632,6 +635,7 @@ const listEntities = defineAction({
 
 const getEntity = defineAction({
   name: "clockify_get_entity",
+  ...STRUCTURE_API_METADATA.clockify_get_entity,
   description:
     "Fetch a single entity by id (tag, project, client, task, user, expense, webhook). Tasks require a projectId.",
   featureGroup: "work_structure",

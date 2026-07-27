@@ -17,6 +17,8 @@ const OWNED_WRITES = [
   "clockify_users_invite",
   "clockify_users_role_update",
   "clockify_users_rate_update",
+  "clockify_users_hourly_rate_update",
+  "clockify_users_cost_rate_update",
   "clockify_users_deactivate",
   "clockify_groups_create",
   "clockify_groups_update",

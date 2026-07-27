@@ -21,6 +21,13 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { sanitizedFingerprint } from "../safe-json.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, reconcileDelete } from "./structure-durable.js";
 import { captureGroupSnapshot, dynamicMutationPlan, fetchCompositeSnapshot } from "./composite-durable.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiExposure,
+  ApiMethod,
+  AvailabilityByAuthClass,
+} from "../api-operation.js";
 
 /**
  * Risky workflows (SPEC "Risky Writes"). Each handler builds a dry-run preview
@@ -41,6 +48,143 @@ const DELETABLE_ENTITY_TYPES = [
   "user",
   "group",
 ] as const;
+
+type AdminActionName =
+  | "clockify_delete_entity"
+  | "assistant_update_permissions"
+  | "clockify_update_entity"
+  | "assistant_show_permissions"
+  | "assistant_recent_outcomes";
+
+const ADMIN_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+const ADMIN_API_KEY_ONLY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: false, reason: "unsupported_auth_class" }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function adminEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule: string,
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function adminInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+  availability: AvailabilityByAuthClass;
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: input.availability,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+function adminLocalMetadata(reason: string): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "local",
+    apiExposureReason: reason,
+    availabilityByAuthClass: ADMIN_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const adminEndpoint = Object.freeze({
+  projectsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+  projectsGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  projectsUpdate: adminEndpointKey("write", "PUT", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  projectsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/projects/{projectId}", "projects.ts"),
+  clientsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients", "clients.ts"),
+  clientsGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+  clientsUpdate: adminEndpointKey("write", "PUT", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+  clientsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/clients/{id}", "clients.ts"),
+  tagsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/tags", "tags.ts"),
+  tagsGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+  tagsUpdate: adminEndpointKey("write", "PUT", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+  tagsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/tags/{id}", "tags.ts"),
+  timeEntriesGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+  timeEntriesDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/time-entries/{id}", "time-entries.ts"),
+  invoicesList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices", "invoices.ts"),
+  invoicesGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  invoicesDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/invoices/{id}", "invoices.ts"),
+  expensesGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/expenses/{id}", "expenses.ts"),
+  expensesDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/expenses/{id}", "expenses.ts"),
+  webhooksGet: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+  webhooksDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/webhooks/{id}", "webhooks.ts"),
+  groupsList: adminEndpointKey("read", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+  groupsDelete: adminEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/user-groups/{id}", "users.ts"),
+});
+
+const ADMIN_API_METADATA = Object.freeze({
+  clockify_delete_entity: adminInternalMetadata({
+    exposure: "generic",
+    reason: "Selects unrelated entity delete endpoints and may archive a project or client before deletion with compensation; Task 6 must use the typed atomic operations.",
+    primary: [
+      adminEndpoint.projectsUpdate,
+      adminEndpoint.projectsDelete,
+      adminEndpoint.clientsUpdate,
+      adminEndpoint.clientsDelete,
+      adminEndpoint.tagsDelete,
+      adminEndpoint.timeEntriesDelete,
+      adminEndpoint.invoicesDelete,
+      adminEndpoint.expensesDelete,
+      adminEndpoint.webhooksDelete,
+      adminEndpoint.groupsDelete,
+    ],
+    support: [
+      adminEndpoint.projectsList,
+      adminEndpoint.projectsGet,
+      adminEndpoint.clientsList,
+      adminEndpoint.clientsGet,
+      adminEndpoint.tagsList,
+      adminEndpoint.tagsGet,
+      adminEndpoint.timeEntriesGet,
+      adminEndpoint.invoicesList,
+      adminEndpoint.invoicesGet,
+      adminEndpoint.expensesGet,
+      adminEndpoint.webhooksGet,
+      adminEndpoint.groupsList,
+    ],
+    availability: ADMIN_API_KEY_ONLY,
+  }),
+  assistant_update_permissions: adminLocalMetadata(
+    "Updates only the caller's persisted assistant policy and performs no Clockify request.",
+  ),
+  clockify_update_entity: adminInternalMetadata({
+    exposure: "generic",
+    reason: "Selects the project, client, or tag update endpoint from entityType and accepts an open fields record; Task 6 must use operation-specific closed updates.",
+    primary: [adminEndpoint.projectsUpdate, adminEndpoint.clientsUpdate, adminEndpoint.tagsUpdate],
+    support: [
+      adminEndpoint.projectsList,
+      adminEndpoint.projectsGet,
+      adminEndpoint.clientsList,
+      adminEndpoint.clientsGet,
+      adminEndpoint.tagsList,
+      adminEndpoint.tagsGet,
+    ],
+    availability: ADMIN_AVAILABILITY,
+  }),
+  assistant_show_permissions: adminLocalMetadata(
+    "Reads only the caller's in-process assistant policy and performs no Clockify request.",
+  ),
+  assistant_recent_outcomes: adminLocalMetadata(
+    "Reads only locally audited assistant outcomes and performs no Clockify request.",
+  ),
+} satisfies Readonly<Record<AdminActionName, ApiActionMetadataCarrier>>);
 
 // Tasks require a project-scoped typed delete and users require a typed
 // deactivate flow. Neither may be reached through the generic capability.
@@ -160,6 +304,7 @@ async function replacementState(ctx: ActionContext, entityType: GenericUpdateTyp
 }
 
 const deleteEntity = defineRiskyAction({
+  ...ADMIN_API_METADATA.clockify_delete_entity,
   name: "clockify_delete_entity",
   description: "Delete a Clockify entity. Always previews first and requires confirmation.",
   group: "work_structure",
@@ -339,6 +484,7 @@ function normalizePermissionArgs(raw: unknown): unknown {
 }
 
 const updatePermissions = defineRiskyAction({
+  ...ADMIN_API_METADATA.assistant_update_permissions,
   name: "assistant_update_permissions",
   description:
     "Change the admin's OWN assistant access to a feature group — set a group to off, read, or read_write. Use this whenever the admin asks to grant/raise/lower/remove their own access, e.g. 'give me full (read_write) access to reports', 'set invoices to read-only', or 'turn off webhooks'. Not a Clockify write; needs a button save, no Clockify dry-run.",
@@ -405,6 +551,7 @@ const TYPED_UPDATE_ACTION: Partial<Record<(typeof DELETABLE_ENTITY_TYPES)[number
 };
 
 const updateEntity = defineRiskyAction({
+  ...ADMIN_API_METADATA.clockify_update_entity,
   name: "clockify_update_entity",
   description:
     "Update simple fields of a project, client, or tag (rename etc.). For every other type use its typed action instead (tasks_update, fix_entry for time entries, invoices_update, expenses_update, webhooks_update, users_role_update, groups_update). Elevated write — always previews and requires confirmation.",
@@ -528,6 +675,7 @@ function deletePartial(
 }
 
 const recentOutcomes = defineReadAction({
+  ...ADMIN_API_METADATA.assistant_recent_outcomes,
   name: "assistant_recent_outcomes",
   description:
     "Summarize what the assistant actually DID, from the audited action outcomes: per-action success/failure counts, error codes, and confirm/cancel rates. Use this to answer \"what did you do\", \"what failed (today)\", or \"which actions failed most\" — never answer activity-recap questions from chat memory.",
@@ -559,6 +707,7 @@ const recentOutcomes = defineReadAction({
 });
 
 const showPermissions = defineReadAction({
+  ...ADMIN_API_METADATA.assistant_show_permissions,
   name: "assistant_show_permissions",
   description: "Show the caller's own assistant permissions for this workspace. Read-only.",
   group: "workspace_settings",

@@ -36,7 +36,10 @@ const metadata = {
   clockify_start_timer: { "start-timer": "create" },
   clockify_stop_timer: { "stop-timer": "state-command" },
   clockify_log_work: { "log-time-entry": "create" },
+  clockify_entries_create: { "create-time-entry": "create" },
+  clockify_entries_start: { "start-time-entry": "create" },
   clockify_fix_entry: { "update-time-entry": "update" },
+  clockify_entries_update: { "update-time-entry": "update" },
   clockify_entries_delete: { "delete-time-entry": "delete" },
   clockify_entries_mark_invoiced: { "mark-entries-invoiced": "state-command" },
   clockify_projects_create: { "create-project": "create" },
@@ -47,9 +50,13 @@ const metadata = {
     "archive-project-for-delete": "state-command",
     "delete-project": "delete",
   },
+  clockify_projects_delete_archived: { "delete-archived-project": "delete" },
   clockify_projects_rate_update: { "update-project-rate": "update" },
+  clockify_projects_member_hourly_rate_update: { "update-project-member-hourly-rate": "update" },
+  clockify_projects_member_cost_rate_update: { "update-project-member-cost-rate": "update" },
   clockify_projects_estimate_update: { "update-project-estimate": "update" },
   clockify_projects_memberships_update: { "update-project-memberships": "update" },
+  clockify_projects_memberships_replace: { "replace-project-memberships": "update" },
   clockify_tasks_create: { "create-task": "create" },
   clockify_tasks_update: { "update-task": "update" },
   clockify_tasks_delete: {
@@ -57,9 +64,17 @@ const metadata = {
     "delete-task": "delete",
   },
   clockify_tasks_rate_update: { "update-task-rate": "update" },
+  clockify_tasks_delete_completed: { "delete-completed-task": "delete" },
+  clockify_tasks_status_update: { "update-task-status": "update" },
+  clockify_tasks_assignees_replace: { "replace-task-assignees": "update" },
+  clockify_tasks_hourly_rate_update: { "update-task-hourly-rate": "update" },
+  clockify_tasks_cost_rate_update: { "update-task-cost-rate": "update" },
   clockify_clients_create: { "create-client": "create", "enrich-client": "update" },
+  clockify_clients_create_base: { "create-client-base": "create" },
   clockify_clients_update: { "update-client": "update" },
+  clockify_clients_archive: { "archive-client": "state-command" },
   clockify_clients_delete: { "archive-client": "state-command", "delete-client": "delete" },
+  clockify_clients_delete_archived: { "delete-archived-client": "delete" },
   clockify_tags_create: { "create-tag": "create" },
   clockify_tags_update: { "update-tag": "update" },
   clockify_tags_delete: { "delete-tag": "delete" },
@@ -426,19 +441,31 @@ const deleteProject: Handler = async (input) => {
   return id ? deleteByRead(input, "project", id, () => input.clockify.getProject(id)) : invalidInput(input);
 };
 
-const updateProjectRate: Handler = async (input) => {
+async function reconcileProjectMemberRate(
+  input: HandlerInput,
+  rateKey: "hourlyRate" | "costRate",
+): Promise<ReconciliationResult> {
   const payload = payloadOf(input.candidate);
-  const id = stringValue(payload?.projectId);
-  const key = payload?.rateKind === "COST" ? "costRate" : payload?.rateKind === "HOURLY" ? "hourlyRate" : undefined;
-  if (!id || !key || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  const projectId = stringValue(payload?.projectId);
+  const userId = stringValue(payload?.userId);
+  if (!projectId || !userId || typeof payload?.amountMinor !== "number") return invalidInput(input);
   return singleRead(input, {
     strategy: "update",
     async read() {
-      const row = await input.clockify.getProject(id);
-      return row ? candidate("project", id, row) : undefined;
+      const memberships = await input.clockify.getProjectMemberships(projectId);
+      if (memberships.truncated) return undefined;
+      const member = memberships.rows.find((row) => String(row.userId) === userId);
+      return member ? candidate("project-membership", `${projectId}:${userId}`, member) : undefined;
     },
-    matches: (item) => record(record(item.projection)?.[key])?.amount === payload.amountMinor,
+    matches: (item) => record(record(item.projection)?.[rateKey])?.amount === payload.amountMinor,
   });
+}
+
+const updateProjectRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const key = payload?.rateKind === "COST" ? "costRate" : payload?.rateKind === "HOURLY" ? "hourlyRate" : undefined;
+  if (!key) return invalidInput(input);
+  return reconcileProjectMemberRate(input, key);
 };
 
 const updateProjectEstimate: Handler = async (input) => {
@@ -455,6 +482,12 @@ const updateProjectEstimate: Handler = async (input) => {
     matches: (item) => containsExpected(item.projection, fields),
   });
 };
+
+const updateProjectMemberHourlyRate: Handler = (input) =>
+  reconcileProjectMemberRate(input, "hourlyRate");
+
+const updateProjectMemberCostRate: Handler = (input) =>
+  reconcileProjectMemberRate(input, "costRate");
 
 const updateProjectMemberships: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
@@ -475,6 +508,8 @@ const updateProjectMemberships: Handler = async (input) => {
     ),
   });
 };
+
+const replaceProjectMemberships: Handler = updateProjectMemberships;
 
 const updateTask: Handler = async (input) => {
   const payload = payloadOf(input.candidate);
@@ -523,6 +558,53 @@ const updateTaskRate: Handler = async (input) => {
       return row ? candidate("task", taskId, row) : undefined;
     },
     matches: (item) => record(record(item.projection)?.[key])?.amount === payload.amountMinor,
+  });
+};
+
+const updateTaskHourlyRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const projectId = stringValue(payload?.projectId);
+  const taskId = stringValue(payload?.taskId);
+  if (!projectId || !taskId || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getTask(projectId, taskId);
+      return row ? candidate("task", taskId, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.hourlyRate)?.amount === payload.amountMinor,
+  });
+};
+
+const updateTaskCostRate: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const projectId = stringValue(payload?.projectId);
+  const taskId = stringValue(payload?.taskId);
+  if (!projectId || !taskId || typeof payload?.amountMinor !== "number") return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    async read() {
+      const row = await input.clockify.getTask(projectId, taskId);
+      return row ? candidate("task", taskId, row) : undefined;
+    },
+    matches: (item) => record(record(item.projection)?.costRate)?.amount === payload.amountMinor,
+  });
+};
+
+const createClientBase: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const body = record(payload?.body);
+  const beforeIds = stringArray(payload?.beforeIds) ?? baselineIds(input);
+  if (!body || typeof body.name !== "string" || !beforeIds) return invalidInput(input);
+  return createClient({
+    ...input,
+    candidate: {
+      ...input.candidate,
+      operation: {
+        ...(record(input.candidate.operation) ?? {}),
+        payload: { base: body, beforeIds },
+      },
+    },
   });
 };
 
@@ -783,7 +865,10 @@ const handlers = new Map<string, Handler>([
   ["clockify_start_timer\0start-timer", startTimer],
   ["clockify_stop_timer\0stop-timer", stopTimer],
   ["clockify_log_work\0log-time-entry", createTimeEntry],
+  ["clockify_entries_create\0create-time-entry", createTimeEntry],
+  ["clockify_entries_start\0start-time-entry", startTimer],
   ["clockify_fix_entry\0update-time-entry", updateTimeEntry],
+  ["clockify_entries_update\0update-time-entry", updateTimeEntry],
   ["clockify_entries_delete\0delete-time-entry", deleteTimeEntry],
   ["clockify_entries_mark_invoiced\0mark-entries-invoiced", markEntriesInvoiced],
   ["clockify_projects_create\0create-project", createProject],
@@ -792,19 +877,31 @@ const handlers = new Map<string, Handler>([
   ["clockify_projects_archive\0archive-project", projectArchived],
   ["clockify_projects_delete\0archive-project-for-delete", projectArchived],
   ["clockify_projects_delete\0delete-project", deleteProject],
+  ["clockify_projects_delete_archived\0delete-archived-project", deleteProject],
   ["clockify_projects_rate_update\0update-project-rate", updateProjectRate],
+  ["clockify_projects_member_hourly_rate_update\0update-project-member-hourly-rate", updateProjectMemberHourlyRate],
+  ["clockify_projects_member_cost_rate_update\0update-project-member-cost-rate", updateProjectMemberCostRate],
   ["clockify_projects_estimate_update\0update-project-estimate", updateProjectEstimate],
   ["clockify_projects_memberships_update\0update-project-memberships", updateProjectMemberships],
+  ["clockify_projects_memberships_replace\0replace-project-memberships", replaceProjectMemberships],
   ["clockify_tasks_create\0create-task", createTask],
   ["clockify_tasks_update\0update-task", updateTask],
   ["clockify_tasks_delete\0complete-task-for-delete", completeTask],
   ["clockify_tasks_delete\0delete-task", deleteTask],
   ["clockify_tasks_rate_update\0update-task-rate", updateTaskRate],
+  ["clockify_tasks_delete_completed\0delete-completed-task", deleteTask],
+  ["clockify_tasks_status_update\0update-task-status", updateTask],
+  ["clockify_tasks_assignees_replace\0replace-task-assignees", updateTask],
+  ["clockify_tasks_hourly_rate_update\0update-task-hourly-rate", updateTaskHourlyRate],
+  ["clockify_tasks_cost_rate_update\0update-task-cost-rate", updateTaskCostRate],
   ["clockify_clients_create\0create-client", createClient],
   ["clockify_clients_create\0enrich-client", enrichClient],
+  ["clockify_clients_create_base\0create-client-base", createClientBase],
   ["clockify_clients_update\0update-client", updateClient],
+  ["clockify_clients_archive\0archive-client", clientArchived],
   ["clockify_clients_delete\0archive-client", clientArchived],
   ["clockify_clients_delete\0delete-client", deleteClient],
+  ["clockify_clients_delete_archived\0delete-archived-client", deleteClient],
   ["clockify_tags_create\0create-tag", createTag],
   ["clockify_tags_update\0update-tag", updateTag],
   ["clockify_tags_delete\0delete-tag", deleteTag],

@@ -23,6 +23,8 @@ import {
   sanitizeCompleteJson,
 } from "../../harness/safe-json.js";
 import { hashOperation } from "../../harness/confirmations.js";
+import type { PendingConfirmationRecord } from "../../harness/confirmations.js";
+import { v1DiscriminatorFromCapability } from "../../harness/action-discriminators.js";
 import { HOST_CALL_BUDGET_MAXIMUM } from "../../clockify/request-governor.js";
 import { successReceipt } from "../../harness/receipts.js";
 
@@ -44,6 +46,16 @@ interface OperationRunRow {
   reconciliation_json: string | null;
   capability_id: string | null;
   capability_hash: string | null;
+  origin: string | null;
+  registry_id: string | null;
+  authority_model: string | null;
+  executor_kind: string | null;
+  run_id: string | null;
+  batch_id: string | null;
+  field_provenance_json: string | null;
+  field_provenance_hash: string | null;
+  source_undo_id: string | null;
+  source_undo_hash: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -178,6 +190,20 @@ function toRun(row: OperationRunRow): OperationRun {
     ...(row.action_result_id ? { actionResultId: row.action_result_id } : {}),
     ...(row.reconciled_at ? { reconciledAt: row.reconciled_at } : {}),
     ...(row.reconciliation_json ? { reconciliation: JSON.parse(row.reconciliation_json) } : {}),
+    ...(row.origin ? { origin: row.origin as OperationRun["origin"] } : {}),
+    ...(row.registry_id ? { registryId: row.registry_id as OperationRun["registryId"] } : {}),
+    ...(row.authority_model
+      ? { authorityModel: row.authority_model as OperationRun["authorityModel"] }
+      : {}),
+    ...(row.executor_kind
+      ? { executorKind: row.executor_kind as OperationRun["executorKind"] }
+      : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.batch_id ? { batchId: row.batch_id } : {}),
+    ...(row.field_provenance_json ? { fieldProvenanceJson: row.field_provenance_json } : {}),
+    ...(row.field_provenance_hash ? { fieldProvenanceHash: row.field_provenance_hash } : {}),
+    ...(row.source_undo_id ? { sourceUndoId: row.source_undo_id } : {}),
+    ...(row.source_undo_hash ? { sourceUndoHash: row.source_undo_hash } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -214,6 +240,9 @@ function completeStartupEvidence(value: unknown): unknown {
 function hasValidPersistedOperationHash(run: OperationRun): boolean {
   const operation = run.operation;
   const confirmed = run.confirmationId !== undefined;
+  if (run.authorityModel === "preview_confirmation_v2" && run.registryId === "v2-api") {
+    return hashOperation(operation) === run.operationHash;
+  }
   if (confirmed && (!operation || typeof operation !== "object" ||
     (operation as Record<string, unknown>).operationId !== run.id ||
     (operation as Record<string, unknown>).actionName !== run.actionName)) return false;
@@ -319,6 +348,25 @@ function toSanitizedScopedOperationRun(
   };
 }
 
+/** Cross-check a persisted v2 assistant preview against its prepared operation run. */
+export function preparedAssistantPreviewMatchesConfirmation(
+  run: OperationRun,
+  record: PendingConfirmationRecord,
+): boolean {
+  if (run.status !== "prepared") return false;
+  if (record.authorityModel !== "preview_confirmation_v2" || record.registryId !== "v2-api") return false;
+  if (run.runId !== record.runId ||
+    run.registryId !== record.registryId ||
+    run.authorityModel !== record.authorityModel ||
+    run.executorKind !== record.executorKind ||
+    run.actionFingerprint !== record.actionFingerprint ||
+    run.catalogHash !== record.catalogHash ||
+    run.operationHash !== record.operationHash) {
+    return false;
+  }
+  return true;
+}
+
 export function buildOperationRunStore(ctx: StoreContext): {
   prepareOperationRun(input: PrepareOperationRunInput): string;
   markOperationExecuting(id: string): boolean;
@@ -329,6 +377,10 @@ export function buildOperationRunStore(ctx: StoreContext): {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  preparedAssistantPreviewMatchesConfirmation(
+    operationId: string,
+    record: PendingConfirmationRecord,
+  ): boolean;
   getScopedOperationRun(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined;
   listScopedOperationRuns(workspaceId: string, adminUserId: string, sessionId: string, limit?: number): SanitizedOperationRun[];
   listStartupReconciliationCandidates(): StartupReconciliationOperation[];
@@ -393,12 +445,18 @@ export function buildOperationRunStore(ctx: StoreContext): {
         ...(input.operation !== undefined ? { operation: input.operation } : {}),
         ...(input.mutationPlan ? { mutationPlan: input.mutationPlan } : {}),
       }, 1_000_000);
+      const discriminator = input.discriminator
+        ? input.discriminator
+        : v1DiscriminatorFromCapability(input.capabilityId);
       db.prepare(
         `INSERT INTO operation_runs (
            id, request_id, confirmation_id, session_id, workspace_id, admin_user_id,
            action_name, action_fingerprint, catalog_hash, operation_hash,
-           operation_json, capability_id, capability_hash, status, action_result_id, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?)`,
+           operation_json, capability_id, capability_hash, status, action_result_id,
+           origin, registry_id, authority_model, executor_kind, run_id, batch_id,
+           field_provenance_json, field_provenance_hash, source_undo_id, source_undo_hash,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         id,
         input.requestId ?? null,
@@ -413,6 +471,16 @@ export function buildOperationRunStore(ctx: StoreContext): {
         actionResultJson(operationEnvelope),
         input.capabilityId ?? null,
         input.capabilityHash ?? null,
+        discriminator.origin,
+        discriminator.registryId,
+        discriminator.authorityModel,
+        discriminator.executorKind,
+        discriminator.runId ?? null,
+        discriminator.batchId ?? null,
+        discriminator.fieldProvenanceJson ?? null,
+        discriminator.fieldProvenanceHash ?? null,
+        discriminator.sourceUndoId ?? null,
+        discriminator.sourceUndoHash ?? null,
         timestamp,
         timestamp,
       );
@@ -483,6 +551,10 @@ export function buildOperationRunStore(ctx: StoreContext): {
     getOperationRun(id) {
       const row = db.prepare("SELECT * FROM operation_runs WHERE id = ?").get(id) as OperationRunRow | undefined;
       return row ? toRun(row) : undefined;
+    },
+    preparedAssistantPreviewMatchesConfirmation(operationId, record) {
+      const run = store.getOperationRun(operationId);
+      return !!run && preparedAssistantPreviewMatchesConfirmation(run, record);
     },
     getScopedOperationRun(id, workspaceId, adminUserId, sessionId) {
       const row = db.prepare(

@@ -4,7 +4,7 @@ import { fakeListResult, type FakeContext } from "./state.js";
 export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pick<
   WorkspaceClient,
   "listClients" | "getClient" | "getClientMutationState" | "createClient" | "updateClient" | "deleteClient" | "listCurrencies" |
-  "createClientBaseAtomic" | "prepareClientUpdate" | "updateClientAtomic" | "deleteClientAtomic"
+  "createClientBaseAtomic" | "prepareClientUpdate" | "updateClientAtomic" | "archiveClientAtomic" | "deleteClientAtomic"
 > {
   const createBaseAtomic: WorkspaceClient["createClientBaseAtomic"] = async ({ name }) => {
     bump("createClientBaseAtomic");
@@ -76,6 +76,14 @@ export function makeFakeClients({ state, seed, bump, nextId }: FakeContext): Pic
     },
     prepareClientUpdate: prepareUpdate,
     updateClientAtomic: updateAtomic,
+    archiveClientAtomic: async (id, body) => {
+      bump("archiveClientAtomic");
+      const index = state.clients.findIndex((client) => client.id === id);
+      const updated = { ...(index >= 0 ? state.clients[index] : { id, name: id }), ...body, id, archived: true } as EntitySummary;
+      if (index >= 0) state.clients[index] = updated;
+      else state.clients.push(updated);
+      return updated;
+    },
     async deleteClient(id) {
       bump("deleteClient");
       state.clients = state.clients.filter((c) => c.id !== id);

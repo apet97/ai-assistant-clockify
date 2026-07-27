@@ -103,6 +103,27 @@ function validReleaseAttachments(): Pick<
 }
 
 describe("release evidence", () => {
+  it("classifies existing conclusions as historical v1 evidence and rejects v2 reuse without changing hashes", () => {
+    const attachments = validReleaseAttachments();
+    const input = {
+      sourceCandidateSha: CANDIDATE_SHA,
+      evidenceCommitSha: EVIDENCE_SHA,
+      machineConclusions: {},
+      ...attachments,
+    };
+    const reportHashes = attachments.coldVerifies.passes.map(({ reportSha256 }) => reportSha256);
+
+    expect(buildReleaseEvidence(input, "v1")).toMatchObject({
+      assistantEngine: "v1",
+      evidenceStatus: "historical",
+      validForV2: false,
+    });
+    expect(() => buildReleaseEvidence(input, "v2")).toThrow(
+      /historical v1 evidence is not valid for v2/iu,
+    );
+    expect(attachments.coldVerifies.passes.map(({ reportSha256 }) => reportSha256)).toEqual(reportHashes);
+  });
+
   it("records machine conclusions while keeping every human gate unevaluated", () => {
     const evidence = buildReleaseEvidence({
       sourceCandidateSha: CANDIDATE_SHA,
@@ -400,5 +421,180 @@ describe("release evidence", () => {
     }
     expect(onboarding).toContain("Permission level for Time tracking");
     expect(actions).toContain("page.waitForEvent(\"download\")");
+  });
+});
+
+describe("v2 release evidence", () => {
+  const { buildV2ReleaseEvidence, buildV2AuthorityEvidenceReport, V2_AUTHORITY_NOT_EVALUATED_SENTINEL } = releaseEvidenceModule;
+  const V2_CANDIDATE_SHA = "c".repeat(40);
+  const V2_EVIDENCE_SHA = "d".repeat(40);
+  const V2_CATALOG_HASH = "e".repeat(64);
+
+  function build(overrides: Partial<Parameters<typeof buildV2ReleaseEvidence>[0]> = {}) {
+    return buildV2ReleaseEvidence({
+      sourceCandidateSha: V2_CANDIDATE_SHA,
+      evidenceCommitSha: V2_EVIDENCE_SHA,
+      machineConclusions: {},
+      v2Authority: buildV2AuthorityEvidenceReport(V2_AUTHORITY_NOT_EVALUATED_SENTINEL),
+      ...overrides,
+    });
+  }
+
+  it("stays not_evaluated_until_pr15 during v1/v2 coexistence", () => {
+    const evidence = build();
+    expect(evidence.assistantEngine).toBe("v2");
+    expect(evidence.v2Authority).toEqual({ status: "not_evaluated_until_pr15" });
+  });
+
+  it("accepts a complete v2 authority evidence report once one is supplied", () => {
+    const evidence = build({
+      v2Authority: buildV2AuthorityEvidenceReport({
+        schemaVersion: 1,
+        engine: "v2",
+        candidateSha: V2_CANDIDATE_SHA,
+        registryId: "v2-api",
+        catalogHash: V2_CATALOG_HASH,
+        assistantWriteCases: 127,
+        assistantWritesPreviewOnly: true,
+        exactOperationBindingMismatches: 0,
+        preparationMutationCount: 0,
+        typedConsentDispatchCount: 0,
+        promptInjectionDispatchCount: 0,
+        intentDeclarationCallCount: 0,
+        intentCapabilityRecordCount: 0,
+        intentCapabilityClaimCount: 0,
+        duplicateConfirmationDispatchViolations: 0,
+      }),
+    });
+    expect(evidence.v2Authority.status).toBe("complete");
+  });
+
+  it("rejects a stale source candidate SHA", () => {
+    expect(() => build({ sourceCandidateSha: "not-a-sha" })).toThrow(/source candidate SHA/);
+  });
+
+  it("rejects a stale evidence commit SHA", () => {
+    expect(() => build({ evidenceCommitSha: "not-a-sha" })).toThrow(/evidence commit SHA/);
+  });
+
+  it("rejects v1 evidence substituted for the v2Authority field", () => {
+    // A v1 HistoricalV1EvidenceClassification has no `status` field at all.
+    expect(() => build({ v2Authority: { assistantEngine: "v1", evidenceStatus: "historical", validForV2: false } as never }))
+      .toThrow(/V2AuthorityEvidenceReport/);
+  });
+
+  it("wires a v2 authority evidence generation step into the release-evidence workflow", () => {
+    const release = readFileSync(resolve(".github/workflows/release-evidence.yml"), "utf8");
+    expect(release).toContain("Record v2 authority evidence");
+    expect(release).toContain("v2-authority-evidence.json");
+    expect(release).toContain('status: "not_evaluated_until_pr15"');
+    expect(release).toContain("release-v2-authority-evidence-");
+    // The record job stays checkout/npm-free (see workflow-contracts.test.ts) —
+    // this step must duplicate the sentinel inline, never shell out to tsx.
+    expect(release).not.toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+  });
+});
+
+describe("T17-G: v2 release evidence requires all three complete evaluations", () => {
+  const { buildV2ReleaseEvidence } = releaseEvidenceModule;
+  const SHA = "a".repeat(40);
+  const HASH = "b".repeat(64);
+
+  function report(overrides: Record<string, unknown> = {}) {
+    return {
+      status: "passed",
+      numerator: 10,
+      denominator: 10,
+      caseCount: 5,
+      identity: { candidateSha: SHA, catalogHash: HASH },
+      ...overrides,
+    };
+  }
+
+  function build(evaluations: Record<string, unknown> | undefined, authorityComplete = true) {
+    return buildV2ReleaseEvidence({
+      sourceCandidateSha: SHA,
+      evidenceCommitSha: "c".repeat(40),
+      machineConclusions: {},
+      v2Authority: authorityComplete
+        ? {
+            status: "complete",
+            evidence: {
+              schemaVersion: 1,
+              engine: "v2",
+              candidateSha: SHA,
+              registryId: "v2-api",
+              catalogHash: HASH,
+              assistantWriteCases: 84,
+              assistantWritesPreviewOnly: true,
+              exactOperationBindingMismatches: 0,
+              preparationMutationCount: 0,
+              typedConsentDispatchCount: 0,
+              promptInjectionDispatchCount: 0,
+              intentDeclarationCallCount: 0,
+              intentCapabilityRecordCount: 0,
+              intentCapabilityClaimCount: 0,
+              duplicateConfirmationDispatchViolations: 0,
+            },
+            conclusions: {
+              all_assistant_writes_preview_only: "passed",
+              exact_operation_binding: "passed",
+              zero_mutation_before_confirmation: "passed",
+              prompt_injection_drafts_cannot_execute: "passed",
+            },
+          }
+        : { status: "not_evaluated_until_pr15" },
+      ...(evaluations ? { evaluations } : {}),
+    } as never);
+  }
+
+  it("marks the release complete only when authority AND all three evaluations pass", () => {
+    const evidence = build({
+      apiDiscovery: report(),
+      assistantTerminal: report(),
+      writeSafety: report(),
+    });
+    expect(evidence.evaluations).toEqual({
+      apiDiscovery: "passed",
+      assistantTerminal: "passed",
+      writeSafety: "passed",
+    });
+    expect(evidence.v2EvaluationComplete).toBe(true);
+  });
+
+  it("rejects a MISSING evaluation", () => {
+    const evidence = build({ apiDiscovery: report(), assistantTerminal: report() });
+    expect(evidence.evaluations.writeSafety).toBe("rejected");
+    expect(evidence.v2EvaluationComplete).toBe(false);
+  });
+
+  it("keeps a SENTINEL evaluation non-passing without calling it rejected", () => {
+    const evidence = build({
+      apiDiscovery: { status: "not_evaluated_missing_credentials", numerator: 0, denominator: 0, caseCount: 127 },
+      assistantTerminal: report(),
+      writeSafety: report(),
+    });
+    expect(evidence.evaluations.apiDiscovery).toBe("not_evaluated_missing_credentials");
+    expect(evidence.v2EvaluationComplete).toBe(false);
+  });
+
+  it("rejects a PARTIAL score, a ZERO denominator, and a zero case count", () => {
+    expect(build({ apiDiscovery: report({ numerator: 9 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: report({ numerator: 0, denominator: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: report({ caseCount: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects a report bound to the wrong candidate SHA", () => {
+    const evidence = build({ apiDiscovery: report({ identity: { candidateSha: "d".repeat(40), catalogHash: HASH } }) });
+    expect(evidence.evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("never marks the release complete while authority evidence is the sentinel", () => {
+    const evidence = build({
+      apiDiscovery: report(),
+      assistantTerminal: report(),
+      writeSafety: report(),
+    }, false);
+    expect(evidence.v2EvaluationComplete).toBe(false);
   });
 });

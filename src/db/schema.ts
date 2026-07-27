@@ -233,7 +233,330 @@ const PRUNE_INDEX_STATEMENTS: string[] = [
     ON retention_runs(recorded_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 8;
+const CREATE_ASSISTANT_RUNS = `CREATE TABLE IF NOT EXISTS assistant_runs (
+  session_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  workspace_id TEXT NOT NULL,
+  admin_user_id TEXT NOT NULL,
+  installation_generation INTEGER NOT NULL CHECK (installation_generation >= 0),
+  auth_class TEXT NOT NULL CHECK (auth_class IN ('addon', 'api_key')),
+  original_request TEXT NOT NULL
+    CHECK (length(CAST(original_request AS BLOB)) <= 16000),
+  request_hash TEXT NOT NULL CHECK (length(request_hash) = 64),
+  phase TEXT NOT NULL CHECK (phase IN (
+    'model', 'discovering', 'executing_reads', 'preparing_writes',
+    'awaiting_confirmation', 'awaiting_clarification', 'completed', 'failed'
+  )),
+  registry_id TEXT NOT NULL CHECK (registry_id = 'v2-api'),
+  catalog_hash TEXT NOT NULL CHECK (length(catalog_hash) = 64),
+  loaded_tool_names_json TEXT NOT NULL
+    CHECK (json_valid(loaded_tool_names_json)
+      AND length(CAST(loaded_tool_names_json AS BLOB)) <= 8192),
+  used_tool_names_json TEXT NOT NULL
+    CHECK (json_valid(used_tool_names_json)
+      AND length(CAST(used_tool_names_json AS BLOB)) <= 8192),
+  continuation_json TEXT NOT NULL
+    CHECK (json_valid(continuation_json)
+      AND length(CAST(continuation_json AS BLOB)) <= 65536),
+  budget_json TEXT NOT NULL
+    CHECK (json_valid(budget_json)
+      AND length(CAST(budget_json AS BLOB)) <= 4096),
+  unfinished_operations_json TEXT NOT NULL
+    CHECK (json_valid(unfinished_operations_json)
+      AND length(CAST(unfinished_operations_json AS BLOB)) <= 16384),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, run_id),
+  UNIQUE (session_id, run_id, workspace_id, admin_user_id),
+  FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+    REFERENCES turn_runs(session_id, request_id, workspace_id, admin_user_id)
+    ON DELETE CASCADE
+)`;
+
+const SCHEMA_V9_STATEMENTS: readonly string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_turn_runs_request_scope
+    ON turn_runs(session_id, request_id, workspace_id, admin_user_id)`,
+  CREATE_ASSISTANT_RUNS,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_scope_updated
+    ON assistant_runs(
+      workspace_id, admin_user_id, session_id,
+      installation_generation, auth_class, updated_at DESC
+    )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_phase_updated
+    ON assistant_runs(phase, updated_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_runs_one_active_per_session
+    ON assistant_runs(session_id)
+    WHERE phase NOT IN ('completed', 'failed')`,
+  `CREATE TABLE IF NOT EXISTS assistant_run_request_links (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('initial', 'free_text_continuation')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, request_id),
+    CHECK (
+      (kind = 'initial' AND request_id = run_id)
+      OR (kind = 'free_text_continuation' AND request_id <> run_id)
+    ),
+    FOREIGN KEY (session_id, request_id, workspace_id, admin_user_id)
+      REFERENCES turn_runs(session_id, request_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_run_request_links_run
+    ON assistant_run_request_links(
+      workspace_id, admin_user_id, session_id, run_id, created_at
+    )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_action_results_id_scope
+    ON action_results(id, session_id, workspace_id, admin_user_id)`,
+  `CREATE TABLE IF NOT EXISTS assistant_run_result_links (
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL
+      CHECK (length(CAST(tool_call_id AS BLOB)) BETWEEN 1 AND 256),
+    action_name TEXT NOT NULL
+      CHECK (length(CAST(action_name AS BLOB)) BETWEEN 1 AND 256),
+    action_result_id TEXT NOT NULL,
+    PRIMARY KEY (session_id, run_id, sequence),
+    UNIQUE (session_id, run_id, tool_call_id),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_run_result_links_result
+    ON assistant_run_result_links(action_result_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_assistant_runs_prune_updated
+    ON assistant_runs(updated_at)`,
+];
+
+const SCHEMA_V10_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS run_events (
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL CHECK (sequence > 0),
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    event_type TEXT NOT NULL CHECK (event_type IN (
+      'run.started', 'model.started', 'model.completed',
+      'api.search_started', 'api.operations_loaded',
+      'tool.requested', 'tool.denied', 'tool.started', 'tool.completed',
+      'operation.prepared', 'operation.confirmed', 'operation.started',
+      'operation.completed', 'clarification.required', 'run.suspended',
+      'run.completed', 'run.failed'
+    )),
+    payload_json TEXT NOT NULL
+      CHECK (json_valid(payload_json)
+        AND length(CAST(payload_json AS BLOB)) <= 65536),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, run_id, sequence),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_run_events_scope_sequence
+    ON run_events(workspace_id, admin_user_id, session_id, run_id, sequence)`,
+  `CREATE INDEX IF NOT EXISTS idx_run_events_prune_created
+    ON run_events(created_at)`,
+];
+
+export const LATEST_SCHEMA_VERSION = 12;
+
+const SCHEMA_V12_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS entity_references (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL
+      CHECK (length(CAST(entity_type AS BLOB)) BETWEEN 1 AND 128),
+    external_id TEXT NOT NULL
+      CHECK (length(CAST(external_id AS BLOB)) BETWEEN 1 AND 256),
+    display_name TEXT NOT NULL
+      CHECK (length(CAST(display_name AS BLOB)) BETWEEN 1 AND 512),
+    bindings_json TEXT NOT NULL
+      CHECK (json_valid(bindings_json)
+        AND length(CAST(bindings_json AS BLOB)) <= 8192),
+    binding_fingerprint TEXT NOT NULL CHECK (length(binding_fingerprint) = 64),
+    source_run_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('active', 'stale', 'deleted')),
+    verified_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (session_id, workspace_id, admin_user_id, entity_type, external_id),
+    FOREIGN KEY (session_id, source_run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_entity_references_scope_recent
+    ON entity_references(
+      workspace_id, admin_user_id, session_id, status, verified_at DESC
+    )`,
+  `CREATE TABLE IF NOT EXISTS pending_clarifications (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    original_tool_name TEXT NOT NULL
+      CHECK (length(CAST(original_tool_name AS BLOB)) BETWEEN 1 AND 256),
+    partial_arguments_json TEXT NOT NULL
+      CHECK (json_valid(partial_arguments_json)
+        AND length(CAST(partial_arguments_json AS BLOB)) <= 16384),
+    missing_field TEXT NOT NULL
+      CHECK (length(CAST(missing_field AS BLOB)) BETWEEN 1 AND 256),
+    candidates_json TEXT NOT NULL
+      CHECK (json_valid(candidates_json)
+        AND length(CAST(candidates_json AS BLOB)) <= 16384),
+    status TEXT NOT NULL CHECK (status IN (
+      'pending', 'resolving', 'resolved', 'continued', 'expired', 'cancelled'
+    )),
+    selected_option_id TEXT,
+    terminal_reason TEXT CHECK (terminal_reason IS NULL OR terminal_reason IN (
+      'selected_option', 'free_text_continuation', 'expired', 'superseded',
+      'stale_replaced', 'user_cancelled'
+    )),
+    action_result_id TEXT,
+    operation_id TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    resolved_at TEXT,
+    CHECK (
+      (status IN ('pending', 'resolving')
+        AND selected_option_id IS NULL AND terminal_reason IS NULL
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NULL)
+      OR
+      (status = 'resolved'
+        AND selected_option_id IS NOT NULL
+        AND terminal_reason = 'selected_option'
+        AND action_result_id IS NOT NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'continued'
+        AND selected_option_id IS NULL
+        AND terminal_reason = 'free_text_continuation'
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'expired'
+        AND selected_option_id IS NULL
+        AND terminal_reason = 'expired'
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+      OR
+      (status = 'cancelled'
+        AND selected_option_id IS NULL
+        AND terminal_reason IN ('superseded', 'stale_replaced', 'user_cancelled')
+        AND action_result_id IS NULL AND operation_id IS NULL
+        AND resolved_at IS NOT NULL)
+    ),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id, session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES operation_runs(id, session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_clarifications_one_active_per_run
+    ON pending_clarifications(session_id, run_id)
+    WHERE status IN ('pending', 'resolving')`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_scope_expires
+    ON pending_clarifications(
+      workspace_id, admin_user_id, session_id, status, expires_at
+    )`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_result
+    ON pending_clarifications(action_result_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_operation
+    ON pending_clarifications(operation_id)`,
+];
+
+const SCHEMA_V11_STATEMENTS: readonly string[] = [
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_confirmations_id_operation_scope
+    ON pending_confirmations(
+      id, operation_id, session_id, run_id, workspace_id, admin_user_id
+    )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_operation_runs_id_scope
+    ON operation_runs(id, session_id, run_id, workspace_id, admin_user_id)`,
+  `CREATE TABLE IF NOT EXISTS confirmation_batches (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    ordered_tuple_hash TEXT NOT NULL CHECK (length(ordered_tuple_hash) = 64),
+    status TEXT NOT NULL CHECK (status IN (
+      'pending', 'executing', 'succeeded', 'partial', 'definitive_failed',
+      'outcome_unknown', 'cancelled', 'expired'
+    )),
+    current_index INTEGER NOT NULL DEFAULT 0 CHECK (current_index >= 0),
+    action_result_id TEXT,
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE (id, session_id, run_id, workspace_id, admin_user_id),
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_confirmation_batches_one_active_per_run
+    ON confirmation_batches(session_id, run_id)
+    WHERE status IN ('pending', 'executing')`,
+  `CREATE INDEX IF NOT EXISTS idx_confirmation_batches_scope_expires
+    ON confirmation_batches(workspace_id, admin_user_id, session_id, expires_at)`,
+  `CREATE TABLE IF NOT EXISTS confirmation_batch_items (
+    batch_id TEXT NOT NULL,
+    item_index INTEGER NOT NULL CHECK (item_index >= 0),
+    session_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    confirmation_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN (
+      'pending', 'executing', 'succeeded', 'definitive_failed',
+      'outcome_unknown', 'cancelled'
+    )),
+    action_result_id TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    PRIMARY KEY (batch_id, item_index),
+    UNIQUE (confirmation_id),
+    UNIQUE (operation_id),
+    FOREIGN KEY (batch_id, session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES confirmation_batches(
+        id, session_id, run_id, workspace_id, admin_user_id
+      ) ON DELETE CASCADE,
+    FOREIGN KEY (
+      confirmation_id, operation_id, session_id, run_id, workspace_id, admin_user_id
+    ) REFERENCES pending_confirmations(
+      id, operation_id, session_id, run_id, workspace_id, admin_user_id
+    ) ON DELETE RESTRICT,
+    FOREIGN KEY (operation_id, session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES operation_runs(id, session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT,
+    FOREIGN KEY (action_result_id, session_id, workspace_id, admin_user_id)
+      REFERENCES action_results(id, session_id, workspace_id, admin_user_id)
+      ON DELETE RESTRICT
+  )`,
+];
 
 const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonly string[] }> = [
   {
@@ -403,6 +726,10 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 6, statements: [] },
   { version: 7, statements: [] },
   { version: 8, statements: [CREATE_LIFECYCLE_AUTHORITY_WATERMARKS] },
+  { version: 9, statements: SCHEMA_V9_STATEMENTS },
+  { version: 10, statements: SCHEMA_V10_STATEMENTS },
+  { version: 11, statements: [] },
+  { version: 12, statements: SCHEMA_V12_STATEMENTS },
 ];
 
 export function migrate(db: Database.Database): void {
@@ -450,6 +777,8 @@ export function migrate(db: Database.Database): void {
       else if (migration.version === 5) migrateToV5(db);
       else if (migration.version === 6) migrateToV6(db);
       else if (migration.version === 7) migrateToV7(db);
+      else if (migration.version === 11) migrateToV11(db);
+      else if (migration.version === 12) migrateToV12(db);
       else for (const statement of migration.statements) db.prepare(statement).run();
       db.pragma(`user_version = ${migration.version}`);
     })();
@@ -482,6 +811,10 @@ export function migrate(db: Database.Database): void {
   // behind in operation_runs. Install them only after the additive canonical-
   // result ownership column above is guaranteed to exist.
   ensureConfirmationOperationTerminalTriggers(db);
+  // Repairs a v12 database opened by an earlier build before the terminal-scrub
+  // triggers were added; idempotent (DROP TRIGGER IF EXISTS + recreate) so a
+  // normal migration rerun is a no-op.
+  ensureClarificationTerminalScrubTriggers(db);
   // Retention-prune indexes run last: claimed_at exists and idempotency_keys is
   // in its final (rebuilt) shape, so indexing those columns can't throw.
   for (const statement of PRUNE_INDEX_STATEMENTS) {
@@ -1666,4 +1999,255 @@ function addColumnIfMissing(
   if (!cols.some((c) => c.name === column)) {
     db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`).run();
   }
+}
+
+/**
+ * Closed v2 confirmation discriminators, scoped composite keys, and exact-batch
+ * tables. Backfill classifies v1 rows from persisted capability links only.
+ */
+function migrateToV11(db: Database.Database): void {
+  for (const table of ["pending_confirmations", "operation_runs"] as const) {
+    addColumnIfMissing(
+      db,
+      table,
+      "origin",
+      "TEXT CHECK (origin IS NULL OR origin IN ('assistant','direct_ui','system','live_test'))",
+    );
+    addColumnIfMissing(
+      db,
+      table,
+      "registry_id",
+      "TEXT CHECK (registry_id IS NULL OR registry_id IN ('v1-internal','v2-api','v2-local'))",
+    );
+    addColumnIfMissing(
+      db,
+      table,
+      "authority_model",
+      "TEXT CHECK (authority_model IS NULL OR authority_model IN ('legacy_v1','intent_capability_v1','preview_confirmation_v2','trusted_direct_v2','undo_v2'))",
+    );
+    addColumnIfMissing(
+      db,
+      table,
+      "executor_kind",
+      "TEXT CHECK (executor_kind IS NULL OR executor_kind IN ('legacy_v1','prepared_safe_write','risky_commit','direct_safe_write','undo_commit'))",
+    );
+    addColumnIfMissing(db, table, "run_id", "TEXT");
+    addColumnIfMissing(db, table, "batch_id", "TEXT");
+  }
+  addColumnIfMissing(
+    db,
+    "operation_runs",
+    "field_provenance_json",
+    "TEXT CHECK (field_provenance_json IS NULL OR (json_valid(field_provenance_json) AND length(CAST(field_provenance_json AS BLOB)) <= 65536))",
+  );
+  addColumnIfMissing(
+    db,
+    "operation_runs",
+    "field_provenance_hash",
+    "TEXT CHECK (field_provenance_hash IS NULL OR length(field_provenance_hash) = 64)",
+  );
+  addColumnIfMissing(db, "operation_runs", "source_undo_id", "TEXT");
+  addColumnIfMissing(
+    db,
+    "operation_runs",
+    "source_undo_hash",
+    "TEXT CHECK (source_undo_hash IS NULL OR length(source_undo_hash) = 64)",
+  );
+
+  db.exec(`
+    UPDATE pending_confirmations
+       SET origin = 'assistant',
+           registry_id = 'v1-internal',
+           authority_model = CASE
+             WHEN capability_id IS NOT NULL THEN 'intent_capability_v1'
+             ELSE 'legacy_v1'
+           END,
+           executor_kind = 'legacy_v1'
+     WHERE origin IS NULL;
+
+    UPDATE operation_runs
+       SET origin = 'assistant',
+           registry_id = 'v1-internal',
+           authority_model = CASE
+             WHEN capability_id IS NOT NULL THEN 'intent_capability_v1'
+             ELSE 'legacy_v1'
+           END,
+           executor_kind = 'legacy_v1'
+     WHERE origin IS NULL;
+  `);
+
+  for (const statement of SCHEMA_V11_STATEMENTS) {
+    db.prepare(statement).run();
+  }
+
+  ensureDiscriminatorMatrixTriggers(db);
+}
+
+/**
+ * New tables only (no additive columns on existing tables), so the migration
+ * is the plain statement list plus the scrub triggers SQLite's CHECK
+ * constraints cannot express (terminal-row JSON scrubbing spans an
+ * INSERT/UPDATE-time comparison, not a static per-row shape).
+ */
+function migrateToV12(db: Database.Database): void {
+  for (const statement of SCHEMA_V12_STATEMENTS) {
+    db.prepare(statement).run();
+  }
+  ensureClarificationTerminalScrubTriggers(db);
+}
+
+function ensureClarificationTerminalScrubTriggers(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS pending_clarifications_terminal_scrub_insert;
+    DROP TRIGGER IF EXISTS pending_clarifications_terminal_scrub_update;
+
+    CREATE TRIGGER pending_clarifications_terminal_scrub_insert
+      BEFORE INSERT ON pending_clarifications
+      WHEN NEW.status IN ('resolved', 'continued', 'expired', 'cancelled')
+       AND (NEW.partial_arguments_json <> '{}' OR NEW.candidates_json <> '[]')
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_clarification_not_scrubbed');
+      END;
+
+    CREATE TRIGGER pending_clarifications_terminal_scrub_update
+      BEFORE UPDATE OF status, partial_arguments_json, candidates_json
+      ON pending_clarifications
+      WHEN NEW.status IN ('resolved', 'continued', 'expired', 'cancelled')
+       AND (NEW.partial_arguments_json <> '{}' OR NEW.candidates_json <> '[]')
+      BEGIN
+        SELECT RAISE(ABORT, 'terminal_clarification_not_scrubbed');
+      END;
+  `);
+}
+
+function ensureDiscriminatorMatrixTriggers(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS pending_confirmations_discriminator_insert;
+    DROP TRIGGER IF EXISTS pending_confirmations_discriminator_update;
+    DROP TRIGGER IF EXISTS operation_runs_discriminator_insert;
+    DROP TRIGGER IF EXISTS operation_runs_discriminator_update;
+
+    CREATE TRIGGER pending_confirmations_discriminator_insert
+      BEFORE INSERT ON pending_confirmations
+      WHEN NEW.origin IS NULL OR NEW.registry_id IS NULL OR NEW.authority_model IS NULL
+           OR NEW.executor_kind IS NULL
+           OR NEW.authority_model IN ('trusted_direct_v2', 'undo_v2')
+           OR NOT (
+             (NEW.registry_id = 'v1-internal'
+              AND NEW.authority_model IN ('legacy_v1', 'intent_capability_v1')
+              AND NEW.executor_kind = 'legacy_v1')
+             OR (NEW.origin = 'assistant'
+                 AND NEW.registry_id = 'v2-api'
+                 AND NEW.authority_model = 'preview_confirmation_v2'
+                 AND NEW.executor_kind IN ('prepared_safe_write', 'risky_commit')
+                 AND NEW.run_id IS NOT NULL)
+           )
+      BEGIN
+        SELECT RAISE(ABORT, 'discriminator_matrix_invalid');
+      END;
+
+    CREATE TRIGGER pending_confirmations_discriminator_update
+      BEFORE UPDATE OF origin, registry_id, authority_model, executor_kind, run_id, batch_id
+      ON pending_confirmations
+      WHEN NEW.origin IS NULL OR NEW.registry_id IS NULL OR NEW.authority_model IS NULL
+           OR NEW.executor_kind IS NULL
+           OR NEW.authority_model IN ('trusted_direct_v2', 'undo_v2')
+           OR NOT (
+             (NEW.registry_id = 'v1-internal'
+              AND NEW.authority_model IN ('legacy_v1', 'intent_capability_v1')
+              AND NEW.executor_kind = 'legacy_v1')
+             OR (NEW.origin = 'assistant'
+                 AND NEW.registry_id = 'v2-api'
+                 AND NEW.authority_model = 'preview_confirmation_v2'
+                 AND NEW.executor_kind IN ('prepared_safe_write', 'risky_commit')
+                 AND NEW.run_id IS NOT NULL)
+           )
+      BEGIN
+        SELECT RAISE(ABORT, 'discriminator_matrix_invalid');
+      END;
+
+    CREATE TRIGGER operation_runs_discriminator_insert
+      BEFORE INSERT ON operation_runs
+      WHEN NEW.origin IS NULL OR NEW.registry_id IS NULL OR NEW.authority_model IS NULL
+           OR NEW.executor_kind IS NULL
+           OR NOT (
+             (NEW.registry_id = 'v1-internal'
+              AND NEW.authority_model IN ('legacy_v1', 'intent_capability_v1')
+              AND NEW.executor_kind = 'legacy_v1')
+             OR (NEW.origin = 'assistant'
+                 AND NEW.registry_id = 'v2-api'
+                 AND NEW.authority_model = 'preview_confirmation_v2'
+                 AND NEW.executor_kind IN ('prepared_safe_write', 'risky_commit')
+                 AND NEW.run_id IS NOT NULL
+                 AND NEW.field_provenance_json IS NOT NULL
+                 AND json_valid(NEW.field_provenance_json)
+                 AND length(CAST(NEW.field_provenance_json AS BLOB)) <= 65536
+                 AND NEW.field_provenance_hash IS NOT NULL
+                 AND length(NEW.field_provenance_hash) = 64
+                 AND EXISTS (
+                   SELECT 1 FROM assistant_runs r
+                    WHERE r.session_id = NEW.session_id
+                      AND r.run_id = NEW.run_id
+                      AND r.workspace_id = NEW.workspace_id
+                      AND r.admin_user_id = NEW.admin_user_id
+                 ))
+             OR (NEW.origin IN ('direct_ui', 'system', 'live_test')
+                 AND NEW.registry_id IN ('v2-api', 'v2-local')
+                 AND NEW.authority_model = 'trusted_direct_v2'
+                 AND NEW.executor_kind = 'direct_safe_write')
+             OR (NEW.origin IN ('direct_ui', 'system', 'live_test')
+                 AND NEW.registry_id = 'v2-local'
+                 AND NEW.authority_model = 'undo_v2'
+                 AND NEW.executor_kind = 'undo_commit'
+                 AND NEW.source_undo_id IS NOT NULL
+                 AND NEW.source_undo_hash IS NOT NULL
+                 AND length(NEW.source_undo_hash) = 64)
+           )
+      BEGIN
+        SELECT RAISE(ABORT, 'discriminator_matrix_invalid');
+      END;
+
+    CREATE TRIGGER operation_runs_discriminator_update
+      BEFORE UPDATE OF origin, registry_id, authority_model, executor_kind, run_id, batch_id,
+                       field_provenance_json, field_provenance_hash, source_undo_id, source_undo_hash
+      ON operation_runs
+      WHEN NEW.origin IS NULL OR NEW.registry_id IS NULL OR NEW.authority_model IS NULL
+           OR NEW.executor_kind IS NULL
+           OR NOT (
+             (NEW.registry_id = 'v1-internal'
+              AND NEW.authority_model IN ('legacy_v1', 'intent_capability_v1')
+              AND NEW.executor_kind = 'legacy_v1')
+             OR (NEW.origin = 'assistant'
+                 AND NEW.registry_id = 'v2-api'
+                 AND NEW.authority_model = 'preview_confirmation_v2'
+                 AND NEW.executor_kind IN ('prepared_safe_write', 'risky_commit')
+                 AND NEW.run_id IS NOT NULL
+                 AND NEW.field_provenance_json IS NOT NULL
+                 AND json_valid(NEW.field_provenance_json)
+                 AND length(CAST(NEW.field_provenance_json AS BLOB)) <= 65536
+                 AND NEW.field_provenance_hash IS NOT NULL
+                 AND length(NEW.field_provenance_hash) = 64
+                 AND EXISTS (
+                   SELECT 1 FROM assistant_runs r
+                    WHERE r.session_id = NEW.session_id
+                      AND r.run_id = NEW.run_id
+                      AND r.workspace_id = NEW.workspace_id
+                      AND r.admin_user_id = NEW.admin_user_id
+                 ))
+             OR (NEW.origin IN ('direct_ui', 'system', 'live_test')
+                 AND NEW.registry_id IN ('v2-api', 'v2-local')
+                 AND NEW.authority_model = 'trusted_direct_v2'
+                 AND NEW.executor_kind = 'direct_safe_write')
+             OR (NEW.origin IN ('direct_ui', 'system', 'live_test')
+                 AND NEW.registry_id = 'v2-local'
+                 AND NEW.authority_model = 'undo_v2'
+                 AND NEW.executor_kind = 'undo_commit'
+                 AND NEW.source_undo_id IS NOT NULL
+                 AND NEW.source_undo_hash IS NOT NULL
+                 AND length(NEW.source_undo_hash) = 64)
+           )
+      BEGIN
+        SELECT RAISE(ABORT, 'discriminator_matrix_invalid');
+      END;
+  `);
 }

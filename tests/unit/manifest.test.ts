@@ -59,7 +59,7 @@ describe("manifest", () => {
     const contractPath = fileURLToPath(new URL("../../docs/ENDPOINT_SCOPE_CONTRACT.md", import.meta.url));
     const contract = readFileSync(contractPath, "utf8");
 
-    expect(contract).toContain("Generated inventory: **118 distinct adapter request shapes**");
+    expect(contract).toContain("Generated inventory: **126 distinct adapter request shapes**, **171 catalog actions**");
     expect(contract).toContain("`API GET /workspaces/{workspaceId}/invoices/{id}/export`");
   });
 
@@ -77,14 +77,14 @@ describe("manifest", () => {
   });
 
   it("fails closed when RestCore calls escape the scanned adapter root or use call for a mutation", () => {
-    const generatorPath = fileURLToPath(new URL("../../scripts/generate-endpoint-scope-contract.ts", import.meta.url));
+    const scannerPath = fileURLToPath(new URL("../../scripts/lib/adapter-endpoints.ts", import.meta.url));
     const workspaceAdapterPath = fileURLToPath(new URL("../../src/clockify/rest-workspace.ts", import.meta.url));
-    const generator = readFileSync(generatorPath, "utf8");
+    const scanner = readFileSync(scannerPath, "utf8");
     const workspaceAdapter = readFileSync(workspaceAdapterPath, "utf8");
 
-    expect(generator).toContain("RestCore callsite outside scanned adapter root");
-    expect(generator).toContain("core.call requires a safe read method");
-    expect(generator).toContain('operation === "postQuery"');
+    expect(scanner).toContain("RestCore callsite outside scanned adapter root");
+    expect(scanner).toContain("core.call requires a safe read method");
+    expect(scanner).toContain('operation === "postQuery"');
     expect(workspaceAdapter).not.toMatch(/\bcore\.(?:call|postQuery|mutate|paginate|paginateEnvelope|getBinary)\s*\(/u);
     expect(workspaceAdapter).toContain("timeEntryRest.deleteTimeEntryAtomic(i)");
   });

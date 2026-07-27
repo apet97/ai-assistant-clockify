@@ -30,6 +30,7 @@ import type { ModelClient, ToolCall } from "../src/assistant/model-client.js";
 import type { ActionContext, ActionResult } from "../src/harness/action.js";
 import { commitConfirmedOperation, executeAction } from "../src/harness/actions.js";
 import { getAction } from "../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
 import { errorReceipt } from "../src/harness/receipts.js";
 import { requiresConfirmation } from "../src/harness/risk.js";
@@ -133,7 +134,7 @@ async function runLoop(ctx: ActionContext, modelClient: ModelClient, message: st
     turn = await runAgentTurn({
       modelClient,
       messages: resumeMessages(state, receipt),
-      tools: toolsForModel(),
+      tools: toolsForModel(INTERNAL_ACTION_CATALOG),
       runAction,
     });
   }

@@ -11,6 +11,14 @@ import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { APPROVAL_PENDING_BATCH_MAX } from "../safety-limits.js";
 import { isJournalDegradedStep } from "../mutation-workflow.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiExposure,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Typed approval workflows (goclmcp §2.11). Reads (list/get) execute
@@ -24,6 +32,192 @@ import { isJournalDegradedStep } from "../mutation-workflow.js";
  */
 
 const AP = "approvals" as const;
+
+type ApprovalActionName =
+  | "clockify_approvals_list"
+  | "clockify_approvals_get"
+  | "clockify_approvals_submit"
+  | "clockify_approvals_approve"
+  | "clockify_approvals_approve_pending"
+  | "clockify_approvals_reject"
+  | "clockify_approvals_withdraw"
+  | "clockify_approvals_resubmit";
+
+const APPROVAL_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function approvalEndpointKey(access: ApiAccess, method: ApiMethod, path: string): string {
+  return [access, "api", method, path, "approvals.ts"].join("\0");
+}
+
+function approvalMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function approvalApiMetadata(input: {
+  actionName: ApprovalActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: APPROVAL_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function approvalInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: APPROVAL_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const approvalEndpoint = Object.freeze({
+  list: approvalEndpointKey("read", "GET", "/workspaces/{workspaceId}/approval-requests"),
+  submit: approvalEndpointKey("write", "POST", "/workspaces/{workspaceId}/approval-requests"),
+  status: approvalEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/approval-requests/{id}"),
+  resubmit: approvalEndpointKey("write", "POST", "/workspaces/{workspaceId}/approval-requests/resubmit-entries-for-approval"),
+});
+
+const APPROVAL_API_METADATA = Object.freeze({
+  clockify_approvals_list: approvalApiMetadata({
+    actionName: "clockify_approvals_list",
+    operationId: "getApprovalRequests",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/approval-requests",
+    access: "read",
+    primary: approvalEndpoint.list,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_approvals_get: approvalInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one approval request by scanning the approval-request list because Clockify exposes no GET approval-by-id operation; it is not a fabricated get-one operation.",
+    primary: [approvalEndpoint.list],
+    support: [],
+  }),
+  clockify_approvals_submit: approvalApiMetadata({
+    actionName: "clockify_approvals_submit",
+    operationId: "createApprrovalRequest",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/approval-requests",
+    access: "write",
+    primary: approvalEndpoint.submit,
+    support: [approvalEndpoint.list],
+    materialFields: [
+      approvalMaterialField("/period", "Period", "text", true),
+      approvalMaterialField("/periodStart", "Period start", "text", true),
+    ],
+  }),
+  clockify_approvals_approve: approvalApiMetadata({
+    actionName: "clockify_approvals_approve",
+    operationId: "updateApprovalStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/approval-requests/{id}",
+    access: "write",
+    primary: approvalEndpoint.status,
+    support: [approvalEndpoint.list],
+    materialFields: [
+      approvalMaterialField("/id", "Approval", "entity", true),
+      approvalMaterialField("/state", "State", "text", true),
+      approvalMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_approvals_approve_pending: approvalInternalMetadata({
+    exposure: "composite",
+    reason: "May approve up to 18 requests through independent status PATCHes, so the current approve-all loop is not one atomic API operation; use the single-request approval operation.",
+    primary: [approvalEndpoint.status],
+    support: [approvalEndpoint.list],
+  }),
+  clockify_approvals_reject: approvalApiMetadata({
+    actionName: "clockify_approvals_reject",
+    operationId: "updateApprovalStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/approval-requests/{id}",
+    access: "write",
+    primary: approvalEndpoint.status,
+    support: [approvalEndpoint.list],
+    materialFields: [
+      approvalMaterialField("/id", "Approval", "entity", true),
+      approvalMaterialField("/state", "State", "text", true),
+      approvalMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_approvals_withdraw: approvalApiMetadata({
+    actionName: "clockify_approvals_withdraw",
+    operationId: "updateApprovalStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/approval-requests/{id}",
+    access: "write",
+    primary: approvalEndpoint.status,
+    support: [approvalEndpoint.list],
+    materialFields: [
+      approvalMaterialField("/id", "Approval", "entity", true),
+      approvalMaterialField("/state", "State", "text", true),
+      approvalMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_approvals_resubmit: approvalApiMetadata({
+    actionName: "clockify_approvals_resubmit",
+    operationId: "resubmitApprovalRequest",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/approval-requests/resubmit-entries-for-approval",
+    access: "write",
+    primary: approvalEndpoint.resubmit,
+    support: [approvalEndpoint.list],
+    materialFields: [
+      approvalMaterialField("/approvalId", "Approval", "entity", true),
+      approvalMaterialField("/period", "Period", "text", true),
+      approvalMaterialField("/periodStart", "Period start", "text", true),
+    ],
+  }),
+} satisfies Readonly<Record<ApprovalActionName, ApiActionMetadataCarrier>>);
+
 const approvalCreateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const approvalStateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["state-command"] });
 
@@ -77,6 +271,7 @@ const BAD_PERIOD_START = (raw: string): string =>
   `I couldn't make sense of the period start "${raw}" — give me a calendar date (YYYY-MM-DD) or something like this week, last week, or next monday.`;
 
 const listApprovals = defineReadAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_list,
   name: "clockify_approvals_list",
   description: "List approval requests (status filter: PENDING / APPROVED / WITHDRAWN_APPROVAL).",
   group: AP,
@@ -88,6 +283,7 @@ const listApprovals = defineReadAction({
 });
 
 const getApproval = defineReadAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_get,
   name: "clockify_approvals_get",
   description: "Fetch a single approval request by id.",
   group: AP,
@@ -99,6 +295,7 @@ const getApproval = defineReadAction({
 });
 
 const submitApproval = defineRiskyAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_submit,
   name: "clockify_approvals_submit",
   description:
     "Submit ONE timesheet period for approval. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` — YYYY-MM-DD or a relative day (next monday, June 1), resolved server-side; do NOT guess a calendar date. Elevated write: previews and requires confirmation. Submit one period per call.",
@@ -168,8 +365,13 @@ const submitApproval = defineRiskyAction({
 });
 
 /** Build an approve/reject/withdraw action — all PATCH the request state (external side effect). */
-function stateAction(name: string, label: string, state: string): ActionDefinition {
+function stateAction(
+  name: "clockify_approvals_approve" | "clockify_approvals_reject",
+  label: string,
+  state: string,
+): ActionDefinition {
   return defineRiskyAction({
+    ...APPROVAL_API_METADATA[name],
     name,
     description: `${label} an approval request. External side effect (notifies the owner) — previews and requires confirmation.`,
     group: AP,
@@ -269,6 +471,7 @@ function approvePendingPreDispatchStopped(detail: unknown): boolean {
 }
 
 const approvePending = defineRiskyAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_approve_pending,
   name: "clockify_approvals_approve_pending",
   description:
     "Approve ALL currently pending timesheets. Takes no ids: the harness lists the complete pending set server-side, binds every exact approval to one preview, and only the preview button can execute it. Never ask for typed confirmation and never call the single-id approval action for an approve-all request.",
@@ -467,6 +670,7 @@ const approvePending = defineRiskyAction({
 });
 
 const withdraw = defineRiskyAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_withdraw,
   name: "clockify_approvals_withdraw",
   description: "Withdraw a submitted or approved approval request. External side effect — previews and requires confirmation.",
   group: AP,
@@ -517,6 +721,7 @@ const withdraw = defineRiskyAction({
 });
 
 const resubmit = defineRiskyAction({
+  ...APPROVAL_API_METADATA.clockify_approvals_resubmit,
   name: "clockify_approvals_resubmit",
   description:
     "Resubmit the caller's rejected/withdrawn entries for ONE approval period. Pass `week` ('this_week' or 'last_week') and the harness computes the period start, OR an explicit `periodStart` — YYYY-MM-DD or a relative day (next monday, June 1), resolved server-side; do NOT guess a calendar date. Bulk external side effect — previews and requires confirmation.",

@@ -23,6 +23,10 @@ export interface PredeployBackupGateInput {
   backupSha256: string;
   backupBytes: number;
   checksumSha256: string;
+  /** The database this deploy is protecting, matched against the backup's own
+   * recorded `metadata.source`. Required: with two databases on the volume a
+   * backup of the WRONG one passes every other check in this gate. */
+  expectedSourceDatabasePath: string;
   metadata: unknown;
   restoreEvidence: unknown;
 }
@@ -72,6 +76,17 @@ export function validatePredeployBackupGate(
     || metadata.sha256 !== input.backupSha256
     || metadata.bytes !== input.backupBytes
   ) throw new Error("predeploy backup metadata does not bind the backup bytes");
+  // `backupDatabase` has always RECORDED metadata.source, but no gate read it.
+  // Once two databases exist on the volume -- the v1 file and the new v2 file --
+  // a perfectly valid backup OF THE WRONG DATABASE passes every other check
+  // here: correct checksum, correct byte count, clean integrity, real schema.
+  // The deploy must name which database it is protecting.
+  if (typeof metadata.source !== "string" || metadata.source.length === 0) {
+    throw new Error("predeploy backup metadata does not record its source database");
+  }
+  if (metadata.source !== input.expectedSourceDatabasePath) {
+    throw new Error("predeploy backup was taken from a different database than this deploy protects");
+  }
   const dataAsOf = Date.parse(exactIso(metadata.dataAsOf, "predeploy backup dataAsOf"));
   const backupCreatedAt = Date.parse(exactIso(metadata.createdAt, "predeploy backup createdAt"));
 
@@ -169,6 +184,9 @@ async function main(): Promise<void> {
     backupSha256: backup.sha256,
     backupBytes: backup.bytes,
     checksumSha256,
+    // The database currently in service is the one this deploy must have a
+    // backup of -- never the new target path a cutover is moving TO.
+    expectedSourceDatabasePath: required("PREDEPLOY_SOURCE_DATABASE_PATH"),
     metadata: readJson(metadataPath, "predeploy backup metadata"),
     restoreEvidence: readJson(restorePath, "predeploy restore evidence"),
   }, { now: gateNow });

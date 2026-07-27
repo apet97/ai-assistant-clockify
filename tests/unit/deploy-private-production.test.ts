@@ -1,3 +1,6 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   assertRollbackCoverage,
@@ -31,6 +34,7 @@ function expectExactRailwayTarget(args: string[]): void {
 
 const releaseEnvironment = (): NodeJS.ProcessEnv => ({
   RELEASE_STAGING: process.cwd(),
+  ROLLBACK_SOURCE_DIR: rollbackSourceDir,
   RELEASE_SHA: "a".repeat(40),
   RELEASE_BUILD_HASH: "b".repeat(64),
   RELEASE_SOURCE_BINDING_SHA256: "c".repeat(64),
@@ -39,15 +43,24 @@ const releaseEnvironment = (): NodeJS.ProcessEnv => ({
   SELECTED_LLM_MODEL: "deepseek-v4-pro",
   SELECTED_REASONING_EFFORT: "unset",
   SELECTED_THINKING_MODE: "disabled",
+  SELECTED_ASSISTANT_ENGINE: "v2",
+  SELECTED_DATABASE_PATH: "/data/ai-assistant-v2.sqlite",
+  SELECTED_DATABASE_PATH_DISPOSITION: "new_unused",
 });
 
+// The v1 deployment this cutover replaces: engine v1, the v1 database file.
 const priorVariables = {
   RELEASE_SHA: "1".repeat(40),
   RELEASE_BUILD_HASH: "2".repeat(64),
   RELEASE_SOURCE_BINDING_SHA256: "3".repeat(64),
   LLM_MODEL: "deepseek-v4-pro",
   LLM_THINKING_MODE: "disabled",
+  ASSISTANT_ENGINE: "v1",
+  DATABASE_PATH: "/data/ai-assistant.sqlite",
 };
+
+const rollbackSourceDir = mkdtempSync(join(tmpdir(), "rollback-source-"));
+const noopVerifier = (): void => {};
 
 describe("private production deployment transaction", () => {
   it("captures only the allowlisted nonsecret release and model settings", () => {
@@ -67,28 +80,123 @@ describe("private production deployment transaction", () => {
   });
 
   it("builds the exact variable mutation without blank model settings", () => {
-    expect(desiredReleaseVariables({
-      RELEASE_SHA: "a".repeat(40),
-      RELEASE_BUILD_HASH: "b".repeat(64),
-      RELEASE_SOURCE_BINDING_SHA256: "c".repeat(64),
-      SELECTED_LLM_MODEL: "deepseek-v4-pro",
-      SELECTED_REASONING_EFFORT: "unset",
-      SELECTED_THINKING_MODE: "disabled",
-    })).toEqual({
+    expect(desiredReleaseVariables(releaseEnvironment(), priorVariables)).toEqual({
       RELEASE_SHA: "a".repeat(40),
       RELEASE_BUILD_HASH: "b".repeat(64),
       RELEASE_SOURCE_BINDING_SHA256: "c".repeat(64),
       LLM_MODEL: "deepseek-v4-pro",
       LLM_THINKING_MODE: "disabled",
+      ASSISTANT_ENGINE: "v2",
+      DATABASE_PATH: "/data/ai-assistant-v2.sqlite",
     });
     expect(() => desiredReleaseVariables({
-      RELEASE_SHA: "a".repeat(40),
-      RELEASE_BUILD_HASH: "b".repeat(64),
-      RELEASE_SOURCE_BINDING_SHA256: "c".repeat(64),
-      SELECTED_LLM_MODEL: "deepseek-v4-pro",
-      SELECTED_REASONING_EFFORT: "unset",
+      ...releaseEnvironment(),
       SELECTED_THINKING_MODE: "unset",
-    }, { LLM_THINKING_MODE: "disabled" })).toThrow(/must already be absent/u);
+    }, { ...priorVariables, LLM_THINKING_MODE: "disabled" })).toThrow(/must already be absent/u);
+  });
+
+  it("carries the engine and database selection through desired, snapshot, and rollback", () => {
+    // Restoring only RELEASE_*/LLM_* after a failed upload would leave the PRIOR
+    // code running with the NEW engine and database: v1 code, engine v2, empty
+    // v2 database.
+    const snapshot = parseRollbackVariableSnapshot(JSON.stringify(priorVariables));
+    expect(snapshot.ASSISTANT_ENGINE).toBe("v1");
+    expect(snapshot.DATABASE_PATH).toBe("/data/ai-assistant.sqlite");
+
+    const desired = desiredReleaseVariables(releaseEnvironment(), snapshot);
+    expect(() => assertRollbackCoverage(snapshot, desired)).not.toThrow();
+    // Without a prior value for either key the transaction must refuse, because
+    // Railway deletes cannot be rolled back with one no-deploy set.
+    for (const key of ["ASSISTANT_ENGINE", "DATABASE_PATH"] as const) {
+      const partial = { ...snapshot };
+      delete partial[key];
+      expect(() => assertRollbackCoverage(partial, desired)).toThrow(new RegExp(key, "u"));
+    }
+  });
+
+  it("refuses an engine or database selection that is missing, invalid, or self-contradictory", () => {
+    for (const engine of [undefined, "", "v3", "V2"]) {
+      expect(() => desiredReleaseVariables(
+        { ...releaseEnvironment(), SELECTED_ASSISTANT_ENGINE: engine },
+        priorVariables,
+      )).toThrow(/SELECTED_ASSISTANT_ENGINE/u);
+    }
+    // A path off the /data volume is either a typo or an ephemeral container
+    // path that silently loses every install on the next redeploy.
+    for (const path of [undefined, "", "ai-assistant.sqlite", "/srv/db.sqlite", "/data/../etc/x", "/data/"]) {
+      expect(() => desiredReleaseVariables(
+        { ...releaseEnvironment(), SELECTED_DATABASE_PATH: path },
+        priorVariables,
+      )).toThrow(/SELECTED_DATABASE_PATH/u);
+    }
+    for (const disposition of [undefined, "", "maybe"]) {
+      expect(() => desiredReleaseVariables(
+        { ...releaseEnvironment(), SELECTED_DATABASE_PATH_DISPOSITION: disposition },
+        priorVariables,
+      )).toThrow(/SELECTED_DATABASE_PATH_DISPOSITION/u);
+    }
+  });
+
+  it("proves the target database path is unused against Railway's own current state", () => {
+    // Claiming a fresh database while pointing at the one already in service
+    // would silently adopt live v1 data.
+    expect(() => desiredReleaseVariables(
+      { ...releaseEnvironment(), SELECTED_DATABASE_PATH: "/data/ai-assistant.sqlite" },
+      priorVariables,
+    )).toThrow(/already the deployed database path/u);
+
+    // And claiming an existing database while introducing a new path would
+    // create an empty one that migrates and looks perfectly healthy.
+    expect(() => desiredReleaseVariables(
+      { ...releaseEnvironment(), SELECTED_DATABASE_PATH_DISPOSITION: "existing_expected" },
+      priorVariables,
+    )).toThrow(/not the deployed database path/u);
+
+    expect(desiredReleaseVariables(
+      {
+        ...releaseEnvironment(),
+        SELECTED_DATABASE_PATH: "/data/ai-assistant.sqlite",
+        SELECTED_DATABASE_PATH_DISPOSITION: "existing_expected",
+      },
+      priorVariables,
+    ).DATABASE_PATH).toBe("/data/ai-assistant.sqlite");
+  });
+
+  it("refuses to upload staged bytes that are not the candidate, or a missing rollback source", () => {
+    const runner: DeployCommandRunner = (command, args) => {
+      if (command === "railway" && args[0] === "--version") return "railway 5.27.0";
+      if (command === "railway" && args[0] === "variable" && args[1] === "list") {
+        return JSON.stringify(priorVariables);
+      }
+      return "";
+    };
+    const rejecting = (): void => {
+      throw new Error("source_tree_mismatch");
+    };
+    const uploads: string[] = [];
+    const counting: DeployCommandRunner = (command, args) => {
+      if (command === "railway" && args[0] === "up") uploads.push("up");
+      return runner(command, args);
+    };
+
+    // A tampered or stale staging tree must stop the transaction before any
+    // variable is mutated and before any upload.
+    expect(() => deployPrivateProduction(releaseEnvironment(), counting, rejecting))
+      .toThrow(/source_tree_mismatch/u);
+    expect(uploads).toHaveLength(0);
+
+    // A rollback that has nowhere to go back to is not a rollback.
+    expect(() => deployPrivateProduction(
+      { ...releaseEnvironment(), ROLLBACK_SOURCE_DIR: join(tmpdir(), "definitely-not-a-real-rollback-dir") },
+      counting,
+      noopVerifier,
+    )).toThrow();
+    expect(() => deployPrivateProduction(
+      { ...releaseEnvironment(), ROLLBACK_SOURCE_DIR: process.cwd() },
+      counting,
+      noopVerifier,
+    )).toThrow(/must not be the candidate staging directory/u);
+    expect(uploads).toHaveLength(0);
   });
 
   it("refuses a mutation that would require a deploy-triggering delete to roll back", () => {
@@ -113,7 +221,7 @@ describe("private production deployment transaction", () => {
       return "";
     };
 
-    expect(() => deployPrivateProduction(releaseEnvironment(), runner)).not.toThrow();
+    expect(() => deployPrivateProduction(releaseEnvironment(), runner, noopVerifier)).not.toThrow();
     const gate = calls.findIndex(({ command, args }) => command === "npm" && args.includes("gate:predeploy-backup"));
     const snapshot = calls.findIndex(({ command, args }) =>
       command === "railway" && args[0] === "variable" && args[1] === "list");
@@ -139,7 +247,7 @@ describe("private production deployment transaction", () => {
       return "";
     };
 
-    deployPrivateProduction(releaseEnvironment(), runner);
+    deployPrivateProduction(releaseEnvironment(), runner, noopVerifier);
 
     const targetedCalls = calls.filter(({ command, args }) =>
       command === "railway" && (args[0] === "variable" || args[0] === "up"));
@@ -169,7 +277,7 @@ describe("private production deployment transaction", () => {
         return "";
       };
 
-      expect(() => deployPrivateProduction(releaseEnvironment(), runner)).toThrow(/restored/u);
+      expect(() => deployPrivateProduction(releaseEnvironment(), runner, noopVerifier)).toThrow(/restored/u);
       const gateIndex = calls.findIndex(({ command, args }) =>
         command === "npm" && args.includes("gate:predeploy-backup"));
       const firstSetIndex = calls.findIndex(({ command, args }) =>

@@ -4,9 +4,41 @@ import { resolve } from "node:path";
 import { writeDeterministicJson } from "./write-json.js";
 import type { ColdVerifyEvidence } from "./cold-verify-evidence.js";
 import type { ReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
+import { V2_AUTHORITY_NOT_EVALUATED_SENTINEL, type V2AuthorityEvidenceReport } from "./v2-authority-evidence.js";
 
 export { buildColdVerifyEvidence } from "./cold-verify-evidence.js";
 export { validateReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
+export {
+  buildV2AuthorityEvidenceReport,
+  deriveV2AuthorityConclusions,
+  validateV2AuthorityEvidence,
+  V2_AUTHORITY_CONCLUSIONS,
+  V2_AUTHORITY_NOT_EVALUATED_SENTINEL,
+  type V2AuthorityConclusion,
+  type V2AuthorityEvidence,
+  type V2AuthorityEvidenceReport,
+} from "./v2-authority-evidence.js";
+
+export type EvidenceTargetAssistantEngine = "v1" | "v2";
+
+export interface HistoricalV1EvidenceClassification {
+  assistantEngine: "v1";
+  evidenceStatus: "historical";
+  validForV2: false;
+}
+
+export function classifyHistoricalV1Evidence(
+  targetAssistantEngine: EvidenceTargetAssistantEngine,
+): HistoricalV1EvidenceClassification {
+  if (targetAssistantEngine !== "v1") {
+    throw new Error("historical v1 evidence is not valid for v2");
+  }
+  return {
+    assistantEngine: "v1",
+    evidenceStatus: "historical",
+    validForV2: false,
+  };
+}
 
 const MACHINE_GATE_KEYS = [
   "verify",
@@ -51,7 +83,7 @@ interface ReleaseEvidenceInput {
   coldVerifies: ColdVerifyEvidence;
 }
 
-export interface ReleaseEvidence {
+export interface ReleaseEvidence extends HistoricalV1EvidenceClassification {
   sourceCandidateSha: string;
   evidenceCommitSha: string;
   machineGates: Record<MachineGate, MachineStatus>;
@@ -70,7 +102,11 @@ function machineStatus(value: unknown): MachineStatus {
   }
 }
 
-export function buildReleaseEvidence(input: ReleaseEvidenceInput): ReleaseEvidence {
+export function buildReleaseEvidence(
+  input: ReleaseEvidenceInput,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
+): ReleaseEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(input.sourceCandidateSha)) {
     throw new Error("release evidence requires a full lowercase source candidate SHA");
   }
@@ -127,12 +163,128 @@ export function buildReleaseEvidence(input: ReleaseEvidenceInput): ReleaseEviden
   ])) as ReleaseEvidence["humanGates"];
 
   return {
+    ...classification,
     sourceCandidateSha: input.sourceCandidateSha,
     evidenceCommitSha: input.evidenceCommitSha,
     machineGates,
     reviewedPullRequest: input.reviewedPullRequest,
     coldVerifies: input.coldVerifies,
     humanGates,
+  };
+}
+
+export interface ReleaseEvidenceV2Input {
+  sourceCandidateSha: string;
+  evidenceCommitSha: string;
+  machineConclusions: Partial<Record<MachineGate, unknown>>;
+  v2Authority: V2AuthorityEvidenceReport;
+  /** T17-G: the three v2 evaluation reports, when they exist. */
+  evaluations?: {
+    apiDiscovery?: V2EvaluationInput;
+    assistantTerminal?: V2EvaluationInput;
+    writeSafety?: V2EvaluationInput;
+  };
+}
+
+/** The bounded shape a v2 evaluation report contributes to release evidence. */
+export interface V2EvaluationInput {
+  status: unknown;
+  numerator: unknown;
+  denominator: unknown;
+  caseCount: unknown;
+  identity?: { candidateSha?: unknown; catalogHash?: unknown };
+}
+
+export type V2EvaluationStatus = "passed" | "not_evaluated_missing_credentials" | "rejected";
+
+/**
+ * T17-G: classify ONE v2 evaluation report for release evidence. A report is
+ * `passed` only when it is complete, fully scored, non-empty, and bound to the
+ * exact candidate SHA; an explicit missing-credential sentinel stays
+ * `not_evaluated_missing_credentials`; anything else — a partial score, a zero
+ * denominator, a stale SHA, a malformed shape — is `rejected`. There is no path
+ * from a partial or sentinel report to a passing v2 release conclusion.
+ */
+export function classifyV2Evaluation(
+  report: V2EvaluationInput | undefined,
+  expected: { candidateSha: string; catalogHash?: string },
+): V2EvaluationStatus {
+  if (!report || typeof report !== "object") return "rejected";
+  if (report.status === "not_evaluated_missing_credentials") return "not_evaluated_missing_credentials";
+  if (report.status !== "passed") return "rejected";
+  const { numerator, denominator, caseCount } = report;
+  if (typeof numerator !== "number" || typeof denominator !== "number" || typeof caseCount !== "number") {
+    return "rejected";
+  }
+  if (denominator <= 0 || caseCount <= 0 || numerator !== denominator) return "rejected";
+  if (report.identity?.candidateSha !== expected.candidateSha) return "rejected";
+  if (expected.catalogHash !== undefined && report.identity?.catalogHash !== expected.catalogHash) {
+    return "rejected";
+  }
+  return "passed";
+}
+
+export interface ReleaseEvidenceV2 {
+  assistantEngine: "v2";
+  sourceCandidateSha: string;
+  evidenceCommitSha: string;
+  machineGates: Record<MachineGate, MachineStatus>;
+  v2Authority: V2AuthorityEvidenceReport;
+  /** Per-evaluation classification; every entry must be `passed` for a v2 release. */
+  evaluations: Record<"apiDiscovery" | "assistantTerminal" | "writeSafety", V2EvaluationStatus>;
+  /** True only when authority evidence is complete AND all three evaluations passed. */
+  v2EvaluationComplete: boolean;
+}
+
+/**
+ * The v2 counterpart to {@link buildReleaseEvidence}. Never accepts v1
+ * evidence (the caller supplies an already-built {@link V2AuthorityEvidenceReport},
+ * so a v1 `ReleaseEvidence`/`HistoricalV1EvidenceClassification` object cannot
+ * type-check in its place). Stays `not_evaluated_until_pr15` until Task 17
+ * supplies a complete, validated artifact — never marks a v2 release passing
+ * before then.
+ */
+export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEvidenceV2 {
+  if (!/^[0-9a-f]{40}$/.test(input.sourceCandidateSha)) {
+    throw new Error("v2 release evidence requires a full lowercase source candidate SHA");
+  }
+  if (!/^[0-9a-f]{40}$/.test(input.evidenceCommitSha)) {
+    throw new Error("v2 release evidence requires a full lowercase evidence commit SHA");
+  }
+  if (
+    input.v2Authority?.status !== V2_AUTHORITY_NOT_EVALUATED_SENTINEL &&
+    input.v2Authority?.status !== "complete"
+  ) {
+    throw new Error("v2 release evidence requires a valid V2AuthorityEvidenceReport");
+  }
+  const machineGates = Object.fromEntries(MACHINE_GATE_KEYS.map((gate) => [
+    gate,
+    machineStatus(input.machineConclusions[gate]),
+  ])) as Record<MachineGate, MachineStatus>;
+  // The catalog hash MUST be threaded, or `classifyV2Evaluation`'s hash check is
+  // dead code at its only call site (pre-T18 review).
+  const expected = {
+    candidateSha: input.sourceCandidateSha,
+    ...(input.v2Authority.status === "complete"
+      ? { catalogHash: input.v2Authority.evidence.catalogHash }
+      : {}),
+  };
+  const evaluations = {
+    apiDiscovery: classifyV2Evaluation(input.evaluations?.apiDiscovery, expected),
+    assistantTerminal: classifyV2Evaluation(input.evaluations?.assistantTerminal, expected),
+    writeSafety: classifyV2Evaluation(input.evaluations?.writeSafety, expected),
+  };
+  return {
+    assistantEngine: "v2",
+    sourceCandidateSha: input.sourceCandidateSha,
+    evidenceCommitSha: input.evidenceCommitSha,
+    machineGates,
+    v2Authority: input.v2Authority,
+    evaluations,
+    // Fail-closed: a missing, partial, or sentinel evaluation can never produce a
+    // complete v2 release conclusion.
+    v2EvaluationComplete: input.v2Authority.status === "complete"
+      && Object.values(evaluations).every((status) => status === "passed"),
   };
 }
 
@@ -170,7 +322,7 @@ function main(): void {
       liveBrowserAcceptance: process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE,
       productionAuditHostClearance: process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE,
     },
-  });
+  }, "v1");
   writeDeterministicJson(outputPath, evidence);
 }
 

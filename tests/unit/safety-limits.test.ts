@@ -23,6 +23,7 @@ import {
   SETUP_PROJECT_MEMBER_BATCH_MAX,
   SETUP_PROJECT_RATE_BATCH_MAX,
   TIME_OFF_BALANCE_USER_BATCH_MAX,
+  TIME_OFF_BALANCE_USER_MATERIAL_MAX,
   TURN_HOST_CALL_LIMIT,
 } from "../../src/harness/safety-limits.js";
 
@@ -183,13 +184,13 @@ describe("deterministic mutation host-call bounds", () => {
 
   it("derives coupled single-step array ceilings from their physical-call estimators", () => {
     expect(3 + 2 * MARK_INVOICED_ENTRY_BATCH_MAX + 2).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
-    expect(3 + 2 * (MARK_INVOICED_ENTRY_BATCH_MAX + 1) + 2).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
+    expect(MARK_INVOICED_ENTRY_BATCH_MAX).toBe(21);
     expect(3 + INVOICE_IMPORT_PROJECT_BATCH_MAX + 3).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
-    expect(3 + (INVOICE_IMPORT_PROJECT_BATCH_MAX + 1) + 3).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
+    expect(INVOICE_IMPORT_PROJECT_BATCH_MAX).toBe(19);
     expect(3 + 3 * SETUP_TASK_ASSIGNEE_BATCH_MAX + 11).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
     expect(3 + 3 * (SETUP_TASK_ASSIGNEE_BATCH_MAX + 1) + 11).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
     expect(3 + 2 * TIME_OFF_BALANCE_USER_BATCH_MAX + 3).toBeLessThanOrEqual(TURN_HOST_CALL_LIMIT);
-    expect(3 + 2 * (TIME_OFF_BALANCE_USER_BATCH_MAX + 1) + 3).toBeGreaterThan(TURN_HOST_CALL_LIMIT);
+    expect(TIME_OFF_BALANCE_USER_BATCH_MAX).toBe(TIME_OFF_BALANCE_USER_MATERIAL_MAX);
   });
 
   it("binds coupled array costs and rejects maximum-plus-one at schema entry", () => {

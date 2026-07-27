@@ -1,5 +1,7 @@
 import type { RiskLabel } from "../../harness/risk.js";
 import type { PendingConfirmationRecord, PendingStatus } from "../../harness/confirmations.js";
+import { confirmationOperationBindingHash } from "../../harness/confirmations.js";
+import { v1DiscriminatorFromCapability } from "../../harness/action-discriminators.js";
 import type { StoreContext } from "./context.js";
 import { randomUUID } from "node:crypto";
 import { actionResultJson, buildActionResultSummary, type ActionResultRef } from "../action-results.js";
@@ -29,6 +31,12 @@ interface PendingRow {
   agent_state_json: string | null;
   action_result_id: string | null;
   idempotency_key: string | null;
+  origin: string | null;
+  registry_id: string | null;
+  authority_model: string | null;
+  executor_kind: string | null;
+  run_id: string | null;
+  batch_id: string | null;
 }
 
 /**
@@ -84,6 +92,16 @@ function pendingRowToRecord(row: PendingRow): PendingConfirmationRecord {
     usedAt: row.used_at ?? undefined,
     agentState: parseStoredAgentState(row.agent_state_json),
     actionResultId: row.action_result_id ?? undefined,
+    ...(row.origin ? { origin: row.origin as PendingConfirmationRecord["origin"] } : {}),
+    ...(row.registry_id ? { registryId: row.registry_id as PendingConfirmationRecord["registryId"] } : {}),
+    ...(row.authority_model
+      ? { authorityModel: row.authority_model as PendingConfirmationRecord["authorityModel"] }
+      : {}),
+    ...(row.executor_kind
+      ? { executorKind: row.executor_kind as PendingConfirmationRecord["executorKind"] }
+      : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.batch_id ? { batchId: row.batch_id } : {}),
   };
 }
 
@@ -127,15 +145,34 @@ export function buildConfirmationStore(ctx: StoreContext): {
   const { db, now, nowIso } = ctx;
   return {
     savePendingConfirmation(record) {
+      if (record.authorityModel === "preview_confirmation_v2" && record.registryId === "v2-api" &&
+          confirmationOperationBindingHash(record) !== record.operationHash) {
+        throw new Error("v2_confirmation_operation_hash_mismatch");
+      }
       const executable = record.status === "pending";
       const scrubPreview = record.status === "cancelled" || record.status === "expired";
+      const discriminator = record.origin
+        ? {
+            origin: record.origin,
+            registryId: record.registryId!,
+            authorityModel: record.authorityModel!,
+            executorKind: record.executorKind!,
+            runId: record.runId ?? null,
+            batchId: record.batchId ?? null,
+          }
+        : {
+            ...v1DiscriminatorFromCapability(record.capabilityId),
+            runId: record.runId ?? null,
+            batchId: record.batchId ?? null,
+          };
       db.prepare(
         `INSERT INTO pending_confirmations (
            id, operation_id, session_id, workspace_id, admin_user_id, status, risk_json, preview_json,
            operation_json, operation_hash, target_fingerprints_json, action_fingerprint, catalog_hash,
            capability_id, capability_hash, nonce_hash, expires_at, created_at, used_at, action_result_id, idempotency_key,
-           result_summary_json, agent_state_json, installation_generation
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           result_summary_json, agent_state_json, installation_generation,
+           origin, registry_id, authority_model, executor_kind, run_id, batch_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         record.id,
         record.operationId ?? record.id,
@@ -161,6 +198,12 @@ export function buildConfirmationStore(ctx: StoreContext): {
         null,
         !executable || record.agentState === undefined ? null : JSON.stringify(record.agentState),
         record.installationGeneration ?? null,
+        discriminator.origin,
+        discriminator.registryId,
+        discriminator.authorityModel,
+        discriminator.executorKind,
+        discriminator.runId,
+        discriminator.batchId,
       );
     },
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ActionDefinition } from "../../src/harness/action.js";
 import { ACTION_CATALOG, actionFingerprint, catalogHash, getAction } from "../../src/harness/catalog.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
+import { PRESENTATION_RULES_VERSION } from "../../src/harness/prepared-write-presentation.js";
 import { writeAuthorityFor } from "../../src/harness/write-authority.js";
 
 type AliasDefinition = {
@@ -55,7 +56,10 @@ type ExpectedBooleanPath =
 
 const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Object.freeze({
   "clockify_start_timer\0billable": { aliases: BILLABLE },
+  "clockify_entries_create\0billable": { aliases: BILLABLE },
+  "clockify_entries_start\0billable": { aliases: BILLABLE },
   "clockify_log_work\0billable": { aliases: BILLABLE },
+  "clockify_entries_update\0billable": { aliases: BILLABLE },
   "clockify_fix_entry\0billable": { aliases: BILLABLE },
   "clockify_entries_mark_invoiced\0invoiced": { aliases: [
     alias("invoiced", false, ["not invoiced", "uninvoiced", "unmark as invoiced"]),
@@ -76,15 +80,34 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   ] },
   "clockify_projects_update\0archived": { aliases: ARCHIVED },
   "clockify_projects_update\0billable": { aliases: BILLABLE },
+  "clockify_tasks_update\0billable": { aliases: BILLABLE },
   "clockify_projects_update\0isPublic": { aliases: [
     alias("isPublic", false, ["private", "not public", "non-public"]),
     alias("isPublic", true, ["public", "not private"]),
   ] },
-  "clockify_clients_update\0archived": { aliases: ARCHIVED },
+  "clockify_projects_estimate_update\0budgetEstimate.active": {
+    excluded: "Estimate enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0budgetEstimate.includeExpenses": {
+    excluded: "Estimate expense inclusion is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0estimateReset.active": {
+    excluded: "Estimate reset enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0timeEstimate.active": {
+    excluded: "Estimate enablement is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_projects_estimate_update\0timeEstimate.includeNonBillable": {
+    excluded: "Estimate non-billable inclusion is a structured API flag; only exact true/false literals may authorize it.",
+  },
+  "clockify_clients_update\0archived": {
+    excluded: "Client lifecycle archiving uses clockify_clients_archive; only exact archived=false literals may authorize unarchive on update.",
+  },
   "clockify_tags_update\0archived": { aliases: ARCHIVED },
   "clockify_expenses_create\0billable": { aliases: BILLABLE },
   "clockify_expenses_update\0billable": { aliases: BILLABLE },
   "clockify_expenses_categories_update\0archived": { aliases: ARCHIVED },
+  "clockify_expenses_categories_status_update\0archived": { aliases: ARCHIVED },
   "clockify_custom_fields_create\0required": { aliases: [
     alias("required", false, ["optional", "not required"]),
     alias("required", true, ["required"]),
@@ -113,6 +136,10 @@ const EXPECTED_BOOLEAN_PATHS: Readonly<Record<string, ExpectedBooleanPath>> = Ob
   ] },
   "clockify_time_off_policies_archive\0archived": { aliases: ARCHIVED },
   "clockify_time_off_requests_create\0halfDay": { aliases: [
+    alias("halfDay", false, ["full day", "full-day"]),
+    alias("halfDay", true, ["half day", "half-day"]),
+  ] },
+  "clockify_time_off_requests_create_days\0halfDay": { aliases: [
     alias("halfDay", false, ["full day", "full-day"]),
     alias("halfDay", true, ["half day", "half-day"]),
   ] },
@@ -171,6 +198,48 @@ function projectCreateWithAliases(semanticLiteralAliases: readonly AliasDefiniti
   const action = getAction("clockify_projects_create");
   if (!action) throw new Error("missing_project_create_action");
   return { ...action, semanticLiteralAliases } as ActionDefinition;
+}
+
+function fingerprintContract(action: ActionDefinition) {
+  const hasApiMetadata = action.apiExposure !== undefined
+    || action.apiExposureReason !== undefined
+    || action.apiOperation !== undefined
+    || action.adapterEndpoints !== undefined
+    || action.availabilityByAuthClass !== undefined
+    || action.boundedArgumentDictionaries !== undefined
+    || action.materialFields !== undefined
+    || action.normalizedOperationMaterialContract !== undefined
+    || action.presentation !== undefined
+    || action.referenceSelector !== undefined;
+  return {
+    name: action.name,
+    args: summarizeArgs(action.schema),
+    featureGroup: action.featureGroup,
+    risks: action.risks,
+    argumentAliases: action.argumentAliases ?? [],
+    argumentOpenPaths: action.argumentOpenPaths ?? [],
+    semanticLiteralAliases: action.semanticLiteralAliases ?? [],
+    mutationWorkflow: action.mutationWorkflow,
+    mutationContract: action.mutationContract,
+    writeAuthority: action.writeAuthority,
+    preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
+    ...(hasApiMetadata
+      ? {
+          apiExposure: action.apiExposure ?? null,
+          apiExposureReason: action.apiExposureReason ?? null,
+          apiOperation: action.apiOperation ?? null,
+          adapterEndpoints: action.adapterEndpoints ?? null,
+          availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+          boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
+          materialFields: action.materialFields ?? [],
+          normalizedOperationMaterialContract:
+            action.normalizedOperationMaterialContract ?? [],
+          presentation: action.presentation ?? null,
+          presentationRulesVersion: PRESENTATION_RULES_VERSION,
+          referenceSelector: action.referenceSelector ?? null,
+        }
+      : {}),
+  };
 }
 
 describe("action-scoped semantic literal alias metadata", () => {
@@ -288,36 +357,12 @@ describe("action-scoped semantic literal alias metadata", () => {
   it("binds alias metadata into action and ordered-catalog compatibility hashes", () => {
     const action = getAction("clockify_projects_create");
     if (!action) throw new Error("missing_project_create_action");
-    const contract = {
-      name: action.name,
-      args: summarizeArgs(action.schema),
-      featureGroup: action.featureGroup,
-      risks: action.risks,
-      argumentAliases: action.argumentAliases ?? [],
-      argumentOpenPaths: action.argumentOpenPaths ?? [],
-      semanticLiteralAliases: action.semanticLiteralAliases ?? [],
-      mutationWorkflow: action.mutationWorkflow,
-      mutationContract: action.mutationContract,
-      writeAuthority: action.writeAuthority,
-      preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
-    };
+    const contract = fingerprintContract(action);
     expect(actionFingerprint(action.name)).toBe(
       createHash("sha256").update(JSON.stringify(contract)).digest("hex"),
     );
 
-    const contracts = ACTION_CATALOG.map((catalogAction) => ({
-      name: catalogAction.name,
-      args: summarizeArgs(catalogAction.schema),
-      featureGroup: catalogAction.featureGroup,
-      risks: catalogAction.risks,
-      argumentAliases: catalogAction.argumentAliases ?? [],
-      argumentOpenPaths: catalogAction.argumentOpenPaths ?? [],
-      semanticLiteralAliases: catalogAction.semanticLiteralAliases ?? [],
-      mutationWorkflow: catalogAction.mutationWorkflow,
-      mutationContract: catalogAction.mutationContract,
-      writeAuthority: catalogAction.writeAuthority,
-      preparedSafeWrite: !!catalogAction.prepareSafeWrite && !!catalogAction.executeSafeWrite,
-    }));
+    const contracts = ACTION_CATALOG.map(fingerprintContract);
     const expectedCatalogHash = createHash("sha256")
       .update(JSON.stringify(contracts))
       .digest("hex");

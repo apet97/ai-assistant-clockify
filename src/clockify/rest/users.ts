@@ -159,6 +159,20 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
     return { id: userId, name: role };
   }
 
+  async function updateWorkspaceMemberHourlyRateAtomic(input: Parameters<UserPort["updateWorkspaceMemberHourlyRateAtomic"]>[0]): Promise<void> {
+    await core.mutate("api", "PUT", `${ws}/users/${input.userId}/hourly-rate`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  }
+
+  async function updateWorkspaceMemberCostRateAtomic(input: Parameters<UserPort["updateWorkspaceMemberCostRateAtomic"]>[0]): Promise<void> {
+    await core.mutate("api", "PUT", `${ws}/users/${input.userId}/cost-rate`, {
+      amount: input.amountMinor,
+      ...(input.since ? { since: input.since } : {}),
+    });
+  }
+
   async function updateWorkspaceMemberRateAtomic(input: Parameters<UserPort["updateWorkspaceMemberRateAtomic"]>[0]): Promise<void> {
     const kind = input.rateKind === "COST" ? "cost-rate" : "hourly-rate";
     await core.mutate("api", "PUT", `${ws}/users/${input.userId}/${kind}`, {
@@ -284,6 +298,8 @@ export function makeUserRest(core: RestCore, workspaceId: string): UserPort {
     inviteUserAtomic,
     updateUserRoleAtomic,
     updateWorkspaceMemberRateAtomic,
+    updateWorkspaceMemberHourlyRateAtomic,
+    updateWorkspaceMemberCostRateAtomic,
     deactivateUserAtomic,
     inviteUser: inviteUserAtomic,
     updateUserRole: updateUserRoleAtomic,

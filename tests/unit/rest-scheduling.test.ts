@@ -96,6 +96,30 @@ describe("scheduling rest", () => {
     expect(JSON.parse(init.body)).toEqual({ start: "2026-06-01", end: "2026-06-07", notifyUsers: true });
   });
 
+  it("getAllProjectScheduleTotals POSTs the all-projects search (no bogus projectId) when none is given", async () => {
+    const f = vi.fn(async () => jsonResponse([{ projectId: "p1", total: 40 }]));
+    const out = await rest(f as unknown as typeof fetch).getAllProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07" });
+    expect(out).toEqual({ rows: [{ projectId: "p1", total: 40 }], truncated: false });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/scheduling/assignments/projects/totals");
+    expect(init.method).toBe("POST");
+    const body = JSON.parse(init.body);
+    expect(body).toEqual({ start: "2026-06-01", end: "2026-06-07", page: 1, pageSize: 200 });
+    expect(body).not.toHaveProperty("projectId");
+  });
+
+  it("getOneProjectScheduleTotals GETs /{projectId} for a single project", async () => {
+    const f = vi.fn(async () => jsonResponse({ projectId: "p1", total: 40 }));
+    const out = await rest(f as unknown as typeof fetch).getOneProjectScheduleTotals({ start: "2026-06-01", end: "2026-06-07", projectId: "p1" });
+    expect(out).toEqual({ rows: [{ projectId: "p1", total: 40 }], truncated: false });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(init.method).toBe("GET");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/api/v1/workspaces/ws-1/scheduling/assignments/projects/totals/p1");
+    expect(parsed.searchParams.get("start")).toBe("2026-06-01");
+    expect(parsed.searchParams.get("end")).toBe("2026-06-07");
+  });
+
   it("getProjectScheduleTotals GETs /{projectId} for a single project (the POST body has no projectId field)", async () => {
     // Spec: ProjectTotalsRequestV1 (the POST body) has NO projectId — sending it was
     // silently ignored, returning ALL projects. A single project's totals live at

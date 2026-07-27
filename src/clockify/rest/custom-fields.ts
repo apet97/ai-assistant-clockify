@@ -89,8 +89,8 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
   };
   const deleteAtomic = async (id: string): Promise<void> => { await core.mutate("api", "DELETE", `${ws}/custom-fields/${id}`); };
   const setProjectAtomic = async (projectId: string, fieldId: string, value: unknown): Promise<void> => { await core.mutate("api", "PATCH", `${ws}/projects/${projectId}/custom-fields/${fieldId}`, { defaultValue: value }); };
-  const getEntryMutationState = async (entryId: string): Promise<Record<string, unknown> | null> => {
-    const entry = await core.call("api", "GET", `${ws}/time-entries/${entryId}`);
+  const getEntryMutationState = async (id: string): Promise<Record<string, unknown> | null> => {
+    const entry = await core.call("api", "GET", `${ws}/time-entries/${id}`);
     return entry && typeof entry === "object" ? structuredClone(entry as Record<string, unknown>) : null;
   };
   const prepareEntryValue = async (entryId: string, fieldId: string, value: unknown): Promise<PreparedEntryCustomFieldValueInput> => {
@@ -120,7 +120,7 @@ export function makeCustomFieldRest(core: RestCore, workspaceId: string): Custom
       },
     };
   };
-  const setEntryAtomic = async (entryId: string, prepared: PreparedEntryCustomFieldValueInput): Promise<void> => { await core.mutate("api", "PUT", `${ws}/time-entries/${entryId}`, prepared.body); };
+  const setEntryAtomic = async (id: string, prepared: PreparedEntryCustomFieldValueInput): Promise<void> => { await core.mutate("api", "PUT", `${ws}/time-entries/${id}`, prepared.body); };
 
   return {
     async listCustomFields() {

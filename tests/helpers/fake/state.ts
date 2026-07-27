@@ -43,6 +43,8 @@ export type FakeListFamily =
   | "getProjectMemberships"
   | "listAssignments"
   | "getProjectScheduleTotals"
+  | "getAllProjectScheduleTotals"
+  | "getOneProjectScheduleTotals"
   | "listTags"
   | "listTasks"
   | "getEntries"

@@ -24,6 +24,20 @@ paths = ['''^tests/unit/config\.test\.ts$''']
 regexes = ['''DATA_ENCRYPTION_KEY(_PREVIOUS)?: "(0123456789abcdef0123456789abcdef|fedcba9876543210fedcba9876543210)"''']
 
 [[rules.allowlists]]
+description = "Generated API action catalog digest"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^src/harness/api-catalog\.generated\.ts$''']
+regexes = ['''^\n?export const API_ACTION_CATALOG_HASH = "[0-9a-f]{64}" as const;$''']
+
+[[rules.allowlists]]
+description = "Fail-closed secret-detector negative test inputs"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^tests/scripts/test_codex_v2_supervisor\.py$''']
+regexes = ['''^\n?\s*"password: abcdefghijklmnop123",$''']
+
+[[rules.allowlists]]
 description = "Historical workflow-contract assertions"
 condition = "AND"
 regexTarget = "line"

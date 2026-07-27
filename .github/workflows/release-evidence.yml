@@ -795,6 +795,36 @@ jobs:
           writeFileSync(temporaryPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
           renameSync(temporaryPath, outputPath);
           NODE
+      - name: Record v2 authority evidence
+        # Task 13 (v1/v2 coexistence): no complete artifact exists yet, so this
+        # always writes the honest not_evaluated_until_pr15 sentinel — the exact
+        # value `scripts/evidence/v2-authority-evidence.ts` also writes when its
+        # required env vars are absent. Task 17 replaces this with a step that
+        # supplies real candidate SHA / catalog hash / write-case counts.
+        shell: bash
+        run: |
+          node <<'NODE'
+          const { mkdirSync, renameSync, rmSync, writeFileSync } = require("node:fs");
+          const { dirname } = require("node:path");
+
+          const outputPath = "/tmp/ai-assistant-release-evidence/v2-authority-evidence.json";
+          const temporaryPath = `${outputPath}.tmp`;
+          mkdirSync(dirname(outputPath), { recursive: true });
+          rmSync(outputPath, { force: true });
+          rmSync(temporaryPath, { force: true });
+
+          const report = { status: "not_evaluated_until_pr15" };
+          writeFileSync(temporaryPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+          renameSync(temporaryPath, outputPath);
+          NODE
+      - name: Upload v2 authority evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-v2-authority-evidence-${{ github.run_id }}
+          path: /tmp/ai-assistant-release-evidence/v2-authority-evidence.json
+          if-no-files-found: error
+          retention-days: 90
       - name: Enforce release-ready engineering gates
         if: ${{ always() }}
         shell: bash

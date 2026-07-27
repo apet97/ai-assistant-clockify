@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 
 import { FEATURE_GROUPS } from "../../src/harness/permissions.js";
 import { hashCanonicalJson } from "../lib/live-evidence.js";
+import {
+  classifyHistoricalV1Evidence,
+  type EvidenceTargetAssistantEngine,
+  type HistoricalV1EvidenceClassification,
+} from "./release-evidence.js";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -86,7 +91,7 @@ export interface LiveBrowserAcceptanceEvidence {
   memberDenialEvidenceSha256: string;
 }
 
-export interface LiveBrowserAcceptanceValidation {
+export interface LiveBrowserAcceptanceValidation extends HistoricalV1EvidenceClassification {
   schemaVersion: 1;
   conclusion: "passed";
   sourceCandidateSha: string;
@@ -338,7 +343,8 @@ export function recordLiveBrowserAcceptanceEvidence(input: {
   memberDenialEvidence: unknown;
   deployedVersion: unknown;
   expectedCandidateSha: string;
-}): LiveBrowserAcceptanceEvidence {
+}, targetAssistantEngine: EvidenceTargetAssistantEngine = "v1"): LiveBrowserAcceptanceEvidence {
+  classifyHistoricalV1Evidence(targetAssistantEngine);
   assertNoSecrets(input.trace);
   const trace = object(input.trace, "sanitized browser trace");
   exactKeys(trace, [
@@ -380,7 +386,7 @@ export function recordLiveBrowserAcceptanceEvidence(input: {
     memberDenialEvidence: member,
     deployedVersion: input.deployedVersion,
     expectedCandidateSha,
-  });
+  }, targetAssistantEngine);
   return evidence;
 }
 
@@ -389,7 +395,8 @@ export function validateLiveBrowserAcceptanceEvidence(input: {
   memberDenialEvidence: unknown;
   deployedVersion: unknown;
   expectedCandidateSha: string;
-}): LiveBrowserAcceptanceValidation {
+}, targetAssistantEngine: EvidenceTargetAssistantEngine = "v1"): LiveBrowserAcceptanceValidation {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   assertNoSecrets(input.evidence);
   const row = object(input.evidence, "live browser evidence");
   exactKeys(row, [
@@ -460,6 +467,7 @@ export function validateLiveBrowserAcceptanceEvidence(input: {
   if (memberObservedMs < startMs || memberObservedMs > completedMs) throw new Error("member denial evidence time mismatch");
 
   return {
+    ...classification,
     schemaVersion: 1,
     conclusion: "passed",
     sourceCandidateSha: expectedCandidateSha,
@@ -497,7 +505,8 @@ export function validateLiveBrowserAcceptanceEvidenceWithTrace(input: {
   memberDenialEvidence: unknown;
   deployedVersion: unknown;
   expectedCandidateSha: string;
-}): LiveBrowserAcceptanceValidation {
+}, targetAssistantEngine: EvidenceTargetAssistantEngine = "v1"): LiveBrowserAcceptanceValidation {
+  classifyHistoricalV1Evidence(targetAssistantEngine);
   let traceText: string;
   let trace: unknown;
   try {
@@ -513,7 +522,7 @@ export function validateLiveBrowserAcceptanceEvidenceWithTrace(input: {
     memberDenialEvidence: input.memberDenialEvidence,
     deployedVersion: input.deployedVersion,
     expectedCandidateSha: input.expectedCandidateSha,
-  });
+  }, targetAssistantEngine);
   if (hashCanonicalJson(reproduced) !== hashCanonicalJson(input.evidence)) {
     throw new Error("retained browser trace does not reproduce final evidence");
   }
@@ -522,7 +531,7 @@ export function validateLiveBrowserAcceptanceEvidenceWithTrace(input: {
     memberDenialEvidence: input.memberDenialEvidence,
     deployedVersion: input.deployedVersion,
     expectedCandidateSha: input.expectedCandidateSha,
-  });
+  }, targetAssistantEngine);
 }
 
 export function isLiveBrowserEvidencePath(path: string): boolean {
@@ -586,7 +595,7 @@ function main(): void {
       process.env.LIVE_BROWSER_DEPLOYED_VERSION_PATH ?? "/tmp/live-browser-deployed-version.json",
     ),
     expectedCandidateSha: sourceCandidateSha,
-  });
+  }, "v1");
   writeAtomic(process.env.LIVE_BROWSER_VALIDATION_PATH ?? "/tmp/live-browser-acceptance-validation.json", result);
 }
 

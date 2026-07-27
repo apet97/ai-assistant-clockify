@@ -1,10 +1,17 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 const script = (name: string): string => readFileSync(resolve("scripts", name), "utf8");
+const ENDPOINT_SCOPE_CONTRACT_SHA256 = "fc1bcb65197da21452e7ce1d7d1b003b74b80810f79fce66124513c30d3434e0";
 
 describe("production HTTP smoke script contracts", () => {
+  it("keeps the generated endpoint scope contract byte-for-byte stable", () => {
+    const bytes = readFileSync(resolve("docs/ENDPOINT_SCOPE_CONTRACT.md"));
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(ENDPOINT_SCOPE_CONTRACT_SHA256);
+  });
+
   it.each([
     "live-confirm-flow.ts",
     "live-planner-quirks.ts",

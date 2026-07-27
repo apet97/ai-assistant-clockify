@@ -8,6 +8,11 @@ import {
   AGENTIC_CASES,
   RELEASE_INTENT_PATH_CASE_ID,
 } from "../eval/agentic-cases.js";
+import {
+  classifyHistoricalV1Evidence,
+  type EvidenceTargetAssistantEngine,
+  type HistoricalV1EvidenceClassification,
+} from "./release-evidence.js";
 import { writeDeterministicJson } from "./write-json.js";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -140,7 +145,7 @@ export interface DeepSeekEvidenceInput {
   now?: Date;
 }
 
-export interface DeepSeekReleaseEvidence {
+export interface DeepSeekReleaseEvidence extends HistoricalV1EvidenceClassification {
   schemaVersion: 2;
   kind: "deepseek-release-validation";
   conclusion: "passed";
@@ -395,18 +400,49 @@ function endpointDigest(value: unknown, label: string): string {
   return digest;
 }
 
+/** The historical `deepseek-release-binding.json` artifact. Frozen for v1
+ * rollback — never widen it. */
+const BINDING_MODEL_CONFIGURATION_KEYS = [
+  "provider",
+  "model",
+  "endpointSha256",
+  "mode",
+  "agentic",
+  "toolSelect",
+  "reasoningEffort",
+  "thinkingMode",
+] as const;
+
+/** The live `/version` payload carries one key the frozen binding artifact does
+ * not: `assistantEngine`. Validating both against one key list made a CORRECT
+ * deployment fail the documented identity assertion, so the two schemas are
+ * checked separately. */
+const DEPLOYED_MODEL_CONFIGURATION_KEYS = [
+  ...BINDING_MODEL_CONFIGURATION_KEYS,
+  "assistantEngine",
+] as const;
+
 function modelConfiguration(value: unknown, expectedThinking: ThinkingMode, label: string): ModelConfiguration {
   const config = object(value, label);
-  exactKeys(config, [
-    "provider",
-    "model",
-    "endpointSha256",
-    "mode",
-    "agentic",
-    "toolSelect",
-    "reasoningEffort",
-    "thinkingMode",
-  ], label);
+  exactKeys(config, BINDING_MODEL_CONFIGURATION_KEYS, label);
+  return modelConfigurationValues(config, expectedThinking, label);
+}
+
+function deployedModelConfiguration(
+  value: unknown,
+  expectedThinking: ThinkingMode,
+  label: string,
+): ModelConfiguration {
+  const config = object(value, label);
+  exactKeys(config, DEPLOYED_MODEL_CONFIGURATION_KEYS, label);
+  return modelConfigurationValues(config, expectedThinking, label);
+}
+
+function modelConfigurationValues(
+  config: JsonObject,
+  expectedThinking: ThinkingMode,
+  label: string,
+): ModelConfiguration {
   const expected: ModelConfiguration = {
     provider: "http",
     model: "deepseek-v4-pro",
@@ -1476,6 +1512,7 @@ function benchmarkEvidence(
   focusedRiskyPreviewRawJson: string,
   evidenceCommitShaValue: string,
   now: Date | undefined,
+  classification: HistoricalV1EvidenceClassification,
   requireFresh: boolean,
 ): DeepSeekBenchmarkEvidence {
   const binding = parseBinding(bindingValue);
@@ -1528,6 +1565,7 @@ function benchmarkEvidence(
   const medianRegressionPercent = regressionPercent(candidate.p50Ms, baseline.p50Ms);
   const p95RegressionPercent = regressionPercent(candidate.p95Ms, baseline.p95Ms);
   return {
+    ...classification,
     schemaVersion: 2,
     kind: "deepseek-release-validation",
     conclusion: "passed",
@@ -1613,6 +1651,7 @@ function verifyDeployedVersion(
   value: unknown,
   candidateSha: string,
   expectedConfiguration: ModelConfiguration,
+  expectedAssistantEngine: EvidenceTargetAssistantEngine,
 ): void {
   const deployed = object(value, "deployed version metadata");
   assertSecretFree(deployed, "deployed version metadata");
@@ -1648,7 +1687,7 @@ function verifyDeployedVersion(
     throw new Error("deployed source binding must be null for an exact-head build");
   }
   try {
-    modelConfiguration(
+    deployedModelConfiguration(
       deployed.modelConfiguration,
       expectedConfiguration.thinkingMode,
       "deployed model configuration",
@@ -1657,6 +1696,13 @@ function verifyDeployedVersion(
     throw new Error("deployed model configuration does not match the selected DeepSeek setting");
   }
   const actual = object(deployed.modelConfiguration, "deployed model configuration");
+  // The engine a deployment is actually serving is the single value the v2
+  // cutover most needs proven at the deploy boundary, and nothing asserted it
+  // before. It is checked separately so an engine mismatch cannot be reported
+  // as a DeepSeek setting mismatch.
+  if (actual.assistantEngine !== expectedAssistantEngine) {
+    throw new Error("deployed assistant engine does not match the intended engine");
+  }
   for (const [key, expected] of Object.entries(expectedConfiguration)) {
     if (actual[key] !== expected) {
       throw new Error("deployed model configuration does not match the selected DeepSeek setting");
@@ -1666,7 +1712,9 @@ function verifyDeployedVersion(
 
 export function validateDeepSeekBenchmarkEvidence(
   input: Omit<DeepSeekEvidenceInput, "deployedVersion">,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
 ): DeepSeekBenchmarkEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   return benchmarkEvidence(
     input.binding,
     input.capabilityProbeRawJson,
@@ -1676,11 +1724,16 @@ export function validateDeepSeekBenchmarkEvidence(
     input.focusedRiskyPreviewRawJson,
     input.evidenceCommitSha,
     input.now,
+    classification,
     false,
   );
 }
 
-export function validateDeepSeekReleaseEvidence(input: DeepSeekEvidenceInput): DeepSeekReleaseEvidence {
+export function validateDeepSeekReleaseEvidence(
+  input: DeepSeekEvidenceInput,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
+): DeepSeekReleaseEvidence {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   const benchmark = benchmarkEvidence(
     input.binding,
     input.capabilityProbeRawJson,
@@ -1690,9 +1743,15 @@ export function validateDeepSeekReleaseEvidence(input: DeepSeekEvidenceInput): D
     input.focusedRiskyPreviewRawJson,
     input.evidenceCommitSha,
     input.now,
+    classification,
     true,
   );
-  verifyDeployedVersion(input.deployedVersion, benchmark.testedCandidateSha, benchmark.modelConfiguration);
+  verifyDeployedVersion(
+    input.deployedVersion,
+    benchmark.testedCandidateSha,
+    benchmark.modelConfiguration,
+    classification.assistantEngine,
+  );
   return { ...benchmark, deployedConfigurationVerified: true };
 }
 
@@ -1786,11 +1845,11 @@ function main(): void {
   };
   const benchmarkOnly = process.argv.includes("--benchmark-only");
   const evidence = benchmarkOnly
-    ? validateDeepSeekBenchmarkEvidence(common)
+    ? validateDeepSeekBenchmarkEvidence(common, "v1")
     : validateDeepSeekReleaseEvidence({
         ...common,
         deployedVersion: JSON.parse(readFileSync(requiredEnvironment("DEEPSEEK_DEPLOYED_VERSION_PATH"), "utf8")) as unknown,
-      });
+      }, "v1");
   const expectedCandidateSha = process.env.DEEPSEEK_EXPECTED_CANDIDATE_SHA?.trim();
   if (expectedCandidateSha !== undefined && expectedCandidateSha !== evidence.testedCandidateSha) {
     throw new Error("workflow candidate SHA does not match the tested DeepSeek candidate");

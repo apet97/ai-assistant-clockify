@@ -27,6 +27,7 @@ import {
   CONFIRMED_REQUEST_PRE_RESERVATION_HOST_CALLS,
   TURN_HOST_CALL_LIMIT,
 } from "../safety-limits.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * `clockify_setup_project` — the single-approval composite. A request like
@@ -73,6 +74,7 @@ function major(amountMinor: number): string {
 
 const setupProject = defineRiskyAction({
   name: "clockify_setup_project",
+  ...STRUCTURE_API_METADATA.clockify_setup_project,
   description:
     'Create a NEW project AND set it up in one step — optionally make it private, add members (names or "me"), set the project\'s default billable/cost rate, and set per-member rates — as ONE preview and ONE Confirm. Use this for "create a project and add me / make it private / set the rate". For just creating a bare project with nothing else, use clockify_projects_create.',
   group: "work_structure",

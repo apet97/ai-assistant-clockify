@@ -2,12 +2,11 @@ import { expect, type Locator, type Page } from "@playwright/test";
 
 export async function openAssistant(
   page: Page,
-  options: { scenario?: string; theme?: "light" | "dark"; language?: "en" | "sr" } = {},
+  options: { scenario?: string; theme?: "light" | "dark" } = {},
 ): Promise<void> {
   const query = new URLSearchParams({
     scenario: options.scenario ?? "default",
     theme: options.theme ?? "light",
-    language: options.language ?? "en",
   });
   await page.goto(`/?${query}`);
   await expect(page.getByRole("heading", { name: "AI Assistant" })).toBeVisible();

@@ -8,6 +8,9 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type ConfirmableOperation,
+  type RiskyClarifyResult,
+  type RiskyPreviewResult,
   type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
@@ -18,12 +21,22 @@ import { listReceipt, successReceipt, errorReceipt } from "../receipts.js";
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
 import { sanitizedFingerprint } from "../safe-json.js";
-import { toMinor } from "../money.js";
 import { resolveEntityRef, resolveUserRef, resolveUserRefs } from "./resolve.js";
 import { RATE_FIELDS, buildRatePreview } from "./rate.js";
+import { zNumberLike } from "../arg-shapes.js";
+import { toMinor } from "../money.js";
 import { dispatchWithReconciliation, reconcileCreate } from "./structure-durable.js";
 import type { UserRoleAssignment } from "../../clockify/ports/users.js";
 import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-limits.js";
+import {
+  apiActionMetadataFields,
+  type ApiAccess,
+  type ApiActionMetadataCarrier,
+  type ApiExposure,
+  type ApiMethod,
+  type AvailabilityByAuthClass,
+  type MaterialFieldMetadata,
+} from "../api-operation.js";
 
 /**
  * Typed user & group workflows (goclmcp §2.13). Reads (list/get) execute
@@ -37,6 +50,287 @@ import { bindMutationPlanHostCalls, GROUP_MEMBER_BATCH_MAX } from "../safety-lim
  */
 
 const UG = "users_groups" as const;
+
+type UserGroupActionName =
+  | "clockify_users_list"
+  | "clockify_users_invite"
+  | "clockify_users_role_update"
+  | "clockify_users_rate_update"
+  | "clockify_users_hourly_rate_update"
+  | "clockify_users_cost_rate_update"
+  | "clockify_users_deactivate"
+  | "clockify_groups_list"
+  | "clockify_groups_get"
+  | "clockify_groups_create"
+  | "clockify_groups_update"
+  | "clockify_groups_delete"
+  | "clockify_groups_add_user"
+  | "clockify_groups_remove_user";
+
+const USER_GROUP_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function userGroupEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "users.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function userGroupMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function userGroupApiMetadata(input: {
+  actionName: UserGroupActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: USER_GROUP_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function userGroupInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: USER_GROUP_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const userGroupEndpoint = Object.freeze({
+  usersList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/users"),
+  usersInvite: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/users"),
+  usersRole: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/users/{userId}/roles"),
+  usersRate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}/{kind}"),
+  usersHourlyRate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}/hourly-rate"),
+  usersCostRate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}/cost-rate"),
+  usersStatus: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/users/{userId}"),
+  groupsList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/user-groups"),
+  groupsCreate: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/user-groups"),
+  groupsUpdate: userGroupEndpointKey("write", "PUT", "/workspaces/{workspaceId}/user-groups/{id}"),
+  groupsDelete: userGroupEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/user-groups/{id}"),
+  groupsAddUser: userGroupEndpointKey("write", "POST", "/workspaces/{workspaceId}/user-groups/{groupId}/users"),
+  groupsRemoveUser: userGroupEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}"),
+  projectsList: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects", "projects.ts"),
+  projectsGet: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}/projects/{id}", "projects.ts"),
+  workspaceGet: userGroupEndpointKey("read", "GET", "/workspaces/{workspaceId}", "workspace.ts"),
+});
+
+const USER_GROUP_API_METADATA = Object.freeze({
+  clockify_users_list: userGroupApiMetadata({
+    actionName: "clockify_users_list",
+    operationId: "getUsersOfWorkspace",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/users",
+    access: "read",
+    primary: userGroupEndpoint.usersList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_users_invite: userGroupApiMetadata({
+    actionName: "clockify_users_invite",
+    operationId: "addUsers",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/users",
+    access: "write",
+    primary: userGroupEndpoint.usersInvite,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/email", "Email", "text", true),
+      userGroupMaterialField("/sendEmail", "Send email", "boolean", true),
+    ],
+  }),
+  clockify_users_role_update: userGroupApiMetadata({
+    actionName: "clockify_users_role_update",
+    operationId: "createUserRole",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/users/{userId}/roles",
+    access: "write",
+    primary: userGroupEndpoint.usersRole,
+    support: [
+      userGroupEndpoint.usersList,
+      userGroupEndpoint.groupsList,
+      userGroupEndpoint.projectsList,
+      userGroupEndpoint.projectsGet,
+      userGroupEndpoint.workspaceGet,
+    ],
+    materialFields: [
+      userGroupMaterialField("/granteeId", "User", "entity", true),
+      userGroupMaterialField("/role", "Role", "text", true),
+      userGroupMaterialField("/entityId", "Role scope", "entity", true),
+      userGroupMaterialField("/sourceType", "Scope type", "text", false),
+    ],
+  }),
+  clockify_users_rate_update: userGroupInternalMetadata({
+    exposure: "generic",
+    reason: "Selects the hourly-rate or cost-rate endpoint from rateKind; Task 6 must split the dynamic mutation path.",
+    primary: [userGroupEndpoint.usersRate],
+    support: [userGroupEndpoint.usersList],
+  }),
+  clockify_users_hourly_rate_update: userGroupApiMetadata({
+    actionName: "clockify_users_hourly_rate_update",
+    operationId: "setHourlyRateForUser",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/users/{userId}/hourly-rate",
+    access: "write",
+    primary: userGroupEndpoint.usersHourlyRate,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/userId", "Member", "entity", true),
+      userGroupMaterialField("/amountMinor", "Hourly rate", "money-minor", true),
+    ],
+  }),
+  clockify_users_cost_rate_update: userGroupApiMetadata({
+    actionName: "clockify_users_cost_rate_update",
+    operationId: "setCostRateForUser",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/users/{userId}/cost-rate",
+    access: "write",
+    primary: userGroupEndpoint.usersCostRate,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/userId", "Member", "entity", true),
+      userGroupMaterialField("/amountMinor", "Cost rate", "money-minor", true),
+    ],
+  }),
+  clockify_users_deactivate: userGroupApiMetadata({
+    actionName: "clockify_users_deactivate",
+    operationId: "updateUserStatus",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/users/{userId}",
+    access: "write",
+    primary: userGroupEndpoint.usersStatus,
+    support: [userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/userId", "User", "entity", true),
+    ],
+  }),
+  clockify_groups_list: userGroupApiMetadata({
+    actionName: "clockify_groups_list",
+    operationId: "getUserGroups",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/user-groups",
+    access: "read",
+    primary: userGroupEndpoint.groupsList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_groups_get: userGroupInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one user group by scanning the workspace group list because Clockify exposes no GET /user-groups/{id}; it is not a fabricated get-one operation.",
+    primary: [userGroupEndpoint.groupsList],
+    support: [],
+  }),
+  clockify_groups_create: userGroupApiMetadata({
+    actionName: "clockify_groups_create",
+    operationId: "createUserGroup",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/user-groups",
+    access: "write",
+    primary: userGroupEndpoint.groupsCreate,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/name", "Group name", "text", true),
+    ],
+  }),
+  clockify_groups_update: userGroupApiMetadata({
+    actionName: "clockify_groups_update",
+    operationId: "updateUserGroup",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/user-groups/{id}",
+    access: "write",
+    primary: userGroupEndpoint.groupsUpdate,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/id", "Group", "entity", true),
+      userGroupMaterialField("/name", "Group name", "text", true),
+    ],
+  }),
+  clockify_groups_delete: userGroupApiMetadata({
+    actionName: "clockify_groups_delete",
+    operationId: "deleteUserGroup",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/user-groups/{id}",
+    access: "write",
+    primary: userGroupEndpoint.groupsDelete,
+    support: [userGroupEndpoint.groupsList],
+    materialFields: [
+      userGroupMaterialField("/id", "Group", "entity", true),
+      userGroupMaterialField("/name", "Group name", "text", false),
+    ],
+  }),
+  clockify_groups_add_user: userGroupInternalMetadata({
+    exposure: "composite",
+    reason: "May add up to 14 users through independent membership POSTs; use clockify_groups_add_member for a single-user add.",
+    primary: [userGroupEndpoint.groupsAddUser],
+    support: [userGroupEndpoint.groupsList, userGroupEndpoint.usersList],
+  }),
+  clockify_groups_remove_user: userGroupApiMetadata({
+    actionName: "clockify_groups_remove_user",
+    operationId: "deleteUser",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/user-groups/{groupId}/users/{userId}",
+    access: "write",
+    primary: userGroupEndpoint.groupsRemoveUser,
+    support: [userGroupEndpoint.groupsList, userGroupEndpoint.usersList],
+    materialFields: [
+      userGroupMaterialField("/groupId", "Group", "entity", true),
+      userGroupMaterialField("/userId", "User", "entity", true),
+    ],
+  }),
+} satisfies Readonly<Record<UserGroupActionName, ApiActionMetadataCarrier>>);
+
+export { USER_GROUP_API_METADATA };
+
 const createContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const userTargetContract = (strategy: "update" | "state-command") => durableMutationContract({
   source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: [strategy],
@@ -85,6 +379,30 @@ async function scopedRoleProjection(ctx: ActionContext, userId: string, entityId
   return { ...userProjection(user.row), scopedRole: matches[0] ?? null };
 }
 
+async function expectedGroupMembership(ctx: ActionContext, groupId: string, expectedUserIds: readonly string[]) {
+  const evidence = await currentGroupEvidence(ctx, groupId);
+  if (!evidence || evidence.truncated) return undefined;
+  return sanitizedFingerprint([...(evidence.row.userIds ?? [])].sort()) === sanitizedFingerprint([...expectedUserIds].sort())
+    ? true
+    : undefined;
+}
+
+export const USER_RATE_LITERAL_ALIASES = Object.freeze([
+  { path: "userId", value: "me", authoredPhrases: Object.freeze(["my", "myself"]) },
+] satisfies readonly SemanticLiteralAlias[]);
+
+export const workspaceMemberRateSchema = z
+  .object({
+    userId: z.string().min(1).optional(),
+    userName: z.string().min(1).optional(),
+    amount: zNumberLike(z.number().nonnegative()),
+    amountUnit: z.enum(["major", "minor"]).default("major"),
+    since: z.string().optional(),
+  })
+  .refine((v) => v.userId !== undefined || v.userName !== undefined, {
+    message: "Provide the member (id or exact name, or 'me').",
+  });
+
 async function scopedRateProjection(ctx: ActionContext, userId: string, rateKind: "HOURLY" | "COST") {
   const [user, scopedRate] = await Promise.all([
     currentUserEvidence(ctx, userId),
@@ -94,12 +412,118 @@ async function scopedRateProjection(ctx: ActionContext, userId: string, rateKind
   return { ...userProjection(user.row), scopedRate };
 }
 
-async function expectedGroupMembership(ctx: ActionContext, groupId: string, expectedUserIds: readonly string[]) {
-  const evidence = await currentGroupEvidence(ctx, groupId);
-  if (!evidence || evidence.truncated) return undefined;
-  return sanitizedFingerprint([...(evidence.row.userIds ?? [])].sort()) === sanitizedFingerprint([...expectedUserIds].sort())
-    ? true
-    : undefined;
+export async function previewWorkspaceMemberRate(
+  ctx: ActionContext,
+  args: z.infer<typeof workspaceMemberRateSchema>,
+  options: {
+    rateKind: "HOURLY" | "COST";
+    planStepId: string;
+    includeRateKindInPayload?: boolean;
+  },
+): Promise<RiskyPreviewResult | RiskyClarifyResult> {
+  const member = await resolveUserRef(
+    { id: args.userId, name: args.userName },
+    { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
+  );
+  if (!member.ok) return member.clarify;
+  const userId = member.userId;
+  const memberLabel = member.label;
+  const evidence = await currentUserEvidence(ctx, userId);
+  if (!evidence || evidence.truncated) return { clarify: "I couldn't obtain complete evidence for that workspace member." };
+  const currentRate = await ctx.clockify.getWorkspaceMemberRate(userId, options.rateKind);
+  if (!currentRate) return { clarify: "I couldn't obtain exact scoped rate evidence for that workspace member." };
+  const targetSnapshot = captureTargetSnapshot(
+    "target",
+    { type: "user", id: userId, name: evidence.row.name },
+    { ...userProjection(evidence.row), scopedRate: currentRate },
+  );
+  const amountMinor = toMinor(args.amount, args.amountUnit);
+  return {
+    ...buildRatePreview({
+      targetType: "user",
+      targetId: userId,
+      scopeLabel: `for ${memberLabel}`,
+      amountMinor,
+      rateKind: options.rateKind,
+      kindNoun: "member",
+    }),
+    payload: {
+      userId,
+      amountMinor,
+      ...(options.includeRateKindInPayload ? { rateKind: options.rateKind } : {}),
+      ...(args.since !== undefined ? { since: args.since } : {}),
+    },
+    targetSnapshots: [targetSnapshot],
+    mutationPlan: {
+      mode: "single" as const,
+      steps: [{
+        id: options.planStepId,
+        kind: "primary",
+        targetFingerprint: targetSnapshot.fingerprint,
+        reconciliationStrategy: "update",
+      }],
+    },
+  };
+}
+
+export async function commitWorkspaceMemberRateStep(
+  ctx: ActionContext,
+  operation: ConfirmableOperation,
+  rateInput: { userId: string; amountMinor: number; since?: string; rateKind?: "HOURLY" | "COST" },
+  options: {
+    planStepId: string;
+    stepName: string;
+    actionName: string;
+    rateKind: "HOURLY" | "COST";
+    dispatch: (input: { userId: string; amountMinor: number; since?: string }) => Promise<void>;
+  },
+) {
+  return commitSingleDurableRiskyStep({
+    ctx,
+    operation,
+    planStepId: options.planStepId,
+    name: options.stepName,
+    verification: {
+      snapshots: operation.targetSnapshots ?? [],
+      async fetchSnapshot(snapshot) {
+        const projection = await scopedRateProjection(ctx, rateInput.userId, options.rateKind);
+        return projection ? { ref: snapshot.ref, projection } : undefined;
+      },
+    },
+    async dispatch() {
+      const dispatched = await dispatchWithReconciliation({
+        dispatch: async () => {
+          await options.dispatch({
+            userId: rateInput.userId,
+            amountMinor: rateInput.amountMinor,
+            ...(rateInput.since !== undefined ? { since: rateInput.since } : {}),
+          });
+          return true;
+        },
+        reconcile: async () => {
+          const current = await ctx.clockify.getWorkspaceMemberRate(rateInput.userId, options.rateKind);
+          if (!current || current.amountMinor !== rateInput.amountMinor) return undefined;
+          if (rateInput.since !== undefined && current.since !== rateInput.since) return undefined;
+          return true;
+        },
+      });
+      return {
+        externalId: rateInput.userId,
+        effect: {
+          rateKind: options.rateKind,
+          amountMinor: rateInput.amountMinor,
+          ...(rateInput.since !== undefined ? { since: rateInput.since } : {}),
+        },
+        detail: { reconciled: dispatched.reconciled },
+      };
+    },
+    success: () => successReceipt({
+      action: options.actionName,
+      entity: "user",
+      ids: { workspaceId: ctx.workspaceId },
+      changed: { updated: [{ type: "user", id: rateInput.userId }] },
+    }),
+  });
 }
 
 async function currentUserEvidence(ctx: ActionContext, id: string) {
@@ -138,6 +562,7 @@ async function fetchUserGroupSnapshot(ctx: ActionContext, snapshot: TargetSnapsh
 
 const listUsers = defineReadAction({
   name: "clockify_users_list",
+  ...USER_GROUP_API_METADATA.clockify_users_list,
   description: "List workspace users.",
   group: UG,
   schema: z.object({}),
@@ -149,6 +574,7 @@ const listUsers = defineReadAction({
 
 const inviteUser = defineRiskyAction({
   name: "clockify_users_invite",
+  ...USER_GROUP_API_METADATA.clockify_users_invite,
   description: "Invite a user to the workspace by email. External side effect (may email) — previews and requires confirmation. Email is NOT sent unless sendEmail is true.",
   group: UG,
   risks: ["external_side_effect"],
@@ -205,6 +631,7 @@ const inviteUser = defineRiskyAction({
 
 const updateRole = defineRiskyAction({
   name: "clockify_users_role_update",
+  ...USER_GROUP_API_METADATA.clockify_users_role_update,
   description:
     "Give a workspace member a manager role; the SCOPE depends on the role (live-verified): WORKSPACE_ADMIN = the whole workspace (no scope needed); PROJECT_MANAGER = a project (pass `projectId` or exact `projectName`); TEAM_MANAGER = a user group (pass `groupId` or exact `groupName`). Pass the RECIPIENT by `userId`/`userName` (or 'me'). Elevated write — previews and requires confirmation.",
   group: UG,
@@ -343,6 +770,7 @@ const updateRole = defineRiskyAction({
 
 const rateUpdate = defineRiskyAction({
   name: "clockify_users_rate_update",
+  ...USER_GROUP_API_METADATA.clockify_users_rate_update,
   description:
     'Set a workspace member\'s default billable hourly or cost rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by `userId`/`userName` (or "me"). `amount` is major units (e.g. 75 = 75.00) unless `amountUnit` is \'minor\'. Billing action — previews and requires confirmation.',
   group: "invoices",
@@ -358,64 +786,20 @@ const rateUpdate = defineRiskyAction({
     })
     .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
   async preview(ctx, args) {
-    // Resolve + VERIFY the member ("me" -> admin; a name -> a user id). A 24-hex
-    // id that is actually a project/task sails past a trust-the-id path and the
-    // rate PUT 404s, so resolveUserRef confirms a real workspace user at preview.
-    const member = await resolveUserRef(
-      { id: args.userId, name: args.userName },
-      { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
-    );
-    if (!member.ok) return member.clarify;
-    const userId = member.userId;
-    const memberLabel = member.label;
-    const evidence = await currentUserEvidence(ctx, userId);
-    if (!evidence || evidence.truncated) return { clarify: "I couldn't obtain complete evidence for that workspace member." };
-    const currentRate = await ctx.clockify.getWorkspaceMemberRate(userId, args.rateKind);
-    if (!currentRate) return { clarify: "I couldn't obtain exact scoped rate evidence for that workspace member." };
-    const targetSnapshot = captureTargetSnapshot(
-      "target",
-      { type: "user", id: userId, name: evidence.row.name },
-      { ...userProjection(evidence.row), scopedRate: currentRate },
-    );
-    const amountMinor = toMinor(args.amount, args.amountUnit);
-    return {
-      ...buildRatePreview({
-        targetType: "user",
-        targetId: userId,
-        scopeLabel: `for ${memberLabel}`,
-        amountMinor,
-        rateKind: args.rateKind,
-        kindNoun: "member",
-      }),
-      payload: { userId, rateKind: args.rateKind, amountMinor, ...(args.since !== undefined ? { since: args.since } : {}) },
-      targetSnapshots: [targetSnapshot],
-      mutationPlan: { mode: "single", steps: [{ id: "update-user-rate", kind: "primary", targetFingerprint: targetSnapshot.fingerprint, reconciliationStrategy: "update" }] },
-    };
+    return previewWorkspaceMemberRate(ctx, args, {
+      rateKind: args.rateKind,
+      planStepId: "update-user-rate",
+      includeRateKindInPayload: true,
+    });
   },
   async commit(ctx, payload, operation) {
     const rate = payload as { userId: string; rateKind: "HOURLY" | "COST"; amountMinor: number; since?: string };
-    return commitSingleDurableRiskyStep({
-      ctx, operation, planStepId: "update-user-rate", name: "Update user rate",
-      verification: {
-        snapshots: operation.targetSnapshots ?? [],
-        async fetchSnapshot(snapshot) {
-          const projection = await scopedRateProjection(ctx, rate.userId, rate.rateKind);
-          return projection ? { ref: snapshot.ref, projection } : undefined;
-        },
-      },
-      async dispatch() {
-        const dispatched = await dispatchWithReconciliation({
-          dispatch: async () => { await ctx.clockify.updateWorkspaceMemberRateAtomic(rate); return true; },
-          reconcile: async () => {
-            const current = await ctx.clockify.getWorkspaceMemberRate(rate.userId, rate.rateKind);
-            if (!current || current.amountMinor !== rate.amountMinor) return undefined;
-            if (rate.since !== undefined && current.since !== rate.since) return undefined;
-            return true;
-          },
-        });
-        return { externalId: rate.userId, effect: { rateKind: rate.rateKind, amountMinor: rate.amountMinor, ...(rate.since !== undefined ? { since: rate.since } : {}) }, detail: { reconciled: dispatched.reconciled } };
-      },
-      success: () => successReceipt({ action: "clockify_users_rate_update", entity: "user", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "user", id: rate.userId }] } }),
+    return commitWorkspaceMemberRateStep(ctx, operation, rate, {
+      planStepId: "update-user-rate",
+      stepName: "Update user rate",
+      actionName: "clockify_users_rate_update",
+      rateKind: rate.rateKind,
+      dispatch: (input) => ctx.clockify.updateWorkspaceMemberRateAtomic({ ...input, rateKind: rate.rateKind }),
     });
   },
 });
@@ -425,6 +809,7 @@ const rateUpdate = defineRiskyAction({
 // defineAction to keep the guard byte-identical.
 const deactivateUser = defineAction({
   name: "clockify_users_deactivate",
+  ...apiActionMetadataFields(USER_GROUP_API_METADATA.clockify_users_deactivate),
   description:
     "Deactivate a workspace user (removes their access). Pass the member by `userId`/`userName` — an id or the exact name, resolved + verified server-side. Elevated write — previews and requires confirmation.",
   featureGroup: UG,
@@ -439,6 +824,10 @@ const deactivateUser = defineAction({
     .refine((v) => v.userId !== undefined || v.userName !== undefined, {
       message: "Provide the member (id or exact name).",
     }),
+  referenceSelector: {
+    entityType: "user",
+    bindings: [{ referenceField: "externalId", argumentPath: "/userId" }],
+  },
   async handler(ctx, args) {
     // Resolve + VERIFY the member first (a name in either slot, a wrong-typed
     // 24-hex id ⇒ clarify) so the self-deactivation guard below holds on the
@@ -510,6 +899,7 @@ const deactivateUser = defineAction({
 
 const listGroups = defineReadAction({
   name: "clockify_groups_list",
+  ...USER_GROUP_API_METADATA.clockify_groups_list,
   description: "List user groups.",
   group: UG,
   schema: z.object({}),
@@ -521,6 +911,7 @@ const listGroups = defineReadAction({
 
 const getGroup = defineAction({
   name: "clockify_groups_get",
+  ...USER_GROUP_API_METADATA.clockify_groups_get,
   description: "Fetch a single user group by id, or by its exact `name` (resolved server-side).",
   featureGroup: UG,
   risks: ["read"],
@@ -536,7 +927,7 @@ const getGroup = defineAction({
       list: () => ctx.clockify.listGroups(),
     });
     if (!resolved.ok) {
-      return clarifyResult(resolved.clarify);
+      return clarifyResult(resolved.clarify, "id");
     }
     const entity = await ctx.clockify.getGroup(resolved.id);
     return { kind: "receipt", receipt: successReceipt({ action: "clockify_groups_get", entity: "group", ids: { workspaceId: ctx.workspaceId }, data: { entity } }) };
@@ -545,6 +936,7 @@ const getGroup = defineAction({
 
 const createGroup = defineRiskyAction({
   name: "clockify_groups_create",
+  ...USER_GROUP_API_METADATA.clockify_groups_create,
   description: "Create a user group. Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
@@ -597,6 +989,7 @@ const createGroup = defineRiskyAction({
 
 const updateGroup = defineRiskyAction({
   name: "clockify_groups_update",
+  ...USER_GROUP_API_METADATA.clockify_groups_update,
   description: "Rename a user group. Elevated write — previews and requires confirmation.",
   group: UG,
   risks: ["high_risk_write"],
@@ -643,6 +1036,7 @@ const updateGroup = defineRiskyAction({
 
 const deleteGroup = defineRiskyAction({
   name: "clockify_groups_delete",
+  ...USER_GROUP_API_METADATA.clockify_groups_delete,
   description:
     "Delete a user group. Pass the group id, or its exact `name` and the harness resolves it. Destructive — previews and requires confirmation.",
   group: UG,
@@ -739,6 +1133,7 @@ function partialGroupAdd(
 
 const addUser = defineRiskyAction({
   name: "clockify_groups_add_user",
+  ...USER_GROUP_API_METADATA.clockify_groups_add_user,
   description:
     "Add one or more members to a group. Pass the group by `groupId`/`groupName` and the members by `members` (an array where each entry is a user id, exact name, or 'me'); a single `userId`/`userName` is also accepted. The harness resolves names server-side and clarifies on an unknown one. Elevated write — previews ALL the adds as ONE card and requires confirmation.",
   group: UG,
@@ -869,6 +1264,7 @@ const addUser = defineRiskyAction({
 
 const removeUser = defineRiskyAction({
   name: "clockify_groups_remove_user",
+  ...USER_GROUP_API_METADATA.clockify_groups_remove_user,
   description:
     "Remove a user from a group. Pass the group by `groupId`/`groupName` and the user by `userId`/`userName` (or 'me') — the harness resolves names server-side and clarifies on an unknown one. Destructive — previews and requires confirmation.",
   group: UG,
@@ -928,6 +1324,45 @@ const removeUser = defineRiskyAction({
   },
 });
 
+export function defineWorkspaceMemberRateAction(input: {
+  name: "clockify_users_hourly_rate_update" | "clockify_users_cost_rate_update";
+  metadataKey: "clockify_users_hourly_rate_update" | "clockify_users_cost_rate_update";
+  rateKind: "HOURLY" | "COST";
+  planStepId: string;
+  stepName: string;
+  rateLabel: "hourly" | "cost";
+  dispatchKey: "updateWorkspaceMemberHourlyRateAtomic" | "updateWorkspaceMemberCostRateAtomic";
+}): ActionDefinition {
+  return defineRiskyAction({
+    name: input.name,
+    ...USER_GROUP_API_METADATA[input.metadataKey],
+    description:
+      `Set a workspace member's default ${input.rateLabel} rate — the rate shown in the Team section (distinct from a per-project member rate). Pass the member by \`userId\`/\`userName\` (or "me"). \`amount\` is major units (e.g. 75 = 75.00) unless \`amountUnit\` is 'minor'. Billing action — previews and requires confirmation.`,
+    group: "invoices",
+    risks: ["billing"],
+    mutationWorkflow: "durable",
+    mutationContract: userTargetContract("update"),
+    semanticLiteralAliases: USER_RATE_LITERAL_ALIASES,
+    schema: workspaceMemberRateSchema,
+    preview: (ctx, args) => previewWorkspaceMemberRate(ctx, args, {
+      rateKind: input.rateKind,
+      planStepId: input.planStepId,
+    }),
+    commit: (ctx, payload, operation) => commitWorkspaceMemberRateStep(
+      ctx,
+      operation,
+      payload as { userId: string; amountMinor: number; since?: string },
+      {
+        planStepId: input.planStepId,
+        stepName: input.stepName,
+        actionName: input.name,
+        rateKind: input.rateKind,
+        dispatch: (rateInput) => ctx.clockify[input.dispatchKey](rateInput),
+      },
+    ),
+  });
+}
+
 export const USER_GROUP_ACTIONS: ActionDefinition[] = [
   listUsers, inviteUser, updateRole, rateUpdate, deactivateUser,
   listGroups, getGroup, createGroup, updateGroup, deleteGroup, addUser, removeUser,
@@ -938,10 +1373,13 @@ export const USER_GROUP_STARTUP_RECONCILIATION = Object.freeze({
   clockify_users_invite: { "invite-user": "create" },
   clockify_users_role_update: { "update-user-role": "state-command" },
   clockify_users_rate_update: { "update-user-rate": "update" },
+  clockify_users_hourly_rate_update: { "update-user-hourly-rate": "update" },
+  clockify_users_cost_rate_update: { "update-user-cost-rate": "update" },
   clockify_users_deactivate: { "deactivate-user": "state-command" },
   clockify_groups_create: { "create-group": "create" },
   clockify_groups_update: { "update-group": "update" },
   clockify_groups_delete: { "delete-group": "delete" },
   clockify_groups_add_user: { "add-user-to-group-*": "update" },
+  clockify_groups_add_member: { "add-user-to-group": "update" },
   clockify_groups_remove_user: { "remove-user-from-group": "update" },
 } as const);

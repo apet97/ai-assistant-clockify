@@ -36,6 +36,13 @@ export interface UpdateWorkspaceMemberRateInput {
   since?: string;
 }
 
+/** Per-member workspace rate write without an endpoint chooser (v2 atomic API). */
+export interface UpdateWorkspaceMemberRateAtomicInput {
+  userId: string;
+  amountMinor: number;
+  since?: string;
+}
+
 /**
  * User & group slice of the {@link WorkspaceClient} port (goclmcp §2.13). Reads
  * are immediate; the writes run from the handler. Gotchas pinned by the unit
@@ -61,6 +68,8 @@ export interface UserPort {
   inviteUserAtomic(email: string, sendEmail: boolean): Promise<EntitySummary>;
   updateUserRoleAtomic(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary>;
   updateWorkspaceMemberRateAtomic(input: UpdateWorkspaceMemberRateInput): Promise<void>;
+  updateWorkspaceMemberHourlyRateAtomic(input: UpdateWorkspaceMemberRateAtomicInput): Promise<void>;
+  updateWorkspaceMemberCostRateAtomic(input: UpdateWorkspaceMemberRateAtomicInput): Promise<void>;
   deactivateUserAtomic(userId: string): Promise<EntitySummary>;
   inviteUser(email: string, sendEmail: boolean): Promise<EntitySummary>;
   updateUserRole(userId: string, role: string, entityId: string, sourceType?: string): Promise<EntitySummary>;

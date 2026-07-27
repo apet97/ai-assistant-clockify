@@ -76,5 +76,5 @@ describe("marketplace submission package", () => {
       .toThrow();
   // Four synchronous tsx subprocesses can exceed Vitest's 5s default while the
   // full verify suite saturates its worker ceiling; keep the allowance local.
-  }, 15_000);
+  }, 30_000);
 });

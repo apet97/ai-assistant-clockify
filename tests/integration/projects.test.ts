@@ -470,7 +470,7 @@ describe("project actions — risky writes (preview → commit)", () => {
     const fake = createFakeWorkspace({ projects: [{ id: "p1", name: "Website" }] });
     const preview = await executeAction({
       actionName: "clockify_projects_estimate_update",
-      args: { id: "p1", fields: { timeEstimate: { estimate: "PT8H", type: "MANUAL", active: true } } },
+      args: { id: "p1", timeEstimate: { estimate: "PT8H", type: "MANUAL", active: true } },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");

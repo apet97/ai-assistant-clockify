@@ -7,6 +7,8 @@ import {
   defineRiskyAction,
   type ActionContext,
   type ActionDefinition,
+  type CommitResult,
+  type ConfirmableOperation,
   type SemanticLiteralAlias,
   type TargetSnapshot,
 } from "../action.js";
@@ -20,7 +22,19 @@ import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshot
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateTimeOffPolicyInput, CreateTimeOffRequestInput, TimeOffPolicySummary, TimeOffRequestSummary } from "../../clockify/ports/time-off.js";
 import { DefinitiveWriteFailure } from "../../clockify/write-outcome.js";
-import { TIME_OFF_BALANCE_USER_BATCH_MAX } from "../safety-limits.js";
+import {
+  TIME_OFF_BALANCE_USER_BATCH_MAX,
+  TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+  TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+} from "../safety-limits.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiExposure,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 const REQUIRES_APPROVAL_LITERAL_ALIASES = Object.freeze([
   { path: "requiresApproval", value: false, authoredPhrases: Object.freeze(["does not require approval", "no approval required", "without approval"]) },
@@ -64,6 +78,374 @@ function addWorkdays(day: string, extra: number): string {
  */
 
 const TOA = "time_off_approvals" as const;
+
+type TimeOffActionName =
+  | "clockify_time_off_policies_list"
+  | "clockify_time_off_policies_get"
+  | "clockify_time_off_policies_create"
+  | "clockify_time_off_policies_update"
+  | "clockify_time_off_policies_archive"
+  | "clockify_time_off_requests_list"
+  | "clockify_time_off_requests_get"
+  | "clockify_time_off_requests_create"
+  | "clockify_time_off_requests_create_days"
+  | "clockify_time_off_requests_create_hours"
+  | "clockify_time_off_requests_delete"
+  | "clockify_time_off_approve"
+  | "clockify_time_off_deny"
+  | "clockify_time_off_balance_get"
+  | "clockify_time_off_balance_update";
+
+const TIME_OFF_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function timeOffEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "time-off.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function timeOffMaterialField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function timeOffApiMetadata(input: {
+  actionName: TimeOffActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: TIME_OFF_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function timeOffInternalMetadata(input: {
+  exposure: Exclude<ApiExposure, "api" | "local">;
+  reason: string;
+  primary: readonly string[];
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([...input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: TIME_OFF_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const timeOffEndpoint = Object.freeze({
+  policiesList: timeOffEndpointKey("read", "GET", "/workspaces/{workspaceId}/time-off/policies"),
+  policiesGet: timeOffEndpointKey("read", "GET", "/workspaces/{workspaceId}/time-off/policies/{id}"),
+  policiesCreate: timeOffEndpointKey("write", "POST", "/workspaces/{workspaceId}/time-off/policies"),
+  policiesUpdate: timeOffEndpointKey("write", "PUT", "/workspaces/{workspaceId}/time-off/policies/{id}"),
+  policiesStatus: timeOffEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/time-off/policies/{id}"),
+  requestsList: timeOffEndpointKey("read", "POST", "/workspaces/{workspaceId}/time-off/requests"),
+  requestsCreate: timeOffEndpointKey("write", "POST", "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests"),
+  requestsDelete: timeOffEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}"),
+  requestsStatus: timeOffEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}"),
+  balanceGet: timeOffEndpointKey("read", "GET", "/workspaces/{workspaceId}/time-off/balance/user/{userId}"),
+  balanceUpdate: timeOffEndpointKey("write", "PATCH", "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}"),
+  usersList: timeOffEndpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+});
+
+export const TIME_OFF_API_METADATA = Object.freeze({
+  clockify_time_off_policies_list: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_list",
+    operationId: "findPoliciesForWorkspace",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/time-off/policies",
+    access: "read",
+    primary: timeOffEndpoint.policiesList,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_time_off_policies_get: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_get",
+    operationId: "getPolicy",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/time-off/policies/{id}",
+    access: "read",
+    primary: timeOffEndpoint.policiesGet,
+    support: [timeOffEndpoint.policiesList],
+    materialFields: [],
+  }),
+  clockify_time_off_policies_create: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_create",
+    operationId: "createPolicy",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/time-off/policies",
+    access: "write",
+    primary: timeOffEndpoint.policiesCreate,
+    support: [timeOffEndpoint.policiesList, timeOffEndpoint.usersList],
+    materialFields: [
+      timeOffMaterialField("/name", "Policy name", "text", true),
+      timeOffMaterialField("/requiresApproval", "Requires approval", "boolean", false),
+      timeOffMaterialField("/daysPerYear", "Days per year", "number", false),
+      timeOffMaterialField("/negativeBalance", "Negative balance", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_time_off_policies_update: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_update",
+    operationId: "updatePolicy",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/time-off/policies/{id}",
+    access: "write",
+    primary: timeOffEndpoint.policiesUpdate,
+    support: [timeOffEndpoint.policiesGet, timeOffEndpoint.usersList],
+    materialFields: [
+      timeOffMaterialField("/id", "Policy", "entity", true),
+      timeOffMaterialField("/name", "Policy name", "text", false),
+      timeOffMaterialField("/requiresApproval", "Requires approval", "boolean", false),
+      timeOffMaterialField("/daysPerYear", "Days per year", "number", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_time_off_policies_archive: timeOffApiMetadata({
+    actionName: "clockify_time_off_policies_archive",
+    operationId: "updatePolicyStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-off/policies/{id}",
+    access: "write",
+    primary: timeOffEndpoint.policiesStatus,
+    support: [timeOffEndpoint.policiesGet],
+    materialFields: [
+      timeOffMaterialField("/id", "Policy", "entity", true),
+      timeOffMaterialField("/name", "Policy name", "text", false),
+      timeOffMaterialField("/archived", "Archived", "boolean", true),
+    ],
+  }),
+  clockify_time_off_requests_list: timeOffApiMetadata({
+    actionName: "clockify_time_off_requests_list",
+    operationId: "getTimeOffRequest",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/time-off/requests",
+    access: "read",
+    primary: timeOffEndpoint.requestsList,
+    support: [timeOffEndpoint.usersList],
+    materialFields: [],
+  }),
+  clockify_time_off_requests_get: timeOffInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one request by scanning the POST request-search result because Clockify exposes no GET request-by-id operation; it is not a fabricated get-one operation.",
+    primary: [timeOffEndpoint.requestsList],
+    support: [],
+  }),
+  clockify_time_off_requests_create: timeOffInternalMetadata({
+    exposure: "generic",
+    reason: "Combines DAYS and HOURS request bodies in one schema; use clockify_time_off_requests_create_days or clockify_time_off_requests_create_hours for unit-specific atomic operations.",
+    primary: [timeOffEndpoint.requestsCreate],
+    support: [
+      timeOffEndpoint.policiesList,
+      timeOffEndpoint.policiesGet,
+      timeOffEndpoint.requestsList,
+      timeOffEndpoint.balanceGet,
+    ],
+  }),
+  clockify_time_off_requests_create_days: timeOffApiMetadata({
+    actionName: "clockify_time_off_requests_create_days",
+    operationId: "createTimeOffRequest",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+    access: "write",
+    primary: timeOffEndpoint.requestsCreate,
+    support: [
+      timeOffEndpoint.policiesList,
+      timeOffEndpoint.policiesGet,
+      timeOffEndpoint.requestsList,
+      timeOffEndpoint.balanceGet,
+    ],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/start", "Start", "text", true),
+      timeOffMaterialField("/end", "End", "text", true),
+      timeOffMaterialField("/days", "Days", "number", false),
+      timeOffMaterialField("/halfDay", "Half day", "boolean", false),
+      timeOffMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_time_off_requests_create_hours: timeOffApiMetadata({
+    actionName: "clockify_time_off_requests_create_hours",
+    operationId: "createTimeOffRequest",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests",
+    access: "write",
+    primary: timeOffEndpoint.requestsCreate,
+    support: [
+      timeOffEndpoint.policiesList,
+      timeOffEndpoint.policiesGet,
+      timeOffEndpoint.requestsList,
+      timeOffEndpoint.balanceGet,
+    ],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/start", "Start", "text", true),
+      timeOffMaterialField("/end", "End", "text", true),
+      timeOffMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_time_off_requests_delete: timeOffApiMetadata({
+    actionName: "clockify_time_off_requests_delete",
+    operationId: "deleteTimeOffRequest",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}",
+    access: "write",
+    primary: timeOffEndpoint.requestsDelete,
+    support: [timeOffEndpoint.requestsList, timeOffEndpoint.policiesGet],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/requestId", "Request", "entity", true),
+    ],
+  }),
+  clockify_time_off_approve: timeOffApiMetadata({
+    actionName: "clockify_time_off_approve",
+    operationId: "changeTimeOffRequestStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}",
+    access: "write",
+    primary: timeOffEndpoint.requestsStatus,
+    support: [timeOffEndpoint.requestsList, timeOffEndpoint.policiesGet],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/requestId", "Request", "entity", true),
+      timeOffMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_time_off_deny: timeOffApiMetadata({
+    actionName: "clockify_time_off_deny",
+    operationId: "changeTimeOffRequestStatus",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-off/policies/{policyId}/requests/{requestId}",
+    access: "write",
+    primary: timeOffEndpoint.requestsStatus,
+    support: [timeOffEndpoint.requestsList, timeOffEndpoint.policiesGet],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/requestId", "Request", "entity", true),
+      timeOffMaterialField("/note", "Note", "text", false),
+    ],
+  }),
+  clockify_time_off_balance_get: timeOffApiMetadata({
+    actionName: "clockify_time_off_balance_get",
+    operationId: "getBalancesForUser",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/time-off/balance/user/{userId}",
+    access: "read",
+    primary: timeOffEndpoint.balanceGet,
+    support: [timeOffEndpoint.usersList],
+    materialFields: [],
+  }),
+  clockify_time_off_balance_update: timeOffApiMetadata({
+    actionName: "clockify_time_off_balance_update",
+    operationId: "updateBalance",
+    method: "PATCH",
+    path: "/workspaces/{workspaceId}/time-off/balance/policy/{policyId}",
+    access: "write",
+    primary: timeOffEndpoint.balanceUpdate,
+    support: [
+      timeOffEndpoint.policiesList,
+      timeOffEndpoint.policiesGet,
+      timeOffEndpoint.usersList,
+      timeOffEndpoint.balanceGet,
+    ],
+    materialFields: [
+      timeOffMaterialField("/policyId", "Policy", "entity", true),
+      timeOffMaterialField("/value", "Balance change", "number", true),
+      timeOffMaterialField("/note", "Note", "text", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: TIME_OFF_BALANCE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: true,
+      },
+    ],
+  }),
+} satisfies Readonly<Record<TimeOffActionName, ApiActionMetadataCarrier>>);
+
 const timeOffCreateContract = durableMutationContract({ source: "confirmed", targeting: { mode: "create_no_target" }, strategies: ["create"] });
 const timeOffSnapshotContract = (relations: ["target" | "parent", ...Array<"target" | "parent">], strategy: "create" | "update" | "delete" | "state-command") =>
   durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations }, strategies: [strategy] });
@@ -131,6 +513,7 @@ function sameRequest(row: TimeOffRequestSummary, policyId: string, input: Create
 // ── Policies ────────────────────────────────────────────────────────────────
 
 const listPolicies = defineReadAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_policies_list,
   name: "clockify_time_off_policies_list",
   description: "List time-off policies.",
   group: TOA,
@@ -148,6 +531,7 @@ const listPolicies = defineReadAction({
 });
 
 const getPolicy = defineAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_policies_get,
   name: "clockify_time_off_policies_get",
   description: "Fetch a single time-off policy by id, or by its exact `name` (resolved server-side).",
   featureGroup: TOA,
@@ -163,7 +547,7 @@ const getPolicy = defineAction({
       verb: "fetch",
       list: () => ctx.clockify.listTimeOffPolicies(),
     });
-    if (!resolved.ok) return clarifyResult(resolved.clarify);
+    if (!resolved.ok) return clarifyResult(resolved.clarify, "id");
     const entity = await ctx.clockify.getTimeOffPolicy(resolved.id);
     return {
       kind: "receipt",
@@ -178,6 +562,7 @@ const getPolicy = defineAction({
 });
 
 const createPolicy = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_policies_create,
   name: "clockify_time_off_policies_create",
   description:
     "Create a time-off policy. Scope it with `userIds` and/or `userGroupIds` — each entry an id, exact name, or 'me' (groups by id/exact name), resolved server-side, clarifies on an unknown one; defaults to just you when neither is given. Elevated write — previews and requires confirmation.",
@@ -195,8 +580,8 @@ const createPolicy = defineRiskyAction({
     requiresApproval: z.boolean().optional(),
     daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
     negativeBalance: z.boolean().optional(),
-    userIds: zStringList().optional(),
-    userGroupIds: zStringList().optional(),
+    userIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX)).optional(),
+    userGroupIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX)).optional(),
   }),
   async preview(ctx, args) {
     const scope = await resolveScopeRefs(ctx, args, { verb: "scope the policy to" });
@@ -271,6 +656,7 @@ const createPolicy = defineRiskyAction({
 });
 
 const updatePolicy = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_policies_update,
   name: "clockify_time_off_policies_update",
   description:
     "Update a time-off policy (name / approval / days per year) or re-scope it with `userIds`/`userGroupIds` (ids, exact names, or 'me'; resolved server-side, clarifies on an unknown one). Elevated write — previews and requires confirmation.",
@@ -285,8 +671,8 @@ const updatePolicy = defineRiskyAction({
       name: z.string().optional(),
       requiresApproval: z.boolean().optional(),
       daysPerYear: zNumberLike(z.number().nonnegative()).optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(TIME_OFF_POLICY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine(
       (v) =>
@@ -348,6 +734,7 @@ const updatePolicy = defineRiskyAction({
 });
 
 const archivePolicy = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_policies_archive,
   name: "clockify_time_off_policies_archive",
   description:
     "Archive (or unarchive) a time-off policy. Destructive — previews and requires confirmation.",
@@ -395,6 +782,7 @@ const archivePolicy = defineRiskyAction({
 // ── Requests ────────────────────────────────────────────────────────────────
 
 const listRequests = defineAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_requests_list,
   name: "clockify_time_off_requests_list",
   description:
     "List time-off requests (optional status / user filter; `userId` accepts a user id, exact name, or 'me').",
@@ -408,7 +796,7 @@ const listRequests = defineAction({
       adminUserId: ctx.adminUserId,
       listUsers: () => ctx.clockify.listUsers(),
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const { rows, truncated } = await ctx.clockify.listTimeOffRequests({ status: args.status, userId: user.userId });
     return {
       kind: "receipt",
@@ -424,6 +812,7 @@ const listRequests = defineAction({
 });
 
 const getRequest = defineReadAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_requests_get,
   name: "clockify_time_off_requests_get",
   description: "Fetch a single time-off request by id.",
   group: TOA,
@@ -439,7 +828,209 @@ const getRequest = defineReadAction({
   },
 });
 
+async function loadVerifiedDaysPolicy(ctx: ActionContext, policyId: string) {
+  const policies = await ctx.clockify.listTimeOffPolicies();
+  const policy = await resolveEntityRef(
+    { id: policyId },
+    {
+      noun: "time-off policy",
+      verb: "request time off under",
+      list: () => Promise.resolve(policies),
+      verifyId: true,
+    },
+  );
+  if (!policy.ok) return policy.clarify;
+  const policyRow = policies.rows.find((row) => row.id === policy.id);
+  if (!policyRow || policies.truncated) return { clarify: "The time-off policy could not be verified completely." };
+  if (policyRow.timeUnit === "HOURS") {
+    return { clarify: `Policy "${policyRow.name ?? policy.id}" is hour-based — use clockify_time_off_requests_create_hours instead.` };
+  }
+  if (policyRow.timeUnit !== undefined && policyRow.timeUnit !== "DAYS") {
+    return { clarify: `Policy "${policyRow.name ?? policy.id}" uses unsupported unit ${policyRow.timeUnit.toLowerCase()}.` };
+  }
+  const parentSnapshot = await policySnapshot(ctx, policyRow.id, "parent");
+  if (!parentSnapshot) return { clarify: "The time-off policy could not be verified completely." };
+  return { policy: policyRow, parentSnapshot };
+}
+
+export async function previewTimeOffRequestDays(
+  ctx: ActionContext,
+  args: { policyId: string; start: string; end: string; days?: number; halfDay?: boolean; note?: string },
+) {
+  const loaded = await loadVerifiedDaysPolicy(ctx, args.policyId);
+  if ("clarify" in loaded) return loaded;
+  const { policy, parentSnapshot } = loaded;
+  const now = nowDate(ctx);
+  const start = resolveRelativeDay(now, { date: args.start }, ctx.timeZone);
+  const end = resolveRelativeDay(now, { date: args.end }, ctx.timeZone);
+  const bad = [start === undefined ? args.start : undefined, end === undefined ? args.end : undefined].filter(
+    (value): value is string => value !== undefined,
+  );
+  if (bad.length || start === undefined || end === undefined) {
+    return {
+      clarify: `I couldn't make sense of the date${bad.length > 1 ? "s" : ""} ${bad.map((b) => `"${b}"`).join(" and ")} — use bare YYYY-MM-DD days for a DAYS policy.`,
+    };
+  }
+  if (start > end) return { clarify: "The time-off start date must be on or before the end date." };
+  const input = {
+    start,
+    end,
+    ...(args.days !== undefined ? { days: args.days } : {}),
+    ...(args.halfDay !== undefined ? { halfDay: args.halfDay } : {}),
+    ...(args.note !== undefined ? { note: args.note } : {}),
+  };
+  const requestedDays =
+    args.days ??
+    (args.halfDay ? 0.5 : Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000) + 1);
+  const warnings = ["This submits a request that notifies approvers."];
+  try {
+    const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
+    const policyBalance = balances.rows.find((row) => row.policyId === policy.id)?.balance;
+    if (policyBalance !== undefined && requestedDays > policyBalance) {
+      warnings.push(
+        `This requests ${requestedDays} day(s) but the policy balance is ${policyBalance} — Clockify will likely reject it.`,
+      );
+    }
+  } catch {
+    // Balance unavailable — submit as before.
+  }
+  const dayCountLabel = args.halfDay
+    ? "a half day"
+    : `${requestedDays} day${requestedDays === 1 ? "" : "s"}`;
+  return {
+    actionLabel: "Submit time-off request",
+    targets: [{ type: "time_off_policy", id: policy.id, name: policy.name }],
+    expectedChanges: [`Request ${dayCountLabel} off ${start} → ${end} under policy ${policy.name ?? policy.id}`],
+    reversibility: "You can delete the request afterward.",
+    warnings,
+    payload: { policyId: policy.id, input },
+    targetSnapshots: [parentSnapshot],
+    mutationPlan: { mode: "single" as const, steps: [{ id: "create-time-off-request", kind: "primary" as const, targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" as const }] },
+  };
+}
+
+export async function previewTimeOffRequestHours(
+  ctx: ActionContext,
+  args: { policyId: string; start: string; end: string; note?: string },
+) {
+  const policies = await ctx.clockify.listTimeOffPolicies();
+  const policy = await resolveEntityRef(
+    { id: args.policyId },
+    {
+      noun: "time-off policy",
+      verb: "request time off under",
+      list: () => Promise.resolve(policies),
+      verifyId: true,
+    },
+  );
+  if (!policy.ok) return policy.clarify;
+  const policyRow = policies.rows.find((row) => row.id === policy.id);
+  if (!policyRow || policies.truncated) return { clarify: "The time-off policy could not be verified completely." };
+  if (policyRow.timeUnit !== "HOURS") {
+    return { clarify: `Policy "${policyRow.name ?? policy.id}" is not hour-based — use clockify_time_off_requests_create_days instead.` };
+  }
+  const parentSnapshot = await policySnapshot(ctx, policyRow.id, "parent");
+  if (!parentSnapshot) return { clarify: "The time-off policy could not be verified completely." };
+  const input = {
+    start: args.start,
+    end: args.end,
+    timeUnit: "HOURS" as const,
+    ...(args.note !== undefined ? { note: args.note } : {}),
+  };
+  const startDay = args.start.slice(0, 10);
+  const hours = (Date.parse(args.end) - Date.parse(args.start)) / 3_600_000;
+  const warnings = ["This submits a request that notifies approvers."];
+  if (Number.isFinite(hours) && hours > 0) {
+    try {
+      const balances = await ctx.clockify.getTimeOffBalance(ctx.adminUserId);
+      const bal = balances.rows.find((row) => row.policyId === policy.id)?.balance;
+      if (bal !== undefined && hours > bal) {
+        warnings.push(`This requests ${hours}h but the policy balance is ${bal}h — Clockify will likely reject it.`);
+      }
+    } catch {
+      // Balance unavailable — submit as before.
+    }
+  }
+  return {
+    actionLabel: "Request time off",
+    targets: [],
+    expectedChanges: [`Request ${Number.isFinite(hours) && hours > 0 ? `${hours}h` : "hours"} off on ${startDay} under "${policyRow.name ?? policy.id}"`],
+    reversibility: "Cancel or have the request denied in Clockify.",
+    warnings,
+    payload: { policyId: policy.id, input },
+    targetSnapshots: [parentSnapshot],
+    mutationPlan: { mode: "single" as const, steps: [{ id: "create-time-off-request", kind: "primary" as const, targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" as const }] },
+  };
+}
+
+export async function commitTimeOffRequest(
+  ctx: ActionContext,
+  payload: unknown,
+  operation: ConfirmableOperation,
+): Promise<CommitResult> {
+  const { policyId, input } = payload as { policyId: string; input: CreateTimeOffRequestInput };
+  let baselineIds: string[];
+  try {
+    const baseline = await ctx.clockify.listTimeOffRequests();
+    if (baseline.truncated) {
+      return errorReceipt({
+        action: operation.actionName,
+        code: "create_baseline_unavailable",
+        message: "Clockify returned an incomplete time-off request list immediately before dispatch. No request was created.",
+        recovery: { hint: "Refresh and preview the request again when the complete list is available.", retryable: true },
+      });
+    }
+    baselineIds = baseline.rows.map((row) => row.id);
+  } catch {
+    return errorReceipt({
+      action: operation.actionName,
+      code: "create_baseline_unavailable",
+      message: "The time-off request list could not be read immediately before dispatch. No request was created.",
+      recovery: { hint: "Refresh and preview the request again after Clockify reads recover.", retryable: true },
+    });
+  }
+  const snapshots = operation.targetSnapshots ?? [];
+  let verificationFailure: "stale_target" | "stale_parent" | undefined;
+  const step = await executeDurableRiskyStep({
+    ctx, operation, planStepId: "create-time-off-request", index: 0, name: "Create time-off request",
+    preparedDetail: { preDispatch: { strategy: "time_off_request_create_baseline", ids: baselineIds, truncated: false }, targetSnapshots: snapshots },
+    dispatch: async () => {
+      const verified = await verifyTargetSnapshots(snapshots, (snapshot) => fetchTimeOffSnapshot(ctx, snapshot));
+      if (!verified.ok) {
+        verificationFailure = verified.code;
+        throw new DefinitiveWriteFailure("VERIFY", "create-time-off-request", verified.code);
+      }
+      const result = await dispatchWithReconciliation({ dispatch: () => ctx.clockify.createTimeOffRequestAtomic(policyId, input), reconcile: async () => { const row = await reconcileCreate({ beforeIds: baselineIds, list: () => ctx.clockify.listTimeOffRequests(), matches: (candidate) => sameRequest(candidate, policyId, input, ctx.adminUserId) }); return row ? { id: row.id, name: row.id } : undefined; } });
+      const req = result.value;
+      return { externalId: req.id, effect: { created: { type: "time_off_request", id: req.id } }, detail: { reconciled: result.reconciled } };
+    },
+  });
+  if (verificationFailure) {
+    return errorReceipt({
+      action: operation.actionName,
+      code: verificationFailure,
+      message: "The time-off policy changed or could not be verified. No Clockify mutation was sent.",
+      recovery: { hint: "Refresh the policy and create a fresh preview.", retryable: true },
+    });
+  }
+  if (step.status === "succeeded") {
+    const receipt = successReceipt({ action: operation.actionName, entity: "time_off_request", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "time_off_request", id: step.externalId ?? "unknown" }] } });
+    return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;
+  }
+  return errorReceipt({
+    action: operation.actionName,
+    code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
+    message: step.status === "outcome_unknown"
+      ? "Clockify did not provide a definitive response, so the request may or may not have been created."
+      : "Clockify definitively rejected time-off request creation.",
+    recovery: step.status === "outcome_unknown"
+      ? { hint: "Verify the exact request in Clockify before deciding whether to try again.", retryable: false }
+      : { hint: "Correct the request details and preview again.", retryable: true },
+  });
+}
+
 const createRequest = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_requests_create,
   name: "clockify_time_off_requests_create",
   description:
     "Submit a time-off request under a policy — pass `policyId` or the exact `policyName` (resolved server-side; do NOT list policies first — an unknown name clarifies with the real options). `start`/`end` accept YYYY-MM-DD or a relative day (tomorrow/next monday…). For 'N days off next/this week' you do NOT need exact dates — pass `days` + `week` and the harness picks the first N workdays (shown in the preview). Never ask which days when a week was given. For an HOUR-based policy, pass the day in `start` plus `hours` (the harness builds the hour window). External side effect (notifies approvers) — previews and requires confirmation.",
@@ -549,7 +1140,7 @@ const createRequest = defineRiskyAction({
           input: { start: startIso, end: endIso, timeUnit: "HOURS", ...(args.note !== undefined ? { note: args.note } : {}) },
         },
         targetSnapshots: [parentSnapshot],
-        mutationPlan: { mode: "single", steps: [{ id: "create-time-off-request", kind: "primary", targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" }] },
+        mutationPlan: { mode: "single" as const, steps: [{ id: "create-time-off-request", kind: "primary" as const, targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" as const }] },
       };
     }
     if (policyUnit !== undefined && policyUnit !== "DAYS") {
@@ -631,73 +1222,14 @@ const createRequest = defineRiskyAction({
       warnings,
       payload: { policyId: policy.id, input },
       targetSnapshots: [parentSnapshot],
-      mutationPlan: { mode: "single", steps: [{ id: "create-time-off-request", kind: "primary", targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" }] },
+      mutationPlan: { mode: "single" as const, steps: [{ id: "create-time-off-request", kind: "primary" as const, targetFingerprint: parentSnapshot.fingerprint, reconciliationStrategy: "create" as const }] },
     };
   },
-  async commit(ctx, payload, operation) {
-    const { policyId, input } = payload as { policyId: string; input: CreateTimeOffRequestInput };
-    let baselineIds: string[];
-    try {
-      const baseline = await ctx.clockify.listTimeOffRequests();
-      if (baseline.truncated) {
-        return errorReceipt({
-          action: operation.actionName,
-          code: "create_baseline_unavailable",
-          message: "Clockify returned an incomplete time-off request list immediately before dispatch. No request was created.",
-          recovery: { hint: "Refresh and preview the request again when the complete list is available.", retryable: true },
-        });
-      }
-      baselineIds = baseline.rows.map((row) => row.id);
-    } catch {
-      return errorReceipt({
-        action: operation.actionName,
-        code: "create_baseline_unavailable",
-        message: "The time-off request list could not be read immediately before dispatch. No request was created.",
-        recovery: { hint: "Refresh and preview the request again after Clockify reads recover.", retryable: true },
-      });
-    }
-    const snapshots = operation.targetSnapshots ?? [];
-    let verificationFailure: "stale_target" | "stale_parent" | undefined;
-    const step = await executeDurableRiskyStep({
-      ctx, operation, planStepId: "create-time-off-request", index: 0, name: "Create time-off request",
-      preparedDetail: { preDispatch: { strategy: "time_off_request_create_baseline", ids: baselineIds, truncated: false }, targetSnapshots: snapshots },
-      dispatch: async () => {
-        const verified = await verifyTargetSnapshots(snapshots, (snapshot) => fetchTimeOffSnapshot(ctx, snapshot));
-        if (!verified.ok) {
-          verificationFailure = verified.code;
-          throw new DefinitiveWriteFailure("VERIFY", "create-time-off-request", verified.code);
-        }
-        const result = await dispatchWithReconciliation({ dispatch: () => ctx.clockify.createTimeOffRequestAtomic(policyId, input), reconcile: async () => { const row = await reconcileCreate({ beforeIds: baselineIds, list: () => ctx.clockify.listTimeOffRequests(), matches: (candidate) => sameRequest(candidate, policyId, input, ctx.adminUserId) }); return row ? { id: row.id, name: row.id } : undefined; } });
-        const req = result.value;
-        return { externalId: req.id, effect: { created: { type: "time_off_request", id: req.id } }, detail: { reconciled: result.reconciled } };
-      },
-    });
-    if (verificationFailure) {
-      return errorReceipt({
-        action: operation.actionName,
-        code: verificationFailure,
-        message: "The time-off policy changed or could not be verified. No Clockify mutation was sent.",
-        recovery: { hint: "Refresh the policy and create a fresh preview.", retryable: true },
-      });
-    }
-    if (step.status === "succeeded") {
-      const receipt = successReceipt({ action: "clockify_time_off_requests_create", entity: "time_off_request", ids: { workspaceId: ctx.workspaceId }, changed: { created: [{ type: "time_off_request", id: step.externalId ?? "unknown" }] } });
-      return isJournalDegradedStep(step) ? withJournalDegradedWarning(receipt) : receipt;
-    }
-    return errorReceipt({
-      action: operation.actionName,
-      code: step.status === "outcome_unknown" ? "commit_outcome_unknown" : "write_failed",
-      message: step.status === "outcome_unknown"
-        ? "Clockify did not provide a definitive response, so the request may or may not have been created."
-        : "Clockify definitively rejected time-off request creation.",
-      recovery: step.status === "outcome_unknown"
-        ? { hint: "Verify the exact request in Clockify before deciding whether to try again.", retryable: false }
-        : { hint: "Correct the request details and preview again.", retryable: true },
-    });
-  },
+  commit: commitTimeOffRequest,
 });
 
 const deleteRequest = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_requests_delete,
   name: "clockify_time_off_requests_delete",
   description: "Delete a time-off request. Destructive — previews and requires confirmation.",
   group: TOA,
@@ -739,6 +1271,7 @@ const deleteRequest = defineRiskyAction({
 function decisionAction(decision: "approve" | "deny"): ActionDefinition {
   const statusType = decision === "approve" ? "APPROVED" : "REJECTED";
   return defineRiskyAction({
+    ...TIME_OFF_API_METADATA[`clockify_time_off_${decision}`],
     name: `clockify_time_off_${decision}`,
     description: `${decision === "approve" ? "Approve" : "Deny"} a time-off request. External side effect (notifies the requester) — previews and requires confirmation.`,
     group: TOA,
@@ -787,6 +1320,7 @@ const denyRequest = decisionAction("deny");
 // ── Balances ────────────────────────────────────────────────────────────────
 
 const getBalance = defineAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_balance_get,
   name: "clockify_time_off_balance_get",
   description: "Get a user's time-off balances (defaults to you; `userId` accepts a user id, exact name, or 'me').",
   featureGroup: TOA,
@@ -799,7 +1333,7 @@ const getBalance = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const { rows, truncated } = await ctx.clockify.getTimeOffBalance(user.userId);
     return {
       kind: "receipt",
@@ -815,6 +1349,7 @@ const getBalance = defineAction({
 });
 
 const updateBalance = defineRiskyAction({
+  ...TIME_OFF_API_METADATA.clockify_time_off_balance_update,
   name: "clockify_time_off_balance_update",
   description:
     "Adjust users' time-off balance for a policy. Pass the policy by id or exact name, and `userIds` as ids/exact names/'me' — resolved server-side, clarifies on an unknown one. Elevated write — previews and requires confirmation.",

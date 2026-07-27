@@ -624,6 +624,36 @@ button.chip.chip-selected {
   font-size: var(--fs-sm);
 }
 
+/* T15-E: v2 presenter facts (a definition list), references, and recovery
+ * (both plain read-only text). */
+.receipt-facts {
+  margin: var(--sp-2) 0 0;
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--sp-1) var(--sp-2);
+  font-size: var(--fs-sm);
+}
+.receipt-facts dt {
+  color: var(--text-3);
+  font-weight: 500;
+}
+.receipt-facts dd,
+.receipt-references,
+.recovery {
+  margin: 0;
+  color: var(--text-2);
+}
+.receipt-references {
+  margin: var(--sp-2) 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-sm);
+}
+.recovery {
+  margin: var(--sp-2) 0 0;
+  font-size: var(--fs-sm);
+}
+
 .undo-done {
   display: inline-flex;
   align-items: center;

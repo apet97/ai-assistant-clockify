@@ -126,21 +126,21 @@ describe("task actions", () => {
     expect(fake.counts.createTaskAtomic ?? 0).toBe(0);
   });
 
-  it("clockify_tasks_update resolves assignee NAMES to ids at preview time", async () => {
+  it("clockify_tasks_assignees_replace resolves assignee NAMES to ids at preview time", async () => {
     const fake = createFakeWorkspace(seedWithUsers());
     const preview = await executeAction({
-      actionName: "clockify_tasks_update",
+      actionName: "clockify_tasks_assignees_replace",
       args: { projectId: "p1", id: "t1", assigneeIds: ["Bob", "me"] },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect((preview.operation.payload as any).patch.assigneeIds).toEqual(["u2", "admin-1"]);
+    expect((preview.operation.payload as any).assigneeIds).toEqual(["u2", "admin-1"]);
   });
 
-  it("clockify_tasks_update clarifies on an unknown assignee name (never previews a doomed commit)", async () => {
+  it("clockify_tasks_assignees_replace clarifies on an unknown assignee name (never previews a doomed commit)", async () => {
     const fake = createFakeWorkspace(seedWithUsers());
     const result = await executeAction({
-      actionName: "clockify_tasks_update",
+      actionName: "clockify_tasks_assignees_replace",
       args: { projectId: "p1", id: "t1", assigneeIds: ["Ghost"] },
       context: makeContext(fake),
     });
@@ -258,15 +258,15 @@ describe("task actions — name→id resolution at preview time (live-loop FIX 1
     expect(fake.state.tasks[0].name).toBe("Design v2");
   });
 
-  it("clockify_tasks_update resolves NAMES passed in the id slots (the audit-log failure shape)", async () => {
+  it("clockify_tasks_status_update resolves NAMES passed in the id slots (the audit-log failure shape)", async () => {
     const fake = createFakeWorkspace(seed());
     const preview = await executeAction({
-      actionName: "clockify_tasks_update",
+      actionName: "clockify_tasks_status_update",
       args: { projectId: "Website", id: "Design", status: "DONE" },
       context: makeContext(fake),
     });
     if (preview.kind !== "preview") throw new Error("expected a preview");
-    expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1" });
+    expect(preview.operation.payload).toMatchObject({ projectId: "p1", id: "t1", status: "DONE" });
   });
 
   it("clockify_tasks_update clarifies on an unknown task name (never previews a doomed commit)", async () => {

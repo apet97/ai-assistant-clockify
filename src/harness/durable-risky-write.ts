@@ -1,10 +1,12 @@
 import type {
   ActionContext,
+  ActionDefinition,
   CommitResult,
   ConfirmableOperation,
   ExternalMutationPlan,
   TargetSnapshot,
 } from "./action.js";
+import { mutationPlanContractError } from "./action.js";
 import type { JournaledMutationStep } from "./mutation-contract.js";
 import {
   executeStep,
@@ -180,4 +182,15 @@ export async function commitSingleDurableRiskyStep(input: {
     message: "Clockify definitively rejected this change.",
     recovery: { hint: "Correct the request and preview it again.", retryable: true },
   });
+}
+
+/** Assistant-origin preparation requires exactly one primary host step. */
+export function validateAssistantPrimaryMutationPlan(
+  action: ActionDefinition,
+  plan: ExternalMutationPlan | undefined,
+): string | undefined {
+  if (!plan) return "missing_mutation_plan";
+  const primaries = plan.steps.filter((step) => step.kind === "primary");
+  if (primaries.length !== 1) return "assistant_requires_single_primary";
+  return mutationPlanContractError(action.mutationContract, plan);
 }

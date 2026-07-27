@@ -22,6 +22,11 @@ import {
   type PrivateProductionSamples,
   type PrivateProductionSourceRelationship,
 } from "../performance/private-production-contract.js";
+import {
+  classifyHistoricalV1Evidence,
+  type EvidenceTargetAssistantEngine,
+  type HistoricalV1EvidenceClassification,
+} from "./release-evidence.js";
 
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -36,7 +41,7 @@ export interface PrivateProductionReleaseEvidenceInput {
   expectedCandidateSha: string;
 }
 
-export interface PrivateProductionReleaseValidation {
+export interface PrivateProductionReleaseValidation extends HistoricalV1EvidenceClassification {
   schemaVersion: 1;
   conclusion: "passed";
   sourceCandidateSha: string;
@@ -292,7 +297,9 @@ function validateMetrics(value: unknown, samples: PrivateProductionSamples): voi
  * `/version` response. Stored verdict booleans are never accepted on trust. */
 export function validatePrivateProductionReleaseEvidence(
   input: PrivateProductionReleaseEvidenceInput,
+  targetAssistantEngine: EvidenceTargetAssistantEngine = "v1",
 ): PrivateProductionReleaseValidation {
+  const classification = classifyHistoricalV1Evidence(targetAssistantEngine);
   const expectedCandidateSha = fullCommit(input.expectedCandidateSha, "expected candidate SHA");
   const evidence = object(input.evidence, "private-production evidence");
   exactKeys(evidence, [
@@ -363,6 +370,7 @@ export function validatePrivateProductionReleaseEvidence(
   assertSecretFreeEvidence(evidence as unknown as PrivateProductionEvidence);
 
   return {
+    ...classification,
     schemaVersion: 1,
     conclusion: "passed",
     sourceCandidateSha: expectedCandidateSha,
@@ -459,7 +467,7 @@ function main(): void {
       "deployed version",
     ),
     expectedCandidateSha: sourceCandidateSha,
-  });
+  }, "v1");
   writeAtomic(
     process.env.PRIVATE_PRODUCTION_VALIDATION_PATH ?? "/tmp/private-production-release-validation.json",
     result,

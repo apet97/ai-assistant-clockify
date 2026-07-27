@@ -25,6 +25,11 @@ function templateKeys(): Set<string> {
 }
 
 describe(".env.example template", () => {
+  it("documents the ASSISTANT_ENGINE schema key", () => {
+    expect(ENV_SCHEMA_KEYS).toContain("ASSISTANT_ENGINE");
+    expect(templateKeys()).toContain("ASSISTANT_ENGINE");
+  });
+
   it("documents every env var the config schema accepts", () => {
     const documented = templateKeys();
     const missing = ENV_SCHEMA_KEYS.filter((key) => !documented.has(key));

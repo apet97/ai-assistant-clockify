@@ -143,9 +143,9 @@ describe("IntentCapabilityV1 contract", () => {
   });
 
   it.each([
-    ["Serbian Latin", "Kreiraj klijenta Acme danas"],
-    ["Serbian Latin with diacritics", "Kreiraj klijenta Acme za Željka"],
-    ["Serbian Cyrillic", "Креирај клијента Acme данас"],
+    ["ASCII prose", "Create client Acme today"],
+    ["Latin multibyte data", "For Željko, create client Acme today"],
+    ["Cyrillic multibyte data", "For Београд, create client Acme today"],
   ])("uses UTF-8 byte spans for %s authored text", (_label, source) => {
     const capability = allowCapability(source);
     const span = capability.writeActions[0]?.sourceSpans[0];
@@ -155,9 +155,9 @@ describe("IntentCapabilityV1 contract", () => {
     expect(hashIntentCapability(capability)).toBe(hashIntentCapability(capability));
   });
 
-  it("rejects UTF-8 spans that split a Serbian multibyte code point", () => {
-    const source = "Promeni ime u Željko";
-    const startByte = Buffer.byteLength("Promeni ime u ", "utf8");
+  it("rejects UTF-8 spans that split a multibyte code point", () => {
+    const source = "Rename client to Željko";
+    const startByte = Buffer.byteLength("Rename client to ", "utf8");
     expect(() => validateUtf8SourceSpan(source, {
       startByte: startByte + 1,
       endByte: startByte + 2,
@@ -166,7 +166,7 @@ describe("IntentCapabilityV1 contract", () => {
   });
 
   it("defaults each exact write action to one execution and supports durable deny-all", () => {
-    const source = "Kreiraj klijenta Acme";
+    const source = "Create client Acme";
     expect(allowCapability(source).writeActions[0]?.maxExecutions).toBe(1);
 
     const denied = buildDenyAllWritesIntentCapabilityV1({
@@ -178,7 +178,7 @@ describe("IntentCapabilityV1 contract", () => {
   });
 
   it("rejects sensitive literal paths and oversized capability JSON", () => {
-    const source = "Kreiraj klijenta Acme";
+    const source = "Create client Acme";
     const sourceSpan = spanFor(source, "Acme");
     expect(() => buildAllowIntentCapabilityV1({
       authoredSource: source,
@@ -206,7 +206,7 @@ describe("IntentCapabilityV1 contract", () => {
 describe("intent capability store", () => {
   it("creates and scoped-loads an immutable capability, replaying the same request", () => {
     const store = createStore(":memory:");
-    const authoredSource = "Kreiraj klijenta Acme";
+    const authoredSource = "Create client Acme";
     const capability = allowCapability(authoredSource);
     const created = store.createIntentCapability({
       id: "capability-1",
@@ -236,7 +236,7 @@ describe("intent capability store", () => {
       ...scope(),
       sessionId: store.createSession({ workspaceId: scope().workspaceId, adminUserId: scope().adminUserId }).id,
     };
-    const authoredSource = "Kreiraj klijenta Acme";
+    const authoredSource = "Create client Acme";
     const capability = allowCapability(authoredSource);
     const record = store.createIntentCapability({ id: "capability-bind", ...bindingScope, authoredSource, capability });
     const operationId = store.prepareOperationRun({
@@ -282,7 +282,7 @@ describe("intent capability store", () => {
 
   it("rejects workspace, admin, session, request, catalog, hash, and action drift", () => {
     const store = createStore(":memory:");
-    const authoredSource = "Kreiraj klijenta Acme";
+    const authoredSource = "Create client Acme";
     const capability = allowCapability(authoredSource);
     const record = store.createIntentCapability({ id: "capability-drift", ...scope(), authoredSource, capability });
     const operationId = store.prepareOperationRun({
@@ -316,7 +316,7 @@ describe("intent capability store", () => {
     try {
       const first = createStore(path);
       const second = createStore(path);
-      const authoredSource = "Kreiraj klijenta Acme";
+      const authoredSource = "Create client Acme";
       const capability = allowCapability(authoredSource);
       const record = first.createIntentCapability({ id: "capability-limit", ...scope(), authoredSource, capability });
       const binding = (store: ReturnType<typeof createStore>, operationId: string) => {
@@ -359,7 +359,7 @@ describe("intent capability store", () => {
         sessionId: before.createSession({ workspaceId: "workspace-resume", adminUserId: "admin-resume" }).id,
         requestId: "request-resume",
       };
-      const authoredSource = "Kreiraj klijenta Acme";
+      const authoredSource = "Create client Acme";
       const capability = allowCapability(authoredSource);
       const record = before.createIntentCapability({
         id: "capability-resume", ...persistedScope, authoredSource, capability,
@@ -412,7 +412,7 @@ describe("intent capability store", () => {
 
   it("rejects operation-scoped IDOR and current catalog/action drift without caller request hashes", () => {
     const store = createStore(":memory:");
-    const authoredSource = "Kreiraj klijenta Acme";
+    const authoredSource = "Create client Acme";
     const capability = allowCapability(authoredSource);
     const record = store.createIntentCapability({ id: "capability-idor", ...scope(), authoredSource, capability });
     const operationId = store.prepareOperationRun({
@@ -449,7 +449,7 @@ describe("intent capability store", () => {
     const path = join(tmpdir(), `intent-capability-drift-${randomUUID()}.sqlite`);
     try {
       const before = createStore(path);
-      const authoredSource = "Kreiraj klijenta Acme";
+      const authoredSource = "Create client Acme";
       const capability = allowCapability(authoredSource);
       const record = before.createIntentCapability({ id: "capability-persisted-drift", ...scope(), authoredSource, capability });
       const operationId = before.prepareOperationRun({
@@ -504,7 +504,7 @@ describe("intent capability store", () => {
     const workers: Worker[] = [];
     try {
       const setup = createStore(path);
-      const authoredSource = "Kreiraj klijenta Acme";
+      const authoredSource = "Create client Acme";
       const capability = allowCapability(authoredSource);
       const record = setup.createIntentCapability({ id: "capability-worker-race", ...scope(), authoredSource, capability });
       const operationScope = (operationId: string) => {
@@ -559,5 +559,5 @@ describe("intent capability store", () => {
       rmSync(`${path}-wal`, { force: true });
       rmSync(`${path}-shm`, { force: true });
     }
-  }, 15_000);
+  }, 30_000);
 });

@@ -52,6 +52,27 @@ function deployedVersion() {
 }
 
 describe("private-production release evidence", () => {
+  it("classifies existing conclusions as historical v1 evidence and rejects v2 reuse without changing hashes", () => {
+    const artifact = evidence();
+    const measurementHash = artifact.measurements.sha256;
+
+    expect(validatePrivateProductionReleaseEvidence({
+      evidence: artifact,
+      deployedVersion: deployedVersion(),
+      expectedCandidateSha: CANDIDATE_SHA,
+    }, "v1")).toMatchObject({
+      assistantEngine: "v1",
+      evidenceStatus: "historical",
+      validForV2: false,
+    });
+    expect(() => validatePrivateProductionReleaseEvidence({
+      evidence: artifact,
+      deployedVersion: deployedVersion(),
+      expectedCandidateSha: CANDIDATE_SHA,
+    }, "v2")).toThrow(/historical v1 evidence is not valid for v2/iu);
+    expect(artifact.measurements.sha256).toBe(measurementHash);
+  });
+
   it("binds every passing aggregate to the exact deployed candidate", () => {
     expect(validatePrivateProductionReleaseEvidence({
       evidence: evidence(),

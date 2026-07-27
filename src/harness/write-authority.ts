@@ -99,9 +99,12 @@ const local = (): ActionAuthoritySemantics => ({
 const ACTION_SEMANTICS = Object.freeze({
   assistant_update_permissions: local(),
   clockify_start_timer: single("start-timer", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]", "operation.body.userId"], defaults: ["operation.body.start"] }),
+  clockify_entries_create: single("create-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
+  clockify_entries_start: single("start-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]", "operation.body.userId"], defaults: ["operation.body.start"] }),
   clockify_stop_timer: single("stop-timer", { derivedIds: ["operation.entryId", "operation.userId"] }),
   clockify_log_work: single("log-time-entry", { derivedIds: ["operation.projectId", "operation.taskId", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"] }),
   clockify_fix_entry: single("update-time-entry", { derivedIds: ["operation.entryId", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
+  clockify_entries_update: single("update-time-entry", { derivedIds: ["operation.id", "operation.projectId", "operation.taskId", "operation.tagIds", "operation.tagIds[]", "operation.body.projectId", "operation.body.taskId", "operation.body.tagIds[]"], defaults: ["operation.body.start"] }),
   clockify_entries_delete: single("delete-time-entry", { derivedIds: ["operation.id"] }),
   clockify_entries_mark_invoiced: repeated(1, "ids[]", [plan("single", step("mark-entries-invoiced"))], { derivedIds: ["operation.entryIds[]"] }, MARK_INVOICED_ENTRY_BATCH_MAX),
   clockify_create_work_package: fixed(5, [
@@ -116,9 +119,13 @@ const ACTION_SEMANTICS = Object.freeze({
     plan("single", step("delete-project")),
     plan("curated", step("archive-project-for-delete"), step("delete-project"), step("restore-project", "compensation")),
   ], { derivedIds: ["operation.id", "operation.projectId"] }),
+  clockify_projects_delete_archived: single("delete-archived-project", { derivedIds: ["operation.id", "operation.projectId"] }),
   clockify_projects_rate_update: single("update-project-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_projects_member_hourly_rate_update: single("update-project-member-hourly-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_projects_member_cost_rate_update: single("update-project-member-cost-rate", { derivedIds: ["operation.projectId", "operation.userId"], authenticatedSelfLiterals: ["userId"] }),
   clockify_projects_estimate_update: single("update-project-estimate", { derivedIds: ["operation.projectId"] }),
   clockify_projects_memberships_update: single("update-project-memberships", { derivedIds: ["operation.projectId", "operation.userIds[]", "operation.memberships[].userId"], authenticatedSelfLiterals: ["addUserIds[]"] }),
+  clockify_projects_memberships_replace: single("replace-project-memberships", { derivedIds: ["operation.projectId", "operation.memberships[].userId"] }),
   clockify_tasks_create: single("create-task", { derivedIds: ["operation.projectId", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]"] }),
   clockify_tasks_update: single("update-task", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]", "operation.patch.assigneeIds[]"] }),
   clockify_tasks_delete: fixed(3, [
@@ -126,21 +133,32 @@ const ACTION_SEMANTICS = Object.freeze({
     plan("curated", step("complete-task-for-delete"), step("delete-task"), step("restore-task-status", "compensation")),
   ], { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.doneBody.projectId"] }),
   clockify_tasks_rate_update: single("update-task-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
+  clockify_tasks_delete_completed: single("delete-completed-task", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id"] }),
+  clockify_tasks_status_update: single("update-task-status", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.body.projectId"] }),
+  clockify_tasks_assignees_replace: single("replace-task-assignees", { derivedIds: ["operation.projectId", "operation.taskId", "operation.id", "operation.assigneeIds[]", "operation.body.projectId", "operation.body.assigneeIds[]"] }),
+  clockify_tasks_hourly_rate_update: single("update-task-hourly-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
+  clockify_tasks_cost_rate_update: single("update-task-cost-rate", { derivedIds: ["operation.projectId", "operation.taskId"] }),
   clockify_clients_create: fixed(2, [plan("single", step("create-client")), plan("curated", step("create-client"), step("enrich-client"))], { derivedIds: ["operation.enrichment.currencyId"] }),
+  clockify_clients_create_base: single("create-client-base"),
   clockify_clients_update: single("update-client", { derivedIds: ["operation.clientId", "operation.id", "operation.body.currencyId", "operation.patch.currencyId"] }),
+  clockify_clients_archive: single("archive-client", { derivedIds: ["operation.id"] }),
   clockify_clients_delete: fixed(3, [
     plan("single", step("delete-client")),
     plan("curated", step("archive-client"), step("delete-client"), step("restore-client", "compensation")),
   ], { derivedIds: ["operation.clientId", "operation.id"] }),
+  clockify_clients_delete_archived: single("delete-archived-client", { derivedIds: ["operation.id"] }),
   clockify_tags_create: single("create-tag"),
   clockify_tags_update: single("update-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
   clockify_tags_delete: single("delete-tag", { derivedIds: ["operation.tagId", "operation.id"] }),
   clockify_invoices_create: repeated(INVOICE_CREATE_MUTATION_STEP_MAX, "items[]", [
     plan("curated", step("create-invoice"), step("enrich-invoice", "primary", 0, 1), step("add-invoice-item-*", "primary", 0, INVOICE_ITEM_BATCH_MAX)),
   ], { derivedIds: ["operation.clientId", "operation.base.clientId", "operation.items[].itemType", "operation.items[].itemTypeId"], defaults: ["operation.number", "operation.base.number", "operation.issuedDate", "operation.base.issuedDate", "operation.dueDate", "operation.base.dueDate", "operation.currency", "operation.base.currency", "operation.items[].description", "operation.items[].quantity", "operation.items[].amountUnit", "operation.items[].applyTaxes"] }, INVOICE_ITEM_BATCH_MAX),
+  clockify_invoices_create_base: single("create-invoice-base", { derivedIds: ["operation.base.clientId"], defaults: ["operation.base.number", "operation.base.issuedDate", "operation.base.dueDate", "operation.base.currency"] }),
   clockify_invoices_update: fixed(2, [
     plan("curated", step("update-invoice-fields", "primary", 0, 1), step("update-invoice-status", "primary", 0, 1)),
   ], { derivedIds: ["operation.invoiceId", "operation.id", "operation.clientId", "operation.patch.clientId", "operation.updateBody.clientId"] }),
+  clockify_invoices_fields_update: single("update-invoice-fields", { derivedIds: ["operation.id", "operation.clientId", "operation.patch.clientId", "operation.updateBody.clientId"] }),
+  clockify_invoices_status_update: single("update-invoice-status", { derivedIds: ["operation.id"] }),
   clockify_invoices_delete: single("delete-invoice", { derivedIds: ["operation.invoiceId", "operation.id"] }),
   clockify_invoices_items_add: single("add-invoice-item", { derivedIds: ["operation.invoiceId", "operation.itemTypeId"], defaults: ["operation.unitPriceUnit"] }),
   clockify_invoices_items_delete: single("delete-invoice-item", { derivedIds: ["operation.invoiceId"] }),
@@ -151,6 +169,9 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_expenses_update: single("update-expense", { derivedIds: ["operation.expenseId", "operation.id", "operation.categoryId", "operation.projectId", "operation.taskId", "operation.body.categoryId", "operation.body.projectId", "operation.body.taskId", "operation.updateBody.userId", "operation.updateBody.categoryId", "operation.updateBody.projectId", "operation.updateBody.taskId", "operation.values.categoryId", "operation.values.projectId", "operation.values.taskId"], defaults: ["operation.amountUnit", "operation.body.amountUnit"] }),
   clockify_expenses_delete: single("delete-expense", { derivedIds: ["operation.expenseId", "operation.id"] }),
   clockify_expenses_categories_create: single("create-expense-category"),
+  clockify_expenses_categories_rename: single("rename-expense-category", { derivedIds: ["operation.categoryId", "operation.id"] }),
+  clockify_expenses_categories_status_update: single("set-expense-category-status", { derivedIds: ["operation.categoryId", "operation.id"] }),
+  clockify_expenses_categories_delete_archived: single("delete-expense-category", { derivedIds: ["operation.categoryId", "operation.id"] }),
   clockify_expenses_categories_update: fixed(2, [
     plan("single", step("rename-expense-category")), plan("single", step("set-expense-category-status")),
     plan("curated", step("rename-expense-category"), step("set-expense-category-status")),
@@ -165,6 +186,8 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_time_off_policies_update: single("update-time-off-policy", { derivedIds: ["operation.policyId", "operation.id", "operation.patch.userIds[]", "operation.patch.userGroupIds[]", "operation.updateBody.userIds[]", "operation.updateBody.userGroupIds[]", "operation.updateBody.body.userIds[]", "operation.updateBody.body.userGroupIds[]", "operation.updateBody.source.userIds[]", "operation.updateBody.source.userGroupIds[]"] }),
   clockify_time_off_policies_archive: single("archive-time-off-policy", { derivedIds: ["operation.policyId", "operation.id"], defaults: ["operation.archived"] }),
   clockify_time_off_requests_create: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
+  clockify_time_off_requests_create_days: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
+  clockify_time_off_requests_create_hours: single("create-time-off-request", { derivedIds: ["operation.policyId", "operation.userId"] }),
   clockify_time_off_requests_delete: single("delete-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_approve: single("approve-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
   clockify_time_off_deny: single("deny-time-off-request", { derivedIds: ["operation.policyId", "operation.requestId", "operation.id"] }),
@@ -190,11 +213,14 @@ const ACTION_SEMANTICS = Object.freeze({
   clockify_users_invite: single("invite-user", { defaults: ["operation.sendEmail"] }),
   clockify_users_role_update: single("update-user-role", { derivedIds: ["operation.groupId", "operation.projectId", "operation.userId", "operation.granteeId", "operation.entityId"] }),
   clockify_users_rate_update: single("update-user-rate", { derivedIds: ["operation.userId"], defaults: ["operation.amountUnit"] }),
+  clockify_users_hourly_rate_update: single("update-user-hourly-rate", { derivedIds: ["operation.userId"], authenticatedSelfLiterals: ["userId"] }),
+  clockify_users_cost_rate_update: single("update-user-cost-rate", { derivedIds: ["operation.userId"], authenticatedSelfLiterals: ["userId"] }),
   clockify_users_deactivate: single("deactivate-user", { derivedIds: ["operation.userId"] }),
   clockify_groups_create: single("create-group"),
   clockify_groups_update: single("update-group", { derivedIds: ["operation.groupId", "operation.id"] }),
   clockify_groups_delete: single("delete-group", { derivedIds: ["operation.groupId", "operation.id"] }),
   clockify_groups_add_user: repeated(GROUP_MEMBER_BATCH_MAX, "members[]", [plan("single", step("add-user-to-group-*")), plan("batch", step("add-user-to-group-*", "primary", 2, GROUP_MEMBER_BATCH_MAX))], { derivedIds: ["operation.groupId", "operation.userIds[]"] }),
+  clockify_groups_add_member: single("add-user-to-group", { derivedIds: ["operation.groupId", "operation.userId"] }),
   clockify_groups_remove_user: single("remove-user-from-group", { derivedIds: ["operation.groupId", "operation.userId"] }),
   clockify_delete_entity: fixed(3, [
     ...["project", "client"].flatMap((entity) => [
@@ -319,6 +345,66 @@ const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
     obligation(["tagIds[]", "tagNames[]"], "\\b(?:tags?|tagged)\\b"),
   ], [], [], ["\\b(?:logging|recording|adding|entering|tracking)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b"]),
 
+  clockify_entries_create: authoredIntent([
+    "\\b(?:log|record|add|enter|track)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b",
+  ], [
+    obligation(["description"], "\\b(?:description|note)\\b"),
+    obligation(["start"], "\\b(?:from|starting(?:\\s+at)?|at)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["end"], "\\b(?:to|until|ending(?:\\s+at)?)\\s+(?:\\d{1,2}(?::\\d{2})?|\\d{4}-\\d{2}-\\d{2}T)"),
+    obligation(["date"], "\\b(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|(?:on\\s+)?\\d{4}-\\d{2}-\\d{2})\\b"),
+    obligation(["dayOffset"], "\\bday\\s+offset\\b"),
+    obligation(["durationMinutes"], "\\b\\d+(?:\\.\\d+)?\\s*(?:m|min|mins|minute|minutes)\\b"),
+    obligation(["durationHours"], "\\b\\d+(?:\\.\\d+)?\\s*(?:h|hr|hrs|hour|hours)\\b"),
+    obligation(
+      ["projectId", "projectName"],
+      "\\bproject\\b",
+      "\\b(?:on|to)\\s+(?!(?:today|yesterday|tomorrow|(?:(?:last|next|this)\\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|\\d{1,4}(?::\\d{2})?\\s*(?:am|pm)?|\\d{4}-\\d{2}-\\d{2})\\b)(?:project\\s+)?[\"'\\p{L}]",
+    ),
+    obligation(["taskId", "taskName"], "\\btask\\b"),
+    obligation(["tagIds[]"], "\\b(?:tags?|tagged)\\b"),
+  ], [], [], ["\\b(?:logging|recording|adding|entering|tracking)\\b[^.!?;\\n]{0,48}\\b(?:time|hours?|work|(?:time\\s+)?entr(?:y|ies))\\b"]),
+
+  clockify_entries_start: authoredIntent([
+    "\\b(?:start|begin)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclock\\s+(?:me\\s+)?in\\b",
+  ], [
+    boundObligation(
+      ["description"],
+      [
+        `\\b(?:description|note)(?:\\s+is|\\s*:)?\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+        `\\btimer\\s+(?:called|named)\\s+${ROLE_PHRASE}(?=\\s+(?:on|for|with|tagged)\\b|[,.;!?]|$)`,
+      ],
+      ["\\b(?:timer\\s+)?(?:description|note)\\b", "\\btimer\\s+(?:called|named)\\b"],
+    ),
+    boundObligation(
+      ["projectId", "projectName"],
+      [
+        `\\bproject(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+        `\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?${ROLE_PHRASE}(?=\\s+(?:with|and|for\\s+task|tagged)\\b|[,.;!?]|$)`,
+      ],
+      [
+        "\\bproject\\b",
+        "\\b(?:on|for)\\s+(?!(?:task|today|yesterday|tomorrow)\\b)(?:project\\s+)?[\"'\\p{L}\\p{N}]",
+      ],
+    ),
+    boundObligation(
+      ["taskId", "taskName"],
+      [`\\btask(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|and|tagged)\\b|[,.;!?]|$)`],
+      ["\\btask\\b"],
+    ),
+    boundObligation(
+      ["tagIds[]"],
+      [
+        `\\btagged\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+        `\\btags?(?:\\s+(?:named|called|are|is|:))?\\s+${ROLE_LIST}(?=[,.;!?]|$)`,
+      ],
+      ["\\b(?:tags?|tagged)\\b"],
+    ),
+  ], ["\\b(?:create|make|add|set\\s+up)\\b[^.!?;\\n]{0,160}\\b(?:project|client|task|tag)\\b"], [], [
+    "\\b(?:starting|beginning)(?:\\s+at)?(?:\\s+(?:a|the|my|new))?\\s+(?:(?:non[- ]?|not\\s+)?billable\\s+)?(?:work\\s+)?timer\\b",
+    "\\bclocking\\s+(?:me\\s+)?in\\b",
+  ]),
+
   clockify_create_work_package: authoredIntent([
     "\\b(?:create|make|add|set\\s+up)(?:\\s+(?:a|the|new))?\\s+work\\s+package\\b",
     "\\b(?:create|make|add|set\\s+up)\\b[^.!?;\\n]{0,180}\\b(?:project|client|task|tag)\\b[^.!?;\\n]{0,180}\\b(?:and|with|then)\\b[^.!?;\\n]{0,180}\\b(?:project|client|task|tag|start(?:\\s+a)?\\s+timer)\\b",
@@ -393,6 +479,30 @@ const SAFE_WRITE_AUTHORED_INTENT = Object.freeze({
       "(?<value>\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b)",
     ], ["\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b"]),
   ], ["\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b"], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
+
+  clockify_clients_create_base: authoredIntent([
+    "\\b(?:create|make|add)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b",
+  ], [
+    boundObligation(["name"], [
+      `\\b(?:client|customer)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|using)\\b|[,.;!?]|$)`,
+    ]),
+  ], [
+    "\\b(?:cc|billing)\\s*(?:e-?mails?|recipients?)\\b|[\\w.+-]+@[\\w.-]+\\.[a-z]{2,}\\b",
+    "\\bcurrency\\b|\\b(?:USD|EUR|GBP|CAD|AUD|JPY|CHF)\\b",
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:project|task|tag|start(?:\\s+a)?\\s+timer)\\b",
+  ], [], ["\\b(?:creating|making|adding)(?:\\s+(?:a|the|new|one))?\\s+(?:client|customer)\\b"]),
+
+  clockify_invoices_create_base: authoredIntent([
+    "\\b(?:create|make|issue)(?:\\s+(?:a|the|new|one))?\\s+invoice\\b",
+  ], [
+    boundObligation(["clientName", "clientId"], [
+      `\\b(?:for|to)\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|number|dated|due)\\b|[,.;!?]|$)`,
+      `\\b(?:client|customer)(?:\\s+(?:named|called))?\\s+${ROLE_PHRASE}(?=\\s+(?:with|for|number|dated|due)\\b|[,.;!?]|$)`,
+    ]),
+  ], [
+    "\\b(?:note|subject|tax|discount|line\\s+item|items?)\\b",
+    "\\b(?:and|with|then)\\b[^.!?;\\n]{0,120}\\b(?:item|payment|import)\\b",
+  ], ["issuedDate", "dueDate", "currency", "number"], ["\\b(?:creating|making|issuing)(?:\\s+(?:a|the|new|one))?\\s+invoice\\b"]),
 
   clockify_tags_create: authoredIntent([
     "\\b(?:(?:create|make)(?:\\s+(?:a\\s+new|a|the|new|one))?|add\\s+(?:a\\s+new|a|the|new|one))\\s+(?:tag|label)\\b",
@@ -782,7 +892,20 @@ export function writeAuthorityFor(action: ActionDefinition): WriteAuthorityMetad
     ...(semantics.derivedIds ?? []),
   ])].sort();
   const permittedServerDefaultPaths = [...new Set(semantics.defaults ?? [])].sort();
-  const preservedStatePaths = [...new Set(semantics.preservedState ?? [])].sort();
+  const preservedStatePaths = [...new Set([
+    ...(semantics.preservedState ?? []),
+    // Authoritative host-read copies in GET-then-PUT / state-command previews are
+    // never model literals; they must not fail closed as undeclared defaults.
+    "operation.body.*",
+    "operation.prepared.body.*",
+    "operation.prepared.source.*",
+    "operation.patch.*",
+    "operation.updateBody.*",
+    "operation.doneBody.*",
+    "operation.archiveBody.*",
+    "operation.restoreBody.*",
+    "operation.originalBody.*",
+  ])].sort();
   return Object.freeze({
     literalConstraintLimits: INTENT_LITERAL_LIMITS,
     literalControlledPaths: Object.freeze(literalControlledPaths),

@@ -284,6 +284,10 @@ describe("raw intent authority matcher", () => {
       action.writeAuthority?.authenticatedSelfLiteralPaths.map((path) => `${action.name}:${path}`) ?? [])).toEqual([
       "clockify_projects_rate_update:userId",
       "clockify_projects_memberships_update:addUserIds[]",
+      "clockify_projects_member_hourly_rate_update:userId",
+      "clockify_projects_member_cost_rate_update:userId",
+      "clockify_users_hourly_rate_update:userId",
+      "clockify_users_cost_rate_update:userId",
     ]);
   });
 

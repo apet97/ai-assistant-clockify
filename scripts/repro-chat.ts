@@ -89,6 +89,7 @@ async function main(): Promise<void> {
   const keys = await testing.generateTestKeys();
   const config: AppConfig = {
     nodeEnv: "test",
+    assistantEngine: "v1",
     port: 3998,
     baseUrl: "https://example.com/ai-assistant",
     clockifyAddonPublicKeyPem: keys.pem,

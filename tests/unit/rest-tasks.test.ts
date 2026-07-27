@@ -103,4 +103,30 @@ describe("task rest", () => {
     expect(init.method).toBe("PUT");
     expect(JSON.parse(init.body)).toEqual({ amount: 4200, since: "2026-06-01T00:00:00Z" });
   });
+
+  it("updateTaskHourlyRateAtomic PUTs the literal hourly-rate path", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateTaskHourlyRateAtomic({
+      projectId: "p1",
+      taskId: "t1",
+      amountMinor: 7500,
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/tasks/t1/hourly-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 7500 });
+  });
+
+  it("updateTaskCostRateAtomic PUTs the literal cost-rate path", async () => {
+    const f = vi.fn(async () => jsonResponse({}, 200));
+    await rest(f as unknown as typeof fetch).updateTaskCostRateAtomic({
+      projectId: "p1",
+      taskId: "t1",
+      amountMinor: 4200,
+    });
+    const [url, init] = (f as any).mock.calls[0];
+    expect(url).toBe("https://api.clockify.me/api/v1/workspaces/ws-1/projects/p1/tasks/t1/cost-rate");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ amount: 4200 });
+  });
 });

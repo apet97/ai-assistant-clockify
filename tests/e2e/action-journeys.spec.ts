@@ -118,7 +118,7 @@ test("history survives reload and past conversations open from the keyboard menu
 });
 
 test("invoice PDF downloads through the authenticated same-origin route", async ({ page, request, browserName }) => {
-  await openAssistant(page, { theme: "light", language: "sr" });
+  await openAssistant(page, { theme: "light" });
   await send(page, "pdf");
 
   const link = page.getByRole("link", { name: "Download invoice PDF: clockify-invoice-INV-42.pdf" });

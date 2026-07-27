@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import {
   defineAction,
   isPartialCommitResult,
   type ActionContext,
+  type ActionResult,
   type BoundedPreparedSafeWrite,
   type CommitResult,
+  type ConfirmableOperation,
   type DurableMutationContract,
+  type PreviewCard,
   type SafeWriteActionDefinition,
   type SafeWritePreparationResult,
   type SemanticLiteralAlias,
@@ -21,9 +25,46 @@ import {
   type MutationDispatchResult,
 } from "./mutation-workflow.js";
 import { errorReceipt } from "./receipts.js";
+import {
+  apiActionMetadataFields,
+  type ApiActionMetadataCarrier,
+} from "./api-operation.js";
 
 export interface DurableSafeWriteDispatch extends MutationDispatchResult {
   result: CommitResult;
+}
+
+/** Convert a bounded safe-write preparation into a v2 assistant preview without dispatch. */
+export function buildPreparedSafeWritePreview(input: {
+  action: SafeWriteActionDefinition;
+  prepared: BoundedPreparedSafeWrite;
+  group: FeatureGroup;
+  operationId?: string;
+  installationGeneration?: number;
+}): ActionResult {
+  const operationId = input.operationId ?? randomUUID();
+  const preview: PreviewCard = {
+    actionLabel: input.action.description.split(".")[0] || input.action.name,
+    featureGroup: input.group,
+    riskLabels: input.action.risks,
+    targets: [],
+    expectedChanges: ["Apply the prepared change after confirmation."],
+    reversibility: input.action.risks.includes("destructive")
+      ? "This change is destructive and cannot be undone automatically."
+      : "Creation may be reversible while the entity still exists.",
+    warnings: [],
+  };
+  const operation: ConfirmableOperation = {
+    operationId,
+    actionName: input.action.name,
+    ...(input.installationGeneration !== undefined ? { installationGeneration: input.installationGeneration } : {}),
+    featureGroup: input.group,
+    risks: input.action.risks,
+    payload: input.prepared.operation as Record<string, unknown>,
+    mutationPlan: input.prepared.mutationPlan,
+    targetSnapshots: [],
+  };
+  return { kind: "preview", preview, operation };
 }
 
 /**
@@ -33,7 +74,7 @@ export interface DurableSafeWriteDispatch extends MutationDispatchResult {
  * use the compatibility branch, but catalog durability is granted only by this
  * builder's journal-enforcing production path.
  */
-export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
+export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -125,6 +166,7 @@ export function defineDurableSafeWriteAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: ["safe_write"],
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),

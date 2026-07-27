@@ -3,6 +3,7 @@ import { commitConfirmedOperation, executeAction } from "../../src/harness/actio
 import { type AdminPolicy, defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { createFakeWorkspace, type FakeWorkspace } from "../helpers/fake-clockify.js";
 import { catalogForModel } from "../../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ActionContext } from "../../src/harness/action.js";
 import { BinaryResponseTooLargeError } from "../../src/clockify/rest/core.js";
 
@@ -442,7 +443,7 @@ describe("invoice actions", () => {
   });
 
   it("the items_add description says an AMOUNT ALONE is enough — the model must not interrogate the admin for defaults (live item 139)", () => {
-    const entry = catalogForModel().find((a) => a.name === "clockify_invoices_items_add");
+    const entry = catalogForModel(INTERNAL_ACTION_CATALOG).find((a) => a.name === "clockify_invoices_items_add");
     expect(entry?.description.toLowerCase()).toContain("amount alone is enough");
     expect(entry?.description.toLowerCase()).toContain("don't ask the admin");
   });

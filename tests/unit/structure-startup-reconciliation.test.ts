@@ -18,7 +18,10 @@ const EXPECTED_BINDINGS = [
   ["clockify_start_timer", "start-timer", "create"],
   ["clockify_stop_timer", "stop-timer", "state-command"],
   ["clockify_log_work", "log-time-entry", "create"],
+  ["clockify_entries_create", "create-time-entry", "create"],
+  ["clockify_entries_start", "start-time-entry", "create"],
   ["clockify_fix_entry", "update-time-entry", "update"],
+  ["clockify_entries_update", "update-time-entry", "update"],
   ["clockify_entries_delete", "delete-time-entry", "delete"],
   ["clockify_entries_mark_invoiced", "mark-entries-invoiced", "state-command"],
   ["clockify_projects_create", "create-project", "create"],
@@ -27,19 +30,31 @@ const EXPECTED_BINDINGS = [
   ["clockify_projects_archive", "archive-project", "state-command"],
   ["clockify_projects_delete", "archive-project-for-delete", "state-command"],
   ["clockify_projects_delete", "delete-project", "delete"],
+  ["clockify_projects_delete_archived", "delete-archived-project", "delete"],
   ["clockify_projects_rate_update", "update-project-rate", "update"],
+  ["clockify_projects_member_hourly_rate_update", "update-project-member-hourly-rate", "update"],
+  ["clockify_projects_member_cost_rate_update", "update-project-member-cost-rate", "update"],
   ["clockify_projects_estimate_update", "update-project-estimate", "update"],
   ["clockify_projects_memberships_update", "update-project-memberships", "update"],
+  ["clockify_projects_memberships_replace", "replace-project-memberships", "update"],
   ["clockify_tasks_create", "create-task", "create"],
   ["clockify_tasks_update", "update-task", "update"],
   ["clockify_tasks_delete", "complete-task-for-delete", "state-command"],
   ["clockify_tasks_delete", "delete-task", "delete"],
   ["clockify_tasks_rate_update", "update-task-rate", "update"],
+  ["clockify_tasks_delete_completed", "delete-completed-task", "delete"],
+  ["clockify_tasks_status_update", "update-task-status", "update"],
+  ["clockify_tasks_assignees_replace", "replace-task-assignees", "update"],
+  ["clockify_tasks_hourly_rate_update", "update-task-hourly-rate", "update"],
+  ["clockify_tasks_cost_rate_update", "update-task-cost-rate", "update"],
   ["clockify_clients_create", "create-client", "create"],
   ["clockify_clients_create", "enrich-client", "update"],
+  ["clockify_clients_create_base", "create-client-base", "create"],
   ["clockify_clients_update", "update-client", "update"],
+  ["clockify_clients_archive", "archive-client", "state-command"],
   ["clockify_clients_delete", "archive-client", "state-command"],
   ["clockify_clients_delete", "delete-client", "delete"],
+  ["clockify_clients_delete_archived", "delete-archived-client", "delete"],
   ["clockify_tags_create", "create-tag", "create"],
   ["clockify_tags_update", "update-tag", "update"],
   ["clockify_tags_delete", "delete-tag", "delete"],
@@ -220,6 +235,41 @@ describe("structure startup reconciliation", () => {
       clockify: { getTag: vi.fn(async () => null) } as never,
     }));
     expect(deleted).toMatchObject({ authoritative: true, reason: "authoritative_match" });
+  });
+
+  it("reconciles project member rates from membership rows, not project defaults", async () => {
+    const operation = {
+      payload: { projectId: "project", userId: "u1", amountMinor: 9_000, rateKind: "HOURLY" },
+    };
+    const matched = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_member_hourly_rate_update",
+      planStepId: "update-project-member-hourly-rate",
+      strategy: "update",
+      operation,
+      clockify: {
+        getProject: vi.fn(async () => ({ id: "project", hourlyRate: { amount: 1 } })),
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [{ userId: "u1", hourlyRate: { amount: 9_000 } }, { userId: "u2" }],
+        })),
+      } as never,
+    }));
+    expect(matched).toMatchObject({ authoritative: true, reason: "authoritative_match" });
+
+    const mismatchedDefault = await reconcileWithStructureStartupRegistry(startupInput({
+      actionName: "clockify_projects_member_cost_rate_update",
+      planStepId: "update-project-member-cost-rate",
+      strategy: "update",
+      operation: { payload: { projectId: "project", userId: "u1", amountMinor: 9_000 } },
+      clockify: {
+        getProject: vi.fn(async () => ({ id: "project", costRate: { amount: 9_000 } })),
+        getProjectMemberships: vi.fn(async () => ({
+          truncated: false,
+          rows: [{ userId: "u1", costRate: { amount: 8_000 } }],
+        })),
+      } as never,
+    }));
+    expect(mismatchedDefault).toMatchObject({ authoritative: false });
   });
 
   it("reconciles membership readback canonically and rejects a requested-rate mismatch", async () => {

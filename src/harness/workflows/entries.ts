@@ -14,6 +14,7 @@ import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
 import { captureStructureSnapshot, dispatchWithReconciliation, fetchStructureSnapshot, mutationPlan, reconcileDelete } from "./structure-durable.js";
 import { MARK_INVOICED_ENTRY_BATCH_MAX } from "../safety-limits.js";
+import { ENTRY_API_METADATA } from "./entry-api-metadata.js";
 
 /**
  * Typed time-entry workflows (goclmcp §2.1) that complement the existing
@@ -25,6 +26,7 @@ import { MARK_INVOICED_ENTRY_BATCH_MAX } from "../safety-limits.js";
 
 const listEntries = defineAction({
   name: "clockify_entries_list",
+  ...ENTRY_API_METADATA.clockify_entries_list,
   description:
     "List time entries for a user (defaults to the caller; `userId` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD, a full ISO instant, or a relative day (today/yesterday/last monday…) resolved server-side. Optional project/task filters — pass an id or the exact name (`projectId`/`projectName`, `taskId`/`taskName`), resolved server-side.",
   featureGroup: "time_tracking",
@@ -47,7 +49,7 @@ const listEntries = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "userId");
     const userId = user.userId;
     // The wire wants yyyy-MM-ddThh:mm:ssZ instants; the live loop sent
     // `?start=today` 12× (400 every time). Both edges are optional with no
@@ -98,6 +100,7 @@ const listEntries = defineAction({
 
 const getEntry = defineReadAction({
   name: "clockify_entries_get",
+  ...ENTRY_API_METADATA.clockify_entries_get,
   description: "Fetch a single time entry by id.",
   group: "time_tracking",
   schema: z.object({ id: z.string().min(1) }),
@@ -114,6 +117,7 @@ const getEntry = defineReadAction({
 
 const deleteEntry = defineRiskyAction({
   name: "clockify_entries_delete",
+  ...ENTRY_API_METADATA.clockify_entries_delete,
   description: "Delete a time entry. Previews first and requires confirmation.",
   group: "time_tracking",
   risks: ["destructive"],
@@ -162,6 +166,7 @@ const deleteEntry = defineRiskyAction({
 
 const markInvoiced = defineRiskyAction({
   name: "clockify_entries_mark_invoiced",
+  ...ENTRY_API_METADATA.clockify_entries_mark_invoiced,
   description:
     "Mark (or unmark) a set of time entries as invoiced. Bulk billing change — previews first and requires confirmation.",
   group: "invoices",

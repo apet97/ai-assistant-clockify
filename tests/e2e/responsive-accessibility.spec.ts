@@ -2,10 +2,10 @@ import { expect, test, type Page } from "@playwright/test";
 import { openAssistant, send } from "./helpers.js";
 
 const matrix = [
-  { width: 280, height: 720, theme: "light", language: "en" },
-  { width: 320, height: 720, theme: "dark", language: "sr" },
-  { width: 375, height: 812, theme: "light", language: "sr" },
-  { width: 1024, height: 768, theme: "dark", language: "en" },
+  { width: 280, height: 720, theme: "light" },
+  { width: 320, height: 720, theme: "dark" },
+  { width: 375, height: 812, theme: "light" },
+  { width: 1024, height: 768, theme: "dark" },
 ] as const;
 
 const longestReceiptAction = "clockify_workspace_membership_permissions_update";
@@ -31,12 +31,12 @@ async function expectAccessibleLayout(page: Page, state: string): Promise<void> 
 }
 
 for (const entry of matrix) {
-  test(`${entry.width}px ${entry.theme} ${entry.language} has no overflow and 44px controls`, async ({ page }) => {
+  test(`${entry.width}px ${entry.theme} accessibility has no overflow and 44px controls`, async ({ page }) => {
     await page.setViewportSize({ width: entry.width, height: entry.height });
-    await openAssistant(page, { scenario: "restricted", theme: entry.theme, language: entry.language });
+    await openAssistant(page, { scenario: "restricted", theme: entry.theme });
 
     await expect(page.locator("html")).toHaveAttribute("data-theme", entry.theme);
-    await expect(page.locator("html")).toHaveAttribute("lang", entry.language);
+    await expect(page.locator("html")).toHaveAttribute("lang", "en");
     await expect(page.getByRole("heading", { name: "What can I do for you?" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Show this week's summary report" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Start a timer for deep work" })).toHaveCount(0);
@@ -77,7 +77,7 @@ test("280px wraps a long receipt action without clipping the card or document", 
       body: `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
     });
   });
-  await openAssistant(page, { theme: "light", language: "en" });
+  await openAssistant(page, { theme: "light" });
 
   await send(page, "Update workspace membership permissions");
   const card = page.getByRole("group", { name: `Done: ${longestReceiptAction}` });
@@ -132,7 +132,7 @@ test("280px wraps restored operation action and step labels without clipping", a
       }),
     });
   });
-  await openAssistant(page, { theme: "dark", language: "en" });
+  await openAssistant(page, { theme: "dark" });
 
   const card = page.getByRole("group", { name: `Operation executing: ${longestReceiptAction}` });
   const action = card.locator(".action");
@@ -171,7 +171,7 @@ test("280px wraps restored operation action and step labels without clipping", a
 for (const width of [280, 320, 375] as const) {
   test(`${width}px first-run renders every permission without horizontal scrolling`, async ({ page }) => {
     await page.setViewportSize({ width, height: 812 });
-    await openAssistant(page, { scenario: "first-run", theme: "dark", language: "en" });
+    await openAssistant(page, { scenario: "first-run", theme: "dark" });
 
     const panel = page.getByRole("region", { name: "Assistant permissions" });
     await expect(panel.getByRole("combobox", { name: /^Permission level for / })).toHaveCount(13);
@@ -186,7 +186,7 @@ for (const width of [280, 320, 375] as const) {
 
 test("1440x900 release capture keeps all 13 permission controls in-frame", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await openAssistant(page, { scenario: "first-run", theme: "dark", language: "en" });
+  await openAssistant(page, { scenario: "first-run", theme: "dark" });
 
   const controls = page.getByRole("combobox", { name: /^Permission level for / });
   await expect(controls).toHaveCount(13);

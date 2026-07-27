@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { ActionCatalogEntry } from "../harness/action.js";
 import type { AdminPolicy } from "../harness/permissions.js";
+import { INTERNAL_ACTION_CATALOG } from "../harness/api-catalog.js";
 import { toolsForModel } from "../harness/tools.js";
 import { runAgentTurn, type AgentTurnResult, type RunAgentTurnInput } from "./agent-loop.js";
 import type { ModelClient, ModelMessage, ToolDefinition } from "./model-client.js";
@@ -50,7 +51,7 @@ const modelPlanSchema = z
  */
 export interface ToolPromptInput {
   policy: AdminPolicy;
-  /** Tool catalog (defaults to `toolsForModel()`); injectable for tests. */
+  /** Tool catalog (defaults to `toolsForModel(INTERNAL_ACTION_CATALOG)`); injectable for tests. */
   tools?: ToolDefinition[];
   /** Clockify auth class so the prompt can surface add-on platform restrictions. */
   authClass?: AuthClass;
@@ -86,7 +87,7 @@ function buildToolMessages(input: ToolPromptInput & { messages: ModelMessage[] }
   });
   return {
     messages: [{ role: "system", content: system }, ...input.messages],
-    tools: input.tools ?? toolsForModel(),
+    tools: input.tools ?? toolsForModel(INTERNAL_ACTION_CATALOG),
   };
 }
 

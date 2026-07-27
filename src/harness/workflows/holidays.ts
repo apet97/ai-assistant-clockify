@@ -17,9 +17,17 @@ import { listReceipt, successReceipt } from "../receipts.js";
 import { resolveDateRange, resolveEntityRef, resolveRelativeDay, resolveScopeRefs, resolveUserFilter } from "./resolve.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep } from "../durable-risky-write.js";
+import { HOLIDAY_SCOPE_GROUP_BATCH_MAX, HOLIDAY_SCOPE_USER_BATCH_MAX } from "../safety-limits.js";
 import { captureTargetSnapshot } from "../target-snapshots.js";
 import { dispatchWithReconciliation, reconcileCreate, reconcileDelete } from "./structure-durable.js";
 import type { CreateHolidayInput, HolidaySummary, PreparedHolidayUpdateInput } from "../../clockify/ports/holidays.js";
+import type {
+  ApiAccess,
+  ApiActionMetadataCarrier,
+  ApiMethod,
+  AvailabilityByAuthClass,
+  MaterialFieldMetadata,
+} from "../api-operation.js";
 
 const HOLIDAY_RECURRENCE_LITERAL_ALIASES = Object.freeze([
   { path: "occursAnnually", value: false, authoredPhrases: Object.freeze(["one-time", "one time", "does not repeat"]) },
@@ -68,6 +76,217 @@ function resolveHolidayDates(
  */
 
 const TOA = "time_off_approvals" as const;
+
+type HolidayActionName =
+  | "clockify_holidays_list"
+  | "clockify_holidays_get"
+  | "clockify_holidays_in_period"
+  | "clockify_holidays_create"
+  | "clockify_holidays_update"
+  | "clockify_holidays_delete";
+
+const HOLIDAY_AVAILABILITY: AvailabilityByAuthClass = Object.freeze({
+  addon: Object.freeze({ available: true }),
+  api_key: Object.freeze({ available: true }),
+});
+
+function holidayEndpointKey(
+  access: ApiAccess,
+  method: ApiMethod,
+  path: string,
+  sourceModule = "holidays.ts",
+): string {
+  return [access, "api", method, path, sourceModule].join("\0");
+}
+
+function holidayValueField(
+  path: string,
+  label: string,
+  formatterId: string,
+  requiredInPreview: boolean,
+): MaterialFieldMetadata {
+  return Object.freeze({
+    kind: "value",
+    path,
+    label,
+    formatterId,
+    formatterVersion: 1,
+    requiredInPreview,
+  });
+}
+
+function holidayApiMetadata(input: {
+  actionName: HolidayActionName;
+  operationId: string;
+  method: ApiMethod;
+  path: string;
+  access: ApiAccess;
+  primary: string;
+  support: readonly string[];
+  materialFields: readonly MaterialFieldMetadata[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: "api",
+    apiOperation: Object.freeze({
+      operationId: input.operationId,
+      host: "api",
+      method: input.method,
+      path: input.path,
+      access: input.access,
+      exposure: "api",
+    }),
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: HOLIDAY_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+    materialFields: Object.freeze([...input.materialFields]),
+    presentation: Object.freeze({ presenterId: input.actionName, version: 1 }),
+  });
+}
+
+function holidayInternalMetadata(input: {
+  exposure: "composite" | "generic";
+  reason: string;
+  primary: string;
+  support: readonly string[];
+}): ApiActionMetadataCarrier {
+  return Object.freeze({
+    apiExposure: input.exposure,
+    apiExposureReason: input.reason,
+    adapterEndpoints: Object.freeze({
+      primary: Object.freeze([input.primary]),
+      support: Object.freeze([...input.support]),
+    }),
+    availabilityByAuthClass: HOLIDAY_AVAILABILITY,
+    boundedArgumentDictionaries: Object.freeze([]),
+  });
+}
+
+const holidayEndpoint = Object.freeze({
+  list: holidayEndpointKey("read", "GET", "/workspaces/{workspaceId}/holidays"),
+  inPeriod: holidayEndpointKey("read", "GET", "/workspaces/{workspaceId}/holidays/in-period"),
+  create: holidayEndpointKey("write", "POST", "/workspaces/{workspaceId}/holidays"),
+  update: holidayEndpointKey("write", "PUT", "/workspaces/{workspaceId}/holidays/{id}"),
+  delete: holidayEndpointKey("write", "DELETE", "/workspaces/{workspaceId}/holidays/{id}"),
+  users: holidayEndpointKey("read", "GET", "/workspaces/{workspaceId}/users", "users.ts"),
+  groups: holidayEndpointKey("read", "GET", "/workspaces/{workspaceId}/user-groups", "users.ts"),
+});
+
+const HOLIDAY_API_METADATA = Object.freeze({
+  clockify_holidays_list: holidayApiMetadata({
+    actionName: "clockify_holidays_list",
+    operationId: "getHolidays",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/holidays",
+    access: "read",
+    primary: holidayEndpoint.list,
+    support: [],
+    materialFields: [],
+  }),
+  clockify_holidays_get: holidayInternalMetadata({
+    exposure: "composite",
+    reason: "Finds one holiday by scanning the holidays list because Clockify exposes no GET /holidays/{id}; it is not a fabricated get-one operation.",
+    primary: holidayEndpoint.list,
+    support: [],
+  }),
+  clockify_holidays_in_period: holidayApiMetadata({
+    actionName: "clockify_holidays_in_period",
+    operationId: "getHolidaysInPeriod",
+    method: "GET",
+    path: "/workspaces/{workspaceId}/holidays/in-period",
+    access: "read",
+    primary: holidayEndpoint.inPeriod,
+    support: [holidayEndpoint.users],
+    materialFields: [],
+  }),
+  clockify_holidays_create: holidayApiMetadata({
+    actionName: "clockify_holidays_create",
+    operationId: "createHoliday",
+    method: "POST",
+    path: "/workspaces/{workspaceId}/holidays",
+    access: "write",
+    primary: holidayEndpoint.create,
+    support: [holidayEndpoint.list, holidayEndpoint.users, holidayEndpoint.groups],
+    materialFields: [
+      holidayValueField("/name", "Holiday name", "text", true),
+      holidayValueField("/startDate", "Start date", "text", true),
+      holidayValueField("/endDate", "End date", "text", false),
+      holidayValueField("/occursAnnually", "Recurs annually", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: HOLIDAY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: HOLIDAY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_holidays_update: holidayApiMetadata({
+    actionName: "clockify_holidays_update",
+    operationId: "updateHoliday",
+    method: "PUT",
+    path: "/workspaces/{workspaceId}/holidays/{id}",
+    access: "write",
+    primary: holidayEndpoint.update,
+    support: [holidayEndpoint.list, holidayEndpoint.users, holidayEndpoint.groups],
+    materialFields: [
+      holidayValueField("/id", "Holiday", "entity", true),
+      holidayValueField("/name", "Holiday name", "text", false),
+      holidayValueField("/startDate", "Start date", "text", false),
+      holidayValueField("/endDate", "End date", "text", false),
+      holidayValueField("/occursAnnually", "Recurs annually", "boolean", false),
+      {
+        kind: "array_item",
+        containerPath: "/userIds",
+        itemPath: "/userId",
+        labelTemplate: "User {index}",
+        maxItems: HOLIDAY_SCOPE_USER_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+      {
+        kind: "array_item",
+        containerPath: "/userGroupIds",
+        itemPath: "/groupId",
+        labelTemplate: "Group {index}",
+        maxItems: HOLIDAY_SCOPE_GROUP_BATCH_MAX,
+        formatterId: "entity",
+        formatterVersion: 1,
+        requiredInPreview: false,
+      },
+    ],
+  }),
+  clockify_holidays_delete: holidayApiMetadata({
+    actionName: "clockify_holidays_delete",
+    operationId: "deleteHoliday",
+    method: "DELETE",
+    path: "/workspaces/{workspaceId}/holidays/{id}",
+    access: "write",
+    primary: holidayEndpoint.delete,
+    support: [holidayEndpoint.list],
+    materialFields: [
+      holidayValueField("/id", "Holiday", "entity", true),
+      holidayValueField("/name", "Holiday name", "text", false),
+    ],
+  }),
+} satisfies Readonly<Record<HolidayActionName, ApiActionMetadataCarrier>>);
+
 const holidayTargetContract = (strategy: "update" | "delete") => durableMutationContract({
   source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: [strategy],
 });
@@ -97,6 +316,7 @@ function sameHoliday(row: HolidaySummary, expected: CreateHolidayInput | Prepare
 
 const listHolidays = defineReadAction({
   name: "clockify_holidays_list",
+  ...HOLIDAY_API_METADATA.clockify_holidays_list,
   description: "List the workspace holidays.",
   group: TOA,
   schema: z.object({}),
@@ -114,6 +334,7 @@ const listHolidays = defineReadAction({
 
 const getHoliday = defineAction({
   name: "clockify_holidays_get",
+  ...HOLIDAY_API_METADATA.clockify_holidays_get,
   description: "Fetch a single holiday by id, or by its exact `name` (resolved server-side).",
   featureGroup: TOA,
   risks: ["read"],
@@ -128,7 +349,7 @@ const getHoliday = defineAction({
       verb: "fetch",
       list: () => ctx.clockify.listHolidays(),
     });
-    if (!resolved.ok) return clarifyResult(resolved.clarify);
+    if (!resolved.ok) return clarifyResult(resolved.clarify, "id");
     const entity = await ctx.clockify.getHoliday(resolved.id);
     return {
       kind: "receipt",
@@ -144,6 +365,7 @@ const getHoliday = defineAction({
 
 const listInPeriod = defineAction({
   name: "clockify_holidays_in_period",
+  ...HOLIDAY_API_METADATA.clockify_holidays_in_period,
   description:
     "List holidays assigned to a user across a date period (defaults to you; `assignedTo` accepts a user id, exact name, or 'me'). `start`/`end` accept YYYY-MM-DD or a relative day/period (today, next month…), resolved server-side.",
   featureGroup: TOA,
@@ -158,7 +380,7 @@ const listInPeriod = defineAction({
       listUsers: () => ctx.clockify.listUsers(),
       defaultTo: ctx.adminUserId,
     });
-    if (!user.ok) return clarifyResult(user.clarify);
+    if (!user.ok) return clarifyResult(user.clarify, "assignedTo");
     const dates = resolveDateRange(nowDate(ctx), {
       start: { raw: args.start },
       end: { raw: args.end },
@@ -190,8 +412,9 @@ const listInPeriod = defineAction({
 
 const createHoliday = defineDurableSafeWriteAction({
   name: "clockify_holidays_create",
+  ...HOLIDAY_API_METADATA.clockify_holidays_create,
   description:
-    "Create a workspace holiday. Assign it with `userIds` and/or `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
+    "Create a workspace holiday. Assign it with up to 8 `userIds` and/or 8 `userGroupIds` — each entry is an id, an exact name, or 'me' (groups by id or exact name); the harness resolves names server-side and clarifies on an unknown one. Safe write — executes immediately when policy allows. Requires at least one user or user group assignment.",
   group: TOA,
   stepName: "Create holiday",
   mutationContract: holidayCreateContract,
@@ -202,8 +425,8 @@ const createHoliday = defineDurableSafeWriteAction({
       startDate: z.string().min(1), // YYYY-MM-DD
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine((v) => (v.userIds?.length ?? 0) > 0 || (v.userGroupIds?.length ?? 0) > 0, {
       message: "A holiday needs at least one userIds or userGroupIds assignment.",
@@ -276,8 +499,9 @@ const createHoliday = defineDurableSafeWriteAction({
 
 const updateHoliday = defineRiskyAction({
   name: "clockify_holidays_update",
+  ...HOLIDAY_API_METADATA.clockify_holidays_update,
   description:
-    "Update a workspace holiday (name, dates, recurrence, or who it applies to). `userIds`/`userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
+    "Update a workspace holiday (name, dates, recurrence, or who it applies to). Up to 8 `userIds` and/or 8 `userGroupIds` entries may be ids, exact names, or 'me' — resolved server-side, clarifies on an unknown one. Editing overwrites live workspace data, so it previews and requires confirmation.",
   group: TOA,
   // Editing an existing holiday overwrites live data for everyone assigned and has no
   // undo — same class as every other *_update, so preview→button-confirm (was wrongly
@@ -293,8 +517,8 @@ const updateHoliday = defineRiskyAction({
       startDate: z.string().optional(),
       endDate: z.string().optional(),
       occursAnnually: z.boolean().optional(),
-      userIds: zStringList().optional(),
-      userGroupIds: zStringList().optional(),
+      userIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_USER_BATCH_MAX)).optional(),
+      userGroupIds: zStringList(z.array(z.string().min(1)).max(HOLIDAY_SCOPE_GROUP_BATCH_MAX)).optional(),
     })
     .refine(
       (v) =>
@@ -361,6 +585,7 @@ const updateHoliday = defineRiskyAction({
 
 const deleteHoliday = defineRiskyAction({
   name: "clockify_holidays_delete",
+  ...HOLIDAY_API_METADATA.clockify_holidays_delete,
   description: "Delete a workspace holiday. Destructive — previews and requires confirmation.",
   group: TOA,
   risks: ["destructive"],

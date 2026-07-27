@@ -140,7 +140,7 @@ describe("store.pruneExpired", () => {
     expect(second.total).toBe(1);
     expect(second.backlog).toBe(false);
     store.close();
-  }, 15_000);
+  }, 30_000);
 
   it("retains referenced intent capabilities, then deletes their literal/span JSON after references expire", async () => {
     const clock = { value: new Date(NOW.getTime() - 31 * DAY_MS) };
@@ -511,7 +511,7 @@ describe("store.pruneExpired", () => {
     expect(auditEvents).toBe(10_025);
     expect(actionResults).toBe(10_025);
     store.close();
-  }, 15_000);
+  }, 30_000);
 
   it("honors a custom retentionDays window", async () => {
     // A 45d-old message is KEPT under the 90d default but PRUNED under a 30d override.

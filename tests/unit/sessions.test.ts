@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { signSessionCookie, verifySessionCookie, type SessionClaims } from "../../src/auth/sessions.js";
 
@@ -14,12 +15,40 @@ function makeClaims(overrides: Partial<SessionClaims> = {}): SessionClaims {
   };
 }
 
+function signRawSessionPayload(claims: unknown): string {
+  const payload = Buffer.from(JSON.stringify(claims), "utf8").toString("base64url");
+  const signature = createHmac("sha256", SECRET).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
 describe("session cookie", () => {
   it("verifies with the same secret and round-trips claims", () => {
-    const claims = makeClaims({ uiPreferences: { theme: "dark", language: "sr" } });
+    const claims = makeClaims();
     const cookie = signSessionCookie(claims, SECRET);
     const verified = verifySessionCookie(cookie, SECRET);
     expect(verified).toEqual(claims);
+  });
+
+  it("accepts and drops only the legacy language field in signed preferences", () => {
+    const claims = makeClaims();
+    const cookie = signRawSessionPayload({
+      ...claims,
+      uiPreferences: { theme: "dark", language: "sr", timeZone: "Europe/Belgrade" },
+    });
+
+    expect(verifySessionCookie(cookie, SECRET)).toEqual({
+      ...claims,
+      uiPreferences: { theme: "dark", timeZone: "Europe/Belgrade" },
+    });
+  });
+
+  it("keeps the nested preference object strict during legacy migration", () => {
+    const cookie = signRawSessionPayload({
+      ...makeClaims(),
+      uiPreferences: { theme: "dark", language: "sr", unrelated: true },
+    });
+
+    expect(verifySessionCookie(cookie, SECRET)).toBeUndefined();
   });
 
   it("fails with a different secret", () => {

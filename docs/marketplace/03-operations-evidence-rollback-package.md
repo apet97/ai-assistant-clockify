@@ -234,10 +234,13 @@ node -e '
       evidence.checks.applicationReadiness.shutdownVerification?.writerLock !== "available" ||
       evidence.checks.integrity.sourceResult !== "ok" ||
       evidence.checks.integrity.migratedResult !== "ok" ||
-      ![7, 8].includes(evidence.checks.schema.sourceUserVersion) ||
-      evidence.checks.schema.userVersion !== 8 ||
+      // LATEST_SCHEMA_VERSION (src/db/schema.ts) is 12. Pinning 8 here made a
+      // CORRECT restore of a current database fail the drill assertion.
+      !(evidence.checks.schema.sourceUserVersion >= 7 &&
+        evidence.checks.schema.sourceUserVersion <= 12) ||
+      evidence.checks.schema.userVersion !== 12 ||
       evidence.checks.schema.migration !==
-        (evidence.checks.schema.sourceUserVersion === 8 ? "not_required" : "candidate_private_clone") ||
+        (evidence.checks.schema.sourceUserVersion === 12 ? "not_required" : "candidate_private_clone") ||
       evidence.checks.metadata.format !== 2 ||
       !Number.isFinite(drillStarted) || !Number.isFinite(ready) ||
       !Number.isFinite(incident) || !Number.isFinite(dataAsOf) ||
@@ -319,7 +322,13 @@ SELECTED_THINKING_MODE="$(node -e '
   const value = JSON.parse(process.argv[1]).thinkingMode;
   process.stdout.write(value === "disabled" ? "disabled" : "unset");
 ' "$EXPECTED_MODEL_CONFIGURATION")"
+# The engine the deployment is intended to serve. `/version` reports the engine
+# it is actually running; the identity assertion below compares the two. The
+# frozen DeepSeek binding artifact does NOT carry this key, so it is selected
+# here rather than read from the binding.
+EXPECTED_ASSISTANT_ENGINE="${SELECTED_ASSISTANT_ENGINE:-v1}"
 export EXPECTED_MODEL_CONFIGURATION SELECTED_LLM_MODEL SELECTED_REASONING_EFFORT SELECTED_THINKING_MODE
+export EXPECTED_ASSISTANT_ENGINE
 RELEASE_SHA="$(node -e '
   const binding = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
   process.stdout.write(binding.candidate.testedSha);
@@ -347,15 +356,21 @@ VERSION_JSON="$(curl --fail --silent --show-error "$BASE_URL/version")"
 node -e '
   const value = JSON.parse(process.argv[1]);
   const expectedModel = JSON.parse(process.env.EXPECTED_MODEL_CONFIGURATION);
-  const modelKeys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
+  // The frozen binding artifact carries eight keys; the live /version payload
+  // carries those eight plus assistantEngine. Sizing the deployed payload
+  // against the binding key count alone failed a CORRECT deployment.
+  const bindingModelKeys = ["provider", "model", "endpointSha256", "mode", "agentic", "toolSelect", "reasoningEffort", "thinkingMode"];
+  const deployedModelKeys = bindingModelKeys.concat(["assistantEngine"]);
   const actualModel = value.modelConfiguration;
   if (value.version !== "1.0.0" || value.releaseSha !== process.env.RELEASE_SHA ||
       value.buildHash !== process.env.RELEASE_BUILD_HASH ||
       value.sourceRelationship !== "source_bound_builder" ||
       value.sourceBindingSha256 !== process.env.RELEASE_SOURCE_BINDING_SHA256 ||
       value.serverArtifactSha256 !== process.env.RELEASE_SERVER_ARTIFACT_SHA256 ||
-      !actualModel || Object.keys(actualModel).length !== modelKeys.length ||
-      modelKeys.some((key) => actualModel[key] !== expectedModel[key])) process.exit(1);
+      !actualModel || Object.keys(actualModel).length !== deployedModelKeys.length ||
+      deployedModelKeys.some((key) => !(key in actualModel)) ||
+      bindingModelKeys.some((key) => actualModel[key] !== expectedModel[key]) ||
+      actualModel.assistantEngine !== process.env.EXPECTED_ASSISTANT_ENGINE) process.exit(1);
 ' "$VERSION_JSON"
 ```
 
@@ -634,6 +649,7 @@ only the strict booleans/counts accepted by
 - risky preview/cancel with the original effect preserved, then a separate risky
   preview/button-confirm with a receipt and authoritative absence proof;
 - chat switching, history restore, full-page reload, and restored operation cards;
+- English interface; Unicode workspace data; timezone-aware Intl formatting;
 - the visible Download PDF action plus authenticated PDF bytes: `.pdf` filename,
   `application/pdf`, `%PDF-` signature, nonzero byte count, authenticated 200, and a
   separate unauthenticated 401;

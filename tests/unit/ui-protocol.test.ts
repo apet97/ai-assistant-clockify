@@ -176,18 +176,55 @@ describe("UI runtime protocol contracts", () => {
       adminUserId: "admin-1",
       workspaceRole: "ADMIN",
       csrfToken: "csrf-token",
-      preferences: { theme: "dark", language: "sr", timeZone: "Europe/Belgrade" },
+      preferences: { theme: "dark", timeZone: "Europe/Belgrade" },
       links: {
         privacy: "https://assistant.example/privacy",
         support: "https://assistant.example/support",
         security: "https://assistant.example/security",
       },
     };
-    expect(decodeMeResponse(valid)).toMatchObject({ preferences: { theme: "dark", language: "sr" } });
+    expect(decodeMeResponse(valid)).toMatchObject({ preferences: { theme: "dark", timeZone: "Europe/Belgrade" } });
+    expect(() => decodeMeResponse({
+      ...valid,
+      preferences: { theme: "dark", timeZone: "Mars/Olympus" },
+    })).toThrow(/timeZone/u);
     expect(() => decodeMeResponse({ ...valid, links: { ...valid.links, support: "javascript:alert(1)" } })).toThrow(
       /links\.support/,
     );
     expect(() => decodeMeResponse({ ok: true, csrfToken: "csrf-token" })).toThrow(ProtocolError);
+  });
+
+  it("preserves arbitrary Unicode project, client, and description data byte-for-byte", () => {
+    const value = "Čukarica 東京 — račun № 7";
+    const decoded = decodeChatResponse({
+      ok: true,
+      reply: { kind: "answer", text: value },
+      results: [{
+        kind: "preview",
+        previewId: "preview-unicode",
+        nonce: "nonce-unicode",
+        preview: {
+          actionLabel: "Update project",
+          expectedChanges: [value],
+          reversibility: "Preview only",
+          warnings: [],
+          targets: [
+            { type: "project", id: "project-1", name: value },
+            { type: "client", id: "client-1", name: value },
+          ],
+        },
+      }],
+    });
+
+    expect(decoded.ok).toBe(true);
+    if (!decoded.ok) throw new Error("expected a decoded chat response");
+    expect(decoded.reply.text).toBe(value);
+    const preview = decoded.results[0];
+    expect(preview?.kind).toBe("preview");
+    if (preview?.kind !== "preview") throw new Error("expected a decoded preview");
+    expect(preview.preview.expectedChanges).toEqual([value]);
+    expect(preview.preview.targets?.map((target) => target.name)).toEqual([value, value]);
+    expect(Buffer.from(preview.preview.expectedChanges[0] ?? "", "utf8")).toEqual(Buffer.from(value, "utf8"));
   });
 
   it("fully decodes permissions, history, and sessions instead of trusting ok:true", () => {

@@ -46,7 +46,27 @@ jobs:
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
         with:
           version: 1.7.7
+      # The two steps below bind their evidence to the FROZEN v1 release
+      # candidate and require every change since it to be evidence-only. They are
+      # structurally inapplicable to a build that is not that candidate -- a v2
+      # rewrite changes hundreds of executable files by definition -- so as
+      # unconditional steps they blocked every branch, `main` included. This probe
+      # decides applicability only; when it reports `true` both gates run below
+      # completely unchanged and enforce their own full checks. It exits nonzero
+      # rather than reporting `false` on any error, so a broken probe fails CI
+      # instead of silently skipping the gates it guards.
+      - name: Detect whether this build is the frozen v1 release candidate
+        id: v1-candidate
+        run: |
+          set -euo pipefail
+          IS_V1_CANDIDATE="$(npm run --silent evidence:v1-candidate-build)"
+          if [ "$IS_V1_CANDIDATE" != "true" ] && [ "$IS_V1_CANDIDATE" != "false" ]; then
+            echo "v1 candidate probe returned an unrecognized value: $IS_V1_CANDIDATE" >&2
+            exit 1
+          fi
+          echo "is_v1_candidate=$IS_V1_CANDIDATE" >> "$GITHUB_OUTPUT"
       - name: Bind reviewed Marketplace media to the exact source candidate
+        if: steps.v1-candidate.outputs.is_v1_candidate == 'true'
         env:
           MARKETPLACE_MEDIA_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
           MARKETPLACE_MEDIA_BINDING_PATH: /tmp/marketplace-media-release-binding.json
@@ -58,6 +78,7 @@ jobs:
           export MARKETPLACE_MEDIA_SOURCE_CANDIDATE_SHA
           npm run evidence:marketplace-media-binding
       - name: Validate machine-bound DeepSeek benchmark evidence
+        if: steps.v1-candidate.outputs.is_v1_candidate == 'true'
         env:
           DEEPSEEK_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
           DEEPSEEK_VALIDATION_PATH: /tmp/deepseek-benchmark-validation.json

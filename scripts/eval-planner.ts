@@ -26,6 +26,7 @@ import type { ModelClient } from "../src/assistant/model-client.js";
 import { planConversation, type ModelPlan } from "../src/assistant/planner.js";
 import { buildSystemPrompt } from "../src/assistant/prompts.js";
 import { catalogForModel, getAction } from "../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import { toolsForModel } from "../src/harness/tools.js";
 import { selectActionsForMessage } from "../src/harness/tool-select.js";
 import { selectEvalModelClient } from "./eval/model-client.js";
@@ -178,8 +179,8 @@ async function main(): Promise<void> {
   }
 
   const actionCatalog = flags.noArgs
-    ? catalogForModel().map((e) => ({ ...e, args: "" }))
-    : catalogForModel();
+    ? catalogForModel(INTERNAL_ACTION_CATALOG).map((e) => ({ ...e, args: "" }))
+    : catalogForModel(INTERNAL_ACTION_CATALOG);
   const policy = defaultAdminPolicy();
   const modelLabel =
     selection.llmProvider === "gemini-cli" ? `gemini-cli:${selection.geminiModel ?? "router"}` : selection.llmModel ?? "?";
@@ -215,8 +216,8 @@ async function main(): Promise<void> {
       plan = await planConversation({
         modelClient: tracked.client,
         messages,
-        actionCatalog: names ? catalogForModel(names) : actionCatalog,
-        tools: names ? toolsForModel(names) : undefined,
+        actionCatalog: names ? catalogForModel(INTERNAL_ACTION_CATALOG, names) : actionCatalog,
+        tools: names ? toolsForModel(INTERNAL_ACTION_CATALOG, names) : undefined,
         policy,
         useTools: !flags.jsonMode,
       });

@@ -35,6 +35,30 @@ describe("GitHub Actions workflow contracts", () => {
     expect(verifyJob).toContain("npx playwright install --with-deps chromium");
     expect(verifyJob.indexOf("npx playwright install --with-deps chromium"))
       .toBeLessThan(verifyJob.indexOf("npm run perf:local-ui"));
+    // The two candidate-bound evidence gates bind to the FROZEN v1 release
+    // candidate and require every change since it to be evidence-only, so they
+    // are structurally inapplicable to a build that is not that candidate. They
+    // run only when the applicability probe says so -- and BOTH must carry the
+    // condition, because leaving either unconditional re-blocks every branch.
+    const probeIndex = verifyJob.indexOf("npm run --silent evidence:v1-candidate-build");
+    expect(probeIndex).toBeGreaterThan(0);
+    for (const gate of [
+      "npm run evidence:marketplace-media-binding",
+      "npm run check:deepseek-evidence -- --benchmark-only",
+    ]) {
+      const gateIndex = verifyJob.indexOf(gate);
+      expect(gateIndex, `${gate} must still exist`).toBeGreaterThan(0);
+      expect(probeIndex, `${gate} must run after the probe`).toBeLessThan(gateIndex);
+      const stepStart = verifyJob.lastIndexOf("\n      - name:", gateIndex);
+      expect(
+        verifyJob.slice(stepStart, gateIndex),
+        `${gate} must be gated on the probe output`,
+      ).toContain("if: steps.v1-candidate.outputs.is_v1_candidate == 'true'");
+    }
+    // A probe value other than the two allowed literals must fail the job rather
+    // than reach $GITHUB_OUTPUT, which also stops a multi-line value from
+    // injecting extra step outputs.
+    expect(verifyJob).toContain('[ "$IS_V1_CANDIDATE" != "false" ]');
     expect(workflow).toContain("raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7");
     expect(workflow).toContain("version: 1.7.7");
     expect(workflow).toContain("npx playwright install --with-deps chromium firefox webkit");
@@ -56,11 +80,24 @@ describe("GitHub Actions workflow contracts", () => {
 
     expect(config).toMatch(/\[extend\]\s+useDefault = true/);
     expect(config).toContain('id = "generic-api-key"');
-    expect(config.match(/condition = "AND"/g)).toHaveLength(3);
-    expect(config.match(/regexTarget = "line"/g)).toHaveLength(3);
+    // Every exception stays AND-scoped to one path AND one exact line shape, so
+    // a real credential in an allowlisted file is still caught. Proven directly:
+    // planting a secret into either file below is still reported.
+    expect(config.match(/condition = "AND"/g)).toHaveLength(5);
+    expect(config.match(/regexTarget = "line"/g)).toHaveLength(5);
     expect(config).toContain("^\\.env\\.example$");
     expect(config).toContain("^tests/unit/config\\.test\\.ts$");
     expect(config).toContain("^tests/unit/workflow-contracts\\.test\\.ts$");
+    // The generated catalog digest is a public content hash, published in the
+    // inventory evidence — not a credential. Pinned to that exact declaration.
+    expect(config).toContain("^src/harness/api-catalog\\.generated\\.ts$");
+    expect(config).toContain(
+      'regexes = [\'\'\'^\\n?export const API_ACTION_CATALOG_HASH = "[0-9a-f]{64}" as const;$\'\'\']',
+    );
+    // A deliberately fake credential-shaped string that the supervisor's own
+    // secret detector is asserted to FIRE on.
+    expect(config).toContain("^tests/scripts/test_codex_v2_supervisor\\.py$");
+    expect(config).toContain("abcdefghijklmnop123");
     expect(config).toContain("Historical workflow-contract assertions");
     expect(config).toContain("regexes = ['''^\\n?    expect\\(config\\)\\.toContain");
     expect(config).toContain("DATA_ENCRYPTION_KEY=replace-with-64-hex-chars");

@@ -6,6 +6,7 @@ import type { WorkspaceClient } from "../clockify/client.js";
 import type { ModelClient } from "../assistant/model-client.js";
 import type { WorkspaceMutationCoordinator } from "../clockify/workspace-mutation-coordinator.js";
 import type { RuntimeReleaseArtifactIdentity } from "../release-artifact.js";
+import type { ApiOperationIndex } from "../assistant-v2/discovery/api-index.js";
 import { signSessionCookie, verifySessionCookie, type SessionClaims } from "../auth/sessions.js";
 
 /**
@@ -34,6 +35,8 @@ export interface AppDeps {
   /** Tests written before persisted intent capabilities may opt out. Ignored
    * outside NODE_ENV=test; production has no capability-enforcement toggle. */
   enforceIntentCapabilitiesInTests?: true;
+  /** Immutable trusted API discovery index built once at startup from MODEL_API. */
+  apiOperationIndex?: ApiOperationIndex;
 }
 
 const SESSION_COOKIE = "ai_assistant_session";

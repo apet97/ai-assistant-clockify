@@ -17,6 +17,12 @@ export interface RestoredApplicationReadinessOptions {
   previousEncryptionKey?: string;
   releaseSha: string;
   releaseBuildHash: string;
+  /**
+   * The engine the probe must boot. Unset defaults to `v1`, which is what the
+   * probe silently did before -- so nothing in the release path ever proved a
+   * v2 deployment boots against a real database file.
+   */
+  assistantEngine?: "v1" | "v2";
   timeoutMs?: number;
   now?: () => Date;
   monotonicNow?: () => number;
@@ -169,6 +175,7 @@ function syntheticProbeEnvironment(
       ? {}
       : { DATA_ENCRYPTION_KEY_PREVIOUS: options.previousEncryptionKey }),
     DATABASE_PATH: options.restoredPath,
+    ASSISTANT_ENGINE: options.assistantEngine ?? "v1",
     LLM_PROVIDER: "http",
     LLM_MODE: "tool",
     LLM_AGENTIC: "1",

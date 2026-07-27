@@ -46,6 +46,7 @@ import {
 } from "../src/harness/action.js";
 import { commitConfirmedOperation, executeAction } from "../src/harness/actions.js";
 import { actionFingerprint, catalogForModel, catalogHash, getAction } from "../src/harness/catalog.js";
+import { INTERNAL_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import { hashOperation } from "../src/harness/confirmations.js";
 import { authorizeIntentWriteArguments } from "../src/harness/intent-authority.js";
 import { defaultAdminPolicy } from "../src/harness/permissions.js";
@@ -308,7 +309,7 @@ export async function runAgenticCase(
     intentPath.intentDeclarationCalls += 1;
     intentPath.intentDeclarationContract = "invalid_or_legacy";
     intentPath.intentDeclarationProvenance = "invalid";
-    const writeActionNames = catalogForModel()
+    const writeActionNames = catalogForModel(INTERNAL_ACTION_CATALOG)
       .filter((entry) => entry.risks.some((risk) => risk !== "read"))
       .map((entry) => entry.name);
     const declarationClient: ModelClient = {
@@ -389,15 +390,15 @@ export async function runAgenticCase(
     // exact subset on resume. The escape hatch can expose only the capability-
     // filtered catalog, never an undeclared write.
     const fullIntentCatalog = intentCapability
-      ? filterCatalogByIntentCapability(catalogForModel(), intentCapability)
-      : catalogForModel();
+      ? filterCatalogByIntentCapability(catalogForModel(INTERNAL_ACTION_CATALOG), intentCapability)
+      : catalogForModel(INTERNAL_ACTION_CATALOG);
     const fullIntentNames = new Set(fullIntentCatalog.map((entry) => entry.name));
     const selectedNames = toolSelect
       ? new Set(selectActionsForMessage(c.message).filter((name) => fullIntentNames.has(name)))
       : fullIntentNames;
-    const subsetTools = toolsForModel(selectedNames);
+    const subsetTools = toolsForModel(INTERNAL_ACTION_CATALOG, selectedNames);
     narrowed = selectedNames.size < fullIntentNames.size;
-    const fullIntentTools = toolsForModel(fullIntentNames);
+    const fullIntentTools = toolsForModel(INTERNAL_ACTION_CATALOG, fullIntentNames);
     const resumeTools = subsetTools;
 
     let turn: AgentTurnResult = await runAgentConversation({
@@ -551,9 +552,9 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
   // catalog/tools for the plan, then a full-catalog re-plan if a NARROWED turn
   // proposed no action (the recall escape hatch — re-plan runs before any execute).
   const subsetNames = toolSelect ? new Set(selectActionsForMessage(c.message)) : undefined;
-  const subsetTools = subsetNames ? toolsForModel(subsetNames) : undefined;
-  const subsetCatalog = subsetNames ? catalogForModel(subsetNames) : catalogForModel();
-  const narrowed = subsetNames !== undefined && subsetNames.size < toolsForModel().length;
+  const subsetTools = subsetNames ? toolsForModel(INTERNAL_ACTION_CATALOG, subsetNames) : undefined;
+  const subsetCatalog = subsetNames ? catalogForModel(INTERNAL_ACTION_CATALOG, subsetNames) : catalogForModel(INTERNAL_ACTION_CATALOG);
+  const narrowed = subsetNames !== undefined && subsetNames.size < toolsForModel(INTERNAL_ACTION_CATALOG).length;
   const tracked = trackUsage(modelClient, () => new Date());
 
   try {
@@ -570,7 +571,7 @@ async function runSingleTurnCase(modelClient: ModelClient, c: AgenticCase, toolS
       plan = await planConversation({
         modelClient: tracked.client,
         messages: [{ role: "user", content: c.message }],
-        actionCatalog: catalogForModel(),
+        actionCatalog: catalogForModel(INTERNAL_ACTION_CATALOG),
         policy: ctx.policy,
         useTools: true,
       });

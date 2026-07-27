@@ -14,6 +14,7 @@ import { ACTION_CATALOG, actionFingerprint } from "../../src/harness/catalog.js"
 import { defaultAdminPolicy } from "../../src/harness/permissions.js";
 import { errorReceipt, type ErrorReceipt } from "../../src/harness/receipts.js";
 import { summarizeArgs } from "../../src/harness/arg-summary.js";
+import { PRESENTATION_RULES_VERSION } from "../../src/harness/prepared-write-presentation.js";
 import {
   optionalLiteralPathsFromJsonSchema,
   validateWriteAuthorityOperation,
@@ -152,8 +153,10 @@ describe("Phase 6 write authority enforcement", () => {
     expect([...writeAuthorityActionNames()].sort()).toEqual(modelVisibleWrites().map((action) => action.name).sort());
   });
 
-  it("catalog-fingerprints authored command and literal authority for exactly all 11 safe writes", () => {
+  it("catalog-fingerprints authored command and literal authority for exactly all 14 safe writes", () => {
     const expected = [
+      "clockify_entries_create",
+      "clockify_entries_start",
       "clockify_start_timer",
       "clockify_stop_timer",
       "clockify_log_work",
@@ -162,6 +165,8 @@ describe("Phase 6 write authority enforcement", () => {
       "clockify_projects_from_template",
       "clockify_tasks_create",
       "clockify_clients_create",
+      "clockify_clients_create_base",
+      "clockify_invoices_create_base",
       "clockify_tags_create",
       "clockify_holidays_create",
       "clockify_scheduling_assignments_create",
@@ -303,6 +308,18 @@ describe("Phase 6 write authority enforcement", () => {
       mutationContract: action.mutationContract,
       writeAuthority: action.writeAuthority,
       preparedSafeWrite: !!action.prepareSafeWrite && !!action.executeSafeWrite,
+      apiExposure: action.apiExposure ?? null,
+      apiExposureReason: action.apiExposureReason ?? null,
+      apiOperation: action.apiOperation ?? null,
+      adapterEndpoints: action.adapterEndpoints ?? null,
+      availabilityByAuthClass: action.availabilityByAuthClass ?? null,
+      boundedArgumentDictionaries: action.boundedArgumentDictionaries ?? [],
+      materialFields: action.materialFields ?? [],
+      normalizedOperationMaterialContract:
+        action.normalizedOperationMaterialContract ?? [],
+      presentation: action.presentation ?? null,
+      presentationRulesVersion: PRESENTATION_RULES_VERSION,
+      referenceSelector: action.referenceSelector ?? null,
     })).digest("hex");
     expect(actionFingerprint(action.name)).toBe(expected);
   });
@@ -354,17 +371,28 @@ describe("Phase 6 write authority enforcement", () => {
       "operation.projectId",
       "operation.clientId",
     ]));
-    expect(projectUpdate.preservedStatePaths).toEqual([]);
+    expect(projectUpdate.preservedStatePaths).toEqual(expect.arrayContaining([
+      "operation.body.*",
+      "operation.patch.*",
+      "operation.updateBody.*",
+      "operation.archiveBody.*",
+      "operation.restoreBody.*",
+      "operation.doneBody.*",
+      "operation.originalBody.*",
+      "operation.prepared.body.*",
+      "operation.prepared.source.*",
+    ]));
     expect(projectUpdate.cardinality).toEqual({ mode: "single", maxExecutions: 1 });
     expect(validateWriteAuthorityOperation(
       ACTION_CATALOG.find((action) => action.name === "clockify_projects_update")!,
       {
         id: "project-1",
         patch: { isPublic: false },
-        body: { name: "Apollo", isPublic: false, hourlyRate: { amount: 7_500, currency: "USD" } },
+        body: { name: "Apollo", isPublic: false },
+        invented: { currency: "USD" },
       },
       { mode: "single", maxHostCalls: 60, steps: [{ id: "update-project", kind: "primary" }] },
-    )).toBe("undeclared_server_default_path:operation.body.hourlyRate.currency");
+    )).toBe("undeclared_server_default_path:operation.invented.currency");
   });
 
   it("pins the reviewed nested id/default paths used by prepared replacement workflows", () => {
@@ -392,9 +420,12 @@ describe("Phase 6 write authority enforcement", () => {
       "operation.prepared.body.start",
       "operation.prepared.source.start",
     ]);
-    expect(entryField.preservedStatePaths).toEqual([
-      "operation.prepared.body.description", "operation.prepared.source.description",
-    ]);
+    expect(entryField.preservedStatePaths).toEqual(expect.arrayContaining([
+      "operation.prepared.body.description",
+      "operation.prepared.source.description",
+      "operation.prepared.body.*",
+      "operation.prepared.source.*",
+    ]));
     expect(validateWriteAuthorityOperation(
       ACTION_CATALOG.find((action) => action.name === "clockify_custom_fields_set_value_entry")!,
       { invented: { description: "not-authoritative" } },

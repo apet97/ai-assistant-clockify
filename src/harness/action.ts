@@ -6,6 +6,10 @@ import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionOutcome } from "../metrics/metrics.js";
 import { randomUUID } from "node:crypto";
 import { bindMutationPlanHostCalls } from "./safety-limits.js";
+import {
+  apiActionMetadataFields,
+  type ApiActionMetadataCarrier,
+} from "./api-operation.js";
 import type {
   ExternalMutationPlan,
   ExternalMutationPlanDraft,
@@ -13,6 +17,13 @@ import type {
 } from "./mutation-contract.js";
 
 export type { ExternalMutationPlan, ExternalMutationPlanDraft } from "./mutation-contract.js";
+export type {
+  ActionOrigin,
+  AuthorityModel,
+  DiscriminatorTuple,
+  ExecutorKind,
+  RegistryId,
+} from "./action-discriminators.js";
 
 /**
  * A durable operation row can exist before the rest of preparation finishes.
@@ -351,7 +362,16 @@ export type ActionResult = (
       options?: ClarifyOption[];
       recovery: RecoveryHint;
     }
-  | { kind: "clarify"; message: string; options?: ClarifyOption[] }
+  /**
+   * `field` is the EXACT raw-argument key the clarification is about, supplied
+   * only where the call site knows it with certainty (a single-slot resolver).
+   * The v2 clarification producer stores it as `missingField` so an exact-option
+   * resolve can inject the chosen entity id back into that one argument. A
+   * clarify with no single owning argument (a date range, a multi-slot
+   * project/task pair) deliberately leaves it undefined and resolves by
+   * free-text continuation instead — never by guessing an argument.
+   */
+  | { kind: "clarify"; message: string; options?: ClarifyOption[]; field?: string }
   | { kind: "preview"; preview: PreviewCard; operation: ConfirmableOperation }
 ) & { operationId?: string };
 
@@ -370,7 +390,7 @@ export function isPartialCommitResult(
 /** Fields shared by every stored action definition. Execution-only fields live
  * on the discriminated variants below so a read can never masquerade as a
  * committable write and a safe write cannot carry a second shadow handler. */
-interface ActionDefinitionBase {
+interface ActionDefinitionBase extends ApiActionMetadataCarrier {
   name: string;
   description: string;
   featureGroup: FeatureGroup;
@@ -447,7 +467,7 @@ export interface ActionCatalogEntry {
  * Define an action with per-action arg typing (handler receives `z.infer<S>`),
  * erased to the uniform `ActionDefinition` for storage in the catalog.
  */
-interface DefineActionCommon<S extends z.ZodTypeAny> {
+interface DefineActionCommon<S extends z.ZodTypeAny> extends ApiActionMetadataCarrier {
   name: string;
   description: string;
   featureGroup: FeatureGroup;
@@ -616,9 +636,12 @@ export interface RiskyClarifyResult {
  * Map a {@link RiskyClarifyResult} to the clarify {@link ActionResult} variant.
  * Workflows return the `{ clarify, options? }` shape; this is the one place that
  * renames `clarify` → `message` so the spelling lives once.
+ *
+ * `field` is optional and names the exact raw-argument key this clarification is
+ * about — pass it only where the call site knows the single owning argument.
  */
-export function clarifyResult(c: RiskyClarifyResult): ActionResult {
-  return { kind: "clarify", message: c.clarify, options: c.options };
+export function clarifyResult(c: RiskyClarifyResult, field?: string): ActionResult {
+  return { kind: "clarify", message: c.clarify, options: c.options, ...(field ? { field } : {}) };
 }
 
 /**
@@ -629,7 +652,7 @@ export function clarifyResult(c: RiskyClarifyResult): ActionResult {
  * `group`/`risks`/`name` so it can never drift. Emits exactly the same
  * ActionResult / ConfirmableOperation shape as the hand-rolled scaffold.
  */
-export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
+export function defineRiskyAction<S extends z.ZodTypeAny>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -662,6 +685,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: def.risks,
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
@@ -739,7 +763,7 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: {
  * reads/resolution but must not mutate; `execute` receives only the durable,
  * normalized nonsecret intent persisted before dispatch.
  */
-export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
+export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -759,6 +783,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: ["safe_write"],
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),
     ...(def.semanticLiteralAliases ? { semanticLiteralAliases: def.semanticLiteralAliases } : {}),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
@@ -771,7 +796,7 @@ export function defineSafeWriteAction<S extends z.ZodTypeAny>(def: {
  * Build an immediate read action (risk `["read"]`). The handler returns the
  * receipt directly; the builder wraps it in `{ kind: "receipt" }`.
  */
-export function defineReadAction<S extends z.ZodTypeAny>(def: {
+export function defineReadAction<S extends z.ZodTypeAny>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -785,6 +810,7 @@ export function defineReadAction<S extends z.ZodTypeAny>(def: {
     featureGroup: def.group,
     risks: ["read"],
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     ...(def.argumentOpenPaths ? { argumentOpenPaths: def.argumentOpenPaths } : {}),
     async handler(ctx, args): Promise<ActionResult> {
       return { kind: "receipt", receipt: await def.handler(ctx, args) };

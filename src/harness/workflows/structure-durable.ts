@@ -22,6 +22,10 @@ import type { FeatureGroup } from "../permissions.js";
 import { errorReceipt, type EntityRef } from "../receipts.js";
 import { sanitizedFingerprint } from "../safe-json.js";
 import { captureTargetSnapshot, verifyTargetSnapshots } from "../target-snapshots.js";
+import {
+  apiActionMetadataFields,
+  type ApiActionMetadataCarrier,
+} from "../api-operation.js";
 
 interface StructureSafeWriteDispatch extends MutationDispatchResult {
   result: CommitResult;
@@ -30,7 +34,7 @@ interface StructureSafeWriteDispatch extends MutationDispatchResult {
 /** Structure-domain safe-write builder whose complete create baseline is read
  * immediately before the step is prepared, then committed with that exact step
  * before any host dispatch. */
-export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, State>(def: {
+export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, State>(def: ApiActionMetadataCarrier & {
   name: string;
   description: string;
   group: FeatureGroup;
@@ -102,6 +106,7 @@ export function defineStructureDurableSafeWriteAction<S extends z.ZodTypeAny, St
     featureGroup: def.group,
     risks: ["safe_write"],
     schema: def.schema,
+    ...apiActionMetadataFields(def),
     mutationWorkflow: "durable",
     mutationContract: def.mutationContract,
     ...(def.argumentAliases ? { argumentAliases: def.argumentAliases } : {}),

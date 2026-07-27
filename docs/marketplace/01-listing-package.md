@@ -42,14 +42,16 @@ for Review**.
 > immediately. Editing existing data and every risky write produce a dry-run preview and
 > require a button confirmation. Typing "yes" never confirms a risky operation.
 >
-> Receipts preserve successful, partial, failed, and unknown outcomes without hiding a
-> partial result. Exact request replay returns the durable result. Undo is offered only
+> Receipts preserve successful, partial, failed, and unknown outcomes. Exact request
+> replay returns the durable result. Undo is offered only
 > for eligible recent creations and is a best-effort compensation, not a promise to roll
 > back every Clockify change.
 >
 > Each administrator controls only their own per-workspace permission policy. The add-on
-> includes accessible light and dark themes, localized date and currency formatting,
-> conversation history, and authenticated short-lived PDF downloads where supported.
+> includes accessible light and dark themes, conversation history, and authenticated
+> short-lived PDF downloads where supported.
+>
+> English interface; Unicode workspace data; timezone-aware Intl formatting.
 
 ## Privacy disclosure copy
 
@@ -119,7 +121,7 @@ non-executable release evidence.
   and unrelated customer data.
 - Do not edit a receipt to imply success. Preserve partial, failed, or unknown labels if
   that is the demonstrated state.
-- Use the same light/dark and locale behavior verified in the browser matrix.
+- English interface; Unicode workspace data; timezone-aware Intl formatting.
 - Keep interactive labels and model disclosure readable after portal compression.
 
 ## Demo script

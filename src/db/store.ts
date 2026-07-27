@@ -33,6 +33,11 @@ import type {
   PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
+  ConfirmationBatchRecord,
+  ConfirmationBatchItemRecord,
+  ConfirmationBatchStatus,
+  ConfirmationBatchItemStatus,
+  CreateConfirmationBatchInput,
 } from "./store/context.js";
 import {
   actionResultJson,
@@ -51,6 +56,7 @@ import { buildSessionStore } from "./store/sessions.js";
 import { buildUndoStore } from "./store/undo.js";
 import { buildInstallationStore } from "./store/installations.js";
 import { buildConfirmationStore } from "./store/confirmations.js";
+import { buildConfirmationBatchStore } from "./store/confirmation-batches.js";
 import { buildIdempotencyStore } from "./store/idempotency.js";
 import {
   buildRetentionStore,
@@ -59,7 +65,14 @@ import {
   type RetentionRunMetric,
 } from "./store/retention.js";
 import { buildTurnRunStore } from "./store/turn-runs.js";
+import { buildAssistantRunStore } from "./store/runs.js";
+import { buildRunEventStore } from "./store/run-events.js";
 import { buildOperationRunStore } from "./store/operation-runs.js";
+import {
+  buildAssistantWritePreparationStore,
+  type PreparedAssistantWriteInput,
+  type PreparedAssistantWriteResult,
+} from "./store/assistant-write-preparation.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import {
   buildIntentCapabilityStore,
@@ -71,6 +84,8 @@ import {
   type IntentCapabilityOperationScope,
   type IntentCapabilityScope,
 } from "./store/intent-capabilities.js";
+import { buildEntityReferenceStore } from "./store/entity-references.js";
+import { buildPendingClarificationStore } from "./store/pending-clarifications.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import type { PendingConfirmationRecord } from "../harness/confirmations.js";
 import type { SuccessReceipt } from "../harness/receipts.js";
@@ -122,6 +137,12 @@ export type {
   PrepareCompensationStepInput,
   ArtifactRecord,
   DurableResultLink,
+  ConfirmationBatchRecord,
+  ConfirmationBatchItemRecord,
+  ConfirmationBatchStatus,
+  ConfirmationBatchItemStatus,
+  CreateConfirmationBatchInput,
+  OperationDiscriminatorInput,
 } from "./store/context.js";
 export type { ActionResultKind, ActionResultRef } from "./action-results.js";
 export type {
@@ -142,6 +163,14 @@ export interface StoreOptions {
   now?: () => Date;
   /** Retention (days) for chat_messages + audit_events; defaults to 90. */
   retentionDays?: number;
+  /**
+   * Refuse to CREATE the database file. `new Database(path)` happily creates a
+   * missing file, which then migrates to the latest schema and presents as a
+   * perfectly healthy but EMPTY install -- so a typo'd `DATABASE_PATH` looks
+   * identical to a correct one. Deploys that expect to reopen an existing
+   * database set this so the mistake fails at open instead.
+   */
+  mustExist?: boolean;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -244,13 +273,206 @@ export interface Store {
     resultLinks?: DurableResultLink[],
   ): void;
   getTurnRun(sessionId: string, requestId: string): TurnRun | undefined;
+  startRunWithTurn(input: import("./store/runs.js").StartAssistantRunInput): void;
+  getRun(scope: import("./store/runs.js").AssistantRunScope): import("../assistant-v2/state.js").RunState | undefined;
+  saveRun(state: import("../assistant-v2/state.js").RunState): void;
+  findLatestEligibleRunForCache(
+    sessionId: string,
+    workspaceId: string,
+    adminUserId: string,
+    installationGeneration: number,
+    authClass: import("../harness/api-operation.js").AuthClass,
+    catalogHash: string,
+  ): import("../assistant-v2/state.js").RunState | undefined;
+  recoverOrphanedActiveRuns(scope: import("../assistant-v2/protocol.js").RunScope): number;
+  failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
+  startRunWithEvent(input: import("./store/runs.js").StartAssistantRunInput): import("../assistant-v2/events.js").SequencedRunEvent;
+  listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput): import("./store/run-events.js").RunEventPageStoreResult;
+  /** T17-E: bounded scoped run-event rows for metrics; no formulas in the store. */
+  listRunEventsForMetrics(input: {
+    workspaceId: string;
+    adminUserId: string;
+    since: string;
+    limit: number;
+  }): import("../metrics/run-metrics.js").RunMetricsEvent[];
+  getLastRunEventSequence(scope: import("./store/runs.js").AssistantRunScope): number;
+  getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
+    runId: string;
+    phase: import("../assistant-v2/state.js").RunPhase;
+    lastSequence: number;
+    updatedAt: string;
+  } | undefined;
+  reserveModelCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["model.started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeModelCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["model.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  reserveDiscoveryCallWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["api.search_started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  loadOperationsWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["api.operations_loaded"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  requestToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.requested"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  denyToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.denied"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  startToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.started"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeToolWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["tool.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  requireClarificationWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["clarification.required"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  suspendRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.suspended"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  completeRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.completed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  failRunWithEvent(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.failed"],
+  ): import("../assistant-v2/events.js").SequencedRunEvent;
+  getActiveRunForSession(sessionId: string, workspaceId: string, adminUserId: string): {
+    runId: string;
+    phase: import("../assistant-v2/state.js").RunPhase;
+    lastSequence: number;
+    updatedAt: string;
+  } | undefined;
   createIntentCapability(input: CreateIntentCapabilityInput): IntentCapabilityRecord;
   getIntentCapability(id: string, scope: IntentCapabilityScope): IntentCapabilityRecord | undefined;
   getIntentCapabilityForOperation(input: IntentCapabilityOperationScope): IntentCapabilityRecord;
   bindIntentCapabilityOperation(input: BindIntentCapabilityOperationInput): BindIntentCapabilityOperationResult;
   consumeIntentCapabilityExecution(input: BindIntentCapabilityOperationInput): ConsumeIntentCapabilityExecutionResult;
   consumeIntentCapabilityForOperation(input: IntentCapabilityOperationScope): ConsumeIntentCapabilityExecutionResult;
+  upsertEntityReference(
+    input: import("./store/entity-references.js").UpsertEntityReferenceInput,
+  ): import("./store/entity-references.js").EntityReferenceRecord;
+  getEntityReference(
+    id: string,
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+  ): import("./store/entity-references.js").EntityReferenceRecord | undefined;
+  listRecentActiveEntityReferences(
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+    limit?: number,
+  ): import("./store/entity-references.js").EntityReferenceRecord[];
+  markEntityReferenceStatus(
+    id: string,
+    scope: import("./store/entity-references.js").EntityReferenceScope,
+    status: import("./store/entity-references.js").EntityReferenceStatus,
+  ): import("./store/entity-references.js").EntityReferenceRecord;
+  createPendingClarification(
+    input: import("./store/pending-clarifications.js").CreatePendingClarificationInput,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  getPendingClarification(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord | undefined;
+  getActiveClarificationForRun(
+    scope: Pick<
+      import("./store/pending-clarifications.js").ClarificationScope,
+      "sessionId" | "runId" | "workspaceId" | "adminUserId"
+    >,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord | undefined;
+  claimClarificationResolving(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resetClarificationToPending(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resolveClarificationWithOption(input: {
+    id: string;
+    scope: import("./store/pending-clarifications.js").ClarificationScope;
+    selectedOptionId: string;
+    actionResultId: string;
+    operationId?: string;
+  }): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  cancelClarification(input: {
+    id: string;
+    scope: import("./store/pending-clarifications.js").ClarificationScope;
+    reason: import("./store/pending-clarifications.js").ClarificationCancelReason;
+  }): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  continueClarificationWithFreeText(
+    id: string,
+    scope: import("./store/pending-clarifications.js").ClarificationScope,
+  ): import("./store/pending-clarifications.js").PendingClarificationRecord;
+  resolveClarificationOption(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    selectedOptionId: string;
+    actionResultId: string;
+    operationId?: string;
+    toolCallId: string;
+    actionName: string;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    event: import("../assistant-v2/events.js").SequencedRunEvent;
+  };
+  continueClarificationWithFreeTextAndLink(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    requestId: string;
+    messageContent: string;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+  };
+  supersedeClarificationForNewRun(input: {
+    clarificationId: string;
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+  }): {
+    clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    event: import("../assistant-v2/events.js").SequencedRunEvent;
+  };
   prepareOperationRun(input: PrepareOperationRunInput): string;
+  prepareAssistantWriteWithEvent(input: {
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    write: PreparedAssistantWriteInput;
+  }): PreparedAssistantWriteResult;
+  prepareAssistantWriteBatchWithEvents(input: {
+    scope: import("./store/runs.js").AssistantRunScope;
+    state: import("../assistant-v2/state.js").RunState;
+    writes: readonly PreparedAssistantWriteInput[];
+    batch?: Omit<CreateConfirmationBatchInput, "items">;
+  }): {
+    state: import("../assistant-v2/state.js").RunState;
+    events: import("../assistant-v2/events.js").SequencedRunEvent[];
+    items: Array<{ operationId: string; confirmationId: string }>;
+    batchId?: string;
+  };
   markOperationExecuting(id: string): boolean;
   settleOperationRun(
     id: string,
@@ -263,6 +485,10 @@ export interface Store {
     result: unknown,
   ): ActionResultRef;
   getOperationRun(id: string): OperationRun | undefined;
+  preparedAssistantPreviewMatchesConfirmation(
+    operationId: string,
+    record: import("../harness/confirmations.js").PendingConfirmationRecord,
+  ): boolean;
   getScopedOperationRun(id: string, workspaceId: string, adminUserId: string, sessionId: string): SanitizedOperationRun | undefined;
   listScopedOperationRuns(workspaceId: string, adminUserId: string, sessionId: string, limit?: number): SanitizedOperationRun[];
   listStartupReconciliationCandidates(): StartupReconciliationOperation[];
@@ -309,7 +535,7 @@ export interface Store {
   mutationStepJournal(operationId: string): MutationStepJournal;
   createArtifact(input: Omit<ArtifactRecord, "id" | "checksum" | "createdAt" | "expiresAt">): { id: string; expiresAt: string };
   getArtifact(id: string, workspaceId: string, adminUserId: string, sessionId: string): ArtifactRecord | undefined;
-  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number };
+  recoverOrphanedRuns(): { turns: number; operations: number; confirmations: number; undos: number; assistantRuns: number };
   recordActionResult(input: {
     workspaceId: string;
     adminUserId: string;
@@ -352,6 +578,41 @@ export interface Store {
   getActionResult(id: string): unknown | undefined;
   /** This session's still-live pending previews (status pending, not expired). */
   countPendingConfirmations(sessionId: string, nowIso: string): number;
+
+  computeOrderedTupleHash(
+    items: ReadonlyArray<{ confirmationId: string; operationId: string }>,
+  ): string;
+  createConfirmationBatch(input: CreateConfirmationBatchInput): ConfirmationBatchRecord;
+  insertConfirmationBatch(input: CreateConfirmationBatchInput): ConfirmationBatchRecord;
+  getConfirmationBatch(id: string): ConfirmationBatchRecord | undefined;
+  getScopedConfirmationBatch(
+    id: string,
+    workspaceId: string,
+    adminUserId: string,
+    sessionId: string,
+  ): ConfirmationBatchRecord | undefined;
+  listConfirmationBatchItems(batchId: string): ConfirmationBatchItemRecord[];
+  updateConfirmationBatchStatus(
+    id: string,
+    status: ConfirmationBatchStatus,
+    patch?: {
+      currentIndex?: number;
+      actionResultId?: string;
+      startedAt?: string;
+      completedAt?: string;
+    },
+  ): boolean;
+  updateConfirmationBatchItemStatus(
+    batchId: string,
+    itemIndex: number,
+    status: ConfirmationBatchItemStatus,
+    patch?: { actionResultId?: string; startedAt?: string; completedAt?: string },
+  ): boolean;
+  markConfirmationBatchExecuting(batchId: string): boolean;
+  advanceConfirmationBatchProgress(batchId: string, nextIndex: number, timestamp: string): boolean;
+  cancelUndispatchedBatchItems(batchId: string, fromIndex: number, timestamp: string): number;
+  recoverConfirmationBatch(batchId: string, nowIsoArg: string): void;
+  expireConfirmationBatches(nowIso: string): number;
 
   /** Idempotency ledger (Phase 5): a committed success keyed by intent hash. */
   recordIdempotency(key: string, workspaceId: string, adminUserId: string, ref: ActionResultRef, committedAtEpochMs: number): void;
@@ -467,7 +728,9 @@ export interface TestStore extends Store {
 }
 
 export function createStore(databasePath: string, options: StoreOptions = {}): Store {
-  const db = new Database(databasePath);
+  const db = options.mustExist === true
+    ? new Database(databasePath, { fileMustExist: true })
+    : new Database(databasePath);
   migrate(db);
 
   const now = options.now ?? (() => new Date());
@@ -505,8 +768,17 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   // exactly as the inline methods used them.
   const ctx: StoreContext = { db, now, nowIso, sealToken, openToken };
   const confirmationStore = buildConfirmationStore(ctx);
+  const confirmationBatchStore = buildConfirmationBatchStore(ctx);
   const undoStore = buildUndoStore(ctx);
   const operationRunStore = buildOperationRunStore(ctx);
+  const runEventStore = buildRunEventStore(ctx);
+  const pendingClarificationStore = buildPendingClarificationStore(ctx);
+  const messageStore = buildMessageStore(ctx);
+  const assistantWritePreparationStore = buildAssistantWritePreparationStore(ctx, {
+    prepareOperationRun: (input) => operationRunStore.prepareOperationRun(input),
+    savePendingConfirmation: (record) => confirmationStore.savePendingConfirmation(record),
+    insertConfirmationBatch: (input) => confirmationBatchStore.insertConfirmationBatch(input),
+  });
   const mutationStepJournal = (operationId: string): MutationStepJournal => ({
     operationId,
     getOperationStatus: () => operationRunStore.getOperationRun(operationId)?.status,
@@ -542,17 +814,144 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
     ...buildAdminPolicyStore(ctx),
     ...buildTelemetryStore(ctx),
     ...buildAuditMetricsStore(ctx),
-    ...buildMessageStore(ctx),
+    ...messageStore,
     ...buildSessionStore(ctx),
     ...undoStore,
     ...buildInstallationStore(ctx),
     ...confirmationStore,
+    ...confirmationBatchStore,
     settleConfirmedOperation: (...args) => confirmationStore.settleConfirmation(...args),
     ...buildIdempotencyStore(ctx),
     ...buildRetentionStore(ctx, { chatAuditRetentionMs }),
     ...buildTurnRunStore(ctx),
+    ...buildAssistantRunStore(ctx),
+    ...runEventStore,
+    listRunEvents(input: import("./store/run-events.js").ListRunEventsStoreInput) {
+      return runEventStore.listEvents(input);
+    },
+    listRunEventsForMetrics(input: { workspaceId: string; adminUserId: string; since: string; limit: number }) {
+      return runEventStore.listEventsForMetrics(input);
+    },
     ...buildIntentCapabilityStore(ctx),
+    ...buildEntityReferenceStore(ctx),
+    ...pendingClarificationStore,
+    resolveClarificationOption(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      state: import("../assistant-v2/state.js").RunState;
+      selectedOptionId: string;
+      actionResultId: string;
+      operationId?: string;
+      toolCallId: string;
+      actionName: string;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+      event: import("../assistant-v2/events.js").SequencedRunEvent;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.resolveClarificationWithOption({
+          id: input.clarificationId,
+          scope: {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+          selectedOptionId: input.selectedOptionId,
+          actionResultId: input.actionResultId,
+          operationId: input.operationId,
+        });
+        const event = runEventStore.completeToolWithEvent(
+          input.scope,
+          { ...input.state, continuation: { kind: "none" }, phase: "model" },
+          { toolCallId: input.toolCallId, actionName: input.actionName, actionResultId: input.actionResultId },
+        );
+        return { clarification, event };
+      })();
+    },
+    continueClarificationWithFreeTextAndLink(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      requestId: string;
+      messageContent: string;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.continueClarificationWithFreeText(
+          input.clarificationId,
+          {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+        );
+        const timestamp = nowIso();
+        db.prepare(
+          `INSERT INTO assistant_run_request_links (
+             session_id, request_id, run_id, workspace_id, admin_user_id, kind, created_at
+           ) VALUES (?, ?, ?, ?, ?, 'free_text_continuation', ?)`,
+        ).run(
+          input.scope.sessionId,
+          input.requestId,
+          input.scope.runId,
+          input.scope.workspaceId,
+          input.scope.adminUserId,
+          timestamp,
+        );
+        messageStore.addMessage({
+          sessionId: input.scope.sessionId,
+          workspaceId: input.scope.workspaceId,
+          adminUserId: input.scope.adminUserId,
+          role: "user",
+          content: input.messageContent,
+        });
+        db.prepare(
+          `UPDATE assistant_runs SET phase = 'model', continuation_json = '{"kind":"none"}', updated_at = ?
+            WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+              AND installation_generation = ? AND auth_class = ?`,
+        ).run(
+          timestamp,
+          input.scope.sessionId,
+          input.scope.runId,
+          input.scope.workspaceId,
+          input.scope.adminUserId,
+          input.scope.installationGeneration,
+          input.scope.authClass,
+        );
+        return { clarification };
+      })();
+    },
+    supersedeClarificationForNewRun(input: {
+      clarificationId: string;
+      scope: import("./store/runs.js").AssistantRunScope;
+      state: import("../assistant-v2/state.js").RunState;
+    }): {
+      clarification: import("./store/pending-clarifications.js").PendingClarificationRecord;
+      event: import("../assistant-v2/events.js").SequencedRunEvent;
+    } {
+      return db.transaction(() => {
+        const clarification = pendingClarificationStore.cancelClarification({
+          id: input.clarificationId,
+          scope: {
+            sessionId: input.scope.sessionId,
+            runId: input.scope.runId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+          },
+          reason: "superseded",
+        });
+        const event = runEventStore.failRunWithEvent(
+          input.scope,
+          { ...input.state, continuation: { kind: "none" } },
+          { code: "clarification_superseded" },
+        );
+        return { clarification, event };
+      })();
+    },
     ...operationRunStore,
+    ...assistantWritePreparationStore,
     startUndoOperation(id, input) {
       return db.transaction(() => {
         if (!undoStore.markUndoExecuting(id)) return undefined;
@@ -827,7 +1226,27 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           ).run(ref.id, actionResultJson(ref.summary), timestamp, row.id).changes;
         }
         const confirmations = confirmationRows.length;
-        return { turns, operations, confirmations, undos };
+        const executingBatches = db.prepare(
+          "SELECT id FROM confirmation_batches WHERE status = 'executing'",
+        ).all() as Array<{ id: string }>;
+        for (const row of executingBatches) {
+          confirmationBatchStore.recoverConfirmationBatch(row.id, timestamp);
+        }
+        const assistantRuns = db.prepare(
+          `UPDATE assistant_runs SET phase = 'failed', updated_at = ?
+            WHERE phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,
+        ).run(timestamp).changes;
+        if (assistantRuns > 0) {
+          db.prepare(
+            `UPDATE turn_runs SET status = 'failed', updated_at = ?
+              WHERE status IN ('prepared', 'executing')
+                AND request_id IN (
+                  SELECT run_id FROM assistant_runs
+                   WHERE phase = 'failed' AND updated_at = ?
+                )`,
+          ).run(timestamp, timestamp);
+        }
+        return { turns, operations, confirmations, undos, assistantRuns };
       })();
     },
 

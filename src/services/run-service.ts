@@ -1,0 +1,228 @@
+import type { ModelMessage, ToolDefinition } from "../assistant/model-client.js";
+import { DISCOVERY_META_TOOL_NAME } from "../harness/api-operation.js";
+import {
+  chargeFailedModelAttempt,
+  chargeSuccessfulModelAttempt,
+  preflightModelRequest,
+  serializeModelRequestForPreflight,
+  utf8ByteLength,
+} from "../assistant-v2/budgets.js";
+import { buildResumeUserMessage, buildV2SystemPrompt } from "../assistant-v2/prompt.js";
+import type {
+  NativeToolModelClient,
+  RunOutcome,
+  RunnerDependencies,
+  RunScope,
+} from "../assistant-v2/protocol.js";
+import type { RunState } from "../assistant-v2/state.js";
+
+/**
+ * RunService (T16-C): the model-call machinery and run lifecycle transitions
+ * extracted from `runner.ts`. It owns budget preflight/charging around one
+ * provider call, the durable model events, and the terminal/suspension outcome
+ * builders. It has no Express, no discovery, and no tool execution: those seams
+ * live in `api-discovery-service.ts` and `action-execution-service.ts`.
+ */
+export type RunServiceDeps = Pick<
+  RunnerDependencies,
+  "modelClient" | "eventService" | "runStore" | "clock"
+>;
+
+/** The scoped identity every store/event call keys on — never a bare runId. */
+export function scopedRun(state: RunState): RunScope & { runId: string } {
+  return {
+    sessionId: state.sessionId,
+    workspaceId: state.workspaceId,
+    adminUserId: state.adminUserId,
+    installationGeneration: state.installationGeneration,
+    authClass: state.authClass,
+    runId: state.runId,
+  };
+}
+
+function serializeToolsForPreflight(tools: ToolDefinition[]): string {
+  return JSON.stringify(tools);
+}
+
+function serializeMessagesForPreflight(messages: ModelMessage[]): string {
+  return JSON.stringify(messages);
+}
+
+export function createRunService(deps: RunServiceDeps) {
+  function lastSequence(state: RunState): number {
+    return deps.runStore.getLastRunEventSequence(scopedRun(state));
+  }
+
+  function budgetStopOutcome(state: RunState, code: string): RunOutcome {
+    return {
+      kind: "failed",
+      runId: state.runId,
+      lastSequence: lastSequence(state),
+      code,
+      presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
+    };
+  }
+
+  function suspendOutcome(
+    state: RunState,
+    reason: "awaiting_confirmation" | "awaiting_clarification",
+    continuationId: string,
+  ): RunOutcome {
+    return {
+      kind: "suspended",
+      runId: state.runId,
+      lastSequence: lastSequence(state),
+      reason,
+      continuationId,
+      presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
+    };
+  }
+
+  function completeOutcome(state: RunState): RunOutcome {
+    return {
+      kind: "completed",
+      runId: state.runId,
+      lastSequence: lastSequence(state),
+      presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
+    };
+  }
+
+  function failRun(state: RunState, code: string): RunOutcome {
+    deps.eventService.failRun({
+      scope: scopedRun(state),
+      state,
+      payload: { code },
+    });
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    return budgetStopOutcome(state, code);
+  }
+
+  function completeRun(state: RunState, chatMessageId?: string): RunOutcome {
+    deps.eventService.completeRun({
+      scope: scopedRun(state),
+      state,
+      payload: {
+        chatMessageId,
+        actionResultIds: state.completedResults.map((r) => r.actionResultId),
+      },
+    });
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    return completeOutcome(state);
+  }
+
+  /** A run's model input is always rebuilt fresh — never a persisted provider
+   * transcript. Resume summaries and the admin's clarification follow-up are
+   * surfaced only on the first model call of a resumed invocation. */
+  function buildFreshMessages(state: RunState, resumeSummaries: string[] = [], adminFollowUp?: string): ModelMessage[] {
+    const userContent = resumeSummaries.length > 0 || adminFollowUp
+      ? buildResumeUserMessage({
+          originalRequest: state.originalRequest,
+          structuredSummaries: resumeSummaries,
+          adminFollowUp,
+        })
+      : state.originalRequest;
+    return [
+      { role: "system", content: buildV2SystemPrompt() },
+      { role: "user", content: userContent },
+    ];
+  }
+
+  async function callModel(
+    state: RunState,
+    messages: ModelMessage[],
+    tools: ToolDefinition[],
+    modelCall: number,
+    signal?: AbortSignal,
+  ): Promise<{ completion: Awaited<ReturnType<NativeToolModelClient["completeWithTools"]>>; providerAttempts: 1 | 2; latencyMs: number }> {
+    const requestBytes = serializeModelRequestForPreflight(
+      serializeMessagesForPreflight(messages),
+      serializeToolsForPreflight(tools),
+    );
+    const preflight = preflightModelRequest(state.budget, requestBytes);
+    if (!preflight.ok) throw new Error("token_budget_exhausted");
+    let providerAttempts: 1 | 2 = 1;
+    deps.eventService.reserveModelCall({
+      scope: scopedRun(state),
+      state,
+      payload: {
+        modelCall,
+        providerAttempt: 1,
+        loadedOperationIds: state.loadedToolNames.filter((n) => n !== DISCOVERY_META_TOOL_NAME),
+        cacheSeeded: state.usedToolNames.length > 0,
+      },
+    });
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    const started = deps.clock.monotonicMs();
+    try {
+      const completion = await deps.modelClient.completeWithTools(messages, tools, signal, {
+        maxOutputTokens: preflight.maxOutputTokens,
+        onProviderAttempt: (attempt) => {
+          if (attempt === 2 && providerAttempts === 1) {
+            providerAttempts = 2;
+            deps.eventService.reserveModelCall({
+              scope: scopedRun(state),
+              state: deps.runStore.getRun(scopedRun(state)) ?? state,
+              payload: {
+                modelCall,
+                providerAttempt: 2,
+                loadedOperationIds: state.loadedToolNames.filter((n) => n !== DISCOVERY_META_TOOL_NAME),
+                cacheSeeded: state.usedToolNames.length > 0,
+              },
+            });
+          }
+        },
+      });
+      const responseBytes = utf8ByteLength(JSON.stringify(completion));
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      state.budget = chargeSuccessfulModelAttempt(
+        state.budget,
+        completion.usage
+          ? { promptTokens: completion.usage.promptTokens, completionTokens: completion.usage.completionTokens }
+          : undefined,
+        requestBytes,
+        responseBytes,
+      );
+      const latencyMs = deps.clock.monotonicMs() - started;
+      deps.eventService.completeModelCall({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          modelCall,
+          providerAttempts,
+          usage: {
+            promptTokens: completion.usage?.promptTokens,
+            completionTokens: completion.usage?.completionTokens,
+          },
+          latencyMs,
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      return { completion, providerAttempts, latencyMs };
+    } catch (error) {
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      if (providerAttempts === 1) {
+        state.budget = chargeFailedModelAttempt(state.budget, preflight.inputReserve, preflight.maxOutputTokens);
+      }
+      throw error;
+    } finally {
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      state.budget = {
+        ...state.budget,
+        activeWallMsUsed: state.budget.activeWallMsUsed + (deps.clock.monotonicMs() - started),
+      };
+      deps.runStore.saveRun({ ...state, updatedAt: new Date().toISOString() });
+    }
+  }
+
+  return {
+    budgetStopOutcome,
+    suspendOutcome,
+    completeOutcome,
+    failRun,
+    completeRun,
+    buildFreshMessages,
+    callModel,
+  };
+}
+
+export type RunService = ReturnType<typeof createRunService>;

@@ -24,7 +24,33 @@ loadDotEnv();
 const API_KEY = process.env.LIVE_CLOCKIFY_API_KEY;
 const WS = process.env.LIVE_WORKSPACE_ID;
 const BASE = (process.env.LIVE_BASE_URL ?? "https://api.clockify.me/api/v1").replace(/\/$/, "");
-const PFX = "AIASSIST_SMOKE_";
+/**
+ * Sweep prefixes. `AIASSIST_SMOKE_` is the v1 live-smoke fixture prefix;
+ * `AIASSIST_V2_` is the T17-F v2 acceptance-harness prefix. The sweep must cover
+ * BOTH, or a v2 acceptance run could leave resources no cleanup job looks for.
+ */
+export const SWEEP_PREFIXES = ["AIASSIST_SMOKE_", "AIASSIST_V2_"] as const;
+
+/** True when a live resource name belongs to a harness fixture (and only then). */
+export function isSweepableName(name: unknown): boolean {
+  return typeof name === "string" && SWEEP_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** A sweep is clean only when it matched-and-removed everything with zero failures. */
+export function sweepIsClean(counts: {
+  matched: number;
+  removed: number;
+  failures: number;
+  scanFailures: number;
+}): boolean {
+  return counts.failures === 0 && counts.scanFailures === 0 && counts.removed === counts.matched;
+}
+
+/** Resources matched but not removed — the leftover count a report must carry. */
+export function sweepLeftovers(counts: { matched: number; removed: number }): number {
+  return Math.max(0, counts.matched - counts.removed);
+}
+
 const EVIDENCE_PATH = process.env.LIVE_SWEEP_EVIDENCE_PATH
   ?? "/tmp/ai-assistant-live-smoke-evidence/cleanup.json";
 let matched = 0;
@@ -85,13 +111,13 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
   // invoices FIRST (a client cannot be deleted while it has invoices).
   const invoices = await scanRows(() => clockify.listInvoices(), "find invoices to sweep");
   for (const inv of invoices) {
-    if (inv?.number?.startsWith(PFX) || inv?.clientName?.startsWith(PFX)) {
+    if (isSweepableName(inv?.number) || isSweepableName(inv?.clientName)) {
       await cleanup(() => mutate("live_cleanup_invoice", { type: "invoice", id: inv.id }, () => clockify.deleteInvoiceAtomic(inv.id)));
     }
   }
   const expenses = await scanRows(() => clockify.listExpenses(), "find expenses to sweep");
   for (const e of expenses) {
-    if (typeof e?.notes === "string" && e.notes.startsWith(PFX)) {
+    if (isSweepableName(e?.notes)) {
       await cleanup(() => mutate("live_cleanup_expense", { type: "expense", id: e.id }, () => clockify.deleteExpenseAtomic(e.id)));
     }
   }
@@ -100,7 +126,7 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
     ...await scanRows(() => clockify.listExpenseCategories({ archived: true }), "find archived expense categories to sweep"),
   ];
   for (const c of cats) {
-    if (typeof c?.name === "string" && c.name.startsWith(PFX)) {
+    if (isSweepableName(c?.name)) {
       await cleanup(async () => {
         if (!c.archived) await mutate("live_cleanup_expense_category_archive", { type: "expense_category", id: c.id }, () => clockify.setExpenseCategoryArchivedAtomic(c.id, true));
         await mutate("live_cleanup_expense_category_delete", { type: "expense_category", id: c.id }, () => clockify.deleteExpenseCategoryAtomic(c.id));
@@ -122,7 +148,7 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
       "find time entries to sweep",
     );
     for (const e of entries) {
-      if (typeof e?.description === "string" && e.description.startsWith(PFX)) {
+      if (isSweepableName(e?.description)) {
         await cleanup(async () => {
           await mutate("live_cleanup_time_entry_uninvoice", { type: "time_entry", id: e.id }, () => clockify.markEntriesInvoicedAtomic({ ids: [e.id], invoiced: false })).catch(() => {});
           await mutate("live_cleanup_time_entry_delete", { type: "time_entry", id: e.id }, () => clockify.deleteTimeEntryAtomic(e.id));
@@ -132,25 +158,25 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
   }
   const customFields = await scanRows(() => clockify.listCustomFields(), "find custom fields to sweep");
   for (const cf of customFields) {
-    if (typeof cf?.name === "string" && cf.name.startsWith(PFX)) {
+    if (isSweepableName(cf?.name)) {
       await cleanup(() => mutate("live_cleanup_custom_field", { type: "custom_field", id: cf.id }, () => clockify.deleteCustomFieldAtomic(cf.id)));
     }
   }
   const holidays = await scanRows(() => clockify.listHolidays(), "find holidays to sweep");
   for (const hol of holidays) {
-    if (typeof hol?.name === "string" && hol.name.startsWith(PFX)) {
+    if (isSweepableName(hol?.name)) {
       await cleanup(() => mutate("live_cleanup_holiday", { type: "holiday", id: hol.id }, () => clockify.deleteHolidayAtomic(hol.id)));
     }
   }
   const groups = await scanRows(() => clockify.listGroups(), "find user groups to sweep");
   for (const g of groups) {
-    if (typeof g?.name === "string" && g.name.startsWith(PFX)) {
+    if (isSweepableName(g?.name)) {
       await cleanup(() => mutate("live_cleanup_group", { type: "group", id: g.id }, () => clockify.deleteGroupAtomic(g.id)));
     }
   }
   const tags = await scanRows(() => clockify.listTags(), "find tags to sweep");
   for (const t of tags) {
-    if (t.name?.startsWith(PFX)) {
+    if (isSweepableName(t.name)) {
       await cleanup(() => mutate("live_cleanup_tag", { type: "tag", id: t.id }, () => clockify.deleteTagAtomic(t.id)));
     }
   }
@@ -159,7 +185,7 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
     ...await scanRows(() => clockify.listProjects({ archived: true }), "find archived projects to sweep"),
   ];
   for (const p of projects) {
-    if (p.name?.startsWith(PFX)) {
+    if (isSweepableName(p.name)) {
       await cleanup(async () => {
         if (!p.archived) {
           const body = await clockify.prepareProjectUpdate(p.id, { archived: true });
@@ -174,7 +200,7 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
     ...await scanRows(() => clockify.listClients({ archived: true }), "find archived clients to sweep"),
   ];
   for (const c of clients) {
-    if (c.name?.startsWith(PFX)) {
+    if (isSweepableName(c.name)) {
       await cleanup(async () => {
         if (!c.archived) {
           const body = await clockify.prepareClientUpdate(c.id, { archived: true });
@@ -186,7 +212,7 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
   }
   const hooks = await scanRows(() => clockify.listWebhooks(), "find webhooks to sweep");
   for (const w of hooks) {
-    if (typeof w?.name === "string" && w.name.startsWith(PFX)) {
+    if (isSweepableName(w?.name)) {
       await cleanup(() => mutate("live_cleanup_webhook", { type: "webhook", id: w.id }, () => clockify.deleteWebhookAtomic(w.id)));
     }
   }
@@ -200,13 +226,13 @@ async function main(): Promise<{ matched: number; removed: number; failures: num
 }
 main().then((counts) => {
   writeLiveEvidence(EVIDENCE_PATH, {
-    resourcePrefixes: [PFX],
+    resourcePrefixes: [...SWEEP_PREFIXES],
     counts,
     passed: true,
   });
 }).catch(() => {
   writeLiveEvidence(EVIDENCE_PATH, {
-    resourcePrefixes: [PFX],
+    resourcePrefixes: [...SWEEP_PREFIXES],
     counts: {
       matched,
       removed,

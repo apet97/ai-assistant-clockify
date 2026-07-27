@@ -6,6 +6,9 @@ is created. This document describes what the add-on stores, for how long, and ho
 to have it deleted. It reflects the behavior in this repository (see `src/db/` and
 `src/harness/` for the enforcement).
 
+The interface and data-handling criterion is: **English interface; Unicode workspace
+data; timezone-aware Intl formatting**.
+
 ## What the model sees — and never sees
 
 The language model is treated as **untrusted**: it proposes actions, while a

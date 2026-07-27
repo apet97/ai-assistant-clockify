@@ -13,7 +13,7 @@ type StartupStep = StartupReconciliationCandidate["steps"][number];
  * this capability. */
 export type LeaveBillingStartupReconciliationReadClient = Pick<WorkspaceClient,
   | "listExpenses" | "getExpense" | "listExpenseCategories"
-  | "listCustomFields" | "getCustomField"
+  | "listCustomFields" | "getCustomField" | "getEntryCustomFieldMutationState"
   | "listTimeOffPolicies" | "getTimeOffPolicy" | "getTimeOffPolicyMutationState"
   | "listTimeOffRequests" | "getTimeOffRequest" | "getTimeOffBalance"
   | "listHolidays" | "getHolidayMutationState"
@@ -36,6 +36,9 @@ const metadata = {
   clockify_expenses_update: { "update-expense": "update" },
   clockify_expenses_delete: { "delete-expense": "delete" },
   clockify_expenses_categories_create: { "create-expense-category": "create" },
+  clockify_expenses_categories_rename: { "rename-expense-category": "update" },
+  clockify_expenses_categories_status_update: { "set-expense-category-status": "state-command" },
+  clockify_expenses_categories_delete_archived: { "delete-expense-category": "delete" },
   clockify_expenses_categories_update: {
     "rename-expense-category": "update",
     "set-expense-category-status": "state-command",
@@ -47,10 +50,14 @@ const metadata = {
   clockify_custom_fields_create: { "create-custom-field": "create" },
   clockify_custom_fields_update: { "update-custom-field": "update" },
   clockify_custom_fields_delete: { "delete-custom-field": "delete" },
+  clockify_custom_fields_set_value_project: { "set-project-custom-field": "update" },
+  clockify_custom_fields_set_value_entry: { "set-entry-custom-field": "update" },
   clockify_time_off_policies_create: { "create-time-off-policy": "create" },
   clockify_time_off_policies_update: { "update-time-off-policy": "update" },
   clockify_time_off_policies_archive: { "archive-time-off-policy": "state-command" },
   clockify_time_off_requests_create: { "create-time-off-request": "create" },
+  clockify_time_off_requests_create_days: { "create-time-off-request": "create" },
+  clockify_time_off_requests_create_hours: { "create-time-off-request": "create" },
   clockify_time_off_requests_delete: { "delete-time-off-request": "delete" },
   clockify_time_off_approve: { "approve-time-off-request": "state-command" },
   clockify_time_off_deny: { "deny-time-off-request": "state-command" },
@@ -63,10 +70,13 @@ const metadata = {
     "enrich-invoice": "update",
     "add-invoice-item-*": "update",
   },
+  clockify_invoices_create_base: { "create-invoice-base": "create" },
   clockify_invoices_update: {
     "update-invoice-fields": "update",
     "update-invoice-status": "state-command",
   },
+  clockify_invoices_fields_update: { "update-invoice-fields": "update" },
+  clockify_invoices_status_update: { "update-invoice-status": "state-command" },
   clockify_invoices_delete: { "delete-invoice": "delete" },
   clockify_invoices_items_add: { "add-invoice-item": "update" },
   clockify_invoices_items_delete: { "delete-invoice-item": "delete" },
@@ -294,6 +304,43 @@ const deleteCustomField: Handler = async (input) => {
   const id = stringValue(payloadOf(input.candidate)?.id);
   return id ? singleRead(input, { strategy: "delete", type: "custom_field", id, read: () => input.clockify.getCustomField(id), matches: () => true }) : invalidInput(input);
 };
+const setProjectCustomField: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const projectId = stringValue(payload?.projectId);
+  const fieldId = stringValue(payload?.fieldId);
+  if (!projectId || !fieldId) return invalidInput(input);
+  const expectedValue = payload?.value;
+  return singleRead(input, {
+    strategy: "update",
+    type: "project",
+    id: projectId,
+    read: () => input.clockify.getProject(projectId),
+    matches: (row) => {
+      const doc = record(row) ?? {};
+      const values = Array.isArray(doc.customFields) ? doc.customFields : [];
+      const match = values.find((entry) => {
+        const item = record(entry);
+        return item?.customFieldId === fieldId || item?.id === fieldId;
+      });
+      return JSON.stringify(record(match)?.value ?? record(match)?.defaultValue) === JSON.stringify(expectedValue);
+    },
+  });
+};
+const setEntryCustomField: Handler = async (input) => {
+  const payload = payloadOf(input.candidate);
+  const entryId = stringValue(payload?.entryId);
+  const fieldId = stringValue(payload?.fieldId);
+  const prepared = record(payload?.prepared);
+  const body = record(prepared?.body);
+  if (!entryId || !fieldId || !body) return invalidInput(input);
+  return singleRead(input, {
+    strategy: "update",
+    type: "time_entry",
+    id: entryId,
+    read: () => input.clockify.getEntryCustomFieldMutationState(entryId),
+    matches: (row) => exact(row, body),
+  });
+};
 
 function samePolicy(row: Record<string, unknown>, expected: Record<string, unknown>): boolean {
   if (typeof expected.name === "string" && row.name !== expected.name) return false;
@@ -474,11 +521,22 @@ function adminUpdate(type: "project" | "client" | "tag"): Handler {
 
 const handlers = new Map<string, Handler>([
   ["clockify_expenses_create\0create-expense", createExpense], ["clockify_expenses_update\0update-expense", updateExpense], ["clockify_expenses_delete\0delete-expense", deleteExpense],
-  ["clockify_expenses_categories_create\0create-expense-category", createExpenseCategory], ["clockify_expenses_categories_update\0rename-expense-category", renameExpenseCategory], ["clockify_expenses_categories_update\0set-expense-category-status", setExpenseCategoryStatus], ["clockify_expenses_categories_delete\0archive-expense-category", archiveExpenseCategory], ["clockify_expenses_categories_delete\0delete-expense-category", deleteExpenseCategory],
-  ["clockify_custom_fields_create\0create-custom-field", createCustomField], ["clockify_custom_fields_update\0update-custom-field", updateCustomField], ["clockify_custom_fields_delete\0delete-custom-field", deleteCustomField],
-  ["clockify_time_off_policies_create\0create-time-off-policy", createTimeOffPolicy], ["clockify_time_off_policies_update\0update-time-off-policy", updateTimeOffPolicy], ["clockify_time_off_policies_archive\0archive-time-off-policy", archiveTimeOffPolicy], ["clockify_time_off_requests_create\0create-time-off-request", createTimeOffRequest], ["clockify_time_off_requests_delete\0delete-time-off-request", deleteTimeOffRequest], ["clockify_time_off_approve\0approve-time-off-request", timeOffDecision("APPROVED")], ["clockify_time_off_deny\0deny-time-off-request", timeOffDecision("REJECTED")], ["clockify_time_off_balance_update\0update-time-off-balance", updateTimeOffBalance],
+  ["clockify_expenses_categories_create\0create-expense-category", createExpenseCategory],
+  ["clockify_expenses_categories_rename\0rename-expense-category", renameExpenseCategory],
+  ["clockify_expenses_categories_status_update\0set-expense-category-status", setExpenseCategoryStatus],
+  ["clockify_expenses_categories_delete_archived\0delete-expense-category", deleteExpenseCategory],
+  ["clockify_expenses_categories_update\0rename-expense-category", renameExpenseCategory],
+  ["clockify_expenses_categories_update\0set-expense-category-status", setExpenseCategoryStatus],
+  ["clockify_expenses_categories_delete\0archive-expense-category", archiveExpenseCategory],
+  ["clockify_expenses_categories_delete\0delete-expense-category", deleteExpenseCategory],
+  ["clockify_custom_fields_create\0create-custom-field", createCustomField],
+  ["clockify_custom_fields_update\0update-custom-field", updateCustomField],
+  ["clockify_custom_fields_delete\0delete-custom-field", deleteCustomField],
+  ["clockify_custom_fields_set_value_project\0set-project-custom-field", setProjectCustomField],
+  ["clockify_custom_fields_set_value_entry\0set-entry-custom-field", setEntryCustomField],
+  ["clockify_time_off_policies_create\0create-time-off-policy", createTimeOffPolicy], ["clockify_time_off_policies_update\0update-time-off-policy", updateTimeOffPolicy], ["clockify_time_off_policies_archive\0archive-time-off-policy", archiveTimeOffPolicy], ["clockify_time_off_requests_create\0create-time-off-request", createTimeOffRequest], ["clockify_time_off_requests_create_days\0create-time-off-request", createTimeOffRequest], ["clockify_time_off_requests_create_hours\0create-time-off-request", createTimeOffRequest], ["clockify_time_off_requests_delete\0delete-time-off-request", deleteTimeOffRequest], ["clockify_time_off_approve\0approve-time-off-request", timeOffDecision("APPROVED")], ["clockify_time_off_deny\0deny-time-off-request", timeOffDecision("REJECTED")], ["clockify_time_off_balance_update\0update-time-off-balance", updateTimeOffBalance],
   ["clockify_holidays_create\0create-holiday", createHoliday], ["clockify_holidays_update\0update-holiday", updateHoliday], ["clockify_holidays_delete\0delete-holiday", deleteHoliday],
-  ["clockify_invoices_create\0create-invoice", createInvoice], ["clockify_invoices_create\0enrich-invoice", enrichInvoice], ["clockify_invoices_create\0add-invoice-item-*", addCreateInvoiceItem], ["clockify_invoices_update\0update-invoice-fields", updateInvoiceFields], ["clockify_invoices_update\0update-invoice-status", updateInvoiceStatus], ["clockify_invoices_delete\0delete-invoice", deleteInvoice], ["clockify_invoices_items_add\0add-invoice-item", addInvoiceItem], ["clockify_invoices_items_delete\0delete-invoice-item", deleteInvoiceItem], ["clockify_invoices_payments_create\0record-payment", recordPayment], ["clockify_invoices_payments_delete\0delete-invoice-payment", deleteInvoicePayment],
+  ["clockify_invoices_create\0create-invoice", createInvoice], ["clockify_invoices_create_base\0create-invoice-base", createInvoice], ["clockify_invoices_create\0enrich-invoice", enrichInvoice], ["clockify_invoices_create\0add-invoice-item-*", addCreateInvoiceItem], ["clockify_invoices_update\0update-invoice-fields", updateInvoiceFields], ["clockify_invoices_fields_update\0update-invoice-fields", updateInvoiceFields], ["clockify_invoices_update\0update-invoice-status", updateInvoiceStatus], ["clockify_invoices_status_update\0update-invoice-status", updateInvoiceStatus], ["clockify_invoices_delete\0delete-invoice", deleteInvoice], ["clockify_invoices_items_add\0add-invoice-item", addInvoiceItem], ["clockify_invoices_items_delete\0delete-invoice-item", deleteInvoiceItem], ["clockify_invoices_payments_create\0record-payment", recordPayment], ["clockify_invoices_payments_delete\0delete-invoice-payment", deleteInvoicePayment],
   ["clockify_delete_entity\0archive-project", adminState("project", true)], ["clockify_delete_entity\0archive-client", adminState("client", true)],
   ...["project", "client", "tag", "time_entry", "invoice", "expense", "webhook", "group"].map((type) => [`clockify_delete_entity\0delete-${type}`, adminDelete(type)] as [string, Handler]),
   ["clockify_delete_entity\0restore-project", adminRestore("project")], ["clockify_delete_entity\0restore-client", adminRestore("client")],

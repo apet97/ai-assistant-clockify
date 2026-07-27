@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { zNumberLike } from "../arg-shapes.js";
 import {
+  membershipRequestRows,
+  previewProjectMemberRate,
+  commitProjectMemberRateStep,
+} from "./project-action-shared.js";
+import {
   clarifyResult,
   defineAction,
   defineReadAction,
@@ -11,8 +16,8 @@ import {
 } from "../action.js";
 import { listReceipt, successReceipt } from "../receipts.js";
 import { fromMinor, toMinor } from "../money.js";
-import { describePatch, resolveEntityRef, resolveUserRef } from "./resolve.js";
-import { RATE_FIELDS, buildRatePreview } from "./rate.js";
+import { describePatch, resolveEntityRef } from "./resolve.js";
+import { RATE_FIELDS } from "./rate.js";
 import { durableMutationContract } from "../durable-mutation-contract.js";
 import { commitSingleDurableRiskyStep, executeDurableRiskyStep } from "../durable-risky-write.js";
 import { executeCompensationStep, isJournalDegradedStep } from "../mutation-workflow.js";
@@ -31,6 +36,7 @@ import {
 } from "./structure-durable.js";
 import { STRUCTURE_CREATE_RECONCILIATION_CANDIDATE_MAX } from "../safety-limits.js";
 import { projectMembershipsEquivalent } from "./membership-canonical.js";
+import { STRUCTURE_API_METADATA } from "./structure-api-metadata.js";
 
 /**
  * Typed project workflows (goclmcp §2.2) — the worked reference area. Reads and
@@ -78,6 +84,7 @@ async function reconcileCreatedProject(
 
 const listProjects = defineReadAction({
   name: "clockify_projects_list",
+  ...STRUCTURE_API_METADATA.clockify_projects_list,
   description: "List projects, optionally filtered by name, archived state, or client ids.",
   group: PROJECT_GROUP,
   schema: z.object({
@@ -99,6 +106,7 @@ const listProjects = defineReadAction({
 
 const getProject = defineAction({
   name: "clockify_projects_get",
+  ...STRUCTURE_API_METADATA.clockify_projects_get,
   description: "Fetch a single project by id, or by its exact `name` (resolved server-side).",
   featureGroup: PROJECT_GROUP,
   risks: ["read"],
@@ -114,7 +122,7 @@ const getProject = defineAction({
       list: () => ctx.clockify.listProjects(),
     });
     if (!resolved.ok) {
-      return clarifyResult(resolved.clarify);
+      return clarifyResult(resolved.clarify, "id");
     }
     const entity = await ctx.clockify.getProject(resolved.id);
     return {
@@ -131,7 +139,8 @@ const getProject = defineAction({
 
 // ── Safe writes ──────────────────────────────────────────────────────────────
 
-const createProject = defineStructureDurableSafeWriteAction({
+const createProjectDefinition = defineStructureDurableSafeWriteAction({
+  ...STRUCTURE_API_METADATA.clockify_projects_create,
   name: "clockify_projects_create",
   description:
     "Create a project. Assign a client by `clientId` or its exact `clientName` (resolved server-side — an unknown client clarifies). Optionally set the project's DEFAULT billable/cost rate with `hourlyRate`/`costRate` (a number; `rateUnit` major by default — Clockify's project rate is set here, not via a separate endpoint). Safe write — executes immediately when policy allows.",
@@ -233,7 +242,12 @@ const createProject = defineStructureDurableSafeWriteAction({
   },
 });
 
-const createFromTemplate = defineStructureDurableSafeWriteAction({
+const createProject = Object.freeze({
+  ...createProjectDefinition,
+});
+
+const createFromTemplateDefinition = defineStructureDurableSafeWriteAction({
+  ...STRUCTURE_API_METADATA.clockify_projects_from_template,
   name: "clockify_projects_from_template",
   description:
     "Create a project from an existing project template. Pass `templateId` or the exact `templateName` (resolved server-side — an unknown template clarifies with the real list), plus the new project's `name` (required by the API).",
@@ -312,10 +326,15 @@ const createFromTemplate = defineStructureDurableSafeWriteAction({
   },
 });
 
+const createFromTemplate = Object.freeze({
+  ...createFromTemplateDefinition,
+});
+
 // ── Risky writes (preview → commit) ──────────────────────────────────────────
 
 const updateProject = defineRiskyAction({
   name: "clockify_projects_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_update,
   description:
     "Update a project's fields (rename, reassign client, billing, color, visibility). Pass the project's `id`, or its exact `currentName` and the harness resolves it — use this to RENAME (`currentName` + the new `name`) without listing first. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -447,6 +466,7 @@ const updateProject = defineRiskyAction({
 
 const archiveProject = defineRiskyAction({
   name: "clockify_projects_archive",
+  ...STRUCTURE_API_METADATA.clockify_projects_archive,
   description:
     "Archive a project (hides it from active lists). Pass the project id, or its exact `name` and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -504,6 +524,7 @@ const archiveProject = defineRiskyAction({
 
 const deleteProject = defineRiskyAction({
   name: "clockify_projects_delete",
+  ...STRUCTURE_API_METADATA.clockify_projects_delete,
   description:
     "Delete a project (archives first, then deletes — Clockify rejects deleting an active project). Pass the project id (preferred — list projects first to get it), or its exact name and the harness resolves it. Previews and requires confirmation.",
   group: PROJECT_GROUP,
@@ -612,6 +633,7 @@ const deleteProject = defineRiskyAction({
 
 const rateUpdate = defineRiskyAction({
   name: "clockify_projects_rate_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_rate_update,
   description:
     'Set a billable hourly or cost rate for a MEMBER of a project (Clockify has no project-wide default rate via the API — it is per member). Pass the project by `projectId` or exact `projectName`, the member by `userId`/`userName` (use "me" for the requesting admin), and `rateKind` as HOURLY or COST. The member must already be on the project. Billing action — previews and requires confirmation.',
   group: "invoices",
@@ -631,7 +653,6 @@ const rateUpdate = defineRiskyAction({
     .object({
       projectId: z.string().min(1).optional(),
       projectName: z.string().min(1).optional(),
-      /** A member's user id, exact name (via userName), or "me" (resolved server-side). */
       userId: z.string().min(1).optional(),
       userName: z.string().min(1).optional(),
       ...RATE_FIELDS,
@@ -639,60 +660,11 @@ const rateUpdate = defineRiskyAction({
     .refine((v) => v.projectId !== undefined || v.projectName !== undefined, { message: "Provide the project id or its exact name." })
     .refine((v) => v.userId !== undefined || v.userName !== undefined, { message: "Provide the member (id or exact name, or 'me')." }),
   async preview(ctx, args) {
-    // Resolve the project.
-    const project = await resolveEntityRef(
-      { id: args.projectId, name: args.projectName },
-      { noun: "project", verb: "set a rate on", list: () => ctx.clockify.listProjects() },
-    );
-    if (!project.ok) return project.clarify;
-    // Resolve the member ("me" -> the admin; a name -> a user id). Clockify's rate
-    // endpoint wants a 24-hex user id in the path, not "me".
-    const rateSelfAlias = args.userId === "my" || args.userId === "myself" ||
-      (args.userId === undefined && (args.userName === "me" || args.userName === "my" || args.userName === "myself"));
-    const member = await resolveUserRef(
-      rateSelfAlias ? { id: "me" } : { id: args.userId, name: args.userName },
-      { verb: "set a rate for", adminUserId: ctx.adminUserId, listUsers: () => ctx.clockify.listUsers() },
-    );
-    if (!member.ok) return member.clarify;
-    const userId = member.userId;
-    const memberLabel = member.label;
-    // VERIFY membership — a member-rate PUT for a non-member 404s ("User membership
-    // on project ... not found"), so catch it at preview, never confirm-then-fail.
-    const memberships = await ctx.clockify.getProjectMemberships(project.id);
-    if (!memberships.rows.some((m) => String(m.userId) === userId)) {
-      if (memberships.truncated) {
-        return {
-          clarify: `Clockify returned an incomplete membership list for "${project.name ?? project.id}", so I can't verify whether ${memberLabel} is already a member. Narrow the membership filter and try again.`,
-        };
-      }
-      const you = memberLabel === "you";
-      return {
-        clarify: `${you ? "You aren't" : `${memberLabel} isn't`} a member of "${project.name ?? project.id}" yet — Clockify only sets a rate for project members. Add ${you ? "yourself" : "them"} to the project first ("add ${you ? "me" : memberLabel} to ${project.name ?? project.id}"), then set the rate.`,
-      };
-    }
-    const amountMinor = toMinor(args.amount, args.amountUnit);
-    const current = await ctx.clockify.getProject(project.id);
-    if (!current) return { clarify: "The requested project no longer exists. Refresh and try again." };
-    const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
-    return {
-      ...buildRatePreview({
-        targetType: "project",
-        targetId: project.id,
-        scopeLabel: `for ${memberLabel} on "${project.name ?? project.id}"`,
-        amountMinor,
-        rateKind: args.rateKind,
-        kindNoun: "project",
-      }),
-      payload: {
-        projectId: project.id,
-        userId,
-        rateKind: args.rateKind,
-        amountMinor,
-        ...(args.since !== undefined ? { since: args.since } : {}),
-      },
-      targetSnapshots: [targetSnapshot],
-      mutationPlan: mutationPlan([{ id: "update-project-rate", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
-    };
+    return previewProjectMemberRate(ctx, args, {
+      rateKind: args.rateKind,
+      planStepId: "update-project-rate",
+      includeRateKindInPayload: true,
+    });
   },
   async commit(ctx, payload, persistedOperation) {
     const rateInput = payload as {
@@ -702,51 +674,91 @@ const rateUpdate = defineRiskyAction({
       amountMinor: number;
       since?: string;
     };
-    return commitSingleDurableRiskyStep({
-      ctx, operation: persistedOperation, planStepId: "update-project-rate", name: "Update project rate",
-      verification: { snapshots: persistedOperation.targetSnapshots ?? [], fetchSnapshot: (stored) => fetchStructureSnapshot(ctx, stored) },
-      dispatch: async () => {
-        const result = await dispatchWithReconciliation({
-          dispatch: async () => { await ctx.clockify.updateProjectRateAtomic(rateInput); return true as const; },
-          reconcile: async () => {
-            const row = await ctx.clockify.getProject(rateInput.projectId) as unknown as Record<string, unknown> | null;
-            const key = rateInput.rateKind === "COST" ? "costRate" : "hourlyRate";
-            return row && (row[key] as { amount?: unknown } | undefined)?.amount === rateInput.amountMinor ? true as const : undefined;
-          },
-        });
-        return { effect: { updatedRate: { projectId: rateInput.projectId, userId: rateInput.userId } }, detail: { reconciled: result.reconciled } };
-      },
-      success: () => successReceipt({ action: "clockify_projects_rate_update", entity: "project", ids: { workspaceId: ctx.workspaceId }, changed: { updated: [{ type: "project", id: rateInput.projectId }] } }),
+    return commitProjectMemberRateStep(ctx, persistedOperation, rateInput, {
+      planStepId: "update-project-rate",
+      stepName: "Update project rate",
+      actionName: "clockify_projects_rate_update",
+      dispatch: (input) => ctx.clockify.updateProjectRateAtomic({
+        projectId: input.projectId,
+        userId: input.userId,
+        rateKind: input.rateKind!,
+        amountMinor: input.amountMinor,
+        ...(input.since !== undefined ? { since: input.since } : {}),
+      }),
+      reconcileRateKey: "dynamic",
     });
   },
 });
 
+const estimateResetOptionSchema = z.enum(["WEEKLY", "MONTHLY", "YEARLY"]);
+const estimateTypeSchema = z.enum(["AUTO", "MANUAL"]);
+const estimateResetSchema = z.object({
+  active: z.boolean().optional(),
+  dayOfMonth: z.number().int().min(1).max(31).optional(),
+  dayOfWeek: z.enum(["MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY"]).optional(),
+  hour: z.number().int().min(0).max(23).optional(),
+  interval: estimateResetOptionSchema.optional(),
+  month: z.enum([
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+  ]).optional(),
+});
+const timeEstimateSchema = z.object({
+  active: z.boolean().optional(),
+  estimate: z.string().min(1).optional(),
+  includeNonBillable: z.boolean().optional(),
+  resetOption: estimateResetOptionSchema.optional(),
+  type: estimateTypeSchema.optional(),
+});
+const budgetEstimateSchema = z.object({
+  active: z.boolean().optional(),
+  estimate: z.number().int().nonnegative().optional(),
+  includeExpenses: z.boolean().optional(),
+  resetOption: estimateResetOptionSchema.optional(),
+  type: estimateTypeSchema.optional(),
+});
+
+function projectEstimateFields(args: {
+  timeEstimate?: z.infer<typeof timeEstimateSchema>;
+  budgetEstimate?: z.infer<typeof budgetEstimateSchema>;
+  estimateReset?: z.infer<typeof estimateResetSchema>;
+}): Record<string, unknown> {
+  return Object.fromEntries(Object.entries({
+    ...(args.timeEstimate !== undefined ? { timeEstimate: args.timeEstimate } : {}),
+    ...(args.budgetEstimate !== undefined ? { budgetEstimate: args.budgetEstimate } : {}),
+    ...(args.estimateReset !== undefined ? { estimateReset: args.estimateReset } : {}),
+  }).filter(([, value]) => value !== undefined));
+}
+
 const estimateUpdate = defineRiskyAction({
   name: "clockify_projects_estimate_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_estimate_update,
   description:
     "Update a project's time/budget estimate. Elevated write — previews and requires confirmation.",
   group: PROJECT_GROUP,
   risks: ["high_risk_write"],
   mutationWorkflow: "durable",
   mutationContract: durableMutationContract({ source: "confirmed", targeting: { mode: "snapshots", relations: ["target"] }, strategies: ["update"] }),
-  argumentOpenPaths: ["fields"],
   schema: z.object({
     id: z.string().min(1),
-    fields: z.record(z.string(), z.unknown()).refine((f) => Object.keys(f).length > 0, {
-      message: "Provide at least one estimate field.",
-    }),
+    timeEstimate: timeEstimateSchema.optional(),
+    budgetEstimate: budgetEstimateSchema.optional(),
+    estimateReset: estimateResetSchema.optional(),
+  }).refine((v) => v.timeEstimate !== undefined || v.budgetEstimate !== undefined || v.estimateReset !== undefined, {
+    message: "Provide at least one estimate field (timeEstimate, budgetEstimate, or estimateReset).",
   }),
   async preview(ctx, args) {
     const current = await ctx.clockify.getProject(args.id);
     if (!current) return { clarify: "The requested project does not exist. Provide a current project id." };
+    const fields = projectEstimateFields(args);
     const targetSnapshot = await captureStructureSnapshot(ctx, "target", "project", current);
     return {
       actionLabel: "Update project estimate",
       targets: [{ type: "project", id: args.id }],
-      expectedChanges: Object.keys(args.fields).map((key) => `set estimate ${key}`),
+      expectedChanges: Object.keys(fields).map((key) => `set estimate ${key}`),
       reversibility: "You can update the estimate again at any time.",
       warnings: ["Changing the estimate affects progress and budget reporting."],
-      payload: { id: args.id, fields: args.fields },
+      payload: { id: args.id, fields },
       targetSnapshots: [targetSnapshot],
       mutationPlan: mutationPlan([{ id: "update-project-estimate", strategy: "update", fingerprint: targetSnapshot.fingerprint }]),
     };
@@ -771,52 +783,9 @@ const estimateUpdate = defineRiskyAction({
   },
 });
 
-function membershipRequestRate(value: unknown): Record<string, unknown> | undefined {
-  if (value === undefined || value === null) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("invalid_membership_rate");
-  const rate = value as Record<string, unknown>;
-  if (!Number.isSafeInteger(rate.amount) || (rate.amount as number) < 0 || (rate.amount as number) > 2_147_483_647) {
-    throw new TypeError("invalid_membership_rate_amount");
-  }
-  if (rate.since !== undefined && (
-    typeof rate.since !== "string"
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(rate.since)
-    || Number.isNaN(Date.parse(rate.since))
-  )) throw new TypeError("invalid_membership_rate_since");
-  return { amount: rate.amount, ...(typeof rate.since === "string" ? { since: rate.since } : {}) };
-}
-
-function membershipRequestRows(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
-  const statuses = new Set(["PENDING", "ACTIVE", "DECLINED", "INACTIVE"]);
-  const types = new Set(["WORKSPACE", "PROJECT", "USERGROUP"]);
-  const normalized = rows.map((row) => {
-    if (typeof row.userId !== "string" || row.userId.length === 0) throw new TypeError("invalid_membership_user_id");
-    const hourlyRate = membershipRequestRate(row.hourlyRate);
-    const costRate = membershipRequestRate(row.costRate);
-    if (row.membershipStatus !== undefined &&
-        (typeof row.membershipStatus !== "string" || !statuses.has(row.membershipStatus))) {
-      throw new TypeError("invalid_membership_status");
-    }
-    if (row.membershipType !== undefined &&
-        (typeof row.membershipType !== "string" || !types.has(row.membershipType))) {
-      throw new TypeError("invalid_membership_type");
-    }
-    return {
-      userId: row.userId,
-      ...(typeof row.membershipStatus === "string" ? { membershipStatus: row.membershipStatus } : {}),
-      ...(typeof row.membershipType === "string" ? { membershipType: row.membershipType } : {}),
-      ...(hourlyRate ? { hourlyRate } : {}),
-      ...(costRate ? { costRate } : {}),
-    };
-  }).sort((left, right) => String(left.userId).localeCompare(String(right.userId)));
-  if (new Set(normalized.map((row) => row.userId)).size !== normalized.length) {
-    throw new TypeError("duplicate_membership_user_id");
-  }
-  return normalized;
-}
-
 const membershipsUpdate = defineRiskyAction({
   name: "clockify_projects_memberships_update",
+  ...STRUCTURE_API_METADATA.clockify_projects_memberships_update,
   description:
     'Update who can access/track a project. To ADD members, pass `addUserIds` — use "me" for the requesting admin (the harness knows who is asking; never ask the admin who they are) — and the harness merges them into the current membership set. Passing `memberships` REPLACES the whole set. Pass the project `id` or its exact `name`. Elevated write — previews and requires confirmation.',
   group: "users_groups",

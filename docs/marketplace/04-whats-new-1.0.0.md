@@ -15,7 +15,8 @@ new product claims.
 > writes, and review risky changes in a dry-run preview before confirming them with a
 > button. Per-admin permissions, durable outcome receipts, conversation history,
 > eligible-action Undo, and authenticated short-lived invoice PDF downloads keep work
-> visible and controlled. The release uses DeepSeek through the documented
+> visible and controlled. English interface; Unicode workspace data; timezone-aware
+> Intl formatting. The release uses DeepSeek through the documented
 > OpenAI-compatible provider boundary.
 
 ## Portal check

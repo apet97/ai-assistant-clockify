@@ -24,6 +24,7 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
   });
   const updateClientAtomic: ClientPort["updateClientAtomic"] = async (id, body) =>
     map(await core.mutate("api", "PUT", `${ws}/clients/${id}`, body));
+  const archiveClientAtomic: ClientPort["archiveClientAtomic"] = updateClientAtomic;
   const deleteClientAtomic: ClientPort["deleteClientAtomic"] = async (id) => {
     await core.mutate("api", "DELETE", `${ws}/clients/${id}`);
   };
@@ -62,6 +63,7 @@ export function makeClientRest(core: RestCore, workspaceId: string): ClientPort 
     },
     prepareClientUpdate,
     updateClientAtomic,
+    archiveClientAtomic,
     async deleteClient(id) {
       await updateClientAtomic(id, await prepareClientUpdate(id, { archived: true }));
       await deleteClientAtomic(id);

@@ -718,6 +718,69 @@ export async function verifyRestoredDatabase(
 }
 
 /** Stable, secret-free CLI failure envelope. Never serialize arbitrary errors. */
+export interface FreshDatabaseEvidence {
+  format: 1;
+  kind: "fresh-database-verification";
+  conclusion: "passed";
+  databasePath: string;
+  userVersion: number;
+  integrity: "ok";
+  installations: 0;
+  assistantRuns: 0;
+}
+
+/**
+ * Verify a database a cutover just CREATED.
+ *
+ * The restore verifier cannot do this: it requires checksum/metadata sidecars a
+ * fresh file has never had, and `readInstallation` hard-fails with
+ * `no_active_installation` because a brand-new database has none -- by
+ * definition, since the reinstall happens after the deploy. So nothing in the
+ * release path could verify the new v2 file at all.
+ *
+ * The properties that matter here are the inverse of a restore's: the file must
+ * exist (never be created by this check), carry the exact current schema, pass
+ * integrity, and be genuinely EMPTY. Emptiness is the real assertion -- it is
+ * what distinguishes a correctly provisioned new database from one that
+ * silently adopted live data at a mistyped path.
+ */
+export function verifyFreshDatabase(databasePath: string): FreshDatabaseEvidence {
+  let db: Database.Database;
+  try {
+    // Never `fileMustExist: false` here: creating the file would make this
+    // check pass on exactly the typo it exists to catch.
+    db = new Database(databasePath, { readonly: true, fileMustExist: true });
+  } catch {
+    throw new RestoreVerificationError("integrity", "fresh_database_missing");
+  }
+  try {
+    if (db.pragma("integrity_check", { simple: true }) !== "ok") {
+      throw new RestoreVerificationError("integrity", "fresh_database_corrupt");
+    }
+    assertSchema(db, LATEST_SCHEMA_VERSION, REQUIRED_SCHEMA, "fresh_database_schema_mismatch");
+    const count = (table: string): number => (db.prepare(
+      `SELECT COUNT(*) AS count FROM ${table}`,
+    ).get() as { count: number }).count;
+    const installations = count("installations");
+    const assistantRuns = count("assistant_runs");
+    if (installations !== 0 || assistantRuns !== 0) {
+      throw new RestoreVerificationError("installation", "fresh_database_not_empty");
+    }
+    return {
+      format: 1,
+      kind: "fresh-database-verification",
+      conclusion: "passed",
+      databasePath,
+      userVersion: LATEST_SCHEMA_VERSION,
+      integrity: "ok",
+      installations: 0,
+      assistantRuns: 0,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 export function formatRestoreVerificationFailure(error: unknown): RestoreVerificationFailure {
   if (error instanceof RestoreVerificationError) {
     return {

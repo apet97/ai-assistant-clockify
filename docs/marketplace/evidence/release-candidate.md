@@ -1,13 +1,23 @@
-# Release-candidate evidence - version 1.0.0
+# Historical v1 release-candidate evidence - version 1.0.0
 
-Status: **IN PROGRESS - NO ROW IN THIS TEMPLATE IMPLIES A PASS**
+Status: **HISTORICAL V1 TEMPLATE - NO ROW IMPLIES A PASS; NOT VALID FOR V2**
 
-This checked-in document is the release-evidence schema/index. The final values belong
-in the immutable GitHub Actions `release-evidence` artifact or PR attachment; committing
-the final SHA into this file would create a self-reference and change the SHA. Replace
-`PENDING CURRENT RUN` only in that external copy, backed by the exact evidence reference.
+The v2 authority-conclusion schema (`V2AuthorityEvidence`, `scripts/evidence/v2-authority-evidence.ts`)
+is a separate, exact-SHA artifact — never a row in this v1 document. It reports the sentinel
+`not_evaluated_until_pr15` during v1/v2 coexistence (Tasks 13-16); Task 17 supplies the first
+complete artifact, still gated on zero mutation/dispatch/capability counts and a nonzero
+assistant-write case count. The release-evidence workflow uploads it as a separate
+`release-v2-authority-evidence-<run>` artifact alongside this v1 record.
+
+This checked-in document preserves the historical v1 release-evidence schema/index.
+In that v1 process, final values belonged in the immutable GitHub Actions
+`release-evidence` artifact or PR attachment; committing the final SHA here would
+have created a self-reference and changed the SHA. `PENDING CURRENT RUN` was to be
+replaced only in that external v1 copy, backed by the exact evidence reference.
 Do not paste secrets, prompts, customer data, raw responses, contact details, or contract
-text. The Marketplace **Submit for Review** action must remain unperformed.
+text. All referenced artifacts and conclusions are historical v1 evidence; their
+bytes/hashes remain untouched for rollback, and none can support a v2 conclusion.
+The Marketplace **Submit for Review** action must remain unperformed.
 
 ## Candidate identity
 
@@ -71,14 +81,14 @@ release record binds its SHA-256 and exact passed/total/failed/pending/todo coun
 | Maintainability | Discriminated action types, shadow mutation removed with parity, chat coordination extracted, script lint, one Zod-shape adapter | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Endpoint-to-scope contract | Generated contract passes; every scope has endpoint/probe; `REPORTS_WRITE` absent | PENDING CURRENT RUN | PENDING CURRENT RUN |
 
-## Browser, accessibility, localization, and product flow
+## Browser, accessibility, interface, and product flow
 
 | Gate | Required result | Status | Evidence reference |
 |---|---|---|---|
 | Cross-browser suite | Chromium, Firefox, and WebKit pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Responsive suite | 280, 320, and 375 px plus desktop; no horizontal overflow; controls at least 44 x 44 px | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Theme and contrast | Light and dark; all small text meets the configured contrast checks | PENDING CURRENT RUN | PENDING CURRENT RUN |
-| Locale and preferences | English plus one non-English locale; Clockify theme/language decoded; page language and `Intl` formatting verified | PENDING CURRENT RUN | PENDING CURRENT RUN |
+| Interface, data, and formatting | English interface; Unicode workspace data; timezone-aware Intl formatting | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Keyboard operation | First run, composer, history, preview, confirm/cancel, artifact action, and policy controls usable without pointer | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Permission-aware first run | DeepSeek disclosure and saved policy shown; restricted-policy welcome/prompts are truthful | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | Action journeys | Read, safe write, risky preview/confirm/cancel, confirm-all partial, undo, history, and reload pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
@@ -135,7 +145,7 @@ raw provider response.
 | Known P1/P2 correctness, safety, accessibility, performance, or release defects | PENDING CURRENT RUN |
 | Worktree contains only intentional release changes; `FINDINGS.md` untouched | PENDING CURRENT RUN |
 | Tested source-candidate SHA and archive hash exposed by `/version` and deployed; any different reviewed head is validated evidence-only | PENDING CURRENT RUN |
-| Engineering status | PENDING CURRENT RUN - may become `ENGINEERING COMPLETE` only when every engineering row above is `PASSED` |
+| Engineering status | HISTORICAL V1 ONLY - the external v1 record may say `ENGINEERING COMPLETE` only when every engineering row above is `PASSED`; never valid for v2 |
 | Marketplace submission | NOT PERFORMED - required stop point |
 
 ## Three-package admin handoff
