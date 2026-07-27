@@ -13,7 +13,10 @@ const ENVIRONMENT_ID = "45300bdc-788b-4f63-8749-5a8f7e46b774";
 // leave the PRIOR code serving with the NEW engine and database selection --
 // for the v2 cutover that means v1 code pointed at an empty v2 database with
 // engine v2, the worst reachable state.
-const ROLLBACK_KEYS = [
+// Exported so the cutover branch planner in ./cutover-transaction.ts plans a
+// rollback over the exact same eight keys this transaction snapshots, rather
+// than a second copy that could drift.
+export const ROLLBACK_KEYS = [
   "RELEASE_SHA",
   "RELEASE_BUILD_HASH",
   "RELEASE_SOURCE_BINDING_SHA256",

@@ -704,6 +704,52 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   workflow-contracts · private-production-release-evidence · db-recovery (109 passed) +
   `type-check` + `type-check:scripts` + `lint`, all exit 0. **No Railway call and no Clockify call.**
   Counts: unchanged. Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `T18-B`.
+- **T18-B CLOSED:** `scripts/cutover-transaction.ts` plans each of the five cutover branches as a
+  PURE function — no filesystem, no network, no `railway` — so an incident-time rollback is decidable
+  without executing it. `planPreseed` refuses a key that already has a serving value, an engine other
+  than `v1` (the preseed lands while v1 still serves), and any drift from the recorded v1 identity,
+  checked in that order so a key collision is reported before the operator is sent to chase identity
+  drift. `planAutomaticRollback` requires a prior value for **all eight** rollback keys and names
+  every absent one, because Railway deletes cannot skip a deploy and the branch is allowed exactly one
+  no-deploy set. `planSignedQuarantine` and `planSignedFullV1Rollback` both require a recorded
+  signature; the latter also refuses to restore v1 code against the v2 database path and returns the
+  full eight-variable set, the v1 restore source/artifact, `restoreDatabasePath`, and
+  `clearsStaleInstallation: true`. `planPostReinstallFailure` permits only `full_v1_rollback` —
+  after the reinstall, authority has already moved to the v2 database and there is no partial way
+  back. `ROLLBACK_KEYS` is now exported from `scripts/deploy-private-production.ts` so the planner
+  and the deploy transaction cover the same eight keys instead of two copies that could drift.
+  **The stale-active-row attestation case is fixed WITHOUT touching `installations.ts` semantics**
+  (its strictness is deliberate): `saveInstallation` deletes the prior attestation unconditionally
+  and writes a new one only when the installation row was genuinely absent, so a reinstall over a
+  database restored from before the outage yields an ACTIVE installation with NO attestation. The new
+  `clearStaleInstallationSql(workspaceId)` returns the exact two statements — attestations first,
+  then the installation row — and rejects an empty/whitespace id or one containing `'`. Both
+  statements are returned even though `installation_attestations` declares
+  `FOREIGN KEY (workspace_id) REFERENCES installations(workspace_id) ON DELETE CASCADE` (verified in
+  `src/db/schema.ts:52`, and it is the only FK into `installations`, so the second statement cannot
+  be blocked by a restricting constraint): the cascade fires only under `PRAGMA foreign_keys = ON`,
+  which the store sets but the `sqlite3` CLI an operator reaches for during an incident defaults
+  OFF — so the explicit attestation delete is load-bearing, not redundant. New
+  `docs/adr/003-cross-database-authority.md` (Accepted) records that the token denylist
+  (`retired_installation_tokens`), the lifecycle `iat` watermark
+  (`lifecycle_authority_watermarks`), and the installation generation all live in the application
+  database; that a fresh v2 database therefore starts with no authority history and cannot detect
+  replay of a v1-retired token; that a full-v1 rollback discards every v2-era retirement; and that
+  the reinstall-for-a-fresh-generation mitigation is a **known, accepted limitation, not a fix** —
+  a replayed token fails on generation rather than the denylist, and only once the reinstall has
+  recorded the new generation, leaving an explicit window between restore and reinstall. 19 new tests
+  (12 `it` blocks, the eight-key rollback rejection expanding to one case per key) use literal
+  expected values — the eight key names are written out in the test, not imported from the module
+  under test — and pin check ORDER as well as each rejection: key-collision beats engine beats
+  identity, and an unsigned full-v1 rollback is refused before the database paths are compared.
+  Gate: focused `npx vitest run` over cutover-transaction · deploy-private-production ·
+  predeploy-backup-gate · restore-verification · db-migration (84 passed) + `type-check` +
+  `type-check:scripts` + `lint` + **`npm run verify` VERIFY_EXIT=0 (341 files / 5,235 tests, zero
+  flakes on the first run)**, all exit 0 — 5,235 is exactly the 5,216 baseline plus this slice's 19. **No Railway call and no Clockify call.** Counts: unchanged
+  (`ACTION_CATALOG` 171 / `MODEL_API` 127, catalog hash
+  `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`). Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: `B2` — the CI step-11 / merge
+  decision, which is the owner's to make.
 
 ## Start here
 

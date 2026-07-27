@@ -354,6 +354,27 @@ here; this file is the execution map.
   probe takes `assistantEngine`; both runbooks' schema assertions moved 8 -> 12. Gate: 109 focused +
   type-check(+scripts) + lint, exit 0. **No Railway or Clockify call.** Live: `not_run`. Default
   engine: `v1`. Next: `T18-B`.
+- **T18-B CLOSED:** `scripts/cutover-transaction.ts` plans all five cutover branches as PURE
+  functions (no filesystem, network, or `railway`), so an incident-time rollback is decidable without
+  executing it. Preseed refuses a key already serving, an engine other than `v1`, and drift from the
+  recorded v1 identity — in that order. Automatic rollback requires a prior value for all eight
+  rollback keys (Railway deletes cannot skip a deploy). Quarantine and full-v1 rollback both require a
+  recorded signature; full-v1 also refuses to restore v1 code against the v2 database path and returns
+  all eight variables plus `clearsStaleInstallation: true`. Post-reinstall failure permits only
+  `full_v1_rollback` — authority has already moved to the v2 database. `ROLLBACK_KEYS` is exported
+  from the deploy script so both cover the same eight keys. **The stale-active-row attestation case is
+  fixed without touching `installations.ts`** (its strictness is deliberate): it deletes the prior
+  attestation unconditionally and reinserts only when the row was genuinely absent, so a reinstall
+  over a pre-outage restored database leaves an ACTIVE install with NO attestation. New
+  `clearStaleInstallationSql` returns attestations-then-installations and rejects an empty or
+  quote-bearing id; both statements ship even though the attestation FK cascades, because the cascade
+  needs `foreign_keys = ON` and the incident-time `sqlite3` CLI defaults it OFF. New
+  [`ADR 003`](./docs/adr/003-cross-database-authority.md) records the denylist, lifecycle `iat`
+  watermark, and generation as per-database, so a fresh v2 database has no authority history and a
+  rollback discards every v2-era retirement — the reinstall-for-a-fresh-generation mitigation is a
+  **known accepted limitation**, with an explicit window between restore and reinstall. Gate: 84
+  focused + type-check(+scripts) + lint + **`verify` exit 0 (341 / 5,235, zero flakes)**. **No Railway
+  or Clockify call.** Live: `not_run`. Default engine: `v1`. Next: `B2` — owner CI/merge decision.
 
 ## Non-negotiable invariants
 
