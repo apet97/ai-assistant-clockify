@@ -888,6 +888,38 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   on**. Consequence, to be applied at Phase F and at any post-cutover deploy: `gate:predeploy-backup`
   can only be satisfied by a **post-reinstall** backup. Capture one immediately after D5 succeeds;
   do not plan to rely on a backup taken before the reinstall.
+- **2026-07-27 — production outage repaired, then v2 cutover executed WITHOUT the predeploy backup
+  gate (owner-directed).** Found production **down**: `404 Application not found`, service `Failed`,
+  20 deployments (18 `REMOVED` / 2 `FAILED`, zero successful), so Railway had no image to roll back
+  to. Root cause was **not** the variables — `RELEASE_SHA`/`RELEASE_BUILD_HASH`/
+  `RELEASE_SOURCE_BINDING_SHA256` already matched `d0f29bc` exactly; the previously uploaded *tree*
+  did not match its binding, so `prebuild` failed `Release source binding verification failed`.
+  Unsetting the binding cannot fix it: with `NODE_ENV=production` the third branch of
+  `release-source-binding.ts` throws `source_binding_required`. Fixed by uploading the exact
+  `git archive d0f29bc` staging tree plus its `--write` binding — verified in-container as
+  `release source binding: verified bce29b95…` on the first attempt. **The deploy deadlock is real
+  and has no in-repo escape:** `deploy-private-production.ts:228` runs `gate:predeploy-backup`
+  unconditionally before any Railway mutation, the gate needs a ≤60-min-fresh backup, and the backup
+  needs a running service. **Railway SSH does not reach the container on this account** — `railway
+  ssh`, `railway volume files`, and direct OpenSSH to the exact `user@host` from Railway's own
+  `ssh config` block all return the account-level management API, never a shell; a release-only key
+  was registered, proven useless, and fully revoked (key deleted, `known_hosts` restored byte-exact).
+  So the online backup is **dashboard-Console-only**. v1 `d0f29bc` was restored first as the
+  runbook's "exactly one current-source bootstrap deployment" (DEPLOYMENT.md:533) — safe because
+  v1 and the production database are **both schema 8**, so no migration ran. The owner then directed
+  the v2 cutover three times without a fresh backup; it was executed by hand-rolling the variable set
+  + `railway up` past the gate, with the 8 rollback keys snapshotted to
+  `…/20260727T091547Z/pre-v2-rollback-snapshot.json` on the encrypted volume first. Result: **v2 is
+  live** — `/version` `releaseSha 29b2e5bcd6f3a92685b6ffcab5069aa2a7d0a4fc`, `buildHash d565c5c9…`,
+  `sourceBindingSha256 501818c2…`, `modelConfiguration.assistantEngine "v2"` (nine-key deployed
+  schema), `/live` + `/manifest` 200, `/health` `{"ok":true}` (the bounded committed-write probe, so
+  the 8→12 migration committed and the database is writable), clean startup with no migration error.
+  `DATABASE_PATH` unchanged at `/data/ai-assistant.sqlite` (`existing_expected`), so installations
+  were migrated in place rather than reset. **Outstanding and NOT done:** no backup of the schema-12
+  database exists anywhere — the newest artifact is the 21 July schema-8 set, which remains a valid
+  but 6-day-stale fallback (restoring it yields v8, which v2 re-migrates on boot); no post-cutover
+  backup/restore drill, no `gate:predeploy-backup` evidence, and no functional Clockify verification
+  (sidebar chat, a read receipt, a risky-write preview) has been performed against v2.
 
 ## Start here
 
