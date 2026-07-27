@@ -750,6 +750,48 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`). Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: `B2` — the CI step-11 / merge
   decision, which is the owner's to make.
+- **B2 CLOSED (owner decision taken, implemented as scoped option A):** the owner chose "B or C,
+  whatever you think best". **B as printed was insufficient and was NOT shipped:** the required
+  `verify` job carries **two** v1-candidate-frozen evidence gates, not one — step 11 "Bind reviewed
+  Marketplace media to the exact source candidate" and step 12 "Validate machine-bound DeepSeek
+  benchmark evidence". Both bind to the frozen v1 candidate `0b1c6794` and require every change since
+  it to be evidence-only, so both are structurally unpassable on a v2 branch; CI only ever reported
+  step 11 because the job died there first. Reproduced locally at `053bf34` on a clean checkout: step
+  11 EXIT=1, step 12 EXIT=1, and for step 12 the cause was proven rather than inferred against
+  `assertEvidenceCommit` (`scripts/evidence/deepseek-release-evidence.ts:1769`) — its first three
+  guards PASS (HEAD equals the evidence sha, checkout clean, candidate IS an ancestor) and only the
+  evidence-only-diff guard fails, at **401** non-evidence paths (not the 391 the plan recorded, which
+  predated A0/T18-A/T18-B). Removing step 11 alone would have moved the failure down one line, so it
+  was reported and the owner authorized gating both. New `scripts/evidence/v1-candidate-build.ts`
+  decides **applicability only** and weakens neither gate: when it reports `true` both run completely
+  unchanged and enforce their own full checks. It imports `isReleaseEvidencePath` from the gate itself
+  rather than restating the path rule, so the two cannot drift. Fail-closed by construction — it
+  prints only `true`/`false` and exits **nonzero** on any error instead of reporting `false` (proven:
+  a binding naming a nonexistent commit and a malformed binding both give EXIT=1 with empty stdout),
+  and `git merge-base --is-ancestor` is read by exit status so only the literal `1` means "not an
+  ancestor" while a real git failure rethrows (the upstream gate conflates these; the probe
+  deliberately does not). The CI step validates the value against the two literals **before** writing
+  `$GITHUB_OUTPUT`, which also stops a multi-line value from injecting extra step outputs; no
+  untrusted event input is interpolated anywhere. **Empirically proven, not assumed** — probe `false`
+  on this branch (401 non-evidence) and `false` on `origin/main` `d0f29bc` (22 non-evidence), so both
+  skip and **`main`'s `verify` job goes green**; probe `true` at `bbd4c29`, the real v1 evidence
+  commit, where **step 12 passes (EXIT=0)** — the gate is genuinely preserved where it applies.
+  **Two findings recorded, NOT fixed and NOT hidden:** (1) step 11 still fails at `bbd4c29` for a
+  reason unrelated to the evidence-commit gate; it is pre-existing, manifests only on a v1-candidate
+  build (which neither `main` nor this branch is), and is out of scope here. (2) The frozen candidate
+  commit `0b1c6794` is not itself a "candidate build" by the gates' own rule: the binding checked in
+  **at** `0b1c6794` names the *previous* candidate `590c0e1d`, so the probe correctly reports `false`
+  there — only the later evidence commit that recorded `0b1c6794` qualifies. The
+  `workflow-contracts` contract pins that BOTH gates carry the condition, that the probe precedes
+  them, and that the value allowlist exists; its non-vacuity was proven by deleting one `if:` and
+  observing the exact failure, then restoring the file byte-for-byte from a copy (never
+  `git checkout --`). Gate: `npx vitest run tests/unit/v1-candidate-build.test.ts
+  tests/unit/workflow-contracts.test.ts` (12 passed) + `actionlint` 1.7.12 exit 0 on `ci.yml` and on
+  all workflows + `type-check` + `type-check:scripts` + `lint` + **`npm run verify` VERIFY_EXIT=0
+  (342 files / 5,242 tests, zero flakes)**, all exit 0. **No CI run was triggered, nothing was
+  pushed, PR #19 was not merged, and no Railway or Clockify call was made.** Counts: unchanged. Live:
+  `live_not_run_missing_credentials`. Default engine: `v1`. Next: push authority for this branch is
+  the owner's to grant; then `B3` (T18-C, per-step authority required).
 
 ## Start here
 

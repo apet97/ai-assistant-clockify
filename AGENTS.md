@@ -375,6 +375,25 @@ here; this file is the execution map.
   **known accepted limitation**, with an explicit window between restore and reinstall. Gate: 84
   focused + type-check(+scripts) + lint + **`verify` exit 0 (341 / 5,235, zero flakes)**. **No Railway
   or Clockify call.** Live: `not_run`. Default engine: `v1`. Next: `B2` — owner CI/merge decision.
+- **B2 CLOSED (CI step 11 + 12 gated on candidate applicability):** the required `verify` job carries
+  **two** v1-candidate-frozen evidence gates, not one — Marketplace media binding AND the DeepSeek
+  benchmark validation. Both bind to frozen candidate `0b1c6794` and require every later change to be
+  evidence-only, so both are unpassable on a v2 branch; CI only reported the first because the job died
+  there. Removing one would have moved the failure down a line, so both are now gated on
+  `scripts/evidence/v1-candidate-build.ts`, which decides **applicability only** — when it reports
+  `true` both gates run unchanged at full strength. It imports the path rule from the gate itself so
+  the two cannot drift, prints only `true`/`false`, and exits **nonzero** on any error rather than
+  reporting `false`; `--is-ancestor` is read by exit status so a real git failure rethrows instead of
+  being read as "not an ancestor". The CI step allowlists the value before writing `$GITHUB_OUTPUT`
+  (also blocking output injection); no untrusted event input is interpolated. Proven empirically:
+  `false` here (401 non-evidence) and on `origin/main` `d0f29bc` (22), so **`main` goes green**;
+  `true` at the real v1 evidence commit `bbd4c29`, where the DeepSeek gate still **passes**.
+  Recorded, not fixed: the media gate fails at `bbd4c29` for a separate pre-existing reason, and
+  `0b1c6794` is not itself a candidate build because the binding checked in there names the previous
+  candidate. `workflow-contracts` pins both conditions; non-vacuity proven by mutation. Gate: 12
+  focused + `actionlint` 1.7.12 exit 0 + type-check(+scripts) + lint + **`verify` exit 0
+  (342 / 5,242)**. **Nothing pushed, PR #19 not merged, no Railway or Clockify call.** Live:
+  `not_run`. Default engine: `v1`. Next: owner push grant, then `B3`.
 
 ## Non-negotiable invariants
 

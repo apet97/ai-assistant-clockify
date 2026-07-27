@@ -35,6 +35,30 @@ describe("GitHub Actions workflow contracts", () => {
     expect(verifyJob).toContain("npx playwright install --with-deps chromium");
     expect(verifyJob.indexOf("npx playwright install --with-deps chromium"))
       .toBeLessThan(verifyJob.indexOf("npm run perf:local-ui"));
+    // The two candidate-bound evidence gates bind to the FROZEN v1 release
+    // candidate and require every change since it to be evidence-only, so they
+    // are structurally inapplicable to a build that is not that candidate. They
+    // run only when the applicability probe says so -- and BOTH must carry the
+    // condition, because leaving either unconditional re-blocks every branch.
+    const probeIndex = verifyJob.indexOf("npm run --silent evidence:v1-candidate-build");
+    expect(probeIndex).toBeGreaterThan(0);
+    for (const gate of [
+      "npm run evidence:marketplace-media-binding",
+      "npm run check:deepseek-evidence -- --benchmark-only",
+    ]) {
+      const gateIndex = verifyJob.indexOf(gate);
+      expect(gateIndex, `${gate} must still exist`).toBeGreaterThan(0);
+      expect(probeIndex, `${gate} must run after the probe`).toBeLessThan(gateIndex);
+      const stepStart = verifyJob.lastIndexOf("\n      - name:", gateIndex);
+      expect(
+        verifyJob.slice(stepStart, gateIndex),
+        `${gate} must be gated on the probe output`,
+      ).toContain("if: steps.v1-candidate.outputs.is_v1_candidate == 'true'");
+    }
+    // A probe value other than the two allowed literals must fail the job rather
+    // than reach $GITHUB_OUTPUT, which also stops a multi-line value from
+    // injecting extra step outputs.
+    expect(verifyJob).toContain('[ "$IS_V1_CANDIDATE" != "false" ]');
     expect(workflow).toContain("raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7");
     expect(workflow).toContain("version: 1.7.7");
     expect(workflow).toContain("npx playwright install --with-deps chromium firefox webkit");

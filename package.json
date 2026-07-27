@@ -39,6 +39,7 @@
     "import:release-evidence": "tsx scripts/evidence/import-release-evidence.ts",
     "gate:predeploy-backup": "tsx scripts/evidence/predeploy-backup-gate.ts",
     "evidence:marketplace-media-binding": "tsx scripts/evidence/marketplace-media-binding.ts",
+    "evidence:v1-candidate-build": "tsx scripts/evidence/v1-candidate-build.ts",
     "probe:scopes": "tsx scripts/live-scope-probe.ts",
     "probe:member-denial": "tsx scripts/live-member-denial-probe.ts",
     "manifest:hash": "tsx scripts/manifest-hash.ts",
