@@ -394,6 +394,27 @@ here; this file is the execution map.
   focused + `actionlint` 1.7.12 exit 0 + type-check(+scripts) + lint + **`verify` exit 0
   (342 / 5,242)**. **Nothing pushed, PR #19 not merged, no Railway or Clockify call.** Live:
   `not_run`. Default engine: `v1`. Next: owner push grant, then `B3`.
+- **GATE 0 CLOSED:** node `v22.23.1`, Railway CLI exactly `5.27.0`, expected HEAD, clean worktree;
+  `railway whoami` exit 0 (stored token had nominally expired, CLI refreshed it). Three findings
+  carried forward: `D6` cannot run as printed because `LIVE_SACRIFICIAL_WORKSPACE_MARKER` and
+  `LIVE_V2_CLEANUP_REGISTRY_PATH` are absent (`live-v2-full` refuses, exit 2) though
+  `LIVE_WORKSPACE_ID` does match the sacrificial workspace; `eval:*`/`live:*` are bare `tsx` with no
+  `--env-file`, so X-I needs `LLM_*` exported into the shell, not just present on disk; and `.env`
+  vs `.env.server` name different models (`deepseek-chat`, stale, vs `deepseek-v4-pro`).
+- **P1 + P2 CLOSED — candidate on `main`:** five gates exit 0 (`verify` 342 / 5,242; `test:e2e`
+  **120 passed**; `audit:prod`; `license:prod`; clean worktree). One documented load-flake
+  (`intent-declaration-chat`) cleared by the protocol — isolation 54/54 then a green full rerun. e2e
+  refused its first window under competing load rather than run degraded, and passed at load 2.98.
+  Pushed `2db1458..95f53a9`; **PR #19 MERGED** as squash `a369e06`. CI proves B2: required `verify`
+  passed 3m34s with the probe step `success` and both candidate-frozen gates **`skipped`**, later
+  steps continuing to success; `secret-scan` green via the `627f874` allowlist. Squash mints a new
+  sha, so tree identity was proven: `main` and `95f53a9` share tree `1e47056c…`, empty diff.
+- **D1 CLOSED:** candidate frozen at `a369e06da895be3d161a0c6f29b3ce54115c0084` with a detached
+  worktree at that commit. Re-run on the merged candidate, zero flakes: `verify` exit 0
+  (342 / 5,242), `check:api-action-inventory` exit 0, `perf:local-ui` PASSED (UI gzip 20,812 /
+  21,504). Counts unchanged: `ACTION_CATALOG` 171 · api 127 · composite 24 · generic 16 · local 4;
+  catalog hash `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`. No Railway or
+  Clockify call. Live: `not_run`. Default engine: `v1`. Next: `D2`, then `D3` (§3.1 blocker).
 
 ## Non-negotiable invariants
 

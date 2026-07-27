@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "kind": "local_fixture_ui_performance",
-  "generatedAt": "2026-07-26T20:58:14.644Z",
+  "generatedAt": "2026-07-27T02:17:54.788Z",
   "scope": {
     "classification": "secret-free local Playwright fixture",
     "productionClaim": false,
@@ -9,8 +9,8 @@
     "note": "Built UI with deterministic local API responses; not Railway, Clockify, DeepSeek, or real-network evidence."
   },
   "source": {
-    "commitSha": "cb815bab32aa03c8eae4321a10bb9ee1274d085d",
-    "workingTreeDirty": true
+    "commitSha": "a369e06da895be3d161a0c6f29b3ce54115c0084",
+    "workingTreeDirty": false
   },
   "environment": {
     "node": "v22.23.1",
@@ -41,52 +41,52 @@
   "metrics": {
     "statusFeedback": {
       "samples": 30,
-      "minMs": 1.6,
-      "p50Ms": 3.4,
-      "p95Ms": 13.6,
-      "maxMs": 15.5,
+      "minMs": 0.6,
+      "p50Ms": 0.8,
+      "p95Ms": 1.7,
+      "maxMs": 8.8,
       "thresholdMaxMs": 100,
       "passed": true
     },
     "warmShellInteractive": {
       "samples": 25,
-      "minMs": 56,
-      "p50Ms": 96.4,
-      "p95Ms": 168.2,
-      "maxMs": 205.1,
+      "minMs": 10.7,
+      "p50Ms": 24.7,
+      "p95Ms": 110.7,
+      "maxMs": 111.7,
       "thresholdP95Ms": 1000,
       "passed": true
     },
     "coldFast4gShellInteractive": {
       "samples": 15,
-      "minMs": 886.8,
-      "p50Ms": 978.3,
-      "p95Ms": 1137.6,
-      "maxMs": 1137.6,
+      "minMs": 353.5,
+      "p50Ms": 362.3,
+      "p95Ms": 479.6,
+      "maxMs": 479.6,
       "thresholdP95Ms": 2000,
       "passed": true
     },
     "historyHydration": {
       "samples": 40,
-      "minMs": 45.4,
-      "p50Ms": 136.9,
-      "p95Ms": 240.2,
-      "maxMs": 326.4,
+      "minMs": 13.2,
+      "p50Ms": 20.2,
+      "p95Ms": 30,
+      "maxMs": 47.1,
       "thresholdP95Ms": 250,
       "supportedMessages": 50,
       "response": {
         "samples": 40,
-        "minMs": 13.4,
-        "p50Ms": 40.7,
-        "p95Ms": 116,
-        "maxMs": 128.8
+        "minMs": 6.8,
+        "p50Ms": 11.2,
+        "p95Ms": 19.3,
+        "maxMs": 30.4
       },
       "renderAfterResponse": {
         "samples": 40,
-        "minMs": 21.5,
-        "p50Ms": 88.3,
-        "p95Ms": 183.7,
-        "maxMs": 197.6
+        "minMs": 4.3,
+        "p50Ms": 8,
+        "p95Ms": 16,
+        "maxMs": 17.8
       },
       "passed": true
     },

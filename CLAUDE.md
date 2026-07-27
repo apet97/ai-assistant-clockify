@@ -792,6 +792,53 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   pushed, PR #19 was not merged, and no Railway or Clockify call was made.** Counts: unchanged. Live:
   `live_not_run_missing_credentials`. Default engine: `v1`. Next: push authority for this branch is
   the owner's to grant; then `B3` (T18-C, per-step authority required).
+- **GATE 0 CLOSED (cutover credential/authority inventory):** node `v22.23.1`, Railway CLI exactly
+  `5.27.0`, HEAD as expected, worktree clean. `railway whoami` (owner-granted read) returned exit 0 —
+  the stored `accessToken` had nominally expired `2026-07-21T05:39:50` but the CLI refreshed it
+  silently, and the project is linked (`ai-assistant-clockify`, production). **Three findings that
+  change later phases, recorded here so they are not rediscovered at the boundary:** (1) `D6` cannot
+  run as printed — `scripts/live-v2-full.ts` reads FIVE variables and `.env` supplies three; both
+  `LIVE_SACRIFICIAL_WORKSPACE_MARKER` (the owner attestation that the workspace is disposable; the
+  script explicitly refuses a workspace id as proof) and `LIVE_V2_CLEANUP_REGISTRY_PATH` are absent,
+  so the harness returns `status: "refused"` / exit 2. `LIVE_WORKSPACE_ID` does match the recorded
+  sacrificial workspace `65b3…b60e`. (2) `npm run eval:*` and `npm run live:*` are bare
+  `tsx scripts/…` with **no `--env-file`**, so they read only the ambient shell — with `LLM_*` unset
+  in the shell they emit `not_evaluated_missing_credentials` regardless of what is on disk. X-I
+  therefore requires an explicit export, not merely a populated dotenv. (3) `.env` and `.env.server`
+  name **different models** (`deepseek-chat` vs `deepseek-v4-pro`) on the same base URL and key; the
+  recorded history is that this key exposes only the V4 models, so `deepseek-chat` is stale. Which
+  file is sourced binds the X-I evidence and must be decided before X-I.
+- **P1 + P2 CLOSED — the v2 candidate is on `main`:** all five P1 gates exit 0 — `verify`
+  (342 files / 5,242 tests), `test:e2e` (**120 passed**, Chromium+Firefox+WebKit), `audit:prod`,
+  `license:prod`, clean worktree before and after. The first `verify` run exited **1** on a 30s
+  timeout in `tests/integration/intent-declaration-chat.test.ts` (a file on the documented flake
+  list, untouched by this work); the flake protocol was followed exactly — isolation 54/54 exit 0,
+  then one full rerun green — and it is recorded as one load-flake, not waved away. e2e was
+  deliberately **refused** on its first 45-minute window (`E2E_NOT_RUN=load_never_below_3.0`) rather
+  than run under a competing build, and passed on the next window once load reached 2.98. Branch
+  pushed `2db1458..95f53a9`; **PR #19 MERGED** 2026-07-27T02:13:50Z as squash commit
+  `a369e06da895be3d161a0c6f29b3ce54115c0084` (`origin/main` `d0f29bc..a369e06`). **B2 is proven in
+  CI, not merely locally:** the required `verify` check passed in 3m34s and the job's own step
+  conclusions show step 11 (the applicability probe) `success` with steps 12 and 13 (Marketplace
+  media binding, DeepSeek benchmark evidence) **`skipped`**, and steps 14/15 continuing to success —
+  so the green is the probe working, not the job dying early. `secret-scan` also passed for the
+  first time (the `627f874` allowlist), as did `browser-e2e`, `analyze`, and `dependency-review`.
+  Because a squash merge mints a NEW sha, tree identity was proven rather than assumed: merged
+  `main` and the CI-validated tip `95f53a9` share tree `1e47056c9fbe4417a5b927773a01c13a35a06df9`
+  with an empty diff, which is what lets `D4` deploy from `main` without re-validating.
+- **D1 CLOSED — private v2 candidate frozen:** `CANDIDATE_SHA`
+  `a369e06da895be3d161a0c6f29b3ce54115c0084`; `CANDIDATE_SOURCE_DIR` a detached worktree at that
+  exact commit (recorded in the commit body; it is fully reproducible from git, so a temp path is
+  safe here — unlike a database backup, which must never live in temp). Gates re-run on the merged
+  candidate, zero flakes: `npm run verify` **EXIT=0 (342 files / 5,242 tests)**,
+  `npm run check:api-action-inventory` **EXIT=0**, `npm run perf:local-ui` **PASSED** (status max
+  8.8ms; warm p95 110.7ms; cold fast-4G p95 479.6ms; history p95 30ms; UI gzip 20,812 / 21,504).
+  Counts unchanged and matching the pre-merge record exactly: `ACTION_CATALOG` **171** ·
+  exposures `api` **127** · `composite` **24** · `generic` **16** · `local` **4**; catalog hash
+  `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`. No Railway call, no Clockify
+  call, no live write. Live: `live_not_run_missing_credentials`. Default engine: `v1`. Next: `D2`
+  (verified v1 rollback preparation), then `D3` (§3.1 — the runbook still derives `RELEASE_SHA` from
+  the frozen **v1** binding `0b1c6794`, which would upload v1 source under `ASSISTANT_ENGINE=v2`).
 
 ## Start here
 
