@@ -1014,6 +1014,67 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   livelock is gone will be the post-deploy sidebar check. No Railway mutation and no Clockify call
   were made in this session. Still outstanding: no schema-12 backup exists; no
   `gate:predeploy-backup` evidence; Task 3's presentation layer remains dead code.
+- **2026-07-28 — the livelock fix is DEPLOYED, and the first schema-12 backup + predeploy gate
+  evidence now exist.** Production serves `releaseSha 34b9d05905cbd71c9cfb72236e1f824129ed5f63`,
+  `buildHash 5d0c575e…`, `serverArtifactSha256 fdfae8d9…` (byte-identical to a local Node 22 build),
+  `sourceBindingSha256 2557f138…`, `assistantEngine "v2"` (nine-key deployed schema); `/live`
+  `/health` `/manifest` `/version` all 200 and `/health` is `{"ok":true}`, so the database is
+  writable. Deployed through the full unmodified `npm run deploy:private-production` — NOT the
+  outage-recovery `railway up` path — with `gate:predeploy-backup` satisfied for the first time
+  since the cutover. `DATABASE_PATH` unchanged (`existing_expected`).
+  **Correction to the 2026-07-27 entry — Railway SSH DOES reach the container.** That entry records
+  `railway ssh` as returning "the account-level management API, never a shell" and says "do not
+  retest it". Retested at the owner's direction: the only blocker is a REGISTERED SSH KEY. With one
+  registered, `railway ssh -i <key> -- <cmd>` runs in the container (`node v22.14.0`, root in
+  `/app`, `/data` writable) and `scp` works against the `ssh.railway.com` host from
+  `railway ssh config`. CLI version is irrelevant — 5.30.1 behaves identically to the pinned 5.27.0,
+  which the deploy hard-requires and which was left untouched (5.30.1 was fetched side-by-side and
+  discarded). **Consequence: the backup and its download are fully scriptable; the dashboard
+  Console + Save-As step is not required.** The temporary key was revoked, the local keypair
+  deleted, the `~/.ssh/config` block removed, and `known_hosts` restored byte-exact — so
+  reproducing this needs a deliberate `railway ssh keys add` first.
+  **Two drill-blocking defects found and fixed, both of which would have blocked any future
+  operator:** (1) `drill-phase2-finalize.sh` prompted for `DATA_ENCRYPTION_KEY (production, 64 hex
+  chars)` — it is NOT hex; `config.ts` accepts any string >= 32 chars and `encryption.ts:14`
+  SHA-256s it to derive the AES key. The real key is 64 chars of mixed case including
+  non-alphanumerics, so the prompt made a correct key look wrong and cost a drill run
+  (`token_decryption_failed`). (2) `readInstallation` selected the token-probe target with
+  `ORDER BY workspace_id LIMIT 1` — deterministic but arbitrary. Production has FOUR active
+  installations (three migrated v1 dev-console rows from June plus the live workspace), and the
+  lexicographically first, `640f2540…`, is dead: the drill reported `token_backed_read 401` and
+  blocked the deploy on a backup that was demonstrably good (probing all four: 3x200 including the
+  live workspace at generation 3, 1x401). Fixed in `34b9d05`: the primary is the most recently
+  updated active installation (workspace_id breaks ties), every other active installation is probed
+  and RECORDED in the evidence as `workspaceSha256` (never the raw id — an existing secret-free
+  assertion enforces that, and `installation_attestations.workspace_sha256` sets the precedent),
+  and a dead PRIMARY still fails the drill (pinned by its own test so this cannot decay into "any
+  installation will do").
+  **Recorded, not fixed (owner-scoped-out as migrated v1 data):** `640f2540…` is `active` with a
+  token Clockify rejects and has NO retirement, tombstone, or attestation — the single
+  `retired_installation_tokens` row belongs to the current workspace's 00:38:28Z reinstall, and the
+  only attestation is the current workspace's. That is a real lifecycle inconsistency; it is now
+  visible in every drill's evidence instead of silently deciding the gate.
+  Backup/evidence: `/Volumes/AIASSIST_RECOVERY/ai-assistant/34b9d05…/20260728T023910Z/`, source
+  `/data/ai-assistant.sqlite`, sha256 `ee3b78f8…`, format 2, schema 12 (`migration:
+  "not_required"`), RTO 8,550ms, RPO 33,166ms, `conclusion: passed`. The earlier
+  `20260728T013529Z` directory holds a valid checksum-verified backup but a FAILED verification and
+  muddled provenance (finalized, copied back to `.partial`, re-finalized) — it is a spare copy, NOT
+  gate evidence.
+  Gate: `npm run verify` **VERIFY_EXIT=0 (343 files / 5,254 tests)** on a settled machine
+  (load 2.92/3.95). Four earlier full runs failed, each a TIMEOUT in a different untouched file
+  (`lifecycle`+`role-recheck`, `agentic-chat`, `undo-route`), each passing in isolation, with load
+  averages between 4 and 37 on 8 cores — the documented `f1-verify-flake-diagnosis` pattern. One
+  further run failed 1,579 tests purely because it was invoked without the Node 22 PATH export and
+  hit `better-sqlite3` `NODE_MODULE_VERSION 127` vs `147`; that was operator error, not a
+  regression.
+  **STILL NOT VERIFIED — the deploy is not the proof.** The livelock fix is proven against fakes
+  only: no test drives `runAssistantV2` against a real provider, and the three `eval:*` scripts
+  still emit `not_evaluated_missing_credentials`. The first real evidence is a sidebar check
+  (`Create a project named …` must reach a preview, and `list my projects` must return a grounded
+  answer instead of `budget_exhausted`). Task 3's presentation layer remains dead code
+  (`run-event-hydration.ts` still hardcodes `facts: []`/`references: []` and uses the raw action
+  name as `title`). This docs commit lands AFTER the deployed candidate, so local HEAD is one
+  docs-only commit ahead of what production serves — the same benign state as `b62cf42` was.
 
 ## Start here
 
