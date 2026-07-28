@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAssistantV2 } from "../../src/assistant-v2/runner.js";
+import { boundedDenialCode } from "../../src/assistant-v2/observations.js";
+import { runEventPayloadSchemas } from "../../src/assistant-v2/events.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ModelMessage, ToolCall } from "../../src/assistant/model-client.js";
 import type { RunnerDependencies, RunScope } from "../../src/assistant-v2/protocol.js";
@@ -168,6 +170,37 @@ function statefulDeps(
 }
 
 const READ_CALL: ToolCall = { id: "call-1", name: "clockify_projects_list", arguments: {} };
+
+describe("denial codes stay inside the event payload bound", () => {
+  it("keeps a code built from a thrown exception message persistable", () => {
+    // Surfacing the real cause is worthless if writing it down throws: the
+    // `tool.denied` payload bounds `code` at 256 UTF-8 bytes, and a raw
+    // exception message routinely exceeds that.
+    const raw = `write_port_not_ready: ${"SqliteError: no such table: assistant_runs ".repeat(20)}`;
+    const bounded = boundedDenialCode(raw);
+
+    expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(256);
+    expect(bounded.startsWith("write_port_not_ready:")).toBe(true);
+    expect(() =>
+      runEventPayloadSchemas["tool.denied"].parse({
+        toolCallId: "call-1",
+        actionName: "clockify_projects_create",
+        code: bounded,
+      }),
+    ).not.toThrow();
+  });
+
+  it("does not cut a multi-byte character into a replacement glyph", () => {
+    const bounded = boundedDenialCode("é".repeat(400));
+
+    expect(Buffer.byteLength(bounded, "utf8")).toBeLessThanOrEqual(256);
+    expect(bounded).not.toContain("�");
+  });
+
+  it("leaves an ordinary short code byte-identical", () => {
+    expect(boundedDenialCode("policy_denied")).toBe("policy_denied");
+  });
+});
 
 describe("v2 tool-result feedback", () => {
   it("shows the model what a completed read returned, so the next iteration can differ", async () => {

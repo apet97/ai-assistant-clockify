@@ -13,7 +13,7 @@ import type {
   WritePreparationOutcome,
 } from "../assistant-v2/protocol.js";
 import type { RunState } from "../assistant-v2/state.js";
-import type { RunObservation } from "../assistant-v2/observations.js";
+import { boundedDenialCode, type RunObservation } from "../assistant-v2/observations.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
 
@@ -250,13 +250,14 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         // A failed read previously journaled `tool.requested` + `tool.started`
         // and then nothing, so the timeline lied about an in-flight read and
         // the model never learned why the read did not help.
+        const code = boundedDenialCode(outcome.code);
         deps.eventService.denyTool({
           scope: scopedRun(state),
           state,
-          payload: { toolCallId: call.id, actionName: call.name, code: outcome.code },
+          payload: { toolCallId: call.id, actionName: call.name, code },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
-        observations.push({ kind: "denied", actionName: call.name, code: outcome.code });
+        observations.push({ kind: "denied", actionName: call.name, code });
       } else if (outcome.kind === "clarification" && !firstClarification) {
         firstClarification = {
           clarificationId: outcome.clarificationId,
@@ -353,7 +354,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         observations.push({
           kind: "denied",
           actionName: call.name,
-          code: thrownCause ? `${preparation.code}: ${thrownCause}` : preparation.code,
+          code: boundedDenialCode(thrownCause ? `${preparation.code}: ${thrownCause}` : preparation.code),
         });
       }
     }
@@ -384,17 +385,18 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
   function recordDenials(state: RunState, denied: DeniedToolCall[]): { state: RunState; observations: RunObservation[] } {
     const observations: RunObservation[] = [];
     for (const d of denied) {
+      const code = boundedDenialCode(d.code);
       deps.eventService.denyTool({
         scope: scopedRun(state),
         state,
         payload: {
           toolCallId: d.toolCallId,
           actionName: d.actionName,
-          code: d.code,
+          code,
         },
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
-      observations.push({ kind: "denied", actionName: d.actionName, code: d.code });
+      observations.push({ kind: "denied", actionName: d.actionName, code });
     }
     return { state, observations };
   }

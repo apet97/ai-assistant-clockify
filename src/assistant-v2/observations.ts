@@ -15,6 +15,28 @@ export type RunObservation =
   | { kind: "result"; actionName: string; summary: string }
   | { kind: "denied"; actionName: string; code: string };
 
+/** `tool.denied`'s payload schema bounds `code` at 256 UTF-8 bytes
+ * (`events.ts` `MAX_UTF8_BYTES`). A code built from a thrown exception message
+ * can exceed that, and an over-long code would fail Zod inside the event
+ * transaction — trading a livelock for a crash. Bound it at the source. */
+const MAX_CODE_BYTES = 256;
+
+/** The truncation marker, counted against the bound rather than added past it. */
+const ELLIPSIS = "…";
+const ELLIPSIS_BYTES = Buffer.byteLength(ELLIPSIS, "utf8");
+
+export function boundedDenialCode(code: string): string {
+  const buffer = Buffer.from(code, "utf8");
+  if (buffer.byteLength <= MAX_CODE_BYTES) return code;
+  // Decode the head and drop a trailing replacement character: slicing raw
+  // bytes can cut a multi-byte sequence in half, and the decoder would turn
+  // that remnant into U+FFFD rather than dropping it.
+  const head = new TextDecoder("utf-8")
+    .decode(buffer.subarray(0, MAX_CODE_BYTES - ELLIPSIS_BYTES))
+    .replace(/�$/, "");
+  return `${head}${ELLIPSIS}`;
+}
+
 /** Deterministic model-visible lines. Data is quoted as data, never as instruction. */
 export function formatObservations(observations: readonly RunObservation[]): string[] {
   return observations.map((observation) =>
