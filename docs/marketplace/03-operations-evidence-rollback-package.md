@@ -366,6 +366,46 @@ export RELEASE_SOURCE_BINDING_SHA256
 test "${#RELEASE_SOURCE_BINDING_SHA256}" -eq 64
 
 export RELEASE_STAGING
+
+# The checked transaction requires four more variables that T18-A added to
+# `deploy-private-production.ts` without updating either runbook, so a literal
+# read-through of this block used to fail at
+# `required(environment, "SELECTED_DATABASE_PATH")` — before any Railway call,
+# but also before any deploy could be verified from the documentation.
+#
+# The database this release will serve, plus an explicit claim about whether the
+# deploy INTRODUCES that path or ADOPTS one already in service. The claim is
+# checked in both directions against Railway's own read-only pre-mutation
+# snapshot, so a cutover can neither point at the live database while claiming a
+# fresh one nor claim an existing one while introducing a new path.
+export SELECTED_DATABASE_PATH="/data/ai-assistant.sqlite"
+export SELECTED_DATABASE_PATH_DISPOSITION="existing_expected"
+# `gate:predeploy-backup` matches this against the backup's own recorded
+# `metadata.source`. With two databases on the volume, a backup of the WRONG one
+# passes every other check — correct checksum, bytes, integrity, schema, and
+# freshness — so this is the only thing that ties the evidence to the database
+# actually being protected.
+export PREDEPLOY_SOURCE_DATABASE_PATH="$SELECTED_DATABASE_PATH"
+# The source tree a rollback would return to: the release CURRENTLY serving,
+# which is what `/version` reports, never this candidate's staging directory.
+# Required BEFORE the upload precisely so a missing rollback source fails while
+# the prior release is still up.
+# Derived from the running deployment, not supplied by hand: a hand-supplied
+# ancestor sha yields a rollback tree that is not what is actually serving, and
+# `deploy-private-production.ts` only rejects it being the staging DIRECTORY.
+SERVING_RELEASE_SHA="$(curl --fail --silent --show-error "$BASE_URL/version" \
+  | node -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(0,"utf8")).releaseSha)')"
+ROLLBACK_RELEASE_SHA="${ROLLBACK_RELEASE_SHA:-$SERVING_RELEASE_SHA}"
+printf '%s' "$ROLLBACK_RELEASE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+# An override may not silently disagree with the release being replaced.
+test "$ROLLBACK_RELEASE_SHA" = "$SERVING_RELEASE_SHA"
+git cat-file -e "$ROLLBACK_RELEASE_SHA^{commit}"
+test "$ROLLBACK_RELEASE_SHA" != "$RELEASE_SHA"
+ROLLBACK_SOURCE_DIR="$(mktemp -d)"
+# Replaces the staging-only trap above so both temp trees are always removed.
+trap 'rm -rf -- "$RELEASE_STAGING" "$ROLLBACK_SOURCE_DIR"' EXIT
+git archive "$ROLLBACK_RELEASE_SHA" | tar -xf - -C "$ROLLBACK_SOURCE_DIR"
+export ROLLBACK_SOURCE_DIR
 # This checked transaction runs gate:predeploy-backup before any variable
 # mutation, snapshots only allowlisted nonsecret release/model settings, and
 # restores their prior presence/value if Railway upload fails.

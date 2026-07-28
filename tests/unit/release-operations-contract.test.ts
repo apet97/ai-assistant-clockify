@@ -5,6 +5,75 @@ import { describe, expect, it } from "vitest";
 const read = (path: string): string => readFileSync(resolve(path), "utf8");
 
 describe("release operations contract", () => {
+  it("documents every variable the checked deploy transaction requires", () => {
+    // T18-A added these four to `deploy-private-production.ts` and updated
+    // neither runbook, so following the documented export block literally threw
+    // `SELECTED_DATABASE_PATH is required` before any Railway call. Derive the
+    // required set from the SCRIPT rather than restating it, so a new
+    // `required(environment, ...)` cannot be added without documenting it.
+    const script = read("scripts/deploy-private-production.ts");
+    const requiredKeys = [...script.matchAll(/required\(environment,\s*"([A-Z0-9_]+)"\)/g)]
+      .map((match) => match[1]);
+    // The gate runs inside the same transaction, so its inputs are part of the
+    // operator's export block too.
+    const gateKeys = [...read("scripts/evidence/predeploy-backup-gate.ts")
+      .matchAll(/required\("([A-Z0-9_]+)"\)/g)].map((match) => match[1]);
+    const allKeys = [...new Set([...requiredKeys, ...gateKeys])];
+
+    expect(allKeys).toContain("SELECTED_DATABASE_PATH");
+    expect(allKeys).toContain("PREDEPLOY_SOURCE_DATABASE_PATH");
+    expect(allKeys).toContain("ROLLBACK_SOURCE_DIR");
+
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      // Word-boundary, not `includes`: a bare substring check lets
+      // `SELECTED_DATABASE_PATH_DISPOSITION` satisfy `SELECTED_DATABASE_PATH`,
+      // so documenting only the longer name would pass while the shorter one
+      // was still missing.
+      // Word-boundary, not `includes`: a bare substring check lets
+      // `SELECTED_DATABASE_PATH_DISPOSITION` satisfy `SELECTED_DATABASE_PATH`.
+      const undocumented = allKeys.filter((key) => !new RegExp(`\\b${key}\\b`).test(runbook));
+      expect(undocumented, `${path} undocumented required deploy variables`).toEqual([]);
+
+      // Mentioning a variable is not the same as setting it: the four T18-A
+      // additions must be ASSIGNED, or the block still fails when run. (A
+      // name-only check passes on `PREDEPLOY_...="$SELECTED_DATABASE_PATH"`
+      // even after the assignment it dereferences has been deleted.)
+      for (const key of [
+        "SELECTED_DATABASE_PATH",
+        "SELECTED_DATABASE_PATH_DISPOSITION",
+        "PREDEPLOY_SOURCE_DATABASE_PATH",
+        "ROLLBACK_SOURCE_DIR",
+      ]) {
+        expect(
+          new RegExp(`(^|\\n)(export\\s+)?${key}=`).test(runbook),
+          `${path} assigns ${key}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it("binds the rollback source to the release actually serving, never to the candidate", () => {
+    for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
+      const runbook = read(path);
+      // A rollback tree equal to the candidate is not a rollback; the script
+      // only rejects it being the staging DIRECTORY, which a separate
+      // `git archive` of the same sha would slip past.
+      expect(runbook, `${path} rollback sha differs from candidate`).toContain(
+        'test "$ROLLBACK_RELEASE_SHA" != "$RELEASE_SHA"',
+      );
+      // ...and equals the release actually serving. Without this the operator
+      // could name any ancestor and stage a rollback tree that was never live.
+      expect(runbook, `${path} rollback sha matches the running deployment`).toContain(
+        'test "$ROLLBACK_RELEASE_SHA" = "$SERVING_RELEASE_SHA"',
+      );
+      const rollbackExport = runbook.indexOf("export ROLLBACK_SOURCE_DIR");
+      const checkedDeploy = runbook.indexOf("npm run --silent deploy:private-production");
+      expect(rollbackExport, `${path} rollback source exported`).toBeGreaterThanOrEqual(0);
+      expect(checkedDeploy, `${path} rollback source precedes the deploy`).toBeGreaterThan(rollbackExport);
+    }
+  });
+
   it("makes encrypted backup and verified restore a hard stop gate before every production Railway upload", () => {
     for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
       const runbook = read(path);
