@@ -920,6 +920,100 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
   but 6-day-stale fallback (restoring it yields v8, which v2 re-migrates on boot); no post-cutover
   backup/restore drill, no `gate:predeploy-backup` evidence, and no functional Clockify verification
   (sidebar chat, a read receipt, a risky-write preview) has been performed against v2.
+- **2026-07-28 — v2 service restored after a second outage, and v2 RISKY WRITES ARE CONFIRMED
+  NON-FUNCTIONAL.** The cutover container ran cleanly `09:36:28Z -> 10:23:10Z` then took an
+  external `SIGTERM` with **zero** restart attempts despite `ON_FAILURE`/5 retries (cause
+  unexplained; no billing banner). Railway then had no active deployment and every one of the 20
+  was `REMOVED`/`FAILED`. **Five redeploy attempts failed, and the mechanism is the durable
+  lesson: Railway's "Redeploy" performs a full Nixpacks REBUILD from that row's stored source
+  snapshot — it does NOT relaunch the stored image.** So only the v2 cutover row can succeed;
+  every other row rebuilds a tree that fails `prebuild` with `Release source binding
+  verification failed` (the guard correctly refusing to start v1 code against a v12 database).
+  `railway deployment redeploy` also takes no deployment-ID and aimed at a months-old `FAILED`
+  v1 row. Four redeploys created inside one second also proved Railway marks earlier ones
+  `REMOVED` even when the later ones fail, with no fallback to the older successful deployment.
+  Service was restored by owner-authorized upload of a verified staging tree — `git archive
+  29b2e5b` + `scripts/release-source-binding.ts --write` reproduced `RELEASE_BUILD_HASH
+  d565c5c9…` and `RELEASE_SOURCE_BINDING_SHA256 501818c2…` exactly before any upload — via
+  `railway up --ci` (bypassing only the structurally-unsatisfiable `gate:predeploy-backup`;
+  zero variable mutation). Deployment `af965b6e` `SUCCESS`; `/version` confirms `releaseSha
+  29b2e5b…`, `assistantEngine "v2"`, and `serverArtifactSha256 e9fdd6de…65d2d` — byte-identical
+  to a local Node 22 build, so the drill environment provably matches production.
+  **Functional verification then FAILED:** the sidebar loads and session/auth work (OWNER), but
+  `Create a project named asdasdsa` terminates as `Assistant run failed: budget_exhausted` after
+  ~12s. Root-caused to a **deterministic livelock, not a budget problem**: token preflight is
+  ruled out empirically (1,420-byte first request vs a 32,000 allowance) and discovery is ruled
+  out empirically (`clockify_projects_create` ranks first and loads correctly; its only required
+  argument is `name`). `budget_exhausted` comes from `runner.ts:201` — the loop exhausting
+  `maxModelCalls` 6 — because `buildFreshMessages` sends only the system prompt plus the original
+  request, never prior tool calls or their denial reasons, and the 586-byte system prompt never
+  mentions denials. **So a denied write makes iterations 2-6 byte-identical and the run provably
+  cannot progress.** The true code is persisted (`OperationPreparationService.prepare` records an
+  `errorReceipt`) but only an allowlist surfaces as `denied`; everything else is flattened to
+  `write_port_not_ready`, and `action-execution-service.ts:290-294` is a bare `catch {}` that
+  discards the exception. The admin also never sees the denial receipt the v1 product contract
+  guarantees. **Why it shipped green: `budget_exhausted` appears in exactly one test file as a
+  metrics fixture string — no test drives `runAssistantV2` to a denied write and asserts the run's
+  terminal outcome; all seven write parity matrices assert only `prepare -> prepared -> confirm`.**
+  Also confirmed unwired at file:line — `run-event-hydration.ts` hardcodes `facts: []` /
+  `references: []` on every branch and uses the raw action name as `title`, so Task 15's
+  presenters for all 127 model-API actions are dead code in production. Handoff with the full
+  actionable list, ranked hypotheses, and three staged drill scripts:
+  `~/Downloads/ai-assistant-v2-SESSION-PROMPT.md` + `~/Downloads/ai-assistant-v2-drill/`.
+  Still outstanding: no schema-12 backup exists; no `gate:predeploy-backup` evidence.
+- **2026-07-28 — the v2 livelock is fixed at its real root: v2 had NO tool-result feedback channel.**
+  The prior entry's diagnosis was correct but narrower than the defect. `buildFreshMessages`
+  (`services/run-service.ts:116`) rebuilds every provider request from the system prompt plus the
+  original request, and `state.completedResults` — the only durable record of what ran — was
+  consumed at `runner.ts:144` ONLY when `resumingExistingRun`, and even then as
+  `"<action> completed (result <opaque-id>)"` carrying no payload. So the model never received tool
+  results in EITHER path. It is therefore not only a denied write that livelocks: **a successful
+  read livelocks identically**, because the model is never shown what it returned, cannot answer
+  the admin from it, and has no reason to stop asking. Every run that is not a write-preview
+  suspension burns `maxModelCalls` 6 and reports `budget_exhausted`.
+  Reproduced locally with no credentials in `tests/unit/v2-runner-feedback.test.ts`: **exactly 6
+  model calls, byte-identical messages across iterations, terminal `budget_exhausted`** — matching
+  production. Two things hid it: the unit fakes return `undefined` from `getRun`, so
+  `completedResults` stays permanently empty, and scripted clients stop calling tools on cue where
+  a real provider does not. Fixed in `65f3f84` + `50e6103`: new `assistant-v2/observations.ts` owns
+  the bounded model-visible channel (reusing v1's `capToolResultForModel` cap, so both engines
+  prune identically); a successful read carries `modelSummary` while the canonical `action_results`
+  row keeps the full receipt; the runner accumulates observations across the invocation and
+  rebuilds them into every request; a repeat of the same calls yielding the same observations stops
+  with the real reason instead of spending the budget; budget exhaustion after a denial reports the
+  denial; `prepareWrites`'s bare `catch {}` no longer discards the cause; and a failed read now
+  journals a terminal `tool.denied` (it previously emitted `tool.requested` + `tool.started` and
+  nothing, so timelines lied about in-flight reads — the Task 4 item 2 gap). `tool.denied` bounds
+  `code` at 256 UTF-8 bytes, so a code built from a thrown exception is truncated at the source;
+  the first attempt was itself off by the ellipsis width and its own test caught it.
+  **Correction to the prior entry:** hypothesis 4 (`policy_denied` from a partial policy row) is
+  not needed to explain production — the livelock reproduces with any non-progressing outcome,
+  including a fully successful read, so the terminal string discriminates nothing.
+  **Ordering correction:** the handoff's "backup, then fix, then deploy" is backwards.
+  `predeploy-backup-gate.ts` binds `releaseSha`/`buildHash`/`serverArtifactSha256` to the candidate
+  being deployed, so a backup taken before the fix cannot validate the deploy that follows. Correct
+  order is fix → commit → clean tree → drill against the new HEAD → deploy.
+  Also fixed (`c633943`): four variables required by `deploy-private-production.ts` /
+  `predeploy-backup-gate.ts` (`SELECTED_DATABASE_PATH`, `SELECTED_DATABASE_PATH_DISPOSITION`,
+  `PREDEPLOY_SOURCE_DATABASE_PATH`, `ROLLBACK_SOURCE_DIR`) appeared in NEITHER runbook — a literal
+  read-through of the documented export block threw before any Railway call. The handoff recorded
+  only one of the four. `ROLLBACK_SOURCE_DIR` is now derived from `/version.releaseSha` rather than
+  hand-supplied. Both new contract cases were mutation-tested and the runbook restored byte-exact
+  from a copy. The drill scripts no longer hard-code the candidate identity (a stale pin silently
+  produces evidence that cannot validate the deploy it is for).
+  Pre-deploy Railway state read (allowlisted keys only, no secret printed):
+  `DATABASE_PATH=/data/ai-assistant.sqlite` (so `existing_expected` is correct),
+  `ASSISTANT_ENGINE=v2`, `RELEASE_SHA=29b2e5b…`, `LLM_REASONING_EFFORT` ABSENT,
+  `LLM_THINKING_MODE` PRESENT, `DATA_ENCRYPTION_KEY_PREVIOUS` ABSENT (not a rotation drill),
+  33 variables.
+  Gate: `npm run verify` **VERIFY_EXIT=0 (343 files / 5,250 tests)** on the clean rerun; an earlier
+  run showed 4 `routes.test.ts` failures that passed 25/25 in isolation — the documented
+  `f1-verify-flake-diagnosis` pattern. **NOT verified: the fix is proven against fakes only.**
+  `runAssistantV2` has never been driven end to end against a real provider, and the three
+  `eval:*` scripts still emit `not_evaluated_missing_credentials`. The first real evidence the
+  livelock is gone will be the post-deploy sidebar check. No Railway mutation and no Clockify call
+  were made in this session. Still outstanding: no schema-12 backup exists; no
+  `gate:predeploy-backup` evidence; Task 3's presentation layer remains dead code.
 
 ## Start here
 
