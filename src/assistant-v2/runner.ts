@@ -16,6 +16,7 @@ import {
   isTerminalPhase,
 } from "./state.js";
 import { discoveryToolsForLoadedSet } from "../harness/tools.js";
+import { formatObservations, type RunObservation } from "./observations.js";
 import { createRunService, scopedRun } from "../services/run-service.js";
 import {
   createApiDiscoveryService,
@@ -136,6 +137,13 @@ export async function runAssistantV2(
 
   let modelCall = state.budget.modelCallsUsed;
   let firstModelCallOfInvocation = true;
+  // What this invocation has learned so far. Rebuilt into every model request:
+  // v2 persists no provider transcript, so without this the model receives
+  // byte-identical input on every iteration and the loop cannot progress.
+  const observations: RunObservation[] = [];
+  let lastIterationSignature: string | undefined;
+  let lastIterationObservations = "";
+  let lastDenialCode: string | undefined;
   while (canReserveModelCall(state.budget) && !isTokenBudgetExceeded(state.budget) && !isActiveWallBudgetExceeded(state.budget)) {
     if (signalAborted(input.signal)) {
       return runs.failRun(state, "cancelled");
@@ -146,7 +154,11 @@ export async function runAssistantV2(
       : [];
     const adminFollowUp = firstModelCallOfInvocation ? input.continuationMessage : undefined;
     firstModelCallOfInvocation = false;
-    const messages = runs.buildFreshMessages(state, resumeSummaries, adminFollowUp);
+    const messages = runs.buildFreshMessages(
+      state,
+      [...resumeSummaries, ...formatObservations(observations)],
+      adminFollowUp,
+    );
     const tools = discoveryToolsForLoadedSet(deps.actionRegistry, new Set(state.loadedToolNames));
     let completion;
     try {
@@ -179,8 +191,11 @@ export async function runAssistantV2(
       return runs.failRun(state, discovered.code);
     }
 
+    const iterationObservations: RunObservation[] = [];
+
     const readBatch = await actions.executeReads(state, readCalls, scope, input.signal, denied);
     state = readBatch.state;
+    iterationObservations.push(...readBatch.observations);
     if (readBatch.clarification) {
       return runs.suspendOutcome(state, "awaiting_clarification", readBatch.clarification.clarificationId);
     }
@@ -188,15 +203,37 @@ export async function runAssistantV2(
     if (writeCalls.length > 0) {
       const writeBatch = await actions.prepareWrites(state, writeCalls, scope, input.runId);
       state = writeBatch.state;
+      iterationObservations.push(...writeBatch.observations);
       if (writeBatch.suspended) {
         return runs.suspendOutcome(state, "awaiting_confirmation", writeBatch.suspended.confirmationId);
       }
     }
 
-    state = actions.recordDenials(state, denied);
+    const denials = actions.recordDenials(state, denied);
+    state = denials.state;
+    iterationObservations.push(...denials.observations);
+
+    observations.push(...iterationObservations);
+    const denial = iterationObservations.find((o) => o.kind === "denied");
+    if (denial) lastDenialCode = denial.code;
+
+    // A repeat of the same tool calls that produced the same observations is
+    // provably not progressing: the next request would be byte-identical to the
+    // one just answered. Stop with the reason, instead of spending the rest of
+    // the model-call budget rebuilding the same failure and reporting it as
+    // `budget_exhausted`.
+    const signature = JSON.stringify(completion.toolCalls.map((c) => [c.name, c.arguments]));
+    const observationSignature = JSON.stringify(iterationObservations);
+    if (signature === lastIterationSignature && observationSignature === lastIterationObservations) {
+      return runs.failRun(state, lastDenialCode ?? "no_progress");
+    }
+    lastIterationSignature = signature;
+    lastIterationObservations = observationSignature;
 
     if (!canReserveModelCall(state.budget)) break;
   }
 
-  return runs.failRun(state, "budget_exhausted");
+  // Exhausting the model-call budget after a denial is not a budget problem —
+  // report what actually blocked the run.
+  return runs.failRun(state, lastDenialCode ?? "budget_exhausted");
 }

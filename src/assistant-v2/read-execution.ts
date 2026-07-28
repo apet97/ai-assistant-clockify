@@ -4,6 +4,7 @@ import type { ActionContext, ActionResult } from "../harness/action.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { defaultAdminPolicy, type AdminPolicy } from "../harness/permissions.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "../harness/receipts.js";
+import { capToolResultForModel } from "../assistant/tool-results.js";
 import type { WorkspaceClient } from "../clockify/client.js";
 import type { ActionResultRef } from "../db/action-results.js";
 import {
@@ -195,7 +196,13 @@ export async function executeV2Read(
   }
 
   if (result.receipt.ok) {
-    return { kind: "succeeded", actionResultId: ref.id };
+    // The canonical row keeps the full receipt; the model gets the byte-capped
+    // copy so it can actually answer the admin from what was read.
+    return {
+      kind: "succeeded",
+      actionResultId: ref.id,
+      modelSummary: capToolResultForModel(result.receipt),
+    };
   }
 
   const code = result.receipt.code;

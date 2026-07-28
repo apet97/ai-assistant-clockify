@@ -56,7 +56,10 @@ export type RunOutcome =
   | { kind: "failed"; runId: string; lastSequence: number; code: string; presentationRefs: PresentationRef[] };
 
 export type ReadExecutionOutcome =
-  | { kind: "succeeded"; actionResultId: string }
+  /** `modelSummary` is the bounded model-visible copy of what the read
+   * returned. Without it the runner can only tell the model that *something*
+   * completed, which is not enough to answer the admin or to stop asking. */
+  | { kind: "succeeded"; actionResultId: string; modelSummary?: string }
   /** A durable `pending_clarifications` row exists (CP-A). `actionResultId`
    * links the canonical clarify result that owns the admin-visible question —
    * events carry the reference, never the prose. */

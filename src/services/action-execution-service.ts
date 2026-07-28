@@ -13,6 +13,7 @@ import type {
   WritePreparationOutcome,
 } from "../assistant-v2/protocol.js";
 import type { RunState } from "../assistant-v2/state.js";
+import type { RunObservation } from "../assistant-v2/observations.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
 
@@ -121,12 +122,16 @@ export type ReadBatchResult = {
   state: RunState;
   /** Set when a read produced a clarification: the run suspends immediately. */
   clarification?: { clarificationId: string };
+  /** What this batch learned, for the next model request. */
+  observations: RunObservation[];
 };
 
 export type WriteBatchResult = {
   state: RunState;
   /** Set when a write batch was prepared: the run suspends awaiting the button. */
   suspended?: { operationIds: string[]; batchId?: string; confirmationId: string };
+  /** What this batch learned, for the next model request. */
+  observations: RunObservation[];
 };
 
 export function createActionExecutionService(deps: ActionExecutionDeps) {
@@ -208,6 +213,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
     // results. Journal the whole batch in provider order first, then suspend on
     // the first clarification.
     let firstClarification: { clarificationId: string; actionResultId: string } | undefined;
+    const observations: RunObservation[] = [];
     for (const { call, outcome } of readOutcomes) {
       deps.eventService.requestTool({
         scope: scopedRun(state),
@@ -237,6 +243,20 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        if (outcome.modelSummary) {
+          observations.push({ kind: "result", actionName: call.name, summary: outcome.modelSummary });
+        }
+      } else if (outcome.kind === "denied" || outcome.kind === "validation_failed" || outcome.kind === "failed") {
+        // A failed read previously journaled `tool.requested` + `tool.started`
+        // and then nothing, so the timeline lied about an in-flight read and
+        // the model never learned why the read did not help.
+        deps.eventService.denyTool({
+          scope: scopedRun(state),
+          state,
+          payload: { toolCallId: call.id, actionName: call.name, code: outcome.code },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        observations.push({ kind: "denied", actionName: call.name, code: outcome.code });
       } else if (outcome.kind === "clarification" && !firstClarification) {
         firstClarification = {
           clarificationId: outcome.clarificationId,
@@ -269,9 +289,9 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         payload: { reason: "awaiting_clarification" },
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
-      return { state, clarification: { clarificationId: firstClarification.clarificationId } };
+      return { state, clarification: { clarificationId: firstClarification.clarificationId }, observations };
     }
-    return { state };
+    return { state, observations };
   }
 
   /** Prepare a write batch: zero host mutations, one durable suspension when
@@ -287,9 +307,15 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       if (!canReserveApiCall(state.budget)) break;
     }
     let preparation: WritePreparationOutcome;
+    const observations: RunObservation[] = [];
+    let thrownCause: string | undefined;
     try {
       preparation = await deps.preparations.prepare(writeCalls, scope);
-    } catch {
+    } catch (error) {
+      // Discarding the exception here made every unexpected preparation failure
+      // present as the same opaque `write_port_not_ready`, which is how the
+      // real cause of a production outage stayed invisible.
+      thrownCause = error instanceof Error ? error.message : String(error);
       preparation = { kind: "not_ready", code: "write_port_not_ready", actionResultId: "prep-failed" };
     }
     if (preparation.kind === "prepared") {
@@ -308,6 +334,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           batchId: preparation.batchId,
           confirmationId: preparation.confirmationIds[0] ?? fallbackContinuationId,
         },
+        observations,
       };
     }
     if (preparation.kind === "not_ready") {
@@ -323,6 +350,11 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        observations.push({
+          kind: "denied",
+          actionName: call.name,
+          code: thrownCause ? `${preparation.code}: ${thrownCause}` : preparation.code,
+        });
       }
     }
     if (preparation.kind === "denied") {
@@ -342,13 +374,15 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        observations.push({ kind: "denied", actionName: call.name, code: preparation.code });
       }
     }
-    return { state };
+    return { state, observations };
   }
 
   /** Journal every denial from this completion batch. */
-  function recordDenials(state: RunState, denied: DeniedToolCall[]): RunState {
+  function recordDenials(state: RunState, denied: DeniedToolCall[]): { state: RunState; observations: RunObservation[] } {
+    const observations: RunObservation[] = [];
     for (const d of denied) {
       deps.eventService.denyTool({
         scope: scopedRun(state),
@@ -360,8 +394,9 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         },
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      observations.push({ kind: "denied", actionName: d.actionName, code: d.code });
     }
-    return state;
+    return { state, observations };
   }
 
   return { partitionToolCalls, executeReads, prepareWrites, recordDenials };
