@@ -313,7 +313,7 @@ describe("prepareWrites denial journaling (review-gate HIGH-2)", () => {
       { id: "w1", name: "clockify_tags_delete", arguments: { id: "a".repeat(24) } },
       { id: "w2", name: "clockify_tags_delete", arguments: { id: "b".repeat(24) } },
     ];
-    const result = await service.prepareWrites(state, calls, baseScope(), "fallback");
+    const result = await service.prepareWrites(state, calls, "fallback");
     // A denied preparation never suspends and never claims completion — but it
     // must not vanish: each call is durably denied with the preparation's code.
     expect(result.suspended).toBeUndefined();

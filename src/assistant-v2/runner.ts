@@ -172,7 +172,9 @@ export async function runAssistantV2(
     state = deps.runStore.getRun(scopedRun(state)) ?? state;
 
     if (completion.toolCalls.length === 0) {
-      return runs.completeRun(state);
+      // The model answered in prose. That text IS the deliverable for a read,
+      // so it must reach the admin rather than being replaced by boilerplate.
+      return runs.completeRun(state, undefined, completion.text);
     }
 
     const { readCalls, writeCalls, discoveryCalls, denied, duplicateWrite } = actions.partitionToolCalls(
@@ -201,7 +203,7 @@ export async function runAssistantV2(
     }
 
     if (writeCalls.length > 0) {
-      const writeBatch = await actions.prepareWrites(state, writeCalls, scope, input.runId);
+      const writeBatch = await actions.prepareWrites(state, writeCalls, input.runId);
       state = writeBatch.state;
       iterationObservations.push(...writeBatch.observations);
       if (writeBatch.suspended) {

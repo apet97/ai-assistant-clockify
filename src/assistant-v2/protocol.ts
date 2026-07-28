@@ -44,7 +44,10 @@ export type PresentationRef =
   | { kind: "confirmation"; id: string };
 
 export type RunOutcome =
-  | { kind: "completed"; runId: string; lastSequence: number; presentationRefs: PresentationRef[] }
+  /** `replyText` is the model's own final answer. Without it the turn had
+   * nothing to show and substituted a canned "Completed.", so a read that
+   * really ran and really answered rendered as if nothing had happened. */
+  | { kind: "completed"; runId: string; lastSequence: number; presentationRefs: PresentationRef[]; replyText?: string }
   | {
       kind: "suspended";
       runId: string;
@@ -204,7 +207,13 @@ export interface RunnerDependencies {
     execute(call: ToolCall, scope: RunScope & { runId: string }): Promise<ReadExecutionOutcome>;
   };
   preparations: {
-    prepare(calls: ToolCall[], scope: RunScope): Promise<WritePreparationOutcome>;
+    /** `runId` is REQUIRED, exactly as for `reads`: preparation loads the
+     * durable run to reserve its host-call budget. This was declared as a bare
+     * `RunScope` while the implementation required the run id, and TypeScript
+     * accepted the mismatch because method parameters are checked bivariantly
+     * — so production silently passed a scope with no `runId` and every
+     * assistant write threw `assistant_run_not_found`. */
+    prepare(calls: ToolCall[], scope: RunScope & { runId: string }): Promise<WritePreparationOutcome>;
   };
   installationGuard: { assertCurrent(scope: RunScope): void };
   requestGovernor: RequestGovernorPort;

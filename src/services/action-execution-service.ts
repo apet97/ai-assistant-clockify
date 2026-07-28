@@ -301,7 +301,6 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
   async function prepareWrites(
     state: RunState,
     writeCalls: ToolCall[],
-    scope: RunScope,
     fallbackContinuationId: string,
   ): Promise<WriteBatchResult> {
     for (const _call of writeCalls) {
@@ -311,7 +310,10 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
     const observations: RunObservation[] = [];
     let thrownCause: string | undefined;
     try {
-      preparation = await deps.preparations.prepare(writeCalls, scope);
+      // `scopedRun(state)` carries the run id. Forwarding the runner's bare
+      // `scope` here is what made every production write fail: preparation
+      // needs the run to reserve its budget against.
+      preparation = await deps.preparations.prepare(writeCalls, scopedRun(state));
     } catch (error) {
       // Discarding the exception here made every unexpected preparation failure
       // present as the same opaque `write_port_not_ready`, which is how the
