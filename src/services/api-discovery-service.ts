@@ -7,6 +7,7 @@ import {
 import { canReserveDiscoveryCall } from "../assistant-v2/budgets.js";
 import type { RunnerDependencies, RunScope } from "../assistant-v2/protocol.js";
 import type { RunState } from "../assistant-v2/state.js";
+import type { RunObservation } from "../assistant-v2/observations.js";
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import { scopedRun } from "./run-service.js";
 
@@ -38,9 +39,18 @@ export function seedCacheFromPriorRun(
   return initialV2ToolSet(registry, ordered);
 }
 
-export type DiscoveryBatchResult =
-  | { kind: "ok"; state: RunState }
-  | { kind: "budget_exhausted"; code: "too_many_refinements"; state: RunState };
+/**
+ * Discovery never fails a run.
+ *
+ * Exceeding `maxDiscoveryCalls` used to return a fatal outcome that the runner
+ * turned into `run.failed: too_many_refinements`, destroying the turn along
+ * with every tool already loaded and every result already produced. Every other
+ * budget in v2 — reads, writes, validation — denies the individual call and
+ * lets the run continue, and discovery is the least destructive of them: the
+ * model can simply use the operations it already has. The over-budget search is
+ * now denied, journaled, and reported back so the model stops searching.
+ */
+export type DiscoveryBatchResult = { kind: "ok"; state: RunState; observations: RunObservation[] };
 
 export function createApiDiscoveryService(deps: ApiDiscoveryDeps) {
   async function executeDiscoveryBatch(
@@ -49,9 +59,25 @@ export function createApiDiscoveryService(deps: ApiDiscoveryDeps) {
     scope: RunScope,
   ): Promise<DiscoveryBatchResult> {
     let searchIndex = state.budget.discoveryCallsUsed;
+    const observations: RunObservation[] = [];
     for (const call of discoveryCalls) {
       if (!canReserveDiscoveryCall(state.budget)) {
-        return { kind: "budget_exhausted", code: "too_many_refinements", state };
+        deps.eventService.denyTool({
+          scope: scopedRun(state),
+          state,
+          payload: {
+            toolCallId: call.id,
+            actionName: call.name,
+            code: "too_many_refinements",
+          },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        observations.push({
+          kind: "denied",
+          actionName: call.name,
+          code: "too_many_refinements",
+        });
+        continue;
       }
       searchIndex += 1;
       const parsed = call.arguments as { query?: string; access?: "read" | "write" | "any" };
@@ -80,7 +106,7 @@ export function createApiDiscoveryService(deps: ApiDiscoveryDeps) {
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
     }
-    return { kind: "ok", state };
+    return { kind: "ok", state, observations };
   }
 
   return { executeDiscoveryBatch };

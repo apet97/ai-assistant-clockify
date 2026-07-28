@@ -189,11 +189,8 @@ export async function runAssistantV2(
 
     const discovered = await discovery.executeDiscoveryBatch(state, discoveryCalls, scope);
     state = discovered.state;
-    if (discovered.kind === "budget_exhausted") {
-      return runs.failRun(state, discovered.code);
-    }
 
-    const iterationObservations: RunObservation[] = [];
+    const iterationObservations: RunObservation[] = [...discovered.observations];
 
     const readBatch = await actions.executeReads(state, readCalls, scope, input.signal, denied);
     state = readBatch.state;

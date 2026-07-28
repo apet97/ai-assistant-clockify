@@ -3,6 +3,7 @@ import { runAssistantV2 } from "../../src/assistant-v2/runner.js";
 import { boundedDenialCode } from "../../src/assistant-v2/observations.js";
 import { runEventPayloadSchemas } from "../../src/assistant-v2/events.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
+import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import type { ModelMessage, ToolCall } from "../../src/assistant/model-client.js";
 import type { RunnerDependencies, RunScope } from "../../src/assistant-v2/protocol.js";
 import type { RunState } from "../../src/assistant-v2/state.js";
@@ -107,7 +108,15 @@ function statefulDeps(
       ),
     ),
     completeModelCall: vi.fn(() => seq()),
-    reserveDiscoveryCall: vi.fn(() => seq()),
+    // Like `reserveModelCall`, the real store increments this inside the same
+    // transaction that writes `api.search_started`. Without it
+    // `canReserveDiscoveryCall` never trips and the budget is untestable.
+    reserveDiscoveryCall: vi.fn((input: { state?: RunState }) =>
+      patch(input, (s) => ({
+        ...s,
+        budget: { ...s.budget, discoveryCallsUsed: s.budget.discoveryCallsUsed + 1 },
+      })),
+    ),
     loadOperations: vi.fn(() => seq()),
     requestTool: vi.fn(() => seq()),
     denyTool: vi.fn(() => seq()),
@@ -267,6 +276,40 @@ describe("v2 tool-result feedback", () => {
       expect(outcome.code).not.toBe("budget_exhausted");
       expect(outcome.code).toContain("policy_denied");
     }
+  });
+
+  it("denies a third discovery search instead of destroying the whole run", async () => {
+    // Every other budget in v2 denies the individual call and lets the run
+    // continue; only discovery was fatal, so a compound request that explored
+    // one search too many ("create a tag and apply it to all entries") lost
+    // everything to `too_many_refinements` — including tools already loaded.
+    const seen: ModelMessage[][] = [];
+    let call = 0;
+    const completeWithTools = vi.fn(async (messages: ModelMessage[]) => {
+      seen.push(structuredClone(messages));
+      call += 1;
+      if (call <= 3) {
+        return {
+          text: "",
+          toolCalls: [{
+            id: `search-${call}`,
+            name: DISCOVERY_META_TOOL_NAME,
+            arguments: { query: `attempt ${call}` },
+          }],
+        };
+      }
+      return { text: "Here is what I found.", toolCalls: [] };
+    });
+
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_tags_create");
+    const outcome = await runAssistantV2(
+      { runId: "run-1", scope: baseScope(), originalRequest: "create a tag and apply it to all entries" },
+      deps,
+    );
+
+    expect(outcome.kind).toBe("completed");
+    // The over-budget search is reported back so the model stops searching.
+    expect(JSON.stringify(seen[3] ?? [])).toContain("too_many_refinements");
   });
 
   it("carries the model's own answer out of the run, not a canned string", async () => {
