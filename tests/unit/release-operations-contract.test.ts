@@ -112,8 +112,18 @@ describe("release operations contract", () => {
     // exited 1 on a CORRECT deployment and nothing checked the engine at all.
     for (const path of ["DEPLOYMENT.md", "docs/marketplace/03-operations-evidence-rollback-package.md"]) {
       const runbook = read(path);
-      const versionProbe = runbook.indexOf('curl --fail --silent --show-error "$BASE_URL/version"');
-      expect(versionProbe, `${path} deployed version probe`).toBeGreaterThanOrEqual(0);
+      // Anchor AFTER the deploy: the runbook now probes `/version` twice — once
+      // before the upload to derive the rollback source from the release still
+      // serving, and once after to assert the deployed identity. The first
+      // occurrence is no longer the identity assertion, and searching from zero
+      // would silently grade the wrong block.
+      const deployCall = runbook.indexOf("npm run --silent deploy:private-production");
+      expect(deployCall, `${path} checked deploy`).toBeGreaterThanOrEqual(0);
+      const versionProbe = runbook.indexOf(
+        'curl --fail --silent --show-error "$BASE_URL/version"',
+        deployCall,
+      );
+      expect(versionProbe, `${path} deployed version probe follows the deploy`).toBeGreaterThan(deployCall);
       const assertion = runbook.slice(versionProbe, versionProbe + 2_000);
 
       expect(assertion, `${path} deployed key list`).toContain(
