@@ -23,6 +23,9 @@ import { LATEST_SCHEMA_VERSION } from "../../src/db/schema.js";
 
 const ENCRYPTION_KEY = "restore-verification-test-key";
 const TOKEN = "secret-addon-token-that-must-never-be-evidence";
+const DEAD_TOKEN = "legacy-addon-token-clockify-no-longer-accepts";
+const sha256Of = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
+const WORKSPACE_SHA256 = sha256Of("workspace-private-id");
 const RELEASE_SHA = "a".repeat(40);
 const RELEASE_BUILD_HASH = "b".repeat(64);
 const SERVER_ARTIFACT_HASH = "c".repeat(64);
@@ -78,6 +81,56 @@ async function restoredFixture(options?: { userVersion?: number; apiUrlOverride?
   };
 }
 
+/**
+ * Two active installations where the LEXICOGRAPHICALLY FIRST one is dead.
+ *
+ * This is the real production shape: three migrated v1 dev-console rows plus
+ * the live workspace, one of the legacy rows holding a token Clockify no longer
+ * accepts. The old `ORDER BY workspace_id LIMIT 1` graded that dead row and
+ * failed the gate on a demonstrably good backup.
+ */
+async function restoredFixtureWithDeadLegacyInstallation(): Promise<{
+  restoredPath: string;
+  checksumPath: string;
+  metadataPath: string;
+}> {
+  const directory = tempDirectory();
+  const sourcePath = join(directory, "source-multi.sqlite");
+  const backupPath = join(directory, "backup-multi.sqlite");
+  const restoredPath = join(directory, "isolated", "restored-multi.sqlite");
+  const store = createStore(sourcePath, { encryptionKey: ENCRYPTION_KEY });
+  // Sorts FIRST by workspace_id, and is the older row by updated_at.
+  store.saveInstallation({
+    workspaceId: "aaaa-dead-legacy-workspace",
+    addonId: "addon-legacy",
+    addonUserId: "addon-user-legacy",
+    addonToken: DEAD_TOKEN,
+    apiUrl: "https://api.clockify.me/api",
+  });
+  store.saveInstallation({
+    workspaceId: "zzzz-live-workspace",
+    addonId: "addon-live",
+    addonUserId: "addon-user-live",
+    addonToken: TOKEN,
+    apiUrl: "https://api.clockify.me/api",
+  });
+  store.close();
+  const db = new Database(sourcePath);
+  // Make the live row unambiguously the most recently updated one.
+  db.prepare("UPDATE installations SET updated_at = ? WHERE workspace_id = ?")
+    .run("2026-07-01T00:00:00.000Z", "aaaa-dead-legacy-workspace");
+  db.prepare("UPDATE installations SET updated_at = ? WHERE workspace_id = ?")
+    .run("2026-07-18T09:00:00.000Z", "zzzz-live-workspace");
+  db.close();
+  await backupDatabase({
+    sourcePath,
+    destinationPath: backupPath,
+    now: () => new Date("2026-07-18T10:00:00.000Z"),
+  });
+  await restoreDatabase({ backupPath, targetPath: restoredPath });
+  return { restoredPath, checksumPath: `${backupPath}.sha256`, metadataPath: `${backupPath}.json` };
+}
+
 function deterministicTimer(): () => number {
   const values = [0, 4, 7, 9, 14, 15];
   return () => values.shift() ?? 15;
@@ -114,6 +167,74 @@ afterEach(() => {
 });
 
 describe("restored database verification", () => {
+  it("grades the live installation, not whichever workspace id sorts first", async () => {
+    // Reproduces the production failure: `ORDER BY workspace_id LIMIT 1` picked
+    // a dead migrated v1 row and reported `token_backed_read: 401` for a backup
+    // whose live workspace authenticated perfectly.
+    const fixture = await restoredFixtureWithDeadLegacyInstallation();
+    const seen: Array<{ token: string | null; status: number }> = [];
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      const token = new Headers(init?.headers).get("X-Addon-Token");
+      const status = token === DEAD_TOKEN ? 401 : 200;
+      seen.push({ token, status });
+      return new Response(JSON.stringify({ id: "private-user-id" }), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    });
+
+    const evidence = await verifyRestoredDatabase({
+      ...fixture,
+      encryptionKey: ENCRYPTION_KEY,
+      releaseSha: RELEASE_SHA,
+      releaseBuildHash: RELEASE_BUILD_HASH,
+      fetchImpl,
+      monotonicNow: deterministicTimer(),
+      drillStartedAt: "2026-07-18T10:05:00.000Z",
+      incidentAt: "2026-07-18T10:05:00.000Z",
+      applicationReadinessProbe: vi.fn(async () => readinessProof()),
+    });
+
+    expect(evidence.conclusion).toBe("passed");
+    // The live row decided the gate...
+    expect(evidence.checks.tokenBackedRead.probed[0]).toEqual({
+      workspaceSha256: sha256Of("zzzz-live-workspace"),
+      httpStatus: 200,
+      primary: true,
+    });
+    // ...and the dead legacy row is RECORDED, not silently dropped.
+    expect(evidence.checks.tokenBackedRead.probed).toContainEqual({
+      workspaceSha256: sha256Of("aaaa-dead-legacy-workspace"),
+      httpStatus: 401,
+      primary: false,
+    });
+    expect(evidence.checks.installation.activeCount).toBe(2);
+    expect(seen.map((s) => s.status)).toEqual([200, 401]);
+  });
+
+  it("still fails when the LIVE installation's token is rejected", async () => {
+    // The relaxation must not become "any installation will do": a dead primary
+    // is still a failed drill.
+    const fixture = await restoredFixtureWithDeadLegacyInstallation();
+    const fetchImpl = vi.fn(async (_input: string | URL | Request, init?: RequestInit) =>
+      new Response("{}", {
+        status: new Headers(init?.headers).get("X-Addon-Token") === TOKEN ? 401 : 200,
+        headers: { "content-type": "application/json" },
+      }));
+
+    await expect(verifyRestoredDatabase({
+      ...fixture,
+      encryptionKey: ENCRYPTION_KEY,
+      releaseSha: RELEASE_SHA,
+      releaseBuildHash: RELEASE_BUILD_HASH,
+      fetchImpl,
+      monotonicNow: deterministicTimer(),
+      drillStartedAt: "2026-07-18T10:05:00.000Z",
+      incidentAt: "2026-07-18T10:05:00.000Z",
+      applicationReadinessProbe: vi.fn(async () => readinessProof()),
+    })).rejects.toMatchObject({ check: "token_backed_read" });
+  });
+
   it("emits stable secret-free checksum, schema, token-read, RTO, and RPO evidence", async () => {
     const fixture = await restoredFixture();
     const fetchImpl = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -185,6 +306,9 @@ describe("restored database verification", () => {
           endpoint: "GET /user",
           httpStatus: 200,
           redirects: "blocked",
+          probed: [
+            { workspaceSha256: WORKSPACE_SHA256, httpStatus: 200, primary: true },
+          ],
         },
         applicationReadiness: {
           status: "passed",

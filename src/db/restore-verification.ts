@@ -37,9 +37,20 @@ interface BackupMetadata {
 }
 
 interface InstallationVerificationRow {
+  workspace_id: string;
   addon_token_ciphertext: string;
   api_url: string | null;
   backend_url: string | null;
+  updated_at: string | null;
+}
+
+/** One probed installation, recorded in the evidence whether it passed or not. */
+export interface ProbedInstallation {
+  /** Hashed, never the raw id: this evidence file is asserted secret-free, and
+   * `installation_attestations.workspace_sha256` sets the same precedent. */
+  workspaceSha256: string;
+  httpStatus: number | "decryption_failed" | "request_failed" | "timeout" | "malformed_response";
+  primary: boolean;
 }
 
 export interface RestoreVerificationEvidence {
@@ -77,6 +88,11 @@ export interface RestoreVerificationEvidence {
       endpoint: "GET /user";
       httpStatus: 200;
       redirects: "blocked";
+      /** Every active installation probed, with its own result. The gate is
+       * decided by the `primary` entry; the rest are recorded so a partially
+       * dead estate is visible in the evidence instead of hidden by which
+       * workspace id happened to sort first. */
+      probed: ProbedInstallation[];
     };
     applicationReadiness: {
       status: "passed";
@@ -424,17 +440,25 @@ function readInstallation(db: Database.Database): {
   activeCount: number;
   token: string;
   apiBase: string;
+  /** Every active installation, primary first, so each can be probed and recorded. */
+  all: Array<{ workspaceSha256: string; token: string; apiBase: string }>;
 } {
   const activeCount = (db.prepare(
     "SELECT COUNT(*) AS count FROM installations WHERE status = 'active'",
   ).get() as { count: number }).count;
-  const row = db.prepare(
-    `SELECT addon_token_ciphertext, api_url, backend_url
+  // The primary installation is the most recently updated one — the estate's
+  // live tenant. The previous `ORDER BY workspace_id LIMIT 1` graded whichever
+  // workspace id sorted first, so a single dead-but-active legacy row could
+  // fail the gate on a perfectly good backup (and, worse, could let the gate
+  // pass while the installation that actually matters was broken). Ordering is
+  // fully deterministic: workspace_id breaks any updated_at tie.
+  const rows = db.prepare(
+    `SELECT workspace_id, addon_token_ciphertext, api_url, backend_url, updated_at
        FROM installations
       WHERE status = 'active'
-      ORDER BY workspace_id
-      LIMIT 1`,
-  ).get() as InstallationVerificationRow | undefined;
+      ORDER BY updated_at DESC, workspace_id ASC`,
+  ).all() as InstallationVerificationRow[];
+  const row = rows[0];
   if (!row || activeCount < 1) {
     throw new RestoreVerificationError("installation", "no_active_installation");
   }
@@ -447,11 +471,59 @@ function readInstallation(db: Database.Database): {
   } catch {
     throw new RestoreVerificationError("installation", "invalid_service_url");
   }
+  // A secondary row with an unusable service URL is recorded as a probe
+  // failure rather than aborting the whole verification: only the primary's
+  // URL is load-bearing for the gate.
+  const all = rows.flatMap((candidate) => {
+    try {
+      return [{
+        workspaceSha256: createHash("sha256").update(candidate.workspace_id, "utf8").digest("hex"),
+        token: candidate.addon_token_ciphertext,
+        apiBase: resolveClockifyApiBase({
+          apiUrl: candidate.api_url ?? undefined,
+          backendUrl: candidate.backend_url ?? undefined,
+        }),
+      }];
+    } catch {
+      return [];
+    }
+  });
   return {
     activeCount,
     token: row.addon_token_ciphertext,
     apiBase,
+    all,
   };
+}
+
+/** Probe a secondary installation for the record. Never throws: its result is
+ * evidence about the estate, not a verdict on this restore. */
+async function probeInstallation(
+  fetchImpl: typeof fetch,
+  candidate: { workspaceSha256: string; token: string; apiBase: string },
+  encryptionKey: string,
+  previousEncryptionKey: string | undefined,
+  timeoutMs: number,
+): Promise<ProbedInstallation["httpStatus"]> {
+  let token: string;
+  try {
+    token = decryptInstallationToken(candidate.token, encryptionKey, previousEncryptionKey);
+  } catch {
+    return "decryption_failed";
+  }
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const response = await fetchImpl(`${candidate.apiBase}/user`, {
+      method: "GET",
+      headers: { "X-Addon-Token": token },
+      redirect: "manual",
+      signal,
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return response.status;
+  } catch {
+    return signal.aborted ? "timeout" : "request_failed";
+  }
 }
 
 async function tokenBackedRead(
@@ -606,6 +678,7 @@ export async function verifyRestoredDatabase(
       throw new RestoreVerificationError("integrity", "database_open_failed");
     }
     let installation: ReturnType<typeof readInstallation>;
+    let probed: ProbedInstallation[] = [];
     let sourceUserVersion: number;
     let integrityFinished: number;
     let schemaFinished: number;
@@ -626,12 +699,31 @@ export async function verifyRestoredDatabase(
         options.previousEncryptionKey,
       );
       const fetchImpl = options.fetchImpl ?? fetch;
+      // The primary is probed first and its failure fails the drill.
       await tokenBackedRead(
         fetchImpl,
         installation.apiBase,
         decryptedToken,
         options.timeoutMs ?? 10_000,
       );
+      probed = [{ workspaceSha256: installation.all[0]?.workspaceSha256 ?? "", httpStatus: 200, primary: true }];
+      // Secondary installations are probed for the record only. A legacy row
+      // whose token Clockify no longer accepts is real information about the
+      // estate, but it is not evidence that THIS restore is unusable, so it is
+      // reported rather than allowed to fail the gate.
+      for (const candidate of installation.all.slice(1)) {
+        probed.push({
+          workspaceSha256: candidate.workspaceSha256,
+          httpStatus: await probeInstallation(
+            fetchImpl,
+            candidate,
+            options.encryptionKey,
+            options.previousEncryptionKey,
+            options.timeoutMs ?? 10_000,
+          ),
+          primary: false,
+        });
+      }
       tokenReadFinished = monotonicNow();
       staticVerificationFinished = monotonicNow();
     } finally {
@@ -684,6 +776,7 @@ export async function verifyRestoredDatabase(
           endpoint: "GET /user",
           httpStatus: 200,
           redirects: "blocked",
+          probed,
         },
         applicationReadiness: {
           status: "passed",
