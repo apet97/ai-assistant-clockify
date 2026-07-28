@@ -269,6 +269,40 @@ describe("v2 tool-result feedback", () => {
     }
   });
 
+  it("carries the model's own answer out of the run, not a canned string", async () => {
+    // A read's deliverable IS the model's prose. `v2OutcomeToTurn` used to
+    // substitute "Completed." unconditionally, so a run that executed a read
+    // and answered from it rendered as though nothing had happened.
+    const completeWithTools = vi.fn(async () => ({
+      text: "You tracked 3h 20m today on Apollo.",
+      toolCalls: [],
+    }));
+
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_entries_list");
+    const outcome = await runAssistantV2(
+      { runId: "run-1", scope: baseScope(), originalRequest: "What did I track today?" },
+      deps,
+    );
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") throw new Error("expected completion");
+    expect(outcome.replyText).toBe("You tracked 3h 20m today on Apollo.");
+  });
+
+  it("omits an empty or whitespace-only model answer rather than showing a blank reply", async () => {
+    const completeWithTools = vi.fn(async () => ({ text: "   \n ", toolCalls: [] }));
+    const { deps } = statefulDeps(completeWithTools as never, "clockify_entries_list");
+    const outcome = await runAssistantV2(
+      { runId: "run-1", scope: baseScope(), originalRequest: "hello" },
+      deps,
+    );
+
+    expect(outcome.kind).toBe("completed");
+    if (outcome.kind !== "completed") throw new Error("expected completion");
+    // Absent, so the caller's deterministic fallback applies.
+    expect(outcome.replyText).toBeUndefined();
+  });
+
   it("does not burn the whole model-call budget on a provably unchanged request", async () => {
     const completeWithTools = vi.fn(async () => ({
       text: "",

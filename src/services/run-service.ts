@@ -78,12 +78,27 @@ export function createRunService(deps: RunServiceDeps) {
     };
   }
 
-  function completeOutcome(state: RunState): RunOutcome {
+  /** The model's own final answer is bounded before it leaves the runner:
+   * it is admin-visible prose, not a tool result, and nothing downstream
+   * re-checks its size. */
+  const MAX_REPLY_BYTES = 8_000;
+
+  function boundedReply(replyText: string | undefined): string | undefined {
+    if (replyText === undefined) return undefined;
+    const trimmed = replyText.trim();
+    if (trimmed.length === 0) return undefined;
+    const buffer = Buffer.from(trimmed, "utf8");
+    if (buffer.byteLength <= MAX_REPLY_BYTES) return trimmed;
+    return new TextDecoder("utf-8").decode(buffer.subarray(0, MAX_REPLY_BYTES)).replace(/\uFFFD$/, "");
+  }
+
+  function completeOutcome(state: RunState, replyText?: string): RunOutcome {
     return {
       kind: "completed",
       runId: state.runId,
       lastSequence: lastSequence(state),
       presentationRefs: state.completedResults.map((r) => ({ kind: "action_result", id: r.actionResultId })),
+      ...(boundedReply(replyText) === undefined ? {} : { replyText: boundedReply(replyText) }),
     };
   }
 
@@ -97,7 +112,7 @@ export function createRunService(deps: RunServiceDeps) {
     return budgetStopOutcome(state, code);
   }
 
-  function completeRun(state: RunState, chatMessageId?: string): RunOutcome {
+  function completeRun(state: RunState, chatMessageId?: string, replyText?: string): RunOutcome {
     deps.eventService.completeRun({
       scope: scopedRun(state),
       state,
@@ -107,7 +122,7 @@ export function createRunService(deps: RunServiceDeps) {
       },
     });
     state = deps.runStore.getRun(scopedRun(state)) ?? state;
-    return completeOutcome(state);
+    return completeOutcome(state, replyText);
   }
 
   /** A run's model input is always rebuilt fresh — never a persisted provider

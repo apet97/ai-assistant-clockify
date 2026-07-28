@@ -334,7 +334,12 @@ function v2OutcomeToTurn(outcome: Awaited<ReturnType<typeof runAssistantV2>>): C
     return {
       ok: true,
       replyKind: "final",
-      replyText: "Completed.",
+      // The model's own answer, when it produced one. A read's answer IS the
+      // deliverable, and substituting "Completed." unconditionally made a run
+      // that really executed and really answered look like it did nothing.
+      // The fallback stays for a completion with no prose (e.g. a resumed run
+      // short-circuiting on an already-terminal phase).
+      replyText: outcome.replyText ?? "Completed.",
       results: [],
       resultLinks: [],
     };
