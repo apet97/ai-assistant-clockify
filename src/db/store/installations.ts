@@ -7,6 +7,7 @@ import type {
   InstallationStatus,
   InstallationStatusResult,
   LifecycleDeletionResult,
+  MaintenanceRetirementResult,
   StoreContext,
 } from "./context.js";
 import { canonicalClockifyServiceUrl } from "../../clockify/service-url.js";
@@ -106,6 +107,11 @@ export function buildInstallationStore(ctx: StoreContext): {
     lifecycleIssuedAt: number,
   ): LifecycleDeletionResult;
   tombstoneInstallation(workspaceId: string): { generation: number } | undefined;
+  retireInstallationForMaintenance(input: {
+    workspaceId: string;
+    expectedGeneration: number;
+    expectedStatus: "active" | "inactive";
+  }): MaintenanceRetirementResult;
   listDeletionTombstones(): string[];
   eraseWorkspace(workspaceId: string): EraseCounts;
   eraseWorkspaceForDeletion(workspaceId: string, generation: number): EraseCounts | undefined;
@@ -719,6 +725,64 @@ export function buildInstallationStore(ctx: StoreContext): {
       return result.accepted && result.generation !== undefined
         ? { generation: result.generation }
         : undefined;
+    },
+
+    // F15: the purpose-built, operator-driven retirement of a stale
+    // installation whose token external reality already rejects. Deliberately
+    // NOT a lifecycle transition: it requires the operator to restate the
+    // exact row (generation + status) and refuses on any mismatch, so it can
+    // never race a live lifecycle callback onto a different row. It retires
+    // the token's fingerprint (a delayed signed callback replaying it is
+    // denied), wipes the ciphertext, bumps the generation (queued writes on
+    // the old authority die), and leaves the row INACTIVE — never `deleted`,
+    // so the startup uninstall-completion path cannot erase workspace data
+    // from a maintenance act.
+    retireInstallationForMaintenance(input) {
+      const timestamp = nowIso();
+      const result = db.transaction((): MaintenanceRetirementResult => {
+        const current = db.prepare(
+          "SELECT * FROM installations WHERE workspace_id = ?",
+        ).get(input.workspaceId) as InstallationRow | undefined;
+        if (!current) return { outcome: "not_found" };
+        if (current.generation !== input.expectedGeneration) {
+          return { outcome: "generation_mismatch", actualGeneration: current.generation };
+        }
+        if (current.status !== input.expectedStatus) {
+          return { outcome: "status_mismatch", actualStatus: current.status };
+        }
+        let currentToken: string | undefined;
+        try {
+          currentToken = openToken(current.addon_token_ciphertext);
+        } catch {
+          // Wrong encryption key (or corrupt ciphertext): fail closed — the
+          // fingerprint denylist is the retirement's replay protection and it
+          // cannot be computed without the plaintext token.
+          return { outcome: "token_unreadable" };
+        }
+        if (currentToken === undefined) return { outcome: "token_unreadable" };
+        if (currentToken) {
+          db.prepare(
+            `INSERT OR IGNORE INTO retired_installation_tokens (
+               token_fingerprint_sha256, retired_at
+             ) VALUES (?, ?)`,
+          ).run(hashRetiredInstallationToken(currentToken), timestamp);
+        }
+        const generation = Math.max(
+          current.generation,
+          lastGenerations.get(input.workspaceId) ?? 0,
+        ) + 1;
+        db.prepare(
+          `UPDATE installations
+              SET status = 'inactive', addon_token_ciphertext = ?, generation = ?,
+                  updated_at = ?
+            WHERE workspace_id = ?`,
+        ).run(sealToken(""), generation, timestamp, input.workspaceId);
+        db.prepare("DELETE FROM installation_attestations WHERE workspace_id = ?")
+          .run(input.workspaceId);
+        return { outcome: "retired", generation, tokenFingerprintRetired: currentToken !== "" };
+      })();
+      if (result.outcome === "retired") rememberGeneration(input.workspaceId, result.generation);
+      return result;
     },
 
     listDeletionTombstones() {

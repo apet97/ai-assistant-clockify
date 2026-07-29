@@ -62,6 +62,15 @@ export interface RestCoreOptions {
   signal?: AbortSignal;
   /** Production adapters enable the Phase 6 exact-plan network gate. */
   enforceMutationScope?: boolean;
+  /**
+   * Observation seam for installation-token authority (F15). `onAuthRejected`
+   * fires on an addon-token 401 that is NOT the known family restriction
+   * ("API is not accessible" — endpoints the token class can never call);
+   * `onAuthAccepted` fires on any successful addon-token response. Purely
+   * observational: neither hook may change authority or the response.
+   */
+  onAuthRejected?: () => void;
+  onAuthAccepted?: () => void;
 }
 
 export interface MutationPlanScopeStep {
@@ -510,6 +519,15 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
         `Clockify does not allow add-ons to call ${method} ${path} — this endpoint is outside the add-on token's reach regardless of manifest scopes.`,
       );
     }
+    // Past the family-restriction mapping, an addon-token 401 means the host
+    // rejected the INSTALLATION TOKEN itself — observe it (F15 suspect
+    // alerting) without altering how the failure is surfaced.
+    if (status === 401 && "X-Addon-Token" in authHeader) opts.onAuthRejected?.();
+  }
+
+  /** F15: a successful addon-token response resets the rejection streak. */
+  function observeAuthAccepted(): void {
+    if ("X-Addon-Token" in authHeader) opts.onAuthAccepted?.();
   }
 
   // Resolve a host base, or fail cleanly when this environment has none (only the
@@ -573,7 +591,10 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       headers: { ...(isForm ? {} : { "content-type": "application/json" }), ...authHeader },
       body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
     });
-    if (res.status === 404 && allow404) return null;
+    if (res.status === 404 && allow404) {
+      observeAuthAccepted();
+      return null;
+    }
     if (!res.ok) {
       const text = await res.text();
       mapAddonRestriction(res.status, method, path, text);
@@ -586,6 +607,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       }
       throw new Error(message);
     }
+    observeAuthAccepted();
     if (res.status === 204) return null;
     const text = await res.text();
     if (!text) return null;
@@ -764,6 +786,7 @@ export function createRestCore(opts: RestCoreOptions): RestCore {
       mapAddonRestriction(res.status, "GET", path, text);
       throw new Error(`Clockify GET ${path} -> ${res.status}: ${text.slice(0, 200)}`);
     }
+    observeAuthAccepted();
     const declared = Number(res.headers.get("content-length"));
     if (Number.isFinite(declared) && declared > maxBytes) {
       await res.body?.cancel().catch(() => undefined);

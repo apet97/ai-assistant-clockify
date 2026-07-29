@@ -11,6 +11,7 @@ import type {
   InstallationSaveResult,
   InstallationStatusResult,
   LifecycleDeletionResult,
+  MaintenanceRetirementResult,
   ChatSession,
   NewSessionInput,
   SessionSummary,
@@ -113,6 +114,7 @@ export type {
   InstallationStatusOutcome,
   InstallationStatusResult,
   LifecycleDeletionResult,
+  MaintenanceRetirementResult,
   ChatSession,
   NewSessionInput,
   SessionSummary,
@@ -231,6 +233,17 @@ export interface Store {
   ): LifecycleDeletionResult;
   /** Wipe the token and persist a deletion tombstone before waiting on host settlement. */
   tombstoneInstallation(workspaceId: string): { generation: number } | undefined;
+  /**
+   * Operator-driven retirement of a stale installation (F15): refuses unless
+   * the caller restates the exact generation and status; retires the token
+   * fingerprint, wipes the ciphertext, bumps the generation, leaves the row
+   * inactive. Never erases workspace data.
+   */
+  retireInstallationForMaintenance(input: {
+    workspaceId: string;
+    expectedGeneration: number;
+    expectedStatus: "active" | "inactive";
+  }): MaintenanceRetirementResult;
   /** Workspaces whose interrupted uninstall must be completed at startup. */
   listDeletionTombstones(): string[];
   /**

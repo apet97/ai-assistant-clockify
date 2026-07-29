@@ -15,6 +15,7 @@ import {
   LIFECYCLE_CLOCK_SKEW_SECONDS,
   MAX_LIFECYCLE_AGE_SECONDS,
 } from "../addon/lifecycle-authority.js";
+import { logAlias } from "../log-alias.js";
 
 /**
  * Clockify lifecycle routes (ARCHITECTURE "Lifecycle Install"). Each request is
@@ -86,6 +87,13 @@ async function verifyOrderedLifecycleToken(
 export function lifecycleRouter(deps: AppDeps): Router {
   const router = Router();
   const mutationCoordinator = deps.mutationCoordinator ?? createWorkspaceMutationCoordinator();
+  // F14: lifecycle log lines carry stable HMAC ALIASES, generation, state, and
+  // bounded counts — never a raw workspace/admin/add-on id (customer-linked
+  // identifiers must not reach the hosting platform's log plane).
+  const wsAlias = (workspaceId: string): string =>
+    logAlias(deps.config.sessionSecret, "workspace", workspaceId);
+  const addonAlias = (addonId: string): string =>
+    logAlias(deps.config.sessionSecret, "addon", addonId);
   let lifecycleRequestSequence = 0;
   const nextLifecycleRequestSequence = (): number => {
     lifecycleRequestSequence += 1;
@@ -165,7 +173,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
             : {}),
         });
         if (saveResult.outcome === "stale_lifecycle" || saveResult.outcome === "retired_token_replay") {
-          console.log(`[lifecycle] event=installed_ignored_${saveResult.outcome} workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=installed_ignored_${saveResult.outcome} workspace=${wsAlias(workspaceId)} generation=${saveResult.generation ?? "none"}`);
           return res.status(200).json({ ok: true });
         }
         const installed = deps.store.getInstallation(workspaceId);
@@ -175,13 +183,14 @@ export function lifecycleRouter(deps: AppDeps): Router {
         if (installed?.status === "active") {
           mutationCoordinator.activate(workspaceId, installed.generation);
         }
-        // Operational trace (searchable, NEVER the token): install churn + correlation.
-        console.log(`[lifecycle] event=installed workspace=${workspaceId} addon=${body.addonId ?? claims.addonId ?? ""}`);
+        // Operational trace (searchable, NEVER the token or a raw id): install
+        // churn + correlation via stable aliases, generation, and state.
+        console.log(`[lifecycle] event=installed workspace=${wsAlias(workspaceId)} addon=${addonAlias(String(body.addonId ?? claims.addonId ?? ""))} generation=${installed?.generation ?? "none"} status=${installed?.status ?? "none"}`);
         return res.status(200).json({ ok: true });
       }, {
         sequence: requestSequence,
         stale: () => {
-          console.log(`[lifecycle] event=installed_ignored_stale workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=installed_ignored_stale workspace=${wsAlias(workspaceId)}`);
           return res.status(200).json({ ok: true });
         },
       });
@@ -211,7 +220,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
         if (pendingDeletion) await pendingDeletion;
         const statusResult = deps.store.setInstallationStatus(workspaceId, status, claims.iat);
         if (statusResult.outcome !== "applied") {
-          console.log(`[lifecycle] event=status_changed_ignored_${statusResult.outcome} workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=status_changed_ignored_${statusResult.outcome} workspace=${wsAlias(workspaceId)} generation=${statusResult.generation ?? "none"}`);
           return res.status(200).json({ ok: true });
         }
         if (status === "inactive") mutationCoordinator.block(workspaceId);
@@ -221,12 +230,12 @@ export function lifecycleRouter(deps: AppDeps): Router {
             mutationCoordinator.activate(workspaceId, installation.generation);
           }
         }
-        console.log(`[lifecycle] event=status_changed workspace=${workspaceId} status=${status}`);
+        console.log(`[lifecycle] event=status_changed workspace=${wsAlias(workspaceId)} status=${status} generation=${statusResult.generation ?? "none"}`);
         return res.status(200).json({ ok: true });
       }, {
         sequence: requestSequence,
         stale: () => {
-          console.log(`[lifecycle] event=status_changed_ignored_stale workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=status_changed_ignored_stale workspace=${wsAlias(workspaceId)}`);
           return res.status(200).json({ ok: true });
         },
       });
@@ -259,7 +268,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
       return mutationCoordinator.runLifecycle(workspaceId, async () => {
         const tombstone = deps.store.tombstoneInstallationForLifecycle(workspaceId, claims.iat);
         if (!tombstone.accepted) {
-          console.log(`[lifecycle] event=deleted_ignored_stale_lifecycle workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=deleted_ignored_stale_lifecycle workspace=${wsAlias(workspaceId)}`);
           return res.status(200).json({ ok: true });
         }
         const deletion = mutationCoordinator.beginDeletion(workspaceId);
@@ -274,7 +283,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
           const erased = tombstone.generation !== undefined
             ? deps.store.eraseWorkspaceForDeletion(workspaceId, tombstone.generation)
             : deps.store.eraseWorkspace(workspaceId);
-          console.log(`[lifecycle] event=deleted workspace=${workspaceId} erased=${JSON.stringify(erased ?? {})}`);
+          console.log(`[lifecycle] event=deleted workspace=${wsAlias(workspaceId)} generation=${tombstone.generation ?? "none"} erased=${JSON.stringify(erased ?? {})}`);
           return res.status(200).json({ ok: true });
         } finally {
           deletion.finish();
@@ -282,7 +291,7 @@ export function lifecycleRouter(deps: AppDeps): Router {
       }, {
         sequence: requestSequence,
         stale: () => {
-          console.log(`[lifecycle] event=deleted_ignored_stale workspace=${workspaceId}`);
+          console.log(`[lifecycle] event=deleted_ignored_stale workspace=${wsAlias(workspaceId)}`);
           return res.status(200).json({ ok: true });
         },
       });

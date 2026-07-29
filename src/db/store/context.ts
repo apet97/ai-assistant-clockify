@@ -83,6 +83,18 @@ export interface LifecycleDeletionResult {
   generation?: number;
 }
 
+/**
+ * Outcome of the operator-driven maintenance retirement (F15). Every mismatch
+ * arm is a REFUSAL — the command must never touch a row the operator did not
+ * describe exactly (workspace + generation + status all match, token readable).
+ */
+export type MaintenanceRetirementResult =
+  | { outcome: "retired"; generation: number; tokenFingerprintRetired: boolean }
+  | { outcome: "not_found" }
+  | { outcome: "generation_mismatch"; actualGeneration: number }
+  | { outcome: "status_mismatch"; actualStatus: InstallationStatus }
+  | { outcome: "token_unreadable" };
+
 export interface Installation {
   workspaceId: string;
   addonId: string;

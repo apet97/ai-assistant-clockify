@@ -58,6 +58,7 @@
     "db:capture-backup-boundary": "tsx scripts/capture-backup-boundary.ts",
     "db:bind-legacy-backup-metadata": "tsx scripts/bind-legacy-backup-metadata.ts",
     "db:restore": "tsx scripts/restore-db.ts",
+    "db:retire-stale-installation": "tsx scripts/maintenance/retire-stale-installation.ts",
     "db:verify-restore": "npm run build 1>&2 && tsx scripts/verify-restored-db.ts"
   },
   "dependencies": {

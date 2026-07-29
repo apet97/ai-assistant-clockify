@@ -8,6 +8,8 @@ import { createStore, type Installation } from "./db/store.js";
 import type { WorkspaceClient } from "./clockify/client.js";
 import { createRestWorkspaceClient } from "./clockify/rest-workspace.js";
 import { createWorkspaceRequestGovernor, type WorkspaceRequestGovernor } from "./clockify/request-governor.js";
+import { createTokenRejectionMonitor, type TokenRejectionMonitor } from "./clockify/token-rejection-monitor.js";
+import { logAlias } from "./log-alias.js";
 import { createWorkspaceMutationCoordinator } from "./clockify/workspace-mutation-coordinator.js";
 import {
   resolveClockifyApiBase,
@@ -201,6 +203,7 @@ function liveClockifyForWorkspace(
   commitTimeoutMs?: number,
   requestGovernor?: WorkspaceRequestGovernor,
   signal?: AbortSignal,
+  tokenRejectionMonitor?: TokenRejectionMonitor,
 ): WorkspaceClient {
   return createRestWorkspaceClient({
     baseUrl: resolveClockifyApiBase(installation),
@@ -211,6 +214,12 @@ function liveClockifyForWorkspace(
     commitTimeoutMs,
     requestGovernor,
     ...(signal ? { signal } : {}),
+    ...(tokenRejectionMonitor
+      ? {
+          onAuthRejected: () => tokenRejectionMonitor.rejected(installation.workspaceId),
+          onAuthAccepted: () => tokenRejectionMonitor.accepted(installation.workspaceId),
+        }
+      : {}),
   });
 }
 
@@ -302,6 +311,11 @@ export async function start(): Promise<void> {
   const modelClient = selectModelClient(config);
 
   const readiness = { ready: true };
+  // F15: repeated authenticated 401s mark the installation `suspect` in the
+  // operator log (aliased); authority is never changed from a wire signal.
+  const tokenRejectionMonitor = createTokenRejectionMonitor({
+    aliasFor: (workspaceId) => logAlias(config.sessionSecret, "workspace", workspaceId),
+  });
   const requestGovernors = new Map<string, WorkspaceRequestGovernor>();
   const requestGovernorFor = (workspaceId: string): WorkspaceRequestGovernor => {
     const existing = requestGovernors.get(workspaceId);
@@ -324,6 +338,8 @@ export async function start(): Promise<void> {
         installation,
         config.commitTimeoutMs,
         requestGovernorFor(installation.workspaceId),
+        undefined,
+        tokenRejectionMonitor,
       ),
     });
   } catch (error) {
@@ -341,6 +357,7 @@ export async function start(): Promise<void> {
       config.commitTimeoutMs,
       requestGovernorFor(installation.workspaceId),
       options?.signal,
+      tokenRejectionMonitor,
     ),
     readiness: { isReady: () => readiness.ready },
     ...(releaseArtifactIdentity ? { releaseArtifactIdentity } : {}),
