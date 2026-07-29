@@ -393,6 +393,15 @@ export interface Store {
     kind: "confirmed" | "cancelled" | "expired";
     actionResultId?: string;
   }): { settled: boolean };
+  /** ONE transaction (closure-plan PR 4 / F02, batch form): settle the run an
+   * EXACT batch belongs to once the batch is aggregate-terminal. `cancelled` /
+   * `expired` first terminalize every still-pending member with a bounded
+   * no-mutation result; `confirmed` uses each member's own terminal result.
+   * Replay-safe like the single form. */
+  settleV2ConfirmationBatchRun(input: {
+    batchId: string;
+    kind: "confirmed" | "cancelled" | "expired";
+  }): { settled: boolean };
   /** ONE transaction (F23): `clarification.required` + `run.suspended` +
    * the `awaiting_clarification` phase/continuation commit together. */
   requireClarificationAndSuspendWithEvents(
@@ -994,6 +1003,93 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             withClaim: kind === "confirmed",
             ...(actionResultId !== undefined ? { actionResultId } : {}),
           },
+        );
+        return { settled: true };
+      })();
+    },
+    settleV2ConfirmationBatchRun(input: {
+      batchId: string;
+      kind: "confirmed" | "cancelled" | "expired";
+    }): { settled: boolean } {
+      return db.transaction(() => {
+        const batch = confirmationBatchStore.getConfirmationBatch(input.batchId);
+        if (!batch) return { settled: false };
+        const items = confirmationBatchStore.listConfirmationBatchItems(input.batchId);
+        if (items.length === 0) return { settled: false };
+        const firstRecord = confirmationStore.getPendingConfirmation(items[0]!.confirmationId);
+        if (!firstRecord || !Number.isSafeInteger(firstRecord.installationGeneration)) {
+          return { settled: false };
+        }
+        const scope = {
+          sessionId: batch.sessionId,
+          runId: batch.runId,
+          workspaceId: batch.workspaceId,
+          adminUserId: batch.adminUserId,
+          installationGeneration: firstRecord.installationGeneration!,
+          authClass: "addon" as const,
+        };
+        const state = store.getRun(scope);
+        if (!state || state.phase !== "awaiting_confirmation") return { settled: false };
+
+        const settledItems: Array<{ operationId: string; actionResultId?: string }> = [];
+        const completedResults = [...state.completedResults];
+        for (const item of items) {
+          const record = confirmationStore.getPendingConfirmation(item.confirmationId);
+          let actionResultId = item.actionResultId ?? record?.actionResultId ?? undefined;
+          if (input.kind !== "confirmed" && record?.status === "pending") {
+            if (input.kind === "cancelled") confirmationStore.cancelConfirmation(item.confirmationId);
+            else confirmationStore.expireConfirmation(item.confirmationId);
+            const operation = record.operation as { actionName?: string } | undefined;
+            const actionName = typeof operation?.actionName === "string" && operation.actionName.length > 0
+              ? operation.actionName
+              : "confirmed_write";
+            const ref = store.recordActionResult({
+              workspaceId: batch.workspaceId,
+              adminUserId: batch.adminUserId,
+              sessionId: batch.sessionId,
+              actionName,
+              status: "definitive_failed",
+              result: {
+                kind: "receipt",
+                receipt: {
+                  ok: false,
+                  action: actionName,
+                  code: input.kind === "cancelled" ? "preview_cancelled" : "preview_expired",
+                  message: input.kind === "cancelled"
+                    ? "The preview was cancelled. No change was made."
+                    : "The preview expired. No change was made.",
+                },
+              },
+            });
+            actionResultId = ref.id;
+            store.settleOperationRun(item.operationId, "definitive_failed", ref.id);
+          }
+          if (actionResultId !== undefined) {
+            completedResults.push({
+              toolCallId: `confirmation-${item.confirmationId}`,
+              actionName: "confirmed_write",
+              actionResultId,
+            });
+          }
+          settledItems.push({
+            operationId: item.operationId,
+            ...(actionResultId !== undefined ? { actionResultId } : {}),
+          });
+        }
+        if (input.kind !== "confirmed" && batch.status === "pending") {
+          confirmationBatchStore.updateConfirmationBatchStatus(
+            input.batchId,
+            input.kind,
+            { completedAt: nowIso() },
+          );
+        }
+        // One batch per run (`maxActiveWriteBatches` 1): the run's entire
+        // reservation belonged to this batch.
+        const budget = { ...state.budget, hostCallsReserved: 0 };
+        runEventStore.completeRunAfterBatchWithEvents(
+          scope,
+          { ...state, budget, completedResults },
+          { items: settledItems },
         );
         return { settled: true };
       })();

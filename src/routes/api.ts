@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { rateLimit } from "express-rate-limit";
 import { reversibleCreations } from "../harness/undo.js";
-import { isV2AssistantPreviewConfirmation } from "../harness/confirmations.js";
+import { isBatchOwnedConfirmation, isV2AssistantPreviewConfirmation } from "../harness/confirmations.js";
 import { setSessionCookie, resolveSession, type AppDeps } from "./deps.js";
 import { type SessionClaims } from "../auth/sessions.js";
 import { fifoAsyncHandler } from "./async-handler.js";
@@ -280,6 +280,7 @@ export function apiRouter(
     confirmationService,
     pipeline,
     isV2Preview: isV2AssistantPreviewConfirmation,
+    isBatchOwned: isBatchOwnedConfirmation,
     getPendingConfirmation: (id) => deps.store.getPendingConfirmation(id),
     // Closure-plan PR 4 (F02): cancelling a v2 preview also settles its
     // assistant run (bounded no-mutation result + operation terminal +

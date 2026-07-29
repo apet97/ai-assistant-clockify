@@ -14,7 +14,7 @@ import type { RequireSession, WrappedHandler } from "./route-ports.js";
  */
 export function confirmationBatchesRouter(options: {
   requireSession: RequireSession;
-  confirmationService: Pick<ConfirmationService, "confirmBatch">;
+  confirmationService: Pick<ConfirmationService, "confirmBatch" | "cancelBatch">;
   getScopedConfirmationBatch: (
     id: string,
     workspaceId: string,
@@ -24,6 +24,20 @@ export function confirmationBatchesRouter(options: {
   sessionAsyncHandler: WrappedHandler;
 }): Router {
   const router = Router();
+
+  // Closure-plan PR 4 (F02): `Cancel all` is ONE aggregate settlement — every
+  // still-pending member terminalizes with a bounded no-mutation result and
+  // the run completes; per-item cancellation of a batch-owned preview is
+  // rejected at the confirmations route.
+  router.post("/confirmation-batches/:id/cancel", options.sessionAsyncHandler(async (req, res) => {
+    const claims = await options.requireSession(req, res);
+    if (!claims) return;
+    const outcome = options.confirmationService.cancelBatch({ claims, batchId: req.params.id });
+    if (!outcome.ok) {
+      return res.status(outcome.status).json({ ok: false, code: outcome.code, message: outcome.message });
+    }
+    return res.json({ ok: true, status: "cancelled" });
+  }));
 
   router.post("/confirmation-batches/:id/confirm", options.sessionAsyncHandler(async (req, res) => {
     const claims = await options.requireSession(req, res);

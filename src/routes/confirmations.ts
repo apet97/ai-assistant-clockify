@@ -21,6 +21,9 @@ export function confirmationsRouter(options: {
   pipeline: Pick<ChatPipeline, "commitConfirmation" | "runResume">;
   /** True when the stored record is a v2 preview (authorityModel discriminator). */
   isV2Preview: (record: PendingRecord) => boolean;
+  /** True when the record belongs to a Confirm-all batch — per-item cancel is
+   * rejected with `batch_cancel_required` (closure-plan PR 4). */
+  isBatchOwned?: (record: PendingRecord) => boolean;
   getPendingConfirmation: (id: string) => PendingRecord | undefined;
   cancelConfirmation: (id: string) => boolean;
   sessionAsyncHandler: WrappedHandler;
@@ -150,6 +153,14 @@ export function confirmationsRouter(options: {
       record.sessionId !== claims.sessionId
     ) {
       res.status(403).json({ ok: false, code: "forbidden", message: "This preview belongs to a different session." });
+      return;
+    }
+    if (options.isBatchOwned?.(record)) {
+      res.status(400).json({
+        ok: false,
+        code: "batch_cancel_required",
+        message: "This preview belongs to a Confirm all batch. Use the batch cancellation route.",
+      });
       return;
     }
     if (!options.cancelConfirmation(record.id)) {

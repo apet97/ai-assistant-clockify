@@ -525,6 +525,41 @@ export function buildRunEventStore(ctx: StoreContext) {
         phase: "completed",
       });
     },
+    /** Closure-plan PR 4 (F02): terminalize a run after its EXACT batch
+     * reached aggregate terminal state — one `operation.completed` per member
+     * with a known result, then the terminal transition and one
+     * `run.completed`, all in ONE transaction. */
+    completeRunAfterBatchWithEvents(
+      scope: AssistantRunScope,
+      state: RunState,
+      input: { items: ReadonlyArray<{ operationId: string; actionResultId?: string }> },
+    ): SequencedRunEvent {
+      return db.transaction(() => {
+        const timestamp = nowIso();
+        const resultIds: string[] = [];
+        for (const item of input.items) {
+          if (item.actionResultId === undefined) continue;
+          resultIds.push(item.actionResultId);
+          allocateAndInsertEvent(db, scope, "operation.completed", {
+            operationId: item.operationId,
+            actionResultId: item.actionResultId,
+          }, timestamp);
+        }
+        updateRunState(db, scope, {
+          phase: "completed",
+          catalogHash: state.catalogHash,
+          loadedToolNames: state.loadedToolNames,
+          usedToolNames: state.usedToolNames,
+          continuation: { kind: "none" },
+          budget: state.budget,
+          unfinishedOperations: state.unfinishedOperations,
+          completedResults: state.completedResults,
+        }, timestamp);
+        return allocateAndInsertEvent(db, scope, "run.completed", {
+          actionResultIds: resultIds,
+        }, timestamp).event;
+      })();
+    },
     /** Closure-plan PR 4 (F02): the operation lifecycle events and the run's
      * terminal transition commit in ONE transaction. `withClaim` also records
      * `operation.confirmed` + `operation.started` (the one-use claim already

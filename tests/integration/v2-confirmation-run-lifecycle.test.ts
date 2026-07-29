@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import request from "supertest";
+import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import {
   composeV2ProductionApp,
   discoverThenCall,
@@ -138,5 +139,96 @@ describe("v2 confirmation run lifecycle", () => {
     const types = (await c.readEvents(runId)).map((e) => e.event.eventType);
     expect(types.filter((t) => t === "run.completed")).toHaveLength(1);
     expect(types.filter((t) => t === "operation.completed")).toHaveLength(1);
+  });
+});
+
+describe("v2 confirmation BATCH run lifecycle", () => {
+  const BATCH_SCRIPT = [
+    { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: "create tags" } }] },
+    {
+      text: "",
+      toolCalls: [
+        { id: "tc-a", name: "clockify_tags_create", arguments: { name: "alpha" } },
+        { id: "tc-b", name: "clockify_projects_create", arguments: { name: "Beta Project" } },
+      ],
+    },
+    { text: "All done.", toolCalls: [] },
+  ];
+
+  async function batchControls(c: Awaited<ReturnType<typeof composeV2ProductionApp>>, runId: string) {
+    const res = await request(c.app)
+      .get(`/api/runs/${runId}/events`)
+      .query({ after: 0 })
+      .set("Cookie", c.cookie);
+    const events = (res.body.events ?? []) as Array<{
+      attachment?: { kind: string; envelope?: { confirmation?: { id: string; nonce: string } } };
+    }>;
+    return events
+      .filter((e) => e.attachment?.kind === "pending_confirmation")
+      .map((e) => e.attachment!.envelope!.confirmation!);
+  }
+
+  it("per-item cancel of a batch member is refused; the aggregate cancel settles everything", async () => {
+    const c = await composeV2ProductionApp({ script: BATCH_SCRIPT });
+    await c.chat("create tags alpha and beta");
+    const runId = c.activeRunId();
+    const run = c.store.getRun(c.getRunScope(runId))!;
+    expect(run.phase).toBe("awaiting_confirmation");
+    if (run.continuation.kind !== "awaiting_operations") throw new Error("expected operations continuation");
+    const batchId = run.continuation.batchId!;
+    expect(batchId).toBeTruthy();
+    const controls = await batchControls(c, runId);
+    expect(controls).toHaveLength(2);
+
+    // Per-item cancel is rejected — the batch is one unit.
+    const perItem = await request(c.app)
+      .post(`/api/confirmations/${controls[0]!.id}/cancel`)
+      .set("Cookie", c.cookie)
+      .send({});
+    expect(perItem.status).toBe(400);
+    expect(perItem.body.code).toBe("batch_cancel_required");
+
+    // ONE aggregate cancel: both members terminal, batch cancelled, run
+    // completed, zero mutations, chat usable.
+    const cancelled = await request(c.app)
+      .post(`/api/confirmation-batches/${batchId}/cancel`)
+      .set("Cookie", c.cookie)
+      .send({});
+    expect(cancelled.status).toBe(200);
+    expect(c.clockifyMutations()).toBe(0);
+    expect(c.store.getConfirmationBatch(batchId)?.status).toBe("cancelled");
+    for (const control of controls) {
+      const record = c.store.getPendingConfirmation(control.id);
+      expect(record?.status).toBe("cancelled");
+    }
+    expect(c.store.getRun(c.getRunScope(runId))?.phase).toBe("completed");
+    const next = await c.chat("hello again");
+    expect(next.status).toBe(200);
+  });
+
+  it("batch confirm commits every member and settles the run once", async () => {
+    const c = await composeV2ProductionApp({ script: BATCH_SCRIPT });
+    await c.chat("create tags alpha and beta");
+    const runId = c.activeRunId();
+    const run = c.store.getRun(c.getRunScope(runId))!;
+    if (run.continuation.kind !== "awaiting_operations") throw new Error("expected operations continuation");
+    const batchId = run.continuation.batchId!;
+    const controls = await batchControls(c, runId);
+
+    const confirmed = await request(c.app)
+      .post(`/api/confirmation-batches/${batchId}/confirm`)
+      .set("Cookie", c.cookie)
+      .send({ items: controls.map((control) => ({ confirmationId: control.id, nonce: control.nonce })) });
+    expect(confirmed.status, confirmed.text).toBe(200);
+    expect(confirmed.body.status, confirmed.text).toBe("succeeded");
+    expect(c.clockifyMutations()).toBeGreaterThanOrEqual(2);
+
+    // The run settled once with one terminal event set.
+    expect(c.store.getRun(c.getRunScope(runId))?.phase).toBe("completed");
+    const types = (await c.readEvents(runId)).map((e) => e.event.eventType);
+    expect(types.filter((t) => t === "run.completed")).toHaveLength(1);
+    expect(types.filter((t) => t === "operation.completed")).toHaveLength(2);
+    const next = await c.chat("hello again");
+    expect(next.status).toBe(200);
   });
 });

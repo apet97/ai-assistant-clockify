@@ -613,6 +613,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     const expiresAtMs = new Date(batch.expiresAt).getTime();
     if (Number.isNaN(expiresAtMs) || deps.now().getTime() >= expiresAtMs) {
       deps.store.updateConfirmationBatchStatus(batchId, "expired", { completedAt: nowIso });
+      settleBatchRunBestEffort(batchId, "expired");
       return rejectBatch(400, "expired", "This confirmation batch has expired. Ask me to run a fresh preview.");
     }
 
@@ -820,6 +821,11 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     } else {
       batch = deps.store.getConfirmationBatch(batchId)!;
     }
+    // Closure-plan PR 4 (F02): the run settles only when the EXACT batch is
+    // aggregate-terminal — including a truthful outcome_unknown stop. Best-
+    // effort after known host effects; a lapsed run reconciles at the next
+    // message.
+    settleBatchRunBestEffort(batchId, "confirmed");
 
     const finalItems: ConfirmBatchItemOutcome[] = [];
     for (const item of deps.store.listConfirmationBatchItems(batchId)) {
@@ -839,9 +845,52 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     };
   }
 
+  function settleBatchRunBestEffort(batchId: string, kind: "confirmed" | "cancelled" | "expired"): void {
+    try {
+      deps.store.settleV2ConfirmationBatchRun({ batchId, kind });
+    } catch {
+      console.error("batch run settlement degraded (outcomes already recorded; response preserved)");
+    }
+  }
+
+  /** Closure-plan PR 4 (F02): `Cancel all` as ONE aggregate settlement — every
+   * still-pending member gets its bounded no-mutation result, the batch and
+   * its operations terminalize, and the run completes, in one transaction. */
+  function cancelBatch(input: {
+    claims: ConfirmationServiceClaims;
+    batchId: string;
+  }): { ok: true } | { ok: false; status: number; code: string; message: string } {
+    const batch = deps.store.getScopedConfirmationBatch(
+      input.batchId,
+      input.claims.workspaceId,
+      input.claims.adminUserId,
+      input.claims.sessionId,
+    );
+    if (!batch) {
+      return { ok: false, status: 404, code: "not_found", message: "No such confirmation batch." };
+    }
+    const { settled } = deps.store.settleV2ConfirmationBatchRun({ batchId: input.batchId, kind: "cancelled" });
+    if (!settled) {
+      // The run already settled (or never suspended): still terminalize the
+      // rows so no member stays confirmable.
+      for (const item of deps.store.listConfirmationBatchItems(input.batchId)) {
+        const record = deps.store.getPendingConfirmation(item.confirmationId);
+        if (record?.status === "pending") deps.store.cancelConfirmation(item.confirmationId);
+      }
+      const current = deps.store.getConfirmationBatch(input.batchId);
+      if (current?.status === "pending") {
+        deps.store.updateConfirmationBatchStatus(input.batchId, "cancelled", {
+          completedAt: deps.now().toISOString(),
+        });
+      }
+    }
+    return { ok: true };
+  }
+
   return {
     confirmSingle,
     confirmBatch,
+    cancelBatch,
     executeTrustedDirectSafeWrite,
     executeUndoCommit,
   };
