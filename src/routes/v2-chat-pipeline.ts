@@ -12,6 +12,7 @@ import {
   type RunScope,
 } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
+import { deterministicGuardReply } from "./chat-guards.js";
 import { createRunEventService } from "../services/run-event-service.js";
 import { createRunEventViewService } from "../services/run-event-view-service.js";
 import { createOperationPreparationService } from "../services/operation-preparation-service.js";
@@ -262,7 +263,31 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           continuationMessage: message,
           signal,
         }, runnerDeps);
-        return v2OutcomeToTurn(outcome);
+        return settleV2Turn(deps, scope, newRequestId, outcome);
+      }
+
+      // Persist the admin's message first (identity chain + faithful
+      // transcript), then run the shared deterministic guards (F20): a
+      // whitespace-only turn or bare typed consent never reaches the provider,
+      // never supersedes a pending clarification, and never trips the
+      // awaiting-confirmation refusal below — it settles a deterministic
+      // answer through the same path a model reply uses.
+      deps.store.beginClaimedTurnMessage({
+        sessionId: claims.sessionId,
+        workspaceId: claims.workspaceId,
+        adminUserId: claims.adminUserId,
+        requestId,
+        content: message,
+      });
+      const guardReply = deterministicGuardReply(
+        deps.store,
+        claims,
+        message,
+        (deps.now?.() ?? new Date()).toISOString(),
+      );
+      if (guardReply !== undefined) {
+        settleAssistantReplyBestEffort(deps, claims, requestId, guardReply, "answer", []);
+        return { ok: true, replyKind: "answer", replyText: guardReply, results: [], resultLinks: [] };
       }
 
       // New-run supersession: a session has at most one nonterminal run
@@ -322,11 +347,75 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         runId,
         scope,
         originalRequest: message,
+        requestId,
         signal,
       }, runnerDeps);
-      return v2OutcomeToTurn(outcome);
+      return settleV2Turn(deps, scope, requestId, outcome);
     },
   };
+}
+
+/**
+ * Best-effort assistant-reply settlement (mirrors v1's `persistAssistantReply`
+ * isolation): the turn's real work already happened, so a transient persistence
+ * failure must not convert a truthful reply into a 502.
+ */
+function settleAssistantReplyBestEffort(
+  deps: AppDeps,
+  claims: { sessionId: string; workspaceId: string; adminUserId: string },
+  requestId: string | undefined,
+  content: string,
+  replyKind: string,
+  orderedRefs: Array<
+    | { kind: "action_result"; id: string }
+    | { kind: "confirmation"; confirmationId: string }
+  >,
+): void {
+  try {
+    deps.store.settleAssistantTurnMessage({
+      sessionId: claims.sessionId,
+      workspaceId: claims.workspaceId,
+      adminUserId: claims.adminUserId,
+      requestId,
+      content,
+      payload: { kind: replyKind },
+      orderedRefs,
+    });
+  } catch {
+    // Driver errors can contain SQL values or serialized payloads.
+    console.error("assistant-turn settlement failed (turn already executed; reply preserved; error details suppressed)");
+  }
+}
+
+/**
+ * Settle a v2 outcome into the durable transcript (closure-plan PR 2, the
+ * transcript half of F01): persist the assistant reply exactly once with its
+ * ordered canonical result links, then return the HTTP turn shape. Failed
+ * outcomes pass through unchanged (fault settlement is PR 5's seam).
+ */
+function settleV2Turn(
+  deps: AppDeps,
+  claims: { sessionId: string; workspaceId: string; adminUserId: string },
+  requestId: string | undefined,
+  outcome: Awaited<ReturnType<typeof runAssistantV2>>,
+): ChatTurnOutcome {
+  const turn = v2OutcomeToTurn(outcome);
+  if (!turn.ok) return turn;
+  const orderedRefs: Array<
+    | { kind: "action_result"; id: string }
+    | { kind: "confirmation"; confirmationId: string }
+  > = outcome.presentationRefs
+    .filter((ref): ref is { kind: "action_result"; id: string } => ref.kind === "action_result")
+    .map((ref) => ({ kind: "action_result" as const, id: ref.id }));
+  if (outcome.kind === "suspended" && outcome.reason === "awaiting_confirmation") {
+    // `continuationId` is the confirmation id on a fresh suspension; a resumed
+    // short-circuit can carry an operation id instead, so link only a value
+    // that names a real confirmation.
+    const record = deps.store.getPendingConfirmation(outcome.continuationId);
+    if (record) orderedRefs.push({ kind: "confirmation", confirmationId: record.id });
+  }
+  settleAssistantReplyBestEffort(deps, claims, requestId, turn.replyText, turn.replyKind, orderedRefs);
+  return turn;
 }
 
 function v2OutcomeToTurn(outcome: Awaited<ReturnType<typeof runAssistantV2>>): ChatTurnOutcome {

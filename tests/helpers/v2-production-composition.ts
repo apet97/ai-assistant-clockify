@@ -85,6 +85,9 @@ export interface V2Composition {
   adminUserId: string;
   sessionId: string;
   cookie: string;
+  /** File-backed only: the SQLite path, for raw read-only SQL assertions on
+   * tables the Store facade deliberately exposes no reader for. */
+  databaseFile?: string;
   /** Advance the ONE shared store+app clock (ages rows exactly like wall time). */
   setClock: (value: Date) => void;
   /** Number of provider (model) completions requested so far. */
@@ -256,6 +259,7 @@ export async function composeV2ProductionApp(
     adminUserId,
     sessionId: primary.sessionId,
     cookie: primary.cookie,
+    ...(tempDir ? { databaseFile: databasePath } : {}),
     setClock: (value) => {
       clock = value;
     },

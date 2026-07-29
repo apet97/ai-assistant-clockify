@@ -126,6 +126,7 @@ export async function runAssistantV2(
         catalogHash: state.catalogHash,
         loadedToolNames: state.loadedToolNames,
         intentHash: input.runId,
+        ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),
       },
     });
     state = deps.runStore.getRun({ ...scope, runId: input.runId }) ?? state;

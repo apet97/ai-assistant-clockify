@@ -267,13 +267,23 @@ export function buildRunEventStore(ctx: StoreContext) {
       timestamp,
       timestamp,
     );
+    // Bind the claimed HTTP request to the freshly minted run when the caller
+    // carries one and that request's turn_runs row exists (the FK target).
+    // Otherwise keep the legacy self-referential link so direct invocations
+    // without a claimed turn stay valid.
+    const initialRequestId = input.requestId !== undefined &&
+      db.prepare(
+        "SELECT 1 FROM turn_runs WHERE session_id = ? AND request_id = ?",
+      ).get(scope.sessionId, input.requestId) !== undefined
+      ? input.requestId
+      : scope.runId;
     db.prepare(
       `INSERT INTO assistant_run_request_links (
          session_id, request_id, run_id, workspace_id, admin_user_id, kind, created_at
        ) VALUES (?, ?, ?, ?, ?, 'initial', ?)`,
     ).run(
       scope.sessionId,
-      scope.runId,
+      initialRequestId,
       scope.runId,
       scope.workspaceId,
       scope.adminUserId,

@@ -80,11 +80,7 @@ import {
   isTransientErrorMessage,
 } from "./history-sanitizer.js";
 import { chatBodySchema } from "./request-schemas.js";
-import {
-  TYPED_CONSENT,
-  BARE_AFFIRMATIVE,
-  lastTurnCompletedAWrite,
-} from "./consent-guard.js";
+import { deterministicGuardReply } from "./chat-guards.js";
 import {
   settleAgentTurn,
   truthfulReplyText,
@@ -1377,56 +1373,10 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     claims: { sessionId: string; workspaceId: string; adminUserId: string },
     message: string,
   ): ChatTurnOutcome | undefined {
-    // A whitespace-only message is no input at all (finding new-6: a blank turn
-    // sent the model guessing — it invoked clockify_review_day / clockify_status
-    // unsolicited and fabricated a context). Treat it as empty and ask what the
-    // admin wants, deterministically — never let it reach the planner.
-    if (message.trim().length === 0) {
-      return deterministicAnswer(claims, "I didn't catch a message there — what would you like me to do?");
-    }
-
-    // SAFETY (live item 157): bare typed consent must never reach the planner —
-    // live, "yes" made the model plan a NEW operation instead of pointing at the
-    // button. Deterministic reply; only a button nonce can execute a pending
-    // change, and without one no action is taken.
-    if (TYPED_CONSENT.test(message)) {
-      if (deps.store.countPendingConfirmations(claims.sessionId, now().toISOString()) > 0) {
-        return deterministicAnswer(
-          claims,
-          "No action was taken from this message. Use the button on the pending preview, or Cancel to discard it.",
-        );
-      }
-      const prior = deps.store.getRecentMessages(claims.sessionId, 2, true);
-      const lastAssistant = [...prior].reverse().find((msg) => msg.role === "assistant");
-      const lastResults = (lastAssistant?.payload as { results?: unknown[] } | undefined)?.results ?? [];
-      return deterministicAnswer(
-        claims,
-        lastTurnCompletedAWrite(lastResults)
-          ? "No new action was taken. The previous completed change is recorded above."
-          : "No action was taken. State the change you want in one fresh message.",
-      );
-    }
-
-    // SAFETY (finding new-2-affirmative-after-completed-safe): a bare affirmative
-    // ("great", "perfect") right after a safe write ALREADY completed — with
-    // nothing pending — must not re-plan another write. These acknowledgment-only
-    // phrases do not match the typed-consent guard above; here we detect the
-    // just-finished write from that turn's persisted
-    // receipts and answer deterministically that it's already done. The model
-    // never sees the affirmative, so it can't duplicate the action.
-    if (BARE_AFFIRMATIVE.test(message)) {
-      const prior = deps.store.getRecentMessages(claims.sessionId, 2, true);
-      const lastAssistant = [...prior].reverse().find((msg) => msg.role === "assistant");
-      const lastResults = (lastAssistant?.payload as { results?: unknown[] } | undefined)?.results ?? [];
-      if (lastTurnCompletedAWrite(lastResults)) {
-        return deterministicAnswer(
-          claims,
-          "No new action was taken. The previous completed change is recorded above.",
-        );
-      }
-    }
-
-    return undefined;
+    // The decision tree and copy live in the engine-neutral chat-guards module
+    // (closure-plan PR 2 / F20); v1 keeps its own persistence tail.
+    const reply = deterministicGuardReply(deps.store, claims, message, now().toISOString());
+    return reply === undefined ? undefined : deterministicAnswer(claims, reply);
   }
 
   /** Build the bounded, model-visible history for a turn (the HISTORY_WINDOW_MESSAGES filter+map). */
@@ -1815,12 +1765,14 @@ export function createChatPipeline(deps: AppDeps): ChatPipeline {
     const requireCurrentActionSpan = !priorClarificationContext && priorAuthoredContext !== undefined;
     const selectionContext = combineSelectionContext(priorAuthoredContext, message);
     // The user message is persisted BEFORE the deterministic guards so even a
-    // short-circuited turn keeps a faithful transcript record.
-    deps.store.addMessage({
+    // short-circuited turn keeps a faithful transcript record. When the route
+    // claimed a turn for this requestId, the settlement path also records the
+    // message's turn-ownership link (closure-plan PR 2 identity chain).
+    deps.store.beginClaimedTurnMessage({
       sessionId: claims.sessionId,
       workspaceId: claims.workspaceId,
       adminUserId: claims.adminUserId,
-      role: "user",
+      requestId,
       content: message,
     });
 

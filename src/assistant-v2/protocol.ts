@@ -224,6 +224,11 @@ export interface RunAssistantInput {
   runId: string;
   scope: RunScope;
   originalRequest?: string;
+  /** The claimed HTTP request id that initiated this run (closure-plan PR 2).
+   * A fresh run's `initial` request link binds it to the minted run id so the
+   * request → run → message identity chain is explicit; absent, the link
+   * stays self-referential (direct invocations without a claimed turn). */
+  requestId?: string;
   /** Admin-authored free text answering a clarification, surfaced to the model
    * only on the first model call of a resumed invocation (T14-E). */
   continuationMessage?: string;

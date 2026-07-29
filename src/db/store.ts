@@ -255,13 +255,44 @@ export interface Store {
    */
   listSessions(workspaceId: string, adminUserId: string, nowIso: string): SessionSummary[];
 
-  addMessage(input: NewMessageInput): void;
+  addMessage(input: NewMessageInput): string;
   /**
    * Loads the most recent `limit` messages, oldest-first. `payload` is omitted
    * unless `includePayload` is true — the model-visible window only needs
    * role + content, so the stored payload blob is not fetched/parsed by default.
    */
   getRecentMessages(sessionId: string, limit: number, includePayload?: boolean): ChatMessage[];
+  /**
+   * Turn settlement (closure-plan PR 2): persist the claimed request's USER
+   * message and, when the request id names a claimed `turn_runs` row, its
+   * `turn_message_links` ownership row — one transaction, exactly once.
+   */
+  beginClaimedTurnMessage(input: {
+    sessionId: string;
+    workspaceId: string;
+    adminUserId: string;
+    requestId?: string;
+    content: string;
+  }): { messageId: string };
+  /**
+   * Turn settlement (closure-plan PR 2): persist the ASSISTANT reply with its
+   * ordered canonical result/confirmation links and its turn ownership row in
+   * one transaction. `orderedRefs` carry ids only; action-result refs are
+   * hydrated from the canonical rows inside the transaction, and a
+   * confirmation ref stores the id alone (never a nonce or payload).
+   */
+  settleAssistantTurnMessage(input: {
+    sessionId: string;
+    workspaceId: string;
+    adminUserId: string;
+    requestId?: string;
+    content: string;
+    payload?: unknown;
+    orderedRefs?: Array<
+      | { kind: "action_result"; id: string }
+      | { kind: "confirmation"; confirmationId: string }
+    >;
+  }): { messageId: string };
 
   claimTurnRun(input: TurnRunClaimInput): TurnRunClaimResult;
   markTurnRunExecuting(sessionId: string, requestId: string): void;
@@ -809,12 +840,104 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   });
 
   // Built as TestStore (the concrete object implements the test-only methods),
+  // Turn-settlement ownership row: written only when the request id names a
+  // CLAIMED turn_runs row (route turns always do; direct pipeline invocations
+  // in tests may not carry a claimed request and then persist the message
+  // without an identity link).
+  const linkTurnMessage = (
+    input: { sessionId: string; workspaceId: string; adminUserId: string; requestId?: string },
+    role: "user" | "assistant",
+    messageId: string,
+  ): void => {
+    if (!input.requestId) return;
+    db.prepare(
+      `INSERT INTO turn_message_links (
+         session_id, request_id, role, message_id, workspace_id, admin_user_id, created_at
+       )
+       SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE EXISTS (SELECT 1 FROM turn_runs WHERE session_id = ? AND request_id = ?)`,
+    ).run(
+      input.sessionId,
+      input.requestId,
+      role,
+      messageId,
+      input.workspaceId,
+      input.adminUserId,
+      nowIso(),
+      input.sessionId,
+      input.requestId,
+    );
+  };
+
   // returned as the narrower Store so production callers never see them.
   const store: TestStore = {
     ...buildAdminPolicyStore(ctx),
     ...buildTelemetryStore(ctx),
     ...buildAuditMetricsStore(ctx),
     ...messageStore,
+    beginClaimedTurnMessage(input: {
+      sessionId: string;
+      workspaceId: string;
+      adminUserId: string;
+      requestId?: string;
+      content: string;
+    }): { messageId: string } {
+      return db.transaction(() => {
+        const messageId = messageStore.addMessage({
+          sessionId: input.sessionId,
+          workspaceId: input.workspaceId,
+          adminUserId: input.adminUserId,
+          role: "user",
+          content: input.content,
+        });
+        linkTurnMessage(input, "user", messageId);
+        return { messageId };
+      })();
+    },
+    settleAssistantTurnMessage(input: {
+      sessionId: string;
+      workspaceId: string;
+      adminUserId: string;
+      requestId?: string;
+      content: string;
+      payload?: unknown;
+      orderedRefs?: Array<
+        | { kind: "action_result"; id: string }
+        | { kind: "confirmation"; confirmationId: string }
+      >;
+    }): { messageId: string } {
+      return db.transaction(() => {
+        const resultLinks = (input.orderedRefs ?? []).map((ref): import("./store/context.js").DurableResultLink => {
+          if (ref.kind === "confirmation") {
+            return { kind: "confirmation", confirmationId: ref.confirmationId };
+          }
+          const row = db.prepare(
+            `SELECT id, kind, summary_json FROM action_results
+              WHERE id = ? AND session_id = ? AND workspace_id = ? AND admin_user_id = ?`,
+          ).get(ref.id, input.sessionId, input.workspaceId, input.adminUserId) as
+            | { id: string; kind: import("./action-results.js").ActionResultKind; summary_json: string }
+            | undefined;
+          // Strict at the store boundary: a settled turn may only link results
+          // that exist in this exact scope. Callers decide best-effort.
+          if (!row) throw new Error("assistant_turn_link_missing_result");
+          return {
+            kind: "action_result",
+            ref: { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) as unknown },
+          };
+        });
+        const messageId = messageStore.addMessage({
+          sessionId: input.sessionId,
+          workspaceId: input.workspaceId,
+          adminUserId: input.adminUserId,
+          role: "assistant",
+          content: input.content,
+          ...(input.payload === undefined ? {} : { payload: input.payload }),
+          resultLinks,
+        });
+        linkTurnMessage(input, "assistant", messageId);
+        return { messageId };
+      })();
+    },
     ...buildSessionStore(ctx),
     ...undoStore,
     ...buildInstallationStore(ctx),
@@ -900,13 +1023,23 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           input.scope.adminUserId,
           timestamp,
         );
-        messageStore.addMessage({
+        const continuationMessageId = messageStore.addMessage({
           sessionId: input.scope.sessionId,
           workspaceId: input.scope.workspaceId,
           adminUserId: input.scope.adminUserId,
           role: "user",
           content: input.messageContent,
         });
+        linkTurnMessage(
+          {
+            sessionId: input.scope.sessionId,
+            workspaceId: input.scope.workspaceId,
+            adminUserId: input.scope.adminUserId,
+            requestId: input.requestId,
+          },
+          "user",
+          continuationMessageId,
+        );
         db.prepare(
           `UPDATE assistant_runs SET phase = 'model', continuation_json = '{"kind":"none"}', updated_at = ?
             WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?

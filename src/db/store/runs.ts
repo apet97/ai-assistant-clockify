@@ -25,6 +25,10 @@ export interface StartAssistantRunInput {
   catalogHash: string;
   loadedToolNames: string[];
   intentHash: string;
+  /** The claimed HTTP request id that initiated this run. The `initial`
+   * request link binds it to the freshly minted run id; absent (direct
+   * invocations without a claimed turn) the link stays self-referential. */
+  requestId?: string;
 }
 
 interface AssistantRunRow {

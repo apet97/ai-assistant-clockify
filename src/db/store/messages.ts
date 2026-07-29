@@ -19,13 +19,14 @@ function envelopeWithoutResults(payload: unknown): unknown {
 
 /** Chat-messages concern: append a message + load the recent window. */
 export function buildMessageStore(ctx: StoreContext): {
-  addMessage(input: NewMessageInput): void;
+  /** Append one message (+ its ordered result links) and return its id. */
+  addMessage(input: NewMessageInput): string;
   getRecentMessages(sessionId: string, limit: number, includePayload?: boolean): ChatMessage[];
 } {
   const { db, nowIso } = ctx;
   return {
     addMessage(input) {
-      db.transaction(() => {
+      return db.transaction(() => {
         const id = randomUUID();
         db.prepare(
           `INSERT INTO chat_messages (id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at)
@@ -49,6 +50,7 @@ export function buildMessageStore(ctx: StoreContext): {
           const columns = durableLinkColumns(link);
           insert.run(id, index, link.kind, columns.actionResultId, columns.descriptorJson);
         }
+        return id;
       })();
     },
 

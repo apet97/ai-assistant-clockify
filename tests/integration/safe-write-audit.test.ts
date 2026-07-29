@@ -131,7 +131,7 @@ const throwingAssistantReplyPersist = (store: Store): Store => ({
     if (input.role === "assistant") {
       throw new Error("sensitive assistant SQL payload must not escape");
     }
-    store.addMessage(input);
+    return store.addMessage(input);
   },
 });
 
