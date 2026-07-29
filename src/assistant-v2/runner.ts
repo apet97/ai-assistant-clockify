@@ -180,6 +180,9 @@ export async function runAssistantV2(
       return runs.failRun(state, error instanceof Error ? error.message : "model_failed");
     }
     state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    // Wall-clock start of the post-model phases (the model call charged its
+    // own elapsed time in run-service).
+    const iterationStarted = deps.clock.monotonicMs();
 
     if (completion.toolCalls.length === 0) {
       // The model answered in prose. That text IS the deliverable for a read,
@@ -200,6 +203,8 @@ export async function runAssistantV2(
         new Set(state.loadedToolNames),
         state.catalogHash,
         scope.authClass,
+        // PR 7: provider tool-call ids are unique across the RUN.
+        new Set(state.completedResults.map((r) => r.toolCallId)),
       );
       if (duplicateWrite) {
         return runs.failRun(state, "duplicate_write");
@@ -242,6 +247,20 @@ export async function runAssistantV2(
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       return runs.failRun(state, "internal_error");
     }
+
+    // Closure-plan PR 7 (F17): discovery/read/preparation time counts toward
+    // the 300-second active-wall allowance, not just provider calls. The next
+    // loop-condition check (a pre-dispatch boundary) enforces it.
+    const iterationElapsed = deps.clock.monotonicMs() - iterationStarted;
+    state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    state = {
+      ...state,
+      budget: {
+        ...state.budget,
+        activeWallMsUsed: state.budget.activeWallMsUsed + Math.max(0, iterationElapsed),
+      },
+    };
+    deps.runStore.saveRun(state);
 
     observations.push(...iterationObservations);
     const denial = iterationObservations.find((o) => o.kind === "denied");

@@ -156,6 +156,18 @@ export function createRunService(deps: RunServiceDeps) {
     const preflight = preflightModelRequest(state.budget, requestBytes);
     if (!preflight.ok) throw new Error("token_budget_exhausted");
     let providerAttempts: 1 | 2 = 1;
+    // F10: a FAILED provider attempt charges its conservative reservation
+    // exactly once, durably — attempt 2's start records attempt 1's failure
+    // BEFORE its own model.started, and a both-fail call charges both.
+    let attempt1FailureCharged = false;
+    const chargeAttemptFailure = (once: boolean): void => {
+      if (once && attempt1FailureCharged) return;
+      attempt1FailureCharged = true;
+      const fresh = deps.runStore.getRun(scopedRun(state)) ?? state;
+      fresh.budget = chargeFailedModelAttempt(fresh.budget, preflight.inputReserve, preflight.maxOutputTokens);
+      deps.runStore.saveRun({ ...fresh, updatedAt: new Date().toISOString() });
+      state = fresh;
+    };
     deps.eventService.reserveModelCall({
       scope: scopedRun(state),
       state,
@@ -174,6 +186,7 @@ export function createRunService(deps: RunServiceDeps) {
         onProviderAttempt: (attempt) => {
           if (attempt === 2 && providerAttempts === 1) {
             providerAttempts = 2;
+            chargeAttemptFailure(true);
             deps.eventService.reserveModelCall({
               scope: scopedRun(state),
               state: deps.runStore.getRun(scopedRun(state)) ?? state,
@@ -189,11 +202,17 @@ export function createRunService(deps: RunServiceDeps) {
       });
       const responseBytes = utf8ByteLength(JSON.stringify(completion));
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      // F10: usage is accepted only when every value is a finite nonnegative
+      // safe integer; anything else falls back to the conservative estimate.
+      const usage = completion.usage;
+      const safeUsage = usage &&
+        Number.isSafeInteger(usage.promptTokens) && usage.promptTokens >= 0 &&
+        Number.isSafeInteger(usage.completionTokens) && usage.completionTokens >= 0
+        ? { promptTokens: usage.promptTokens, completionTokens: usage.completionTokens }
+        : undefined;
       state.budget = chargeSuccessfulModelAttempt(
         state.budget,
-        completion.usage
-          ? { promptTokens: completion.usage.promptTokens, completionTokens: completion.usage.completionTokens }
-          : undefined,
+        safeUsage,
         requestBytes,
         responseBytes,
       );
@@ -216,7 +235,12 @@ export function createRunService(deps: RunServiceDeps) {
     } catch (error) {
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       if (providerAttempts === 1) {
+        // Attempt 1 failed with no retry.
         state.budget = chargeFailedModelAttempt(state.budget, preflight.inputReserve, preflight.maxOutputTokens);
+      } else {
+        // Both attempts failed: attempt 1 was charged at attempt 2's start;
+        // charge attempt 2's failure too (F10 — previously NEITHER was).
+        chargeAttemptFailure(false);
       }
       throw error;
     } finally {

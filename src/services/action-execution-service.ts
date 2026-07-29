@@ -4,7 +4,7 @@ import {
   validateLoadedToolCall,
   type LoadedToolValidationFailure,
 } from "../assistant-v2/discovery/api-search-tool.js";
-import { V2_LIMITS, canReserveApiCall } from "../assistant-v2/budgets.js";
+import { V2_LIMITS } from "../assistant-v2/budgets.js";
 import { computeArgumentsHash } from "../assistant-v2/events.js";
 import type {
   ReadExecutionOutcome,
@@ -39,15 +39,34 @@ function denyCode(reason: LoadedToolValidationFailure | "duplicate_tool_call_id"
   return reason;
 }
 
+/** F11: order-insensitive canonical form — reordered keys collide, genuinely
+ * distinct arguments do not. */
+export function canonicalArgumentsKey(value: unknown): string {
+  const canonical = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(canonical);
+    if (v && typeof v === "object") {
+      return Object.fromEntries(
+        Object.keys(v as Record<string, unknown>).sort()
+          .map((key) => [key, canonical((v as Record<string, unknown>)[key])]),
+      );
+    }
+    return v;
+  };
+  return JSON.stringify(canonical(value));
+}
+
 export function validateCompletionToolCalls(
   toolCalls: ToolCall[],
   loadedNames: ReadonlySet<string>,
   registry: ActionRegistry,
   catalogHash: string,
   authClass: RunScope["authClass"],
+  /** PR 7: provider tool-call ids must be unique across the RUN, not merely
+   * one completion array. */
+  priorToolCallIds: ReadonlySet<string> = new Set(),
 ): { accepted: ToolCall[]; denied: DeniedToolCall[] } {
   const denied: DeniedToolCall[] = [];
-  const seenIds = new Set<string>();
+  const seenIds = new Set<string>(priorToolCallIds);
   const accepted: ToolCall[] = [];
   const hasDiscovery = toolCalls.some((call) => call.name === DISCOVERY_META_TOOL_NAME);
   const hasApi = toolCalls.some((call) => call.name !== DISCOVERY_META_TOOL_NAME);
@@ -183,6 +202,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
     loadedNames: ReadonlySet<string>,
     catalogHash: string,
     authClass: RunScope["authClass"],
+    priorToolCallIds: ReadonlySet<string> = new Set(),
   ): PartitionedToolCalls {
     const { accepted, denied } = validateCompletionToolCalls(
       toolCalls,
@@ -190,6 +210,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       deps.actionRegistry,
       catalogHash,
       authClass,
+      priorToolCallIds,
     );
     const readCalls: ToolCall[] = [];
     const writeCalls: ToolCall[] = [];
@@ -206,7 +227,8 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       }
       writeCalls.length = 0;
     }
-    const writeNames = writeCalls.map((c) => `${c.name}:${JSON.stringify(c.arguments)}`);
+    // F11: canonical, order-insensitive duplicate detection.
+    const writeNames = writeCalls.map((c) => `${c.name}:${canonicalArgumentsKey(c.arguments)}`);
     const duplicateWrite = new Set(writeNames).size !== writeNames.length;
     return { readCalls, writeCalls, discoveryCalls, denied, duplicateWrite };
   }
@@ -222,8 +244,12 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
   ): Promise<ReadBatchResult> {
     const readOutcomes: Array<{ call: ToolCall; outcome: ReadExecutionOutcome }> = [];
     const readCallsToRun: ToolCall[] = [];
-    for (const call of readCalls) {
-      if (!canReserveApiCall(state.budget)) {
+    // Closure-plan PR 7 (F17): admit the batch against the REMAINING logical
+    // allowance in provider order — the old per-call check read one stale
+    // `apiCallsUsed` for the whole batch and could overshoot the ceiling.
+    const remainingLogical = Math.max(0, V2_LIMITS.maxApiCalls - state.budget.apiCallsUsed);
+    for (const [index, call] of readCalls.entries()) {
+      if (index >= remainingLogical) {
         denied.push({ toolCallId: call.id, actionName: call.name, code: denyCode("budget_exhausted") });
         continue;
       }
@@ -332,11 +358,30 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
     writeCalls: ToolCall[],
     fallbackContinuationId: string,
   ): Promise<WriteBatchResult> {
-    for (const _call of writeCalls) {
-      if (!canReserveApiCall(state.budget)) break;
-    }
-    let preparation: WritePreparationOutcome;
     const observations: RunObservation[] = [];
+    // Closure-plan PR 7 (F17): WRITES are logical API calls too — the old
+    // loop here checked the budget and did nothing. Admit against the
+    // remaining allowance in provider order, deny the excess, and persist the
+    // count BEFORE preparation (which reloads the run row itself).
+    const remainingLogical = Math.max(0, V2_LIMITS.maxApiCalls - state.budget.apiCallsUsed);
+    const admitted = writeCalls.slice(0, remainingLogical);
+    for (const call of writeCalls.slice(remainingLogical)) {
+      deps.eventService.denyTool({
+        scope: scopedRun(state),
+        state,
+        payload: { toolCallId: call.id, actionName: call.name, code: denyCode("budget_exhausted") },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      observations.push({ kind: "denied", actionName: call.name, code: denyCode("budget_exhausted") });
+    }
+    if (admitted.length === 0) return { state, observations };
+    state = {
+      ...state,
+      budget: { ...state.budget, apiCallsUsed: state.budget.apiCallsUsed + admitted.length },
+    };
+    deps.runStore.saveRun(state);
+    writeCalls = admitted;
+    let preparation: WritePreparationOutcome;
     let thrownCause: string | undefined;
     try {
       // `scopedRun(state)` carries the run id. Forwarding the runner's bare

@@ -2,6 +2,7 @@ import type { ToolCall } from "../assistant/model-client.js";
 import { DISCOVERY_META_TOOL_NAME } from "../harness/api-operation.js";
 import {
   initialV2ToolSet,
+  parseFindApiOperationsInput,
   refineLoadedToolSet,
 } from "../assistant-v2/discovery/api-search-tool.js";
 import { canReserveDiscoveryCall } from "../assistant-v2/budgets.js";
@@ -79,19 +80,36 @@ export function createApiDiscoveryService(deps: ApiDiscoveryDeps) {
         });
         continue;
       }
+      // Closure-plan PR 7 (F18): the runtime — not the provider — is the
+      // trust boundary for the one always-loaded tool. Every discovery call
+      // goes through the canonical strict parser; invalid input produces a
+      // bounded denial and NO search, and the full parsed object (query,
+      // access, groups, limit) is forwarded and journaled exactly.
+      let parsed;
+      try {
+        parsed = parseFindApiOperationsInput(call.arguments);
+      } catch {
+        deps.eventService.denyTool({
+          scope: scopedRun(state),
+          state,
+          payload: { toolCallId: call.id, actionName: call.name, code: "invalid_args" },
+        });
+        state = deps.runStore.getRun(scopedRun(state)) ?? state;
+        observations.push({ kind: "denied", actionName: call.name, code: "invalid_args" });
+        continue;
+      }
       searchIndex += 1;
-      const parsed = call.arguments as { query?: string; access?: "read" | "write" | "any" };
       deps.eventService.reserveDiscoveryCall({
         scope: scopedRun(state),
         state,
         payload: {
           searchIndex,
           access: parsed.access ?? "any",
-          groups: [],
+          groups: [...(parsed.groups ?? [])],
         },
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
-      const searchResult = await deps.discovery.search({ query: String(parsed.query ?? "") }, scope);
+      const searchResult = await deps.discovery.search(parsed, scope);
       state.loadedToolNames = [
         ...refineLoadedToolSet(new Set(state.loadedToolNames), new Set(state.usedToolNames), searchResult),
       ];
