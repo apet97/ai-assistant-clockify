@@ -256,6 +256,7 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
             message: "That clarification could not be continued.",
           };
         }
+        const lastSequenceBefore = deps.store.getLastRunEventSequence(continuationScope);
         const runnerDeps = buildV2RunnerDependencies(deps, installation, continuationScope, signal);
         const outcome = await runAssistantV2({
           runId: continuationRunId,
@@ -263,7 +264,8 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           continuationMessage: message,
           signal,
         }, runnerDeps);
-        return settleV2Turn(deps, scope, newRequestId, outcome);
+        const turn = settleV2Turn(deps, scope, newRequestId, outcome);
+        return attachRunEventsPage(deps, scope, continuationRunId, lastSequenceBefore, turn);
       }
 
       // Persist the admin's message first (identity chain + faithful
@@ -350,9 +352,38 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         requestId,
         signal,
       }, runnerDeps);
-      return settleV2Turn(deps, scope, requestId, outcome);
+      const turn = settleV2Turn(deps, scope, requestId, outcome);
+      return attachRunEventsPage(deps, scope, runId, 0, turn);
     },
   };
+}
+
+/**
+ * Deliver the turn's hydrated run-event page ON THE ORIGINAL TURN (closure-plan
+ * PR 3 / F01's delivery half): canonical result cards and — when the run
+ * suspended on a preview — the pending confirmation with its freshly rotated
+ * one-use nonce. Best-effort: a hydration failure must never convert a settled
+ * turn into an error.
+ */
+function attachRunEventsPage(
+  deps: AppDeps,
+  scope: RunScope,
+  runId: string,
+  after: number,
+  turn: ChatTurnOutcome,
+): ChatTurnOutcome {
+  if (!turn.ok) return turn;
+  try {
+    const eventViews = createRunEventViewService(deps.store, {
+      sessionSecret: deps.config.sessionSecret,
+      now: deps.now,
+    });
+    const page = eventViews.list({ scope, runId, after, limit: 200 });
+    return { ...turn, runEvents: page };
+  } catch {
+    console.error("run-event delivery degraded (reply preserved; error details suppressed)");
+    return turn;
+  }
 }
 
 /**

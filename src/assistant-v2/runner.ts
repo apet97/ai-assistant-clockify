@@ -16,7 +16,7 @@ import {
   isTerminalPhase,
 } from "./state.js";
 import { discoveryToolsForLoadedSet } from "../harness/tools.js";
-import { formatObservations, type RunObservation } from "./observations.js";
+import { formatObservations, summarizeActionResultForModel, type RunObservation } from "./observations.js";
 import { createRunService, scopedRun } from "../services/run-service.js";
 import {
   createApiDiscoveryService,
@@ -150,8 +150,17 @@ export async function runAssistantV2(
       return runs.failRun(state, "cancelled");
     }
     modelCall += 1;
+    // F22: a resumed model request receives the BOUNDED CANONICAL RECEIPT of
+    // each already-completed tool, in provider order — never an opaque result
+    // id (which forced the model to repeat reads it could not see).
     const resumeSummaries = firstModelCallOfInvocation && resumingExistingRun && state.completedResults.length > 0
-      ? state.completedResults.map((r) => `${r.actionName} completed (result ${r.actionResultId}).`)
+      ? state.completedResults.map((r) => {
+          const stored = deps.runStore.getActionResult(r.actionResultId);
+          const summary = summarizeActionResultForModel(stored);
+          return summary !== undefined
+            ? `${r.actionName} returned: ${summary}`
+            : `${r.actionName} completed (result ${r.actionResultId}).`;
+        })
       : [];
     const adminFollowUp = firstModelCallOfInvocation ? input.continuationMessage : undefined;
     firstModelCallOfInvocation = false;

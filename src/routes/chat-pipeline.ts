@@ -154,7 +154,18 @@ function combineSelectionContext(previous: string | undefined, message: string):
 
 /** The outcome of one chat turn, shared by the JSON route and the streaming route. */
 export type ChatTurnOutcome =
-  | { ok: true; replyKind: string; replyText: string; results: unknown[]; resultLinks: DurableResultLink[] }
+  | {
+      ok: true;
+      replyKind: string;
+      replyText: string;
+      results: unknown[];
+      resultLinks: DurableResultLink[];
+      /** v2 only (closure-plan PR 3): the turn's hydrated run-event page —
+       * canonical cards and the freshly rotated pending-confirmation control —
+       * delivered on the ORIGINAL turn. v1 never sets it; the routes treat it
+       * as absent. */
+      runEvents?: import("../assistant-v2/events.js").RunEventPage;
+    }
   | { ok: false; code: string; message: string };
 
 /** What `chatPreconditions` returns when a request is cleared to run a turn. */

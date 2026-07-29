@@ -1,4 +1,5 @@
 import { Router, type Response } from "express";
+import type { RunEventFrame } from "../assistant-v2/events.js";
 import type { SessionClaims } from "../auth/sessions.js";
 import type { HistoryService } from "../services/history-service.js";
 import type { SessionContextService } from "../services/session-context-service.js";
@@ -177,7 +178,25 @@ export function chatRouter(options: {
         turn.ok ? turn.resultLinks : [],
       );
       if (!turn.ok) write({ type: "error", code: turn.code, message: turn.message });
-      else write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
+      else {
+        // v2 (closure-plan PR 3): stream the turn's hydrated run events —
+        // canonical cards and the freshly rotated pending confirmation —
+        // BEFORE the truthful reply, exactly the frame shape the
+        // clarification-resolve stream already uses. v1 turns carry no page.
+        if (turn.runEvents) {
+          for (const item of turn.runEvents.events) {
+            const frame: RunEventFrame = {
+              type: "run_event",
+              runId: turn.runEvents.runId,
+              sequence: item.sequence,
+              event: item.event,
+              ...(item.attachment ? { attachment: item.attachment } : {}),
+            };
+            write(frame);
+          }
+        }
+        write({ type: "reply", kind: turn.replyKind, text: turn.replyText });
+      }
     } catch {
       options.finishTurnRun(pre.claims.sessionId, pre.requestId, "outcome_unknown", {
         status: 500,

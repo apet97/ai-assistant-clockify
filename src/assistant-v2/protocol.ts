@@ -148,6 +148,10 @@ export interface RunStateStore {
   }): SequencedRunEvent;
   getRun(scope: RunScope & { runId: string }): import("./state.js").RunState | undefined;
   saveRun(state: import("./state.js").RunState): void;
+  /** Canonical stored result content, for resumed-run model feedback
+   * (closure-plan PR 3 / F22): a resumed model request receives the bounded
+   * receipt itself, never an opaque result id. */
+  getActionResult(actionResultId: string): unknown;
   getLastRunEventSequence(scope: RunScope & { runId: string }): number;
   findLatestEligibleRunForCache(
     sessionId: string,

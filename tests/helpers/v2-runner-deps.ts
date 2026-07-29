@@ -53,6 +53,7 @@ export function mockRunnerDeps(overrides: Partial<RunnerDependencies> = {}): Run
       startRunWithEvent: vi.fn(),
       getRun: vi.fn(),
       saveRun: vi.fn(),
+      getActionResult: vi.fn(() => undefined),
       getLastRunEventSequence: vi.fn(() => sequence),
       findLatestEligibleRunForCache: vi.fn(),
       recoverOrphanedActiveRuns: vi.fn(() => 0),
