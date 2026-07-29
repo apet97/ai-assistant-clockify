@@ -630,6 +630,10 @@ export function isPreparedSafeWrite(value: unknown): value is PreparedSafeWrite 
 export interface RiskyClarifyResult {
   clarify: string;
   options?: ClarifyOption[];
+  /** The exact raw-argument key this clarification is about, when the call
+   * site knows the single owning argument — it lets a durable clarification's
+   * chips resolve by exact option (the chosen grounded id lands in this key). */
+  field?: string;
 }
 
 /**
@@ -638,10 +642,11 @@ export interface RiskyClarifyResult {
  * renames `clarify` → `message` so the spelling lives once.
  *
  * `field` is optional and names the exact raw-argument key this clarification is
- * about — pass it only where the call site knows the single owning argument.
+ * about — the explicit parameter wins over one carried on the result itself.
  */
 export function clarifyResult(c: RiskyClarifyResult, field?: string): ActionResult {
-  return { kind: "clarify", message: c.clarify, options: c.options, ...(field ? { field } : {}) };
+  const owningField = field ?? c.field;
+  return { kind: "clarify", message: c.clarify, options: c.options, ...(owningField ? { field: owningField } : {}) };
 }
 
 /**
@@ -711,7 +716,9 @@ export function defineRiskyAction<S extends z.ZodTypeAny>(def: ApiActionMetadata
       const operationId = randomUUID();
       const r = await def.preview(ctx, args, operationId);
       if ("clarify" in r) {
-        return { kind: "clarify", message: r.clarify, options: r.options };
+        // The ONE rename lives in clarifyResult — including the optional
+        // owning-argument `field` a resolver-aware preview attaches.
+        return clarifyResult(r);
       }
       const planError = def.mutationWorkflow === "durable"
         ? mutationPlanContractError(def.mutationContract, r.mutationPlan)

@@ -140,7 +140,7 @@ function harness(): {
 }
 
 describe("clarification service (T14-D exact option resolution)", () => {
-  it("resolves an exact optionId into a prepared write and resumes the same run", async () => {
+  it("resolves an exact optionId into a prepared write and suspends for CONFIRMATION — no resume, no synthetic success (F19)", async () => {
     const { store, deps, resumeSpy } = harness();
     const { scope, clarification } = seedRunAndClarification(store);
     const service = createClarificationService(deps);
@@ -153,21 +153,34 @@ describe("clarification service (T14-D exact option resolution)", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(resumeSpy).toHaveBeenCalledTimes(1);
+    if (!result.ok) throw new Error("expected ok");
+    // A resolved WRITE never calls the model again: only the button moves it.
+    expect(resumeSpy).not.toHaveBeenCalled();
+    expect(result.outcome.kind).toBe("suspended");
+    if (result.outcome.kind !== "suspended") throw new Error("expected suspension");
+    expect(result.outcome.reason).toBe("awaiting_confirmation");
 
     const resolved = store.getPendingClarification(clarification.id, scope);
     expect(resolved?.status).toBe("resolved");
     expect(resolved?.selectedOptionId).toBe("opt-urgent");
     expect(resolved?.terminalReason).toBe("selected_option");
     expect(resolved?.actionResultId).toBeTruthy();
+    // The row binds the EXACT prepared operation.
+    expect(resolved?.operationId).toBeTruthy();
     // Terminal rows scrub executable JSON immediately.
     expect(resolved?.partialArguments).toEqual({});
     expect(resolved?.candidates).toEqual([]);
 
+    // The run moved DIRECTLY to awaiting_confirmation with the prepared
+    // operation bound — never back to the model loop, and no fabricated
+    // completed-write entry.
     const run = store.getRun(scope);
-    expect(run?.phase).not.toBe("awaiting_clarification");
-    expect(run?.continuation).toEqual({ kind: "none" });
-    expect(run?.completedResults.some((r) => r.actionName === "clockify_tags_create")).toBe(true);
+    expect(run?.phase).toBe("awaiting_confirmation");
+    expect(run?.continuation.kind).toBe("awaiting_operations");
+    if (run?.continuation.kind === "awaiting_operations") {
+      expect(run.continuation.operationIds).toEqual([resolved!.operationId]);
+    }
+    expect(run?.completedResults.some((r) => r.actionName === "clockify_tags_create")).toBe(false);
   });
 
   it("rejects a foreign clarification id (different session)", async () => {
@@ -260,7 +273,7 @@ describe("clarification service (T14-D exact option resolution)", () => {
     expect(result.code).toBe("clarification_expired");
   });
 
-  it("does not reopen the clarification when the resumed run fails after durable resolution", async () => {
+  it("a resolved WRITE never invokes the model even when the runner would fail (F19: no resume path exists)", async () => {
     const { store, deps } = harness();
     const { scope, clarification } = seedRunAndClarification(store);
     const failingResume = vi.fn(async () => {
@@ -268,15 +281,18 @@ describe("clarification service (T14-D exact option resolution)", () => {
     });
     const service = createClarificationService({ ...deps, runner: { resume: failingResume } });
 
-    await expect(service.resolveOption({
+    // The write resolution completes WITHOUT touching the (broken) runner:
+    // there is no post-resolution model call to fail.
+    const result = await service.resolveOption({
       clarificationId: clarification.id, scope, runId: scope.runId, optionId: "opt-urgent",
-    })).rejects.toThrow("provider_unavailable");
+    });
+    expect(result.ok).toBe(true);
+    expect(failingResume).not.toHaveBeenCalled();
 
-    // The clarification and its result link are already durably committed
-    // before the resume call — a later provider failure must not reopen it.
     const resolved = store.getPendingClarification(clarification.id, scope);
     expect(resolved?.status).toBe("resolved");
     expect(resolved?.selectedOptionId).toBe("opt-urgent");
+    expect(store.getRun(scope)?.phase).toBe("awaiting_confirmation");
   });
 
   it("resets to pending when the prepared write's live target lookup fails (stale candidate)", async () => {

@@ -76,10 +76,10 @@ function persistResult(
  * id — see `suggestOptions`/`manyMatchClarify` in `workflows/resolve.ts`), which
  * is exactly what the resolve side injects.
  */
-function createClarificationRow(
-  deps: ReadExecutionDeps,
+export function createClarificationRow(
+  deps: Pick<ReadExecutionDeps, "store">,
   scope: RunScope & { runId: string },
-  call: ToolCall,
+  call: { name: string; arguments: Record<string, unknown> },
   result: Extract<ActionResult, { kind: "clarify" }>,
 ): string | undefined {
   const clarificationScope: ClarificationScope = {

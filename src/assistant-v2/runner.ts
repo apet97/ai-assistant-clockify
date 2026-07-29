@@ -216,6 +216,9 @@ export async function runAssistantV2(
       if (writeBatch.suspended) {
         return runs.suspendOutcome(state, "awaiting_confirmation", writeBatch.suspended.confirmationId);
       }
+      if (writeBatch.clarification) {
+        return runs.suspendOutcome(state, "awaiting_clarification", writeBatch.clarification.clarificationId);
+      }
     }
 
     const denials = actions.recordDenials(state, denied);

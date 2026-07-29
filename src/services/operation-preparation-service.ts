@@ -30,6 +30,19 @@ import {
 import type { WorkspaceClient } from "../clockify/client.js";
 import { errorReceipt } from "../harness/receipts.js";
 import { buildV2ActionContext } from "../assistant-v2/action-context.js";
+import { createClarificationRow } from "../assistant-v2/read-execution.js";
+
+/** Carries a durable write clarification out of the batch builder (F19): the
+ * question and its chips already exist; `prepare()` maps this to the
+ * `clarification` outcome instead of a generic denial. */
+class WriteClarificationPending extends Error {
+  constructor(
+    readonly clarificationId: string,
+    readonly actionResultId: string,
+  ) {
+    super("write_clarification_pending");
+  }
+}
 
 export interface OperationPreparationDeps {
   store: Store;
@@ -203,6 +216,10 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
     });
 
     if (result.kind === "clarify") {
+      // Closure-plan PR 4 (F19): an ambiguous WRITE produces a real durable
+      // clarification through the same producer reads use — grounded chips,
+      // not a generic denial. The canonical clarify result owns the question
+      // prose; the pending row carries the candidates.
       const ref = deps.store.recordActionResult({
         workspaceId: scope.workspaceId,
         adminUserId: scope.adminUserId,
@@ -211,7 +228,17 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
         status: "definitive_failed",
         result,
       });
-      return { ok: false, code: "clarification_required", actionResultId: ref.id };
+      const clarificationId = createClarificationRow(
+        { store: deps.store },
+        scope,
+        { name: call.actionName, arguments: call.rawArguments },
+        result,
+      );
+      if (clarificationId !== undefined) {
+        throw new WriteClarificationPending(clarificationId, ref.id);
+      }
+      // The run already owns an open question — report this write truthfully.
+      return { ok: false, code: "clarification_already_active", actionResultId: ref.id };
     }
     if (result.kind !== "preview") {
       const ref = deps.store.recordActionResult({
@@ -415,8 +442,14 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
           ...(batch.batchId ? { batchId: batch.batchId } : {}),
         };
       } catch (error) {
-        const code = error instanceof Error ? error.message : "preparation_failed";
-        const ref = deps.store.recordActionResult({
+        if (error instanceof WriteClarificationPending) {
+          return {
+            kind: "clarification",
+            clarificationId: error.clarificationId,
+            actionResultId: error.actionResultId,
+          };
+        }
+        const code = error instanceof Error ? error.message : "preparation_failed";        const ref = deps.store.recordActionResult({
           workspaceId: scope.workspaceId,
           adminUserId: scope.adminUserId,
           sessionId: scope.sessionId,

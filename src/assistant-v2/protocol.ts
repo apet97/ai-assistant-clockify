@@ -78,6 +78,9 @@ export type WritePreparationOutcome =
       confirmationIds: string[];
       batchId?: string;
     }
+  /** F19: an ambiguous write produced a DURABLE clarification (grounded
+   * chips), not a generic denial. The run suspends awaiting the answer. */
+  | { kind: "clarification"; clarificationId: string; actionResultId: string }
   | { kind: "denied"; code: string; actionResultId: string }
   | { kind: "not_ready"; code: "write_port_not_ready"; actionResultId: string };
 

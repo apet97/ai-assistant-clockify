@@ -267,7 +267,10 @@ const deleteTag = defineRiskyAction({
       includeArchived: true,
       verifyId: true,
     });
-    if (!resolved.ok) return resolved.clarify;
+    // `field: "id"` names the owning argument (same convention as the tag GET
+    // handler) so a durable clarification's chips can resolve by exact option:
+    // the chosen grounded 24-hex id lands in `id` and resolution is exact.
+    if (!resolved.ok) return { ...resolved.clarify, field: "id" };
     const { id } = resolved;
     const name = resolved.name ?? args.name;
     const current = await ctx.clockify.getTag(id);

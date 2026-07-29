@@ -3,7 +3,6 @@ import type { ReadExecutionOutcome, RunOutcome, RunScope, WritePreparationOutcom
 import type { ActionRegistry } from "../harness/api-catalog.js";
 import type { Store } from "../db/store.js";
 import { PendingClarificationStoreError, type ClarificationScope } from "../db/store/pending-clarifications.js";
-import { successReceipt } from "../harness/receipts.js";
 
 export interface ClarificationServiceDeps {
   store: Store;
@@ -126,30 +125,73 @@ export function createClarificationService(deps: ClarificationServiceDeps): {
         const outcome = await deps.preparations.prepare([call], runScope);
         if (outcome.kind !== "prepared") {
           safeResetToPending(deps.store, input.clarificationId, claimScope);
-          const code = "code" in outcome ? outcome.code : "write_port_not_ready";
+          const code = outcome.kind === "clarification" ? "clarification_still_ambiguous"
+            : "code" in outcome ? outcome.code : "write_port_not_ready";
           return { ok: false, status: 409, code, message: "The selected option could not be prepared." };
         }
+        // Closure-plan PR 4 (F19): the preparation transaction ATOMICALLY
+        // suspended this run into `awaiting_confirmation` with its prepared
+        // operation (F23). Bind the clarification terminally to that exact
+        // operation — its own clarify result stays the linked record — and
+        // return the preview. NO synthetic "write succeeded" marker and NO
+        // model resume: only the button can move a write forward.
         operationId = outcome.operationIds[0];
-        const confirmationId = outcome.confirmationIds[0];
-        // A prepared write has no linked action_result yet (only the eventual
-        // confirm settles one) — record a bounded marker now so the clarification
-        // row's required action_result_id links to something durable and
-        // canonical `action_results` stays the sole result-of-record owner.
-        const ref = deps.store.recordActionResult({
-          workspaceId: runScope.workspaceId,
-          adminUserId: runScope.adminUserId,
-          sessionId: runScope.sessionId,
-          actionName: clarification.originalToolName,
-          status: "succeeded",
-          result: {
-            kind: "receipt",
-            receipt: successReceipt({
-              action: clarification.originalToolName,
-              data: { status: "prepared", operationId, confirmationId },
-            }),
+        // The resolved row binds the QUESTION's canonical result: producers
+        // journal it in the `clarification.required` event payload. A row
+        // seeded without that event gets a truthful resolution marker instead
+        // (never a synthetic success).
+        const journaled = deps.store.listRunEvents({
+          scope: {
+            sessionId: runScope.sessionId,
+            runId: runScope.runId,
+            workspaceId: runScope.workspaceId,
+            adminUserId: runScope.adminUserId,
+            installationGeneration: runScope.installationGeneration,
+            authClass: runScope.authClass,
           },
+          after: 0,
+          limit: 500,
+        }).events.find((entry) =>
+          entry.event.eventType === "clarification.required" &&
+          entry.event.payload.clarificationId === input.clarificationId);
+        const boundResultId = journaled?.event.eventType === "clarification.required"
+          ? journaled.event.payload.actionResultId
+          : deps.store.recordActionResult({
+              workspaceId: runScope.workspaceId,
+              adminUserId: runScope.adminUserId,
+              sessionId: runScope.sessionId,
+              actionName: clarification.originalToolName,
+              status: "definitive_failed",
+              result: {
+                kind: "clarify",
+                message: "The clarification resolved into a pending write awaiting confirmation.",
+              },
+            }).id;
+        deps.store.resolveClarificationWithOption({
+          id: input.clarificationId,
+          scope: claimScope,
+          selectedOptionId: input.optionId,
+          actionResultId: boundResultId,
+          ...(operationId ? { operationId } : {}),
         });
-        actionResultId = ref.id;
+        return {
+          ok: true,
+          outcome: {
+            kind: "suspended",
+            runId: input.runId,
+            lastSequence: deps.store.getLastRunEventSequence({
+              sessionId: runScope.sessionId,
+              runId: runScope.runId,
+              workspaceId: runScope.workspaceId,
+              adminUserId: runScope.adminUserId,
+              installationGeneration: runScope.installationGeneration,
+              authClass: runScope.authClass,
+            }),
+            reason: "awaiting_confirmation",
+            continuationId: outcome.confirmationIds[0] ?? operationId ?? input.runId,
+            presentationRefs: [],
+          },
+        };
       }
 
       const state = deps.store.getRun({

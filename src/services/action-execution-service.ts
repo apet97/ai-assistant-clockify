@@ -130,6 +130,9 @@ export type WriteBatchResult = {
   state: RunState;
   /** Set when a write batch was prepared: the run suspends awaiting the button. */
   suspended?: { operationIds: string[]; batchId?: string; confirmationId: string };
+  /** F19: set when an ambiguous write produced a durable clarification — the
+   * run suspends awaiting the answer, exactly like an ambiguous read. */
+  clarification?: { clarificationId: string };
   /** What this batch learned, for the next model request. */
   observations: RunObservation[];
 };
@@ -325,6 +328,28 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
           batchId: preparation.batchId,
           confirmationId: preparation.confirmationIds[0] ?? fallbackContinuationId,
         },
+        observations,
+      };
+    }
+    if (preparation.kind === "clarification") {
+      // F19: suspend on the write's durable question — the question event and
+      // the run suspension commit atomically (F23), same as an ambiguous read.
+      state.continuation = {
+        kind: "awaiting_clarification",
+        clarificationId: preparation.clarificationId,
+      };
+      deps.eventService.requireClarificationAndSuspend({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          clarificationId: preparation.clarificationId,
+          actionResultId: preparation.actionResultId,
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      return {
+        state,
+        clarification: { clarificationId: preparation.clarificationId },
         observations,
       };
     }
