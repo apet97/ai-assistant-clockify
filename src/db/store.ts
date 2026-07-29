@@ -71,7 +71,6 @@ import { buildOperationRunStore } from "./store/operation-runs.js";
 import {
   buildAssistantWritePreparationStore,
   type PreparedAssistantWriteInput,
-  type PreparedAssistantWriteResult,
 } from "./store/assistant-write-preparation.js";
 import { buildArtifactStore } from "./store/artifacts.js";
 import {
@@ -383,6 +382,16 @@ export interface Store {
     state: import("../assistant-v2/state.js").RunState,
     payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.suspended"],
   ): import("../assistant-v2/events.js").SequencedRunEvent;
+  /** ONE transaction (F23): `clarification.required` + `run.suspended` +
+   * the `awaiting_clarification` phase/continuation commit together. */
+  requireClarificationAndSuspendWithEvents(
+    scope: import("./store/runs.js").AssistantRunScope,
+    state: import("../assistant-v2/state.js").RunState,
+    payload: import("../assistant-v2/events.js").RunEventPayloadMap["clarification.required"],
+  ): {
+    required: import("../assistant-v2/events.js").SequencedRunEvent;
+    suspended: import("../assistant-v2/events.js").SequencedRunEvent;
+  };
   completeRunWithEvent(
     scope: import("./store/runs.js").AssistantRunScope,
     state: import("../assistant-v2/state.js").RunState,
@@ -488,11 +497,6 @@ export interface Store {
     event: import("../assistant-v2/events.js").SequencedRunEvent;
   };
   prepareOperationRun(input: PrepareOperationRunInput): string;
-  prepareAssistantWriteWithEvent(input: {
-    scope: import("./store/runs.js").AssistantRunScope;
-    state: import("../assistant-v2/state.js").RunState;
-    write: PreparedAssistantWriteInput;
-  }): PreparedAssistantWriteResult;
   prepareAssistantWriteBatchWithEvents(input: {
     scope: import("./store/runs.js").AssistantRunScope;
     state: import("../assistant-v2/state.js").RunState;

@@ -266,28 +266,20 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       }
     }
     if (firstClarification) {
-      // Order matters: the continuation must be set BEFORE any event commits,
-      // because `commitStateEvent` persists `state.continuation` — journaling
-      // first and then reloading would write back `{kind:"none"}` and lose the
-      // clarification id the resolve route restores from. The per-tool events
-      // above committed with the continuation still `none`, which is correct:
-      // the run is only awaiting clarification once the whole batch is journaled.
+      // Order matters: the continuation must be set BEFORE the commit, because
+      // the atomic suspension persists `state.continuation`. The per-tool
+      // events above committed with the continuation still `none`, which is
+      // correct: the run is only awaiting clarification once the whole batch
+      // is journaled. The question and the suspension then commit in ONE
+      // store transaction (F23) — a crash cannot journal one without the other.
       state.continuation = {
         kind: "awaiting_clarification",
         clarificationId: firstClarification.clarificationId,
       };
-      deps.eventService.requireClarification({
+      deps.eventService.requireClarificationAndSuspend({
         scope: scopedRun(state),
         state,
         payload: firstClarification,
-      });
-      // The reload returns the persisted state, which already carries the
-      // continuation set before the event; no re-assignment is needed.
-      state = deps.runStore.getRun(scopedRun(state)) ?? state;
-      deps.eventService.suspendRun({
-        scope: scopedRun(state),
-        state,
-        payload: { reason: "awaiting_clarification" },
       });
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       return { state, clarification: { clarificationId: firstClarification.clarificationId }, observations };
@@ -322,13 +314,9 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       preparation = { kind: "not_ready", code: "write_port_not_ready", actionResultId: "prep-failed" };
     }
     if (preparation.kind === "prepared") {
-      state.continuation = { kind: "awaiting_operations", operationIds: preparation.operationIds, batchId: preparation.batchId };
-      state.pendingOperationIds = preparation.operationIds;
-      deps.eventService.suspendRun({
-        scope: scopedRun(state),
-        state,
-        payload: { reason: "awaiting_confirmation" },
-      });
+      // The preparation transaction already committed phase, continuation, and
+      // `run.suspended` atomically with the operation/confirmation rows (F23).
+      // Reload the durably suspended state instead of re-suspending here.
       state = deps.runStore.getRun(scopedRun(state)) ?? state;
       return {
         state,

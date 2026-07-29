@@ -351,13 +351,15 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
         };
       }
 
+      // The store transaction owns the run row now (budget, continuation,
+      // phase, run.suspended) — a post-transaction saveRun would only re-write
+      // what already committed atomically (F23).
       const persisted = deps.store.prepareAssistantWriteBatchWithEvents({
         scope: toAssistantScope(scope),
         state,
         writes,
         ...(batchMeta ? { batch: batchMeta } : {}),
       });
-      deps.store.saveRun(persisted.state);
 
       const batchId = persisted.batchId;
       if (batchId) {

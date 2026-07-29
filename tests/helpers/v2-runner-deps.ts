@@ -35,6 +35,10 @@ export function mockRunnerDeps(overrides: Partial<RunnerDependencies> = {}): Run
     startTool: vi.fn((input) => eventStore.startToolWithEvent({}, input.state, input.payload)),
     completeTool: vi.fn((input) => eventStore.completeToolWithEvent({}, input.state, input.payload)),
     requireClarification: vi.fn((input) => eventStore.requireClarificationWithEvent({}, input.state, input.payload)),
+    requireClarificationAndSuspend: vi.fn((input) => ({
+      required: eventStore.requireClarificationWithEvent({}, input.state, input.payload),
+      suspended: eventStore.suspendRunWithEvent({}, input.state, { reason: "awaiting_clarification" }),
+    })),
     suspendRun: vi.fn((input) => eventStore.suspendRunWithEvent({}, input.state, input.payload)),
     completeRun: vi.fn((input) => eventStore.completeRunWithEvent({}, input.state, input.payload)),
     failRun: vi.fn((input) => eventStore.failRunWithEvent({}, input.state, input.payload)),

@@ -1,6 +1,6 @@
-import type { RunEventPayloadMap, SequencedRunEvent } from "../../assistant-v2/events.js";
+import type { RunEventPayloadMap, RunEventType, SequencedRunEvent } from "../../assistant-v2/events.js";
 import { encodeRunEventPayload, parseRunEventPayload } from "../../assistant-v2/events.js";
-import type { RunBudget, RunState } from "../../assistant-v2/state.js";
+import type { RunBudget, RunContinuation, RunState } from "../../assistant-v2/state.js";
 import { canReserveHostCalls, reserveHostCalls } from "../../assistant-v2/budgets.js";
 import type { PendingConfirmationRecord } from "../../harness/confirmations.js";
 import { computeOrderedTupleHash } from "./confirmation-batches.js";
@@ -39,10 +39,11 @@ function updateBudget(db: StoreContext["db"], scope: AssistantRunScope, budget: 
   );
 }
 
-function insertPreparedEvent(
+function insertRunEvent<K extends RunEventType>(
   db: StoreContext["db"],
   scope: AssistantRunScope,
-  payload: RunEventPayloadMap["operation.prepared"],
+  eventType: K,
+  payload: RunEventPayloadMap[K],
   timestamp: string,
 ): SequencedRunEvent {
   const nextRow = db.prepare(
@@ -50,18 +51,19 @@ function insertPreparedEvent(
        FROM run_events WHERE session_id = ? AND run_id = ?`,
   ).get(scope.sessionId, scope.runId) as { next: number };
   const sequence = nextRow.next;
-  const payloadJson = encodeRunEventPayload("operation.prepared", payload);
+  const payloadJson = encodeRunEventPayload(eventType, payload);
   db.prepare(
     `INSERT INTO run_events (
        session_id, run_id, sequence, workspace_id, admin_user_id,
        event_type, payload_json, created_at
-     ) VALUES (?, ?, ?, ?, ?, 'operation.prepared', ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     scope.sessionId,
     scope.runId,
     sequence,
     scope.workspaceId,
     scope.adminUserId,
+    eventType,
     payloadJson,
     timestamp,
   );
@@ -69,11 +71,46 @@ function insertPreparedEvent(
     runId: scope.runId,
     sequence,
     event: {
-      eventType: "operation.prepared",
-      payload: parseRunEventPayload("operation.prepared", payload),
+      eventType,
+      payload: parseRunEventPayload(eventType, payload),
       createdAt: timestamp,
-    },
+    } as SequencedRunEvent["event"],
   };
+}
+
+function insertPreparedEvent(
+  db: StoreContext["db"],
+  scope: AssistantRunScope,
+  payload: RunEventPayloadMap["operation.prepared"],
+  timestamp: string,
+): SequencedRunEvent {
+  return insertRunEvent(db, scope, "operation.prepared", payload, timestamp);
+}
+
+/** The suspension half of the one atomic preparation transaction (F23): the
+ * run's phase + continuation and its `run.suspended` event commit with the
+ * operation/confirmation rows or not at all. */
+function suspendRunForConfirmation(
+  db: StoreContext["db"],
+  scope: AssistantRunScope,
+  continuation: RunContinuation,
+  timestamp: string,
+): SequencedRunEvent {
+  db.prepare(
+    `UPDATE assistant_runs SET phase = 'awaiting_confirmation', continuation_json = ?, updated_at = ?
+      WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+        AND installation_generation = ? AND auth_class = ?`,
+  ).run(
+    JSON.stringify(continuation),
+    timestamp,
+    scope.sessionId,
+    scope.runId,
+    scope.workspaceId,
+    scope.adminUserId,
+    scope.installationGeneration,
+    scope.authClass,
+  );
+  return insertRunEvent(db, scope, "run.suspended", { reason: "awaiting_confirmation" }, timestamp);
 }
 
 function applyPreparedWrite(
@@ -117,11 +154,11 @@ export function buildAssistantWritePreparationStore(
     >;
   },
 ): {
-  prepareAssistantWriteWithEvent(input: {
-    scope: AssistantRunScope;
-    state: RunState;
-    write: PreparedAssistantWriteInput;
-  }): PreparedAssistantWriteResult;
+  /** ONE transaction (F23): operations, confirmations/batch, host
+   * reservations, `operation.prepared` events, the run continuation,
+   * `awaiting_confirmation`, and `run.suspended` commit together — a crash
+   * can never leave a live confirmable control whose run does not know it
+   * exists. */
   prepareAssistantWriteBatchWithEvents(input: {
     scope: AssistantRunScope;
     state: RunState;
@@ -137,11 +174,6 @@ export function buildAssistantWritePreparationStore(
   const { db, nowIso } = ctx;
 
   return {
-    prepareAssistantWriteWithEvent(input) {
-      return db.transaction(() =>
-        applyPreparedWrite(db, input.scope, input.state, input.write, nowIso(), deps),
-      )();
-    },
     prepareAssistantWriteBatchWithEvents(input) {
       return db.transaction(() => {
         let state = input.state;
@@ -176,6 +208,14 @@ export function buildAssistantWritePreparationStore(
             if (write.operationRun.discriminator) write.operationRun.discriminator.batchId = batch.id;
           }
         }
+
+        const continuation: RunContinuation = {
+          kind: "awaiting_operations",
+          operationIds: items.map((item) => item.operationId),
+          ...(batchId ? { batchId } : {}),
+        };
+        events.push(suspendRunForConfirmation(db, input.scope, continuation, timestamp));
+        state = { ...state, phase: "awaiting_confirmation", continuation };
 
         return { state, events, items, ...(batchId ? { batchId } : {}) };
       })();

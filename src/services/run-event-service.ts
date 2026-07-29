@@ -42,6 +42,7 @@ type RunEventServiceStore = Pick<Store,
   | "startToolWithEvent"
   | "completeToolWithEvent"
   | "requireClarificationWithEvent"
+  | "requireClarificationAndSuspendWithEvents"
   | "suspendRunWithEvent"
   | "completeRunWithEvent"
   | "failRunWithEvent"
@@ -91,6 +92,18 @@ export function createRunEventService(store: RunEventServiceStore) {
     requireClarification(input: RunEventCommand<"clarification.required">): SequencedRunEvent {
       parseRunEventPayload("clarification.required", input.payload);
       return store.requireClarificationWithEvent(toAssistantScope(input.scope), input.state, input.payload);
+    },
+    /** F23: the question and the suspension are one atomic commit. */
+    requireClarificationAndSuspend(
+      input: RunEventCommand<"clarification.required">,
+    ): { required: SequencedRunEvent; suspended: SequencedRunEvent } {
+      parseRunEventPayload("clarification.required", input.payload);
+      parseRunEventPayload("run.suspended", { reason: "awaiting_clarification" });
+      return store.requireClarificationAndSuspendWithEvents(
+        toAssistantScope(input.scope),
+        input.state,
+        input.payload,
+      );
     },
     suspendRun(input: RunEventCommand<"run.suspended">): SequencedRunEvent {
       parseRunEventPayload("run.suspended", input.payload);

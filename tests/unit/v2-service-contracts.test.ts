@@ -144,6 +144,9 @@ describe("RunEventService is closed to named transitions (T16-B)", () => {
     "startTool",
     "completeTool",
     "requireClarification",
+    // F23: the atomic question+suspension composite — still a NAMED
+    // transition, not a generic append.
+    "requireClarificationAndSuspend",
     "suspendRun",
     "completeRun",
     "failRun",

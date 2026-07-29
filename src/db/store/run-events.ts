@@ -479,6 +479,39 @@ export function buildRunEventStore(ctx: StoreContext) {
         phase,
       });
     },
+    /** ONE transaction (F23): the `clarification.required` event, the
+     * `run.suspended` event, and the `awaiting_clarification`
+     * phase/continuation commit together or not at all — a crash can no
+     * longer journal the question without suspending the run on it. The
+     * caller sets `state.continuation` to the owning clarification first. */
+    requireClarificationAndSuspendWithEvents(
+      scope: AssistantRunScope,
+      state: RunState,
+      payload: RunEventPayloadMap["clarification.required"],
+    ): { required: SequencedRunEvent; suspended: SequencedRunEvent } {
+      return db.transaction(() => {
+        const timestamp = nowIso();
+        updateRunState(db, scope, {
+          phase: "awaiting_clarification",
+          catalogHash: state.catalogHash,
+          loadedToolNames: state.loadedToolNames,
+          usedToolNames: state.usedToolNames,
+          continuation: state.continuation,
+          budget: state.budget,
+          unfinishedOperations: state.unfinishedOperations,
+          completedResults: state.completedResults,
+        }, timestamp);
+        const required = allocateAndInsertEvent(db, scope, "clarification.required", payload, timestamp).event;
+        const suspended = allocateAndInsertEvent(
+          db,
+          scope,
+          "run.suspended",
+          { reason: "awaiting_clarification" },
+          timestamp,
+        ).event;
+        return { required, suspended };
+      })();
+    },
     completeRunWithEvent(
       scope: AssistantRunScope,
       state: RunState,

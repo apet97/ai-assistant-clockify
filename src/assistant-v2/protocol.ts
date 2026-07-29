@@ -187,6 +187,10 @@ export interface RunEventServicePort {
   startTool(input: RunEventCommand<"tool.started">): SequencedRunEvent;
   completeTool(input: RunEventCommand<"tool.completed">): SequencedRunEvent;
   requireClarification(input: RunEventCommand<"clarification.required">): SequencedRunEvent;
+  /** F23: the question and the run's suspension commit in ONE transaction. */
+  requireClarificationAndSuspend(
+    input: RunEventCommand<"clarification.required">,
+  ): { required: SequencedRunEvent; suspended: SequencedRunEvent };
   suspendRun(input: RunEventCommand<"run.suspended">): SequencedRunEvent;
   completeRun(input: RunEventCommand<"run.completed">): SequencedRunEvent;
   failRun(input: RunEventCommand<"run.failed">): SequencedRunEvent;
