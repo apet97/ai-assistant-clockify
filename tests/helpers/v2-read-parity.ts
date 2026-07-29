@@ -239,8 +239,6 @@ export async function assertConcurrentReadsPreserveOrder(
         active -= 1;
       }
     },
-    remainingHostCalls: () => 60,
-    persistHostCallAllowance: () => undefined,
   };
   const calls = actionNames.map((name, index) => ({
     id: `read-${index}`,

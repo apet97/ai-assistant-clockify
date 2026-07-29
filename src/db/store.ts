@@ -382,6 +382,17 @@ export interface Store {
     state: import("../assistant-v2/state.js").RunState,
     payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.suspended"],
   ): import("../assistant-v2/events.js").SequencedRunEvent;
+  /** Closure-plan PR 6 (F04): atomically charge ONE physical host call
+   * against the run's persisted budget — one conditional statement enforcing
+   * `used + reserved < 60`. Returns false (denying the call before any
+   * fetch) when the ceiling is reached or the run row is absent. */
+  chargeRunHostCall(scope: import("./store/runs.js").AssistantRunScope): boolean;
+  /** Durable refund for a queued call cancelled before dispatch. */
+  refundRunHostCall(scope: import("./store/runs.js").AssistantRunScope): void;
+  /** Convert one RESERVED slot to USED at a confirmed write's dispatch
+   * boundary (sum unchanged); charges conditionally when no reservation
+   * remains (a plan that underestimated). */
+  convertReservedRunHostCall(scope: import("./store/runs.js").AssistantRunScope): boolean;
   /** ONE transaction (closure-plan PR 4 / F02): settle the assistant run a
    * v2 confirmation belongs to. `confirmed` records the operation lifecycle
    * events and links the canonical receipt; `cancelled`/`expired` create the
@@ -920,6 +931,67 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         linkTurnMessage(input, "user", messageId);
         return { messageId };
       })();
+    },
+    chargeRunHostCall(scope: import("./store/runs.js").AssistantRunScope): boolean {
+      return db.prepare(
+        `UPDATE assistant_runs SET
+           budget_json = json_set(budget_json, '$.hostCallsUsed',
+             json_extract(budget_json, '$.hostCallsUsed') + 1),
+           updated_at = ?
+         WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+           AND installation_generation = ? AND auth_class = ?
+           AND json_extract(budget_json, '$.hostCallsUsed')
+             + json_extract(budget_json, '$.hostCallsReserved') < 60`,
+      ).run(
+        nowIso(),
+        scope.sessionId,
+        scope.runId,
+        scope.workspaceId,
+        scope.adminUserId,
+        scope.installationGeneration,
+        scope.authClass,
+      ).changes === 1;
+    },
+    refundRunHostCall(scope: import("./store/runs.js").AssistantRunScope): void {
+      db.prepare(
+        `UPDATE assistant_runs SET
+           budget_json = json_set(budget_json, '$.hostCallsUsed',
+             MAX(0, json_extract(budget_json, '$.hostCallsUsed') - 1)),
+           updated_at = ?
+         WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+           AND installation_generation = ? AND auth_class = ?`,
+      ).run(
+        nowIso(),
+        scope.sessionId,
+        scope.runId,
+        scope.workspaceId,
+        scope.adminUserId,
+        scope.installationGeneration,
+        scope.authClass,
+      );
+    },
+    convertReservedRunHostCall(scope: import("./store/runs.js").AssistantRunScope): boolean {
+      return db.prepare(
+        `UPDATE assistant_runs SET
+           budget_json = json_set(budget_json,
+             '$.hostCallsUsed', json_extract(budget_json, '$.hostCallsUsed') + 1,
+             '$.hostCallsReserved',
+               MAX(0, json_extract(budget_json, '$.hostCallsReserved') - 1)),
+           updated_at = ?
+         WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
+           AND installation_generation = ? AND auth_class = ?
+           AND (json_extract(budget_json, '$.hostCallsReserved') > 0
+             OR json_extract(budget_json, '$.hostCallsUsed')
+               + json_extract(budget_json, '$.hostCallsReserved') < 60)`,
+      ).run(
+        nowIso(),
+        scope.sessionId,
+        scope.runId,
+        scope.workspaceId,
+        scope.adminUserId,
+        scope.installationGeneration,
+        scope.authClass,
+      ).changes === 1;
     },
     settleV2ConfirmationRun(input: {
       record: import("../harness/confirmations.js").PendingConfirmationRecord;

@@ -125,14 +125,15 @@ export interface PreparedBatch {
 export type NativeToolModelClient = ModelClient &
   Required<Pick<ModelClient, "completeWithTools">>;
 
+/** Closure-plan PR 6 (F04): ONE accounting mechanism. `runRead` installs the
+ * persisted run-scoped ledger; every physical charge is a durable conditional
+ * store write. The old in-memory allowance mirror is gone. */
 export interface RequestGovernorPort {
   runRead<T>(
     scope: RunScope,
     operation: () => Promise<T>,
     options?: { signal?: AbortSignal; onDispatch?: () => void },
   ): Promise<T>;
-  remainingHostCalls(scope: RunScope): number;
-  persistHostCallAllowance(scope: RunScope, remaining: number): void;
 }
 
 export interface RunStateStore {

@@ -145,6 +145,13 @@ function updateRunState(
     phase: RunPhase;
   } | undefined;
   if (!current) throw new Error("assistant_run_not_found");
+  // Closure-plan PR 6 (F04): `hostCallsUsed` is owned by the DURABLE ledger
+  // (atomic conditional charges/refunds against the row). An event commit
+  // carrying a stale in-memory budget must never clobber it.
+  const currentBudget = JSON.parse(current.budget_json) as RunBudget;
+  const nextBudget = patch.budget
+    ? { ...patch.budget, hostCallsUsed: currentBudget.hostCallsUsed }
+    : currentBudget;
   db.prepare(
     `UPDATE assistant_runs SET
        phase = ?, catalog_hash = ?, loaded_tool_names_json = ?, used_tool_names_json = ?,
@@ -156,7 +163,7 @@ function updateRunState(
     JSON.stringify(patch.loadedToolNames ?? JSON.parse(current.loaded_tool_names_json)),
     JSON.stringify(patch.usedToolNames ?? JSON.parse(current.used_tool_names_json)),
     JSON.stringify(patch.continuation ?? JSON.parse(current.continuation_json)),
-    JSON.stringify(patch.budget ?? JSON.parse(current.budget_json)),
+    JSON.stringify(nextBudget),
     JSON.stringify(patch.unfinishedOperations ?? JSON.parse(current.unfinished_operations_json)),
     timestamp,
     ...where.params,

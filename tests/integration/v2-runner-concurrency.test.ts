@@ -15,8 +15,6 @@ describe("v2 runner read concurrency integration", () => {
           active -= 1;
           return op();
         }),
-        remainingHostCalls: vi.fn(() => 60),
-        persistHostCallAllowance: vi.fn(),
       },
     });
     const calls = Array.from({ length: 6 }, (_, i) => ({

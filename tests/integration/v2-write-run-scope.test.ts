@@ -130,8 +130,6 @@ describe("v2 write preparation receives the run it belongs to", () => {
       installationGuard: { assertCurrent: () => undefined },
       requestGovernor: {
         runRead: async (_s, op) => op(),
-        remainingHostCalls: () => 60,
-        persistHostCallAllowance: () => undefined,
       },
       clock: { now: () => WRITE_PARITY_NOW, monotonicMs: () => 0 },
     });
@@ -169,7 +167,7 @@ describe("v2 write preparation receives the run it belongs to", () => {
       reads,
       preparations,
       installationGuard: { assertCurrent: () => undefined },
-      requestGovernor: { runRead: async (_s, op) => op(), remainingHostCalls: () => 60, persistHostCallAllowance: () => undefined },
+      requestGovernor: { runRead: async (_s, op) => op() },
       clock: { now: () => WRITE_PARITY_NOW, monotonicMs: () => 0 },
     });
 

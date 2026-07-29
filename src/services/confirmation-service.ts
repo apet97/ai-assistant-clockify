@@ -18,6 +18,7 @@ import {
   type PendingConfirmationRecord,
 } from "../harness/confirmations.js";
 import { canWrite } from "../harness/permissions.js";
+import { withRunScopedHostCallBudget } from "../clockify/request-governor.js";
 import type { AdminPolicy } from "../harness/permissions.js";
 import { errorReceipt, type ErrorReceipt, type SuccessReceipt } from "../harness/receipts.js";
 import type { EntityRef } from "../harness/receipts.js";
@@ -469,11 +470,32 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
       idempotency: atomicLedger(claims, record.id),
     };
 
-    const commitResult = await executeStoredV2Write(
+    // Closure-plan PR 6 (F04): a confirmed dispatch converts this preview's
+    // RESERVED slots to USED in the persisted run ledger, one per physical
+    // call, at the dispatch boundary. Records without run scope (v1) keep the
+    // plain request budget.
+    const runScope = typeof record.runId === "string" && record.runId.length > 0 &&
+      Number.isSafeInteger(record.installationGeneration)
+      ? {
+          sessionId: record.sessionId,
+          runId: record.runId,
+          workspaceId: record.workspaceId,
+          adminUserId: record.adminUserId,
+          installationGeneration: record.installationGeneration!,
+          authClass: "addon" as const,
+        }
+      : undefined;
+    const dispatchWrite = () => executeStoredV2Write(
       authorizedContext,
       operation as ConfirmableOperation & { mutationPlan: ExternalMutationPlan },
       executorKind === "prepared_safe_write" ? "prepared_safe_write" : "risky_commit",
     );
+    const commitResult = runScope
+      ? await withRunScopedHostCallBudget(dispatchWrite, {
+          charge: () => deps.store.convertReservedRunHostCall(runScope),
+          refund: () => deps.store.refundRunHostCall(runScope),
+        })
+      : await dispatchWrite();
 
     let partialResult: Extract<ActionResult, { kind: "partial" }> | undefined;
     let receipt: SuccessReceipt | ErrorReceipt;

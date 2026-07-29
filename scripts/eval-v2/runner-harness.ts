@@ -151,7 +151,6 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
     const index = buildApiOperationIndex(MODEL_API_ACTION_CATALOG);
     const eventService = createRunEventService(store);
     const eventViews = createRunEventViewService(store, { sessionSecret: SESSION_SECRET, now: () => new Date() });
-    let remainingHostCalls = options.maxHostCalls ?? 60;
     let maxLoadedApiTools = 0;
 
     const outcome = await runAssistantV2({
@@ -183,14 +182,7 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
       }),
       installationGuard: { assertCurrent: () => undefined },
       requestGovernor: {
-        runRead: async (_readScope, operation) => {
-          remainingHostCalls -= 1;
-          return operation();
-        },
-        remainingHostCalls: () => remainingHostCalls,
-        persistHostCallAllowance: (_readScope, remaining) => {
-          remainingHostCalls = remaining;
-        },
+        runRead: async (_readScope, operation) => operation(),
       },
       clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
     });

@@ -18,36 +18,30 @@ import { createRunEventViewService } from "../services/run-event-view-service.js
 import { createOperationPreparationService } from "../services/operation-preparation-service.js";
 import { createClarificationService } from "../services/clarification-service.js";
 import type { Installation } from "../db/store.js";
-import {
-  persistRunHostCallAllowance,
-  remainingHostCallsFromRunBudget,
-  withHostCallBudgetFromUsed,
-} from "../clockify/request-governor.js";
+import { withRunScopedHostCallBudget } from "../clockify/request-governor.js";
 
+/**
+ * Closure-plan PR 6 (F04): the ONE persisted run ledger governs every v2
+ * physical host call. Each charge is an atomic conditional store write
+ * (`used + reserved < 60`) at the pre-dispatch boundary — it survives
+ * clarification resume and process restart by construction, and call 61 is
+ * denied before any fetch.
+ */
 function requestGovernorFor(deps: AppDeps, scope: RunScope & { runId: string }) {
-  const run = deps.store.getRun({
+  const assistantScope = {
     sessionId: scope.sessionId,
     runId: scope.runId,
     workspaceId: scope.workspaceId,
     adminUserId: scope.adminUserId,
     installationGeneration: scope.installationGeneration,
     authClass: scope.authClass,
-  });
-  const budget = run?.budget ?? { hostCallsUsed: 0, hostCallsReserved: 0 };
+  };
   return {
     runRead: async <T>(_readScope: RunScope, op: () => Promise<T>) =>
-      withHostCallBudgetFromUsed(op, budget.hostCallsUsed, remainingHostCallsFromRunBudget(budget) + budget.hostCallsUsed),
-    remainingHostCalls: () => remainingHostCallsFromRunBudget(budget),
-    persistHostCallAllowance: (_readScope: RunScope, remaining: number) => {
-      if (!run) return;
-      deps.store.saveRun({
-        ...run,
-        budget: {
-          ...run.budget,
-          ...persistRunHostCallAllowance(run.budget, remaining),
-        },
-      });
-    },
+      withRunScopedHostCallBudget(op, {
+        charge: () => deps.store.chargeRunHostCall(assistantScope),
+        refund: () => deps.store.refundRunHostCall(assistantScope),
+      }),
   };
 }
 
@@ -107,7 +101,18 @@ export function buildV2RunnerDependencies(
         }
       },
     }),
-    preparations: preparationService,
+    preparations: {
+      ...preparationService,
+      // Preview-time target/support reads run under the SAME persisted run
+      // ledger as ordinary reads (F04) — no unscoped 60-call fallthrough.
+      prepare: (calls, prepareScope) => withRunScopedHostCallBudget(
+        () => preparationService.prepare(calls, prepareScope),
+        {
+          charge: () => deps.store.chargeRunHostCall({ ...scope }),
+          refund: () => deps.store.refundRunHostCall({ ...scope }),
+        },
+      ),
+    },
     installationGuard: {
       assertCurrent: () => {
         const current = deps.store.getInstallation(installation.workspaceId);

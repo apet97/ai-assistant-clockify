@@ -23,8 +23,12 @@ export interface PreparedAssistantWriteResult {
 }
 
 function updateBudget(db: StoreContext["db"], scope: AssistantRunScope, budget: RunBudget, timestamp: string): void {
+  // Closure-plan PR 6 (F04): preserve the row-owned `hostCallsUsed` ledger —
+  // this write is about RESERVING for a prepared write, never about charges.
   db.prepare(
-    `UPDATE assistant_runs SET budget_json = ?, updated_at = ?
+    `UPDATE assistant_runs SET
+       budget_json = json_set(?, '$.hostCallsUsed', json_extract(budget_json, '$.hostCallsUsed')),
+       updated_at = ?
       WHERE session_id = ? AND run_id = ? AND workspace_id = ? AND admin_user_id = ?
         AND installation_generation = ? AND auth_class = ?`,
   ).run(

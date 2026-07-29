@@ -112,8 +112,6 @@ describe("v2 refuses to execute prompt-injected instructions from Clockify data"
       installationGuard: { assertCurrent: () => undefined },
       requestGovernor: {
         runRead: async (_s, op) => op(),
-        remainingHostCalls: () => 60,
-        persistHostCallAllowance: () => undefined,
       },
       clock: { now: () => WRITE_PARITY_NOW, monotonicMs: () => 0 },
     });

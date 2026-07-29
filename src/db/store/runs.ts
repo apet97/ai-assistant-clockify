@@ -229,6 +229,14 @@ export function buildAssistantRunStore(ctx: StoreContext): {
       };
       const where = scopeWhere(scope);
       db.transaction(() => {
+        // Closure-plan PR 6 (F04): the durable ledger owns `hostCallsUsed`;
+        // a stale in-memory budget must never clobber it.
+        const currentRow = db.prepare(
+          `SELECT budget_json FROM assistant_runs WHERE ${where.sql}`,
+        ).get(...where.params) as { budget_json: string } | undefined;
+        const ledgerUsed = currentRow
+          ? (JSON.parse(currentRow.budget_json) as RunBudget).hostCallsUsed
+          : state.budget.hostCallsUsed;
         db.prepare(
           `UPDATE assistant_runs SET
              phase = ?, catalog_hash = ?, loaded_tool_names_json = ?, used_tool_names_json = ?,
@@ -240,7 +248,7 @@ export function buildAssistantRunStore(ctx: StoreContext): {
           JSON.stringify(state.loadedToolNames),
           JSON.stringify(state.usedToolNames),
           JSON.stringify(state.continuation),
-          JSON.stringify(state.budget),
+          JSON.stringify({ ...state.budget, hostCallsUsed: ledgerUsed }),
           JSON.stringify(state.unfinishedOperations),
           nowIso(),
           ...where.params,

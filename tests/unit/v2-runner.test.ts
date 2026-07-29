@@ -96,8 +96,6 @@ function fakeDeps(overrides: Partial<RunnerDependencies> = {}): RunnerDependenci
     installationGuard: { assertCurrent: vi.fn() },
     requestGovernor: {
       runRead: vi.fn(async (_scope, op) => op()),
-      remainingHostCalls: vi.fn(() => 60),
-      persistHostCallAllowance: vi.fn(),
     },
     clock: { now: () => new Date(), monotonicMs: () => 0 },
     ...overrides,
@@ -341,8 +339,6 @@ describe("executeReadsConcurrently", () => {
           active -= 1;
           return op();
         }),
-        remainingHostCalls: vi.fn(() => 60),
-        persistHostCallAllowance: vi.fn(),
       },
       reads: {
         execute: vi.fn(async () => ({ kind: "succeeded" as const, actionResultId: "r" })),

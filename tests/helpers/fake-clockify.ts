@@ -26,6 +26,7 @@ import { makeFakeAudit } from "./fake/audit.js";
 import { makeFakeWorkspace } from "./fake/workspace.js";
 import { makeFakeMiscRisky } from "./fake/misc-risky.js";
 import { beginScopedMutationDispatchForTest } from "../../src/clockify/rest/core.js";
+import { chargeInstalledHostCallBudgetForTest } from "../../src/clockify/request-governor.js";
 
 /**
  * In-memory fake of the Clockify WorkspaceClient port for deterministic tests.
@@ -93,13 +94,24 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
   const client = new Proxy(rawClient, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);
-      if (typeof property !== "string" || typeof value !== "function" || !mutationMethod.test(property)) {
+      if (typeof property !== "string" || typeof value !== "function") {
         return value;
+      }
+      if (!mutationMethod.test(property)) {
+        // Closure-plan PR 6 (F04): the fake bypasses the REST core where
+        // physical fetches charge the host-call budget, so it charges per
+        // port call instead — one fake call ≈ one physical host call. No-op
+        // when no budget is installed (direct unit invocations).
+        return (...args: unknown[]) => {
+          chargeInstalledHostCallBudgetForTest();
+          return (value as (...methodArgs: unknown[]) => unknown).apply(target, args);
+        };
       }
       return async (...args: unknown[]) => {
         if (nestedFakeMutation.getStore()) {
           return (value as (...methodArgs: unknown[]) => unknown).apply(target, args);
         }
+        chargeInstalledHostCallBudgetForTest();
         await beginScopedMutationDispatchForTest();
         return nestedFakeMutation.run(true, () =>
           (value as (...methodArgs: unknown[]) => unknown).apply(target, args));

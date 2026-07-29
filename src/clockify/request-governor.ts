@@ -2,7 +2,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export type HostRequestKind = "read" | "mutation";
 
-interface HostCallBudget { used: number; maximum: number }
+interface HostCallBudget {
+  used: number;
+  maximum: number;
+  /** Closure-plan PR 6 (F04): a DURABLE conditional charge, invoked at the
+   * last pre-dispatch boundary. Returning false denies the call before any
+   * fetch. Present only on run-scoped budgets; plain request budgets keep the
+   * in-memory counter. */
+  onCharge?: () => boolean;
+  /** Durable refund for a queued call cancelled before dispatch. */
+  onRefund?: () => void;
+}
 const hostCallBudget = new AsyncLocalStorage<HostCallBudget>();
 const hostCallReservation = new AsyncLocalStorage<{ remaining: number }>();
 
@@ -27,22 +37,22 @@ export class HostRequestCancelledError extends Error {
 
 export const HOST_CALL_BUDGET_MAXIMUM = 60;
 
-/** Mirror a v2 run budget into remaining physical host-call slots for read dispatch. */
-export function remainingHostCallsFromRunBudget(
-  budget: { hostCallsUsed: number; hostCallsReserved: number },
+/**
+ * Closure-plan PR 6 (F04): install a RUN-scoped host-call budget whose every
+ * physical charge is a durable conditional store write. Unlike
+ * `withHostCallBudgetFromUsed`, this ALWAYS nests — the persisted run ledger
+ * is authoritative even when an outer per-request budget exists (that outer
+ * budget was exactly what made the v2 run ceiling unenforceable).
+ */
+export function withRunScopedHostCallBudget<T>(
+  operation: () => Promise<T>,
+  hooks: { charge: () => boolean; refund: () => void },
   maximum = HOST_CALL_BUDGET_MAXIMUM,
-): number {
-  return Math.max(0, maximum - budget.hostCallsUsed - budget.hostCallsReserved);
-}
-
-/** Persist the post-read allowance back into the run budget used counter. */
-export function persistRunHostCallAllowance(
-  budget: { hostCallsUsed: number; hostCallsReserved: number },
-  remaining: number,
-  maximum = HOST_CALL_BUDGET_MAXIMUM,
-): { hostCallsUsed: number; hostCallsReserved: number } {
-  const used = Math.max(0, Math.min(maximum, maximum - remaining - budget.hostCallsReserved));
-  return { ...budget, hostCallsUsed: used };
+): Promise<T> {
+  return hostCallBudget.run(
+    { used: 0, maximum, onCharge: hooks.charge, onRefund: hooks.refund },
+    operation,
+  );
 }
 
 export function withHostCallBudgetFromUsed<T>(
@@ -96,17 +106,45 @@ export function chargeHostCallBudget(): () => void {
     reservation.remaining -= 1;
     charged = "reservation";
   } else if (budget) {
-    if (budget.used + 1 > budget.maximum) {
-      throw new HostCallBudgetExceededError(budget.maximum, 1);
+    if (budget.onCharge) {
+      // Durable run ledger (F04): the store performs the conditional
+      // `used + reserved <= maximum` charge atomically; a refusal denies the
+      // call BEFORE any external fetch.
+      if (!budget.onCharge()) {
+        throw new HostCallBudgetExceededError(budget.maximum, 1);
+      }
+      budget.used += 1;
+      charged = "turn";
+    } else {
+      if (budget.used + 1 > budget.maximum) {
+        throw new HostCallBudgetExceededError(budget.maximum, 1);
+      }
+      budget.used += 1;
+      charged = "turn";
     }
-    budget.used += 1;
-    charged = "turn";
   }
   return () => {
     if (charged === "reservation" && reservation) reservation.remaining += 1;
-    else if (charged === "turn" && budget) budget.used -= 1;
+    else if (charged === "turn" && budget) {
+      budget.used -= 1;
+      budget.onRefund?.();
+    }
     charged = undefined;
   };
+}
+
+/** Test seam: the fake WorkspaceClient bypasses the REST core (where physical
+ * fetches charge), so it charges here per port call instead — one fake port
+ * call ≈ one physical host call. Charges ONLY the durable run-scoped ledger
+ * (`onCharge` present): plain request budgets and reservation scopes keep
+ * their production-calibrated physical-call accounting, which a port-call
+ * approximation would distort (the worst-case estimators count fetches, not
+ * port methods). */
+export function chargeInstalledHostCallBudgetForTest(): void {
+  const budget = hostCallBudget.getStore();
+  if (!budget?.onCharge) return;
+  if (hostCallReservation.getStore()) return;
+  chargeHostCallBudget();
 }
 
 export interface WorkspaceRequestGovernor {

@@ -124,8 +124,6 @@ function harness(): {
       installationGuard: { assertCurrent: () => undefined },
       requestGovernor: {
         runRead: async (_s, op) => op(),
-        remainingHostCalls: () => 60,
-        persistHostCallAllowance: () => undefined,
       },
       clock: { now: () => NOW, monotonicMs: () => 0 },
     }));

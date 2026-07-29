@@ -68,8 +68,6 @@ export function mockRunnerDeps(overrides: Partial<RunnerDependencies> = {}): Run
     installationGuard: { assertCurrent: vi.fn() },
     requestGovernor: {
       runRead: vi.fn(async (_s, op) => op()),
-      remainingHostCalls: vi.fn(() => 60),
-      persistHostCallAllowance: vi.fn(),
     },
     clock: { now: () => new Date(), monotonicMs: () => 0 },
     ...overrides,
