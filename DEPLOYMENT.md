@@ -635,6 +635,14 @@ export RELEASE_STAGING
 # fresh one nor claim an existing one while introducing a new path.
 export SELECTED_DATABASE_PATH="/data/ai-assistant.sqlite"
 export SELECTED_DATABASE_PATH_DISPOSITION="existing_expected"
+# F24 (ADR 001): an ADR-fresh v2 transition — the deployed engine is not yet v2
+# — is REFUSED with `existing_expected`: a v2 cutover must introduce a fresh
+# `new_unused` path (e.g. /data/ai-assistant-v2.sqlite). The only override is
+# an owner-recorded formal ADR-001 supersession, stated explicitly as
+#   export SELECTED_ADR001_DECISION="superseded_in_place_migration"
+# The transaction also sets the runtime `DATABASE_PATH_DISPOSITION`; on boot a
+# `new_unused` claim is PROVEN (src/db/fresh-boundary.ts): a nonempty database
+# with no fresh-cutover marker refuses to start before opening the file.
 # `gate:predeploy-backup` matches this against the backup's own recorded
 # `metadata.source`. With two databases on the volume, a backup of the WRONG one
 # passes every other check — correct checksum, bytes, integrity, schema, and

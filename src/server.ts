@@ -29,6 +29,7 @@ import { finishNdjsonWithServerError } from "./routes/ndjson.js";
 import type { AppDeps } from "./routes/deps.js";
 import { runProductionStartupReconciliation } from "./harness/startup-reconciliation-registry.js";
 import { completeInterruptedDeletionTombstones } from "./db/deletion-tombstones.js";
+import { assertFreshDatabaseBoundary, writeFreshCutoverMarker } from "./db/fresh-boundary.js";
 import { renderPublicDocument, type PublicDocumentKind } from "./public-documents.js";
 import { verifyRuntimeReleaseArtifact } from "./release-artifact.js";
 import { buildApiOperationIndex } from "./assistant-v2/discovery/api-index.js";
@@ -302,11 +303,23 @@ export async function start(): Promise<void> {
     releaseBuildHash: config.releaseBuildHash,
     sourceBindingSha256: config.releaseSourceBindingSha256,
   });
+  // F24: a `new_unused` boundary claim is PROVEN before the database opens —
+  // a nonempty unmarked file (e.g. the retained v1 database) refuses to boot.
+  const freshBoundary = assertFreshDatabaseBoundary(
+    config.databasePath,
+    config.databasePathDisposition,
+  );
   const store = createStore(config.databasePath, {
     encryptionKey: config.dataEncryptionKey,
     previousEncryptionKey: config.dataEncryptionKeyPrevious,
     retentionDays: config.retentionDays,
   });
+  if (freshBoundary.firstBoot) {
+    writeFreshCutoverMarker(config.databasePath, {
+      ...(config.releaseSha ? { releaseSha: config.releaseSha } : {}),
+      createdAt: new Date().toISOString(),
+    });
+  }
   const parser = createSignatureParser(config.clockifyAddonKey, config.clockifyAddonPublicKeyPem);
   const modelClient = selectModelClient(config);
 

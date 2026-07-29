@@ -4,7 +4,7 @@
  * network, Railway, or Clockify -- the plan is computed and reviewed first, and a
  * caller executes it separately. That separation is the point: an incident-time
  * rollback must be decidable without running it. */
-import { ROLLBACK_KEYS } from "./deploy-private-production.js";
+import { INTRODUCIBLE_KEYS, ROLLBACK_KEYS } from "./deploy-private-production.js";
 
 export type CutoverBranch =
   | "preseed"
@@ -36,8 +36,11 @@ function sameCutoverIdentity(left: CutoverIdentity, right: CutoverIdentity): boo
     && left.databasePath === right.databasePath;
 }
 
-/** Collects the eight rollback values, reporting every absent key rather than
- * only the first, so one review pass sees the whole gap. */
+/** Collects the rollback values, reporting every absent key rather than
+ * only the first, so one review pass sees the whole gap. An INTRODUCIBLE key
+ * (F24: `DATABASE_PATH_DISPOSITION`) is restored when a prior value exists but
+ * never refuses when absent — a snapshot taken before the variable existed is
+ * a complete rollback record for the artifact it restores. */
 function collectRollbackVariables(
   prior: Readonly<Record<string, string>>,
 ): { variables: Record<string, string>; missing: string[] } {
@@ -45,8 +48,11 @@ function collectRollbackVariables(
   const missing: string[] = [];
   for (const key of ROLLBACK_KEYS) {
     const value = prior[key];
-    if (value === undefined) missing.push(key);
-    else variables[key] = value;
+    if (value === undefined) {
+      if (!INTRODUCIBLE_KEYS.has(key)) missing.push(key);
+    } else {
+      variables[key] = value;
+    }
   }
   return { variables, missing };
 }

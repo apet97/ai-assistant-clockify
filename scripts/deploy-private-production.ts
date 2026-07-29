@@ -25,6 +25,7 @@ export const ROLLBACK_KEYS = [
   "LLM_THINKING_MODE",
   "ASSISTANT_ENGINE",
   "DATABASE_PATH",
+  "DATABASE_PATH_DISPOSITION",
 ] as const;
 
 const ASSISTANT_ENGINES = new Set(["v1", "v2"]);
@@ -100,6 +101,24 @@ export function desiredReleaseVariables(
   if (disposition === "existing_expected" && existing.DATABASE_PATH !== databasePath) {
     throw new Error("SELECTED_DATABASE_PATH is not the deployed database path and cannot be existing_expected");
   }
+  // F24: an ADR-fresh v2 transition (the deployed engine is not yet v2) must
+  // move to a NEW unused database path. Reusing the in-service database for a
+  // v2 cutover is exactly the recorded ADR-001 violation. The only way past
+  // this rule is the review's option 2 — a FORMAL, owner-recorded ADR
+  // supersession — stated explicitly; silence never passes.
+  if (
+    engine === "v2"
+    && existing.ASSISTANT_ENGINE !== undefined
+    && existing.ASSISTANT_ENGINE !== "v2"
+    && disposition === "existing_expected"
+    && environment.SELECTED_ADR001_DECISION !== "superseded_in_place_migration"
+  ) {
+    throw new Error(
+      "An ADR-fresh v2 transition requires SELECTED_DATABASE_PATH_DISPOSITION=new_unused. "
+        + "Reusing the deployed database needs an owner-recorded ADR-001 supersession, stated as "
+        + "SELECTED_ADR001_DECISION=superseded_in_place_migration.",
+    );
+  }
   return {
     RELEASE_SHA: exactHash(required(environment, "RELEASE_SHA"), 40, "RELEASE_SHA"),
     RELEASE_BUILD_HASH: exactHash(required(environment, "RELEASE_BUILD_HASH"), 64, "RELEASE_BUILD_HASH"),
@@ -111,6 +130,9 @@ export function desiredReleaseVariables(
     LLM_MODEL: required(environment, "SELECTED_LLM_MODEL"),
     ASSISTANT_ENGINE: engine,
     DATABASE_PATH: databasePath,
+    // F24: the runtime PROVES a `new_unused` claim before opening the database
+    // (src/db/fresh-boundary.ts), so the disposition travels with the release.
+    DATABASE_PATH_DISPOSITION: disposition,
     ...(reasoning === "unset" ? {} : { LLM_REASONING_EFFORT: reasoning }),
     ...(thinking === "disabled" ? { LLM_THINKING_MODE: "disabled" } : {}),
   };
@@ -127,11 +149,22 @@ export function selectedDatabasePath(environment: NodeJS.ProcessEnv): string {
   return value;
 }
 
+/**
+ * Variables this transaction may INTRODUCE without a prior value. A rollback
+ * leaves an introduced variable set, which must be provably harmless: the
+ * restored artifact predates `DATABASE_PATH_DISPOSITION` and ignores it, and
+ * the next deploy snapshots it normally. Every other desired variable still
+ * requires a no-deploy rollback value.
+ */
+export const INTRODUCIBLE_KEYS = new Set(["DATABASE_PATH_DISPOSITION"]);
+
 export function assertRollbackCoverage(
   snapshot: RollbackVariableSnapshot,
   desired: Record<string, string>,
 ): void {
-  const missing = Object.keys(desired).filter((key) => !Object.hasOwn(snapshot, key));
+  const missing = Object.keys(desired)
+    .filter((key) => !INTRODUCIBLE_KEYS.has(key))
+    .filter((key) => !Object.hasOwn(snapshot, key));
   if (missing.length > 0) {
     throw new Error(
       `Refusing to mutate variables without a no-deploy rollback value for: ${missing.join(", ")}`,

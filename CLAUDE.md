@@ -4,14 +4,16 @@ The engineering source of truth for this repo. Read it before changing code.
 Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.md`,
 `PRIVACY.md`.
 
-## Current state (2026-07-28)
+## Current state (2026-07-29)
 
 Full build history: [`docs/V2_BUILD_LOG.md`](./docs/V2_BUILD_LOG.md). This section
 is the CURRENT contract only — if it disagrees with the log, this wins.
 
-**Deployed:** `ec09863` on Railway, `ASSISTANT_ENGINE=v2`, database
-`/data/ai-assistant.sqlite` at schema 12. `/live` `/health` `/manifest` `/version`
-all 200. The v1 engine remains in-tree for rollback and is selected only by
+**Deployed:** `ec09863` on Railway (predates the closure work below),
+`ASSISTANT_ENGINE=v2`, database `/data/ai-assistant.sqlite` at schema 12. The
+deployed database boundary VIOLATES ADR 001 (F24): a fresh v2 deploy must move
+to a new unused `/data/…` path, and the planner + runtime now enforce that
+(below). The v1 engine remains in-tree for rollback and is selected only by
 `ASSISTANT_ENGINE=v1`.
 
 **Catalog:** 171 typed catalog actions — `api` 127 · `composite` 24 · `generic` 16 ·
@@ -19,56 +21,57 @@ all 200. The v1 engine remains in-tree for rollback and is selected only by
 `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`; model-API
 registry hash `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`.
 
-### v2 works end to end for READS
+### The 2026-07-28 adversarial-review closure plan is CODE-COMPLETE on main
 
-A read request discovers operations, executes them, feeds the results back, and
-answers from them. Proven in production: `What did I track today?` runs
-`clockify_entries_list` and answers from the real data.
+All 24 findings (F01–F24) of the 2026-07-28 adversarial review are closed in
+source on `main` (commit series `3afa132..c9a04f1` plus the F24 tooling commit,
+PRs 1–12 of the closure plan; schema 13). V2 now works end to end in the real
+production composition for the full journey list: read + grounded answer + card
++ reload/replay, read failure + next message, clarification (chips, exact
+option, free-text continuation), preview with zero pre-confirm mutation, single
+confirm/cancel/expiry, exact batch confirm/cancel + ambiguity stop, request
+replay, cross-tab stale-nonce re-arm, history/switcher restore, and
+member rejection — proven by `tests/e2e-real/` (15 journeys × Chromium/Firefox/
+WebKit) against the tsc-built server with a real SQLite store and real
+signed-JWT component auth, no hand-authored frames.
 
-### v2 WRITES ARE STILL NON-FUNCTIONAL — no Confirm button reaches the admin
+Landmarks (each with its own suites): durable turn/transcript settlement +
+schema 13 links (PR 2), atomic suspension transactions (PR 3a), the one
+presentation boundary + live run-event delivery + one v2 control source (PR 3),
+confirm/cancel/expiry/batch run settlement + write-clarification lifecycle
+(PR 4), no-throw reads + orphan reclaim (PR 5), the persisted per-run host-call
+ledger with conditional charges (PR 6), logical/wall/retry/discovery/duplicate
+budgets (PR 7), installation-generation rechecks (PR 8), exactly-once
+audit/telemetry at settlement (PR 9), no `referenceId` claim + registry-bound
+dispatch (PR 10), aliased lifecycle logs + suspect-token alerting + the audited
+stale-installation retirement command (PR 11), and the real-server browser
+matrix + gitleaks closure (PR 12).
 
-`v2OutcomeToTurn` (`src/routes/v2-chat-pipeline.ts`) returns `results: []` and
-`resultLinks: []` on **every** arm, including `suspended`. The UI builds Confirm
-buttons from preview results, so a correctly prepared write renders the
-deterministic copy "Review the preview and click Confirm." with **no preview card
-and no button**. The write is prepared, durable, and confirmable by API — the
-admin simply cannot reach it. This is the top open defect; see "Open defects".
+**The lesson that keeps repeating:** the worst defects hid behind test fakes
+more permissive than the real store, and behind fixtures that hand-authored the
+frames the server was supposed to produce. When a v2 test passes, check the
+fake matches the store's real transactional behaviour — and prefer
+`tests/helpers/v2-production-composition.ts` (unit/integration) or
+`npm run test:e2e:real` (browser), which compose the real app.
 
-### Four v2 defects fixed on 2026-07-27/28 — do not re-derive
+### What remains OPEN (human/live gates — not silently deferrable)
 
-1. **No tool-result feedback channel.** `buildFreshMessages` rebuilt every request
-   from the system prompt plus the original request, so the model never saw what a
-   tool returned — in either the in-invocation or the resume path. Reads were
-   unanswerable and every run burned `maxModelCalls` and reported
-   `budget_exhausted`. Fixed by `src/assistant-v2/observations.ts`, which rebuilds
-   bounded results and denial codes into each request using v1's
-   `capToolResultForModel` cap.
-2. **Write preparation received no `runId`.** The `preparations` port declared a
-   bare `RunScope` while the implementation required `RunScope & {runId}`;
-   TypeScript allowed it because method parameters are bivariant. Production
-   scopes carry five fields, so every write threw `assistant_run_not_found`,
-   flattened to `write_port_not_ready`. Port now matches `reads`.
-3. **The model's answer was discarded.** `RunOutcome` carried no reply text, so a
-   canned `"Completed."` replaced real answers. Now carried, bounded at 8 KB.
-4. **A third discovery search killed the run.** Exceeding `maxDiscoveryCalls` was
-   fatal; every other budget denies the call and continues. Now denied and fed
-   back.
-
-**The lesson that keeps repeating:** three of these hid behind test fakes more
-permissive than the real store — `getRun` returning `undefined`, budgets never
-incrementing, or a fixture scope carrying a field production lacks. When a v2 test
-passes, check the fake matches the store's real transactional behaviour.
-
-### Open defects
-
-- **No Confirm button (above).** `results`/`resultLinks` empty for `suspended`.
-- **The presentation layer is dead code.** `run-event-hydration.ts` hardcodes
-  `facts: []` / `references: []` on every branch and uses the raw action name
-  (`clockify_projects_create`) as the human-facing title, so all 127 registered
-  presenters are never invoked with real data.
-- **A stale v1 installation is `active` with a token Clockify rejects**
-  (`640f2540…`), with no retirement, tombstone, or attestation. Owner-scoped-out as
-  migrated v1 data; visible in every drill's evidence.
+- **Credentialed model evidence:** the `eval:*` scripts emit
+  `not_evaluated_missing_credentials` without `LLM_*` exported; fresh v2
+  DeepSeek suites have not run.
+- **Live Clockify gates:** `live:v2-full` (sacrificial workspace) has never run.
+- **Operation 11B:** retire the stale v1 installation row (`640f2540…`, active
+  with a token Clockify rejects) on PRODUCTION via
+  `npm run db:retire-stale-installation` — the command exists and is tested;
+  running it against production is an operator act after a verified backup.
+- **F24 database-boundary decision (owner):** re-cutover to a fresh
+  `/data/ai-assistant-v2.sqlite` (preferred) or formally supersede ADR 001. The
+  deploy planner now REFUSES an ADR-fresh v2 transition onto the in-service
+  database unless `SELECTED_ADR001_DECISION=superseded_in_place_migration` is
+  stated, and the runtime refuses to boot a `new_unused` claim against a
+  nonempty unmarked file (`src/db/fresh-boundary.ts`).
+- **Production deploy of the closure candidate**, GitHub branch protection,
+  soak declaration, independent security/recovery sign-off, Marketplace portal.
 
 ### Operations
 
@@ -77,9 +80,11 @@ passes, check the fake matches the store's real transactional behaviour.
   older claim that SSH only reaches the management API is wrong. Keys are revoked
   after each use, so re-establishing is deliberate.
 - **Deploy:** `npm run deploy:private-production` only, from a `git archive`
-  staging tree. Both runbooks now document every required variable, including
+  staging tree. Both runbooks document every required variable, including
   `SELECTED_DATABASE_PATH`, `SELECTED_DATABASE_PATH_DISPOSITION`,
-  `PREDEPLOY_SOURCE_DATABASE_PATH` and `ROLLBACK_SOURCE_DIR`.
+  `PREDEPLOY_SOURCE_DATABASE_PATH` and `ROLLBACK_SOURCE_DIR`. The transaction
+  now also sets the runtime `DATABASE_PATH_DISPOSITION` (F24) so startup can
+  prove a `new_unused` claim before the database opens.
 - **`gate:predeploy-backup` binds evidence to the exact candidate**, so the drill
   must run against the commit being deployed — fix first, then drill, then deploy,
   inside one ≤60-minute window.
@@ -88,15 +93,22 @@ passes, check the fake matches the store's real transactional behaviour.
 - **`npm run verify` is the gate.** Check its own exit code. Full-suite timeouts
   under host CPU load are a documented flake (`f1-verify-flake-diagnosis`): confirm
   in isolation, then one clean rerun.
-- **Evidence blocked on credentials:** the three `eval:*` scripts emit
-  `not_evaluated_missing_credentials` without `LLM_*` exported; `live:v2-full`
-  refuses without its four preconditions and has never been run.
+- **Lifecycle logs are aliased** (F14): `src/log-alias.ts` domain-separated HMAC
+  aliases; never log a raw workspace/admin/add-on id. Repeated authenticated
+  401s alert as `token_rejected_suspect` (aliased) without ever changing
+  authority.
 
 ### v2 budgets (`V2_LIMITS`)
 
 `maxModelCalls` 6 · `maxDiscoveryCalls` 2 · `maxLoadedApiTools` 12 ·
 `maxApiCalls` 12 · `maxConcurrentReads` 4 · `maxHostCalls` 60 ·
-`maxWallClockMs` 300_000 · `maxTotalTokens` 64_000.
+`maxWallClockMs` 300_000 · `maxTotalTokens` 64_000. All are enforced at
+runtime: logical calls reserve per batch in provider order, writes count,
+physical host calls charge a persisted per-run ledger (`used + reserved ≤ 60`
+in the dispatch-granting transaction; reservations convert/release at
+settlement; restart reloads the persisted budget), active wall-time is charged
+around every awaited segment, and provider retry attempts are charged including
+the both-fail case.
 
 ## Start here
 

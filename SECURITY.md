@@ -97,6 +97,11 @@ admin's sessions, and queued work dispatches no write.
 - **Bounded Clockify traffic**: per workspace, 10 requests/second, burst 10, concurrency 4,
   one host mutation at a time, 60 host calls per turn, and adaptive `429` cooldown. Writes
   are not automatically retried after dispatch.
+- **V2 run budgets are durable**: the v2 engine additionally enforces per-run ceilings
+  (6 model calls, 2 discovery searches, 12 logical API calls with writes counted, 60
+  physical host calls charged against a PERSISTED per-run ledger whose reservation is
+  checked in the dispatch-granting transaction and survives restart, 300 s active
+  wall-clock, 64k tokens). Provider retry attempts are charged, including when both fail.
 
 ## Data handling
 

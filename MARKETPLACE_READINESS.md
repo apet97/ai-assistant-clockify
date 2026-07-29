@@ -1,5 +1,20 @@
 # Marketplace readiness - historical v1 version 1.0.0
 
+## V2 status: NOT READY — closure plan code-complete, evidence gates open
+
+The 2026-07-28 adversarial-review closure plan (findings F01–F24, PRs 1–12) is
+code-complete on `main` (series through `c9a04f1`), including the real-server
+Chromium/Firefox/WebKit journey matrix (`npm run test:e2e:real`). The v2
+candidate is **not releasable**: fresh credentialed model evidence, live
+sacrificial-workspace gates, the F24 database-boundary decision and re-cutover
+deploy, Operation 11B (stale-installation retirement on production), soak, and
+independent human sign-off all remain open. No historical artifact below
+establishes a v2 conclusion. The locally provable rows of the review's release
+acceptance matrix, with per-row evidence, are recorded in
+[`docs/V2_CLOSURE_ACCEPTANCE.md`](./docs/V2_CLOSURE_ACCEPTANCE.md).
+
+## Historical v1 record
+
 This document preserves the v1 private-production release-candidate criteria and
 the stop immediately before the Marketplace **Submit for Review** action. Every
 artifact and conclusion referenced here is historical v1 evidence and is invalid

@@ -17,11 +17,20 @@ is v1 rollback/history context only, using
 [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) for its historical
 acceptance criteria. It cannot establish a v2 conclusion.
 
-The accepted architecture for the future atomic API agent is
-[`ADR 001`](./docs/adr/001-api-agent-v2.md). It is an architecture contract, not
-evidence that v2 code, release evidence, or deployment exists. V1 remains the
-default while v2 is built beside it under `src/assistant-v2/`.
+The accepted architecture for the atomic API agent is
+[`ADR 001`](./docs/adr/001-api-agent-v2.md). V1 remains in-tree as the rollback
+engine while v2 lives under `src/assistant-v2/`.
 During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
+
+## Current behavior matrix (2026-07-29)
+
+| Surface | State | Evidence |
+|---|---|---|
+| **v1 engine** (`ASSISTANT_ENGINE=v1`) | Rollback engine; byte-identical behavior fenced by its integration suites | `npm run verify` (5,372+ tests) |
+| **v2 engine, source on `main`** | The 2026-07-28 adversarial-review closure plan (F01–F24) is code-complete: reads, clarifications, previews, confirm/cancel/expiry, batches, replay, reload, budgets, audit/telemetry, privacy logging | closure commit series through `c9a04f1`; per-PR suites under `tests/` |
+| **v2 in the browser** | Full journey list passes on Chromium, Firefox, and WebKit against the tsc-built production composition (real SQLite, real signed-JWT auth, no hand-authored frames) | `npm run test:e2e:real` (15 journeys × 3 engines) |
+| **v2 deployed on Railway** | Runs a PRE-closure build (`ec09863`) on the ADR-violating database boundary | redeploy + F24 boundary decision are open human gates |
+| **Release evidence** | NOT READY — credentialed model evals, live Clockify gates, deploy, soak, and sign-off remain | [`MARKETPLACE_READINESS.md`](./MARKETPLACE_READINESS.md) |
 
 The interface and workspace-data criterion is: **English interface; Unicode workspace
 data; timezone-aware Intl formatting**.

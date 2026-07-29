@@ -88,6 +88,7 @@ describe("private production deployment transaction", () => {
       LLM_THINKING_MODE: "disabled",
       ASSISTANT_ENGINE: "v2",
       DATABASE_PATH: "/data/ai-assistant-v2.sqlite",
+      DATABASE_PATH_DISPOSITION: "new_unused",
     });
     expect(() => desiredReleaseVariables({
       ...releaseEnvironment(),
@@ -104,6 +105,9 @@ describe("private production deployment transaction", () => {
     expect(snapshot.DATABASE_PATH).toBe("/data/ai-assistant.sqlite");
 
     const desired = desiredReleaseVariables(releaseEnvironment(), snapshot);
+    // DATABASE_PATH_DISPOSITION is the one deliberately INTRODUCIBLE variable
+    // (F24): the first deploy that adds it has no prior value, and a rollback
+    // leaving it set is harmless — the restored artifact predates it.
     expect(() => assertRollbackCoverage(snapshot, desired)).not.toThrow();
     // Without a prior value for either key the transaction must refuse, because
     // Railway deletes cannot be rolled back with one no-deploy set.
@@ -152,13 +156,35 @@ describe("private production deployment transaction", () => {
       priorVariables,
     )).toThrow(/not the deployed database path/u);
 
-    expect(desiredReleaseVariables(
+    // F24: an ADR-fresh v2 transition (deployed engine v1) may NOT reuse the
+    // in-service database — that is the recorded ADR-001 violation. The only
+    // way past the rule is an explicit, owner-recorded ADR supersession.
+    expect(() => desiredReleaseVariables(
       {
         ...releaseEnvironment(),
         SELECTED_DATABASE_PATH: "/data/ai-assistant.sqlite",
         SELECTED_DATABASE_PATH_DISPOSITION: "existing_expected",
       },
       priorVariables,
+    )).toThrow(/ADR-fresh v2 transition/u);
+    expect(desiredReleaseVariables(
+      {
+        ...releaseEnvironment(),
+        SELECTED_DATABASE_PATH: "/data/ai-assistant.sqlite",
+        SELECTED_DATABASE_PATH_DISPOSITION: "existing_expected",
+        SELECTED_ADR001_DECISION: "superseded_in_place_migration",
+      },
+      priorVariables,
+    ).DATABASE_PATH).toBe("/data/ai-assistant.sqlite");
+    // A v2 -> v2 redeploy of the SAME database is an ordinary redeploy, not an
+    // ADR-fresh transition; it needs no decision variable.
+    expect(desiredReleaseVariables(
+      {
+        ...releaseEnvironment(),
+        SELECTED_DATABASE_PATH: "/data/ai-assistant.sqlite",
+        SELECTED_DATABASE_PATH_DISPOSITION: "existing_expected",
+      },
+      { ...priorVariables, ASSISTANT_ENGINE: "v2" },
     ).DATABASE_PATH).toBe("/data/ai-assistant.sqlite");
   });
 

@@ -41,6 +41,8 @@ export interface AppConfig {
   /** Previous at-rest key accepted once at startup to re-encrypt installation tokens. */
   dataEncryptionKeyPrevious?: string;
   databasePath: string;
+  /** F24: the deploy's recorded database-boundary claim (fresh vs reopened). */
+  databasePathDisposition?: "new_unused" | "existing_expected";
   /** Planner backend: "http" (OpenAI-compatible endpoint) or "gemini-cli" (dev). */
   llmProvider: "http" | "gemini-cli";
   /** Atomic rewrite switch. V1 remains the default until an authorized cutover. */
@@ -131,6 +133,10 @@ const envObjectSchema = z.object({
   DATA_ENCRYPTION_KEY: z.string().min(32).optional(),
   DATA_ENCRYPTION_KEY_PREVIOUS: z.string().min(32).optional(),
   DATABASE_PATH: z.string().min(1),
+  // F24: the deploy transaction's recorded claim about DATABASE_PATH. When
+  // `new_unused`, startup proves the path is genuinely fresh before boot
+  // (src/db/fresh-boundary.ts). Absent = no boundary claim (dev/tests).
+  DATABASE_PATH_DISPOSITION: z.enum(["new_unused", "existing_expected"]).optional(),
   // The HTTP provider needs base/key/model; the gemini-cli provider needs none
   // (it uses the authenticated CLI), so these are optional here and enforced
   // below only for the http provider.
@@ -264,6 +270,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     dataEncryptionKey: parsed.DATA_ENCRYPTION_KEY,
     dataEncryptionKeyPrevious: parsed.DATA_ENCRYPTION_KEY_PREVIOUS,
     databasePath: parsed.DATABASE_PATH,
+    databasePathDisposition: parsed.DATABASE_PATH_DISPOSITION,
     llmProvider: parsed.LLM_PROVIDER,
     assistantEngine: parsed.ASSISTANT_ENGINE,
     llmMode: parsed.LLM_MODE,
