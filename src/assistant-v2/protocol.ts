@@ -67,9 +67,12 @@ export type ReadExecutionOutcome =
    * links the canonical clarify result that owns the admin-visible question —
    * events carry the reference, never the prose. */
   | { kind: "clarification"; clarificationId: string; actionResultId: string }
-  | { kind: "denied"; code: string; actionResultId: string }
+  /** `actionResultId` is absent only for governor-level denials synthesized
+   * OUTSIDE the read port (budget/cancellation before the read began) — no
+   * canonical row exists because nothing executed (closure-plan PR 5). */
+  | { kind: "denied"; code: string; actionResultId?: string }
   | { kind: "validation_failed"; code: string; actionResultId: string }
-  | { kind: "failed"; code: string; actionResultId: string };
+  | { kind: "failed"; code: string; actionResultId?: string };
 
 export type WritePreparationOutcome =
   | {

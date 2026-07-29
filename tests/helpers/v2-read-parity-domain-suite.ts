@@ -52,7 +52,7 @@ function storedReceipt(store: Store, actionResultId: string | undefined): Succes
 }
 
 function outcomeResultId(outcome: ReadExecutionOutcome): string {
-  if ("actionResultId" in outcome) return outcome.actionResultId;
+  if ("actionResultId" in outcome && outcome.actionResultId !== undefined) return outcome.actionResultId;
   throw new Error("expected actionResultId");
 }
 

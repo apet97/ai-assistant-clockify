@@ -38,13 +38,25 @@ describe("run events transactionality", () => {
       loadedToolNames: [],
       intentHash: "run-1",
     });
+    // Suspend before close: an INTENTIONALLY suspended run is exempt from
+    // open-time orphan recovery (which since PR 5 appends its own run.failed
+    // event and would otherwise consume the trigger's target sequence).
+    const suspendScope = {
+      sessionId: session.id,
+      runId: "run-1",
+      workspaceId: "ws-1",
+      adminUserId: "admin-1",
+      installationGeneration: 1,
+      authClass: "addon" as const,
+    };
+    store.suspendRunWithEvent(suspendScope, store.getRun(suspendScope)!, { reason: "awaiting_clarification" });
     store.close();
 
     const db = new Database(path);
     db.exec(`
-      CREATE TRIGGER IF NOT EXISTS run_events_fail_second_insert
+      CREATE TRIGGER IF NOT EXISTS run_events_fail_third_insert
       BEFORE INSERT ON run_events
-      WHEN NEW.sequence = 2
+      WHEN NEW.sequence = 3
       BEGIN
         SELECT RAISE(ABORT, 'injected_event_failure');
       END;
@@ -92,7 +104,7 @@ describe("run events transactionality", () => {
       adminUserId: "admin-1",
       installationGeneration: 1,
       authClass: "addon",
-    })).toBe(1);
+    })).toBe(2);
     reopen.close();
     db.close();
   });

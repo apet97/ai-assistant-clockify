@@ -14,6 +14,7 @@ import {
   type PendingClarificationRecord,
 } from "../db/store/pending-clarifications.js";
 import type { ReadExecutionOutcome, RunScope } from "./protocol.js";
+import { boundedDenialCode } from "./observations.js";
 import { buildV2ActionContext } from "./action-context.js";
 
 export interface ReadExecutionStore {
@@ -167,12 +168,34 @@ export async function executeV2Read(
     return { kind: "denied", code: "unavailable_for_auth_class", actionResultId: ref.id };
   }
 
-  const context = await buildContext(scope, deps);
-  const result = await executeAction({
-    actionName: call.name,
-    args: call.arguments,
-    context,
-  });
+  // Closure-plan PR 5 (F03): a read NEVER throws out of this port. A Clockify
+  // transport error, timeout, malformed response, or handler bug becomes a
+  // typed `failed` outcome with a bounded canonical failure result — the run
+  // settles instead of stranding the session at `executing_reads`.
+  let result: ActionResult;
+  try {
+    const context = await buildContext(scope, deps);
+    result = await executeAction({
+      actionName: call.name,
+      args: call.arguments,
+      context,
+    });
+  } catch (error) {
+    const code = boundedDenialCode(error instanceof Error && error.message.length > 0
+      ? error.message
+      : "read_failed");
+    const failure: ActionResult = {
+      kind: "receipt",
+      receipt: errorReceipt({
+        action: call.name,
+        code: "read_failed",
+        message: "The read did not complete.",
+        recovery: { hint: "Try again, or narrow the request.", retryable: true },
+      }),
+    };
+    const ref = persistResult(deps, scope, call.name, failure);
+    return { kind: "failed", code, actionResultId: ref.id };
+  }
 
   if (result.kind === "clarify") {
     // Persist the question as a canonical `action_results` row FIRST: it is the

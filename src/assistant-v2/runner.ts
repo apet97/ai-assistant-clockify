@@ -187,43 +187,61 @@ export async function runAssistantV2(
       return runs.completeRun(state, undefined, completion.text);
     }
 
-    const { readCalls, writeCalls, discoveryCalls, denied, duplicateWrite } = actions.partitionToolCalls(
-      completion.toolCalls,
-      new Set(state.loadedToolNames),
-      state.catalogHash,
-      scope.authClass,
-    );
-    if (duplicateWrite) {
-      return runs.failRun(state, "duplicate_write");
-    }
-
-    const discovered = await discovery.executeDiscoveryBatch(state, discoveryCalls, scope);
-    state = discovered.state;
-
-    const iterationObservations: RunObservation[] = [...discovered.observations];
-
-    const readBatch = await actions.executeReads(state, readCalls, scope, input.signal, denied);
-    state = readBatch.state;
-    iterationObservations.push(...readBatch.observations);
-    if (readBatch.clarification) {
-      return runs.suspendOutcome(state, "awaiting_clarification", readBatch.clarification.clarificationId);
-    }
-
-    if (writeCalls.length > 0) {
-      const writeBatch = await actions.prepareWrites(state, writeCalls, input.runId);
-      state = writeBatch.state;
-      iterationObservations.push(...writeBatch.observations);
-      if (writeBatch.suspended) {
-        return runs.suspendOutcome(state, "awaiting_confirmation", writeBatch.suspended.confirmationId);
+    // Closure-plan PR 5 (F03): a fail-safe around the pre-mutation phases.
+    // Discovery, reads, and preparation may only end this run as a bounded
+    // terminal failure — never an escaped exception that strands the session
+    // at an active phase. Durable suspensions return INSIDE the try, so the
+    // guard can never overwrite one; confirmed mutation dispatch never runs
+    // inside this loop at all.
+    let iterationObservations: RunObservation[];
+    try {
+      const { readCalls, writeCalls, discoveryCalls, denied, duplicateWrite } = actions.partitionToolCalls(
+        completion.toolCalls,
+        new Set(state.loadedToolNames),
+        state.catalogHash,
+        scope.authClass,
+      );
+      if (duplicateWrite) {
+        return runs.failRun(state, "duplicate_write");
       }
-      if (writeBatch.clarification) {
-        return runs.suspendOutcome(state, "awaiting_clarification", writeBatch.clarification.clarificationId);
-      }
-    }
 
-    const denials = actions.recordDenials(state, denied);
-    state = denials.state;
-    iterationObservations.push(...denials.observations);
+      const discovered = await discovery.executeDiscoveryBatch(state, discoveryCalls, scope);
+      state = discovered.state;
+
+      iterationObservations = [...discovered.observations];
+
+      const readBatch = await actions.executeReads(state, readCalls, scope, input.signal, denied);
+      state = readBatch.state;
+      iterationObservations.push(...readBatch.observations);
+      if (readBatch.clarification) {
+        return runs.suspendOutcome(state, "awaiting_clarification", readBatch.clarification.clarificationId);
+      }
+
+      if (writeCalls.length > 0) {
+        const writeBatch = await actions.prepareWrites(state, writeCalls, input.runId);
+        state = writeBatch.state;
+        iterationObservations.push(...writeBatch.observations);
+        if (writeBatch.suspended) {
+          return runs.suspendOutcome(state, "awaiting_confirmation", writeBatch.suspended.confirmationId);
+        }
+        if (writeBatch.clarification) {
+          return runs.suspendOutcome(state, "awaiting_clarification", writeBatch.clarification.clarificationId);
+        }
+      }
+
+      const denials = actions.recordDenials(state, denied);
+      state = denials.state;
+      iterationObservations.push(...denials.observations);
+    } catch (error) {
+      // A stable server code, never the raw exception text (which can carry
+      // Clockify data or driver SQL) — the real cause is logged server-side.
+      console.error(
+        "v2 iteration failed before durable completion:",
+        error instanceof Error ? error.message : String(error),
+      );
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+      return runs.failRun(state, "internal_error");
+    }
 
     observations.push(...iterationObservations);
     const denial = iterationObservations.find((o) => o.kind === "denied");

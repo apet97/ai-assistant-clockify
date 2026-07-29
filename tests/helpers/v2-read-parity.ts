@@ -149,7 +149,9 @@ export async function runV2ReadReceipt(
 ): Promise<{ outcome: ReadExecutionOutcome; receipt: SuccessReceipt | ErrorReceipt }> {
   const call: ToolCall = { id: "tool-1", name: actionName, arguments: args };
   const outcome = await executeV2Read(call, scope, deps);
-  if (!("actionResultId" in outcome)) throw new Error(`missing actionResultId for ${actionName}`);
+  if (!("actionResultId" in outcome) || outcome.actionResultId === undefined) {
+    throw new Error(`missing actionResultId for ${actionName}`);
+  }
   const stored = deps.store.getActionResult(outcome.actionResultId);
   if (!stored || typeof stored !== "object" || (stored as { kind?: string }).kind !== "receipt") {
     throw new Error(`missing stored receipt for ${actionName}`);

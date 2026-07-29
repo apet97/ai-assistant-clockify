@@ -348,6 +348,26 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
             );
           }
         }
+        if (active.phase === "model" || active.phase === "discovering" ||
+            active.phase === "executing_reads" || active.phase === "preparing_writes") {
+          // Closure-plan PR 5 (F03): an ACTIVE phase surviving to the next
+          // FIFO-serialized request is impossible for a healthy run — the
+          // prior request died mid-flight. Fail it durably WITH its
+          // `run.failed` event (never the eventless bulk update) so the
+          // journal stays truthful and the new run can start.
+          const strandedScope = { ...scope, runId: active.runId };
+          const strandedState = deps.store.getRun(strandedScope);
+          if (strandedState) {
+            deps.store.failRunWithEvent(strandedScope, strandedState, { code: "stranded_active_run" });
+          } else {
+            deps.store.failActiveRunsForSession(
+              claims.sessionId,
+              claims.workspaceId,
+              claims.adminUserId,
+              "stranded_active_run",
+            );
+          }
+        }
         if (active.phase === "awaiting_clarification") {
           const activeScope = { ...scope, runId: active.runId };
           const clarification = deps.store.getActiveClarificationForRun(activeScope);

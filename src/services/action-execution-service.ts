@@ -90,21 +90,50 @@ export async function executeReadsConcurrently(
 ): Promise<void> {
   const poolSize = V2_LIMITS.maxConcurrentReads;
   let nextIndex = 0;
+  // Closure-plan PR 5 (F03): one worker's failure must not unwind the batch
+  // while siblings are mid-flight. Workers catch everything (the read port
+  // itself no longer throws; this bounds governor/budget rejections), stop
+  // ADMITTING new work after cancellation or a fatal denial, and every
+  // already-started worker is awaited (`allSettled`) before the batch reports.
+  let stopAdmitting = false;
   const ordered: Array<{ call: ToolCall; outcome: ReadExecutionOutcome } | undefined> = new Array(calls.length);
   async function worker(): Promise<void> {
     for (;;) {
-      if (signal?.aborted) return;
+      if (signal?.aborted || stopAdmitting) return;
       const index = nextIndex;
       nextIndex += 1;
       if (index >= calls.length) return;
       const call = calls[index];
-      const outcome = await deps.requestGovernor.runRead(scope, () => deps.reads.execute(call, scope), { signal });
-      ordered[index] = { call, outcome };
+      try {
+        const outcome = await deps.requestGovernor.runRead(scope, () => deps.reads.execute(call, scope), { signal });
+        ordered[index] = { call, outcome };
+      } catch (error) {
+        stopAdmitting = true;
+        ordered[index] = {
+          call,
+          outcome: {
+            kind: "denied",
+            code: boundedDenialCode(error instanceof Error && error.message.length > 0
+              ? error.message
+              : "read_dispatch_failed"),
+          },
+        };
+      }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(poolSize, calls.length) }, () => worker()));
-  for (const entry of ordered) {
-    if (entry) onResult(entry.call, entry.outcome);
+  await Promise.allSettled(Array.from({ length: Math.min(poolSize, calls.length) }, () => worker()));
+  for (const [index, call] of calls.entries()) {
+    const entry = ordered[index];
+    if (entry) {
+      onResult(entry.call, entry.outcome);
+      continue;
+    }
+    // Never silently dropped: a call that was not admitted (cancellation or a
+    // fatal denial stopped the pool) is journaled as an explicit denial.
+    onResult(call, {
+      kind: "denied",
+      code: signal?.aborted ? "cancelled_before_dispatch" : "not_admitted",
+    });
   }
 }
 
@@ -257,7 +286,12 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
         deps.eventService.denyTool({
           scope: scopedRun(state),
           state,
-          payload: { toolCallId: call.id, actionName: call.name, code },
+          payload: {
+            toolCallId: call.id,
+            actionName: call.name,
+            code,
+            ...(outcome.actionResultId ? { actionResultId: outcome.actionResultId } : {}),
+          },
         });
         state = deps.runStore.getRun(scopedRun(state)) ?? state;
         observations.push({ kind: "denied", actionName: call.name, code });

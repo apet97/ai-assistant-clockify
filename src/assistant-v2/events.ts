@@ -84,6 +84,9 @@ export const runEventPayloadSchemas = {
     toolCallId: boundedString(),
     actionName: boundedString(),
     code: boundedString(),
+    /** Links the canonical failure/denial result when one was persisted
+     * (closure-plan PR 5 / F22) — absent for pure pre-dispatch denials. */
+    actionResultId: boundedString().optional(),
   }).strict(),
   "tool.started": z.object({
     toolCallId: boundedString(),

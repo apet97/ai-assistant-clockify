@@ -1565,6 +1565,33 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         for (const row of executingBatches) {
           confirmationBatchStore.recoverConfirmationBatch(row.id, timestamp);
         }
+        // Closure-plan PR 5 (F03): startup recovery APPENDS the scoped
+        // `run.failed` event for each orphaned active run — the journal stays
+        // truthful instead of a phase silently flipping with no event.
+        const orphanedRuns = db.prepare(
+          `SELECT session_id, run_id, workspace_id, admin_user_id FROM assistant_runs
+            WHERE phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,
+        ).all() as Array<{ session_id: string; run_id: string; workspace_id: string; admin_user_id: string }>;
+        for (const orphan of orphanedRuns) {
+          const next = (db.prepare(
+            `SELECT COALESCE(MAX(sequence), 0) + 1 AS next FROM run_events
+              WHERE session_id = ? AND run_id = ?`,
+          ).get(orphan.session_id, orphan.run_id) as { next: number }).next;
+          db.prepare(
+            `INSERT INTO run_events (
+               session_id, run_id, sequence, workspace_id, admin_user_id,
+               event_type, payload_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, 'run.failed', ?, ?)`,
+          ).run(
+            orphan.session_id,
+            orphan.run_id,
+            next,
+            orphan.workspace_id,
+            orphan.admin_user_id,
+            JSON.stringify({ code: "interrupted_before_durable_completion" }),
+            timestamp,
+          );
+        }
         const assistantRuns = db.prepare(
           `UPDATE assistant_runs SET phase = 'failed', updated_at = ?
             WHERE phase IN ('model', 'discovering', 'executing_reads', 'preparing_writes')`,
