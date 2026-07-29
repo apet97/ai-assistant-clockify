@@ -84,7 +84,9 @@ export type WritePreparationOutcome =
   /** F19: an ambiguous write produced a DURABLE clarification (grounded
    * chips), not a generic denial. The run suspends awaiting the answer. */
   | { kind: "clarification"; clarificationId: string; actionResultId: string }
-  | { kind: "denied"; code: string; actionResultId: string }
+  /** `actionResultId` absent only for pre-persistence denials (e.g. a revoked
+   * installation, F07) where creating a row would violate the boundary. */
+  | { kind: "denied"; code: string; actionResultId?: string }
   | { kind: "not_ready"; code: "write_port_not_ready"; actionResultId: string };
 
 export interface ValidatedWriteCall {
@@ -230,7 +232,12 @@ export interface RunnerDependencies {
      * assistant write threw `assistant_run_not_found`. */
     prepare(calls: ToolCall[], scope: RunScope & { runId: string }): Promise<WritePreparationOutcome>;
   };
-  installationGuard: { assertCurrent(scope: RunScope): void };
+  installationGuard: {
+    assertCurrent(scope: RunScope): void;
+    /** Closure-plan PR 8 (F07): synchronous post-await recheck — false when
+     * the installation went inactive or its generation moved. */
+    isCurrent?(): boolean;
+  };
   requestGovernor: RequestGovernorPort;
   clock: { now(): Date; monotonicMs(): number };
 }

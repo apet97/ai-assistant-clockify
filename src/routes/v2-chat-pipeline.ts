@@ -13,6 +13,7 @@ import {
 } from "../assistant-v2/protocol.js";
 import { runDiscoverySearch } from "../assistant-v2/discovery/api-search-tool.js";
 import { deterministicGuardReply } from "./chat-guards.js";
+import { WorkspaceMutationRevokedError } from "../clockify/workspace-mutation-coordinator.js";
 import { createRunEventService } from "../services/run-event-service.js";
 import { createRunEventViewService } from "../services/run-event-view-service.js";
 import { createOperationPreparationService } from "../services/operation-preparation-service.js";
@@ -27,7 +28,11 @@ import { withRunScopedHostCallBudget } from "../clockify/request-governor.js";
  * clarification resume and process restart by construction, and call 61 is
  * denied before any fetch.
  */
-function requestGovernorFor(deps: AppDeps, scope: RunScope & { runId: string }) {
+function requestGovernorFor(
+  deps: AppDeps,
+  scope: RunScope & { runId: string },
+  installationCurrent?: () => boolean,
+) {
   const assistantScope = {
     sessionId: scope.sessionId,
     runId: scope.runId,
@@ -37,11 +42,17 @@ function requestGovernorFor(deps: AppDeps, scope: RunScope & { runId: string }) 
     authClass: scope.authClass,
   };
   return {
-    runRead: async <T>(_readScope: RunScope, op: () => Promise<T>) =>
-      withRunScopedHostCallBudget(op, {
+    runRead: async <T>(_readScope: RunScope, op: () => Promise<T>) => {
+      // F07: the generation is rechecked immediately before each read
+      // dispatch; a revoked installation denies the read as a typed failure.
+      if (installationCurrent && !installationCurrent()) {
+        throw new Error("installation_changed");
+      }
+      return withRunScopedHostCallBudget(op, {
         charge: () => deps.store.chargeRunHostCall(assistantScope),
         refund: () => deps.store.refundRunHostCall(assistantScope),
-      }),
+      });
+    },
   };
 }
 
@@ -57,6 +68,14 @@ export function buildV2RunnerDependencies(
   scope: RunScope & { runId: string },
   signal?: AbortSignal,
 ): RunnerDependencies {
+  // Closure-plan PR 8 (F07): the exact-generation recheck used after every
+  // provider await, before each read dispatch, and before write preparation —
+  // captured installation authority never outlives revocation by more than
+  // one await boundary.
+  const installationCurrent = (): boolean => {
+    const current = deps.store.getInstallation(installation.workspaceId);
+    return !!current && current.status === "active" && current.generation === installation.generation;
+  };
   const eventService = createRunEventService(deps.store);
   const eventViews = createRunEventViewService(deps.store, { sessionSecret: deps.config.sessionSecret, now: deps.now });
   const preparationService = createOperationPreparationService({
@@ -105,23 +124,28 @@ export function buildV2RunnerDependencies(
       ...preparationService,
       // Preview-time target/support reads run under the SAME persisted run
       // ledger as ordinary reads (F04) — no unscoped 60-call fallthrough.
-      prepare: (calls, prepareScope) => withRunScopedHostCallBudget(
-        () => preparationService.prepare(calls, prepareScope),
-        {
-          charge: () => deps.store.chargeRunHostCall({ ...scope }),
-          refund: () => deps.store.refundRunHostCall({ ...scope }),
-        },
-      ),
+      // F07: the generation is rechecked before any operation/confirmation
+      // row can be persisted.
+      prepare: async (calls, prepareScope) => {
+        if (!installationCurrent()) {
+          return { kind: "denied", code: "installation_changed" };
+        }
+        return withRunScopedHostCallBudget(
+          () => preparationService.prepare(calls, prepareScope),
+          {
+            charge: () => deps.store.chargeRunHostCall({ ...scope }),
+            refund: () => deps.store.refundRunHostCall({ ...scope }),
+          },
+        );
+      },
     },
     installationGuard: {
       assertCurrent: () => {
-        const current = deps.store.getInstallation(installation.workspaceId);
-        if (!current || current.status !== "active" || current.generation !== installation.generation) {
-          throw new Error("installation_not_current");
-        }
+        if (!installationCurrent()) throw new Error("installation_not_current");
       },
+      isCurrent: installationCurrent,
     },
-    requestGovernor: requestGovernorFor(deps, scope),
+    requestGovernor: requestGovernorFor(deps, scope, installationCurrent),
     // `model.completed`'s `latencyMs` is a strict integer (events.ts); round the
     // fractional `performance.now()` reading here rather than at every call site.
     clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
@@ -232,6 +256,22 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         installationGeneration: installation.generation,
         authClass: "addon" as const,
       };
+
+      // Closure-plan PR 8 (F07): combine the lifecycle observer with client
+      // cancellation so provider/read work aborts the moment this exact
+      // installation generation is revoked or replaced.
+      let turnSignal = signal;
+      if (deps.mutationCoordinator) {
+        try {
+          turnSignal = deps.mutationCoordinator.observe(claims.workspaceId, installation.generation, signal);
+        } catch (error) {
+          if (error instanceof WorkspaceMutationRevokedError) {
+            return { ok: false, code: "installation_changed", message: "The Clockify installation changed. No change was made." };
+          }
+          throw error;
+        }
+      }
+      signal = turnSignal;
 
       // T14-E: an explicit continuationRunId resumes the exact scoped run's
       // single `pending` clarification with admin-authored free text — never

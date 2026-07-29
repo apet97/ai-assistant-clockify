@@ -180,6 +180,12 @@ export async function runAssistantV2(
       return runs.failRun(state, error instanceof Error ? error.message : "model_failed");
     }
     state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    // Closure-plan PR 8 (F07): recheck the exact installation generation
+    // immediately after the provider await — a revoked/replaced installation
+    // stops the run before completion persistence or any further dispatch.
+    if (deps.installationGuard.isCurrent && !deps.installationGuard.isCurrent()) {
+      return runs.failRun(state, "installation_changed");
+    }
     // Wall-clock start of the post-model phases (the model call charged its
     // own elapsed time in run-service).
     const iterationStarted = deps.clock.monotonicMs();
@@ -220,6 +226,10 @@ export async function runAssistantV2(
       iterationObservations.push(...readBatch.observations);
       if (readBatch.clarification) {
         return runs.suspendOutcome(state, "awaiting_clarification", readBatch.clarification.clarificationId);
+      }
+      // F07: recheck after the read I/O awaits, before write preparation.
+      if (deps.installationGuard.isCurrent && !deps.installationGuard.isCurrent()) {
+        return runs.failRun(state, "installation_changed");
       }
 
       if (writeCalls.length > 0) {

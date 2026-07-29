@@ -239,7 +239,8 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
             });
             expect(denied.prepared.kind).toBe("denied");
             if (denied.prepared.kind === "denied") {
-              expect(receiptCode(denied.store, denied.prepared.actionResultId)).toBe("unavailable_for_auth_class");
+              expect(denied.prepared.actionResultId).toBeDefined();
+              expect(receiptCode(denied.store, denied.prepared.actionResultId!)).toBe("unavailable_for_auth_class");
               expect(denied.mutationsAfterPrepare - denied.mutationsBefore).toBe(0);
             }
 
@@ -276,7 +277,8 @@ export function registerWriteParityDomainSuite(domain: WriteParityDomain): void 
             });
             expect(result.prepared.kind).toBe("denied");
             if (result.prepared.kind !== "denied") return;
-            expect(receiptCode(result.store, result.prepared.actionResultId)).toBe("policy_denied");
+            expect(result.prepared.actionResultId).toBeDefined();
+            expect(receiptCode(result.store, result.prepared.actionResultId!)).toBe("policy_denied");
             expect(result.mutationsAfterPrepare - result.mutationsBefore).toBe(0);
           });
         }
