@@ -47,6 +47,12 @@ export interface FakeWorkspace {
 
 const nestedFakeMutation = new AsyncLocalStorage<boolean>();
 
+/** The one definition of "this WorkspaceClient method mutates Clockify" — used by
+ * the dispatch proxy below and by the production-composition harness's mutation
+ * counter, so the two can never disagree about what counts as a write. */
+export const FAKE_MUTATION_METHOD_PATTERN =
+  /^(?:add|archive|create|deactivate|delete|import|invite|mark|publish|remove|resubmit|set|start|stop|submit|update)/;
+
 export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace {
   // One independent object graph backs both mutable state and every factory's
   // failure/list control reads. No factory can mutate the caller's seed or a
@@ -83,7 +89,7 @@ export function createFakeWorkspace(seed: FakeWorkspaceSeed = {}): FakeWorkspace
     ...makeFakeMiscRisky(ctx),
   };
 
-  const mutationMethod = /^(?:add|archive|create|deactivate|delete|import|invite|mark|publish|remove|resubmit|set|start|stop|submit|update)/;
+  const mutationMethod = FAKE_MUTATION_METHOD_PATTERN;
   const client = new Proxy(rawClient, {
     get(target, property, receiver) {
       const value = Reflect.get(target, property, receiver);

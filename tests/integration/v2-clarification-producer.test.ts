@@ -1,33 +1,27 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import request from "supertest";
-import type { Express } from "express";
-import { createApp } from "../../src/server.js";
-import { createSignatureParser } from "../../src/addon/verify.js";
-import { createStore, type Store } from "../../src/db/store.js";
-import { signSessionCookie } from "../../src/auth/sessions.js";
-import { buildSessionCookie } from "../../src/routes/deps.js";
+import type { Store } from "../../src/db/store.js";
 import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
-import type { RunEventAttachment } from "../../src/assistant-v2/events.js";
-import { createFakeWorkspace } from "../helpers/fake-clockify.js";
-import { makeTestConfig } from "../helpers/config.js";
-import { testKeys } from "../helpers/test-keys.js";
-import { scriptedToolModel } from "../helpers/scripted-model.js";
 import type { ToolCompletion } from "../../src/assistant/model-client.js";
+import {
+  composeV2ProductionApp,
+  discoverThenCall,
+  ndjsonFrames,
+  type V2Composition,
+} from "../helpers/v2-production-composition.js";
 
 /**
  * CP-B: the live clarification PRODUCER, end to end over real HTTP.
  *
- * Every case drives `createApp` with `assistantEngine: "v2"`, so the whole
- * chain is the real one: chat route -> v2 pipeline -> `runAssistantV2` ->
- * `ActionExecutionService` -> `executeV2Read` -> the real Clockify read action
- * and its real name resolver. Nothing here seeds a `pending_clarifications`
- * row by hand (that is what T14-D's route tests already do); the point is that
- * the product now CREATES one at runtime, journals it, hydrates it, and can
- * resolve it.
+ * Every case drives the production composition (`composeV2ProductionApp`,
+ * `assistantEngine: "v2"`), so the whole chain is the real one: chat route ->
+ * v2 pipeline -> `runAssistantV2` -> `ActionExecutionService` ->
+ * `executeV2Read` -> the real Clockify read action and its real name resolver.
+ * Nothing here seeds a `pending_clarifications` row by hand (that is what
+ * T14-D's route tests already do); the point is that the product CREATES one
+ * at runtime, journals it, hydrates it, and can resolve it.
  */
 
-const NOW = new Date("2026-07-26T00:00:00.000Z");
-const ADDON_KEY = "addon-key";
 const WORKSPACE_ID = "ws-1";
 const ADMIN_ID = "admin-1";
 
@@ -37,108 +31,25 @@ const ADMIN_ID = "admin-1";
 const ALICE_ONE = "aaaaaaaaaaaaaaaaaaaaaaa1";
 const ALICE_TWO = "aaaaaaaaaaaaaaaaaaaaaaa2";
 
-const stores: Store[] = [];
-
-afterEach(() => {
-  for (const store of stores.splice(0)) store.close();
-});
-
-function seededWorkspace() {
-  return createFakeWorkspace({
-    users: [
-      { id: ALICE_ONE, name: "Alice", email: "alice.one@example.com" },
-      { id: ALICE_TWO, name: "Alice", email: "alice.two@example.com" },
-      { id: "bbbbbbbbbbbbbbbbbbbbbbb1", name: "Bob", email: "bob@example.com" },
-    ],
-    entries: [
-      {
-        id: "e1",
-        description: "spec work",
-        start: "2026-07-25T09:00:00Z",
-        end: "2026-07-25T10:00:00Z",
-        billable: true,
-      },
-    ] as never,
-  });
-}
-
-async function makeV2App(script: ToolCompletion[]): Promise<{
-  app: Express;
-  store: Store;
-  cookie: string;
-  session: ReturnType<Store["createSession"]>;
-  /** Advance the one shared store + app clock. This ages an existing row exactly
-   * the way wall-clock time does in production, without waiting or touching the
-   * row. */
-  setClock: (value: Date) => void;
-}> {
-  const keys = await testKeys();
-  const config = makeTestConfig({
-    clockifyAddonPublicKeyPem: keys.pem,
-    clockifyAddonKey: ADDON_KEY,
-    assistantEngine: "v2",
-  });
-  // ONE clock for the store and the app, as in production. Left unset the app
-  // clock defaults to the REAL wall clock while the store writes rows at the
-  // fixed `NOW`, so every row is born "expired" — the same skew class as the
-  // T15-E session-cookie bug.
-  let clock = NOW;
-  const store = createStore(":memory:", { encryptionKey: "test-key", now: () => clock });
-  stores.push(store);
-  store.saveInstallation({
-    workspaceId: WORKSPACE_ID,
-    addonId: "addon-1",
-    addonUserId: "addon-user-1",
-    addonToken: "addon-token",
-  });
-  const fake = seededWorkspace();
-  const app = createApp({
-    config,
-    store,
-    parser: createSignatureParser(ADDON_KEY, keys.pem),
-    modelClient: scriptedToolModel(script),
-    clockifyForWorkspace: () => fake.client,
-    now: () => clock,
-  });
-  const session = store.createSession({ workspaceId: WORKSPACE_ID, adminUserId: ADMIN_ID });
-  // `verifySessionCookie` checks expiry against the REAL wall clock, so the
-  // cookie carries a fixed far-future expiry (the store's own `expiresAt`,
-  // which is session bookkeeping rather than auth, is untouched).
-  const value = signSessionCookie(
+const SEED = {
+  users: [
+    { id: ALICE_ONE, name: "Alice", email: "alice.one@example.com" },
+    { id: ALICE_TWO, name: "Alice", email: "alice.two@example.com" },
+    { id: "bbbbbbbbbbbbbbbbbbbbbbb1", name: "Bob", email: "bob@example.com" },
+  ],
+  entries: [
     {
-      sessionId: session.id,
-      workspaceId: WORKSPACE_ID,
-      adminUserId: ADMIN_ID,
-      workspaceRole: "ADMIN",
-      expiresAt: "2099-01-01T00:00:00.000Z",
+      id: "e1",
+      description: "spec work",
+      start: "2026-07-25T09:00:00Z",
+      end: "2026-07-25T10:00:00Z",
+      billable: true,
     },
-    config.sessionSecret,
-  );
-  return {
-    app,
-    store,
-    session,
-    cookie: buildSessionCookie(value, false).split(";")[0]!,
-    setClock: (value_: Date) => {
-      clock = value_;
-    },
-  };
-}
+  ] as never,
+};
 
-/** The v2 runner's first completion may only call the discovery meta-tool; the
- * requested read tool becomes callable in the NEXT completion. */
-function discoverThenCall(query: string, call: { name: string; arguments: Record<string, unknown> }): ToolCompletion[] {
-  return [
-    { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query } }] },
-    { text: "", toolCalls: [{ id: "tc-read", name: call.name, arguments: call.arguments }] },
-    { text: "All done.", toolCalls: [] },
-  ];
-}
-
-async function activeRunId(store: Store, sessionId: string): Promise<string> {
-  const active = store.getActiveRunForSession(sessionId, WORKSPACE_ID, ADMIN_ID);
-  if (!active) throw new Error("expected an active run");
-  return active.runId;
+async function makeV2App(script: ToolCompletion[]): Promise<V2Composition> {
+  return composeV2ProductionApp({ script, seed: SEED });
 }
 
 function clarificationRowsFor(store: Store, sessionId: string, runId: string) {
@@ -150,44 +61,20 @@ function clarificationRowsFor(store: Store, sessionId: string, runId: string) {
   });
 }
 
-function ndjsonFrames(text: string): Array<Record<string, unknown>> {
-  return text
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
-}
-
-type EventRow = {
-  event: { eventType: string; payload: Record<string, unknown> };
-  attachment?: RunEventAttachment;
-};
-
-async function readEvents(app: Express, cookie: string, runId: string): Promise<EventRow[]> {
-  const res = await request(app)
-    .get(`/api/runs/${runId}/events`)
-    .query({ after: 0 })
-    .set("Cookie", cookie);
-  expect(res.status).toBe(200);
-  return (res.body.events ?? res.body.data?.events) as EventRow[];
-}
-
 describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarifications", () => {
   it("creates exactly one durable pending_clarifications row from an ambiguous read", async () => {
-    const { app, store, cookie, session } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { userId: "Alice" },
       }),
     );
 
-    const res = await request(app)
-      .post("/api/chat/messages")
-      .set("Cookie", cookie)
-      .send({ message: "list Alice's time entries" });
+    const res = await c.chat("list Alice's time entries");
     expect(res.status).toBe(200);
 
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId);
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId);
     expect(row).toBeDefined();
     expect(row!.status).toBe("pending");
     expect(row!.originalToolName).toBe("clockify_entries_list");
@@ -195,7 +82,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     expect(row!.missingField).toBe("userId");
     expect(row!.partialArguments).toEqual({ userId: "Alice" });
     expect(row!.candidates).toHaveLength(2);
-    expect(row!.candidates.map((c) => c.externalId).sort()).toEqual([ALICE_ONE, ALICE_TWO]);
+    expect(row!.candidates.map((cand) => cand.externalId).sort()).toEqual([ALICE_ONE, ALICE_TWO]);
     for (const candidate of row!.candidates) {
       expect(candidate.externalId).toMatch(/^[0-9a-f]{24}$/);
       expect(candidate.optionId).toBe(candidate.externalId);
@@ -203,30 +90,23 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     }
 
     // The run is suspended on exactly this clarification.
-    const run = store.getRun({
-      sessionId: session.id,
-      runId,
-      workspaceId: WORKSPACE_ID,
-      adminUserId: ADMIN_ID,
-      installationGeneration: 1,
-      authClass: "addon",
-    });
+    const run = c.store.getRun(c.getRunScope(runId));
     expect(run?.phase).toBe("awaiting_clarification");
     expect(run?.continuation).toEqual({ kind: "awaiting_clarification", clarificationId: row!.id });
   });
 
   it("journals clarification.required and hydrates a display-only pending_clarification attachment", async () => {
-    const { app, store, cookie, session } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { userId: "Alice" },
       }),
     );
-    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list Alice's entries" });
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId)!;
+    await c.chat("list Alice's entries");
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId)!;
 
-    const events = await readEvents(app, cookie, runId);
+    const events = await c.readEvents(runId);
     const required = events.filter((e) => e.event.eventType === "clarification.required");
     expect(required).toHaveLength(1);
     expect(required[0]!.event.payload.clarificationId).toBe(row.id);
@@ -240,8 +120,8 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     // clarify action_results row the event links to.
     expect(attachment.question).toContain("Alice");
     expect(attachment.missingField).toBe("userId");
-    expect(attachment.candidates.map((c) => c.optionId).sort()).toEqual([ALICE_ONE, ALICE_TWO]);
-    expect(attachment.candidates.every((c) => c.label === "Alice")).toBe(true);
+    expect(attachment.candidates.map((cand) => cand.optionId).sort()).toEqual([ALICE_ONE, ALICE_TWO]);
+    expect(attachment.candidates.every((cand) => cand.label === "Alice")).toBe(true);
     // Display data ONLY: no externalId, no partial arguments.
     for (const candidate of attachment.candidates) {
       expect("externalId" in candidate).toBe(false);
@@ -254,26 +134,26 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
   });
 
   it("resolves the produced clarification by exact option id and runs the read", async () => {
-    const { app, store, cookie, session } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { userId: "Alice" },
       }),
     );
-    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list Alice's entries" });
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId)!;
-    const scope = { sessionId: session.id, runId, workspaceId: WORKSPACE_ID, adminUserId: ADMIN_ID };
+    await c.chat("list Alice's entries");
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId)!;
+    const scope = c.runScope(runId);
 
-    const res = await request(app)
+    const res = await request(c.app)
       .post(`/api/clarifications/${row.id}/resolve`)
-      .set("Cookie", cookie)
+      .set("Cookie", c.cookie)
       .send({ optionId: ALICE_TWO });
     expect(res.status).toBe(200);
     const frames = ndjsonFrames(res.text);
     expect(frames.at(-1)?.type).toBe("done");
 
-    const settled = store.getPendingClarification(row.id, scope);
+    const settled = c.store.getPendingClarification(row.id, scope);
     expect(settled?.status).toBe("resolved");
     expect(settled?.terminalReason).toBe("selected_option");
     expect(settled?.selectedOptionId).toBe(ALICE_TWO);
@@ -282,7 +162,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     expect(settled?.partialArguments).toEqual({});
 
     // The read really executed, with the CHOSEN 24-hex id — not the name.
-    const stored = store.getActionResult(settled!.actionResultId!) as {
+    const stored = c.store.getActionResult(settled!.actionResultId!) as {
       kind: string;
       receipt: { ok: boolean; action: string; data?: { userId?: string } };
     };
@@ -292,29 +172,29 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     expect(stored.receipt.data?.userId).toBe(ALICE_TWO);
 
     // The run advanced past the clarification (the scripted model then finished).
-    expect(store.getActiveRunForSession(session.id, WORKSPACE_ID, ADMIN_ID)).toBeUndefined();
+    expect(c.store.getActiveRunForSession(c.sessionId, WORKSPACE_ID, ADMIN_ID)).toBeUndefined();
   });
 
   it("stops rendering a settled clarification as live", async () => {
-    const { app, store, cookie, session } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { userId: "Alice" },
       }),
     );
-    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list Alice's entries" });
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId)!;
+    await c.chat("list Alice's entries");
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId)!;
 
-    const before = await readEvents(app, cookie, runId);
+    const before = await c.readEvents(runId);
     expect(before.find((e) => e.event.eventType === "clarification.required")?.attachment).toBeDefined();
 
-    await request(app)
+    await request(c.app)
       .post(`/api/clarifications/${row.id}/resolve`)
-      .set("Cookie", cookie)
+      .set("Cookie", c.cookie)
       .send({ optionId: ALICE_ONE });
 
-    const after = await readEvents(app, cookie, runId);
+    const after = await c.readEvents(runId);
     const required = after.find((e) => e.event.eventType === "clarification.required");
     expect(required).toBeDefined();
     expect(required!.attachment).toBeUndefined();
@@ -324,75 +204,67 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     // Expiry is enforced at claim time and only LAZILY by the retention sweep,
     // so a still-`pending` row can outlive its TTL in the database. Hydrating on
     // status alone rendered live chips that 410 on click.
-    const { app, store, cookie, session, setClock } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { userId: "Alice" },
       }),
     );
-    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list Alice's entries" });
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId)!;
-    const scope = { sessionId: session.id, runId, workspaceId: WORKSPACE_ID, adminUserId: ADMIN_ID };
+    await c.chat("list Alice's entries");
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId)!;
+    const scope = c.runScope(runId);
 
     // Live at creation time.
-    const live = await readEvents(app, cookie, runId);
+    const live = await c.readEvents(runId);
     expect(live.find((e) => e.event.eventType === "clarification.required")?.attachment).toBeDefined();
 
     // Past the 5-minute TTL, with NO sweep and NO status change.
-    setClock(new Date(Date.parse(row.expiresAt) + 1));
-    expect(store.getPendingClarification(row.id, scope)?.status).toBe("pending");
+    c.setClock(new Date(Date.parse(row.expiresAt) + 1));
+    expect(c.store.getPendingClarification(row.id, scope)?.status).toBe("pending");
 
-    const after = await readEvents(app, cookie, runId);
+    const after = await c.readEvents(runId);
     const required = after.find((e) => e.event.eventType === "clarification.required");
     expect(required).toBeDefined();
     expect(required!.attachment).toBeUndefined();
 
     // ...and the row it would have offered really is unclaimable, so nothing
     // truthful was withheld.
-    expect(() => store.claimClarificationResolving(row.id, scope)).toThrow(/clarification_expired/);
+    expect(() => c.store.claimClarificationResolving(row.id, scope)).toThrow(/clarification_expired/);
   });
 
   it("creates a candidate-free row for a clarification with no single owning argument", async () => {
     // A date-range clarify (`resolveDateRange`) carries no options and no owning
     // argument, so the row stores the inert `"selection"` marker: resolve-by-option
     // can never match, and free-text continuation (T14-E) is the only answer.
-    const { app, store, cookie, session } = await makeV2App(
+    const c = await makeV2App(
       discoverThenCall("list time entries", {
         name: "clockify_entries_list",
         arguments: { start: "not-a-real-date" },
       }),
     );
-    await request(app).post("/api/chat/messages").set("Cookie", cookie).send({ message: "list entries since not-a-real-date" });
+    await c.chat("list entries since not-a-real-date");
 
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId)!;
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId)!;
     expect(row.status).toBe("pending");
     expect(row.candidates).toEqual([]);
     expect(row.missingField).toBe("selection");
 
     // Exact-option resolve cannot invent a match.
-    const rejected = await request(app)
+    const rejected = await request(c.app)
       .post(`/api/clarifications/${row.id}/resolve`)
-      .set("Cookie", cookie)
+      .set("Cookie", c.cookie)
       .send({ optionId: ALICE_ONE });
     expect(rejected.status).toBe(400);
     expect(rejected.body.code).toBe("unknown_option");
     // A rejected option leaves the clarification answerable.
-    expect(clarificationRowsFor(store, session.id, runId)?.status).toBe("pending");
+    expect(clarificationRowsFor(c.store, c.sessionId, runId)?.status).toBe("pending");
 
     // Free-text continuation still resumes the same run.
-    const continued = await request(app)
-      .post("/api/chat/messages")
-      .set("Cookie", cookie)
-      .send({ message: "use yesterday instead", continuationRunId: runId });
+    const continued = await c.chat("use yesterday instead", { continuationRunId: runId });
     expect(continued.status).toBe(200);
-    const settled = store.getPendingClarification(row.id, {
-      sessionId: session.id,
-      runId,
-      workspaceId: WORKSPACE_ID,
-      adminUserId: ADMIN_ID,
-    });
+    const settled = c.store.getPendingClarification(row.id, c.runScope(runId));
     expect(settled?.status).toBe("continued");
     expect(settled?.terminalReason).toBe("free_text_continuation");
   });
@@ -405,7 +277,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     // above the other read's chips — pre-T18 review MEDIUM); it reports
     // `clarification_already_active` and the run suspends on the row's real
     // owner, so exactly one question and one event exist.
-    const { app, store, cookie, session } = await makeV2App([
+    const c = await makeV2App([
       { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: "list time entries" } }] },
       {
         text: "",
@@ -417,31 +289,21 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
       { text: "All done.", toolCalls: [] },
     ]);
 
-    const res = await request(app)
-      .post("/api/chat/messages")
-      .set("Cookie", cookie)
-      .send({ message: "list entries for Alice twice" });
+    const res = await c.chat("list entries for Alice twice");
     expect(res.status).toBe(200);
 
-    const runId = await activeRunId(store, session.id);
-    const row = clarificationRowsFor(store, session.id, runId);
+    const runId = c.activeRunId();
+    const row = clarificationRowsFor(c.store, c.sessionId, runId);
     expect(row).toBeDefined();
     expect(row!.status).toBe("pending");
 
     // Exactly one clarification.required event, naming the one row that exists.
-    const events = await readEvents(app, cookie, runId);
+    const events = await c.readEvents(runId);
     const required = events.filter((e) => e.event.eventType === "clarification.required");
     expect(required).toHaveLength(1);
     expect(required[0]!.event.payload.clarificationId).toBe(row!.id);
 
-    const run = store.getRun({
-      sessionId: session.id,
-      runId,
-      workspaceId: WORKSPACE_ID,
-      adminUserId: ADMIN_ID,
-      installationGeneration: 1,
-      authClass: "addon",
-    });
+    const run = c.store.getRun(c.getRunScope(runId));
     expect(run?.continuation).toEqual({ kind: "awaiting_clarification", clarificationId: row!.id });
   });
 
@@ -449,7 +311,7 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     // The read pool resolves EVERY call before any outcome suspends the run, so
     // the second read below really executed and really persisted a result.
     // Returning at the first clarification erased it from the journal entirely.
-    const { app, store, cookie, session } = await makeV2App([
+    const c = await makeV2App([
       { text: "", toolCalls: [{ id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: "list time entries" } }] },
       {
         text: "",
@@ -463,14 +325,11 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
       { text: "All done.", toolCalls: [] },
     ]);
 
-    const res = await request(app)
-      .post("/api/chat/messages")
-      .set("Cookie", cookie)
-      .send({ message: "list entries for Alice and Bob" });
+    const res = await c.chat("list entries for Alice and Bob");
     expect(res.status).toBe(200);
 
-    const runId = await activeRunId(store, session.id);
-    const events = await readEvents(app, cookie, runId);
+    const runId = c.activeRunId();
+    const events = await c.readEvents(runId);
     const forCall = (id: string) =>
       events.filter((e) => e.event.payload.toolCallId === id).map((e) => e.event.eventType);
 
@@ -488,15 +347,15 @@ describe("CP-B: v2 reads produce, journal, hydrate, and resolve real clarificati
     // The journaled result is the real one the executed read persisted.
     const completed = events.find((e) => e.event.payload.toolCallId === "tc-after"
       && e.event.eventType === "tool.completed")!;
-    const stored = store.getActionResult(completed.event.payload.actionResultId as string) as {
+    const stored = c.store.getActionResult(completed.event.payload.actionResultId as string) as {
       receipt: { ok: boolean; data?: { userId?: string } };
     };
     expect(stored.receipt.ok).toBe(true);
     expect(stored.receipt.data?.userId).toBe("bbbbbbbbbbbbbbbbbbbbbbb1");
 
     // The run still suspends on the clarification.
-    const row = clarificationRowsFor(store, session.id, runId)!;
-    expect(row.status).toBe("pending");
-    expect(row.missingField).toBe("userId");
+    const rowAfter = clarificationRowsFor(c.store, c.sessionId, runId)!;
+    expect(rowAfter.status).toBe("pending");
+    expect(rowAfter.missingField).toBe("userId");
   });
 });
