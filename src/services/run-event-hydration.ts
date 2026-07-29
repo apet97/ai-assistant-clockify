@@ -1,13 +1,12 @@
 import type {
-  JsonValue,
-  PresentedResult,
-  PresentedResultEnvelope,
   RunEventAttachment,
   RunEventType,
   RunEventView,
   SequencedRunEvent,
 } from "../assistant-v2/events.js";
 import { rotatePendingNonce } from "../harness/confirmations.js";
+import { MODEL_API_ACTION_CATALOG } from "../harness/api-catalog.js";
+import { createResultViewService, type ResultViewService } from "./result-view-service.js";
 import type { Store } from "../db/store.js";
 import type { AssistantRunScope } from "../db/store/runs.js";
 
@@ -16,93 +15,12 @@ export interface HydrationContext {
   scope: AssistantRunScope;
   sessionSecret: string;
   now: Date;
+  /** Injectable for tests; defaults to the production catalog-backed view. */
+  resultViews?: ResultViewService;
 }
 
-function chatResultToPresentation(result: unknown, actionName: string): PresentedResult {
-  if (result && typeof result === "object" && !Array.isArray(result)) {
-    const row = result as Record<string, unknown>;
-    if (row.kind === "receipt" && row.receipt && typeof row.receipt === "object") {
-      const receipt = row.receipt as Record<string, unknown>;
-      const ok = receipt.ok === true;
-      return {
-        status: ok ? "succeeded" : "failed",
-        title: typeof receipt.action === "string" ? receipt.action : actionName,
-        summary: typeof receipt.message === "string" ? receipt.message : "",
-        facts: [],
-        warnings: Array.isArray(receipt.warnings)
-          ? receipt.warnings.slice(0, 12).map((w, index) => {
-              const item = w as Record<string, unknown>;
-              return {
-                code: typeof item.code === "string" ? item.code.slice(0, 256) : `warning_${index}`,
-                message: typeof item.message === "string" ? item.message.slice(0, 256) : "",
-              };
-            })
-          : [],
-        references: [],
-      };
-    }
-    if (row.kind === "preview" && row.preview && typeof row.preview === "object") {
-      const preview = row.preview as Record<string, unknown>;
-      return {
-        status: "pending_confirmation",
-        title: typeof preview.actionLabel === "string" ? preview.actionLabel : actionName,
-        summary: Array.isArray(preview.expectedChanges)
-          ? preview.expectedChanges.slice(0, 12).map(String).join("; ")
-          : "",
-        facts: [],
-        warnings: Array.isArray(preview.warnings)
-          ? preview.warnings.slice(0, 12).map((w, index) => ({
-              code: `preview_${index}`,
-              message: String(w).slice(0, 256),
-            }))
-          : [],
-        references: [],
-      };
-    }
-    if (row.kind === "clarify") {
-      // A clarify payload means the action did NOT execute — it resolved to a
-      // question. Live clarifications render through the dedicated
-      // pending_clarification attachment (T14-F), never this path, so a stored
-      // clarify reaching a presented_result card must degrade truthfully:
-      // "succeeded" here would present an unexecuted action as done
-      // (T14-T16 review gate, Finding 2 coupling).
-      return {
-        status: "failed",
-        title: actionName,
-        summary: typeof row.message === "string" ? row.message : "",
-        facts: [],
-        warnings: [{ code: "clarification_required", message: "The action needs clarification and was not performed." }],
-        references: [],
-      };
-    }
-  }
-  return {
-    status: "succeeded",
-    title: actionName,
-    summary: "",
-    facts: [],
-    warnings: [],
-    references: [],
-  };
-}
-
-function envelopeFromActionResult(
-  actionResultId: string,
-  actionName: string,
-  result: unknown,
-): PresentedResultEnvelope {
-  const presentation = chatResultToPresentation(result, actionName);
-  return {
-    presentation,
-    actionResultId,
-    diagnostic: {
-      kind: "sanitized_receipt",
-      // diagnosticViewSchema requires the EXACT UTF-8 byte length of `value`
-      // (T15-E flagged the prior UTF-16 code-unit count as a latent mismatch).
-      byteLength: Buffer.byteLength(JSON.stringify(result ?? null), "utf8"),
-      value: (result ?? null) as JsonValue,
-    },
-  };
+function resultViewsFor(ctx: HydrationContext): ResultViewService {
+  return ctx.resultViews ?? createResultViewService({ registry: MODEL_API_ACTION_CATALOG });
 }
 
 /** The clarify question is owned by the canonical `action_results` row the
@@ -151,7 +69,7 @@ function hydrateAttachment(
       return {
         kind: "presented_result",
         actionResultId,
-        envelope: envelopeFromActionResult(actionResultId, actionName, result),
+        envelope: resultViewsFor(ctx).presentActionResult(actionName, actionResultId, result),
       };
     }
     case "operation.prepared": {
@@ -171,7 +89,7 @@ function hydrateAttachment(
         kind: "pending_confirmation",
         confirmationId: record.id,
         envelope: {
-          presentation: chatResultToPresentation({ kind: "preview", preview: record.preview }, record.id),
+          presentation: resultViewsFor(ctx).presentPendingConfirmation(record),
           confirmation: {
             id: record.id,
             nonce: rotated.nonce,

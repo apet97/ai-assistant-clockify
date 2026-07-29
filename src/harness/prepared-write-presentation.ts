@@ -536,7 +536,10 @@ function defaultReversibility(definition: ActionDefinition): { reversible: boole
   return { reversible: false, explanation: "This change may be hard to reverse." };
 }
 
-function defaultTitle(definition: ActionDefinition): string {
+/** The one reviewed human-title source for ANY action: the description's first
+ * sentence (every catalog description is reviewed metadata), falling back to
+ * the action name. Exported for the v2 result-view service (closure-plan PR 3). */
+export function defaultTitle(definition: ActionDefinition): string {
   const firstSentence = definition.description.split(".")[0]?.trim();
   return firstSentence && firstSentence.length > 0 ? firstSentence : definition.name;
 }
