@@ -15,6 +15,7 @@
     "type-check:scripts": "tsc -p tsconfig.scripts.json --noEmit",
     "test": "npm run build && vitest run",
     "test:e2e": "npm run build && playwright test",
+    "test:e2e:real": "npm run build && tsc -p tsconfig.e2e-real.json && playwright test -c playwright.real.config.ts",
     "test:e2e:headed": "npm run build && playwright test --headed",
     "perf:local-ui": "npm run build && tsx scripts/performance/local-ui-gate.ts",
     "perf:private-production": "tsx scripts/performance/private-production-gate.ts",

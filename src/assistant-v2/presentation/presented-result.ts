@@ -130,6 +130,8 @@ export const presentedResultEnvelopeSchema = z
         id: z.string().max(PRESENTED_RESULT_STRING_ID_MAX_CHARS),
         nonce: z.string(),
         expiresAt: z.string(),
+        /** Aggregate cancel handle for a batch-owned preview (id only, PR 12). */
+        batchId: z.string().max(PRESENTED_RESULT_STRING_ID_MAX_CHARS).optional(),
       })
       .strict()
       .optional(),

@@ -659,8 +659,9 @@ avoid re-deriving a decision. For what is true right now, read `CLAUDE.md`.
   failed on 25 gitleaks findings, all false positives, remediated in `627f874`
   (`ci: allowlist two proven secret-scan false positives`): `API_ACTION_CATALOG_HASH` (a published
   content digest, 24 hits = one per commit that changed it) and
-  `"password: abcdefghijklmnop123"` (a NEGATIVE test input the supervisor's own detector is asserted
-  to FIRE on). Both exceptions are AND-scoped to one exact path + line shape like the three already
+  the supervisor detector's fake `password:` negative-test input (the exact literal lives only in
+  `tests/scripts/test_codex_v2_supervisor.py`, where the detector is asserted to FIRE on it).
+  Both exceptions are AND-scoped to one exact path + line shape like the three already
   in `.gitleaks.toml`, `useDefault` stays true, and the scoping was verified ADVERSARIALLY —
   planting a real credential into each of those two files is still reported at the planted line.
   `workflow-contracts` pins the exception count, moved 3 -> 5 in the same commit. Git-mode scans of

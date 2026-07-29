@@ -167,6 +167,10 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   payload?: unknown;
+  /** Ordered canonical action-result refs behind `payload.results` (id +
+   * parsed canonical JSON), for presentation-layer re-presentation (PR 12).
+   * Present only on payload-hydrated reads with at least one linked result. */
+  actionResults?: Array<{ id: string; result: unknown }>;
 }
 
 export type DurableResultLink =

@@ -11,6 +11,8 @@ import type { ArtifactDescriptor, ChatEvent, RunEventAttachment, SequencedRunEve
 export interface PreviewRef {
   previewId: string;
   nonce: string;
+  /** Aggregate cancel handle when this preview is batch-owned (v2, PR 12). */
+  batchId?: string;
 }
 
 export interface PolicyShape {
@@ -25,6 +27,8 @@ export interface ChatController {
   confirmStream(ref: PreviewRef, onEvent: (event: StreamEvent) => void): Promise<void>;
   confirmAll(refs: PreviewRef[]): Promise<ConfirmResponse[]>;
   cancel(previewId: string): Promise<unknown>;
+  /** Aggregate batch cancel — batch-owned previews reject per-item cancel. */
+  cancelBatch(batchId: string): Promise<unknown>;
   undo(id: string): Promise<unknown>;
   savePermissions(groups: Record<string, string>): Promise<unknown>;
   getPermissions(): Promise<unknown>;
@@ -87,6 +91,8 @@ export interface PreviewResult {
   nonce: string;
   /** ISO expiry of the one-use nonce (advisory for the UI; the server enforces). */
   expiresAt?: string;
+  /** Aggregate cancel handle when this preview is batch-owned (v2, PR 12). */
+  batchId?: string;
   preview: {
     actionLabel: string;
     expectedChanges: string[];
@@ -277,7 +283,7 @@ export function dispatchStreamEvent(
   }
 }
 
-function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
+export function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
   if (attachment.kind === "pending_confirmation") {
     const confirmation = attachment.envelope.confirmation;
     if (!confirmation) return [];
@@ -287,6 +293,7 @@ function attachmentToResults(attachment: RunEventAttachment): ChatResult[] {
       previewId: confirmation.id,
       nonce: confirmation.nonce,
       expiresAt: confirmation.expiresAt,
+      ...(confirmation.batchId ? { batchId: confirmation.batchId } : {}),
       preview: {
         actionLabel: presentation.title,
         expectedChanges: presentation.summary

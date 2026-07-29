@@ -158,6 +158,9 @@ export interface ClarificationResolutionResult {
   code?: string;
   message?: string;
   page?: ReturnType<ReturnType<typeof createRunEventViewService>["list"]>;
+  /** The resumed run's truthful reply (PR 12): the model's answer after a read
+   * resolve, or the deterministic preview copy after a write resolve. */
+  reply?: { kind: string; text: string };
 }
 
 /**
@@ -216,8 +219,21 @@ export function createClarificationResolutionPort(deps: AppDeps) {
       if (!result.ok) {
         return { ok: false, status: result.status, code: result.code, message: result.message };
       }
+      // PR 12: a resolve settles like a resume turn — transcript row with
+      // ordered refs, telemetry from the persisted budget, and the truthful
+      // reply (the model's answer, or the deterministic preview copy when the
+      // resolve suspended into a prepared write).
+      const turn = settleV2Turn(deps, claims, undefined, result.outcome, {
+        scope: runScope,
+        kind: "resume",
+      });
       const page = eventViews.list({ scope, runId: active.runId, after: lastSequenceBefore, limit: 200 });
-      return { ok: true, status: 200, page };
+      return {
+        ok: true,
+        status: 200,
+        page,
+        ...(turn.ok && turn.replyText ? { reply: { kind: turn.replyKind, text: turn.replyText } } : {}),
+      };
     },
   };
 }
@@ -521,7 +537,10 @@ function settleAssistantReplyBestEffort(
       adminUserId: claims.adminUserId,
       requestId,
       content,
-      payload: { kind: replyKind },
+      // `engine` marks the row as v2-owned so the history restore re-presents
+      // its linked canonical results through the result-view service (PR 12)
+      // instead of serving raw canonical receipts. v1 rows never carry it.
+      payload: { kind: replyKind, engine: "v2" },
       orderedRefs,
     });
   } catch {

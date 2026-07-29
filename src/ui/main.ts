@@ -123,8 +123,43 @@ export function createController(api: ChatApi): ChatController {
     send: (message) => api.sendMessage(message),
     confirm: (ref) => api.confirmPreview(ref.previewId, ref.nonce),
     confirmStream: (ref, onEvent) => api.confirmStream(ref, onEvent),
-    confirmAll: (refs) => Promise.all(refs.map((r) => api.confirmPreview(r.previewId, r.nonce))),
+    confirmAll: async (refs) => {
+      // A batch-owned card (every ref carries the same batchId) confirms
+      // through the ONE aggregate settlement (PR 12): per-item confirm of a
+      // batch member is bound to the batch's capability/settlement and is
+      // rejected server-side. v1-shaped multi-previews keep the per-item loop.
+      const batchId = refs[0]?.batchId;
+      if (batchId !== undefined && refs.every((r) => r.batchId === batchId)) {
+        const committed = await api.confirmBatch(
+          batchId,
+          refs.map((r) => ({ confirmationId: r.previewId, nonce: r.nonce })),
+        );
+        if (!committed.ok) {
+          return refs.map(() => ({ ok: false, ...(committed.message ? { message: committed.message } : {}) }));
+        }
+        const byId = new Map(committed.items.map((item) => [item.confirmationId, item]));
+        return refs.map((r) => {
+          const item = byId.get(r.previewId);
+          if (!item) return { ok: false, message: "No response." };
+          if (item.status === "succeeded") return { ok: true };
+          if (item.status === "partial") {
+            return {
+              ok: true,
+              result: {
+                kind: "partial" as const,
+                receipt: { ok: true, action: "" },
+                message: "Partial — review needed. Verify in Clockify.",
+                recovery: { hint: "Check the operation status card." },
+              },
+            };
+          }
+          return { ok: false, message: `Confirmation ${item.status.split("_").join(" ")}.` };
+        });
+      }
+      return Promise.all(refs.map((r) => api.confirmPreview(r.previewId, r.nonce)));
+    },
     cancel: (previewId) => api.cancelPreview(previewId),
+    cancelBatch: (batchId) => api.cancelBatch(batchId),
     undo: (id) => api.undo(id),
     savePermissions: (groups) => api.savePermissions(groups),
     getPermissions: () => api.getPermissions(),
@@ -406,6 +441,9 @@ function mount(root: HTMLElement, api: ChatApi): void {
           // session's live pendings so a tab whose nonce was rotated by another
           // tab can re-render the re-served card.
           getHistory: () => api.getHistory(),
+          // v2 previews live ONLY on the run-event page (one control source) —
+          // the stale-nonce re-arm reads it for the freshly rotated pending.
+          ...(api.getRunEvents ? { getRunEvents: (runId: string, after: number) => api.getRunEvents!(runId, after) } : {}),
           // After Confirm/Cancel removes the card, return focus to the composer
           // (not <body>) — WCAG 2.4.3 Focus Order, r1-ux-copy-a11y-04.
           returnFocus: () => focusComposer(),

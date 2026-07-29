@@ -1,8 +1,10 @@
 import type { SessionClaims } from "../auth/sessions.js";
+import type { ChatMessage } from "../db/store.js";
 import type { Store } from "../db/store.js";
 import { isV2PreviewAuthority, rotatePendingNonce } from "../harness/confirmations.js";
 import { isTransientErrorMessage } from "../routes/history-sanitizer.js";
 import { sanitizeResultsForHistory } from "../routes/chat-results.js";
+import { chatReceiptFromEnvelope, type ResultViewService } from "./result-view-service.js";
 import type { HistoryPendingPreview, HistoryView } from "../shared/contracts.js";
 
 /**
@@ -32,7 +34,32 @@ export interface HistoryServiceDeps {
     | "getActiveRunForSession"
   >;
   sessionSecret: string;
+  /** Presentation boundary for v2-owned rows (PR 12: the restore serves the
+   * SAME authoritative card the live stream delivered). */
+  resultViews: ResultViewService;
   now(): Date;
+}
+
+/** Restore results for one stored message. A v2-owned row (payload.engine ===
+ * "v2") re-presents each linked canonical result through the result-view
+ * service — human title, facts, fail-closed status — exactly like the live
+ * `tool.completed` attachment. v1 rows keep the byte-identical legacy
+ * hydration. Presentation failure falls back to the sanitized legacy shape
+ * rather than dropping the record. */
+function restoredResults(resultViews: ResultViewService, message: ChatMessage): unknown[] {
+  const payload = message.payload as { results?: unknown[]; engine?: unknown } | undefined;
+  if (payload?.engine === "v2" && message.actionResults && message.actionResults.length > 0) {
+    try {
+      return message.actionResults.map(({ id, result }) => {
+        const receipt = (result as { receipt?: { action?: unknown } } | undefined)?.receipt;
+        const actionName = typeof receipt?.action === "string" ? receipt.action : "";
+        return chatReceiptFromEnvelope(resultViews.presentActionResult(actionName, id, result));
+      });
+    } catch {
+      return sanitizeResultsForHistory(payload?.results ?? []);
+    }
+  }
+  return sanitizeResultsForHistory(payload?.results ?? []);
 }
 
 export function createHistoryService(deps: HistoryServiceDeps) {
@@ -46,7 +73,7 @@ export function createHistoryService(deps: HistoryServiceDeps) {
       .map((m) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
-        results: sanitizeResultsForHistory((m.payload as { results?: unknown[] } | undefined)?.results ?? []),
+        results: restoredResults(deps.resultViews, m),
       }));
     const pendingPreviews: HistoryPendingPreview[] = [];
     for (const record of deps.store.listPendingConfirmations(claims.sessionId, deps.now().toISOString())) {

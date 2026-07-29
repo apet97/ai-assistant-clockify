@@ -82,9 +82,17 @@ export function buildMessageStore(ctx: StoreContext): {
         if (!includePayload) return { role: r.role, content: r.content };
         const envelope = r.payload_json ? JSON.parse(r.payload_json) as Record<string, unknown> : undefined;
         const links = loadLinks.all(r.id) as ResultLinkRow[];
+        // Ordered canonical-result references (id + parsed canonical JSON) for
+        // presentation-layer callers (PR 12: the v2 history restore re-presents
+        // through the result-view service). Additive: `results` below is
+        // byte-identical to the pre-existing hydration.
+        const actionResults: Array<{ id: string; result: unknown }> = [];
         const results = links.flatMap((link) => {
           if (link.descriptor_kind === "action_result") {
-            return link.result_json ? [JSON.parse(link.result_json) as unknown] : [];
+            if (!link.result_json) return [];
+            const parsed = JSON.parse(link.result_json) as unknown;
+            if (link.action_result_id) actionResults.push({ id: link.action_result_id, result: parsed });
+            return [parsed];
           }
           // Confirmation links are hydrated by the presentation layer with a
           // freshly rotated nonce; the raw id-only pointer never enters the
@@ -95,7 +103,13 @@ export function buildMessageStore(ctx: StoreContext): {
         const payload = envelope === undefined && results.length === 0
           ? undefined
           : { ...(envelope ?? {}), ...(results.length > 0 ? { results } : {}) };
-        return { ...(r.id ? { id: r.id } : {}), role: r.role, content: r.content, payload };
+        return {
+          ...(r.id ? { id: r.id } : {}),
+          role: r.role,
+          content: r.content,
+          payload,
+          ...(actionResults.length > 0 ? { actionResults } : {}),
+        };
       });
     },
   };

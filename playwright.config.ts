@@ -2,6 +2,16 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = 4174;
 
+/**
+ * RENDERER/CONTRACT suite (closure-plan PR 12 relabel): these specs run the
+ * real built UI against `tests/e2e/fixtures/server.mjs`, a fixture that
+ * hand-authors protocol frames. They pin the CLIENT's rendering, keyboard,
+ * accessibility, and protocol-decoding contracts — they are NOT product
+ * evidence that the server produces those frames. The PRODUCT browser matrix
+ * is `playwright.real.config.ts` (`npm run test:e2e:real`): the tsc-built
+ * production composition with a real SQLite store, real signed-JWT component
+ * auth, and no hand-authored frames.
+ */
 export default defineConfig({
   testDir: "tests/e2e",
   fullyParallel: true,

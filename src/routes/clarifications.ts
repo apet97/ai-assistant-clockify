@@ -70,6 +70,12 @@ export function clarificationsRouter(options: {
           };
           res.write(`${JSON.stringify(frame)}\n`);
         }
+        // PR 12: the resumed run's truthful reply, exactly like the chat
+        // stream — the model's answer after a read resolve, the deterministic
+        // preview copy after a write resolve.
+        if (result.reply) {
+          res.write(`${JSON.stringify({ type: "reply", kind: result.reply.kind, text: result.reply.text })}\n`);
+        }
         res.write(`${JSON.stringify({ type: "done", runId: page.runId, lastSequence: page.lastSequence })}\n`);
       } catch {
         res.write(`${JSON.stringify({ type: "transport_error", code: "server_error", message: "Something went wrong." })}\n`);

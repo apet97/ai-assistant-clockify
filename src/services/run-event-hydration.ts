@@ -94,6 +94,9 @@ function hydrateAttachment(
             id: record.id,
             nonce: rotated.nonce,
             expiresAt: record.expiresAt,
+            // PR 12 (F19 UI): batch-owned previews cancel only as a batch, so
+            // the client needs the aggregate handle. Id only — never a nonce.
+            ...(record.batchId ? { batchId: record.batchId } : {}),
           },
         },
       };

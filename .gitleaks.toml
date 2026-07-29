@@ -37,6 +37,19 @@ regexTarget = "line"
 paths = ['''^tests/scripts/test_codex_v2_supervisor\.py$''']
 regexes = ['''^\n?\s*"password: abcdefghijklmnop123",$''']
 
+# The build-history prose ONCE quoted the supervisor's fake negative-test input
+# verbatim; the current tree describes it without the literal, but the quoted
+# line survives in immutable history blobs (CLAUDE.md before the log moved,
+# docs/V2_BUILD_LOG.md at the move commit). Scoped to that ONE exact sentence
+# in those two paths only — any other credential-shaped line in either file is
+# still reported (proven adversarially with a planted key).
+[[rules.allowlists]]
+description = "Historical prose quoting the supervisor's fake negative-test input"
+condition = "AND"
+regexTarget = "line"
+paths = ['''^CLAUDE\.md$''', '''^docs/V2_BUILD_LOG\.md$''']
+regexes = ['''^\n?  `"password: abcdefghijklmnop123"` \(a NEGATIVE test input the supervisor's own detector is asserted$''']
+
 [[rules.allowlists]]
 description = "Historical workflow-contract assertions"
 condition = "AND"

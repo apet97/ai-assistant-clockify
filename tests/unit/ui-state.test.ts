@@ -57,6 +57,14 @@ function fakeApi(): ChatApi & { calls: Record<string, number> } {
       bump("cancelPreview");
       return { ok: true };
     },
+    async cancelBatch() {
+      bump("cancelBatch");
+      return { ok: true };
+    },
+    async confirmBatch() {
+      bump("confirmBatch");
+      return { ok: true as const, status: "succeeded", items: [] };
+    },
     async undo() {
       bump("undo");
       return { ok: true };

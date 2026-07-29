@@ -23,6 +23,7 @@ import {
   decodePermissionPreviewTokenResponse,
   decodePermissionSaveResponse,
   decodeSessionsResponse,
+  decodeConfirmBatchResponse,
   decodeSimpleMutationResponse,
   decodeUndoResponse,
   decodeRunEventsResponse,
@@ -66,6 +67,13 @@ export interface ChatApi {
   /** v2 exact clarification resolve (T14-F): streams the resumed run's events. */
   resolveClarificationOption(clarificationId: string, optionId: string, onEvent: (event: StreamEvent) => void): Promise<void>;
   cancelPreview(previewId: string): Promise<SimpleMutationResponse>;
+  /** Aggregate batch cancel (v2): batch-owned previews reject per-item cancel. */
+  cancelBatch(batchId: string): Promise<SimpleMutationResponse>;
+  /** Aggregate batch confirm (v2): one settlement for the exact previewed batch. */
+  confirmBatch(
+    batchId: string,
+    items: Array<{ confirmationId: string; nonce: string }>,
+  ): Promise<ReturnType<typeof decodeConfirmBatchResponse>>;
   undo(id: string): Promise<UndoResponse>;
 }
 
@@ -412,6 +420,18 @@ export function createFetchApi(): ChatApi {
         `/api/confirmations/${encodeURIComponent(previewId)}/cancel`,
         { method: "POST", body: JSON.stringify({}) },
         (value) => decodeSimpleMutationResponse(value, "cancelled"),
+      ),
+    cancelBatch: (batchId) =>
+      mutation(
+        `/api/confirmation-batches/${encodeURIComponent(batchId)}/cancel`,
+        { method: "POST", body: JSON.stringify({}) },
+        (value) => decodeSimpleMutationResponse(value, "cancelled"),
+      ),
+    confirmBatch: (batchId, items) =>
+      mutation(
+        `/api/confirmation-batches/${encodeURIComponent(batchId)}/confirm`,
+        { method: "POST", body: JSON.stringify({ items }) },
+        decodeConfirmBatchResponse,
       ),
     undo: (id) => mutation(
       `/api/undo/${encodeURIComponent(id)}`,

@@ -132,6 +132,13 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
      * clarify rather than 404 at commit — mirrors resolveUserRef's verifyIds.
      */
     verifyId?: boolean;
+    /**
+     * The exact raw-argument key an option's grounded 24-hex id may be
+     * injected back into (the v2 exact-option resolve, T14-D/PR 12). Attach
+     * only where that argument accepts a bare Clockify id; clarifies without
+     * it remain free-text-only (the inert "selection" marker).
+     */
+    field?: string;
   },
 ): Promise<ResolveEntityResult<T>> {
   const rawId = ref.id?.trim();
@@ -174,6 +181,7 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
       clarify: {
         clarify: `More than one ${qualifier}${opts.noun} is named "${query}". Which one should I ${opts.verb}?`,
         options: match.matches.map((m) => ({ id: m.id, label: optionLabel(m) })),
+        ...(opts.field ? { field: opts.field } : {}),
       },
     };
   }
@@ -191,6 +199,7 @@ export async function resolveEntityRef<T extends { id: string; name: string; arc
     clarify: {
       clarify: opts.notFoundHint ? `${base} ${opts.notFoundHint}` : base,
       options: options.length ? options : undefined,
+      ...(opts.field && options.length ? { field: opts.field } : {}),
     },
   };
 }
@@ -222,7 +231,9 @@ export async function resolveProjectTaskRefs(
   if (refs.projectId?.trim() || refs.projectName?.trim()) {
     const project = await resolveEntityRef(
       { id: refs.projectId, name: refs.projectName },
-      { noun: "project", verb: opts.verb, list: opts.listProjects, notFoundHint: opts.projectNotFoundHint },
+      // `field: "projectId"` lets a chosen option's grounded 24-hex id inject
+      // straight back into the id slot (v2 exact-option resolve).
+      { noun: "project", verb: opts.verb, list: opts.listProjects, notFoundHint: opts.projectNotFoundHint, field: "projectId" },
     );
     if (!project.ok) return project;
     projectId = project.id;

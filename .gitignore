@@ -25,3 +25,4 @@ plans/
 
 # Firecrawl local scrape cache
 .firecrawl/
+dist-e2e/

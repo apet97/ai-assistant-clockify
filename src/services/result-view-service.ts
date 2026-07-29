@@ -209,3 +209,28 @@ export function createResultViewService(deps: ResultViewDeps) {
 }
 
 export type ResultViewService = ReturnType<typeof createResultViewService>;
+
+/**
+ * Encode a presented envelope as the receipt-shaped `ChatResult` the client
+ * renders (PR 12 / F05). This is the SERVER-side twin of the UI's
+ * `attachmentToResults` presented_result branch, so a v2 history restore
+ * serves the same authoritative card the live stream delivered — never the
+ * bounded canonical summary with a raw action name.
+ */
+export function chatReceiptFromEnvelope(envelope: PresentedResultEnvelope): Record<string, unknown> {
+  const presentation = envelope.presentation;
+  return {
+    kind: "receipt",
+    receipt: {
+      ok: presentation.status === "succeeded" || presentation.status === "partial",
+      action: presentation.title,
+      message: presentation.summary,
+      presentedStatus: presentation.status,
+      ...(presentation.warnings.length > 0 ? { warnings: presentation.warnings } : {}),
+      ...(presentation.facts.length > 0 ? { facts: presentation.facts } : {}),
+      ...(presentation.references.length > 0 ? { references: presentation.references } : {}),
+      ...(presentation.recovery ? { recovery: presentation.recovery } : {}),
+      ...(envelope.diagnostic ? { diagnostic: envelope.diagnostic } : {}),
+    },
+  };
+}

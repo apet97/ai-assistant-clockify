@@ -32,6 +32,7 @@ import { permissionsRouter } from "./permissions.js";
 import { artifactsRouter } from "./artifacts.js";
 import { undoRouter } from "./undo.js";
 import { operationsRouter } from "./operations.js";
+import { createResultViewService } from "../services/result-view-service.js";
 import { chatRouter } from "./chat.js";
 import { confirmationsRouter } from "./confirmations.js";
 import { confirmationBatchesRouter } from "./confirmation-batches.js";
@@ -121,6 +122,7 @@ export function apiRouter(
   const historyService = createHistoryService({
     store: deps.store,
     sessionSecret: deps.config.sessionSecret,
+    resultViews: createResultViewService({ registry: MODEL_API_ACTION_CATALOG }),
     now,
   });
   const sessionContextService = createSessionContextService({

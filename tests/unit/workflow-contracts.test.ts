@@ -83,11 +83,15 @@ describe("GitHub Actions workflow contracts", () => {
     // Every exception stays AND-scoped to one path AND one exact line shape, so
     // a real credential in an allowlisted file is still caught. Proven directly:
     // planting a secret into either file below is still reported.
-    expect(config.match(/condition = "AND"/g)).toHaveLength(5);
-    expect(config.match(/regexTarget = "line"/g)).toHaveLength(5);
+    expect(config.match(/condition = "AND"/g)).toHaveLength(6);
+    expect(config.match(/regexTarget = "line"/g)).toHaveLength(6);
     expect(config).toContain("^\\.env\\.example$");
     expect(config).toContain("^tests/unit/config\\.test\\.ts$");
     expect(config).toContain("^tests/unit/workflow-contracts\\.test\\.ts$");
+    // Historical prose blobs that quoted the fake negative-test input verbatim;
+    // scoped to that one exact sentence in those two paths only.
+    expect(config).toContain("^CLAUDE\\.md$");
+    expect(config).toContain("^docs/V2_BUILD_LOG\\.md$");
     // The generated catalog digest is a public content hash, published in the
     // inventory evidence — not a credential. Pinned to that exact declaration.
     expect(config).toContain("^src/harness/api-catalog\\.generated\\.ts$");

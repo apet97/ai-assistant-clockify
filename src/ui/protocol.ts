@@ -611,6 +611,30 @@ export function decodeSimpleMutationResponse(
   return { ok: true, ...(expectedStatus ? { status: expectedStatus } : {}) };
 }
 
+/** One settled member of an aggregate batch confirm (id + terminal status). */
+export interface ConfirmBatchItem {
+  confirmationId: string;
+  status: string;
+}
+
+/** Decode POST /api/confirmation-batches/:id/confirm (aggregate, non-stream). */
+export function decodeConfirmBatchResponse(
+  value: unknown,
+): { ok: true; status: string; items: ConfirmBatchItem[] } | ApiFailure {
+  const envelope = decodeApiEnvelope(value);
+  if (!envelope.ok) return failureFrom(envelope);
+  const rawItems = envelope.items;
+  if (!Array.isArray(rawItems)) throw new ProtocolError("API response.items must be an array");
+  const items = rawItems.map((item, index) => {
+    const row = record(item, `API response.items[${index}]`);
+    return {
+      confirmationId: string(row.confirmationId, `API response.items[${index}].confirmationId`),
+      status: string(row.status, `API response.items[${index}].status`),
+    };
+  });
+  return { ok: true, status: string(envelope.status, "API response.status"), items };
+}
+
 /** Decode the passive operation-status route's rendered subset. */
 export function decodeOperationResponse(value: unknown): { ok: true; operation: OperationCardData } | ApiFailure {
   const envelope = decodeApiEnvelope(value);
@@ -779,6 +803,9 @@ function decodeRunEventAttachment(value: unknown): import("../shared/contracts.j
               id: string((envelope.confirmation as Record<string, unknown>).id, "stream event.attachment.envelope.confirmation.id"),
               nonce: string((envelope.confirmation as Record<string, unknown>).nonce, "stream event.attachment.envelope.confirmation.nonce"),
               expiresAt: isoString((envelope.confirmation as Record<string, unknown>).expiresAt, "stream event.attachment.envelope.confirmation.expiresAt"),
+              ...(typeof (envelope.confirmation as Record<string, unknown>).batchId === "string"
+                ? { batchId: (envelope.confirmation as Record<string, unknown>).batchId as string }
+                : {}),
             },
           }
         : {}),

@@ -150,6 +150,7 @@ function controller(over: Partial<ChatController> = {}): ChatController {
     confirmStream: vi.fn(async () => {}),
     confirmAll: vi.fn(async () => []),
     cancel: vi.fn(async () => ({ ok: true })),
+    cancelBatch: vi.fn(async () => ({ ok: true })),
     undo: vi.fn(async () => ({ ok: true })),
     savePermissions: vi.fn(async () => ({})),
     getPermissions: vi.fn(async () => ({})),

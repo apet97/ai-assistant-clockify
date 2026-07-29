@@ -17,6 +17,7 @@ import {
   featureGroupRows,
   removeCardReturningFocus,
   reservedPendingFor,
+  attachmentToResults,
   runConfirmStreamLive,
   settleConfirmOutcome,
   undoFailureMessage,
@@ -34,6 +35,7 @@ import {
   type PreviewResult,
   type ReceiptResult,
   type PartialResult,
+  type RunEventPageResponse,
 } from "./shared.js";
 
 const PERMISSION_LEVELS = ["off", "read", "read_write"];
@@ -599,6 +601,13 @@ export interface PreviewDeps {
    */
   getHistory?: () => Promise<HistoryResponse>;
   /**
+   * Fetch GET /api/runs/:id/events — the v2 stale-nonce re-arm source (PR 12).
+   * A v2 preview hydrates ONLY from its run-event page (one control source), so
+   * the history `pendingPreviews` re-arm above never matches it; the event page
+   * re-serves the still-live pending with a freshly rotated nonce. Optional.
+   */
+  getRunEvents?: (runId: string, after: number) => Promise<RunEventPageResponse>;
+  /**
    * Move keyboard focus to a stable location (the composer input) after a
    * Confirm/Cancel click removes this card — otherwise focus collapses to
    * <body> and the next Tab restarts from the page top (WCAG 2.4.3 Focus Order,
@@ -740,15 +749,32 @@ function handleStaleRearm(
   setButtons: (disabled: boolean) => void,
   deps: PreviewDeps,
 ): void {
-  const { getHistory, renderResults, appendMessage, showError } = deps;
+  const { getHistory, getRunEvents, renderResults, appendMessage, showError } = deps;
   void (async () => {
     const previewId = refs[0]?.previewId;
     let reserved: PreviewResult | undefined;
+    let history: HistoryResponse | undefined;
     if (getHistory && previewId) {
       try {
-        reserved = reservedPendingFor(await getHistory(), previewId);
+        history = await getHistory();
+        reserved = reservedPendingFor(history, previewId);
       } catch {
         reserved = undefined; // a failed re-fetch falls through to the honest error
+      }
+    }
+    // v2 (PR 12): the pending lives ONLY on the active run's event page (one
+    // control source), which re-serves it with a freshly rotated nonce.
+    if (!reserved && previewId && getRunEvents && history?.activeRun) {
+      try {
+        const page = await getRunEvents(history.activeRun.runId, 0);
+        for (const entry of page.events) {
+          const attachment = entry.attachment;
+          if (attachment?.kind !== "pending_confirmation" || attachment.confirmationId !== previewId) continue;
+          const [result] = attachmentToResults(attachment);
+          if (result?.kind === "preview") reserved = result;
+        }
+      } catch {
+        reserved = undefined;
       }
     }
     if (reserved) {
@@ -881,9 +907,15 @@ function wireCancel(
       // controller.cancel resolves the route's JSON body (only a 401 throws). A
       // 409/403/404 comes back as { ok:false, message } — inspect it instead of
       // assuming success, so a concurrent-confirm never reads a false "Cancelled."
-      const outcomes = (await Promise.all(
-        refs.map((ref) => controller.cancel(ref.previewId)),
-      )) as Array<{ ok?: boolean; message?: string } | null | undefined>;
+      // A batch-owned card (every ref carries the same batchId) cancels through
+      // the ONE aggregate settlement — per-item cancel of a batch member is
+      // rejected by the server (batch_cancel_required, PR 4/F02).
+      const batchId = refs[0]?.batchId;
+      const wholeBatch = batchId !== undefined && refs.every((ref) => ref.batchId === batchId);
+      const outcomes = (wholeBatch
+        ? [await controller.cancelBatch(batchId)]
+        : await Promise.all(refs.map((ref) => controller.cancel(ref.previewId)))
+      ) as Array<{ ok?: boolean; message?: string } | null | undefined>;
       const result = cancelOutcome(outcomes);
       if (!result.ok) {
         showError(result.error);
@@ -942,7 +974,11 @@ export function renderPreview(previews: PreviewResult[], deps: PreviewDeps): HTM
   }
 
   const actions = el("div", "buttons");
-  const refs: PreviewRef[] = previews.map((p) => ({ previewId: p.previewId, nonce: p.nonce }));
+  const refs: PreviewRef[] = previews.map((p) => ({
+    previewId: p.previewId,
+    nonce: p.nonce,
+    ...(p.batchId ? { batchId: p.batchId } : {}),
+  }));
   const confirmButton = el("button", "primary", batch ? "Confirm all" : "Confirm");
   const cancelButton = el("button", "secondary", batch ? "Cancel all" : "Cancel");
   const setButtons = (disabled: boolean): void => {
