@@ -300,7 +300,7 @@ export function apiRouter(
   router.use("/clarifications", clarificationsRouter({
     requireSession,
     resolution: clarificationResolution,
-    sessionFifoKey: (req) => resolveSession(req, deps)?.sessionId,
+    sessionAsyncHandler,
   }));
   const inspector = devRunInspectorRouter(deps);
   if (inspector) router.use("/dev/runs", inspector);

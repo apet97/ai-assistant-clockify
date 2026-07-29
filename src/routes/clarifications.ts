@@ -1,11 +1,9 @@
-import { Router, type Request } from "express";
+import { Router } from "express";
 import type { RunEventFrame } from "../assistant-v2/events.js";
 import type { ClarificationResolutionPort } from "./v2-chat-pipeline.js";
 import { resolveClarificationBodySchema } from "./request-schemas.js";
 import { requestAbortScope } from "./request-abort.js";
-import { fifoAsyncHandler } from "./async-handler.js";
-import { KeyedFifo } from "./fifo-lock.js";
-import type { RequireSession } from "./route-ports.js";
+import type { RequireSession, WrappedHandler } from "./route-ports.js";
 
 /**
  * `POST /api/clarifications/:id/resolve` (T14-D/T16-F): exact `optionId` ->
@@ -14,18 +12,21 @@ import type { RequireSession } from "./route-ports.js";
  * `ClarificationResolutionPort`; this file decodes, authorizes, calls it once,
  * and streams the resumed run's new events as the same RunEventFrame |
  * DoneFrame NDJSON union chat/confirm use.
+ *
+ * Serialization (closure-plan PR 2 / F21): the route runs under the ONE
+ * composition-owned session FIFO/async handler shared with chat, confirm,
+ * batch, permissions, and undo — an option click cannot race an ordinary
+ * message or cancel for the same session, and it inherits the same outer
+ * per-request host-call budget.
  */
 export function clarificationsRouter(options: {
   requireSession: RequireSession;
   resolution: ClarificationResolutionPort;
-  sessionFifoKey: (req: Request) => string | undefined;
+  sessionAsyncHandler: WrappedHandler;
 }): Router {
   const router = Router();
-  const sessionFifo = new KeyedFifo();
 
-  router.post("/:id/resolve", fifoAsyncHandler(
-    sessionFifo,
-    options.sessionFifoKey,
+  router.post("/:id/resolve", options.sessionAsyncHandler(
     async (req, res) => {
       const claims = await options.requireSession(req, res);
       if (!claims) return;
@@ -74,8 +75,7 @@ export function clarificationsRouter(options: {
         res.write(`${JSON.stringify({ type: "transport_error", code: "server_error", message: "Something went wrong." })}\n`);
       }
       res.end();
-    },
-  ));
+    }));
 
   return router;
 }
