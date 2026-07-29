@@ -147,15 +147,21 @@ export function hydrateRunEventAttachments(
 ): SequencedRunEvent[] {
   const presented = new Set<string>();
   return events.map((entry) => {
+    // Dedupe BEFORE hydrating (closure-plan PR 3 / F06): the pending-
+    // confirmation hydration ROTATES the one-use nonce, so deduping after it
+    // would rotate twice in one page and serve a card whose earlier nonce was
+    // already dead. The dedupe key is readable from the raw event payload.
+    const preKey = entry.event.eventType === "operation.prepared"
+      ? `confirmation:${entry.event.payload.confirmationId}`
+      : entry.event.eventType === "tool.completed" || entry.event.eventType === "operation.completed"
+        ? `result:${entry.event.payload.actionResultId}`
+        : undefined;
+    if (preKey) {
+      if (presented.has(preKey)) return { ...entry, attachment: undefined };
+      presented.add(preKey);
+    }
     const attachment = hydrateAttachment(ctx, entry.event);
     if (!attachment) return entry;
-    if (attachment.kind === "presented_result" || attachment.kind === "pending_confirmation") {
-      const key = attachment.kind === "presented_result"
-        ? attachment.actionResultId
-        : attachment.confirmationId;
-      if (presented.has(key)) return { ...entry, attachment: undefined };
-      presented.add(key);
-    }
     return { ...entry, attachment };
   });
 }

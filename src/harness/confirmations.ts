@@ -400,7 +400,10 @@ const TRUSTED_DIRECT_ORIGINS = new Set<ActionOrigin>(["direct_ui", "system", "li
 const V2_PREVIEW_EXECUTORS = new Set<ExecutorKind>(["prepared_safe_write", "risky_commit"]);
 
 /** Shared v2 assistant preview authority — identical for single and batch-owned rows. */
-function isV2PreviewAuthority(record: PendingConfirmationRecord): boolean {
+/** True for EVERY v2 assistant preview (batch-owned or not). Exported for the
+ * one-control-source rule (closure-plan PR 3 / F06): history restore serves
+ * v1 previews only; a v2 preview's sole live source is its run-event page. */
+export function isV2PreviewAuthority(record: PendingConfirmationRecord): boolean {
   return record.origin === "assistant" &&
     record.registryId === "v2-api" &&
     record.authorityModel === "preview_confirmation_v2" &&

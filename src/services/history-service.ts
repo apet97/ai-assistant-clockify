@@ -1,6 +1,6 @@
 import type { SessionClaims } from "../auth/sessions.js";
 import type { Store } from "../db/store.js";
-import { rotatePendingNonce } from "../harness/confirmations.js";
+import { isV2PreviewAuthority, rotatePendingNonce } from "../harness/confirmations.js";
 import { isTransientErrorMessage } from "../routes/history-sanitizer.js";
 import { sanitizeResultsForHistory } from "../routes/chat-results.js";
 import type { HistoryPendingPreview, HistoryView } from "../shared/contracts.js";
@@ -50,6 +50,13 @@ export function createHistoryService(deps: HistoryServiceDeps) {
       }));
     const pendingPreviews: HistoryPendingPreview[] = [];
     for (const record of deps.store.listPendingConfirmations(claims.sessionId, deps.now().toISOString())) {
+      // ONE v2 control source (closure-plan PR 3 / F06): a v2 assistant
+      // preview hydrates ONLY from its run-event page (`activeRun` +
+      // GET /api/runs/:id/events, which rotates the one nonce). Serving it
+      // here too minted a second nonce that invalidated the first, so one
+      // reload rendered two cards where only the later one could confirm.
+      // v1 previews keep this legacy source unchanged.
+      if (isV2PreviewAuthority(record)) continue;
       const rotated = rotatePendingNonce({
         record,
         sessionId: claims.sessionId,
