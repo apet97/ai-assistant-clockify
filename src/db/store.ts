@@ -883,7 +883,10 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
       content: string;
     }): { messageId: string } {
       return db.transaction(() => {
-        const messageId = messageStore.addMessage({
+        // Route through the FACADE's addMessage (not the builder closure) so a
+        // composition-level override — the established fault-injection and
+        // observation seam — governs every internal message write too.
+        const messageId = store.addMessage({
           sessionId: input.sessionId,
           workspaceId: input.workspaceId,
           adminUserId: input.adminUserId,
@@ -925,7 +928,7 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             ref: { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) as unknown },
           };
         });
-        const messageId = messageStore.addMessage({
+        const messageId = store.addMessage({
           sessionId: input.sessionId,
           workspaceId: input.workspaceId,
           adminUserId: input.adminUserId,
