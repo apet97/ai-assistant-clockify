@@ -382,6 +382,17 @@ export interface Store {
     state: import("../assistant-v2/state.js").RunState,
     payload: import("../assistant-v2/events.js").RunEventPayloadMap["run.suspended"],
   ): import("../assistant-v2/events.js").SequencedRunEvent;
+  /** ONE transaction (closure-plan PR 4 / F02): settle the assistant run a
+   * v2 confirmation belongs to. `confirmed` records the operation lifecycle
+   * events and links the canonical receipt; `cancelled`/`expired` create the
+   * bounded no-mutation result, terminalize the prepared operation, and scrub
+   * the control. Replay-safe: a run not in `awaiting_confirmation` is a
+   * no-op `{settled:false}`. */
+  settleV2ConfirmationRun(input: {
+    record: import("../harness/confirmations.js").PendingConfirmationRecord;
+    kind: "confirmed" | "cancelled" | "expired";
+    actionResultId?: string;
+  }): { settled: boolean };
   /** ONE transaction (F23): `clarification.required` + `run.suspended` +
    * the `awaiting_clarification` phase/continuation commit together. */
   requireClarificationAndSuspendWithEvents(
@@ -899,6 +910,92 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
         });
         linkTurnMessage(input, "user", messageId);
         return { messageId };
+      })();
+    },
+    settleV2ConfirmationRun(input: {
+      record: import("../harness/confirmations.js").PendingConfirmationRecord;
+      kind: "confirmed" | "cancelled" | "expired";
+      actionResultId?: string;
+    }): { settled: boolean } {
+      const { record, kind } = input;
+      if (typeof record.runId !== "string" || record.runId.length === 0 ||
+          !Number.isSafeInteger(record.installationGeneration)) {
+        return { settled: false };
+      }
+      return db.transaction(() => {
+        const scope = {
+          sessionId: record.sessionId,
+          runId: record.runId!,
+          workspaceId: record.workspaceId,
+          adminUserId: record.adminUserId,
+          installationGeneration: record.installationGeneration!,
+          authClass: "addon" as const,
+        };
+        const state = store.getRun(scope);
+        if (!state || state.phase !== "awaiting_confirmation") return { settled: false };
+
+        const operation = record.operation as
+          | { actionName?: string; mutationPlan?: { maxHostCalls?: number } }
+          | undefined;
+        const actionName = typeof operation?.actionName === "string" && operation.actionName.length > 0
+          ? operation.actionName
+          : "confirmed_write";
+
+        let actionResultId = input.actionResultId;
+        if (kind !== "confirmed") {
+          if (kind === "cancelled") confirmationStore.cancelConfirmation(record.id);
+          else if (record.status === "pending") confirmationStore.expireConfirmation(record.id);
+          const message = kind === "cancelled"
+            ? "The preview was cancelled. No change was made."
+            : "The preview expired. No change was made.";
+          const ref = store.recordActionResult({
+            workspaceId: record.workspaceId,
+            adminUserId: record.adminUserId,
+            sessionId: record.sessionId,
+            actionName,
+            status: "definitive_failed",
+            result: {
+              kind: "receipt",
+              receipt: {
+                ok: false,
+                action: actionName,
+                code: kind === "cancelled" ? "preview_cancelled" : "preview_expired",
+                message,
+              },
+            },
+          });
+          actionResultId = ref.id;
+          store.settleOperationRun(record.operationId, "definitive_failed", ref.id);
+        }
+
+        // Release this preview's host-call reservation (its worst-case cost
+        // was reserved atomically at preparation).
+        const reservedForPlan = typeof operation?.mutationPlan?.maxHostCalls === "number"
+          ? operation.mutationPlan.maxHostCalls
+          : 0;
+        const budget = {
+          ...state.budget,
+          hostCallsReserved: Math.max(0, state.budget.hostCallsReserved - reservedForPlan),
+        };
+        const completedResults = actionResultId !== undefined
+          ? [...state.completedResults, {
+              toolCallId: `confirmation-${record.id}`,
+              actionName,
+              actionResultId,
+            }]
+          : state.completedResults;
+
+        runEventStore.completeRunAfterConfirmationWithEvents(
+          scope,
+          { ...state, budget, completedResults },
+          {
+            operationId: record.operationId,
+            confirmationId: record.id,
+            withClaim: kind === "confirmed",
+            ...(actionResultId !== undefined ? { actionResultId } : {}),
+          },
+        );
+        return { settled: true };
       })();
     },
     settleAssistantTurnMessage(input: {

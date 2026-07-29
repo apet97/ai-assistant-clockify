@@ -281,7 +281,20 @@ export function apiRouter(
     pipeline,
     isV2Preview: isV2AssistantPreviewConfirmation,
     getPendingConfirmation: (id) => deps.store.getPendingConfirmation(id),
-    cancelConfirmation: (id) => deps.store.cancelConfirmation(id),
+    // Closure-plan PR 4 (F02): cancelling a v2 preview also settles its
+    // assistant run (bounded no-mutation result + operation terminal +
+    // run.completed) in one store transaction; a v1 preview keeps the plain
+    // row cancel.
+    cancelConfirmation: (id) => {
+      const record = deps.store.getPendingConfirmation(id);
+      if (record && isV2AssistantPreviewConfirmation(record)) {
+        const { settled } = deps.store.settleV2ConfirmationRun({ record, kind: "cancelled" });
+        // A run that already settled (or a record without run scope) still
+        // needs the plain row cancel.
+        if (settled) return true;
+      }
+      return deps.store.cancelConfirmation(id);
+    },
     sessionAsyncHandler,
   }));
   router.use(confirmationBatchesRouter({

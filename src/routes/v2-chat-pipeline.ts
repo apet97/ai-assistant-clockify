@@ -301,11 +301,52 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
       const active = deps.store.getActiveRunForSession(claims.sessionId, claims.workspaceId, claims.adminUserId);
       if (active) {
         if (active.phase === "awaiting_confirmation") {
-          return {
-            ok: false,
-            code: "run_awaiting_confirmation",
-            message: "A previous action is awaiting your confirmation. Confirm or cancel it before starting something new.",
-          };
+          // Closure-plan PR 4 (F02): reconcile a LAPSED awaiting-confirmation
+          // run before refusing. `listPendingConfirmations` sweeps expired
+          // rows as a side effect; any live pending row for THIS run keeps
+          // the refusal. With none left (expired, or settlement degraded
+          // after a confirm), settle the run from its terminal confirmations
+          // so the session can never be permanently wedged.
+          const nowIso = (deps.now?.() ?? new Date()).toISOString();
+          const live = deps.store.listPendingConfirmations(claims.sessionId, nowIso)
+            .filter((row) => row.runId === active.runId);
+          if (live.length > 0) {
+            return {
+              ok: false,
+              code: "run_awaiting_confirmation",
+              message: "A previous action is awaiting your confirmation. Confirm or cancel it before starting something new.",
+            };
+          }
+          const lapsedScope = { ...scope, runId: active.runId };
+          const lapsedState = deps.store.getRun(lapsedScope);
+          const lapsedIds = lapsedState?.continuation.kind === "awaiting_operations"
+            ? lapsedState.continuation.operationIds
+            : [];
+          let reconciled = false;
+          for (const operationId of lapsedIds) {
+            const operationRun = deps.store.getOperationRun(operationId);
+            const record = operationRun?.confirmationId
+              ? deps.store.getPendingConfirmation(operationRun.confirmationId)
+              : undefined;
+            if (!record) continue;
+            const { settled } = deps.store.settleV2ConfirmationRun({
+              record,
+              kind: record.status === "pending" || record.status === "expired" ? "expired" : "confirmed",
+              ...(record.actionResultId ? { actionResultId: record.actionResultId } : {}),
+            });
+            if (settled) {
+              reconciled = true;
+              break;
+            }
+          }
+          if (!reconciled) {
+            deps.store.failActiveRunsForSession(
+              claims.sessionId,
+              claims.workspaceId,
+              claims.adminUserId,
+              "confirmation_lapsed",
+            );
+          }
         }
         if (active.phase === "awaiting_clarification") {
           const activeScope = { ...scope, runId: active.runId };

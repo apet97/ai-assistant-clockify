@@ -318,6 +318,20 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
         installation,
         mutationLease,
       });
+      // Closure-plan PR 4 (F02): the confirmation's assistant run terminalizes
+      // in one store transaction (operation lifecycle events + linked receipt
+      // + run.completed). Best-effort AFTER the known host effect — the
+      // post-dispatch degradation rule wins, and a lapsed run is reconciled
+      // at the session's next message.
+      try {
+        deps.store.settleV2ConfirmationRun({
+          record,
+          kind: "confirmed",
+          ...(dispatched.resultRef ? { actionResultId: dispatched.resultRef.id } : {}),
+        });
+      } catch {
+        console.error("assistant-run settlement degraded (change already applied; receipt preserved)");
+      }
       return {
         ok: true,
         receipt: dispatched.receipt,
@@ -437,6 +451,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
     partialResult?: Extract<ActionResult, { kind: "partial" }>;
     terminalStatus: "succeeded" | "partial" | "definitive_failed" | "outcome_unknown";
     undoId?: string;
+    resultRef?: ActionResultRef;
     persistenceDegraded?: true;
   }> {
     const { claims, record, installation, mutationLease } = input;
@@ -507,6 +522,7 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
       ...(partialResult ? { partialResult } : {}),
       terminalStatus,
       ...(undoId ? { undoId } : {}),
+      ...(resultRef ? { resultRef } : {}),
       ...(!resultRef ? { persistenceDegraded: true as const } : {}),
     };
   }

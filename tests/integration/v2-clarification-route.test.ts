@@ -8,6 +8,7 @@ import { createApp } from "../../src/server.js";
 import { createSignatureParser } from "../../src/addon/verify.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import { computeRequestHash } from "../../src/assistant-v2/state.js";
+import { createPendingConfirmation } from "../../src/harness/confirmations.js";
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 import { createOperationPreparationService } from "../../src/services/operation-preparation-service.js";
@@ -420,6 +421,35 @@ describe("T14-E: free-text continuation and new-run supersession (HTTP)", () => 
       });
       return { scope, clarification };
     }
+    // PR 4 (F02): the refusal now protects a LIVE preview — a run awaiting
+    // confirmation with no pending row is a lapsed wedge and gets reconciled
+    // instead. Seed the real pending confirmation this run is waiting on.
+    const created = createPendingConfirmation({
+      id: `conf-${runId.slice(0, 8)}`,
+      sessionId, workspaceId: "ws-1", adminUserId: "admin-1",
+      risk: ["safe_write"],
+      preview: { summary: "create tag urgent" },
+      operation: {
+        operationId: `op-${runId.slice(0, 8)}`,
+        actionName: "clockify_tags_create",
+        payload: { name: "urgent" },
+        mutationPlan: {
+          mode: "single",
+          maxHostCalls: 1,
+          steps: [{ id: "create-tag", kind: "primary", reconciliationStrategy: "create" }],
+        },
+      },
+      installationGeneration: 1,
+      sessionSecret: "test-session-secret",
+      now: new Date(),
+      ttlMs: 300_000,
+      origin: "assistant",
+      registryId: "v2-api",
+      authorityModel: "preview_confirmation_v2",
+      executorKind: "prepared_safe_write",
+      runId,
+    });
+    store.savePendingConfirmation(created.record);
     return { scope, clarification: undefined };
   }
 

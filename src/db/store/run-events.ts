@@ -525,6 +525,54 @@ export function buildRunEventStore(ctx: StoreContext) {
         phase: "completed",
       });
     },
+    /** Closure-plan PR 4 (F02): the operation lifecycle events and the run's
+     * terminal transition commit in ONE transaction. `withClaim` also records
+     * `operation.confirmed` + `operation.started` (the one-use claim already
+     * happened in the same request); `actionResultId` present records
+     * `operation.completed`; absent (degraded canonical persistence after a
+     * known host effect) the run still completes truthfully without it. */
+    completeRunAfterConfirmationWithEvents(
+      scope: AssistantRunScope,
+      state: RunState,
+      input: {
+        operationId: string;
+        confirmationId: string;
+        withClaim: boolean;
+        actionResultId?: string;
+      },
+    ): SequencedRunEvent {
+      return db.transaction(() => {
+        const timestamp = nowIso();
+        if (input.withClaim) {
+          allocateAndInsertEvent(db, scope, "operation.confirmed", {
+            operationId: input.operationId,
+            confirmationId: input.confirmationId,
+          }, timestamp);
+          allocateAndInsertEvent(db, scope, "operation.started", {
+            operationId: input.operationId,
+          }, timestamp);
+        }
+        if (input.actionResultId !== undefined) {
+          allocateAndInsertEvent(db, scope, "operation.completed", {
+            operationId: input.operationId,
+            actionResultId: input.actionResultId,
+          }, timestamp);
+        }
+        updateRunState(db, scope, {
+          phase: "completed",
+          catalogHash: state.catalogHash,
+          loadedToolNames: state.loadedToolNames,
+          usedToolNames: state.usedToolNames,
+          continuation: { kind: "none" },
+          budget: state.budget,
+          unfinishedOperations: state.unfinishedOperations,
+          completedResults: state.completedResults,
+        }, timestamp);
+        return allocateAndInsertEvent(db, scope, "run.completed", {
+          actionResultIds: input.actionResultId !== undefined ? [input.actionResultId] : [],
+        }, timestamp).event;
+      })();
+    },
     failRunWithEvent(
       scope: AssistantRunScope,
       state: RunState,
