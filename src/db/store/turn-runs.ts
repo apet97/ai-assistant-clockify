@@ -1,3 +1,4 @@
+import { durableLinkColumns } from "./context.js";
 import type { DurableResultLink, StoreContext, TurnRun, TurnRunClaimInput, TurnRunClaimResult, TurnRunStatus } from "./context.js";
 
 interface TurnRunRow {
@@ -57,6 +58,9 @@ export function buildTurnRunStore(ctx: StoreContext): {
           result_json: string | null;
         }>;
         const results = links.flatMap((link) => {
+          // Confirmation links are re-served by the replay path's own nonce
+          // rotation, never replayed as raw id-only descriptors.
+          if (link.descriptor_kind === "confirmation") return [];
           const encoded = link.descriptor_kind === "action_result" ? link.result_json : link.descriptor_json;
           return encoded ? [JSON.parse(encoded) as unknown] : [];
         });
@@ -109,14 +113,8 @@ export function buildTurnRunStore(ctx: StoreContext): {
            ) VALUES (?, ?, ?, ?, ?, ?)`,
         );
         for (const [index, link] of resultLinks.entries()) {
-          insert.run(
-            sessionId,
-            requestId,
-            index,
-            link.kind,
-            link.kind === "action_result" ? link.ref.id : null,
-            link.kind === "action_result" ? null : JSON.stringify(link.descriptor),
-          );
+          const columns = durableLinkColumns(link);
+          insert.run(sessionId, requestId, index, link.kind, columns.actionResultId, columns.descriptorJson);
         }
       })();
     },

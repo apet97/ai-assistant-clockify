@@ -369,7 +369,7 @@ const SCHEMA_V10_STATEMENTS: readonly string[] = [
     ON run_events(created_at)`,
 ];
 
-export const LATEST_SCHEMA_VERSION = 12;
+export const LATEST_SCHEMA_VERSION = 13;
 
 const SCHEMA_V12_STATEMENTS: readonly string[] = [
   `CREATE TABLE IF NOT EXISTS entity_references (
@@ -482,6 +482,98 @@ const SCHEMA_V12_STATEMENTS: readonly string[] = [
     ON pending_clarifications(action_result_id)`,
   `CREATE INDEX IF NOT EXISTS idx_pending_clarifications_operation
     ON pending_clarifications(operation_id)`,
+];
+
+/**
+ * Schema 13 — the request/run/message identity chain (closure-plan PR 2).
+ *
+ * (a) `assistant_run_request_links` is rebuilt so an `initial` link may bind a
+ *     real client HTTP request id to a DIFFERENTLY minted server run id. The
+ *     old CHECK forced `request_id = run_id` for `initial`, which made the
+ *     link self-referential and therefore contentless. Legacy self-links stay
+ *     valid; a partial unique index enforces at most ONE initial link per run.
+ * (b) `turn_message_links` is new: durable ownership of the user and assistant
+ *     message ids for one claimed HTTP request, so identity never has to be
+ *     inferred from timestamps or content. `message_id` is UNIQUE (a message
+ *     belongs to exactly one turn) and both parents CASCADE.
+ * (c) Both result-link tables gain the `confirmation` descriptor kind: an
+ *     id-only pointer to a pending/terminal confirmation. Only the id is ever
+ *     stored — never a nonce and never an operation payload.
+ */
+const SCHEMA_V13_STATEMENTS: readonly string[] = [
+  "DROP TABLE IF EXISTS assistant_run_request_links_v12",
+  "ALTER TABLE assistant_run_request_links RENAME TO assistant_run_request_links_v12",
+  `CREATE TABLE assistant_run_request_links (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    run_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('initial', 'free_text_continuation')),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, request_id),
+    CHECK (kind = 'initial' OR request_id <> run_id),
+    FOREIGN KEY (session_id, request_id, workspace_id, admin_user_id)
+      REFERENCES turn_runs(session_id, request_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (session_id, run_id, workspace_id, admin_user_id)
+      REFERENCES assistant_runs(session_id, run_id, workspace_id, admin_user_id)
+      ON DELETE CASCADE
+  )`,
+  "INSERT INTO assistant_run_request_links SELECT * FROM assistant_run_request_links_v12",
+  "DROP TABLE assistant_run_request_links_v12",
+  `CREATE INDEX IF NOT EXISTS idx_assistant_run_request_links_run
+    ON assistant_run_request_links(
+      workspace_id, admin_user_id, session_id, run_id, created_at
+    )`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_assistant_run_request_links_one_initial
+    ON assistant_run_request_links(session_id, run_id)
+    WHERE kind = 'initial'`,
+  `CREATE TABLE IF NOT EXISTS turn_message_links (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    message_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    admin_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (session_id, request_id, role),
+    FOREIGN KEY (session_id, request_id)
+      REFERENCES turn_runs(session_id, request_id)
+      ON DELETE CASCADE,
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  )`,
+  "DROP TABLE IF EXISTS chat_message_result_links_v12",
+  "ALTER TABLE chat_message_result_links RENAME TO chat_message_result_links_v12",
+  `CREATE TABLE chat_message_result_links (
+    message_id TEXT NOT NULL,
+    result_index INTEGER NOT NULL CHECK (result_index >= 0),
+    descriptor_kind TEXT NOT NULL
+      CHECK (descriptor_kind IN ('action_result', 'preview', 'inline', 'confirmation')),
+    action_result_id TEXT,
+    descriptor_json TEXT CHECK (descriptor_json IS NULL OR json_valid(descriptor_json)),
+    PRIMARY KEY (message_id, result_index),
+    FOREIGN KEY (message_id) REFERENCES chat_messages(id) ON DELETE CASCADE
+  )`,
+  "INSERT INTO chat_message_result_links SELECT * FROM chat_message_result_links_v12",
+  "DROP TABLE chat_message_result_links_v12",
+  "CREATE INDEX idx_chat_message_result_links_action ON chat_message_result_links(action_result_id)",
+  "DROP TABLE IF EXISTS turn_run_result_links_v12",
+  "ALTER TABLE turn_run_result_links RENAME TO turn_run_result_links_v12",
+  `CREATE TABLE turn_run_result_links (
+    session_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    result_index INTEGER NOT NULL CHECK (result_index >= 0),
+    descriptor_kind TEXT NOT NULL
+      CHECK (descriptor_kind IN ('action_result', 'preview', 'inline', 'confirmation')),
+    action_result_id TEXT,
+    descriptor_json TEXT CHECK (descriptor_json IS NULL OR json_valid(descriptor_json)),
+    PRIMARY KEY (session_id, request_id, result_index),
+    FOREIGN KEY (session_id, request_id) REFERENCES turn_runs(session_id, request_id) ON DELETE CASCADE
+  )`,
+  "INSERT INTO turn_run_result_links SELECT * FROM turn_run_result_links_v12",
+  "DROP TABLE turn_run_result_links_v12",
+  "CREATE INDEX idx_turn_run_result_links_action ON turn_run_result_links(action_result_id)",
 ];
 
 const SCHEMA_V11_STATEMENTS: readonly string[] = [
@@ -730,6 +822,7 @@ const VERSIONED_MIGRATIONS: ReadonlyArray<{ version: number; statements: readonl
   { version: 10, statements: SCHEMA_V10_STATEMENTS },
   { version: 11, statements: [] },
   { version: 12, statements: SCHEMA_V12_STATEMENTS },
+  { version: 13, statements: SCHEMA_V13_STATEMENTS },
 ];
 
 export function migrate(db: Database.Database): void {

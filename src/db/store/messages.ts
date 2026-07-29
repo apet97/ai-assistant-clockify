@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { durableLinkColumns } from "./context.js";
 import type { ChatMessage, ChatRole, DurableResultLink, NewMessageInput, StoreContext } from "./context.js";
 
 interface ResultLinkRow {
@@ -45,13 +46,8 @@ export function buildMessageStore(ctx: StoreContext): {
            ) VALUES (?, ?, ?, ?, ?)`,
         );
         for (const [index, link] of (input.resultLinks ?? []).entries()) {
-          insert.run(
-            id,
-            index,
-            link.kind,
-            link.kind === "action_result" ? link.ref.id : null,
-            link.kind === "action_result" ? null : JSON.stringify(link.descriptor),
-          );
+          const columns = durableLinkColumns(link);
+          insert.run(id, index, link.kind, columns.actionResultId, columns.descriptorJson);
         }
       })();
     },
@@ -88,6 +84,10 @@ export function buildMessageStore(ctx: StoreContext): {
           if (link.descriptor_kind === "action_result") {
             return link.result_json ? [JSON.parse(link.result_json) as unknown] : [];
           }
+          // Confirmation links are hydrated by the presentation layer with a
+          // freshly rotated nonce; the raw id-only pointer never enters the
+          // model-visible payload.results.
+          if (link.descriptor_kind === "confirmation") return [];
           return link.descriptor_json ? [JSON.parse(link.descriptor_json) as unknown] : [];
         });
         const payload = envelope === undefined && results.length === 0

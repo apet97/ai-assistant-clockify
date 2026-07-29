@@ -270,6 +270,7 @@ function v3GraphDatabase(): Database.Database {
   db.exec(`
     DROP TABLE chat_message_result_links;
     DROP TABLE turn_run_result_links;
+    DROP TABLE turn_message_links;
     DROP TABLE chat_messages;
     DROP TABLE turn_runs;
     DROP TABLE pending_confirmations;
@@ -494,6 +495,7 @@ describe("schema v4 canonical-result ownership", () => {
     db.exec(`
       DROP TABLE chat_message_result_links;
       DROP TABLE turn_run_result_links;
+      DROP TABLE turn_message_links;
       DROP TABLE chat_messages;
       DROP TABLE turn_runs;
       DROP TABLE pending_confirmations;
@@ -1078,5 +1080,144 @@ describe("checked historical schema fixtures", () => {
     expect(new Database(missing, { readonly: true }).pragma("user_version", { simple: true }))
       .toBe(LATEST_SCHEMA_VERSION);
     reopened.close();
+  });
+});
+
+/**
+ * Schema 13 — the request/run/message identity chain (closure-plan PR 2).
+ * These pin the REBUILT link tables and the new `turn_message_links` at the
+ * schema level; the settlement service that writes them is covered separately.
+ */
+describe("schema v13 identity links", () => {
+  const CATALOG_HASH = "a".repeat(64);
+
+  function v13Database(): Database.Database {
+    const db = new Database(":memory:");
+    migrate(db);
+    return db;
+  }
+
+  function insertTurnRun(db: Database.Database, requestId: string, sessionId = "session-1"): void {
+    db.prepare(
+      `INSERT INTO turn_runs
+         (request_id, session_id, workspace_id, admin_user_id, intent_hash, status,
+          response_envelope_json, created_at, updated_at)
+       VALUES (?, ?, 'ws', 'admin', 'intent', 'executing', NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run(requestId, sessionId);
+  }
+
+  function insertAssistantRun(db: Database.Database, runId: string, sessionId = "session-1"): void {
+    db.prepare(
+      `INSERT INTO assistant_runs
+         (session_id, run_id, workspace_id, admin_user_id, installation_generation, auth_class,
+          original_request, request_hash, phase, registry_id, catalog_hash,
+          loaded_tool_names_json, used_tool_names_json, continuation_json, budget_json,
+          unfinished_operations_json, created_at, updated_at)
+       VALUES (?, ?, 'ws', 'admin', 1, 'addon', 'request', ?, 'model', 'v2-api', ?,
+               '[]', '[]', '{"kind":"none"}', '{}', '[]',
+               '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+    ).run(sessionId, runId, CATALOG_HASH, CATALOG_HASH);
+  }
+
+  it("preserves a legacy self-referential initial link through the v13 rebuild", () => {
+    const path = fileURLToPath(new URL("../fixtures/db/schema-v12.sql", import.meta.url));
+    const db = new Database(":memory:");
+    db.exec(readFileSync(path, "utf8"));
+    insertTurnRun(db, "run-legacy");
+    insertAssistantRun(db, "run-legacy");
+    db.prepare(
+      `INSERT INTO assistant_run_request_links
+         (session_id, request_id, run_id, workspace_id, admin_user_id, kind, created_at)
+       VALUES ('session-1', 'run-legacy', 'run-legacy', 'ws', 'admin', 'initial', '2026-01-01T00:00:00.000Z')`,
+    ).run();
+
+    migrate(db);
+
+    expect(db.pragma("user_version", { simple: true })).toBe(LATEST_SCHEMA_VERSION);
+    expect(db.prepare(
+      "SELECT request_id, run_id, kind FROM assistant_run_request_links",
+    ).all()).toEqual([{ request_id: "run-legacy", run_id: "run-legacy", kind: "initial" }]);
+    db.close();
+  });
+
+  it("accepts an initial link binding a distinct HTTP request id to the run, once", () => {
+    const db = v13Database();
+    db.prepare("INSERT INTO chat_sessions (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at) VALUES ('session-1', 'ws', 'admin', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')").run();
+    insertTurnRun(db, "http-request-1");
+    insertTurnRun(db, "run-1");
+    insertAssistantRun(db, "run-1");
+
+    const insert = db.prepare(
+      `INSERT INTO assistant_run_request_links
+         (session_id, request_id, run_id, workspace_id, admin_user_id, kind, created_at)
+       VALUES (?, ?, 'run-1', 'ws', 'admin', 'initial', '2026-01-01T00:00:00.000Z')`,
+    );
+    insert.run("session-1", "http-request-1");
+
+    // A run has exactly ONE initial link (partial unique index).
+    insertTurnRun(db, "http-request-2");
+    expect(() => insert.run("session-1", "http-request-2")).toThrow(/UNIQUE/);
+    db.close();
+  });
+
+  it("accepts the id-only confirmation descriptor kind in both link tables and rejects unknown kinds", () => {
+    const db = v13Database();
+    db.prepare("INSERT INTO chat_sessions (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at) VALUES ('session-1', 'ws', 'admin', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')").run();
+    db.prepare(
+      `INSERT INTO chat_messages (id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at)
+       VALUES ('message-1', 'session-1', 'ws', 'admin', 'assistant', 'Preview ready.', NULL, '2026-01-01T00:00:00.000Z')`,
+    ).run();
+    insertTurnRun(db, "request-1");
+
+    db.prepare(
+      `INSERT INTO chat_message_result_links (message_id, result_index, descriptor_kind, action_result_id, descriptor_json)
+       VALUES ('message-1', 0, 'confirmation', NULL, '{"confirmationId":"confirmation-1"}')`,
+    ).run();
+    db.prepare(
+      `INSERT INTO turn_run_result_links (session_id, request_id, result_index, descriptor_kind, action_result_id, descriptor_json)
+       VALUES ('session-1', 'request-1', 0, 'confirmation', NULL, '{"confirmationId":"confirmation-1"}')`,
+    ).run();
+
+    expect(() => db.prepare(
+      `INSERT INTO chat_message_result_links (message_id, result_index, descriptor_kind, action_result_id, descriptor_json)
+       VALUES ('message-1', 1, 'bogus', NULL, NULL)`,
+    ).run()).toThrow(/CHECK/);
+    db.close();
+  });
+
+  it("cascades turn_message_links from both parents and keeps one turn per message", () => {
+    const db = v13Database();
+    db.prepare("INSERT INTO chat_sessions (id, workspace_id, admin_user_id, created_at, last_seen_at, expires_at) VALUES ('session-1', 'ws', 'admin', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2099-01-01T00:00:00.000Z')").run();
+    insertTurnRun(db, "request-1");
+    for (const messageId of ["message-user", "message-assistant"]) {
+      db.prepare(
+        `INSERT INTO chat_messages (id, session_id, workspace_id, admin_user_id, role, content, payload_json, created_at)
+         VALUES (?, 'session-1', 'ws', 'admin', 'user', 'hello', NULL, '2026-01-01T00:00:00.000Z')`,
+      ).run(messageId);
+    }
+    const link = db.prepare(
+      `INSERT INTO turn_message_links (session_id, request_id, role, message_id, workspace_id, admin_user_id, created_at)
+       VALUES ('session-1', 'request-1', ?, ?, 'ws', 'admin', '2026-01-01T00:00:00.000Z')`,
+    );
+    link.run("user", "message-user");
+    link.run("assistant", "message-assistant");
+
+    // One turn per message: relinking an already-owned message is rejected.
+    insertTurnRun(db, "request-2");
+    expect(() => db.prepare(
+      `INSERT INTO turn_message_links (session_id, request_id, role, message_id, workspace_id, admin_user_id, created_at)
+       VALUES ('session-1', 'request-2', 'user', 'message-user', 'ws', 'admin', '2026-01-01T00:00:00.000Z')`,
+    ).run()).toThrow(/UNIQUE/);
+    // Only user/assistant roles may be linked.
+    expect(() => db.prepare(
+      `INSERT INTO turn_message_links (session_id, request_id, role, message_id, workspace_id, admin_user_id, created_at)
+       VALUES ('session-1', 'request-2', 'system', 'message-assistant', 'ws', 'admin', '2026-01-01T00:00:00.000Z')`,
+    ).run()).toThrow(/CHECK|UNIQUE/);
+
+    db.prepare("DELETE FROM chat_messages WHERE id = 'message-user'").run();
+    expect(db.prepare("SELECT COUNT(*) FROM turn_message_links").pluck().get()).toBe(1);
+    db.prepare("DELETE FROM turn_runs WHERE request_id = 'request-1'").run();
+    expect(db.prepare("SELECT COUNT(*) FROM turn_message_links").pluck().get()).toBe(0);
+    db.close();
   });
 });

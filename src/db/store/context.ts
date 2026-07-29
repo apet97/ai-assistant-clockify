@@ -159,7 +159,24 @@ export interface ChatMessage {
 
 export type DurableResultLink =
   | { kind: "action_result"; ref: ActionResultRef }
-  | { kind: "preview" | "inline"; descriptor: unknown };
+  | { kind: "preview" | "inline"; descriptor: unknown }
+  // Id-only pointer to a pending/terminal confirmation (schema 13). Hydrated
+  // at serve time with a freshly rotated nonce — the link row itself never
+  // carries a nonce or an operation payload.
+  | { kind: "confirmation"; confirmationId: string };
+
+/** The one link → (action_result_id, descriptor_json) column mapping, shared by
+ * the chat-message and turn-run link writers so the two can never diverge. */
+export function durableLinkColumns(link: DurableResultLink): {
+  actionResultId: string | null;
+  descriptorJson: string | null;
+} {
+  if (link.kind === "action_result") return { actionResultId: link.ref.id, descriptorJson: null };
+  if (link.kind === "confirmation") {
+    return { actionResultId: null, descriptorJson: JSON.stringify({ confirmationId: link.confirmationId }) };
+  }
+  return { actionResultId: null, descriptorJson: JSON.stringify(link.descriptor) };
+}
 
 export type TurnRunStatus = "prepared" | "executing" | "succeeded" | "failed" | "outcome_unknown";
 
@@ -479,6 +496,7 @@ export interface EraseCounts {
   artifacts: number;
   idempotencyKeys: number;
   turnRunResultLinks: number;
+  turnMessageLinks: number;
   chatMessageResultLinks: number;
   assistantRunResultLinks: number;
   assistantRunRequestLinks: number;
