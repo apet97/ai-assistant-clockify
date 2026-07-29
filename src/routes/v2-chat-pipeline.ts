@@ -309,7 +309,10 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
           continuationMessage: message,
           signal,
         }, runnerDeps);
-        const turn = settleV2Turn(deps, scope, newRequestId, outcome);
+        const turn = settleV2Turn(deps, scope, newRequestId, outcome, {
+          scope: continuationScope,
+          kind: "resume",
+        });
         return attachRunEventsPage(deps, scope, continuationRunId, lastSequenceBefore, turn);
       }
 
@@ -458,7 +461,10 @@ export function createV2RunnerPipeline(deps: AppDeps): ChatPipeline {
         requestId,
         signal,
       }, runnerDeps);
-      const turn = settleV2Turn(deps, scope, requestId, outcome);
+      const turn = settleV2Turn(deps, scope, requestId, outcome, {
+        scope: { ...scope, runId },
+        kind: "chat",
+      });
       return attachRunEventsPage(deps, scope, runId, 0, turn);
     },
   };
@@ -535,8 +541,34 @@ function settleV2Turn(
   claims: { sessionId: string; workspaceId: string; adminUserId: string },
   requestId: string | undefined,
   outcome: Awaited<ReturnType<typeof runAssistantV2>>,
+  telemetry?: { scope: RunScope & { runId: string }; kind: "chat" | "resume" },
 ): ChatTurnOutcome {
   const turn = v2OutcomeToTurn(outcome);
+  // Closure-plan PR 9 (F13): one invocation-telemetry record from the
+  // PERSISTED run budget — best-effort, never breaks a turn. Tokens are
+  // reported only when the provider reported them (absence ≠ zero); v2's
+  // active-wall figure aggregates model AND tool phases, recorded as both
+  // turn and model time until the budgets separate them.
+  if (telemetry) {
+    try {
+      const run = deps.store.getRun(telemetry.scope);
+      if (run) {
+        deps.store.recordTurnTelemetry({
+          sessionId: claims.sessionId,
+          workspaceId: claims.workspaceId,
+          adminUserId: claims.adminUserId,
+          kind: telemetry.kind,
+          modelCalls: run.budget.modelCallsUsed,
+          ...(run.budget.promptTokensUsed > 0 ? { promptTokens: run.budget.promptTokensUsed } : {}),
+          ...(run.budget.completionTokensUsed > 0 ? { completionTokens: run.budget.completionTokensUsed } : {}),
+          turnMs: run.budget.activeWallMsUsed,
+          modelMs: run.budget.activeWallMsUsed,
+        });
+      }
+    } catch {
+      console.error("v2 turn telemetry degraded (reply preserved)");
+    }
+  }
   if (!turn.ok) return turn;
   const orderedRefs: Array<
     | { kind: "action_result"; id: string }

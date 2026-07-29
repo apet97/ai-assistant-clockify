@@ -875,6 +875,17 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
   });
 
   // Built as TestStore (the concrete object implements the test-only methods),
+  // Closure-plan PR 9 (F13): ONE bounded audit row per canonical terminal
+  // result, linked by resultRef (never a fresh canonical copy). Loaded from
+  // the exact stored row so the audit summary can never drift from it.
+  const auditRefFor = (actionResultId: string): { id: string; kind: import("./action-results.js").ActionResultKind; summary: unknown } | undefined => {
+    const row = db.prepare(
+      "SELECT id, kind, summary_json FROM action_results WHERE id = ?",
+    ).get(actionResultId) as { id: string; kind: import("./action-results.js").ActionResultKind; summary_json: string } | undefined;
+    if (!row) return undefined;
+    return { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) as unknown };
+  };
+
   // Turn-settlement ownership row: written only when the request id names a
   // CLAIMED turn_runs row (route turns always do; direct pipeline invocations
   // in tests may not carry a claimed request and then persist the message
@@ -1076,6 +1087,21 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             ...(actionResultId !== undefined ? { actionResultId } : {}),
           },
         );
+        // F13: exactly-once audit — the settle command's replay-safety
+        // ({settled:false} on any repeat) is the idempotency guard.
+        if (actionResultId !== undefined) {
+          const ref = auditRefFor(actionResultId);
+          if (ref) {
+            store.addAuditEvent({
+              workspaceId: record.workspaceId,
+              adminUserId: record.adminUserId,
+              sessionId: record.sessionId,
+              actionName,
+              risk: record.risk,
+              resultRef: ref,
+            });
+          }
+        }
         return { settled: true };
       })();
     },
@@ -1163,6 +1189,23 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
           { ...state, budget, completedResults },
           { items: settledItems },
         );
+        // F13: one audit row per settled member, exactly once (replay-safe).
+        for (const item of settledItems) {
+          if (item.actionResultId === undefined) continue;
+          const ref = auditRefFor(item.actionResultId);
+          if (!ref) continue;
+          const record = confirmationStore.getPendingConfirmation(
+            items.find((entry) => entry.operationId === item.operationId)!.confirmationId,
+          );
+          store.addAuditEvent({
+            workspaceId: batch.workspaceId,
+            adminUserId: batch.adminUserId,
+            sessionId: batch.sessionId,
+            actionName: (record?.operation as { actionName?: string } | undefined)?.actionName ?? "confirmed_write",
+            risk: record?.risk ?? [],
+            resultRef: ref,
+          });
+        }
         return { settled: true };
       })();
     },
@@ -1184,14 +1227,25 @@ export function createStore(databasePath: string, options: StoreOptions = {}): S
             return { kind: "confirmation", confirmationId: ref.confirmationId };
           }
           const row = db.prepare(
-            `SELECT id, kind, summary_json FROM action_results
+            `SELECT id, kind, summary_json, action_name FROM action_results
               WHERE id = ? AND session_id = ? AND workspace_id = ? AND admin_user_id = ?`,
           ).get(ref.id, input.sessionId, input.workspaceId, input.adminUserId) as
-            | { id: string; kind: import("./action-results.js").ActionResultKind; summary_json: string }
+            | { id: string; kind: import("./action-results.js").ActionResultKind; summary_json: string; action_name: string }
             | undefined;
           // Strict at the store boundary: a settled turn may only link results
           // that exist in this exact scope. Callers decide best-effort.
           if (!row) throw new Error("assistant_turn_link_missing_result");
+          // Closure-plan PR 9 (F13): one bounded audit row per settled turn
+          // result — settlement runs once per executed turn (replay serves
+          // the stored envelope), so this cannot duplicate.
+          store.addAuditEvent({
+            workspaceId: input.workspaceId,
+            adminUserId: input.adminUserId,
+            sessionId: input.sessionId,
+            actionName: row.action_name,
+            risk: ["read"],
+            resultRef: { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) as unknown },
+          });
           return {
             kind: "action_result",
             ref: { id: row.id, kind: row.kind, summary: JSON.parse(row.summary_json) as unknown },
