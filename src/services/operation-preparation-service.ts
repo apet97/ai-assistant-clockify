@@ -213,6 +213,9 @@ export function createOperationPreparationService(deps: OperationPreparationDeps
       args: call.rawArguments,
       context,
       installationGeneration: scope.installationGeneration,
+      // PR 10 (F16): the injected registry entry executes — same source as
+      // the fingerprint/availability checks above.
+      definition: action,
     });
 
     if (result.kind === "clarify") {

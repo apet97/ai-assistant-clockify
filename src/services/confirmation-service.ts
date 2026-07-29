@@ -489,6 +489,8 @@ export function createConfirmationService(deps: ConfirmationServiceDeps) {
       authorizedContext,
       operation as ConfirmableOperation & { mutationPlan: ExternalMutationPlan },
       executorKind === "prepared_safe_write" ? "prepared_safe_write" : "risky_commit",
+      // PR 10 (F16): registry-bound dispatch — the injected catalog entry.
+      deps.registry.get((operation as ConfirmableOperation).actionName),
     );
     const commitResult = runScope
       ? await withRunScopedHostCallBudget(dispatchWrite, {

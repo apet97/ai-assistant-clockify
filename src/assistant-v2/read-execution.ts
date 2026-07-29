@@ -179,6 +179,9 @@ export async function executeV2Read(
       actionName: call.name,
       args: call.arguments,
       context,
+      // PR 10 (F16): execute the SAME injected registry entry the metadata
+      // checks used — never a same-named global definition.
+      definition: action,
     });
   } catch (error) {
     const code = boundedDenialCode(error instanceof Error && error.message.length > 0

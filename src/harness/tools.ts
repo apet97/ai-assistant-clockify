@@ -2,7 +2,7 @@ import type { CatalogRegistry } from "./catalog.js";
 import type { ToolDefinition } from "../assistant/model-client.js";
 import type { ActionRegistry } from "./api-catalog.js";
 import { DISCOVERY_META_TOOL_NAME } from "./api-operation.js";
-import { actionParametersSchema, actionParametersSchemaWithReference } from "./tool-schema.js";
+import { actionParametersSchema } from "./tool-schema.js";
 import { DISCOVERY_META_TOOL } from "../assistant-v2/discovery/api-search-tool.js";
 
 export { actionParametersSchema } from "./tool-schema.js";
@@ -83,7 +83,12 @@ export function discoveryToolsForLoadedSet(
     .map((action) => ({
       name: action.name,
       description: action.description,
-      parameters: actionParametersSchemaWithReference(action.schema, action.referenceSelector !== undefined),
+      // Closure-plan PR 10 (F09): `referenceId` is NOT advertised — the
+      // producer/resolver vertical has no runtime path, so offering it made
+      // the model invoke a feature that always failed validation. The
+      // dormant storage stays compatible until the feature is funded or
+      // removed.
+      parameters: actionParametersSchema(action.schema),
     }));
   return [DISCOVERY_META_TOOL, ...apiTools];
 }

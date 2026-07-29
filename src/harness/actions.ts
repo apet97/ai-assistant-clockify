@@ -48,6 +48,11 @@ export interface ExecuteActionInput {
   actionName: string;
   args: unknown;
   context: ActionContext;
+  /** Closure-plan PR 10 (F16): the caller's INJECTED registry entry. When
+   * present, metadata and handler come from this exact definition — v2 can
+   * never execute a different same-named global definition. V1 callers omit
+   * it and keep the global catalog lookup. */
+  definition?: ActionDefinition;
 }
 
 export interface ExecuteV2ApiActionInput extends ExecuteActionInput {
@@ -120,7 +125,7 @@ export async function executeV2ApiAction(input: ExecuteV2ApiActionInput): Promis
     };
   }
 
-  const action = getAction(input.actionName);
+  const action = input.definition ?? getAction(input.actionName);
   if (!action) {
     const suggestions = suggestActionNames(input.actionName);
     const hint = suggestions.length
@@ -251,7 +256,7 @@ function hasAuthoritativelyReconciledStep(
 }
 
 export async function executeAction(input: ExecuteActionInput): Promise<ActionResult> {
-  const action = getAction(input.actionName);
+  const action = input.definition ?? getAction(input.actionName);
   if (!action) {
     // "Did you mean" (Phase 3): name the closest real actions so a weak model that
     // typos/scrambles a name self-corrects on the next step instead of dead-ending.
@@ -634,8 +639,11 @@ export async function executeStoredV2Write(
   ctx: ActionContext,
   operation: ConfirmableOperation & { mutationPlan: ExternalMutationPlan },
   executorKind: "prepared_safe_write" | "risky_commit",
+  /** PR 10 (F16): the injected registry entry — same-source metadata and
+   * handler; the global lookup remains only as the v1-compatible fallback. */
+  definition?: ActionDefinition,
 ): Promise<CommitResult> {
-  const action = getAction(operation.actionName);
+  const action = definition ?? getAction(operation.actionName);
   if (!action) {
     return errorReceipt({
       action: operation.actionName,
