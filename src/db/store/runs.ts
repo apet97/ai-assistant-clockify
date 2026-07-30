@@ -9,6 +9,11 @@ import type {
 import type { AuthClass } from "../../harness/api-operation.js";
 import type { StoreContext } from "./context.js";
 
+/** A prior run may seed a fresh turn's tool cache only if it settled within
+ * this window — a seed is a conversational-freshness heuristic, not
+ * durability, and the fallback (discovery-only) costs one search. */
+export const RUN_SEED_RECENCY_WINDOW_MS = 30 * 60 * 1000;
+
 export interface AssistantRunScope {
   sessionId: string;
   runId: string;
@@ -116,7 +121,7 @@ export function buildAssistantRunStore(ctx: StoreContext): {
   recoverOrphanedActiveRuns(scope: Omit<AssistantRunScope, "runId">): number;
   failActiveRunsForSession(sessionId: string, workspaceId: string, adminUserId: string, code: string): number;
 } {
-  const { db, nowIso } = ctx;
+  const { db, now, nowIso } = ctx;
 
   const loadCompletedResults = (
     sessionId: string,
@@ -274,13 +279,20 @@ export function buildAssistantRunStore(ctx: StoreContext): {
       })();
     },
     findLatestEligibleRunForCache(sessionId, workspaceId, adminUserId, installationGeneration, authClass, catalogHash) {
+      // Readiness-plan A3 (defect D-1 hardening): only the terminal SUCCESS
+      // phase seeds — a failed or abandoned run must not hand its tool set to
+      // the next turn — and only within the bounded recency window. Both
+      // timestamps come from the injectable clock's toISOString(), so the
+      // lexicographic comparison is chronologically exact.
+      const recencyCutoffIso = new Date(now().getTime() - RUN_SEED_RECENCY_WINDOW_MS).toISOString();
       const row = db.prepare(
         `SELECT * FROM assistant_runs
           WHERE session_id = ? AND workspace_id = ? AND admin_user_id = ?
             AND installation_generation = ? AND auth_class = ?
             AND registry_id = 'v2-api' AND catalog_hash = ?
+            AND phase = 'completed' AND updated_at >= ?
           ORDER BY updated_at DESC LIMIT 1`,
-      ).get(sessionId, workspaceId, adminUserId, installationGeneration, authClass, catalogHash) as AssistantRunRow | undefined;
+      ).get(sessionId, workspaceId, adminUserId, installationGeneration, authClass, catalogHash, recencyCutoffIso) as AssistantRunRow | undefined;
       if (!row) return undefined;
       const scope: AssistantRunScope = {
         sessionId,
