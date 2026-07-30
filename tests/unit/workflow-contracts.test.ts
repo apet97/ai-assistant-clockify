@@ -238,7 +238,13 @@ describe("GitHub Actions workflow contracts", () => {
     expect(workflow).toContain("VITEST_RELEASE_REPORT_PATH");
     expect(workflow).toContain("vitest-pass-${pass}.json");
     expect(workflow).toContain("npm run record:cold-verifies");
-    expect(workflow).toContain("minimumPassedTests !== 2366");
+    // The release test-count floor: BOTH inline workflow gates must carry the
+    // exact derived value floor(5,461 × 0.98) = 5,351, and the constant's
+    // module must record the baseline + explicit shrink it derives from.
+    expect(workflow.split("minimumPassedTests !== 5351").length - 1).toBe(2);
+    expect(workflow.split("pass.passedTests < 5351").length - 1).toBe(2);
+    expect(coldVerifyEvidence).toContain("RECORDED_SUITE_BASELINE = 5_461");
+    expect(coldVerifyEvidence).toContain("ALLOWED_SUITE_SHRINK_PERCENT = 2");
     expect(coldVerifyEvidence).toContain("numPendingTests");
     expect(coldVerifyEvidence).toContain("numTodoTests");
     expect(workflow).toContain("npm run perf:local-ui");

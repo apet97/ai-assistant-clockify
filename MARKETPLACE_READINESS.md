@@ -52,7 +52,7 @@ is green is the three admin-only packages below.
 The evidence record is the single status source. It covers:
 
 - three consecutive cold Node 22 `npm run verify` passes without retries, each with a
-  hashed Vitest JSON report proving at least 2,366 passed tests and zero failed,
+  hashed Vitest JSON report proving at least 5,351 passed tests and zero failed,
   pending/skipped, or todo tests;
 - `audit:prod`, `license:prod`, `eval:smoke`, configured DeepSeek evaluation,
   actionlint, dependency review, secret scan, CodeQL, SBOM, and license artifacts;

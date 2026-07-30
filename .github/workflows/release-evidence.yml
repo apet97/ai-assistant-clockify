@@ -118,12 +118,12 @@ jobs:
           const { readFileSync } = require("node:fs");
           const evidence = JSON.parse(readFileSync(process.env.VERIFY_EVIDENCE_PATH, "utf8"));
           if (
-            evidence.minimumPassedTests !== 2366
+            evidence.minimumPassedTests !== 5351
             || evidence.consecutiveColdPasses !== 3
             || evidence.retries !== 0
             || evidence.passes?.length !== 3
             || evidence.passes.some((pass) =>
-              pass.passedTests < 2366
+              pass.passedTests < 5351
               || pass.passedTests !== pass.totalTests
               || pass.failedTests !== 0
               || pass.pendingTests !== 0
@@ -745,12 +745,12 @@ jobs:
             coldVerifies.conclusion !== "passed"
             || coldVerifies.sourceCandidateSha !== sourceCandidateSha
             || coldVerifies.evidenceCommitSha !== evidenceCommitSha
-            || coldVerifies.minimumPassedTests !== 2366
+            || coldVerifies.minimumPassedTests !== 5351
             || coldVerifies.consecutiveColdPasses !== 3
             || coldVerifies.retries !== 0
             || coldVerifies.passes?.length !== 3
             || coldVerifies.passes.some((pass) =>
-              pass.passedTests < 2366
+              pass.passedTests < 5351
               || pass.passedTests !== pass.totalTests
               || pass.failedTests !== 0
               || pass.pendingTests !== 0

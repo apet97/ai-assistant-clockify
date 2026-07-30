@@ -9,6 +9,14 @@ const { buildReleaseEvidence } = releaseEvidenceModule;
 const CANDIDATE_SHA = "a".repeat(40);
 const EVIDENCE_SHA = "b".repeat(40);
 
+// Double-entry pin of the release test-count floor: floor(5,461 recorded
+// baseline × 0.98) = 5,351. Deliberately a literal, NOT an import from
+// scripts/evidence/cold-verify-evidence.ts — re-basing the floor must fail
+// here until this pin is moved with it, in the same commit.
+const RELEASE_TEST_FLOOR = 5351;
+// A representative healthy pass count sitting above the floor.
+const REPORT_TOTAL = RELEASE_TEST_FLOOR + 34;
+
 function reviewedPullRequestInput(): ReviewedPullRequestValidationInput {
   return {
     repository: "cake/ai-assistant-addon",
@@ -75,8 +83,8 @@ function vitestReport(overrides: Record<string, unknown> = {}): Record<string, u
     numPassedTestSuites: 410,
     numFailedTestSuites: 0,
     numPendingTestSuites: 0,
-    numTotalTests: 2400,
-    numPassedTests: 2400,
+    numTotalTests: REPORT_TOTAL,
+    numPassedTests: REPORT_TOTAL,
     numFailedTests: 0,
     numPendingTests: 0,
     numTodoTests: 0,
@@ -189,14 +197,14 @@ describe("release evidence", () => {
         sourceCandidateSha: CANDIDATE_SHA,
         evidenceCommitSha: EVIDENCE_SHA,
         node: "v22.17.1",
-        minimumPassedTests: 2366,
+        minimumPassedTests: RELEASE_TEST_FLOOR,
         consecutiveColdPasses: 3,
         retries: 0,
         passes: [1, 2, 3].map((pass) => ({
           pass,
           reportSha256: String(pass).repeat(64),
-          totalTests: 2400,
-          passedTests: 2400,
+          totalTests: REPORT_TOTAL,
+          passedTests: REPORT_TOTAL,
           failedTests: 0,
           pendingTests: 0,
           todoTests: 0,
@@ -301,20 +309,20 @@ describe("release evidence", () => {
       consecutiveColdPasses: number;
       passes: Array<{ pass: number; passedTests: number; reportSha256: string }>;
     };
-    expect(evidence.minimumPassedTests).toBe(2366);
+    expect(evidence.minimumPassedTests).toBe(RELEASE_TEST_FLOOR);
     expect(evidence.consecutiveColdPasses).toBe(3);
     expect(evidence.passes.map(({ pass, passedTests }) => ({ pass, passedTests }))).toEqual([
-      { pass: 1, passedTests: 2400 },
-      { pass: 2, passedTests: 2400 },
-      { pass: 3, passedTests: 2400 },
+      { pass: 1, passedTests: REPORT_TOTAL },
+      { pass: 2, passedTests: REPORT_TOTAL },
+      { pass: 3, passedTests: REPORT_TOTAL },
     ]);
     expect(evidence.passes.every(({ reportSha256 }) => /^[a-f0-9]{64}$/.test(reportSha256))).toBe(true);
 
     for (const bad of [
-      { ...base, reports: [vitestReport({ numTotalTests: 2365, numPassedTests: 2365 }), vitestReport(), vitestReport()] },
-      { ...base, reports: [vitestReport({ numTotalTests: 2401, numPendingTests: 1 }), vitestReport(), vitestReport()] },
-      { ...base, reports: [vitestReport({ numTotalTests: 2401, numTodoTests: 1 }), vitestReport(), vitestReport()] },
-      { ...base, reports: [vitestReport({ numPassedTests: 2399, numFailedTests: 1 }), vitestReport(), vitestReport()] },
+      { ...base, reports: [vitestReport({ numTotalTests: RELEASE_TEST_FLOOR - 1, numPassedTests: RELEASE_TEST_FLOOR - 1 }), vitestReport(), vitestReport()] },
+      { ...base, reports: [vitestReport({ numTotalTests: REPORT_TOTAL + 1, numPendingTests: 1 }), vitestReport(), vitestReport()] },
+      { ...base, reports: [vitestReport({ numTotalTests: REPORT_TOTAL + 1, numTodoTests: 1 }), vitestReport(), vitestReport()] },
+      { ...base, reports: [vitestReport({ numPassedTests: REPORT_TOTAL - 1, numFailedTests: 1 }), vitestReport(), vitestReport()] },
       { ...base, reports: [vitestReport({ success: undefined }), vitestReport(), vitestReport()] },
       { ...base, reports: [vitestReport(), vitestReport()] },
       { ...base, retries: 1 },

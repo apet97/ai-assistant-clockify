@@ -46,7 +46,7 @@ release record binds its SHA-256 and exact passed/total/failed/pending/todo coun
 | `npm run verify` - cold pass 1 | Pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | `npm run verify` - cold pass 2 | Pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | `npm run verify` - cold pass 3 | Pass | PENDING CURRENT RUN | PENDING CURRENT RUN |
-| Full deterministic suite | Every cold pass records at least 2,366 passed tests, passed equals total, and failed/pending/todo are all zero under the checked-in four-worker, zero-retry ceiling | PENDING CURRENT RUN | PENDING CURRENT RUN |
+| Full deterministic suite | Every cold pass records at least 5,351 passed tests, passed equals total, and failed/pending/todo are all zero under the checked-in four-worker, zero-retry ceiling | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | `npm run audit:prod` | Pass, no unallowlisted high/critical production advisory | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | `npm run license:prod` | Pass and deterministic production-license JSON | PENDING CURRENT RUN | PENDING CURRENT RUN |
 | `npm run eval:smoke` | Pass | PENDING CURRENT RUN | PENDING CURRENT RUN |

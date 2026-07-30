@@ -191,7 +191,7 @@ npm run dev           # tsx src/server.ts (needs env)
   remain operator work.
 - Manual `.github/workflows/release-evidence.yml` records the exact commit SHA,
   validated reviewed-PR/head/CI/CodeQL identities, three hashed zero-retry Vitest
-  count reports (minimum 2,366 passed, zero skipped/todo), and machine conclusions
+  count reports (minimum 5,351 passed, zero skipped/todo), and machine conclusions
   for verify, audit, license, CodeQL, secret scan,
   `eval:smoke`, SBOM, live smoke, backup/restore, deterministic DeepSeek safety,
   and production AUDIT-host clearance. Only the three final admin packages are

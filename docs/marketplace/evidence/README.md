@@ -29,7 +29,7 @@ can support a v2 readiness conclusion.
   `browser-e2e`, `dependency-review`, and gitleaks `secret-scan`; CodeQL must include a
   green `analyze` job.
 - Retain all three Vitest JSON reports. The consolidated record stores each report's
-  SHA-256 and passed/total/failed/pending/todo counts, requires at least 2,366 passed
+  SHA-256 and passed/total/failed/pending/todo counts, requires at least 5,351 passed
   tests on every pass, and rejects retries, skipped/pending tests, and todo tests.
 - The checked-in Markdown is a schema and index, not the final exact-SHA attestation.
   Filling a committed file with its own commit SHA would change that SHA. Never claim

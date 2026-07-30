@@ -2,7 +2,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 
 import { writeDeterministicJson } from "./write-json.js";
-import type { ColdVerifyEvidence } from "./cold-verify-evidence.js";
+import { MINIMUM_RELEASE_TESTS, type ColdVerifyEvidence } from "./cold-verify-evidence.js";
 import type { ReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
 import { V2_AUTHORITY_NOT_EVALUATED_SENTINEL, type V2AuthorityEvidenceReport } from "./v2-authority-evidence.js";
 
@@ -170,14 +170,14 @@ export function buildReleaseEvidence(
     || cold.sourceCandidateSha !== input.sourceCandidateSha
     || cold.evidenceCommitSha !== input.evidenceCommitSha
     || !/^v22\.[0-9]+\.[0-9]+$/.test(cold.node)
-    || cold.minimumPassedTests !== 2_366
+    || cold.minimumPassedTests !== MINIMUM_RELEASE_TESTS
     || cold.consecutiveColdPasses !== 3
     || cold.retries !== 0
     || cold.passes?.length !== 3
     || !cold.passes.every((pass, index) =>
       pass.pass === index + 1
       && /^[a-f0-9]{64}$/.test(pass.reportSha256)
-      && pass.totalTests >= 2_366
+      && pass.totalTests >= MINIMUM_RELEASE_TESTS
       && pass.passedTests === pass.totalTests
       && pass.failedTests === 0
       && pass.pendingTests === 0

@@ -5,7 +5,37 @@ import { resolve } from "node:path";
 
 import { writeDeterministicJson } from "./write-json.js";
 
-export const MINIMUM_RELEASE_TESTS = 2_366;
+/**
+ * The release test-count floor — derived from a recorded baseline, never
+ * hand-picked.
+ *
+ * `RECORDED_SUITE_BASELINE` is the REAL deterministic-suite count measured
+ * from a full `npm test` run (the exact test stage `npm run verify` executes)
+ * on Node 22 on 2026-07-30: 377 files, 5,461 tests, zero
+ * failed/pending/todo. Re-measure and re-record it whenever the floor is
+ * deliberately re-based; never lower it to green a failing gate.
+ *
+ * `ALLOWED_SUITE_SHRINK_PERCENT` is the explicit shrink the release
+ * tolerates: 2% (~110 tests) absorbs a small honest refactor that
+ * consolidates cases, while a mass-skip or mass-delete regression still
+ * fails every cold pass. The derived floor is floor(5,461 × 0.98) = 5,351.
+ * The previous literal floor (2,366) had decayed to 44% of the real suite
+ * and no longer discriminated anything.
+ *
+ * Coupled sites that must move with this derivation in the same commit:
+ * `scripts/evidence/release-evidence.ts` (imports this constant), BOTH
+ * inline gates in `.github/workflows/release-evidence.yml`,
+ * `tests/unit/release-evidence.test.ts` and
+ * `tests/unit/workflow-contracts.test.ts` (deliberate double-entry literal
+ * pins), `CLAUDE.md`, `MARKETPLACE_READINESS.md`, `AGENTS.md`,
+ * `docs/marketplace/evidence/README.md`, and
+ * `docs/marketplace/evidence/release-candidate.md`.
+ */
+export const RECORDED_SUITE_BASELINE = 5_461;
+export const ALLOWED_SUITE_SHRINK_PERCENT = 2;
+export const MINIMUM_RELEASE_TESTS = Math.floor(
+  (RECORDED_SUITE_BASELINE * (100 - ALLOWED_SUITE_SHRINK_PERCENT)) / 100,
+);
 
 interface VitestJsonReport {
   numTotalTestSuites: number;

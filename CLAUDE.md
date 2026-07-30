@@ -842,7 +842,9 @@ resource ids/names, payloads, response bodies, or prompts.
 
 Manual `release-evidence.yml` records the exact commit SHA, API-validated reviewed
 PR/head/CI/CodeQL identities, and three hashed zero-retry Vitest count reports
-(minimum 2,366 passed with zero skipped/todo) plus machine conclusions for verify,
+(minimum 5,351 passed with zero skipped/todo — floor(5,461 recorded baseline ×
+0.98), derivation in `scripts/evidence/cold-verify-evidence.ts`) plus machine
+conclusions for verify,
 production audit/license, CodeQL, gitleaks,
 `eval:smoke`, SBOM, live smoke, backup/restore, deterministic DeepSeek safety, and
 production AUDIT-host clearance. Only the three admin packages named above are
