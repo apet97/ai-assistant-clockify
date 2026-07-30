@@ -4,13 +4,16 @@ import type { ActionRegistry } from "../../src/harness/api-catalog.js";
 import type { ActionDefinition } from "../../src/harness/action.js";
 import {
   buildEvalCases,
+  caseByName,
   evalOperationNames,
   type EvalCase,
 } from "../../scripts/eval-v2/case-model.js";
 import { READ_PARITY_FIXTURES } from "../helpers/v2-read-parity-fixtures.js";
 import { WRITE_PREVIEW_FIXTURES } from "../helpers/v2-write-preview-fixtures.js";
 import {
+  buildDiscoveryEvalCorpus,
   buildDiscoveryEvalCases,
+  DISCOVERY_CORPUS_VERSION,
   DISCOVERY_THRESHOLDS,
 } from "../../scripts/eval-v2/api-discovery-cases.js";
 import {
@@ -29,7 +32,10 @@ import {
   MISSING_CREDENTIAL_STATUS,
   type EvalAttempt,
 } from "../../scripts/eval-v2/report.js";
-import { runApiDiscoveryEvaluation } from "../../scripts/eval-api-discovery.js";
+import {
+  apiDiscoveryIdentity,
+  runApiDiscoveryEvaluation,
+} from "../../scripts/eval-api-discovery.js";
 
 /**
  * T17-A: the accounting gate. Every expectation here computes BOTH sides from
@@ -252,6 +258,405 @@ describe("T17-A/M4: the discovery cohort covers every addon-loadable operation a
     expect(DISCOVERY_THRESHOLDS.typoRequired).toBe(2);
     expect(DISCOVERY_THRESHOLDS.unrelatedDestructiveAllowed).toBe(0);
     expect(DISCOVERY_THRESHOLDS.maxLoadedApiTools).toBe(12);
+  });
+});
+
+interface PromptArgumentLeaf {
+  path: string;
+  value: string | number | boolean;
+}
+
+function promptArgumentLeaves(value: unknown, path = ""): PromptArgumentLeaf[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => promptArgumentLeaves(entry, `${path}[${index}]`));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([key, entry]) =>
+      promptArgumentLeaves(entry, path.length > 0 ? `${path}.${key}` : key));
+  }
+  if (value === undefined || value === null) return [];
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return [{ path, value }];
+  }
+  return [];
+}
+
+type ResolverSeedResource =
+  | "clients"
+  | "expenseCategories"
+  | "groups"
+  | "invoices"
+  | "projects"
+  | "tags"
+  | "tasks"
+  | "timeOffPolicies"
+  | "users";
+
+const RESOLVER_RESOURCE_BY_PATH: Readonly<Record<string, ResolverSeedResource>> = {
+  assigneeIds: "users",
+  categoryId: "expenseCategories",
+  clientId: "clients",
+  groupId: "groups",
+  invoiceId: "invoices",
+  policyId: "timeOffPolicies",
+  projectId: "projects",
+  taskId: "tasks",
+  userId: "users",
+  userIds: "users",
+};
+
+const RESOLVER_ID_RESOURCE_BY_ACTION_PREFIX: ReadonlyArray<readonly [string, ResolverSeedResource]> = [
+  ["clockify_clients_", "clients"],
+  ["clockify_expenses_categories_", "expenseCategories"],
+  ["clockify_groups_", "groups"],
+  ["clockify_invoices_", "invoices"],
+  ["clockify_projects_", "projects"],
+  ["clockify_tags_", "tags"],
+  ["clockify_tasks_", "tasks"],
+  ["clockify_time_off_policies_", "timeOffPolicies"],
+];
+
+function resolverResource(actionName: string, path: string): ResolverSeedResource | undefined {
+  const normalized = path.replace(/\[\d+\]/gu, "");
+  const leafPath = normalized.split(".").at(-1) ?? normalized;
+  const pathResource = RESOLVER_RESOURCE_BY_PATH[leafPath];
+  if (pathResource !== undefined) return pathResource;
+  if (normalized !== "id") return undefined;
+  return RESOLVER_ID_RESOURCE_BY_ACTION_PREFIX.find(([prefix]) => actionName.startsWith(prefix))?.[1];
+}
+
+function seededHumanAliases(entry: EvalCase, leaf: PromptArgumentLeaf): string[] {
+  if (typeof leaf.value !== "string") return [];
+  const resource = resolverResource(entry.actionName, leaf.path);
+  if (resource === undefined || entry.fakeSeed === null || typeof entry.fakeSeed !== "object") return [];
+  const rows = (entry.fakeSeed as Record<string, unknown>)[resource];
+  if (!Array.isArray(rows)) return [];
+  const row = rows.find((candidate) =>
+    candidate !== null
+    && typeof candidate === "object"
+    && (candidate as Record<string, unknown>).id === leaf.value);
+  if (row === null || typeof row !== "object") return [];
+  const aliases = new Set<string>();
+  const record = row as Record<string, unknown>;
+  for (const key of ["name", "number", "email"] as const) {
+    if (typeof record[key] === "string" && record[key].length > 0) aliases.add(record[key]);
+  }
+  return [...aliases];
+}
+
+function idArgumentLabel(actionName: string): string {
+  if (actionName.startsWith("clockify_clients_")) return "client";
+  if (actionName.startsWith("clockify_expenses_categories_")) return "expense category";
+  if (actionName.startsWith("clockify_groups_")) return "group";
+  if (actionName.startsWith("clockify_invoices_")) return "invoice";
+  if (actionName.startsWith("clockify_projects_")) return "project";
+  if (actionName.startsWith("clockify_tags_")) return "tag";
+  if (actionName.startsWith("clockify_tasks_")) return "task";
+  if (actionName.startsWith("clockify_time_off_policies_")) return "time-off policy";
+  return "id";
+}
+
+function expectedPromptLabel(actionName: string, path: string): string {
+  const normalized = path.replace(/\[\d+\]/gu, "");
+  if (normalized === "id") return idArgumentLabel(actionName);
+  if (normalized === "name" && /_(?:update|rename)$/u.test(actionName)) return "new name";
+  const leaf = normalized.split(".").at(-1) ?? normalized;
+  const labels: Record<string, string> = {
+    assigneeIds: "assignee",
+    categoryId: "expense category",
+    clientId: "client",
+    dateRangeEnd: "date range end",
+    dateRangeStart: "date range start",
+    durationHours: "duration hours",
+    endDate: "end date",
+    entryId: "time entry id",
+    fieldId: "custom field id",
+    groupId: "group",
+    groups: "report grouping",
+    hoursPerDay: "hours per day",
+    invoiceId: "invoice",
+    memberships: "member",
+    paymentDate: "payment date",
+    paymentId: "payment id",
+    policyId: "time-off policy",
+    projectId: "project",
+    requestId: "request id",
+    seriesUpdateOption: "series update option",
+    startDate: "start date",
+    taskId: "task",
+    unitPrice: "unit price",
+    userId: "user",
+    userIds: "user",
+  };
+  return labels[leaf] ?? leaf.replace(/([a-z])([A-Z])/gu, "$1 $2").toLocaleLowerCase("en-US");
+}
+
+function exactPromptValues(entry: EvalCase, leaf: PromptArgumentLeaf): string[] {
+  const raw = leaf.value;
+  if (typeof raw !== "string") return [String(raw)];
+  const aliases = seededHumanAliases(entry, leaf);
+  if (aliases.length > 0) return aliases.map((alias) => `"${alias}"`);
+  const values = new Set<string>();
+  values.add(`"${raw}"`);
+  if (/^PT\d+H$/u.test(raw)) values.add(`"${raw.slice(2, -1)} hours (${raw})"`);
+  if (raw === "this_week" || raw === "last_week") {
+    values.add(`"${raw.replace("_", " ")} (${raw})"`);
+  }
+  return [...values];
+}
+
+const PROMPT_ARGUMENT_MARKER = " Use these request values: ";
+
+function promptArgumentSuffix(request: string): string {
+  const marker = request.indexOf(PROMPT_ARGUMENT_MARKER);
+  return marker === -1 ? "" : request.slice(marker);
+}
+
+function promptIntentPrefix(request: string): string {
+  const marker = request.indexOf(PROMPT_ARGUMENT_MARKER);
+  return marker === -1 ? request : request.slice(0, marker);
+}
+
+function invalidPromptArguments(entry: EvalCase, request: string): string[] {
+  const leaves = promptArgumentLeaves(entry.expectedArguments);
+  const marker = request.indexOf(PROMPT_ARGUMENT_MARKER);
+  if (leaves.length === 0) {
+    return marker === -1 ? [] : ["unexpected_argument_suffix"];
+  }
+  if (marker === -1 || marker !== request.lastIndexOf(PROMPT_ARGUMENT_MARKER)) {
+    return leaves.map((leaf) => `${leaf.path}=${leaf.value}`);
+  }
+  const suffixBody = request.slice(marker + PROMPT_ARGUMENT_MARKER.length);
+  if (!suffixBody.endsWith(".")) return leaves.map((leaf) => `${leaf.path}=${leaf.value}`);
+  const clauses = suffixBody.slice(0, -1).split("; ");
+  const invalid: string[] = [];
+  for (const [index, leaf] of leaves.entries()) {
+    const clause = clauses[index];
+    const label = expectedPromptLabel(entry.actionName, leaf.path);
+    const expectedPrefix = `${label} `;
+    const value = clause?.startsWith(expectedPrefix) ? clause.slice(expectedPrefix.length) : undefined;
+    if (value === undefined || !exactPromptValues(entry, leaf).includes(value)) {
+      invalid.push(`${leaf.path}=${leaf.value}`);
+    }
+  }
+  if (clauses.length !== leaves.length) invalid.push(`clause_count=${clauses.length}/${leaves.length}`);
+  return invalid;
+}
+
+function isSingleCharacterInsertionOrDeletion(left: string, right: string): boolean {
+  if (Math.abs(left.length - right.length) !== 1) return false;
+  const [longer, shorter] = left.length > right.length ? [left, right] : [right, left];
+  let mismatch = 0;
+  while (mismatch < shorter.length && longer[mismatch] === shorter[mismatch]) mismatch += 1;
+  return longer.slice(mismatch + 1) === shorter.slice(mismatch);
+}
+
+describe("M5: the discovery corpus carries user-authored arguments", () => {
+  it("grounds every expected argument in every canonical, paraphrase, and typo request", () => {
+    const casesByName = caseByName(buildEvalCases());
+    const offenders: string[] = [];
+    const discoveryCases = buildDiscoveryEvalCases();
+    let checkedScalarArguments = 0;
+    for (const discovery of discoveryCases) {
+      const entry = casesByName.get(discovery.actionName);
+      if (!entry) throw new Error(`missing_eval_case:${discovery.actionName}`);
+      expect(discovery.paraphraseRequest, entry.actionName).not.toBe(discovery.canonicalRequest);
+      expect(promptArgumentSuffix(discovery.paraphraseRequest), `${entry.actionName}:paraphrase suffix`)
+        .toBe(promptArgumentSuffix(discovery.canonicalRequest));
+      expect(promptArgumentSuffix(discovery.typoRequest ?? ""), `${entry.actionName}:typo suffix`)
+        .toBe(promptArgumentSuffix(discovery.canonicalRequest));
+      expect(
+        discovery.typoRequest
+          ? isSingleCharacterInsertionOrDeletion(
+            promptIntentPrefix(discovery.canonicalRequest),
+            promptIntentPrefix(discovery.typoRequest),
+          )
+          : false,
+        `${entry.actionName} typo must change exactly one character without changing its arguments`,
+      ).toBe(true);
+      for (const [cohort, request] of [
+        ["canonical", discovery.canonicalRequest],
+        ["paraphrase", discovery.paraphraseRequest],
+        ["typo", discovery.typoRequest],
+      ] as const) {
+        if (!request) {
+          offenders.push(`${entry.actionName}:${cohort}:missing_request`);
+          continue;
+        }
+        checkedScalarArguments += promptArgumentLeaves(entry.expectedArguments).length;
+        const missing = invalidPromptArguments(entry, request);
+        if (missing.length > 0) offenders.push(`${entry.actionName}:${cohort}:${missing.join(",")}`);
+      }
+    }
+
+    expect(discoveryCases).toHaveLength(120);
+    expect(checkedScalarArguments).toBe(570);
+    expect(
+      offenders,
+      `${offenders.length} under-specified case/cohort phrasings; first offenders: ${offenders.slice(0, 8).join(" | ")}`,
+    ).toEqual([]);
+  });
+
+  it("detects clause deletion, evidence corruption, and invalid resource aliases", () => {
+    const cases = caseByName(buildEvalCases());
+    const mutations = [
+      {
+        id: "entries_list_start_deleted",
+        entry: cases.get("clockify_entries_list")!,
+        originalRequest: cases.get("clockify_entries_list")!.canonicalRequest,
+        request: cases.get("clockify_entries_list")!.canonicalRequest.replace('start "today"; ', ""),
+        expectedMissing: "start=today",
+      },
+      {
+        id: "expenses_create_category_deleted",
+        entry: cases.get("clockify_expenses_create")!,
+        originalRequest: cases.get("clockify_expenses_create")!.canonicalRequest,
+        request: cases.get("clockify_expenses_create")!.canonicalRequest.replace('expense category "Travel"; ', ""),
+        expectedMissing: "categoryId=ec1",
+      },
+      {
+        id: "groups_update_source_deleted",
+        entry: cases.get("clockify_groups_update")!,
+        originalRequest: cases.get("clockify_groups_update")!.canonicalRequest,
+        request: cases.get("clockify_groups_update")!.canonicalRequest.replace('group "Team"; ', ""),
+        expectedMissing: "id=g1",
+      },
+      {
+        id: "invoice_item_quantity_deleted",
+        entry: cases.get("clockify_invoices_items_add")!,
+        originalRequest: cases.get("clockify_invoices_items_add")!.canonicalRequest,
+        request: cases.get("clockify_invoices_items_add")!.canonicalRequest.replace("quantity 1; ", ""),
+        expectedMissing: "quantity=1",
+      },
+      {
+        id: "scheduling_start_deleted",
+        entry: cases.get("clockify_scheduling_assignments_create")!,
+        originalRequest: cases.get("clockify_scheduling_assignments_create")!.canonicalRequest,
+        request: cases.get("clockify_scheduling_assignments_create")!.canonicalRequest.replace(
+          'start "2026-06-10"; ',
+          "",
+        ),
+        expectedMissing: "start=2026-06-10",
+      },
+      {
+        id: "typo_start_evidence_corrupted",
+        entry: cases.get("clockify_entries_list")!,
+        originalRequest: cases.get("clockify_entries_list")!.typoRequest!,
+        request: cases.get("clockify_entries_list")!.typoRequest!.replace('start "today"', 'start "tday"'),
+        expectedMissing: "start=today",
+      },
+      {
+        id: "entries_get_description_alias",
+        entry: cases.get("clockify_entries_get")!,
+        originalRequest: cases.get("clockify_entries_get")!.canonicalRequest,
+        request: cases.get("clockify_entries_get")!.canonicalRequest.replace('id "e1"', 'id "Focus"'),
+        expectedMissing: "id=e1",
+      },
+      {
+        id: "expenses_get_unscoped_alias",
+        entry: cases.get("clockify_expenses_get")!,
+        originalRequest: cases.get("clockify_expenses_get")!.canonicalRequest,
+        request: cases.get("clockify_expenses_get")!.canonicalRequest.replace('id "exp1"', 'id "Travel"'),
+        expectedMissing: "id=exp1",
+      },
+      {
+        id: "custom_fields_delete_unscoped_alias",
+        entry: cases.get("clockify_custom_fields_delete")!,
+        originalRequest: cases.get("clockify_custom_fields_delete")!.canonicalRequest,
+        request: cases.get("clockify_custom_fields_delete")!.canonicalRequest.replace(
+          'id "cf1"',
+          'id "Priority"',
+        ),
+        expectedMissing: "id=cf1",
+      },
+      {
+        id: "holidays_delete_unscoped_alias",
+        entry: cases.get("clockify_holidays_delete")!,
+        originalRequest: cases.get("clockify_holidays_delete")!.canonicalRequest,
+        request: cases.get("clockify_holidays_delete")!.canonicalRequest.replace('id "h1"', 'id "Team day"'),
+        expectedMissing: "id=h1",
+      },
+      {
+        id: "clients_get_raw_id",
+        entry: cases.get("clockify_clients_get")!,
+        originalRequest: cases.get("clockify_clients_get")!.canonicalRequest,
+        request: cases.get("clockify_clients_get")!.canonicalRequest.replace('client "Acme"', 'client "c1"'),
+        expectedMissing: "id=c1",
+      },
+    ];
+    const undetected: string[] = [];
+    for (const mutation of mutations) {
+      expect(mutation.request, `${mutation.id} must mutate the request`).not.toBe(mutation.originalRequest);
+      if (!invalidPromptArguments(mutation.entry, mutation.request).includes(mutation.expectedMissing)) {
+        undetected.push(mutation.id);
+      }
+    }
+    expect(undetected, `${undetected.length} clause mutations escaped the argument gate`).toEqual([]);
+  });
+
+  it("uses seeded names and preserves representative dates, renames, durations, and typo meaning", () => {
+    const cases = caseByName(buildEvalCases());
+    const clientsGet = cases.get("clockify_clients_get")!;
+    const groupRename = cases.get("clockify_groups_update")!;
+    const entryCreate = cases.get("clockify_entries_create")!;
+    const estimate = cases.get("clockify_projects_estimate_update")!;
+    const schedule = cases.get("clockify_scheduling_assignments_create")!;
+
+    for (const request of [clientsGet.canonicalRequest, clientsGet.paraphraseRequest, clientsGet.typoRequest!]) {
+      expect(request).toContain("Acme");
+      expect(request).not.toContain("c1");
+    }
+    for (const request of [groupRename.canonicalRequest, groupRename.paraphraseRequest, groupRename.typoRequest!]) {
+      expect(request).toContain("Team");
+      expect(request).toContain("Team renamed");
+      expect(request).not.toContain("g1");
+    }
+    for (const request of [entryCreate.canonicalRequest, entryCreate.paraphraseRequest, entryCreate.typoRequest!]) {
+      expect(request).toContain("today");
+      expect(request).toContain("1");
+      expect(request).toContain("Work");
+    }
+    expect(estimate.canonicalRequest).toContain("Website");
+    expect(estimate.canonicalRequest).toMatch(/PT2H|2 hours/u);
+    expect(schedule.canonicalRequest).toContain("2026-06-10");
+    expect(schedule.canonicalRequest).toContain("8");
+
+    expect(entryCreate.typoRequest).not.toBe(entryCreate.canonicalRequest);
+    for (const literal of ["today", "1", "Work"]) {
+      expect(entryCreate.typoRequest).toContain(literal);
+    }
+  });
+
+  it("pins the discovery corpus version in normal and missing-credential report identities", async () => {
+    expect(DISCOVERY_CORPUS_VERSION).toBe("v2-discovery-argument-bearing-v1");
+    expect(apiDiscoveryIdentity(
+      { provider: "http", model: "fixture-model" },
+      buildDiscoveryEvalCorpus().caseSelection,
+    ).corpusVersion).toBe(DISCOVERY_CORPUS_VERSION);
+
+    const credentialKeys = ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"] as const;
+    const saved = new Map(credentialKeys.map((key) => [key, process.env[key]] as const));
+    for (const key of credentialKeys) delete process.env[key];
+    try {
+      const report = await runApiDiscoveryEvaluation();
+      expect((report.identity as unknown as Record<string, unknown>).corpusVersion)
+        .toBe(DISCOVERY_CORPUS_VERSION);
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+
+  it("keeps generic eval report identities compatible without a corpus version", () => {
+    const report = buildEvalReport({
+      kind: "generic_eval",
+      identity: IDENTITY,
+      caseIds: ["case"],
+      attempts: [{ caseId: "case", cohort: "canonical", repeat: 0, passed: true }],
+    });
+    expect((report.identity as unknown as Record<string, unknown>).corpusVersion).toBeUndefined();
   });
 });
 

@@ -2,9 +2,11 @@ import { randomUUID } from "node:crypto";
 import { MODEL_API_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import {
   buildDiscoveryEvalCorpus,
+  DISCOVERY_CORPUS_VERSION,
   DISCOVERY_REPEATS,
   DISCOVERY_THRESHOLDS,
   type DiscoveryEvalCase,
+  type DiscoveryEvalCaseSelection,
 } from "./eval-v2/api-discovery-cases.js";
 import {
   buildEvalCases,
@@ -21,6 +23,7 @@ import {
   evalIdentity,
   modelConfigurationFromEnvironment,
   runRealAssistantTurn,
+  type ModelConfiguration,
 } from "./eval-v2/runner-harness.js";
 import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
 
@@ -65,6 +68,17 @@ function requestFor(entry: DiscoveryEvalCase, cohort: Cohort): string | undefine
 interface AttemptOutcome {
   passed: boolean;
   failureCode?: string;
+}
+
+export function apiDiscoveryIdentity(
+  configuration: ModelConfiguration | undefined,
+  caseSelection: DiscoveryEvalCaseSelection,
+): EvalReport["identity"] {
+  return {
+    ...evalIdentity(configuration, COHORT_ORDER),
+    corpusVersion: DISCOVERY_CORPUS_VERSION,
+    caseSelection,
+  };
 }
 
 /** Non-gating ranked-set telemetry, kept separate so score outcomes remain byte-stable. */
@@ -157,21 +171,12 @@ export async function runApiDiscoveryEvaluation(): Promise<EvalReport> {
   const { cases, caseSelection } = buildDiscoveryEvalCorpus(MODEL_API_ACTION_CATALOG);
   const caseIds = cases.map((entry) => entry.actionName);
   const configuration = modelConfigurationFromEnvironment();
-  const identity = {
-    ...evalIdentity(configuration, COHORT_ORDER),
-    caseSelection,
-  };
+  const identity = apiDiscoveryIdentity(configuration, caseSelection);
 
   if (!configuration) {
     return buildMissingCredentialReport({
       kind: KIND,
-      identity: {
-        candidateSha: identity.candidateSha,
-        catalogHash: identity.catalogHash,
-        registryId: "v2-api",
-        cohortOrder: [...COHORT_ORDER],
-        caseSelection,
-      },
+      identity,
       caseIds,
       blockedReason:
         "LLM_PROVIDER/LLM_BASE_URL/LLM_API_KEY/LLM_MODEL are not present in the environment; "

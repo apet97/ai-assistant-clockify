@@ -86,13 +86,6 @@ function apiActions(registry: ActionRegistry, access: EvalAccess): ActionDefinit
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-/** A one-character corruption of the longest word, or absent when nothing is long enough
- * to corrupt into a still-recognizable request. */
-function typoFor(action: ActionDefinition): string | undefined {
-  const { canonical, typo } = discoveryQueriesForAction(action);
-  return typo === canonical ? undefined : typo;
-}
-
 function derivedCohortsForRead(action: ActionDefinition, readsPerGroup: Map<FeatureGroup, number>): DerivedCohort[] {
   const fixture = READ_PARITY_FIXTURES[action.name];
   const cohorts: DerivedCohort[] = ["single_read", "denial", "hostile_data"];
@@ -144,7 +137,11 @@ export function buildEvalCases(registry: ActionRegistry = MODEL_API_ACTION_CATAL
 
   const readCases = reads.map((action): EvalCase => {
     const fixture = READ_PARITY_FIXTURES[action.name]!;
-    const { canonical, paraphrase } = discoveryQueriesForAction(action);
+    const fakeSeed = { ...READ_PARITY_BASE_SEED, ...fixture.seed };
+    const { canonical, paraphrase, typo } = discoveryQueriesForAction(action, {
+      expectedArguments: fixture.args,
+      fakeSeed,
+    });
     return {
       actionName: action.name,
       apiOperationId: action.apiOperation!.operationId,
@@ -152,8 +149,8 @@ export function buildEvalCases(registry: ActionRegistry = MODEL_API_ACTION_CATAL
       featureGroup: action.featureGroup,
       canonicalRequest: canonical,
       paraphraseRequest: paraphrase,
-      ...(typoFor(action) ? { typoRequest: typoFor(action) } : {}),
-      fakeSeed: { ...READ_PARITY_BASE_SEED, ...fixture.seed },
+      ...(typo !== canonical ? { typoRequest: typo } : {}),
+      fakeSeed,
       expectedArguments: fixture.args,
       expectedTerminalState: "succeeded",
       compoundMembership: derivedCohortsForRead(action, readsPerGroup),
@@ -162,7 +159,11 @@ export function buildEvalCases(registry: ActionRegistry = MODEL_API_ACTION_CATAL
 
   const writeCases = writes.map((action): EvalCase => {
     const fixture = WRITE_PREVIEW_FIXTURES[action.name]!;
-    const { canonical, paraphrase } = discoveryQueriesForAction(action);
+    const fakeSeed = { ...WRITE_PREVIEW_BASE_SEED, ...fixture.seed };
+    const { canonical, paraphrase, typo } = discoveryQueriesForAction(action, {
+      expectedArguments: fixture.args,
+      fakeSeed,
+    });
     return {
       actionName: action.name,
       apiOperationId: action.apiOperation!.operationId,
@@ -170,8 +171,8 @@ export function buildEvalCases(registry: ActionRegistry = MODEL_API_ACTION_CATAL
       featureGroup: action.featureGroup,
       canonicalRequest: canonical,
       paraphraseRequest: paraphrase,
-      ...(typoFor(action) ? { typoRequest: typoFor(action) } : {}),
-      fakeSeed: { ...WRITE_PREVIEW_BASE_SEED, ...fixture.seed },
+      ...(typo !== canonical ? { typoRequest: typo } : {}),
+      fakeSeed,
       expectedArguments: fixture.args,
       // A v2 assistant write can NEVER terminate in an executed mutation from a
       // model turn — the truthful terminal state is the unconfirmed preview.

@@ -153,30 +153,196 @@ export function expectedUnicodeSubstring(actionName: string): string | undefined
   }
 }
 
+export interface DiscoveryQueryContext {
+  expectedArguments: Record<string, unknown>;
+  fakeSeed: FakeWorkspaceSeed;
+}
+
+interface DiscoveryArgumentLeaf {
+  path: string;
+  value: string | number | boolean;
+}
+
+function discoveryArgumentLeaves(value: unknown, path = ""): DiscoveryArgumentLeaf[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => discoveryArgumentLeaves(entry, `${path}[${index}]`));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).flatMap(([key, entry]) =>
+      discoveryArgumentLeaves(entry, path.length > 0 ? `${path}.${key}` : key));
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return [{ path, value }];
+  }
+  return [];
+}
+
+function resourceForId(actionName: string, path: string): keyof FakeWorkspaceSeed | undefined {
+  if (/(?:^|\.)projectId$/u.test(path)) return "projects";
+  if (/(?:^|\.)taskId$/u.test(path)) return "tasks";
+  if (/(?:^|\.)clientId$/u.test(path)) return "clients";
+  if (/(?:^|\.)groupId$/u.test(path)) return "groups";
+  if (/(?:^|\.)(?:userId|userIds\[\d+\]|assigneeIds\[\d+\])$/u.test(path)) return "users";
+  if (/(?:^|\.)categoryId$/u.test(path)) return "expenseCategories";
+  if (/(?:^|\.)invoiceId$/u.test(path)) return "invoices";
+  if (/(?:^|\.)policyId$/u.test(path)) return "timeOffPolicies";
+  if (path !== "id") return undefined;
+  if (actionName.startsWith("clockify_clients_")) return "clients";
+  if (actionName.startsWith("clockify_groups_")) return "groups";
+  if (actionName.startsWith("clockify_invoices_")) return "invoices";
+  if (actionName.startsWith("clockify_projects_")) return "projects";
+  if (actionName.startsWith("clockify_tags_")) return "tags";
+  if (actionName.startsWith("clockify_tasks_")) return "tasks";
+  if (actionName.startsWith("clockify_time_off_policies_")) return "timeOffPolicies";
+  if (actionName.startsWith("clockify_expenses_categories_")) return "expenseCategories";
+  return undefined;
+}
+
+function humanSeedValue(
+  actionName: string,
+  path: string,
+  value: string,
+  seed: FakeWorkspaceSeed,
+): string | undefined {
+  const resource = resourceForId(actionName, path);
+  const rows = resource ? seed[resource] : undefined;
+  if (!Array.isArray(rows)) return undefined;
+  const row = rows.find((candidate) => {
+    if (candidate === null || typeof candidate !== "object") return false;
+    return (candidate as { id?: unknown }).id === value;
+  });
+  if (row === null || typeof row !== "object") return undefined;
+  const record = row as Record<string, unknown>;
+  for (const key of ["name", "number", "email"] as const) {
+    if (typeof record[key] === "string" && record[key].length > 0) return record[key];
+  }
+  return undefined;
+}
+
+function humanArgumentLabel(actionName: string, path: string): string {
+  const normalized = path.replace(/\[\d+\]/gu, "");
+  if (normalized === "id") {
+    const resource = resourceForId(actionName, normalized);
+    const singular: Partial<Record<keyof FakeWorkspaceSeed, string>> = {
+      clients: "client",
+      expenseCategories: "expense category",
+      groups: "group",
+      invoices: "invoice",
+      projects: "project",
+      tags: "tag",
+      tasks: "task",
+      timeOffPolicies: "time-off policy",
+    };
+    return resource ? singular[resource] ?? "id" : "id";
+  }
+  if (normalized === "name" && /_(?:update|rename)$/u.test(actionName)) return "new name";
+  const leaf = normalized.split(".").at(-1) ?? normalized;
+  const labels: Record<string, string> = {
+    assigneeIds: "assignee",
+    categoryId: "expense category",
+    clientId: "client",
+    dateRangeEnd: "date range end",
+    dateRangeStart: "date range start",
+    durationHours: "duration hours",
+    endDate: "end date",
+    entryId: "time entry id",
+    fieldId: "custom field id",
+    groupId: "group",
+    groups: "report grouping",
+    hoursPerDay: "hours per day",
+    invoiceId: "invoice",
+    memberships: "member",
+    paymentDate: "payment date",
+    paymentId: "payment id",
+    policyId: "time-off policy",
+    projectId: "project",
+    requestId: "request id",
+    seriesUpdateOption: "series update option",
+    startDate: "start date",
+    taskId: "task",
+    unitPrice: "unit price",
+    userId: "user",
+    userIds: "user",
+  };
+  return labels[leaf] ?? leaf.replace(/([a-z])([A-Z])/gu, "$1 $2").toLocaleLowerCase("en-US");
+}
+
+function humanArgumentValue(
+  actionName: string,
+  leaf: DiscoveryArgumentLeaf,
+  seed: FakeWorkspaceSeed,
+): string {
+  if (typeof leaf.value === "string") {
+    const seeded = humanSeedValue(actionName, leaf.path, leaf.value, seed);
+    if (seeded) return `"${seeded}"`;
+    if (/^PT\d+H$/u.test(leaf.value)) {
+      const hours = leaf.value.slice(2, -1);
+      return `"${hours} hours (${leaf.value})"`;
+    }
+    if (leaf.value === "this_week" || leaf.value === "last_week") {
+      return `"${leaf.value.replace("_", " ")} (${leaf.value})"`;
+    }
+    return `"${leaf.value}"`;
+  }
+  return String(leaf.value);
+}
+
+function discoveryArgumentSummary(actionName: string, context: DiscoveryQueryContext): string {
+  return discoveryArgumentLeaves(context.expectedArguments)
+    .map((leaf) =>
+      `${humanArgumentLabel(actionName, leaf.path)} ${humanArgumentValue(actionName, leaf, context.fakeSeed)}`)
+    .join("; ");
+}
+
+function corruptLongestWord(text: string): string {
+  const words = text.match(/[A-Za-z]+/gu) ?? [];
+  const target = words.reduce(
+    (longest, word) => (word.length > longest.length ? word : longest),
+    words[0] ?? "",
+  );
+  if (target.length === 0) return `${text}x`;
+  if (target.length <= 3) return text.replace(target, `${target}x`);
+  return text.replace(target, `${target.slice(0, 2)}${target.slice(3)}`);
+}
+
 /**
  * Canonical / paraphrase / one-character-typo request phrasings for an action.
  * Lives in this PURE module (no `vitest` import) so `scripts/eval-v2` can derive
  * evaluation cases from it in a plain `tsx` run; `v2-read-parity.ts` and
  * `v2-write-parity.ts` re-export it so their own callers are unchanged.
  */
-export function discoveryQueriesForAction(action: ActionDefinition): {
+export function discoveryQueriesForAction(action: ActionDefinition, context?: DiscoveryQueryContext): {
   canonical: string;
   paraphrase: string;
   typo: string;
 } {
-  const canonical = action.name.replace(/^clockify_/, "").replace(/_/g, " ");
+  const actionWords = action.name.replace(/^clockify_/, "").replace(/_/g, " ");
   const descriptionLead = action.description
     .replace(/\([^)]*\)/gu, "")
+    .replace(/\s+/gu, " ")
     .split(/[.;]/u)[0]
     ?.trim();
-  const paraphrase = descriptionLead && descriptionLead.length >= 8
-    ? descriptionLead.slice(0, 80)
-    : canonical;
-  const words = canonical.split(" ").filter(Boolean);
-  const target = words.reduce((longest, word) => (word.length > longest.length ? word : longest), words[0] ?? "list");
-  const typoWord = target.length > 4
-    ? `${target.slice(0, 2)}${target.slice(3)}`
-    : `${target}x`;
-  const typo = canonical.replace(target, typoWord);
+  if (!context) {
+    const canonical = actionWords;
+    const paraphrase = descriptionLead && descriptionLead.length >= 8
+      ? descriptionLead.slice(0, 80)
+      : canonical;
+    const words = canonical.split(" ").filter(Boolean);
+    const target = words.reduce((longest, word) => (word.length > longest.length ? word : longest), words[0] ?? "list");
+    const typoWord = target.length > 4
+      ? `${target.slice(0, 2)}${target.slice(3)}`
+      : `${target}x`;
+    const typo = canonical.replace(target, typoWord);
+    return { canonical, paraphrase, typo };
+  }
+
+  const intent = descriptionLead && descriptionLead.length >= 8
+    ? descriptionLead
+    : actionWords;
+  const argumentSummary = discoveryArgumentSummary(action.name, context);
+  const evidence = argumentSummary.length > 0 ? ` Use these request values: ${argumentSummary}.` : "";
+  const canonical = `${actionWords}.${evidence}`;
+  const paraphrase = `${intent}.${evidence}`;
+  const typo = `${corruptLongestWord(actionWords)}.${evidence}`;
   return { canonical, paraphrase, typo };
 }

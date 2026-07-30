@@ -17,6 +17,9 @@ import { buildEvalCases, type EvalCase } from "./case-model.js";
 
 export const DISCOVERY_REPEATS = 3;
 
+/** Stable identity for the M5 argument-bearing discovery request corpus. */
+export const DISCOVERY_CORPUS_VERSION = "v2-discovery-argument-bearing-v1";
+
 /** The real eval harness scope (`runner-harness.ts`) and discovery pool use this auth class. */
 export const DISCOVERY_HARNESS_AUTH_CLASS = "addon" as const;
 

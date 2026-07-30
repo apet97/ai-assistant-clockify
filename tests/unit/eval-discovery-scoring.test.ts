@@ -24,12 +24,12 @@ function evalCase(actionName: string): { entry: EvalCase; discovery: DiscoveryEv
   return { entry, discovery };
 }
 
-function scriptFor(entry: EvalCase, finalText?: string): ToolCompletion[] {
+function scriptFor(entry: EvalCase, finalText?: string, discoveryQuery = entry.canonicalRequest): ToolCompletion[] {
   return [
     {
       text: "",
       toolCalls: [
-        { id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: entry.canonicalRequest } },
+        { id: "tc-find", name: DISCOVERY_META_TOOL_NAME, arguments: { query: discoveryQuery } },
       ],
     },
     { text: "", toolCalls: [{ id: "tc-use", name: entry.actionName, arguments: entry.expectedArguments }] },
@@ -100,7 +100,10 @@ describe("M3: destructive selection follows model calls", () => {
       seed: entry.fakeSeed,
       request: entry.canonicalRequest,
       runId: randomUUID(),
-      modelClient: scriptedToolModel(scriptFor(entry, "Here are the scheduling totals.")),
+      // A model searches by operation concept rather than repeating the M5
+      // argument-bearing admin request verbatim. This keeps M3's real ranked-set
+      // telemetry scenario while the user request supplies its required dates.
+      modelClient: scriptedToolModel(scriptFor(entry, "Here are the scheduling totals.", "scheduling user totals")),
     });
 
     expect(run.loadedOperationNames).toContain(loadedDestructive);
