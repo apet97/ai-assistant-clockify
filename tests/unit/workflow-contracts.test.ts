@@ -344,4 +344,91 @@ describe("GitHub Actions workflow contracts", () => {
     );
     expectRemoteActionsPinned(workflow);
   });
+
+  it("keeps the credentialed v2 evals dispatch-only and threads their reports to the B5 CLI", () => {
+    const workflow = readWorkflow("v2-model-evals.yml");
+
+    // Dispatch-only: one run spends real provider money. Never on push,
+    // pull_request, schedule, or workflow_call — normal CI stays fakes-only.
+    expect(workflow).toMatch(/\non:\s*\n  workflow_dispatch:\s*\n/);
+    for (const trigger of ["push:", "pull_request:", "schedule:", "workflow_call:"]) {
+      expect(workflow, `${trigger} must never trigger the credentialed evals`)
+        .not.toMatch(new RegExp(`^\\s{0,4}${trigger.replace(":", "\\:")}\\s*$`, "m"));
+    }
+    // One dispatch at a time, and never cancel a paid run midway.
+    expect(workflow).toContain("group: v2-model-evals");
+    expect(workflow).toContain("cancel-in-progress: false");
+    expect(workflow.match(/group: v2-model-evals/g)).toHaveLength(1);
+
+    // The Phase M guard (defect D-5): the header prose AND an enforced typed
+    // attestation input. A pre-M run is VOID as model evidence.
+    expect(workflow).toContain("MUST NOT be dispatched until Phase M");
+    expect(workflow).toContain("D-5");
+    expect(workflow).toContain("confirm_void_until_phase_m:");
+    expect(workflow).toMatch(/if \[ "\$CONFIRMATION" != "phase-m-landed" \]/);
+    for (const job of ["api-discovery", "assistant-terminal", "write-safety"]) {
+      expect(workflow, `${job} must not start without the guard`).toContain(`\n  ${job}:\n    needs: guard`);
+    }
+
+    // The three evals run by their npm-script NAMES so the post-M scripts flow
+    // through this file unchanged, each capturing its report through the B4
+    // evidence-path contract.
+    expect(workflow).toContain("npm run eval:api-discovery");
+    expect(workflow).toContain("npm run eval:assistant-terminal");
+    expect(workflow).toContain("npm run eval:write-safety");
+    expect(workflow).toContain("EVAL_API_DISCOVERY_EVIDENCE_PATH");
+    expect(workflow).toContain("EVAL_ASSISTANT_TERMINAL_EVIDENCE_PATH");
+    expect(workflow).toContain("EVAL_WRITE_SAFETY_EVIDENCE_PATH");
+    // The write-safety OBSERVATIONS producer (real prepare/confirm flows) runs
+    // before the accountant script; the accountant alone proves nothing.
+    expect(workflow.indexOf("npx vitest run tests/integration/v2-write-safety-matrix.test.ts"))
+      .toBeGreaterThan(0);
+    expect(workflow.indexOf("npx vitest run tests/integration/v2-write-safety-matrix.test.ts"))
+      .toBeLessThan(workflow.indexOf("npm run eval:write-safety"));
+
+    // Honest sizing prose and the hosted-runner ceiling on both credentialed jobs.
+    expect(workflow).toContain("1,143 real agent turns");
+    expect(workflow).toContain("897");
+    expect(workflow.match(/timeout-minutes: 360/g)).toHaveLength(2);
+
+    // Credentials come ONLY from the shared eval secrets, mapped as per-step
+    // env — never echoed, never interpolated into a run script.
+    const secretLines = [...workflow.matchAll(/^.*\$\{\{\s*secrets\..*$/gm)].map((match) => match[0]);
+    expect(secretLines).toHaveLength(6);
+    for (const line of secretLines) {
+      expect(line).toMatch(
+        /^\s+LLM_(BASE_URL|API_KEY|MODEL): \$\{\{ secrets\.EVAL_LLM_(BASE_URL|API_KEY|MODEL) \}\}$/,
+      );
+    }
+
+    // Every report uploads even for a non-passing run (3 evals + the aggregate),
+    // and the record job still aggregates honestly after an eval failure.
+    expect(workflow.match(/uses:\s*actions\/upload-artifact@/g)).toHaveLength(4);
+    expect(workflow.match(/if:\s*\$\{\{\s*always\(\)\s*\}\}/g)).toHaveLength(4);
+    const recordStart = workflow.indexOf("\n  record:");
+    expect(recordStart).toBeGreaterThan(0);
+    const recordJob = workflow.slice(recordStart);
+    expect(recordJob).toContain("needs: [guard, api-discovery, assistant-terminal, write-safety]");
+    expect(recordJob).toMatch(/if:\s*\$\{\{\s*always\(\)\s*&&\s*needs\.guard\.result == 'success'\s*\}\}/);
+
+    // The handoff: the real v2 authority generator plus the B5 CLI thread the
+    // three reports into ReleaseEvidenceV2Input.evaluations on THIS commit.
+    expect(recordJob).toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+    expect(recordJob).toContain("npm run record:v2-release-evidence");
+    expect(recordJob).toContain("V2_EVAL_API_DISCOVERY_REPORT_PATH");
+    expect(recordJob).toContain("V2_EVAL_ASSISTANT_TERMINAL_REPORT_PATH");
+    expect(recordJob).toContain("V2_EVAL_WRITE_SAFETY_REPORT_PATH");
+    expect(recordJob).toContain("V2_AUTHORITY_CANDIDATE_SHA: ${{ github.sha }}");
+    expect(recordJob).toContain("RELEASE_SOURCE_CANDIDATE_SHA: ${{ github.sha }}");
+    expect(recordJob).toContain("RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}");
+    // The catalog hash is the v2 MODEL-API REGISTRY hash (the 127 actions the
+    // v2 model can see) — never the 171-action inventory hash.
+    expect(recordJob).toContain(
+      "V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7",
+    );
+    expect(workflow).not.toContain("fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce");
+    expect(recordJob).toContain('V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"');
+
+    expectRemoteActionsPinned(workflow);
+  });
 });

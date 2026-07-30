@@ -1,0 +1,244 @@
+# =============================================================================
+# V2 model evals (manual, credentialed, dispatch-only) — plan B8.
+#
+# !!! THIS WORKFLOW MUST NOT be dispatched until Phase M lands. The current
+# !!! discovery scorer carries defect D-5: "used" is scored from the READ
+# !!! batch's `tool.requested` events, so a correctly-behaving write can
+# !!! architecturally never score "used". A pre-M dispatch spends real provider
+# !!! money and its output is VOID as model evidence — exactly like the
+# !!! ad06c08 239/1143 diagnostic run. This file exists so the post-M run has a
+# !!! recorded, reviewable procedure; it invokes the three eval scripts BY
+# !!! NAME, so the Phase M scorer fixes flow through without editing it.
+#
+# Honest sizing (per dispatch, real provider money, serial by design):
+#   eval:api-discovery      — 1,143 real agent turns (127 cases x 3 cohorts x
+#                             3 repeats), roughly 2,300-4,600 provider
+#                             completions. May exceed the 6-hour hosted-runner
+#                             job cap; a timeout is a truthful failure, not a
+#                             reason to parallelize the turns.
+#   eval:assistant-terminal — 897 scored attempts, also serial + credentialed.
+#   eval:write-safety       — ZERO provider calls: the observations come from
+#                             the vitest write-safety matrix (real prepare/
+#                             confirm flows, real SQLite, fake host).
+#
+# Trigger: workflow_dispatch ONLY — never push, pull_request, or schedule.
+# Normal CI stays fakes-only, credential-free, and deterministic.
+#
+# Credentials: the same three repository secrets eval-cheap.yml uses
+# (EVAL_LLM_BASE_URL / EVAL_LLM_API_KEY / EVAL_LLM_MODEL), mapped as per-step
+# env only — never echoed, never interpolated into a run script, and never
+# written to evidence: the B4 report identity records only
+# provider/model/thinking/seed (scripts/eval-v2/runner-harness.ts
+# describeModelConfiguration). The eval harness reads the ambient environment
+# only and never sources .env.server.
+#
+# Evidence handoff (B4 -> B5): each eval writes its JSON report through the B4
+# EVAL_<NAME>_EVIDENCE_PATH contract (mode 0600, overwrite refused; the file is
+# byte-identical to stdout) and uploads it as an artifact. The record job then
+# downloads all three, regenerates the v2 authority report for THIS commit
+# (scripts/evidence/v2-authority-evidence.ts), and threads the reports into
+# ReleaseEvidenceV2Input.evaluations via the B5 CLI
+# (npm run record:v2-release-evidence, the V2_EVAL_*_REPORT_PATH inputs).
+# The aggregate classifies each report fail-closed — a stale candidate SHA, a
+# wrong catalog hash, a partial score, or a missing report is rejected — so
+# v2EvaluationComplete is true only when all three genuinely passed on this
+# exact commit. Machine gates stay "unknown" here on purpose: this workflow
+# records EVALUATION evidence only; the full machine-gate record remains
+# release-evidence.yml's job.
+# =============================================================================
+name: V2 model evals (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_void_until_phase_m:
+        description: >-
+          Type "phase-m-landed" to attest the Phase M discovery-scorer fixes
+          are merged. A pre-M run costs real provider money and is VOID as
+          model evidence (defect D-5).
+        required: true
+        type: string
+permissions:
+  contents: read
+# Real provider money: one dispatch at a time, and never cancel a paid run
+# midway through its serial turns.
+concurrency:
+  group: v2-model-evals
+  cancel-in-progress: false
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Refuse a dispatch without the explicit Phase M attestation
+        env:
+          CONFIRMATION: ${{ inputs.confirm_void_until_phase_m }}
+        run: |
+          if [ "$CONFIRMATION" != "phase-m-landed" ]; then
+            echo "Refusing: type phase-m-landed to attest the Phase M scorer fixes are merged." >&2
+            echo "A pre-M run spends real provider money and is VOID as model evidence (D-5)." >&2
+            exit 1
+          fi
+  api-discovery:
+    needs: guard
+    runs-on: ubuntu-latest
+    # 1,143 real agent turns, serial: the hosted-runner maximum. If the
+    # provider is slow this can still time out; rerunning costs money again.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run eval:api-discovery (1,143 credentialed agent turns)
+        env:
+          LLM_PROVIDER: http
+          LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL }}
+          EVAL_API_DISCOVERY_EVIDENCE_PATH: evidence/evals/v2-api-discovery.json
+        run: npm run eval:api-discovery
+      - name: Upload api-discovery evidence
+        # always(): a non-passing report (documented exit 2) is still evidence.
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-eval-api-discovery
+          path: evidence/evals/v2-api-discovery.json
+  assistant-terminal:
+    needs: guard
+    runs-on: ubuntu-latest
+    # 897 scored attempts, serial and credentialed like api-discovery.
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run eval:assistant-terminal (897 credentialed attempts)
+        env:
+          LLM_PROVIDER: http
+          LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.EVAL_LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.EVAL_LLM_MODEL }}
+          EVAL_ASSISTANT_TERMINAL_EVIDENCE_PATH: evidence/evals/v2-assistant-terminal.json
+        run: npm run eval:assistant-terminal
+      - name: Upload assistant-terminal evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-eval-assistant-terminal
+          path: evidence/evals/v2-assistant-terminal.json
+  write-safety:
+    needs: guard
+    runs-on: ubuntu-latest
+    # No provider calls: this leg is credential-free and cheap.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prove the write-safety matrix from real flows (no provider calls)
+        # The OBSERVATIONS producer AND the proof: every catalog write is
+        # re-driven through its real preparation/confirmation flow (real
+        # services, real SQLite store, fake host) and every invariant verdict
+        # is derived from measured behaviour. One unsatisfied invariant on any
+        # write fails this step, naming the write.
+        run: npx vitest run tests/integration/v2-write-safety-matrix.test.ts
+      - name: Capture the write-safety accountant's report
+        env:
+          EVAL_WRITE_SAFETY_EVIDENCE_PATH: evidence/evals/v2-write-safety.json
+        # eval:write-safety is the ACCOUNTANT. Standalone it refuses to claim
+        # observations it did not make: the documented outcome is exit 2 with
+        # the explicit blocked status in the report it still emits. Tolerate
+        # EXACTLY that machine-checked shape — a crash, a missing report, or a
+        # non-blocked failing report stays a failure. When a future task feeds
+        # the accountant the vitest observations directly, its exit 0 passes
+        # here unchanged.
+        run: |
+          set +e
+          npm run eval:write-safety
+          status="$?"
+          set -e
+          if [ "$status" -eq 2 ]; then
+            reported="$(node -e 'const fs = require("node:fs"); console.log(JSON.parse(fs.readFileSync(process.env.EVAL_WRITE_SAFETY_EVIDENCE_PATH, "utf8")).status)')"
+            if [ "$reported" = "not_evaluated_missing_credentials" ]; then
+              echo "The accountant emitted its documented standalone blocked report; the vitest matrix above is the proof."
+              exit 0
+            fi
+          fi
+          exit "$status"
+      - name: Upload write-safety evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-eval-write-safety
+          path: evidence/evals/v2-write-safety.json
+  record:
+    needs: [guard, api-discovery, assistant-terminal, write-safety]
+    # A failed or partial eval still yields an honest aggregate: a missing
+    # report classifies that evaluation as rejected, never as passed. Only a
+    # refused guard skips recording entirely.
+    if: ${{ always() && needs.guard.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Download the eval evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: v2-eval-*
+          path: eval-reports
+          merge-multiple: true
+      - name: Regenerate the v2 authority evidence for this commit
+        env:
+          V2_AUTHORITY_EVIDENCE_PATH: eval-reports/v2-authority.json
+          V2_AUTHORITY_CANDIDATE_SHA: ${{ github.sha }}
+          # The v2 MODEL-API REGISTRY hash (the 127 actions the v2 model can
+          # see) — never the 171-action inventory hash. It must match
+          # MODEL_API_ACTION_CATALOG.hash() at this commit or every evaluation
+          # is rejected, which is the fail-closed intent.
+          V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7
+          V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"
+        run: npx tsx scripts/evidence/v2-authority-evidence.ts
+      - name: Thread the reports into ReleaseEvidenceV2Input.evaluations (B5 CLI)
+        env:
+          V2_RELEASE_EVIDENCE_PATH: eval-reports/v2-release-evidence.json
+          V2_AUTHORITY_REPORT_PATH: eval-reports/v2-authority.json
+          # github.sha is the SHA every eval job checked out, so it equals each
+          # report's identity.candidateSha (the harness binds git rev-parse
+          # HEAD); the aggregate rejects any report bound to a different SHA.
+          RELEASE_SOURCE_CANDIDATE_SHA: ${{ github.sha }}
+          RELEASE_EVIDENCE_COMMIT_SHA: ${{ github.sha }}
+        # A report that exists is threaded; a missing one stays unthreaded and
+        # classifies as rejected. No RELEASE_GATE_* conclusions are supplied on
+        # purpose — machine gates record as "unknown" because this workflow
+        # proves evaluations only.
+        run: |
+          if [ -f eval-reports/v2-api-discovery.json ]; then
+            export V2_EVAL_API_DISCOVERY_REPORT_PATH=eval-reports/v2-api-discovery.json
+          fi
+          if [ -f eval-reports/v2-assistant-terminal.json ]; then
+            export V2_EVAL_ASSISTANT_TERMINAL_REPORT_PATH=eval-reports/v2-assistant-terminal.json
+          fi
+          if [ -f eval-reports/v2-write-safety.json ]; then
+            export V2_EVAL_WRITE_SAFETY_REPORT_PATH=eval-reports/v2-write-safety.json
+          fi
+          npm run record:v2-release-evidence
+      - name: Upload the v2 release-evidence aggregate
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: v2-release-evidence
+          path: eval-reports/v2-release-evidence.json
