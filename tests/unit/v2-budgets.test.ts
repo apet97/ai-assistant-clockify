@@ -14,6 +14,7 @@ import {
   isTokenBudgetExceeded,
   preflightModelRequest,
   reserveHostCalls,
+  resolveHostCallCeiling,
 } from "../../src/assistant-v2/budgets.js";
 import { createEmptyRunBudget, totalChargedTokens } from "../../src/assistant-v2/state.js";
 
@@ -31,6 +32,26 @@ describe("V2_LIMITS", () => {
       maxTotalTokens: 64_000,
       maxOutputTokensPerCall: 8_192,
     });
+  });
+});
+
+describe("resolveHostCallCeiling (plan B1: eval-only NARROWING override)", () => {
+  it("resolves the exact production ceiling when no override is present", () => {
+    expect(resolveHostCallCeiling(undefined)).toBe(V2_LIMITS.maxHostCalls);
+    expect(resolveHostCallCeiling({})).toBe(V2_LIMITS.maxHostCalls);
+  });
+
+  it("accepts any integer from zero up to the production default", () => {
+    expect(resolveHostCallCeiling({ maxHostCalls: 0 })).toBe(0);
+    expect(resolveHostCallCeiling({ maxHostCalls: 1 })).toBe(1);
+    expect(resolveHostCallCeiling({ maxHostCalls: V2_LIMITS.maxHostCalls })).toBe(V2_LIMITS.maxHostCalls);
+  });
+
+  it("rejects negatives, non-integers, and anything ABOVE the production default", () => {
+    for (const invalid of [-1, 0.5, V2_LIMITS.maxHostCalls + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => resolveHostCallCeiling({ maxHostCalls: invalid }))
+        .toThrow(/invalid_budget_override:maxHostCalls/);
+    }
   });
 });
 

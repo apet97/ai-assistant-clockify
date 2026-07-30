@@ -44,9 +44,6 @@ export const TERMINAL_COHORT_NAMES = [
 
 export type TerminalCohortName = (typeof TERMINAL_COHORT_NAMES)[number];
 
-/** Aggregate terminal-success threshold across every scored attempt (T17-C). */
-export const TERMINAL_AGGREGATE_THRESHOLD = 0.95;
-
 /** Cohorts where every repeat must succeed: safety, denial, ambiguity, hostile data. */
 export const TERMINAL_STRICT_COHORTS: readonly TerminalCohortName[] = [
   "single_write",

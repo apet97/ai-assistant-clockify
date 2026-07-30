@@ -16,6 +16,8 @@ import { selectModelClient } from "../../src/assistant/select-model-client.js";
 import type { ModelClient } from "../../src/assistant/model-client.js";
 import { createStore, type Store } from "../../src/db/store.js";
 import { createFakeWorkspace, type FakeWorkspaceSeed } from "../../tests/helpers/fake-clockify.js";
+import { withRunScopedHostCallBudget } from "../../src/clockify/request-governor.js";
+import { V2_LIMITS } from "../../src/assistant-v2/budgets.js";
 import { MISSING_CREDENTIAL_STATUS, type EvalIdentity } from "./report.js";
 
 /**
@@ -119,7 +121,10 @@ export interface HarnessOptions {
   signal?: AbortSignal;
   /** Test-only override so the harness itself can be exercised without a provider. */
   modelClient?: ModelClient;
-  /** Host-call budget for the turn; the production default is 60. */
+  /** Plan B1: NARROWING host-call ceiling for the run, forwarded as
+   * `RunAssistantInput.budgetOverrides` and validated by the runner itself
+   * (non-integers, negatives, and values above the production default of 60
+   * are rejected). Absent, the run keeps the exact production ceiling. */
   maxHostCalls?: number;
 }
 
@@ -153,11 +158,46 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
     const eventViews = createRunEventViewService(store, { sessionSecret: SESSION_SECRET, now: () => new Date() });
     let maxLoadedApiTools = 0;
 
+    // Plan B1 + closure-plan PR 6 fidelity: the SAME durable conditional
+    // ledger production installs (`buildV2RunnerDependencies` →
+    // `withRunScopedHostCallBudget` + `store.chargeRunHostCall`), narrowed by
+    // the run's validated ceiling. The store row keeps the hard 60-call cap;
+    // the in-memory mirror can only narrow it further — never widen it. The
+    // old governor here ran the operation bare, which is exactly how
+    // `maxHostCalls` was silently dropped and `budget_exhaustion` could never
+    // reach its terminal state.
+    let narrowedCharges = 0;
+    const chargeHooks = (ceiling: number): { charge: () => boolean; refund: () => void } => ({
+      charge: (): boolean => {
+        if (narrowedCharges >= ceiling) return false;
+        if (!store.chargeRunHostCall(runScope)) return false;
+        narrowedCharges += 1;
+        return true;
+      },
+      refund: (): void => {
+        store.refundRunHostCall(runScope);
+        narrowedCharges = Math.max(0, narrowedCharges - 1);
+      },
+    });
+    // The runner validates the override before any dispatch can occur, so the
+    // raw value is only ever USED after validation succeeded.
+    const requestedCeiling = options.maxHostCalls ?? V2_LIMITS.maxHostCalls;
+    const preparationService = createOperationPreparationService({
+      store,
+      registry: MODEL_API_ACTION_CATALOG,
+      sessionSecret: SESSION_SECRET,
+      clockifyForScope: () => fake.client,
+      loadCalendarContext: async () => ({ timeZone: "UTC", weekStartsOn: 1 }),
+    });
+
     const outcome = await runAssistantV2({
       runId: options.runId,
       scope,
       originalRequest: options.request,
       ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.maxHostCalls !== undefined
+        ? { budgetOverrides: { maxHostCalls: options.maxHostCalls } }
+        : {}),
     }, {
       modelClient: (options.modelClient ?? nativeModelClient()) as Parameters<typeof runAssistantV2>[1]["modelClient"],
       runStore: store,
@@ -173,16 +213,23 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
         clockifyForScope: () => fake.client,
         loadCalendarContext: async () => ({ timeZone: "UTC", weekStartsOn: 1 }),
       }),
-      preparations: createOperationPreparationService({
-        store,
-        registry: MODEL_API_ACTION_CATALOG,
-        sessionSecret: SESSION_SECRET,
-        clockifyForScope: () => fake.client,
-        loadCalendarContext: async () => ({ timeZone: "UTC", weekStartsOn: 1 }),
-      }),
+      preparations: {
+        ...preparationService,
+        // Preview-time target/support reads run under the SAME persisted run
+        // ledger as ordinary reads, exactly as `buildV2RunnerDependencies`
+        // wraps them in production.
+        prepare: async (calls, prepareScope) => withRunScopedHostCallBudget(
+          () => preparationService.prepare(calls, prepareScope),
+          chargeHooks(requestedCeiling),
+          requestedCeiling,
+        ),
+      },
       installationGuard: { assertCurrent: () => undefined },
       requestGovernor: {
-        runRead: async (_readScope, operation) => operation(),
+        runRead: async (_readScope, operation, readOptions) => {
+          const ceiling = readOptions?.maxHostCalls ?? V2_LIMITS.maxHostCalls;
+          return withRunScopedHostCallBudget(operation, chargeHooks(ceiling), ceiling);
+        },
       },
       clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
     });

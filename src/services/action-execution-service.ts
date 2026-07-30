@@ -106,6 +106,10 @@ export async function executeReadsConcurrently(
   deps: Pick<RunnerDependencies, "requestGovernor" | "reads">,
   signal: AbortSignal | undefined,
   onResult: (call: ToolCall, outcome: ReadExecutionOutcome) => void,
+  /** Plan B1: the run's validated host-call ceiling, threaded to the governor
+   * boundary. Defaults to the production `V2_LIMITS` ceiling; an override can
+   * only narrow it (the runner rejects anything wider). */
+  hostCallCeiling: number = V2_LIMITS.maxHostCalls,
 ): Promise<void> {
   const poolSize = V2_LIMITS.maxConcurrentReads;
   let nextIndex = 0;
@@ -124,7 +128,11 @@ export async function executeReadsConcurrently(
       if (index >= calls.length) return;
       const call = calls[index];
       try {
-        const outcome = await deps.requestGovernor.runRead(scope, () => deps.reads.execute(call, scope), { signal });
+        const outcome = await deps.requestGovernor.runRead(
+          scope,
+          () => deps.reads.execute(call, scope),
+          { signal, maxHostCalls: hostCallCeiling },
+        );
         ordered[index] = { call, outcome };
       } catch (error) {
         stopAdmitting = true;
@@ -185,7 +193,15 @@ export type WriteBatchResult = {
   observations: RunObservation[];
 };
 
-export function createActionExecutionService(deps: ActionExecutionDeps) {
+export function createActionExecutionService(
+  deps: ActionExecutionDeps,
+  options?: {
+    /** Plan B1: the run's validated host-call ceiling (see `RunBudgetOverrides`).
+     * Absent — every production composition — it is the `V2_LIMITS` default. */
+    hostCallCeiling?: number;
+  },
+) {
+  const hostCallCeiling = options?.hostCallCeiling ?? V2_LIMITS.maxHostCalls;
   function isWriteAction(name: string): boolean {
     return deps.actionRegistry.get(name)?.apiOperation?.access === "write";
   }
@@ -263,6 +279,7 @@ export function createActionExecutionService(deps: ActionExecutionDeps) {
       (call, outcome) => {
         readOutcomes.push({ call, outcome });
       },
+      hostCallCeiling,
     );
 
     // The reads have ALL already run (the pool resolves every call before any

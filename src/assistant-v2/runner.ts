@@ -3,6 +3,7 @@ import {
   canReserveModelCall,
   isActiveWallBudgetExceeded,
   isTokenBudgetExceeded,
+  resolveHostCallCeiling,
 } from "./budgets.js";
 import type {
   RunAssistantInput,
@@ -43,11 +44,17 @@ export async function runAssistantV2(
   deps: RunnerDependencies,
 ): Promise<RunOutcome> {
   const scope: RunScope = input.scope;
+  // Plan B1: `budgetOverrides` is EVAL-ONLY and can only narrow. Validate it
+  // before any durable state exists — an invalid override is a caller defect
+  // and fails closed here rather than silently widening or dropping a ceiling.
+  // Every production caller leaves it absent, so this resolves to the exact
+  // `V2_LIMITS.maxHostCalls` production ceiling.
+  const hostCallCeiling = resolveHostCallCeiling(input.budgetOverrides);
   deps.installationGuard.assertCurrent(scope);
 
   const runs = createRunService(deps);
   const discovery = createApiDiscoveryService(deps);
-  const actions = createActionExecutionService(deps);
+  const actions = createActionExecutionService(deps, { hostCallCeiling });
 
   let state = deps.runStore.getRun({
     sessionId: scope.sessionId,

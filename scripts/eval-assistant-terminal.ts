@@ -3,7 +3,6 @@ import { MODEL_API_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import { buildEvalCases, caseByName, type EvalCase } from "./eval-v2/case-model.js";
 import {
   buildTerminalCohorts,
-  TERMINAL_AGGREGATE_THRESHOLD,
   TERMINAL_REPEATS,
   type TerminalCohort,
 } from "./eval-v2/assistant-terminal-cases.js";
@@ -11,6 +10,7 @@ import {
   buildEvalReport,
   buildMissingCredentialReport,
   cohortRatio,
+  isReleasableReport,
   type EvalAttempt,
   type EvalReport,
 } from "./eval-v2/report.js";
@@ -168,7 +168,11 @@ function scenarioOptions(cohort: CohortName): { aborted?: boolean; maxHostCalls?
 export async function runTerminalEvaluation(): Promise<EvalReport & {
   delegatedCohorts: typeof DELEGATED_COHORTS;
   unscoredCohorts: typeof UNSCORED_COHORTS;
-  aggregateThreshold: number;
+  /** Plan B1: the REAL gate — `isReleasableReport` (complete, scored, fully
+   * passing) with zero strict-cohort violations. The old
+   * `TERMINAL_AGGREGATE_THRESHOLD` could never bind (a `passed` status already
+   * forces aggregate 1.0) and was deleted rather than kept as decoration. */
+  releasable: boolean;
   strictCohortViolations: string[];
 }> {
   const cohorts = buildTerminalCohorts(MODEL_API_ACTION_CATALOG).filter(
@@ -196,7 +200,8 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
       }),
       delegatedCohorts: DELEGATED_COHORTS,
       unscoredCohorts: UNSCORED_COHORTS,
-      aggregateThreshold: TERMINAL_AGGREGATE_THRESHOLD,
+      // A credential-less run scored nothing; it is never releasable.
+      releasable: false,
       strictCohortViolations: [],
     };
   }
@@ -222,7 +227,7 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
     ...report,
     delegatedCohorts: DELEGATED_COHORTS,
     unscoredCohorts: UNSCORED_COHORTS,
-    aggregateThreshold: TERMINAL_AGGREGATE_THRESHOLD,
+    releasable: isReleasableReport(report) && strictCohortViolations.length === 0,
     strictCohortViolations,
   };
 }
@@ -230,12 +235,7 @@ export async function runTerminalEvaluation(): Promise<EvalReport & {
 async function main(): Promise<void> {
   const report = await runTerminalEvaluation();
   process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  const aggregate = report.denominator > 0 ? report.numerator / report.denominator : 0;
-  if (
-    report.status !== "passed"
-    || report.strictCohortViolations.length > 0
-    || aggregate < TERMINAL_AGGREGATE_THRESHOLD
-  ) {
+  if (!report.releasable) {
     process.exitCode = 2;
   }
 }

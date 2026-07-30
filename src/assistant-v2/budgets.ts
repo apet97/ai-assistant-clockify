@@ -17,6 +17,36 @@ export const V2_LIMITS = Object.freeze({
   maxOutputTokensPerCall: 8_192,
 });
 
+/**
+ * EVAL-ONLY (plan B1): a NARROWING per-run budget override.
+ *
+ * `runAssistantV2` validates it before any durable state exists and threads the
+ * resolved host-call ceiling to the request-governor boundary. Absent — every
+ * production caller — the ceiling is exactly `V2_LIMITS.maxHostCalls`. No
+ * configuration or environment variable feeds it; the sole caller is the v2
+ * eval harness (`scripts/eval-v2/runner-harness.ts`), pinned by
+ * `tests/unit/v2-budget-override-pin.test.ts`. Because values above the
+ * `V2_LIMITS` default are rejected, the override can never widen a ceiling.
+ * Write-preparation RESERVATIONS keep the production `V2_LIMITS` math; the
+ * override governs the physical host-call charge boundary.
+ */
+export interface RunBudgetOverrides {
+  maxHostCalls?: number;
+}
+
+/** Fail-closed resolution of the per-run host-call ceiling: non-integers,
+ * negatives, and values above the production default all throw. */
+export function resolveHostCallCeiling(overrides: RunBudgetOverrides | undefined): number {
+  if (overrides === undefined || overrides.maxHostCalls === undefined) {
+    return V2_LIMITS.maxHostCalls;
+  }
+  const ceiling = overrides.maxHostCalls;
+  if (!Number.isSafeInteger(ceiling) || ceiling < 0 || ceiling > V2_LIMITS.maxHostCalls) {
+    throw new Error(`invalid_budget_override:maxHostCalls:${String(ceiling)}`);
+  }
+  return ceiling;
+}
+
 export type TokenBudgetFailure = "token_budget_exhausted";
 
 export interface ModelPreflightSuccess {

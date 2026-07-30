@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { ModelClient, ToolCall } from "../assistant/model-client.js";
+import type { RunBudgetOverrides } from "./budgets.js";
 import type {
   ApiSearchResult,
   AuthClass,
@@ -134,7 +135,16 @@ export interface RequestGovernorPort {
   runRead<T>(
     scope: RunScope,
     operation: () => Promise<T>,
-    options?: { signal?: AbortSignal; onDispatch?: () => void },
+    options?: {
+      signal?: AbortSignal;
+      onDispatch?: () => void;
+      /** Plan B1: the run's VALIDATED host-call ceiling, always ≤
+       * `V2_LIMITS.maxHostCalls`. The production governor ignores it — its
+       * durable ledger owns the hard 60-call cap, and production runs never
+       * carry an override — while the eval harness narrows its charge hook
+       * on it. It can only ever narrow, never widen. */
+      maxHostCalls?: number;
+    },
   ): Promise<T>;
 }
 
@@ -255,6 +265,13 @@ export interface RunAssistantInput {
    * only on the first model call of a resumed invocation (T14-E). */
   continuationMessage?: string;
   signal?: AbortSignal;
+  /** EVAL-ONLY (plan B1): a validated NARROWING budget override for this run.
+   * The runner rejects non-integers, negatives, and anything above the
+   * `V2_LIMITS` default before any durable state exists, so it can never widen
+   * a production ceiling. No config or environment feeds it; the sole caller
+   * is the v2 eval harness (pinned by
+   * `tests/unit/v2-budget-override-pin.test.ts`). */
+  budgetOverrides?: RunBudgetOverrides;
 }
 
 /** T16-A frozen start/resume DTOs: the two legal shapes of `RunAssistantInput`.
