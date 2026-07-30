@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import { rotatePendingNonce } from "../../src/harness/confirmations.js";
-import { defaultAdminPolicy } from "../../src/harness/permissions.js";
-import { createOperationPreparationService } from "../../src/services/operation-preparation-service.js";
-import { createConfirmationService } from "../../src/services/confirmation-service.js";
-import { createWorkspaceMutationCoordinator } from "../../src/clockify/workspace-mutation-coordinator.js";
-import { computeRequestHash } from "../../src/assistant-v2/state.js";
 import { createFakeWorkspace } from "./fake-clockify.js";
 import {
   SESSION_SECRET,
@@ -22,134 +16,30 @@ import {
   discoveryQueriesForWrite,
   fixtureForWrite,
   isAddonUnavailableWrite,
-  mergeWriteSeed,
   mutationCallTotal,
-  policyWithGroupOff,
-  seedInvoicePaymentExtras,
   unicodeWriteArgs,
   writeActionNames,
   type WriteParityDomain,
 } from "./v2-write-parity.js";
+import {
+  confirmationServiceFor,
+  prepareWriteOnce,
+  storedReceiptCode as receiptCode,
+} from "./v2-write-flows.js";
 
 const stores: ReturnType<typeof createWriteParityStore>[] = [];
 
-function trackedStore() {
-  const store = createWriteParityStore();
-  stores.push(store);
-  return store;
-}
-
-function receiptCode(store: ReturnType<typeof createWriteParityStore>, actionResultId: string): string {
-  const stored = store.getActionResult(actionResultId);
-  if (!stored || typeof stored !== "object" || (stored as { kind?: string }).kind !== "receipt") {
-    throw new Error("expected receipt");
-  }
-  const receipt = (stored as { receipt: { ok: boolean; code?: string } }).receipt;
-  if (receipt.ok) throw new Error("expected error receipt");
-  return receipt.code ?? "missing";
-}
-
+/** The shared expect-free flow (`v2-write-flows.ts`), with this suite's
+ * store-lifecycle tracking layered on top. */
 async function prepareOnce(input: {
   actionName: string;
   args: Record<string, unknown>;
   policyOff?: boolean;
   authClass?: "addon" | "api_key";
 }) {
-  const action = MODEL_API_ACTION_CATALOG.get(input.actionName)!;
-  const fixture = fixtureForWrite(input.actionName);
-  const fake = createFakeWorkspace(mergeWriteSeed(fixture));
-  seedInvoicePaymentExtras(input.actionName, fake);
-  const store = trackedStore();
-  store.saveInstallation({
-    workspaceId: "ws-1",
-    addonId: "addon-1",
-    addonUserId: "u1",
-    addonToken: "token",
-  });
-  const session = store.createSession({ workspaceId: "ws-1", adminUserId: "admin-1" });
-  const runId = `run-${input.actionName}-${Math.random().toString(16).slice(2, 8)}`;
-  const scope = {
-    sessionId: session.id,
-    runId,
-    workspaceId: "ws-1",
-    adminUserId: "admin-1",
-    installationGeneration: 1,
-    authClass: (input.authClass ?? "addon") as "addon" | "api_key",
-  };
-  store.startRunWithTurn({
-    scope,
-    originalRequest: `write ${input.actionName}`,
-    requestHash: computeRequestHash(`write ${input.actionName}`),
-    catalogHash: MODEL_API_ACTION_CATALOG.hash(),
-    loadedToolNames: [input.actionName],
-    intentHash: runId,
-  });
-
-  const policy = input.policyOff ? policyWithGroupOff(action.featureGroup) : defaultAdminPolicy();
-  const preparation = createOperationPreparationService({
-    store,
-    registry: MODEL_API_ACTION_CATALOG,
-    sessionSecret: SESSION_SECRET,
-    clockifyForScope: () => fake.client,
-    now: () => WRITE_PARITY_NOW,
-    loadCalendarContext: async () => ({ timeZone: "UTC", weekStartsOn: 1 }),
-    getAdminPolicy: () => policy,
-  });
-
-  const mutationsBefore = mutationCallTotal(fake.counts);
-  const prepared = await preparation.prepare([{
-    id: "tool-1",
-    name: input.actionName,
-    arguments: input.args,
-  }], scope);
-
-  return {
-    action,
-    fake,
-    store,
-    session,
-    scope,
-    prepared,
-    mutationsBefore,
-    mutationsAfterPrepare: mutationCallTotal(fake.counts),
-    policy,
-  };
-}
-
-function confirmationServiceFor(
-  store: ReturnType<typeof createWriteParityStore>,
-  fake: ReturnType<typeof createFakeWorkspace>,
-  options: {
-    policy?: ReturnType<typeof defaultAdminPolicy>;
-    verifyOk?: boolean;
-  } = {},
-) {
-  const policy = options.policy ?? defaultAdminPolicy();
-  return createConfirmationService({
-    store,
-    registry: MODEL_API_ACTION_CATALOG,
-    sessionSecret: SESSION_SECRET,
-    catalogHash: () => MODEL_API_ACTION_CATALOG.hash(),
-    now: () => WRITE_PARITY_NOW,
-    loadPolicy: () => policy,
-    verifyWriteAuthority: async () => options.verifyOk === false
-      ? {
-          ok: false as const,
-          status: 403 as const,
-          code: "admin_required" as const,
-          message: "Admin role required.",
-        }
-      : { ok: true as const, installationGeneration: 1 },
-    actionContext: () => ({
-      workspaceId: "ws-1",
-      adminUserId: "admin-1",
-      policy,
-      clockify: fake.client,
-      now: () => WRITE_PARITY_NOW,
-    }),
-    mutationCoordinator: createWorkspaceMutationCoordinator(),
-    recordUndoIfReversible: () => undefined,
-  });
+  const result = await prepareWriteOnce(input);
+  stores.push(result.store);
+  return result;
 }
 
 async function rotateAndConfirm(input: {
