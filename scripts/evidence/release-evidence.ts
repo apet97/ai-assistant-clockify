@@ -40,6 +40,37 @@ export function classifyHistoricalV1Evidence(
   };
 }
 
+/**
+ * B6 — the v2 sibling of {@link HistoricalV1EvidenceClassification}. Evidence
+ * carrying this triple was produced FOR the v2 engine and is valid for a v2
+ * conclusion; it is "current", never "historical", because v2 has no prior
+ * release to roll back to.
+ */
+export interface CurrentV2EvidenceClassification {
+  assistantEngine: "v2";
+  evidenceStatus: "current";
+  validForV2: true;
+}
+
+/**
+ * B6 — the v2 sibling of {@link classifyHistoricalV1Evidence}. The v1
+ * classifier is the v1 ROLLBACK CONTRACT and stays untouched; this function is
+ * the only way to mint the current-v2 classification, and it refuses a v1
+ * target with the mirrored error, before any artifact is parsed.
+ */
+export function classifyCurrentV2Evidence(
+  targetAssistantEngine: EvidenceTargetAssistantEngine,
+): CurrentV2EvidenceClassification {
+  if (targetAssistantEngine !== "v2") {
+    throw new Error("current v2 evidence is not valid for v1");
+  }
+  return {
+    assistantEngine: "v2",
+    evidenceStatus: "current",
+    validForV2: true,
+  };
+}
+
 const MACHINE_GATE_KEYS = [
   "verify",
   "reviewedPullRequest",
