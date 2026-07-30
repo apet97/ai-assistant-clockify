@@ -192,6 +192,8 @@ export interface V2EvaluationInput {
   numerator: unknown;
   denominator: unknown;
   caseCount: unknown;
+  /** Distinct case ids with at least one attempt — the completeness proof (B5). */
+  scoredCaseIds?: unknown;
   identity?: { candidateSha?: unknown; catalogHash?: unknown };
 }
 
@@ -204,6 +206,11 @@ export type V2EvaluationStatus = "passed" | "not_evaluated_missing_credentials" 
  * `not_evaluated_missing_credentials`; anything else — a partial score, a zero
  * denominator, a stale SHA, a malformed shape — is `rejected`. There is no path
  * from a partial or sentinel report to a passing v2 release conclusion.
+ *
+ * Completeness (B5): the attempt count must cover the report's own case set
+ * (`denominator >= caseCount`) and the distinct scored cases must cover it
+ * exactly — a SHORT report scored fewer cases than it claims, and a DUPLICATED
+ * scored-case entry can only mask a case that never ran. Both are rejected.
  */
 export function classifyV2Evaluation(
   report: V2EvaluationInput | undefined,
@@ -212,11 +219,17 @@ export function classifyV2Evaluation(
   if (!report || typeof report !== "object") return "rejected";
   if (report.status === "not_evaluated_missing_credentials") return "not_evaluated_missing_credentials";
   if (report.status !== "passed") return "rejected";
-  const { numerator, denominator, caseCount } = report;
+  const { numerator, denominator, caseCount, scoredCaseIds } = report;
   if (typeof numerator !== "number" || typeof denominator !== "number" || typeof caseCount !== "number") {
     return "rejected";
   }
   if (denominator <= 0 || caseCount <= 0 || numerator !== denominator) return "rejected";
+  if (denominator < caseCount) return "rejected";
+  if (!Array.isArray(scoredCaseIds) || !scoredCaseIds.every((id) => typeof id === "string")) {
+    return "rejected";
+  }
+  if (new Set(scoredCaseIds).size !== scoredCaseIds.length) return "rejected";
+  if (scoredCaseIds.length !== caseCount) return "rejected";
   if (report.identity?.candidateSha !== expected.candidateSha) return "rejected";
   if (expected.catalogHash !== undefined && report.identity?.catalogHash !== expected.catalogHash) {
     return "rejected";
@@ -240,9 +253,10 @@ export interface ReleaseEvidenceV2 {
  * The v2 counterpart to {@link buildReleaseEvidence}. Never accepts v1
  * evidence (the caller supplies an already-built {@link V2AuthorityEvidenceReport},
  * so a v1 `ReleaseEvidence`/`HistoricalV1EvidenceClassification` object cannot
- * type-check in its place). Stays `not_evaluated_until_pr15` until Task 17
- * supplies a complete, validated artifact — never marks a v2 release passing
- * before then.
+ * type-check in its place). The CLI entry is
+ * `scripts/evidence/v2-release-evidence.ts` (`npm run record:v2-release-evidence`);
+ * without a complete, validated authority artifact plus all three passing
+ * evaluations it stays honestly incomplete — never a fabricated pass.
  */
 export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEvidenceV2 {
   if (!/^[0-9a-f]{40}$/.test(input.sourceCandidateSha)) {
@@ -288,6 +302,40 @@ export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEv
   };
 }
 
+/**
+ * The one `RELEASE_GATE_*` environment → machine-conclusion mapping, shared by
+ * the v1 entry below and the v2 CLI entry (`v2-release-evidence.ts`).
+ */
+export function releaseGateConclusionsFromEnvironment(
+  env: Record<string, string | undefined>,
+): Partial<Record<MachineGate, unknown>> {
+  return {
+    verify: env.RELEASE_GATE_VERIFY,
+    reviewedPullRequest: env.RELEASE_GATE_REVIEWED_PULL_REQUEST,
+    pullRequestCi: env.RELEASE_GATE_PULL_REQUEST_CI,
+    dependencyReview: env.RELEASE_GATE_DEPENDENCY_REVIEW,
+    pullRequestCodeql: env.RELEASE_GATE_PULL_REQUEST_CODEQL,
+    pullRequestSecretScan: env.RELEASE_GATE_PULL_REQUEST_SECRET_SCAN,
+    engineeringReview: env.RELEASE_GATE_ENGINEERING_REVIEW,
+    localUiPerformance: env.RELEASE_GATE_LOCAL_UI_PERFORMANCE,
+    actionlint: env.RELEASE_GATE_ACTIONLINT,
+    marketplaceMediaBinding: env.RELEASE_GATE_MARKETPLACE_MEDIA_BINDING,
+    audit: env.RELEASE_GATE_AUDIT,
+    license: env.RELEASE_GATE_LICENSE,
+    codeql: env.RELEASE_GATE_CODEQL,
+    secretScan: env.RELEASE_GATE_SECRET_SCAN,
+    scriptedSafetyCorpus: env.RELEASE_GATE_SCRIPTED_SAFETY_CORPUS,
+    browserE2e: env.RELEASE_GATE_BROWSER_E2E,
+    sbom: env.RELEASE_GATE_SBOM,
+    liveSmoke: env.RELEASE_GATE_LIVE_SMOKE,
+    backupRestoreDrill: env.RELEASE_GATE_BACKUP_RESTORE_DRILL,
+    deterministicSafetyEvaluation: env.RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION,
+    privateProductionPerformance: env.RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE,
+    liveBrowserAcceptance: env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE,
+    productionAuditHostClearance: env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE,
+  };
+}
+
 function main(): void {
   const outputPath = process.env.RELEASE_EVIDENCE_PATH;
   if (!outputPath) throw new Error("RELEASE_EVIDENCE_PATH is required");
@@ -297,31 +345,7 @@ function main(): void {
     evidenceCommitSha: process.env.RELEASE_EVIDENCE_COMMIT_SHA ?? "",
     reviewedPullRequest: JSON.parse(process.env.RELEASE_REVIEWED_PR_EVIDENCE ?? "null") as ReviewedPullRequestEvidence,
     coldVerifies: JSON.parse(process.env.RELEASE_COLD_VERIFY_EVIDENCE ?? "null") as ColdVerifyEvidence,
-    machineConclusions: {
-      verify: process.env.RELEASE_GATE_VERIFY,
-      reviewedPullRequest: process.env.RELEASE_GATE_REVIEWED_PULL_REQUEST,
-      pullRequestCi: process.env.RELEASE_GATE_PULL_REQUEST_CI,
-      dependencyReview: process.env.RELEASE_GATE_DEPENDENCY_REVIEW,
-      pullRequestCodeql: process.env.RELEASE_GATE_PULL_REQUEST_CODEQL,
-      pullRequestSecretScan: process.env.RELEASE_GATE_PULL_REQUEST_SECRET_SCAN,
-      engineeringReview: process.env.RELEASE_GATE_ENGINEERING_REVIEW,
-      localUiPerformance: process.env.RELEASE_GATE_LOCAL_UI_PERFORMANCE,
-      actionlint: process.env.RELEASE_GATE_ACTIONLINT,
-      marketplaceMediaBinding: process.env.RELEASE_GATE_MARKETPLACE_MEDIA_BINDING,
-      audit: process.env.RELEASE_GATE_AUDIT,
-      license: process.env.RELEASE_GATE_LICENSE,
-      codeql: process.env.RELEASE_GATE_CODEQL,
-      secretScan: process.env.RELEASE_GATE_SECRET_SCAN,
-      scriptedSafetyCorpus: process.env.RELEASE_GATE_SCRIPTED_SAFETY_CORPUS,
-      browserE2e: process.env.RELEASE_GATE_BROWSER_E2E,
-      sbom: process.env.RELEASE_GATE_SBOM,
-      liveSmoke: process.env.RELEASE_GATE_LIVE_SMOKE,
-      backupRestoreDrill: process.env.RELEASE_GATE_BACKUP_RESTORE_DRILL,
-      deterministicSafetyEvaluation: process.env.RELEASE_GATE_DETERMINISTIC_SAFETY_EVALUATION,
-      privateProductionPerformance: process.env.RELEASE_GATE_PRIVATE_PRODUCTION_PERFORMANCE,
-      liveBrowserAcceptance: process.env.RELEASE_GATE_LIVE_BROWSER_ACCEPTANCE,
-      productionAuditHostClearance: process.env.RELEASE_GATE_PRODUCTION_AUDIT_HOST_CLEARANCE,
-    },
+    machineConclusions: releaseGateConclusionsFromEnvironment(process.env),
   }, "v1");
   writeDeterministicJson(outputPath, evidence);
 }

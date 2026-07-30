@@ -37,6 +37,7 @@
     "check:reviewed-pr-evidence": "tsx scripts/evidence/reviewed-pr-evidence.ts",
     "record:cold-verifies": "tsx scripts/evidence/cold-verify-evidence.ts",
     "record:live-browser-evidence": "tsx scripts/evidence/record-live-browser-acceptance.ts",
+    "record:v2-release-evidence": "tsx scripts/evidence/v2-release-evidence.ts",
     "import:release-evidence": "tsx scripts/evidence/import-release-evidence.ts",
     "gate:predeploy-backup": "tsx scripts/evidence/predeploy-backup-gate.ts",
     "evidence:marketplace-media-binding": "tsx scripts/evidence/marketplace-media-binding.ts",

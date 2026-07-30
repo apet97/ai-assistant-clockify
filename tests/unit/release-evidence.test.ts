@@ -483,15 +483,23 @@ describe("v2 release evidence", () => {
       .toThrow(/V2AuthorityEvidenceReport/);
   });
 
-  it("wires a v2 authority evidence generation step into the release-evidence workflow", () => {
+  it("wires the REAL v2 authority evidence generator into the release-evidence workflow", () => {
     const release = readFileSync(resolve(".github/workflows/release-evidence.yml"), "utf8");
     expect(release).toContain("Record v2 authority evidence");
-    expect(release).toContain("v2-authority-evidence.json");
-    expect(release).toContain('status: "not_evaluated_until_pr15"');
+    expect(release).toContain(
+      "V2_AUTHORITY_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/v2-authority-evidence.json",
+    );
     expect(release).toContain("release-v2-authority-evidence-");
-    // The record job stays checkout/npm-free (see workflow-contracts.test.ts) —
-    // this step must duplicate the sentinel inline, never shell out to tsx.
-    expect(release).not.toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+    // B5: the Task-13 inline sentinel heredoc is gone — the record job now runs
+    // the real generator (the coupled checkout/npm pins live in
+    // workflow-contracts.test.ts), so a complete artifact is producible.
+    expect(release).toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+    expect(release).not.toContain('status: "not_evaluated_until_pr15"');
+  });
+
+  it("exposes a v2 release-evidence CLI entry through an npm script", () => {
+    const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as { scripts?: Record<string, string> };
+    expect(pkg.scripts?.["record:v2-release-evidence"]).toContain("scripts/evidence/v2-release-evidence.ts");
   });
 });
 
@@ -506,6 +514,7 @@ describe("T17-G: v2 release evidence requires all three complete evaluations", (
       numerator: 10,
       denominator: 10,
       caseCount: 5,
+      scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", "case-5"],
       identity: { candidateSha: SHA, catalogHash: HASH },
       ...overrides,
     };
@@ -587,6 +596,41 @@ describe("T17-G: v2 release evidence requires all three complete evaluations", (
   it("rejects a report bound to the wrong candidate SHA", () => {
     const evidence = build({ apiDiscovery: report({ identity: { candidateSha: "d".repeat(40), catalogHash: HASH } }) });
     expect(evidence.evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects a SHORT report: fewer attempts than its own case set", () => {
+    // B5 completeness: 4 fully-passing attempts across a 5-case set means one
+    // case can never have been scored — never a pass.
+    expect(build({ apiDiscovery: report({ numerator: 4, denominator: 4 }) }).evaluations.apiDiscovery)
+      .toBe("rejected");
+  });
+
+  it("rejects a report whose distinct scored cases do not cover the case set exactly", () => {
+    // Enough attempts, but one case was scored twice and another never ran.
+    expect(build({
+      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4"] }),
+    }).evaluations.apiDiscovery).toBe("rejected");
+    // More distinct cases than the report's own case set is inconsistent too.
+    expect(build({
+      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", "case-5", "case-6"] }),
+    }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects DUPLICATED scored-case entries", () => {
+    // A duplicated entry can only mask a case that never ran.
+    expect(build({
+      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-1", "case-2", "case-3", "case-4"] }),
+    }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects a report that omits or malforms its scored-case list", () => {
+    expect(build({ apiDiscovery: report({ scoredCaseIds: undefined }) }).evaluations.apiDiscovery)
+      .toBe("rejected");
+    expect(build({ apiDiscovery: report({ scoredCaseIds: "case-1" }) }).evaluations.apiDiscovery)
+      .toBe("rejected");
+    expect(build({
+      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", 5] }),
+    }).evaluations.apiDiscovery).toBe("rejected");
   });
 
   it("never marks the release complete while authority evidence is the sentinel", () => {

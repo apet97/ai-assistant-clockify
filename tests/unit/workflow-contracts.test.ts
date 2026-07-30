@@ -284,10 +284,24 @@ describe("GitHub Actions workflow contracts", () => {
     expect(recordJob).toContain(
       "RELEASE_GATE_LIVE_SMOKE: ${{ needs.live-smoke.result == 'success' && needs.live-smoke-cleanup.result == 'success' && 'success' || 'failure' }}",
     );
-    expect(recordJob).not.toContain("actions/checkout@");
-    expect(recordJob).not.toContain("actions/setup-node@");
-    expect(recordJob).not.toContain("npm ci");
-    expect(recordJob).not.toContain("npx tsx");
+    // B5 (deliberate flip of the former checkout-free pin): the record job now
+    // checks out the evidence tree and installs dependencies so the REAL v2
+    // authority generator runs — the inline not_evaluated_until_pr15 sentinel
+    // heredoc is gone. The checkout comes AFTER the machine-conclusion heredoc
+    // so a dependency-install failure cannot lose the v1 record.
+    expect(recordJob).toContain("actions/checkout@");
+    expect(recordJob).toContain("actions/setup-node@");
+    expect(recordJob).toContain("npm ci");
+    expect(recordJob.indexOf("node <<'NODE'")).toBeLessThan(recordJob.indexOf("actions/checkout@"));
+    expect(recordJob).toContain("npx tsx scripts/evidence/v2-authority-evidence.ts");
+    expect(recordJob).toContain("V2_AUTHORITY_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}");
+    // The catalog hash is the v2 MODEL-API REGISTRY hash (the 127 actions the
+    // v2 model can see) — never the 171-action inventory hash.
+    expect(recordJob).toContain(
+      "V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7",
+    );
+    expect(recordJob).not.toContain("fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce");
+    expect(recordJob).toContain('V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"');
     expect(recordJob).toContain("node <<'NODE'");
     expect(recordJob).toContain('"not_evaluated"');
     expect(recordJob).toContain("RELEASE_GATE_LIVE_SMOKE");

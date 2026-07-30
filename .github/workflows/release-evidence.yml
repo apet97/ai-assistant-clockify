@@ -795,28 +795,27 @@ jobs:
           writeFileSync(temporaryPath, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
           renameSync(temporaryPath, outputPath);
           NODE
+      # B5: the record job checks out the evidence tree so the REAL v2 authority
+      # generator can run. Deliberately AFTER the machine-conclusion heredoc, so
+      # a dependency-install failure cannot lose the v1 record.
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - name: Record v2 authority evidence
-        # Task 13 (v1/v2 coexistence): no complete artifact exists yet, so this
-        # always writes the honest not_evaluated_until_pr15 sentinel — the exact
-        # value `scripts/evidence/v2-authority-evidence.ts` also writes when its
-        # required env vars are absent. Task 17 replaces this with a step that
-        # supplies real candidate SHA / catalog hash / write-case counts.
-        shell: bash
-        run: |
-          node <<'NODE'
-          const { mkdirSync, renameSync, rmSync, writeFileSync } = require("node:fs");
-          const { dirname } = require("node:path");
-
-          const outputPath = "/tmp/ai-assistant-release-evidence/v2-authority-evidence.json";
-          const temporaryPath = `${outputPath}.tmp`;
-          mkdirSync(dirname(outputPath), { recursive: true });
-          rmSync(outputPath, { force: true });
-          rmSync(temporaryPath, { force: true });
-
-          const report = { status: "not_evaluated_until_pr15" };
-          writeFileSync(temporaryPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-          renameSync(temporaryPath, outputPath);
-          NODE
+        # B5: replaces the Task-13 inline sentinel with the real generator. The
+        # catalog hash is the v2 MODEL-API REGISTRY hash (the 127 `api` actions
+        # the v2 model can see) — deliberately NOT the 171-action inventory
+        # hash — and 84 is the v2 assistant write-case count (the write-safety
+        # matrix denominator). The generator fail-closes on any malformed input.
+        env:
+          V2_AUTHORITY_EVIDENCE_PATH: /tmp/ai-assistant-release-evidence/v2-authority-evidence.json
+          V2_AUTHORITY_CANDIDATE_SHA: ${{ inputs.tested_candidate_sha }}
+          V2_AUTHORITY_CATALOG_HASH: 3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7
+          V2_AUTHORITY_ASSISTANT_WRITE_CASES: "84"
+        run: npx tsx scripts/evidence/v2-authority-evidence.ts
       - name: Upload v2 authority evidence
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
