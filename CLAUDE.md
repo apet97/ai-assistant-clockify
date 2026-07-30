@@ -4,145 +4,86 @@ The engineering source of truth for this repo. Read it before changing code.
 Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.md`,
 `PRIVACY.md`.
 
-## Current state (2026-07-29)
+## Current state (2026-07-31)
 
-Full build history: [`docs/V2_BUILD_LOG.md`](./docs/V2_BUILD_LOG.md). This section
-is the CURRENT contract only — if it disagrees with the log, this wins.
+Full history is in [`docs/V2_BUILD_LOG.md`](./docs/V2_BUILD_LOG.md); the immutable
+production cutover is in [`docs/V2_CUTOVER_RECORD.md`](./docs/V2_CUTOVER_RECORD.md).
+This capsule is current truth, not a PR chronology.
 
-**Deployed:** the closure candidate `ad06c08` on Railway,
-`ASSISTANT_ENGINE=v2`, database **`/data/ai-assistant-v2.sqlite`** at schema 13
-— the ADR-001-compliant fresh path (F24 resolved by option 1, the preferred
-re-cutover). `/version` exact-matches the candidate; `/live` `/health`
-`/manifest` all 200. The retained `/data/ai-assistant.sqlite` is untouched and
-paired with the `ec09863` rollback tree. Full executed record:
-[`docs/V2_CUTOVER_RECORD.md`](./docs/V2_CUTOVER_RECORD.md).
+### Source, remote, and deployment are different boundaries
 
-**A fresh database has no installation authority by design**, so production
-answers `409 not installed` until an owner reinstalls the add-on in the Clockify
-console (Settings → Add-ons → Uninstall, then Insert link `<base>/manifest` →
-INSTALL). That POST creates the fresh installation row and attestation. This is
-the correct fail-closed state, and the proof no v1 authority crossed the
-boundary — not a defect.
+- **Deployed:** Railway serves immutable candidate `ad06c08`, explicitly
+  `ASSISTANT_ENGINE=v2`, from schema 13
+  `/data/ai-assistant-v2.sqlite`; `/version` was candidate-bound and `/live`,
+  `/health`, and `/manifest` passed at cutover. The untouched v1 database and
+  `ec09863` tree remain rollback history.
+- **Source boundary:** Phase A, the Phase B evidence scaffolding, and M1–M7 are
+  present through immutable Phase M boundary `0b2b723`. Documentation and later
+  source-checkpoint descendants do not change that evaluator boundary. Refresh
+  the live remote, candidate, and checks with the preflight in `AGENTS.md`; never
+  freeze their transient status into this file.
+- `ASSISTANT_ENGINE` is the sole runtime switch. Unspecified configuration
+  defaults to v1 fail-safe; deployed `ad06c08` explicitly selects v2. V1 remains
+  in-tree for rollback only.
+- The cutover record correctly preserves the fresh database's initial
+  `409 not installed` state. Reinstall subsequently completed: an aliased
+  production lifecycle log records `installed` at `2026-07-30T02:47:41Z`,
+  generation 1, so current production has a fresh v2 installation/attestation.
 
-The v1 engine remains in-tree for rollback and is selected only by
-`ASSISTANT_ENGINE=v1`.
+"Phase M landed" has one meaning: protected remote `main` contains `0b2b723` and
+the exact current candidate's required checks are green. A local commit, docs
+descendant, or typed workflow input does not satisfy it. Do not dispatch the paid
+workflow with `phase-m-landed` before that boundary is true.
 
-**Catalog:** 171 typed catalog actions — `api` 127 · `composite` 24 · `generic` 16 ·
-`local` 4. Only the 127 `api` actions are visible to the v2 model; the 44
-`composite`/`generic`/`local` actions are v1-only by design. Inventory evidence hash
-`fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`; model-API
-registry hash `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`.
+### Phase A, B, and M source landmarks
 
-### The 2026-07-28 adversarial-review closure plan is CODE-COMPLETE on main
+- **Phase A:** stale cross-turn write seeds are filtered to recent completed reads,
+  the prompt requires fresh discovery before changes, `no_change_needed` is
+  presented end to end, and the 127-visible/44-v1-only split is pinned.
+- **Phase B:** `live:v2-full` owns the guarded v2 preview → stored nonce →
+  confirm → real Clockify write → cleanup chain and has a credential-free
+  `--dry-run` contract path. V2 authority, aggregate release, model,
+  private-production, and live-browser builders/validators exist beside the
+  immutable v1 evidence lane; `.github/workflows/v2-model-evals.yml` records the
+  three v2 reports.
+- **M1–M7:** the evaluator now scores real runner use, journals admitted write
+  requests, judges destructive selection from model calls, limits the corpus to
+  the 120 operations loadable with add-on auth, uses argument-bearing requests,
+  enforces the owner-ratified policy, and binds the historical diagnostic without
+  promoting it. The exact discovery grid is **120 cases × 3 cohorts × 3 repeats =
+  1,080 attempts**. Per-case floors are canonical 3/3, paraphrase at least 2/3,
+  and typo at least 2/3. Calling an unrelated destructive operation and loading
+  more than 12 API tools are the two zero-tolerance gates.
+- The `ad06c08` 239/1,143 discovery run is diagnostic evidence only and is void
+  for model selection. It predates the M1–M7 scorer/corpus contract.
 
-All 24 findings (F01–F24) of the 2026-07-28 adversarial review are closed in
-source on `main` (commit series `3afa132..c9a04f1` plus the F24 tooling commit,
-PRs 1–12 of the closure plan; schema 13). V2 now works end to end in the real
-production composition for the full journey list: read + grounded answer + card
-+ reload/replay, read failure + next message, clarification (chips, exact
-option, free-text continuation), preview with zero pre-confirm mutation, single
-confirm/cancel/expiry, exact batch confirm/cancel + ambiguity stop, request
-replay, cross-tab stale-nonce re-arm, history/switcher restore, and
-member rejection — proven by `tests/e2e-real/` (15 journeys × Chromium/Firefox/
-WebKit) against the tsc-built server with a real SQLite store and real
-signed-JWT component auth, no hand-authored frames.
+The catalog remains 171 typed actions (`api` 127, `composite` 24, `generic` 16,
+`local` 4); v2 exposes only the 127 API actions. Regenerate and check the API
+inventory instead of copying hashes into prose.
 
-Landmarks (each with its own suites): durable turn/transcript settlement +
-schema 13 links (PR 2), atomic suspension transactions (PR 3a), the one
-presentation boundary + live run-event delivery + one v2 control source (PR 3),
-confirm/cancel/expiry/batch run settlement + write-clarification lifecycle
-(PR 4), no-throw reads + orphan reclaim (PR 5), the persisted per-run host-call
-ledger with conditional charges (PR 6), logical/wall/retry/discovery/duplicate
-budgets (PR 7), installation-generation rechecks (PR 8), exactly-once
-audit/telemetry at settlement (PR 9), no `referenceId` claim + registry-bound
-dispatch (PR 10), aliased lifecycle logs + suspect-token alerting + the audited
-stale-installation retirement command (PR 11), and the real-server browser
-matrix + gitleaks closure (PR 12).
+### Evidence and open gates
 
-**The lesson that keeps repeating:** the worst defects hid behind test fakes
-more permissive than the real store, and behind fixtures that hand-authored the
-frames the server was supposed to produce. When a v2 test passes, check the
-fake matches the store's real transactional behaviour — and prefer
-`tests/helpers/v2-production-composition.ts` (unit/integration) or
-`npm run test:e2e:real` (browser), which compose the real app.
+- Historical DeepSeek, private-production, browser, and aggregate artifacts are
+  immutable **v1 rollback evidence**. Their schemas/hashes must not be rewritten.
+- The v2 lane is **structurally blocked**, not merely incomplete:
+  `scripts/eval-write-safety.ts` always emits
+  `not_evaluated_missing_credentials` and exits 2; the real observer exists only
+  in the integration test. `v2-model-evals.yml` uploads that blocked report,
+  while `v2-authority-evidence.ts` can construct apparently complete zero fields
+  from metadata instead of consuming observations. `release-evidence.yml` does
+  not consume the three v2 eval artifacts into one all-gates exact-SHA conclusion.
+- Remaining sequence: repair the post-M evidence handoff, complete C/D work, then
+  run a candidate-bound release. The live v2 write/cleanup, exact-candidate
+  deployment/browser proof, soak, independent security/recovery sign-off, and
+  Marketplace access remain external/technical gates.
+- `scripts/live-full.ts` is read/preview/sweep diagnostic only. It constructs a
+  bare `ActionContext`, so its writes correctly fail `mutation_scope_required`;
+  its write columns are not evidence. **`live:v2-full` is the sole v2 live-write
+  evidence path.** Never relax the runtime scope to make `live-full.ts` pass.
 
-### Closed by the 2026-07-30 release run
-
-- **Backup/restore drill** bound to `ad06c08`: online backup, TLS transfer,
-  isolated restore, `db:verify-restore` passed (token-backed read, `GET /health`
-  from the built artifact, integrity ok, schema 12→13 in the clone, writer lock
-  available), RTO 10.3 s / RPO 69.3 s, `gate:predeploy-backup` passed.
-- **F24** — fresh-path cutover executed (option 1). Enforcement is permanent:
-  the planner REFUSES an ADR-fresh v2 transition onto the in-service database
-  unless `SELECTED_ADR001_DECISION=superseded_in_place_migration` is stated, and
-  the runtime refuses to boot a `new_unused` claim against a nonempty unmarked
-  file (`src/db/fresh-boundary.ts`).
-- **Operation 11B** — the stale `640f2540…` authority is no longer reachable by
-  production: it exists only in the retained rollback database. The audited
-  `npm run db:retire-stale-installation` remains available for that database or
-  a future recurrence.
-- **Branch protection** — `main` requires the `verify` check; force-push and
-  deletion blocked. All checks green on `ad06c08` (verify, browser-e2e, CodeQL,
-  secret-scan).
-- **Live Clockify reads** — the broad `live-full.ts` matrix ran on the
-  sacrificial workspace (PASS=36 reads, PREVIEW_OK=9) and `live-sweep` reported
-  **0 leftovers**.
-
-### `live-full.ts` is obsolete for WRITES (found 2026-07-30 — do not re-derive)
-
-Its write FAIL count moved from the documented 2 to **26**. Root cause is the
-script, not the engine: `live-full.ts:976` builds a bare `ActionContext`
-(workspace, admin, policy, clockify, now) with **no store-backed capabilities**,
-so no durable mutation workflow ever opens the async-local plan scope, and
-`RestCore.mutate` correctly refuses every external write with
-`mutation_scope_required` (some surface as `commit_outcome_unknown` after
-higher-layer classification). That is the fail-closed rule working — an external
-write without normalized operation data, an exact plan, and a step journal must
-not dispatch. Its READ coverage and the sweep remain meaningful; its write
-columns are no longer evidence. Fixing it means routing its writes through the
-durable path (or preferring `live:v2-full`), not relaxing the gate.
-
-### What remains OPEN (human gates)
-
-- **Owner reinstall** to create the fresh installation + attestation (above).
-- **Credentialed v2 model evidence** — the `eval:*` suites against the live
-  provider.
-- **A live-Clockify v2 WRITE proof.** No confirmed v2 write has been executed
-  against real Clockify: `live:v2-full` is the harness for it and refuses
-  without its five preconditions (the fifth, `LIVE_V2_CLEANUP_REGISTRY_PATH`,
-  is consumed: created entities persist there as they are created, so an
-  interrupted run stays cleanable in reverse dependency order) plus the
-  separate per-step `LIVE_V2_WRITE_AUTHORIZATION` variable, and `live-full.ts`
-  cannot substitute (above). Its `--dry-run` mode proves the exact
-  preview→stored-nonce-confirm chain against the fake host with zero network.
-  Confirmed writes are proven against the fake host by `npm run test:e2e:real`.
-- **Soak declaration**, **independent security/recovery sign-off**, and
-  **Marketplace portal review/upload**.
-
-### Operations
-
-- **Backups are scriptable.** `railway ssh` DOES reach the container once a key is
-  registered (`railway ssh keys add`); `scp` works via `railway ssh config`. The
-  older claim that SSH only reaches the management API is wrong. Keys are revoked
-  after each use, so re-establishing is deliberate.
-- **Deploy:** `npm run deploy:private-production` only, from a `git archive`
-  staging tree. Both runbooks document every required variable, including
-  `SELECTED_DATABASE_PATH`, `SELECTED_DATABASE_PATH_DISPOSITION`,
-  `PREDEPLOY_SOURCE_DATABASE_PATH` and `ROLLBACK_SOURCE_DIR`. The transaction
-  now also sets the runtime `DATABASE_PATH_DISPOSITION` (F24) so startup can
-  prove a `new_unused` claim before the database opens.
-- **`gate:predeploy-backup` binds evidence to the exact candidate**, so the drill
-  must run against the commit being deployed — fix first, then drill, then deploy,
-  inside one ≤60-minute window.
-- **Restore verification grades the live installation**, not whichever workspace id
-  sorts first, and records every active installation's probe result.
-- **`npm run verify` is the gate.** Check its own exit code. Full-suite timeouts
-  under host CPU load are a documented flake (`f1-verify-flake-diagnosis`): confirm
-  in isolation, then one clean rerun.
-- **Lifecycle logs are aliased** (F14): `src/log-alias.ts` domain-separated HMAC
-  aliases; never log a raw workspace/admin/add-on id. Repeated authenticated
-  401s alert as `token_rejected_suspect` (aliased) without ever changing
-  authority.
+The highest-risk defects historically hid behind permissive fakes and
+hand-authored frames. Prefer `tests/helpers/v2-production-composition.ts` and
+`npm run test:e2e:real`, which compose the real app/store boundary.
 
 ### v2 budgets (`V2_LIMITS`)
 
@@ -265,8 +206,10 @@ confirmation, undo, and external dispatch is uncached.
   it supplies no classification defaults, validates reviewed endpoint keys,
   closed model-write schemas, bounded dictionaries, material facts, presenter
   identity/version, and one primary mutation, and recomputes
-  `writeAuthorityFor()` before returning an immutable definition. Every metadata
-  field participates in action fingerprints and registry/catalog hashes; no
+  `writeAuthorityFor()` before returning an immutable definition. The exact
+  compatibility/hash source of truth is `actionFingerprintContract()` in
+  `src/harness/catalog.ts`; do not infer fields from this prose. In particular,
+  model-visible `description` is not currently in that fingerprint contract. No
   incomplete definition may enter a model registry.
 - Every advertised batch limit is derived from the deterministic worst-case host
   call estimator. Group-member additions are capped at 14. A prepared external
@@ -323,12 +266,20 @@ bug was found against the REAL API, not by reading the code.
   tests opt-in on a sacrificial workspace only.
 - If a safety test fails, stop and fix it before features.
 - [`ADR 001`](./docs/adr/001-api-agent-v2.md) is the accepted v2 architecture
-  contract. V2 coexists under `src/assistant-v2/`; the sole rewrite switch will be
-  `ASSISTANT_ENGINE=v1|v2`, defaulting to v1 until the authorized cutover.
+  contract. V2 coexists under `src/assistant-v2/`; `ASSISTANT_ENGINE=v1|v2` is the
+  sole switch. Unspecified configuration defaults to v1 fail-safe, while the
+  deployed `ad06c08` cutover explicitly selects v2.
   During coexistence, v1 accepts only critical safety, production, and verified Clockify-contract fixes.
 
 ## Architecture
 
+- `src/assistant-v2/` — the current agent runtime: protocol/state, bounded runner,
+  durable events/observations, catalog discovery and loading, read execution,
+  grounded references, prompt, and the presented-result/presenter registry.
+- `src/services/` — the production orchestration seam used by routes and v2:
+  run/session context, API discovery, preparation/execution, confirmation,
+  clarification, result/history/artifact views, events/hydration, permissions,
+  metrics, and undo. Keep transport and UI out of these services.
 - `src/config.ts` env (Zod) · `src/db/store.ts` thin SQLite facade composing
   per-concern builders in `src/db/store/` (sessions, confirmations, idempotency
   ledger, undo, audit/metrics, telemetry, durable turn/operation + ordered
@@ -402,7 +353,8 @@ bug was found against the REAL API, not by reading the code.
   `invoice-create-workflow.ts`/`invoice-update-workflow.ts`/
   `invoice-payment-workflow.ts` reconciliation modules,
   `target-snapshots.ts` (authoritative pre-dispatch drift checks),
-  `mutation-compatibility.ts` (no-exception durable catalog gate),
+  `mutation-compatibility.ts` (deterministic catalog audit helper invoked by
+  tests; it has zero production callers and is not the runtime write guard),
   `startup-reconciliation.ts` + `startup-reconciliation-registry.ts` and focused
   workflow registries (read-only executable reconciliation for crash-orphaned
   dispatched steps; never resumes prepared work or compensates),
@@ -424,12 +376,20 @@ bug was found against the REAL API, not by reading the code.
   rate-preview builder for the project/task/member rate actions). Shared day-span
   constants AND the injectable-clock helpers (`nowDate`/`nowIso`) live in
   `src/durations.ts`.
-- `src/assistant/` — model client (`LLM_PROVIDER=http` OpenAI-compatible DeepSeek
+- `src/assistant/` — shared provider client plus the legacy v1 planner
+  (`LLM_PROVIDER=http` OpenAI-compatible DeepSeek
   default, or `gemini-cli`), `prompts.ts`, `planner.ts`,
   `intent-declaration.ts` (the isolated admin-text + trusted catalog-metadata
   declaration pass),
   `agent-loop.ts` + `agent-state.ts` (the durable agentic loop, including bounded
   selection context, persisted capability bindings, and provider cancellation).
+- `scripts/eval-v2/` + `scripts/eval-{api-discovery,assistant-terminal,write-safety}.ts`
+  own the v2 corpus, real-runner harness, policy, deterministic report shape, and
+  three entrypoints. `scripts/live-v2-full.ts` is the sole guarded live-write
+  chain; `scripts/live-full.ts` remains read/preview/sweep diagnostic only.
+- `scripts/evidence/v2-*.ts` owns the v2 authority, aggregate, model,
+  private-production, deployed-engine, and live-browser evidence chain. These are
+  siblings of immutable v1 validators, not replacements for them.
 - `src/routes/api.ts` — chat (JSON + NDJSON stream), confirm/cancel/undo/metrics +
   `POST /chat/new` (mints a fresh session/cookie → empty transcript; the prior
   session's messages are NOT deleted — kept under retention + the audit log) + the
@@ -553,10 +513,14 @@ bug was found against the REAL API, not by reading the code.
   read strategy before traffic is accepted. Compatible authoritative evidence
   settles the step and operation; incomplete, zero/multiple, truncated,
   handler-missing, or fingerprint-drift evidence remains unknown. It never resumes
-  prepared work or compensates automatically. `mutation-compatibility.ts` rejects any external
-  write lacking normalized nonsecret operation data, an exact plan,
-  authoritative targeting, or step-bound complete-evidence reconciliation
-  metadata; there is no exception bridge. `clockify_tags_create` is the
+  prepared work or compensates automatically. C0 runtime refusal lives in the
+  async-local mutation scope in `src/clockify/rest/core.ts`: an unscoped,
+  repeated, excess, out-of-order, or incomplete-plan mutation fails before the
+  affected dispatch/success report. `mutation-compatibility.ts` is only the
+  deterministic audit/test gate proving every catalog write declares normalized
+  nonsecret operation data, an exact plan, authoritative targeting, and
+  step-bound complete-evidence reconciliation; it has zero production callers and
+  no exception bridge. `clockify_tags_create` is the
   step-journaled safe-write reference. Invoice writes are the confirmed-write
   reference:
   they persist the exact operation plan and journal each base create,
@@ -805,20 +769,29 @@ bug was found against the REAL API, not by reading the code.
 ## Build, test, run
 
 ```bash
-npm install
-npm run type-check     # tsc --noEmit
-npm test               # build exact server + served UI artifact, then Vitest; no unmocked network
-npm run build          # tsc + vite -> dist/server, dist/ui
-npm run lint           # typed eslint across src + operational scripts; zero warnings
-npm run verify         # both type-checks + lint + cycles + dup + test + build
+npm ci
+npm run type-check              # app/tests TypeScript; no credentials
+npm run type-check:scripts      # operational/eval/evidence TypeScript; no credentials
+npm test                        # build + Vitest; fake host, no unmocked network
+npm run build                   # tsc + vite -> dist/server, dist/ui
+npm run lint                    # typed eslint across src + scripts; zero warnings
+npm run verify                  # full credential-free local gate; run in isolation
 npm run generate:api-action-inventory # regenerate TS, JSON, and Markdown from one evidence model
 npm run check:api-action-inventory # fail if inventory artifacts or classifications drift
-npm run test:e2e       # Chromium + Firefox + WebKit product/browser matrix
-npm run perf:local-ui  # local UI, history, status, and 20 KiB gzip gates
-npm run media:marketplace # deterministic icon/banner/screenshots/demo package
-npm run audit:prod     # fail-closed production advisory gate
-npm run license:prod   # production license gate + deterministic JSON report
-npm run eval:smoke     # offline scripted safety corpus; no network/credentials
+npm run test:e2e                # renderer/browser fixture matrix
+npm run test:e2e:real           # local real Express/SQLite path × 3 browsers
+npm run perf:local-ui           # local UI, history, status, and 20 KiB gzip gates
+npm run media:marketplace       # deterministic icon/banner/screenshots/demo package
+npm run audit:prod              # fail-closed production advisory gate
+npm run license:prod            # production license gate + deterministic JSON report
+npm run eval:smoke              # offline scripted safety corpus
+npm run eval:write-safety       # credential-free BLOCKED accounting entrypoint; exits 2
+npm run eval:api-discovery      # CREDENTIALED + PAID: 1,080 real agent turns
+npm run eval:assistant-terminal # CREDENTIALED + PAID: 897 attempts
+npm run live:v2-full -- --dry-run # guarded chain, fake host, zero external writes
+npm run live:v2-full            # LIVE WRITES: sacrificial workspace + authorization
+npm run live:sweep              # LIVE cleanup; must finish at zero leftovers
+npm run record:v2-release-evidence # partial v2 builder; not an all-gates conclusion
 npm run deploy:private-production # guarded exact-source Railway transaction; DEPLOYMENT.md prerequisites required
 npm run db:capture-backup-boundary -- BOUNDARY # create-only pre-snapshot RPO timestamp
 npm run db:bind-legacy-backup-metadata -- BACKUP SHA256 V1_JSON BOUNDARY V2_JSON # non-overwriting v7 release sidecar
@@ -840,22 +813,19 @@ serializes smoke and its separate always-run cleanup job; both are timeout-bound
 and always upload sanitized prefix/count/status evidence without credentials,
 resource ids/names, payloads, response bodies, or prompts.
 
-Manual `release-evidence.yml` records the exact commit SHA, API-validated reviewed
-PR/head/CI/CodeQL identities, and three hashed zero-retry Vitest count reports
-(minimum 5,351 passed with zero skipped/todo — floor(5,461 recorded baseline ×
-0.98), derivation in `scripts/evidence/cold-verify-evidence.ts`) plus machine
-conclusions for verify,
-production audit/license, CodeQL, gitleaks,
-`eval:smoke`, SBOM, live smoke, backup/restore, deterministic DeepSeek safety, and
-production AUDIT-host clearance. Only the three admin packages named above are
-human `not_evaluated` gates. Workflow presence is not sign-off, deployment
-evidence, or Marketplace approval; no workflow deploys or submits the add-on.
+Manual `release-evidence.yml` preserves the exact-candidate machine-gate and
+historical v1 aggregation path. Existing DeepSeek, private-production,
+live-browser, and aggregate records remain immutable v1 rollback evidence; do not
+rewrite their schemas or recorded hashes.
 
-All artifacts accepted by the current DeepSeek, private-production, live-browser,
-and aggregate release validators are historical v1 evidence. Their derived
-conclusions carry `assistantEngine: "v1"`, `evidenceStatus: "historical"`, and
-`validForV2: false`; requesting a v2 conclusion is rejected before artifact
-parsing. Legacy input schemas and recorded hashes remain unchanged for v1 rollback.
+The v2 builders and manual `v2-model-evals.yml` workflow exist, but their handoff
+is structurally blocked: write-safety produces a blocked accounting report,
+authority evidence does not consume the test-only observations, and
+`release-evidence.yml` does not join all three v2 evals to the all-gates exact-SHA
+conclusion. Repair that post-M handoff before C/D work and a candidate-bound
+release run. `phase-m-landed` is truthful only when protected remote `main`
+contains `0b2b723` and the exact current candidate's checks are green. Workflow
+presence never deploys, approves, or submits the add-on.
 
 ## Runtime constraints
 
@@ -883,9 +853,12 @@ checks are opt-in, gated by env (`LIVE_CLOCKIFY=1` + the relevant tokens/IDs), a
 **must target a throwaway workspace**.
 
 ```bash
-npm run eval:smoke                                                                   # deterministic offline safety floor
-LIVE_CLOCKIFY=1 LIVE_CLOCKIFY_API_KEY=… LIVE_WORKSPACE_ID=… npx tsx scripts/live-full.ts   # every action, self-cleaning
-LIVE_CLOCKIFY=1 npx tsx scripts/live-sweep.ts                                              # leftover sweep → must report 0
+npm run eval:smoke                              # OFFLINE deterministic safety floor
+npm run eval:write-safety                       # credential-free BLOCKED accounting entrypoint; exits 2
+npm run live:v2-full -- --dry-run               # OFFLINE v2 preview/confirm contract
+npm run live:v2-full                            # LIVE WRITES; guarded credentials + per-step authorization
+npm run live:sweep                              # LIVE cleanup; must report 0 leftovers
+LIVE_CLOCKIFY=1 LIVE_CLOCKIFY_API_KEY=… LIVE_WORKSPACE_ID=… npx tsx scripts/live-full.ts # LIVE reads/previews/sweep diagnostic ONLY
 npx tsx --env-file=.env.server scripts/eval-planner.ts --repeat=3                          # planner meter (pass-rate + consistency + spread)
 npx tsx --env-file=.env.server scripts/eval-agentic.ts --repeat=3 [--single-turn]          # agentic loop meter
 npx tsx scripts/eval-matrix.ts --repeat=5                                                  # weak-model MATRIX: planner+agentic × N models (eval-models.json, gitignored)
@@ -895,6 +868,10 @@ npx tsx --env-file=.env.server scripts/live-chat-tour.ts                        
 LIVE_CLOCKIFY=1 LIVE_SCOPE_FRESH_INSTALL=1 npm run probe:scopes                            # aggregate scope + explicit AUDIT reachability on a server-attested fresh install
 LIVE_CLOCKIFY=1 npx tsx scripts/host-auth-spike.ts                                         # API/reports/AUDIT add-on-token clearance
 ```
+
+`scripts/live-full.ts` is not a v2 write harness: its bare context correctly
+fails the async-local mutation scope, so its write columns are not evidence.
+`live:v2-full` is the sole v2 live-write evidence path.
 
 For `eval-agentic`, `--only=<exact case id>` selects exactly one case. A non-exact
 value keeps the ad-hoc substring behavior for selecting several related case IDs.
