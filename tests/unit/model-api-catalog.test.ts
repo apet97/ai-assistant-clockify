@@ -15,6 +15,17 @@ import {
 } from "../../src/harness/prepared-write-presentation.js";
 
 const INTERNAL_ONLY_EXCLUSIONS = [
+  // D-2: the intent-shaped time-tracking actions are deliberately invisible to
+  // the v2 model. clockify_entries_create is the bounded replacement for
+  // clockify_log_work (same dispatcher, entry-action-shared.ts), and
+  // clockify_entries_update supersedes clockify_fix_entry on MODEL_API.
+  // A future exposure flip must fail these named pins, not only a count.
+  "clockify_log_work",
+  "clockify_start_timer",
+  "clockify_fix_entry",
+  "clockify_review_day",
+  "clockify_review_week",
+  "clockify_status",
   "clockify_period_report",
   "clockify_onboard_user",
   "clockify_setup_project",
@@ -76,9 +87,15 @@ describe("explicit ActionRegistry surfaces", () => {
   it("keeps named composites and generics out of the model API registry", () => {
     const modelNames = new Set(namesOf(MODEL_API_ACTION_CATALOG));
     for (const name of INTERNAL_ONLY_EXCLUSIONS) {
-      expect(INTERNAL_ACTION_CATALOG.get(name), name).toBeDefined();
+      const internal = INTERNAL_ACTION_CATALOG.get(name);
+      expect(internal, name).toBeDefined();
+      expect(internal?.apiExposure, name).not.toBe("api");
       expect(modelNames.has(name), name).toBe(false);
+      expect(MODEL_API_ACTION_CATALOG.get(name), name).toBeUndefined();
     }
+    // The bounded replacement for clockify_log_work IS exposed (same dispatcher,
+    // src/harness/workflows/entry-action-shared.ts dispatchEntriesCreate).
+    expect(MODEL_API_ACTION_CATALOG.get("clockify_entries_create")).toBeDefined();
   });
 
   it("exposes assistant local actions only on the local registry, never as model API tools", () => {

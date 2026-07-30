@@ -28,7 +28,8 @@ The v1 engine remains in-tree for rollback and is selected only by
 `ASSISTANT_ENGINE=v1`.
 
 **Catalog:** 171 typed catalog actions — `api` 127 · `composite` 24 · `generic` 16 ·
-`local` 4. Inventory evidence hash
+`local` 4. Only the 127 `api` actions are visible to the v2 model; the 44
+`composite`/`generic`/`local` actions are v1-only by design. Inventory evidence hash
 `fb3c3b5c4787767e6cde921f735f8d5eab55aadde7e5a166aefe0db2a1c75bce`; model-API
 registry hash `3872950503ac629de4629009b7548fbbc1cd509893d0ad2d7c7b34359246cbd7`.
 
@@ -702,7 +703,13 @@ bug was found against the REAL API, not by reading the code.
   bypasses the Clockify feature-group gate by design) — real Clockify permission
   writes use `high_risk_write`.
 - Curated intent actions (`clockify_period_report`, `clockify_onboard_user`) beat
-  primitive-scrambling; measured 12/12 adoption.
+  primitive-scrambling; measured 12/12 adoption. That is a **v1** result: all 44
+  v1-only actions — 24 `composite`, 16 `generic`, 4 `local`, the curated intents
+  included — are invisible to the v2 model BY DESIGN (v2 sees only the 127
+  reviewed `apiExposure: "api"` actions). `clockify_entries_create` is the
+  bounded v2 replacement for `clockify_log_work` (same dispatcher,
+  `src/harness/workflows/entry-action-shared.ts:296`). The intent-shaped
+  exclusions are pinned by name in `tests/unit/model-api-catalog.test.ts`.
 
 ## Clockify API facts (live/spec-verified; pinned in unit tests)
 
