@@ -5,6 +5,7 @@ import {
   discoverThenCall,
   V2_COMPOSITION_NOW,
 } from "../helpers/v2-production-composition.js";
+import { DISCOVERY_META_TOOL_NAME } from "../../src/harness/api-operation.js";
 
 /**
  * PR 1 (closure plan): characterization proof that the production-composition
@@ -108,6 +109,60 @@ describe("v2 production composition harness", () => {
     ).toBe(1);
     // The run suspended before a third completion was requested.
     expect(c.providerCalls()).toBe(2);
+  });
+
+  it("journals every admitted write request before its prepared operation (M2)", async () => {
+    // Fake fidelity: only provider completions and Clockify I/O use their
+    // production injection seams. The app, runner, SQLite journal, action
+    // execution service, and operation preparation service are all real.
+    const c = await composeV2ProductionApp({
+      script: [
+        {
+          text: "",
+          toolCalls: [{
+            id: "tc-find",
+            name: DISCOVERY_META_TOOL_NAME,
+            arguments: { query: "create tags" },
+          }],
+        },
+        {
+          text: "",
+          toolCalls: [
+            { id: "tc-tag", name: "clockify_tags_create", arguments: { name: "Journal Tag" } },
+            { id: "tc-project", name: "clockify_projects_create", arguments: { name: "Journal Project" } },
+          ],
+        },
+      ],
+    });
+
+    const response = await c.chat("create a tag named Journal Tag and a project named Journal Project");
+    expect(response.status).toBe(200);
+    expect(response.body.reply.kind).toBe("preview");
+
+    const events = await c.readEvents(c.activeRunId());
+    const requested = events.filter((entry) => entry.event.eventType === "tool.requested");
+    expect(requested.map((entry) => entry.event.payload)).toEqual([
+      expect.objectContaining({ toolCallId: "tc-tag", actionName: "clockify_tags_create" }),
+      expect.objectContaining({ toolCallId: "tc-project", actionName: "clockify_projects_create" }),
+    ]);
+
+    const preparedByAction = new Map<string, number>();
+    for (const [index, entry] of events.entries()) {
+      if (entry.event.eventType !== "operation.prepared") continue;
+      const operation = c.store.getOperationRun(String(entry.event.payload.operationId));
+      expect(operation).toBeDefined();
+      preparedByAction.set(operation!.actionName, index);
+    }
+    expect([...preparedByAction.keys()]).toEqual([
+      "clockify_tags_create",
+      "clockify_projects_create",
+    ]);
+    for (const entry of requested) {
+      const requestedAt = events.indexOf(entry);
+      const preparedAt = preparedByAction.get(String(entry.event.payload.actionName));
+      expect(preparedAt).toBeDefined();
+      expect(requestedAt).toBeLessThan(preparedAt!);
+    }
   });
 
   it("persists an intentional suspension across a real store reopen (file-backed)", async () => {

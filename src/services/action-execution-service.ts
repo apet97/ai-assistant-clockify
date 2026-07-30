@@ -398,6 +398,18 @@ export function createActionExecutionService(
     };
     deps.runStore.saveRun(state);
     writeCalls = admitted;
+    for (const call of writeCalls) {
+      deps.eventService.requestTool({
+        scope: scopedRun(state),
+        state,
+        payload: {
+          toolCallId: call.id,
+          actionName: call.name,
+          argumentsHash: computeArgumentsHash(call.arguments),
+        },
+      });
+      state = deps.runStore.getRun(scopedRun(state)) ?? state;
+    }
     let preparation: WritePreparationOutcome;
     let thrownCause: string | undefined;
     try {

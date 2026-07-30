@@ -48,7 +48,7 @@ describe("M1: discovery scoring follows real runner use", () => {
 
     expect(run.terminalPhase).toBe("awaiting_confirmation");
     expect(run.loadedOperationNames).toContain(entry.actionName);
-    expect(run.requestedToolNames).not.toContain(entry.actionName);
+    expect(run.requestedToolNames).toContain(entry.actionName);
     expect(run.preparedWriteActionNames).toEqual([entry.actionName]);
     expect(scoreRun(
       discovery,
