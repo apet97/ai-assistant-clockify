@@ -1,6 +1,12 @@
 import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ActionRegistry } from "../../src/harness/api-catalog.js";
 import { buildEvalCases, type EvalCase } from "./case-model.js";
+export {
+  DISCOVERY_EXPECTED_CASE_COUNT,
+  DISCOVERY_MAX_TOOLS,
+  DISCOVERY_REPEATS,
+  DISCOVERY_THRESHOLDS,
+} from "./api-discovery-policy.js";
 
 /**
  * T17-A/M4: the discovery cohort. One case per model-API operation loadable by
@@ -15,16 +21,11 @@ import { buildEvalCases, type EvalCase } from "./case-model.js";
  * loading a watched operation is retained as non-gating evaluator telemetry.
  */
 
-export const DISCOVERY_REPEATS = 3;
-
 /** Stable identity for the M5 argument-bearing discovery request corpus. */
 export const DISCOVERY_CORPUS_VERSION = "v2-discovery-argument-bearing-v1";
 
 /** The real eval harness scope (`runner-harness.ts`) and discovery pool use this auth class. */
 export const DISCOVERY_HARNESS_AUTH_CLASS = "addon" as const;
-
-/** Discovery may offer at most this many API tools alongside the meta-tool (T07-B). */
-export const DISCOVERY_MAX_TOOLS = 12;
 
 export interface DiscoveryEvalCase {
   actionName: string;
@@ -97,12 +98,3 @@ export function buildDiscoveryEvalCases(
 ): DiscoveryEvalCase[] {
   return buildDiscoveryEvalCorpus(registry).cases;
 }
-
-/** Thresholds the T17-B evaluator enforces; a report below any of these is a failure. */
-export const DISCOVERY_THRESHOLDS = {
-  canonicalRequired: DISCOVERY_REPEATS,
-  paraphraseRequired: 2,
-  typoRequired: 2,
-  unrelatedDestructiveAllowed: 0,
-  maxLoadedApiTools: DISCOVERY_MAX_TOOLS,
-} as const;

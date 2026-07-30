@@ -5,15 +5,38 @@ import {
   validateV2ModelReleaseEvidence,
   validateV2ModelReleaseEvidenceFromEnvironment,
 } from "../../scripts/evidence/v2-model-release-evidence.js";
+import { DISCOVERY_EXPECTED_CASE_COUNT } from "../../scripts/eval-v2/api-discovery-policy.js";
+import {
+  buildDiscoveryEvalCorpus,
+  DISCOVERY_CORPUS_VERSION,
+} from "../../scripts/eval-v2/api-discovery-cases.js";
+import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 
 const SHA = "a".repeat(40);
-const CATALOG_HASH = "3".repeat(64);
+const CATALOG_HASH = MODEL_API_ACTION_CATALOG.hash();
+const DISCOVERY_CORPUS = buildDiscoveryEvalCorpus();
 
-/** The exact deterministic report shape `scripts/eval-v2/report.ts` emits. */
-function evalReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function discoveryIdentity(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    candidateSha: SHA,
+    catalogHash: CATALOG_HASH,
+    registryId: "v2-api",
+    modelConfiguration: "provider=http model=fixture-model",
+    cohortOrder: ["canonical", "paraphrase", "typo"],
+    corpusVersion: DISCOVERY_CORPUS_VERSION,
+    caseSelection: DISCOVERY_CORPUS.caseSelection,
+    ...overrides,
+  };
+}
+
+/** The exact strict-report shape `scripts/eval-v2/report.ts` emits. */
+function evalReport(
+  kind: "v2_assistant_terminal" | "v2_write_safety",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     schemaVersion: 1,
-    kind: "v2_fixture",
+    kind,
     status: "passed",
     identity: {
       candidateSha: SHA,
@@ -30,6 +53,139 @@ function evalReport(overrides: Record<string, unknown> = {}): Record<string, unk
     scoredCaseIds: ["case-a", "case-b", "case-c"],
     ...overrides,
   };
+}
+
+/** A complete API-discovery attempt grid, including the persisted M6 proof. */
+function discoveryReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const caseIds = DISCOVERY_CORPUS.cases.map((entry) => entry.actionName);
+  const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+    Array.from({ length: 3 }, (_, repeat) => ({ caseId, cohort, repeat, passed: true }))));
+  return {
+    schemaVersion: 1,
+    kind: "v2_api_discovery",
+    status: "passed",
+    identity: discoveryIdentity(),
+    caseCount: caseIds.length,
+    numerator: attempts.length,
+    denominator: attempts.length,
+    cohorts: ["canonical", "paraphrase", "typo"].map((cohort) => ({
+      cohort,
+      numerator: caseIds.length * 3,
+      denominator: caseIds.length * 3,
+      failedCaseIds: [],
+    })),
+    failures: [],
+    scoredCaseIds: caseIds,
+    caseIds,
+    attempts,
+    thresholdViolations: [],
+    ...overrides,
+  };
+}
+
+function exactFloorDiscoveryReport(): Record<string, unknown> {
+  const caseIds = DISCOVERY_CORPUS.cases.map((entry) => entry.actionName);
+  const failedCaseIds = [...caseIds].sort();
+  const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+    Array.from({ length: 3 }, (_, repeat) => {
+      const passed = cohort === "canonical" || repeat < 2;
+      return {
+        caseId,
+        cohort,
+        repeat,
+        passed,
+        ...(passed ? {} : { failureCode: "operation_not_loaded" }),
+      };
+    })));
+  return discoveryReport({
+    numerator: DISCOVERY_EXPECTED_CASE_COUNT * 7,
+    denominator: DISCOVERY_EXPECTED_CASE_COUNT * 9,
+    caseCount: DISCOVERY_EXPECTED_CASE_COUNT,
+    caseIds,
+    scoredCaseIds: caseIds,
+    attempts,
+    cohorts: [
+      {
+        cohort: "canonical",
+        numerator: DISCOVERY_EXPECTED_CASE_COUNT * 3,
+        denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3,
+        failedCaseIds: [],
+      },
+      {
+        cohort: "paraphrase",
+        numerator: DISCOVERY_EXPECTED_CASE_COUNT * 2,
+        denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3,
+        failedCaseIds,
+      },
+      {
+        cohort: "typo",
+        numerator: DISCOVERY_EXPECTED_CASE_COUNT * 2,
+        denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3,
+        failedCaseIds,
+      },
+    ],
+    failures: attempts.filter((attempt) => !attempt.passed).map((attempt) => ({
+      caseId: attempt.caseId,
+      cohort: attempt.cohort,
+      repeat: attempt.repeat,
+      failureCode: attempt.failureCode,
+    })),
+  });
+}
+
+function fabricatedDiscoveryReport(): Record<string, unknown> {
+  const caseIds = Array.from(
+    { length: DISCOVERY_EXPECTED_CASE_COUNT },
+    (_, index) => `fabricated-${index}`,
+  );
+  const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+    Array.from({ length: 3 }, (_, repeat) => {
+      const passed = cohort === "canonical" || repeat < 2;
+      return {
+        caseId,
+        cohort,
+        repeat,
+        passed,
+        ...(passed ? {} : { failureCode: "operation_not_loaded" }),
+      };
+    })));
+  const failedCaseIds = [...caseIds].sort();
+  return discoveryReport({
+    caseIds,
+    scoredCaseIds: caseIds,
+    caseCount: caseIds.length,
+    attempts,
+    numerator: caseIds.length * 7,
+    denominator: caseIds.length * 9,
+    cohorts: [
+      { cohort: "canonical", numerator: caseIds.length * 3, denominator: caseIds.length * 3, failedCaseIds: [] },
+      {
+        cohort: "paraphrase",
+        numerator: caseIds.length * 2,
+        denominator: caseIds.length * 3,
+        failedCaseIds,
+      },
+      {
+        cohort: "typo",
+        numerator: caseIds.length * 2,
+        denominator: caseIds.length * 3,
+        failedCaseIds,
+      },
+    ],
+    failures: attempts.filter((attempt) => !attempt.passed).map((attempt) => ({
+      caseId: attempt.caseId,
+      cohort: attempt.cohort,
+      repeat: attempt.repeat,
+      failureCode: attempt.failureCode,
+    })),
+    identity: {
+      candidateSha: SHA,
+      catalogHash: CATALOG_HASH,
+      registryId: "v2-api",
+      modelConfiguration: "provider=http model=fixture-model",
+      cohortOrder: ["canonical", "paraphrase", "typo"],
+    },
+  });
 }
 
 /** The subset of the real `/version` payload (src/server.ts) the v2 check binds. */
@@ -58,9 +214,9 @@ function deployedVersion(overrides: Record<string, unknown> = {}): Record<string
 
 function releaseInput(overrides: Record<string, unknown> = {}): Parameters<typeof validateV2ModelReleaseEvidence>[0] {
   return {
-    apiDiscovery: evalReport(),
-    assistantTerminal: evalReport(),
-    writeSafety: evalReport(),
+    apiDiscovery: discoveryReport(),
+    assistantTerminal: evalReport("v2_assistant_terminal"),
+    writeSafety: evalReport("v2_write_safety"),
     deployedVersion: deployedVersion(),
     expectedCandidateSha: SHA,
     expectedCatalogHash: CATALOG_HASH,
@@ -89,12 +245,37 @@ describe("B6: the v2 model release evidence sibling", () => {
     });
   });
 
+  it("rejects a fabricated 120-case replacement corpus at the model-evidence boundary", () => {
+    const { deployedVersion: _unused, ...benchmarkInput } = releaseInput({
+      apiDiscovery: fabricatedDiscoveryReport(),
+    });
+    expect(() => validateV2ModelBenchmarkEvidence(benchmarkInput)).toThrow(
+      /apiDiscovery evaluation is rejected/u,
+    );
+  });
+
   it("accepts a benchmark validation without a deployment, marked unverified", () => {
     const { deployedVersion: _unused, ...benchmarkInput } = releaseInput();
     const evidence = validateV2ModelBenchmarkEvidence(benchmarkInput);
     expect(evidence.deployedConfigurationVerified).toBe(false);
     expect(evidence.conclusion).toBe("passed");
     expect(evidence.validForV2).toBe(true);
+  });
+
+  it("accepts the exact discovery floor without relaxing a strict sibling evaluation", () => {
+    const { deployedVersion: _unused, ...benchmarkInput } = releaseInput({
+      apiDiscovery: exactFloorDiscoveryReport(),
+    });
+    expect(validateV2ModelBenchmarkEvidence(benchmarkInput).evaluations.apiDiscovery).toBe("passed");
+
+    expect(() => validateV2ModelBenchmarkEvidence({
+      ...benchmarkInput,
+      assistantTerminal: evalReport("v2_assistant_terminal", {
+        numerator: 2,
+        denominator: 3,
+        failures: [{ caseId: "case-c", cohort: "canonical", repeat: 0, failureCode: "failed" }],
+      }),
+    })).toThrow(/assistantTerminal evaluation is rejected/u);
   });
 
   it("rejects a v1 target before any artifact is parsed", () => {
@@ -106,7 +287,10 @@ describe("B6: the v2 model release evidence sibling", () => {
 
   it("rejects a missing-credential sentinel evaluation instead of passing it", () => {
     const input = releaseInput({
-      assistantTerminal: { status: "not_evaluated_missing_credentials" },
+      assistantTerminal: {
+        kind: "v2_assistant_terminal",
+        status: "not_evaluated_missing_credentials",
+      },
     });
     expect(() => validateV2ModelReleaseEvidence(input)).toThrow(
       /assistantTerminal evaluation is not_evaluated_missing_credentials/u,
@@ -115,7 +299,7 @@ describe("B6: the v2 model release evidence sibling", () => {
 
   it("rejects an evaluation bound to a different catalog hash", () => {
     const input = releaseInput({
-      writeSafety: evalReport({
+      writeSafety: evalReport("v2_write_safety", {
         identity: {
           candidateSha: SHA,
           catalogHash: "4".repeat(64),
@@ -130,14 +314,8 @@ describe("B6: the v2 model release evidence sibling", () => {
 
   it("rejects an evaluation bound to a different candidate SHA", () => {
     const input = releaseInput({
-      apiDiscovery: evalReport({
-        identity: {
-          candidateSha: "b".repeat(40),
-          catalogHash: CATALOG_HASH,
-          registryId: "v2-api",
-          modelConfiguration: "scripted",
-          cohortOrder: ["canonical"],
-        },
+      apiDiscovery: discoveryReport({
+        identity: discoveryIdentity({ candidateSha: "b".repeat(40) }),
       }),
     });
     expect(() => validateV2ModelReleaseEvidence(input)).toThrow(/apiDiscovery evaluation is rejected/u);
@@ -166,9 +344,9 @@ describe("B6: the v2 model release evidence sibling", () => {
 
   it("validates end to end from environment paths with injected reads", () => {
     const files: Record<string, unknown> = {
-      "api-discovery.json": evalReport(),
-      "assistant-terminal.json": evalReport(),
-      "write-safety.json": evalReport(),
+      "api-discovery.json": discoveryReport(),
+      "assistant-terminal.json": evalReport("v2_assistant_terminal"),
+      "write-safety.json": evalReport("v2_write_safety"),
       "deployed-version.json": deployedVersion(),
     };
     const { outputPath, evidence } = validateV2ModelReleaseEvidenceFromEnvironment({

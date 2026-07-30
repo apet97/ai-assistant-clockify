@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { buildV2ReleaseEvidenceFromEnvironment } from "../../scripts/evidence/v2-release-evidence.js";
+import {
+  buildDiscoveryEvalCorpus,
+  DISCOVERY_CORPUS_VERSION,
+} from "../../scripts/eval-v2/api-discovery-cases.js";
+import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 
 const SHA = "a".repeat(40);
 const EVIDENCE_SHA = "b".repeat(40);
-const CATALOG_HASH = "3".repeat(64);
+const CATALOG_HASH = MODEL_API_ACTION_CATALOG.hash();
+const DISCOVERY_CORPUS = buildDiscoveryEvalCorpus();
 
 /** The exact artifact shape `scripts/evidence/v2-authority-evidence.ts` writes. */
 function authorityReport(evidenceOverrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -38,10 +44,13 @@ function authorityReport(evidenceOverrides: Record<string, unknown> = {}): Recor
 }
 
 /** A complete, fully-scored eval report in the `scripts/eval-v2/report.ts` shape. */
-function evalReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function evalReport(
+  kind: "v2_assistant_terminal" | "v2_write_safety",
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     schemaVersion: 1,
-    kind: "v2_fixture",
+    kind,
     status: "passed",
     identity: {
       candidateSha: SHA,
@@ -56,6 +65,41 @@ function evalReport(overrides: Record<string, unknown> = {}): Record<string, unk
     cohorts: [{ cohort: "canonical", numerator: 3, denominator: 3, failedCaseIds: [] }],
     failures: [],
     scoredCaseIds: ["case-a", "case-b", "case-c"],
+    ...overrides,
+  };
+}
+
+function discoveryReport(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const caseIds = DISCOVERY_CORPUS.cases.map((entry) => entry.actionName);
+  const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+    Array.from({ length: 3 }, (_, repeat) => ({ caseId, cohort, repeat, passed: true }))));
+  return {
+    schemaVersion: 1,
+    kind: "v2_api_discovery",
+    status: "passed",
+    identity: {
+      candidateSha: SHA,
+      catalogHash: CATALOG_HASH,
+      registryId: "v2-api",
+      modelConfiguration: "provider=http model=fixture-model",
+      cohortOrder: ["canonical", "paraphrase", "typo"],
+      corpusVersion: DISCOVERY_CORPUS_VERSION,
+      caseSelection: DISCOVERY_CORPUS.caseSelection,
+    },
+    caseCount: caseIds.length,
+    numerator: attempts.length,
+    denominator: attempts.length,
+    cohorts: ["canonical", "paraphrase", "typo"].map((cohort) => ({
+      cohort,
+      numerator: caseIds.length * 3,
+      denominator: caseIds.length * 3,
+      failedCaseIds: [],
+    })),
+    failures: [],
+    scoredCaseIds: caseIds,
+    caseIds,
+    attempts,
+    thresholdViolations: [],
     ...overrides,
   };
 }
@@ -85,9 +129,9 @@ function environment(
 function completeFixtureFiles(): Record<string, unknown> {
   return {
     "authority.json": authorityReport(),
-    "api-discovery.json": evalReport(),
-    "assistant-terminal.json": evalReport(),
-    "write-safety.json": evalReport(),
+    "api-discovery.json": discoveryReport(),
+    "assistant-terminal.json": evalReport("v2_assistant_terminal"),
+    "write-safety.json": evalReport("v2_write_safety"),
   };
 }
 
@@ -156,13 +200,15 @@ describe("B5: the v2 release-evidence CLI entry", () => {
   it("rejects an evaluation report bound to a different catalog hash than the authority evidence", () => {
     const files = {
       ...completeFixtureFiles(),
-      "api-discovery.json": evalReport({
+      "api-discovery.json": discoveryReport({
         identity: {
           candidateSha: SHA,
           catalogHash: "4".repeat(64),
           registryId: "v2-api",
-          modelConfiguration: "scripted",
-          cohortOrder: ["canonical"],
+          modelConfiguration: "provider=http model=fixture-model",
+          cohortOrder: ["canonical", "paraphrase", "typo"],
+          corpusVersion: DISCOVERY_CORPUS_VERSION,
+          caseSelection: DISCOVERY_CORPUS.caseSelection,
         },
       }),
     };

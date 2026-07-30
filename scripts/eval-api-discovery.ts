@@ -20,6 +20,10 @@ import {
   type EvalReport,
 } from "./eval-v2/report.js";
 import {
+  API_DISCOVERY_REPORT_KIND,
+  DISCOVERY_COHORT_ORDER,
+} from "./eval-v2/api-discovery-policy.js";
+import {
   evalIdentity,
   modelConfigurationFromEnvironment,
   runRealAssistantTurn,
@@ -39,11 +43,13 @@ import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
  * is scored ONLY from durable `api.operations_loaded`, `tool.requested`,
  * `tool.denied`, and `operation.prepared` events it journaled.
  *
- * Enforced, per case: the operation is loaded in 3/3 canonical repeats, ≥2/3
- * paraphrase, ≥2/3 typo, at most 12 API tools are ever offered in one
- * completion, and ZERO destructive operations from an unrelated feature group
- * are ever called. Unrelated destructive operations in the ranked loaded set
- * remain visible as non-gating report telemetry.
+ * Owner-ratified and enforced per case: 3/3 canonical repeats, ≥2/3
+ * paraphrase, and ≥2/3 typo. The exact case/cohort/repeat grid must be complete;
+ * at most 12 API tools may be offered in one completion; and ZERO destructive
+ * operations from an unrelated feature group may be called. The legacy
+ * `unrelated_destructive_loaded` failure-code spelling now means a MODEL CALL
+ * (post-M3), not presence in the loaded set. Ranked-set destructive loads and
+ * clarification-instead-of-target-call rates remain non-gating telemetry.
  *
  * Without model credentials this emits the exact
  * `not_evaluated_missing_credentials` report and exits non-zero. It never sources
@@ -54,9 +60,9 @@ import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
  * file refused) via the shared evidence-path contract.
  */
 
-const KIND = "v2_api_discovery";
+const KIND = API_DISCOVERY_REPORT_KIND;
 const EVIDENCE_PATH_VARIABLE = "EVAL_API_DISCOVERY_EVIDENCE_PATH";
-const COHORT_ORDER = ["canonical", "paraphrase", "typo"] as const;
+const COHORT_ORDER = DISCOVERY_COHORT_ORDER;
 type Cohort = (typeof COHORT_ORDER)[number];
 
 function requestFor(entry: DiscoveryEvalCase, cohort: Cohort): string | undefined {
@@ -150,6 +156,8 @@ async function attempt(
       cohort,
       repeat,
       passed: scored.passed,
+      clarificationInsteadOfCall: run.terminalPhase === "awaiting_clarification"
+        && !run.modelCalledToolNames.includes(entry.actionName),
       loadedUnrelatedDestructiveOperations: loadedUnrelatedDestructiveOperations(
         entry,
         run.loadedOperationNames,
@@ -163,6 +171,7 @@ async function attempt(
       repeat,
       passed: false,
       failureCode: `run_failed:${error instanceof Error ? error.message.slice(0, 120) : "unknown"}`,
+      clarificationInsteadOfCall: false,
     };
   }
 }
@@ -198,34 +207,12 @@ export async function runApiDiscoveryEvaluation(): Promise<EvalReport> {
   return buildEvalReport({ kind: KIND, identity, caseIds, attempts });
 }
 
-/**
- * Per-CASE threshold enforcement. The aggregate report already requires every
- * attempt to pass, so this exists to name the exact cases that fell below their
- * cohort floor rather than to relax anything: a cohort average could otherwise
- * mask one case at 0/3 behind others at 3/3 (pre-T18 review).
- */
-export function discoveryThresholdViolations(report: EvalReport): string[] {
-  const perCase = new Map<string, { cohort: string; passed: number }>();
-  for (const cohort of report.cohorts) {
-    for (const caseId of cohort.failedCaseIds) {
-      perCase.set(`${caseId}|${cohort.cohort}`, { cohort: cohort.cohort, passed: 0 });
-    }
-  }
-  const violations: string[] = [];
-  for (const [key, entry] of perCase) {
-    const required = entry.cohort === "canonical"
-      ? DISCOVERY_THRESHOLDS.canonicalRequired
-      : DISCOVERY_THRESHOLDS.paraphraseRequired;
-    violations.push(`${key.split("|")[0]}:${entry.cohort}_below_${required}_of_${DISCOVERY_REPEATS}`);
-  }
-  return violations.sort();
-}
+export { discoveryThresholdViolations } from "./eval-v2/report.js";
 
 export async function main(): Promise<void> {
   const report = await runApiDiscoveryEvaluation();
-  const violations = discoveryThresholdViolations(report);
-  emitEvalReport({ ...report, thresholdViolations: violations }, evalEvidenceSink(EVIDENCE_PATH_VARIABLE));
-  if (report.status !== "passed" || violations.length > 0 || !isReleasableReport(report)) {
+  emitEvalReport(report, evalEvidenceSink(EVIDENCE_PATH_VARIABLE));
+  if (!isReleasableReport(report)) {
     process.exitCode = 2;
   }
 }

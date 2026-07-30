@@ -119,7 +119,9 @@ describe("M3: destructive selection follows model calls", () => {
     );
     const loadedTelemetry = loadedUnrelatedDestructiveOperations(discovery, run.loadedOperationNames);
     const report = buildEvalReport({
-      kind: "v2_api_discovery",
+      // This test owns one attempt's loaded-set telemetry, not M6's complete
+      // three-cohort release grid. Keep it a generic report fixture.
+      kind: "v2_loaded_set_telemetry_fixture",
       identity: REPORT_IDENTITY,
       caseIds: [entry.actionName],
       attempts: [{

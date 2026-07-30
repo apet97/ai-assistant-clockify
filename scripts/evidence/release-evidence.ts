@@ -5,6 +5,8 @@ import { writeDeterministicJson } from "./write-json.js";
 import { MINIMUM_RELEASE_TESTS, type ColdVerifyEvidence } from "./cold-verify-evidence.js";
 import type { ReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
 import { V2_AUTHORITY_NOT_EVALUATED_SENTINEL, type V2AuthorityEvidenceReport } from "./v2-authority-evidence.js";
+import { API_DISCOVERY_REPORT_KIND } from "../eval-v2/api-discovery-policy.js";
+import { isReleasableReport, type EvalReport } from "../eval-v2/report.js";
 
 export { buildColdVerifyEvidence } from "./cold-verify-evidence.js";
 export { validateReviewedPullRequestEvidence } from "./reviewed-pr-evidence.js";
@@ -219,21 +221,37 @@ export interface ReleaseEvidenceV2Input {
 
 /** The bounded shape a v2 evaluation report contributes to release evidence. */
 export interface V2EvaluationInput {
+  schemaVersion?: unknown;
+  kind?: unknown;
   status: unknown;
   numerator: unknown;
   denominator: unknown;
   caseCount: unknown;
   /** Distinct case ids with at least one attempt — the completeness proof (B5). */
   scoredCaseIds?: unknown;
-  identity?: { candidateSha?: unknown; catalogHash?: unknown };
+  caseIds?: unknown;
+  attempts?: unknown;
+  cohorts?: unknown;
+  failures?: unknown;
+  thresholdViolations?: unknown;
+  identity?: {
+    candidateSha?: unknown;
+    catalogHash?: unknown;
+    registryId?: unknown;
+    modelConfiguration?: unknown;
+    cohortOrder?: unknown;
+    caseSelection?: unknown;
+  };
 }
 
 export type V2EvaluationStatus = "passed" | "not_evaluated_missing_credentials" | "rejected";
 
 /**
  * T17-G: classify ONE v2 evaluation report for release evidence. A report is
- * `passed` only when it is complete, fully scored, non-empty, and bound to the
- * exact candidate SHA; an explicit missing-credential sentinel stays
+ * `passed` only when it is complete, non-empty, bound to the exact candidate
+ * SHA, and passes its kind-specific policy. Discovery uses the owner-ratified
+ * per-case floors; the other eval kinds remain all-attempts-must-pass. An
+ * explicit missing-credential sentinel stays
  * `not_evaluated_missing_credentials`; anything else — a partial score, a zero
  * denominator, a stale SHA, a malformed shape — is `rejected`. There is no path
  * from a partial or sentinel report to a passing v2 release conclusion.
@@ -245,16 +263,17 @@ export type V2EvaluationStatus = "passed" | "not_evaluated_missing_credentials" 
  */
 export function classifyV2Evaluation(
   report: V2EvaluationInput | undefined,
-  expected: { candidateSha: string; catalogHash?: string },
+  expected: { candidateSha: string; catalogHash?: string; kind?: string },
 ): V2EvaluationStatus {
   if (!report || typeof report !== "object") return "rejected";
+  if (expected.kind !== undefined && report.kind !== expected.kind) return "rejected";
   if (report.status === "not_evaluated_missing_credentials") return "not_evaluated_missing_credentials";
   if (report.status !== "passed") return "rejected";
   const { numerator, denominator, caseCount, scoredCaseIds } = report;
   if (typeof numerator !== "number" || typeof denominator !== "number" || typeof caseCount !== "number") {
     return "rejected";
   }
-  if (denominator <= 0 || caseCount <= 0 || numerator !== denominator) return "rejected";
+  if (denominator <= 0 || caseCount <= 0) return "rejected";
   if (denominator < caseCount) return "rejected";
   if (!Array.isArray(scoredCaseIds) || !scoredCaseIds.every((id) => typeof id === "string")) {
     return "rejected";
@@ -265,6 +284,24 @@ export function classifyV2Evaluation(
   if (expected.catalogHash !== undefined && report.identity?.catalogHash !== expected.catalogHash) {
     return "rejected";
   }
+  if (report.kind === API_DISCOVERY_REPORT_KIND) {
+    if (
+      report.schemaVersion !== 1
+      || !Array.isArray(report.caseIds)
+      || !report.caseIds.every((id) => typeof id === "string")
+      || !Array.isArray(report.attempts)
+      || !Array.isArray(report.cohorts)
+      || !Array.isArray(report.failures)
+      || !Array.isArray(report.thresholdViolations)
+      || typeof report.identity?.registryId !== "string"
+      || typeof report.identity?.modelConfiguration !== "string"
+      || !Array.isArray(report.identity?.cohortOrder)
+    ) {
+      return "rejected";
+    }
+    return isReleasableReport(report as EvalReport) ? "passed" : "rejected";
+  }
+  if (numerator !== denominator) return "rejected";
   return "passed";
 }
 
@@ -315,9 +352,18 @@ export function buildV2ReleaseEvidence(input: ReleaseEvidenceV2Input): ReleaseEv
       : {}),
   };
   const evaluations = {
-    apiDiscovery: classifyV2Evaluation(input.evaluations?.apiDiscovery, expected),
-    assistantTerminal: classifyV2Evaluation(input.evaluations?.assistantTerminal, expected),
-    writeSafety: classifyV2Evaluation(input.evaluations?.writeSafety, expected),
+    apiDiscovery: classifyV2Evaluation(input.evaluations?.apiDiscovery, {
+      ...expected,
+      kind: API_DISCOVERY_REPORT_KIND,
+    }),
+    assistantTerminal: classifyV2Evaluation(input.evaluations?.assistantTerminal, {
+      ...expected,
+      kind: "v2_assistant_terminal",
+    }),
+    writeSafety: classifyV2Evaluation(input.evaluations?.writeSafety, {
+      ...expected,
+      kind: "v2_write_safety",
+    }),
   };
   return {
     assistantEngine: "v2",

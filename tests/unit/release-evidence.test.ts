@@ -3,6 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import * as releaseEvidenceModule from "../../scripts/evidence/release-evidence.js";
+import { DISCOVERY_EXPECTED_CASE_COUNT } from "../../scripts/eval-v2/api-discovery-policy.js";
+import {
+  buildDiscoveryEvalCorpus,
+  DISCOVERY_CORPUS_VERSION,
+} from "../../scripts/eval-v2/api-discovery-cases.js";
+import { MODEL_API_ACTION_CATALOG } from "../../src/harness/api-catalog.js";
 import type { ReviewedPullRequestValidationInput } from "../../scripts/evidence/reviewed-pr-evidence.js";
 
 const { buildReleaseEvidence } = releaseEvidenceModule;
@@ -514,18 +520,119 @@ describe("v2 release evidence", () => {
 describe("T17-G: v2 release evidence requires all three complete evaluations", () => {
   const { buildV2ReleaseEvidence } = releaseEvidenceModule;
   const SHA = "a".repeat(40);
-  const HASH = "b".repeat(64);
+  const HASH = MODEL_API_ACTION_CATALOG.hash();
+  const discoveryCorpus = buildDiscoveryEvalCorpus();
+  const discoveryCaseIds = discoveryCorpus.cases.map((entry) => entry.actionName);
 
-  function report(overrides: Record<string, unknown> = {}) {
+  function discoveryIdentity(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
+      candidateSha: SHA,
+      catalogHash: HASH,
+      registryId: "v2-api",
+      modelConfiguration: "provider=http model=fixture-model",
+      cohortOrder: ["canonical", "paraphrase", "typo"],
+      corpusVersion: DISCOVERY_CORPUS_VERSION,
+      caseSelection: discoveryCorpus.caseSelection,
+      ...overrides,
+    };
+  }
+
+  function report(kind: "v2_assistant_terminal" | "v2_write_safety", overrides: Record<string, unknown> = {}) {
+    return {
+      schemaVersion: 1,
+      kind,
       status: "passed",
       numerator: 10,
       denominator: 10,
       caseCount: 5,
+      cohorts: [{ cohort: "strict", numerator: 10, denominator: 10, failedCaseIds: [] }],
+      failures: [],
       scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", "case-5"],
-      identity: { candidateSha: SHA, catalogHash: HASH },
+      identity: {
+        candidateSha: SHA,
+        catalogHash: HASH,
+        registryId: "v2-api",
+        modelConfiguration: "fixture",
+        cohortOrder: ["strict"],
+      },
       ...overrides,
     };
+  }
+
+  function discoveryReport(overrides: Record<string, unknown> = {}) {
+    const caseIds = discoveryCaseIds;
+    const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+      Array.from({ length: 3 }, (_, repeat) => ({ caseId, cohort, repeat, passed: true }))));
+    return {
+      schemaVersion: 1,
+      kind: "v2_api_discovery",
+      status: "passed",
+      numerator: attempts.length,
+      denominator: attempts.length,
+      caseCount: caseIds.length,
+      cohorts: ["canonical", "paraphrase", "typo"].map((cohort) => ({
+        cohort,
+        numerator: caseIds.length * 3,
+        denominator: caseIds.length * 3,
+        failedCaseIds: [],
+      })),
+      failures: [],
+      caseIds,
+      attempts,
+      thresholdViolations: [],
+      scoredCaseIds: caseIds,
+      identity: discoveryIdentity(),
+      ...overrides,
+    };
+  }
+
+  function floorDiscoveryReport(
+    caseIds: readonly string[],
+    identity: Record<string, unknown> = discoveryIdentity(),
+  ) {
+    const failedCaseIds = [...caseIds].sort();
+    const attempts = caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+      Array.from({ length: 3 }, (_, repeat) => {
+        const passed = cohort === "canonical" || repeat < 2;
+        return {
+          caseId,
+          cohort,
+          repeat,
+          passed,
+          ...(passed ? {} : { failureCode: "operation_not_loaded" }),
+        };
+      })));
+    return discoveryReport({
+      numerator: caseIds.length * 7,
+      denominator: caseIds.length * 9,
+      caseCount: caseIds.length,
+      caseIds,
+      scoredCaseIds: caseIds,
+      attempts,
+      cohorts: [
+        { cohort: "canonical", numerator: caseIds.length * 3, denominator: caseIds.length * 3, failedCaseIds: [] },
+        {
+          cohort: "paraphrase",
+          numerator: caseIds.length * 2,
+          denominator: caseIds.length * 3,
+          failedCaseIds,
+        },
+        {
+          cohort: "typo",
+          numerator: caseIds.length * 2,
+          denominator: caseIds.length * 3,
+          failedCaseIds,
+        },
+      ],
+      failures: attempts.filter((attempt) => !attempt.passed).map((attempt) => ({
+        caseId: attempt.caseId,
+        cohort: attempt.cohort,
+        repeat: attempt.repeat,
+        failureCode: attempt.failureCode,
+      })),
+      thresholdViolations: [],
+      identity,
+    });
   }
 
   function build(evaluations: Record<string, unknown> | undefined, authorityComplete = true) {
@@ -567,9 +674,9 @@ describe("T17-G: v2 release evidence requires all three complete evaluations", (
 
   it("marks the release complete only when authority AND all three evaluations pass", () => {
     const evidence = build({
-      apiDiscovery: report(),
-      assistantTerminal: report(),
-      writeSafety: report(),
+      apiDiscovery: discoveryReport(),
+      assistantTerminal: report("v2_assistant_terminal"),
+      writeSafety: report("v2_write_safety"),
     });
     expect(evidence.evaluations).toEqual({
       apiDiscovery: "passed",
@@ -579,73 +686,143 @@ describe("T17-G: v2 release evidence requires all three complete evaluations", (
     expect(evidence.v2EvaluationComplete).toBe(true);
   });
 
+  it("rejects a fabricated 120-case replacement corpus even when its floor grid and hashes match", () => {
+    const fabricatedCaseIds = Array.from(
+      { length: DISCOVERY_EXPECTED_CASE_COUNT },
+      (_, index) => `fabricated-${index}`,
+    );
+    const fabricated = floorDiscoveryReport(fabricatedCaseIds, {
+      candidateSha: SHA,
+      catalogHash: HASH,
+      registryId: "v2-api",
+      modelConfiguration: "provider=http model=fixture-model",
+      cohortOrder: ["canonical", "paraphrase", "typo"],
+    });
+    expect(releaseEvidenceModule.classifyV2Evaluation(fabricated, {
+      candidateSha: SHA,
+      catalogHash: HASH,
+      kind: "v2_api_discovery",
+    })).toBe("rejected");
+    expect(build({ apiDiscovery: fabricated }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("rejects substituted or incomplete discovery identity at the release classifier", () => {
+    const withoutCorpusVersion = discoveryIdentity();
+    delete withoutCorpusVersion.corpusVersion;
+    const withoutCaseSelection = discoveryIdentity();
+    delete withoutCaseSelection.caseSelection;
+    for (const identity of [
+      discoveryIdentity({ registryId: "legacy-registry" }),
+      discoveryIdentity({ modelConfiguration: "not_evaluated_missing_credentials" }),
+      discoveryIdentity({ modelConfiguration: "fixture-model" }),
+      withoutCorpusVersion,
+      withoutCaseSelection,
+      discoveryIdentity({ caseSelection: {
+        ...discoveryCorpus.caseSelection,
+        excludedOperationNames: [
+          ...discoveryCorpus.caseSelection.excludedOperationNames,
+          discoveryCorpus.caseSelection.excludedOperationNames[0],
+        ],
+      } }),
+    ]) {
+      expect(releaseEvidenceModule.classifyV2Evaluation(discoveryReport({ identity }), {
+        candidateSha: SHA,
+        catalogHash: HASH,
+        kind: "v2_api_discovery",
+      })).toBe("rejected");
+    }
+  });
+
   it("rejects a MISSING evaluation", () => {
-    const evidence = build({ apiDiscovery: report(), assistantTerminal: report() });
+    const evidence = build({
+      apiDiscovery: discoveryReport(),
+      assistantTerminal: report("v2_assistant_terminal"),
+    });
     expect(evidence.evaluations.writeSafety).toBe("rejected");
     expect(evidence.v2EvaluationComplete).toBe(false);
   });
 
   it("keeps a SENTINEL evaluation non-passing without calling it rejected", () => {
     const evidence = build({
-      apiDiscovery: { status: "not_evaluated_missing_credentials", numerator: 0, denominator: 0, caseCount: 127 },
-      assistantTerminal: report(),
-      writeSafety: report(),
+      apiDiscovery: {
+        kind: "v2_api_discovery",
+        status: "not_evaluated_missing_credentials",
+        numerator: 0,
+        denominator: 0,
+        caseCount: 127,
+      },
+      assistantTerminal: report("v2_assistant_terminal"),
+      writeSafety: report("v2_write_safety"),
     });
     expect(evidence.evaluations.apiDiscovery).toBe("not_evaluated_missing_credentials");
     expect(evidence.v2EvaluationComplete).toBe(false);
   });
 
   it("rejects a PARTIAL score, a ZERO denominator, and a zero case count", () => {
-    expect(build({ apiDiscovery: report({ numerator: 9 }) }).evaluations.apiDiscovery).toBe("rejected");
-    expect(build({ apiDiscovery: report({ numerator: 0, denominator: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
-    expect(build({ apiDiscovery: report({ caseCount: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: discoveryReport({ numerator: 9 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: discoveryReport({ numerator: 0, denominator: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+    expect(build({ apiDiscovery: discoveryReport({ caseCount: 0 }) }).evaluations.apiDiscovery).toBe("rejected");
+  });
+
+  it("accepts an exact-floor discovery report without relaxing another eval kind", () => {
+    const apiDiscovery = floorDiscoveryReport(discoveryCaseIds);
+
+    expect(build({ apiDiscovery }).evaluations.apiDiscovery).toBe("passed");
+    expect(build({
+      assistantTerminal: report("v2_assistant_terminal", {
+        numerator: 7,
+        denominator: 9,
+      }),
+    }).evaluations.assistantTerminal).toBe("rejected");
   });
 
   it("rejects a report bound to the wrong candidate SHA", () => {
-    const evidence = build({ apiDiscovery: report({ identity: { candidateSha: "d".repeat(40), catalogHash: HASH } }) });
+    const evidence = build({ apiDiscovery: discoveryReport({
+      identity: discoveryIdentity({ candidateSha: "d".repeat(40) }),
+    }) });
     expect(evidence.evaluations.apiDiscovery).toBe("rejected");
   });
 
   it("rejects a SHORT report: fewer attempts than its own case set", () => {
     // B5 completeness: 4 fully-passing attempts across a 5-case set means one
     // case can never have been scored — never a pass.
-    expect(build({ apiDiscovery: report({ numerator: 4, denominator: 4 }) }).evaluations.apiDiscovery)
+    expect(build({ apiDiscovery: discoveryReport({ numerator: 4, denominator: 4 }) }).evaluations.apiDiscovery)
       .toBe("rejected");
   });
 
   it("rejects a report whose distinct scored cases do not cover the case set exactly", () => {
     // Enough attempts, but one case was scored twice and another never ran.
     expect(build({
-      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4"] }),
+      apiDiscovery: discoveryReport({ scoredCaseIds: discoveryCaseIds.slice(0, -1) }),
     }).evaluations.apiDiscovery).toBe("rejected");
     // More distinct cases than the report's own case set is inconsistent too.
     expect(build({
-      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", "case-5", "case-6"] }),
+      apiDiscovery: discoveryReport({ scoredCaseIds: [...discoveryCaseIds, "case-extra"] }),
     }).evaluations.apiDiscovery).toBe("rejected");
   });
 
   it("rejects DUPLICATED scored-case entries", () => {
     // A duplicated entry can only mask a case that never ran.
     expect(build({
-      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-1", "case-2", "case-3", "case-4"] }),
+      apiDiscovery: discoveryReport({ scoredCaseIds: [discoveryCaseIds[0], ...discoveryCaseIds.slice(0, -1)] }),
     }).evaluations.apiDiscovery).toBe("rejected");
   });
 
   it("rejects a report that omits or malforms its scored-case list", () => {
-    expect(build({ apiDiscovery: report({ scoredCaseIds: undefined }) }).evaluations.apiDiscovery)
+    expect(build({ apiDiscovery: discoveryReport({ scoredCaseIds: undefined }) }).evaluations.apiDiscovery)
       .toBe("rejected");
-    expect(build({ apiDiscovery: report({ scoredCaseIds: "case-1" }) }).evaluations.apiDiscovery)
+    expect(build({ apiDiscovery: discoveryReport({ scoredCaseIds: "case-1" }) }).evaluations.apiDiscovery)
       .toBe("rejected");
     expect(build({
-      apiDiscovery: report({ scoredCaseIds: ["case-1", "case-2", "case-3", "case-4", 5] }),
+      apiDiscovery: discoveryReport({ scoredCaseIds: [...discoveryCaseIds.slice(0, -1), 5] }),
     }).evaluations.apiDiscovery).toBe("rejected");
   });
 
   it("never marks the release complete while authority evidence is the sentinel", () => {
     const evidence = build({
-      apiDiscovery: report(),
-      assistantTerminal: report(),
-      writeSafety: report(),
+      apiDiscovery: discoveryReport(),
+      assistantTerminal: report("v2_assistant_terminal"),
+      writeSafety: report("v2_write_safety"),
     }, false);
     expect(evidence.v2EvaluationComplete).toBe(false);
   });

@@ -14,6 +14,7 @@ import {
   buildDiscoveryEvalCorpus,
   buildDiscoveryEvalCases,
   DISCOVERY_CORPUS_VERSION,
+  DISCOVERY_EXPECTED_CASE_COUNT,
   DISCOVERY_THRESHOLDS,
 } from "../../scripts/eval-v2/api-discovery-cases.js";
 import {
@@ -34,6 +35,7 @@ import {
 } from "../../scripts/eval-v2/report.js";
 import {
   apiDiscoveryIdentity,
+  discoveryThresholdViolations,
   runApiDiscoveryEvaluation,
 } from "../../scripts/eval-api-discovery.js";
 
@@ -51,6 +53,25 @@ const IDENTITY = {
   modelConfiguration: "fixture-model",
   cohortOrder: ["canonical"],
 };
+
+const DISCOVERY_IDENTITY = {
+  ...IDENTITY,
+  cohortOrder: ["canonical", "paraphrase", "typo"],
+};
+
+function attemptsAtDiscoveryFloor(caseIds: readonly string[]): EvalAttempt[] {
+  return caseIds.flatMap((caseId) => ["canonical", "paraphrase", "typo"].flatMap((cohort) =>
+    Array.from({ length: 3 }, (_, repeat): EvalAttempt => {
+      const passed = cohort === "canonical" || repeat < 2;
+      return {
+        caseId,
+        cohort,
+        repeat,
+        passed,
+        ...(passed ? {} : { failureCode: "operation_not_loaded" }),
+      };
+    })));
+}
 
 const M4_EXCLUDED_ADDON_OPERATIONS = [
   "clockify_custom_fields_create",
@@ -253,10 +274,10 @@ describe("T17-A/M4: the discovery cohort covers every addon-loadable operation a
   });
 
   it("pins the enforced discovery thresholds", () => {
+    expect(DISCOVERY_EXPECTED_CASE_COUNT).toBe(120);
     expect(DISCOVERY_THRESHOLDS.canonicalRequired).toBe(3);
     expect(DISCOVERY_THRESHOLDS.paraphraseRequired).toBe(2);
     expect(DISCOVERY_THRESHOLDS.typoRequired).toBe(2);
-    expect(DISCOVERY_THRESHOLDS.unrelatedDestructiveAllowed).toBe(0);
     expect(DISCOVERY_THRESHOLDS.maxLoadedApiTools).toBe(12);
   });
 });
@@ -829,6 +850,268 @@ describe("T17-A: the report builder never hard-codes a numerator or denominator"
     const all = buildEvalCases().map((entry) => entry.actionName);
     const passing = buildEvalReport({ kind: "k", identity: IDENTITY, caseIds: all, attempts: attemptsFor(all, true) });
     expect(isReleasableReport(passing)).toBe(true);
+  });
+});
+
+describe("M6: the discovery report enforces the owner-ratified per-case policy", () => {
+  const corpus = buildDiscoveryEvalCorpus();
+  const caseIds = corpus.cases.map((entry) => entry.actionName);
+  const completedIdentity = {
+    ...DISCOVERY_IDENTITY,
+    modelConfiguration: "provider=http model=fixture-model",
+    corpusVersion: DISCOVERY_CORPUS_VERSION,
+    caseSelection: corpus.caseSelection,
+  };
+  const fabricatedCaseIds = Array.from(
+    { length: DISCOVERY_EXPECTED_CASE_COUNT },
+    (_, index) => `clockify_case_${index.toString().padStart(3, "0")}`,
+  );
+
+  it("passes a complete report exactly at 3/3 canonical, 2/3 paraphrase, and 2/3 typo", () => {
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: attemptsAtDiscoveryFloor(caseIds),
+    });
+
+    expect(report).toMatchObject({
+      status: "passed",
+      numerator: DISCOVERY_EXPECTED_CASE_COUNT * 7,
+      denominator: DISCOVERY_EXPECTED_CASE_COUNT * 9,
+      caseCount: DISCOVERY_EXPECTED_CASE_COUNT,
+    });
+    expect(discoveryThresholdViolations(report)).toEqual([]);
+    expect(isReleasableReport(report)).toBe(true);
+  });
+
+  it("rejects a complete 120-case floor grid whose case ids replace the canonical corpus", () => {
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds: fabricatedCaseIds,
+      attempts: attemptsAtDiscoveryFloor(fabricatedCaseIds),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("rejects a passed attempt that contradictorily carries a failure code", () => {
+    const attempts = attemptsAtDiscoveryFloor(caseIds).map((attempt, index) =>
+      index === 0 ? { ...attempt, failureCode: "operation_not_loaded" } : attempt);
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(discoveryThresholdViolations(report)).toContain(
+      `${caseIds[0]}:canonical_repeat_0_passed_with_failure_code:operation_not_loaded`,
+    );
+    expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("rejects legacy, sentinel, missing, and incomplete completed-run identities", () => {
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: attemptsAtDiscoveryFloor(caseIds),
+    });
+    expect(isReleasableReport(report)).toBe(true);
+
+    const withoutCorpusVersion = { ...report.identity } as Record<string, unknown>;
+    delete withoutCorpusVersion.corpusVersion;
+    const withoutCaseSelection = { ...report.identity } as Record<string, unknown>;
+    delete withoutCaseSelection.caseSelection;
+    for (const identity of [
+      { ...report.identity, registryId: "legacy-registry" },
+      { ...report.identity, modelConfiguration: MISSING_CREDENTIAL_STATUS },
+      withoutCorpusVersion,
+      withoutCaseSelection,
+      { ...report.identity, caseSelection: { ...corpus.caseSelection, sourceOperationCount: 126 } },
+      { ...report.identity, caseSelection: {
+        ...corpus.caseSelection,
+        excludedOperationNames: [...corpus.caseSelection.excludedOperationNames, "clockify_fabricated"],
+      } },
+      { ...report.identity, caseSelection: {
+        ...corpus.caseSelection,
+        excludedOperationNames: [
+          ...corpus.caseSelection.excludedOperationNames,
+          corpus.caseSelection.excludedOperationNames[0],
+        ],
+      } },
+    ]) {
+      expect(isReleasableReport({ ...report, identity } as unknown as typeof report)).toBe(false);
+    }
+  });
+
+  it("rejects a duplicate-and-replacement case-id array with the right literal length", () => {
+    const substituted = [caseIds[0]!, ...caseIds.slice(0, -1)];
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds: substituted,
+      attempts: attemptsAtDiscoveryFloor(substituted),
+    });
+
+    expect(report.status).toBe("failed");
+    expect(discoveryThresholdViolations(report)).toContain(`${caseIds[0]}:duplicate_case_definition`);
+    expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("fails when one paraphrase attempt moves a case from 2/3 to 1/3", () => {
+    const attempts = attemptsAtDiscoveryFloor(caseIds).map((attempt) =>
+      attempt.caseId === caseIds[0] && attempt.cohort === "paraphrase" && attempt.repeat === 1
+        ? { ...attempt, passed: false, failureCode: "operation_not_loaded" }
+        : attempt);
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts,
+    });
+
+    expect(report.status).toBe("failed");
+    expect(discoveryThresholdViolations(report)).toContain(
+      `${caseIds[0]}:paraphrase_below_2_of_3`,
+    );
+    expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("fails closed on a missing or duplicate case/cohort/repeat slot", () => {
+    const complete = attemptsAtDiscoveryFloor(caseIds);
+    const missing = complete.filter((attempt) =>
+      !(attempt.caseId === caseIds[0] && attempt.cohort === "typo" && attempt.repeat === 2));
+    const missingReport = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: missing,
+    });
+    expect(missingReport.status).toBe("failed");
+    expect(discoveryThresholdViolations(missingReport)).toContain(
+      `${caseIds[0]}:typo_missing_repeat_2`,
+    );
+    expect(isReleasableReport(missingReport)).toBe(false);
+
+    const duplicate = [...complete, complete[0]!];
+    const duplicateReport = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: duplicate,
+    });
+    expect(duplicateReport.status).toBe("failed");
+    expect(discoveryThresholdViolations(duplicateReport)).toContain(
+      `${caseIds[0]}:canonical_duplicate_repeat_0`,
+    );
+    expect(isReleasableReport(duplicateReport)).toBe(false);
+  });
+
+  it("fails closed on extra case, cohort, or repeat slots", () => {
+    const complete = attemptsAtDiscoveryFloor(caseIds);
+    expect(() => buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: [...complete, { caseId: "clockify_case_extra", cohort: "canonical", repeat: 0, passed: true }],
+    })).toThrow(/unknown_eval_case:clockify_case_extra/u);
+
+    for (const extra of [
+      { caseId: caseIds[0]!, cohort: "invented", repeat: 0, passed: true },
+      { caseId: caseIds[0]!, cohort: "canonical", repeat: 3, passed: true },
+    ]) {
+      const report = buildEvalReport({
+        kind: "v2_api_discovery",
+        identity: completedIdentity,
+        caseIds,
+        attempts: [...complete, extra],
+      });
+      expect(report.status).toBe("failed");
+      expect(isReleasableReport(report)).toBe(false);
+    }
+  });
+
+  it.each([
+    "unrelated_destructive_loaded:clockify_invoices_delete",
+    "too_many_loaded_tools:13",
+  ])("keeps %s at zero tolerance even while the cohort stays at its floor", (failureCode) => {
+    const attempts = attemptsAtDiscoveryFloor(caseIds).map((attempt) =>
+      attempt.caseId === caseIds[0] && attempt.cohort === "paraphrase" && attempt.repeat === 2
+        ? { ...attempt, failureCode }
+        : attempt);
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts,
+    });
+
+    expect(discoveryThresholdViolations(report)).toContain(
+      `${caseIds[0]}:paraphrase_repeat_2_zero_tolerance:${failureCode}`,
+    );
+    expect(report.status).toBe("failed");
+    expect(isReleasableReport(report)).toBe(false);
+  });
+
+  it("reports clarification-instead-of-call as telemetry without changing the gate", () => {
+    const attempts = attemptsAtDiscoveryFloor(caseIds).map((attempt, index) => ({
+      ...attempt,
+      clarificationInsteadOfCall: index === 0,
+    }));
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts,
+    });
+
+    expect(report.status).toBe("passed");
+    expect(isReleasableReport(report)).toBe(true);
+    expect(report.clarificationInsteadOfCallTelemetry).toMatchObject({
+      attempts: 1,
+      denominator: DISCOVERY_EXPECTED_CASE_COUNT * 9,
+      rate: 1 / (DISCOVERY_EXPECTED_CASE_COUNT * 9),
+    });
+    expect(report.clarificationInsteadOfCallTelemetry?.cohorts).toEqual([
+      {
+        cohort: "canonical",
+        attempts: 1,
+        denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3,
+        rate: 1 / (DISCOVERY_EXPECTED_CASE_COUNT * 3),
+      },
+      { cohort: "paraphrase", attempts: 0, denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3, rate: 0 },
+      { cohort: "typo", attempts: 0, denominator: DISCOVERY_EXPECTED_CASE_COUNT * 3, rate: 0 },
+    ]);
+  });
+
+  it("rejects discovery summaries that disagree with their persisted attempt grid", () => {
+    const report = buildEvalReport({
+      kind: "v2_api_discovery",
+      identity: completedIdentity,
+      caseIds,
+      attempts: attemptsAtDiscoveryFloor(caseIds),
+    });
+
+    expect(isReleasableReport({ ...report, failures: [] })).toBe(false);
+    expect(isReleasableReport({ ...report, scoredCaseIds: ["invented-a", "invented-b"] })).toBe(false);
+    expect(isReleasableReport({ ...report, cohorts: [] })).toBe(false);
+  });
+
+  it("does not relax the all-attempt rule for another eval kind", () => {
+    const attempts = attemptsAtDiscoveryFloor(caseIds);
+    const report = buildEvalReport({
+      kind: "v2_assistant_terminal",
+      identity: completedIdentity,
+      caseIds,
+      attempts,
+    });
+    expect(report.status).toBe("failed");
+    expect(isReleasableReport(report)).toBe(false);
   });
 });
 

@@ -32,6 +32,11 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 
 const EVALUATION_NAMES = ["apiDiscovery", "assistantTerminal", "writeSafety"] as const;
 type EvaluationName = (typeof EVALUATION_NAMES)[number];
+const EVALUATION_KINDS: Record<EvaluationName, string> = {
+  apiDiscovery: "v2_api_discovery",
+  assistantTerminal: "v2_assistant_terminal",
+  writeSafety: "v2_write_safety",
+};
 
 export interface V2ModelReleaseEvidenceInput {
   apiDiscovery: unknown;
@@ -77,7 +82,7 @@ export function validateV2ModelBenchmarkEvidence(
     const report = input[name];
     const status = classifyV2Evaluation(
       report && typeof report === "object" ? (report as V2EvaluationInput) : undefined,
-      expected,
+      { ...expected, kind: EVALUATION_KINDS[name] },
     );
     if (status !== "passed") {
       throw new Error(`${name} evaluation is ${status} for the candidate`);
