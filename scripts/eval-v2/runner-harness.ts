@@ -39,6 +39,8 @@ export interface HarnessRun {
   loadedOperationNames: string[];
   /** Tool names the run actually requested. */
   requestedToolNames: string[];
+  /** Write action names the run durably prepared, in event order. */
+  preparedWriteActionNames: string[];
   /** Largest number of API tools offered to the model in a single completion. */
   maxLoadedApiTools: number;
   /** Terminal phase of the durable run row. */
@@ -234,24 +236,37 @@ export async function runRealAssistantTurn(options: HarnessOptions): Promise<Har
       clock: { now: () => new Date(), monotonicMs: () => Math.round(performance.now()) },
     });
 
-    const page = store.listRunEvents({ scope: runScope, after: 0, limit: 500 });
     const loadedOperationNames: string[] = [];
     const requestedToolNames: string[] = [];
-    for (const entry of page.events) {
-      if (entry.event.eventType === "api.operations_loaded") {
-        const names = entry.event.payload.operationIds;
-        loadedOperationNames.push(...names);
-        maxLoadedApiTools = Math.max(maxLoadedApiTools, names.length);
+    const preparedWriteActionNames: string[] = [];
+    let after = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const page = store.listRunEvents({ scope: runScope, after, limit: 500 });
+      for (const entry of page.events) {
+        if (entry.event.eventType === "api.operations_loaded") {
+          const names = entry.event.payload.operationIds;
+          loadedOperationNames.push(...names);
+          maxLoadedApiTools = Math.max(maxLoadedApiTools, names.length);
+        }
+        if (entry.event.eventType === "tool.requested") {
+          requestedToolNames.push(entry.event.payload.actionName);
+        }
+        if (entry.event.eventType === "operation.prepared") {
+          const operation = store.getOperationRun(entry.event.payload.operationId);
+          if (!operation) throw new Error(`prepared_operation_not_found:${entry.event.payload.operationId}`);
+          preparedWriteActionNames.push(operation.actionName);
+        }
       }
-      if (entry.event.eventType === "tool.requested") {
-        requestedToolNames.push(entry.event.payload.actionName);
-      }
+      after = page.nextAfter;
+      hasMore = page.hasMore;
     }
     const state = store.getRun(runScope);
     return {
       outcome,
       loadedOperationNames,
       requestedToolNames,
+      preparedWriteActionNames,
       maxLoadedApiTools,
       terminalPhase: state?.phase ?? "unknown",
     };

@@ -64,10 +64,11 @@ interface AttemptOutcome {
   failureCode?: string;
 }
 
-function scoreRun(
+export function scoreRun(
   entry: DiscoveryEvalCase,
   loaded: readonly string[],
   requested: readonly string[],
+  prepared: readonly string[],
   maxLoadedApiTools: number,
 ): AttemptOutcome {
   if (maxLoadedApiTools > DISCOVERY_THRESHOLDS.maxLoadedApiTools) {
@@ -80,7 +81,7 @@ function scoreRun(
   if (!loaded.includes(entry.actionName)) {
     return { passed: false, failureCode: "operation_not_loaded" };
   }
-  if (!requested.includes(entry.actionName)) {
+  if (!requested.includes(entry.actionName) && !prepared.includes(entry.actionName)) {
     return { passed: false, failureCode: "operation_loaded_but_not_used" };
   }
   return { passed: true };
@@ -106,7 +107,13 @@ async function attempt(
       request,
       runId: randomUUID(),
     });
-    const scored = scoreRun(entry, run.loadedOperationNames, run.requestedToolNames, run.maxLoadedApiTools);
+    const scored = scoreRun(
+      entry,
+      run.loadedOperationNames,
+      run.requestedToolNames,
+      run.preparedWriteActionNames,
+      run.maxLoadedApiTools,
+    );
     return {
       caseId: entry.actionName,
       cohort,
