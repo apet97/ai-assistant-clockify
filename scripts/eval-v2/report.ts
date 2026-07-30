@@ -51,6 +51,12 @@ export interface EvalIdentity {
   modelConfiguration: string;
   /** Deterministic seed/cohort ordering identity. */
   cohortOrder: string[];
+  /** Discovery-only corpus selection metadata; other eval identities omit it. */
+  caseSelection?: {
+    authClass: "addon" | "api_key";
+    sourceOperationCount: number;
+    excludedOperationNames: string[];
+  };
 }
 
 export interface EvalReport {

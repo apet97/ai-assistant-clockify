@@ -29,6 +29,7 @@ import {
   MISSING_CREDENTIAL_STATUS,
   type EvalAttempt,
 } from "../../scripts/eval-v2/report.js";
+import { runApiDiscoveryEvaluation } from "../../scripts/eval-api-discovery.js";
 
 /**
  * T17-A: the accounting gate. Every expectation here computes BOTH sides from
@@ -45,6 +46,16 @@ const IDENTITY = {
   cohortOrder: ["canonical"],
 };
 
+const M4_EXCLUDED_ADDON_OPERATIONS = [
+  "clockify_custom_fields_create",
+  "clockify_webhooks_create",
+  "clockify_webhooks_delete",
+  "clockify_webhooks_get",
+  "clockify_webhooks_list",
+  "clockify_webhooks_logs",
+  "clockify_webhooks_update",
+] as const;
+
 /** A registry restricted to the named actions, used to prove derivation follows its input. */
 function registryWithout(excluded: ReadonlySet<string>): ActionRegistry {
   const actions = MODEL_API_ACTION_CATALOG.actions.filter((action) => !excluded.has(action.name));
@@ -60,6 +71,19 @@ function catalogOperationNames(): string[] {
     .filter((action) => action.apiOperation)
     .map((action) => action.name)
     .sort();
+}
+
+function addonLoadableOperationNames(): string[] {
+  return MODEL_API_ACTION_CATALOG.actions
+    .filter((action) => action.apiOperation)
+    .filter((action) => MODEL_API_ACTION_CATALOG.availability(action.name, "addon").available)
+    .map((action) => action.name)
+    .sort();
+}
+
+function excludedDiscoveryOperationNames(): string[] {
+  const emitted = new Set(buildDiscoveryEvalCases().map((entry) => entry.actionName));
+  return catalogOperationNames().filter((name) => !emitted.has(name));
 }
 
 describe("T17-A: v2 evaluation fixtures cover every model-API operation exactly once", () => {
@@ -155,16 +179,55 @@ describe("T17-A: v2 evaluation fixtures cover every model-API operation exactly 
   });
 });
 
-describe("T17-A: the discovery cohort covers every operation and never invites a destructive neighbour", () => {
-  it("emits one discovery case per operation with its three phrasings", () => {
+describe("T17-A/M4: the discovery cohort covers every addon-loadable operation and never invites a destructive neighbour", () => {
+  it("emits one discovery case per addon-loadable operation with its three phrasings", () => {
     const cases = buildDiscoveryEvalCases();
-    expect(cases.map((entry) => entry.actionName).sort()).toEqual(catalogOperationNames());
+    expect(cases.map((entry) => entry.actionName).sort()).toEqual(addonLoadableOperationNames());
     for (const entry of cases) {
       expect(entry.canonicalRequest.length, entry.actionName).toBeGreaterThan(0);
       expect(entry.paraphraseRequest.length, entry.actionName).toBeGreaterThan(0);
       // Nothing in the watch list may share the request's own feature group,
       // and the requested operation is never its own counter-example.
       expect(entry.unrelatedDestructiveOperations, entry.actionName).not.toContain(entry.actionName);
+    }
+  });
+
+  it("drops the discovery corpus from 127 source operations to 120 addon-loadable cases", () => {
+    expect(catalogOperationNames()).toHaveLength(127);
+    expect(buildDiscoveryEvalCases()).toHaveLength(120);
+  });
+
+  it("records the exact seven operations excluded by the addon availability contract", () => {
+    expect(excludedDiscoveryOperationNames()).toEqual(M4_EXCLUDED_ADDON_OPERATIONS);
+  });
+
+  it("emits no case that the real registry says the addon harness cannot load", () => {
+    for (const entry of buildDiscoveryEvalCases()) {
+      expect(
+        MODEL_API_ACTION_CATALOG.availability(entry.actionName, "addon").available,
+        entry.actionName,
+      ).toBe(true);
+    }
+  });
+
+  it("makes the auth-class filter and denominator change visible in report identity metadata", async () => {
+    const credentialKeys = ["LLM_PROVIDER", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL"] as const;
+    const saved = new Map(credentialKeys.map((key) => [key, process.env[key]] as const));
+    for (const key of credentialKeys) delete process.env[key];
+    try {
+      const report = await runApiDiscoveryEvaluation();
+
+      expect(report.caseCount).toBe(120);
+      expect(report.identity.caseSelection).toEqual({
+        authClass: "addon",
+        sourceOperationCount: 127,
+        excludedOperationNames: M4_EXCLUDED_ADDON_OPERATIONS,
+      });
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

@@ -387,7 +387,7 @@ describe("GitHub Actions workflow contracts", () => {
       .toBeLessThan(workflow.indexOf("npm run eval:write-safety"));
 
     // Honest sizing prose and the hosted-runner ceiling on both credentialed jobs.
-    expect(workflow).toContain("1,143 real agent turns");
+    expect(workflow).toContain("1,080 real agent turns");
     expect(workflow).toContain("897");
     expect(workflow.match(/timeout-minutes: 360/g)).toHaveLength(2);
 

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { MODEL_API_ACTION_CATALOG } from "../src/harness/api-catalog.js";
 import {
-  buildDiscoveryEvalCases,
+  buildDiscoveryEvalCorpus,
   DISCOVERY_REPEATS,
   DISCOVERY_THRESHOLDS,
   type DiscoveryEvalCase,
@@ -27,10 +27,12 @@ import { emitEvalReport, evalEvidenceSink } from "./eval-v2/evidence-path.js";
 /**
  * T17-B: API-discovery evaluation through the REAL runner.
  *
- * For each of the 127 model-API operations the configured native-tool model is
- * asked, three times per phrasing class, to satisfy a request that needs exactly
- * that operation. Nothing here calls discovery directly, scripts the provider, or
- * pre-loads the catalog — the run starts with the discovery meta-tool alone and
+ * For each model-API operation loadable under the real harness auth class, the
+ * configured native-tool model is asked three times per phrasing class to satisfy
+ * a request that needs exactly that operation. The report identity names the auth
+ * class, pre-filter count, and exact excluded operation names, so the denominator
+ * change is visible. Nothing here calls discovery directly, scripts the provider,
+ * or pre-loads the catalog — the run starts with the discovery meta-tool alone and
  * is scored ONLY from durable `api.operations_loaded`, `tool.requested`,
  * `tool.denied`, and `operation.prepared` events it journaled.
  *
@@ -112,7 +114,7 @@ async function attempt(
     // No phrasing exists for this cohort, so there is nothing to score. Return
     // `undefined` and let the caller OMIT the attempt — an earlier version
     // returned `passed: true` here, which would have inflated the numerator
-    // (pre-T18 review; currently unreachable, since all 127 cases have a typo).
+      // (pre-T18 review; currently unreachable, since all included cases have a typo).
     return undefined;
   }
   try {
@@ -152,10 +154,13 @@ async function attempt(
 }
 
 export async function runApiDiscoveryEvaluation(): Promise<EvalReport> {
-  const cases = buildDiscoveryEvalCases(MODEL_API_ACTION_CATALOG);
+  const { cases, caseSelection } = buildDiscoveryEvalCorpus(MODEL_API_ACTION_CATALOG);
   const caseIds = cases.map((entry) => entry.actionName);
   const configuration = modelConfigurationFromEnvironment();
-  const identity = evalIdentity(configuration, COHORT_ORDER);
+  const identity = {
+    ...evalIdentity(configuration, COHORT_ORDER),
+    caseSelection,
+  };
 
   if (!configuration) {
     return buildMissingCredentialReport({
@@ -165,6 +170,7 @@ export async function runApiDiscoveryEvaluation(): Promise<EvalReport> {
         catalogHash: identity.catalogHash,
         registryId: "v2-api",
         cohortOrder: [...COHORT_ORDER],
+        caseSelection,
       },
       caseIds,
       blockedReason:

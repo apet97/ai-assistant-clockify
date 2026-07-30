@@ -3,9 +3,10 @@ import type { ActionRegistry } from "../../src/harness/api-catalog.js";
 import { buildEvalCases, type EvalCase } from "./case-model.js";
 
 /**
- * T17-A: the discovery cohort. One case per model-API operation, each carrying
- * the three request phrasings the evaluator repeats three times, plus the exact
- * destructive operations that the model must NEVER call for that request.
+ * T17-A/M4: the discovery cohort. One case per model-API operation loadable by
+ * the harness's add-on auth class, each carrying the three request phrasings the
+ * evaluator repeats three times, plus the exact destructive operations that the
+ * model must NEVER call for that request.
  *
  * The destructive watch list is derived, not chosen: every `write` operation
  * whose reviewed HTTP method is `DELETE`, minus anything in the request's own
@@ -15,6 +16,9 @@ import { buildEvalCases, type EvalCase } from "./case-model.js";
  */
 
 export const DISCOVERY_REPEATS = 3;
+
+/** The real eval harness scope (`runner-harness.ts`) and discovery pool use this auth class. */
+export const DISCOVERY_HARNESS_AUTH_CLASS = "addon" as const;
 
 /** Discovery may offer at most this many API tools alongside the meta-tool (T07-B). */
 export const DISCOVERY_MAX_TOOLS = 12;
@@ -33,6 +37,19 @@ export interface DiscoveryEvalCase {
   unrelatedDestructiveOperations: string[];
 }
 
+export interface DiscoveryEvalCaseSelection {
+  authClass: typeof DISCOVERY_HARNESS_AUTH_CLASS;
+  /** All model-API operations before applying the harness auth contract. */
+  sourceOperationCount: number;
+  /** Operations rejected by the registry contract, sorted so denominator drift is reviewable. */
+  excludedOperationNames: string[];
+}
+
+export interface DiscoveryEvalCorpus {
+  cases: DiscoveryEvalCase[];
+  caseSelection: DiscoveryEvalCaseSelection;
+}
+
 function destructiveWriteNames(registry: ActionRegistry): Array<{ name: string; featureGroup: EvalCase["featureGroup"] }> {
   return registry.actions
     .filter((action) => action.apiOperation?.access === "write" && action.apiOperation.method === "DELETE")
@@ -40,21 +57,42 @@ function destructiveWriteNames(registry: ActionRegistry): Array<{ name: string; 
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
+export function buildDiscoveryEvalCorpus(
+  registry: ActionRegistry = MODEL_API_ACTION_CATALOG,
+): DiscoveryEvalCorpus {
+  const destructive = destructiveWriteNames(registry);
+  const sourceCases = buildEvalCases(registry);
+  const excludedOperationNames = sourceCases
+    .filter((entry) => !registry.availability(entry.actionName, DISCOVERY_HARNESS_AUTH_CLASS).available)
+    .map((entry) => entry.actionName)
+    .sort();
+  const cases = sourceCases
+    .filter((entry) => registry.availability(entry.actionName, DISCOVERY_HARNESS_AUTH_CLASS).available)
+    .map((entry) => ({
+      actionName: entry.actionName,
+      apiOperationId: entry.apiOperationId,
+      featureGroup: entry.featureGroup,
+      canonicalRequest: entry.canonicalRequest,
+      paraphraseRequest: entry.paraphraseRequest,
+      ...(entry.typoRequest ? { typoRequest: entry.typoRequest } : {}),
+      unrelatedDestructiveOperations: destructive
+        .filter((candidate) => candidate.featureGroup !== entry.featureGroup && candidate.name !== entry.actionName)
+        .map((candidate) => candidate.name),
+    }));
+  return {
+    cases,
+    caseSelection: {
+      authClass: DISCOVERY_HARNESS_AUTH_CLASS,
+      sourceOperationCount: sourceCases.length,
+      excludedOperationNames,
+    },
+  };
+}
+
 export function buildDiscoveryEvalCases(
   registry: ActionRegistry = MODEL_API_ACTION_CATALOG,
 ): DiscoveryEvalCase[] {
-  const destructive = destructiveWriteNames(registry);
-  return buildEvalCases(registry).map((entry) => ({
-    actionName: entry.actionName,
-    apiOperationId: entry.apiOperationId,
-    featureGroup: entry.featureGroup,
-    canonicalRequest: entry.canonicalRequest,
-    paraphraseRequest: entry.paraphraseRequest,
-    ...(entry.typoRequest ? { typoRequest: entry.typoRequest } : {}),
-    unrelatedDestructiveOperations: destructive
-      .filter((candidate) => candidate.featureGroup !== entry.featureGroup && candidate.name !== entry.actionName)
-      .map((candidate) => candidate.name),
-  }));
+  return buildDiscoveryEvalCorpus(registry).cases;
 }
 
 /** Thresholds the T17-B evaluator enforces; a report below any of these is a failure. */

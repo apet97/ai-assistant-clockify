@@ -11,7 +11,7 @@
 # !!! NAME, so the Phase M scorer fixes flow through without editing it.
 #
 # Honest sizing (per dispatch, real provider money, serial by design):
-#   eval:api-discovery      — 1,143 real agent turns (127 cases x 3 cohorts x
+#   eval:api-discovery      — 1,080 real agent turns (120 cases x 3 cohorts x
 #                             3 repeats), roughly 2,300-4,600 provider
 #                             completions. May exceed the 6-hour hosted-runner
 #                             job cap; a timeout is a truthful failure, not a
@@ -81,7 +81,7 @@ jobs:
   api-discovery:
     needs: guard
     runs-on: ubuntu-latest
-    # 1,143 real agent turns, serial: the hosted-runner maximum. If the
+    # 1,080 real agent turns, serial: the hosted-runner maximum. If the
     # provider is slow this can still time out; rerunning costs money again.
     timeout-minutes: 360
     steps:
@@ -91,7 +91,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Run eval:api-discovery (1,143 credentialed agent turns)
+      - name: Run eval:api-discovery (1,080 credentialed agent turns)
         env:
           LLM_PROVIDER: http
           LLM_BASE_URL: ${{ secrets.EVAL_LLM_BASE_URL }}
