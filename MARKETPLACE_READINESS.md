@@ -3,13 +3,17 @@
 ## V2 status: NOT READY — closure plan code-complete, evidence gates open
 
 The 2026-07-28 adversarial-review closure plan (findings F01–F24, PRs 1–12) is
-code-complete on `main` (series through `c9a04f1`), including the real-server
-Chromium/Firefox/WebKit journey matrix (`npm run test:e2e:real`). The v2
-candidate is **not releasable**: fresh credentialed model evidence, live
-sacrificial-workspace gates, the F24 database-boundary decision and re-cutover
-deploy, Operation 11B (stale-installation retirement on production), soak, and
-independent human sign-off all remain open. No historical artifact below
-establishes a v2 conclusion. The locally provable rows of the review's release
+code-complete on `main`, including the real-server Chromium/Firefox/WebKit
+journey matrix (`npm run test:e2e:real`). On 2026-07-30 the candidate
+`ad06c08` was deployed through the checked transaction onto the ADR-compliant
+fresh database, with a candidate-bound backup/restore drill, branch protection,
+and all remote checks green — recorded in
+[`docs/V2_CUTOVER_RECORD.md`](./docs/V2_CUTOVER_RECORD.md).
+
+The v2 candidate is still **not releasable**: the owner reinstall that creates
+the fresh installation/attestation, fresh credentialed model evidence,
+`live:v2-full`, soak, and independent human security/recovery sign-off all remain
+open. No historical artifact below establishes a v2 conclusion. The locally provable rows of the review's release
 acceptance matrix, with per-row evidence, are recorded in
 [`docs/V2_CLOSURE_ACCEPTANCE.md`](./docs/V2_CLOSURE_ACCEPTANCE.md).
 

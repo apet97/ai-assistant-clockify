@@ -9,11 +9,22 @@ Companion: `AGENTS.md` (short map), `README.md` (product overview), `DEPLOYMENT.
 Full build history: [`docs/V2_BUILD_LOG.md`](./docs/V2_BUILD_LOG.md). This section
 is the CURRENT contract only — if it disagrees with the log, this wins.
 
-**Deployed:** `ec09863` on Railway (predates the closure work below),
-`ASSISTANT_ENGINE=v2`, database `/data/ai-assistant.sqlite` at schema 12. The
-deployed database boundary VIOLATES ADR 001 (F24): a fresh v2 deploy must move
-to a new unused `/data/…` path, and the planner + runtime now enforce that
-(below). The v1 engine remains in-tree for rollback and is selected only by
+**Deployed:** the closure candidate `ad06c08` on Railway,
+`ASSISTANT_ENGINE=v2`, database **`/data/ai-assistant-v2.sqlite`** at schema 13
+— the ADR-001-compliant fresh path (F24 resolved by option 1, the preferred
+re-cutover). `/version` exact-matches the candidate; `/live` `/health`
+`/manifest` all 200. The retained `/data/ai-assistant.sqlite` is untouched and
+paired with the `ec09863` rollback tree. Full executed record:
+[`docs/V2_CUTOVER_RECORD.md`](./docs/V2_CUTOVER_RECORD.md).
+
+**A fresh database has no installation authority by design**, so production
+answers `409 not installed` until an owner reinstalls the add-on in the Clockify
+console (Settings → Add-ons → Uninstall, then Insert link `<base>/manifest` →
+INSTALL). That POST creates the fresh installation row and attestation. This is
+the correct fail-closed state, and the proof no v1 authority crossed the
+boundary — not a defect.
+
+The v1 engine remains in-tree for rollback and is selected only by
 `ASSISTANT_ENGINE=v1`.
 
 **Catalog:** 171 typed catalog actions — `api` 127 · `composite` 24 · `generic` 16 ·
@@ -54,24 +65,54 @@ fake matches the store's real transactional behaviour — and prefer
 `tests/helpers/v2-production-composition.ts` (unit/integration) or
 `npm run test:e2e:real` (browser), which compose the real app.
 
-### What remains OPEN (human/live gates — not silently deferrable)
+### Closed by the 2026-07-30 release run
 
-- **Credentialed model evidence:** the `eval:*` scripts emit
-  `not_evaluated_missing_credentials` without `LLM_*` exported; fresh v2
-  DeepSeek suites have not run.
-- **Live Clockify gates:** `live:v2-full` (sacrificial workspace) has never run.
-- **Operation 11B:** retire the stale v1 installation row (`640f2540…`, active
-  with a token Clockify rejects) on PRODUCTION via
-  `npm run db:retire-stale-installation` — the command exists and is tested;
-  running it against production is an operator act after a verified backup.
-- **F24 database-boundary decision (owner):** re-cutover to a fresh
-  `/data/ai-assistant-v2.sqlite` (preferred) or formally supersede ADR 001. The
-  deploy planner now REFUSES an ADR-fresh v2 transition onto the in-service
-  database unless `SELECTED_ADR001_DECISION=superseded_in_place_migration` is
-  stated, and the runtime refuses to boot a `new_unused` claim against a
-  nonempty unmarked file (`src/db/fresh-boundary.ts`).
-- **Production deploy of the closure candidate**, GitHub branch protection,
-  soak declaration, independent security/recovery sign-off, Marketplace portal.
+- **Backup/restore drill** bound to `ad06c08`: online backup, TLS transfer,
+  isolated restore, `db:verify-restore` passed (token-backed read, `GET /health`
+  from the built artifact, integrity ok, schema 12→13 in the clone, writer lock
+  available), RTO 10.3 s / RPO 69.3 s, `gate:predeploy-backup` passed.
+- **F24** — fresh-path cutover executed (option 1). Enforcement is permanent:
+  the planner REFUSES an ADR-fresh v2 transition onto the in-service database
+  unless `SELECTED_ADR001_DECISION=superseded_in_place_migration` is stated, and
+  the runtime refuses to boot a `new_unused` claim against a nonempty unmarked
+  file (`src/db/fresh-boundary.ts`).
+- **Operation 11B** — the stale `640f2540…` authority is no longer reachable by
+  production: it exists only in the retained rollback database. The audited
+  `npm run db:retire-stale-installation` remains available for that database or
+  a future recurrence.
+- **Branch protection** — `main` requires the `verify` check; force-push and
+  deletion blocked. All checks green on `ad06c08` (verify, browser-e2e, CodeQL,
+  secret-scan).
+- **Live Clockify reads** — the broad `live-full.ts` matrix ran on the
+  sacrificial workspace (PASS=36 reads, PREVIEW_OK=9) and `live-sweep` reported
+  **0 leftovers**.
+
+### `live-full.ts` is obsolete for WRITES (found 2026-07-30 — do not re-derive)
+
+Its write FAIL count moved from the documented 2 to **26**. Root cause is the
+script, not the engine: `live-full.ts:976` builds a bare `ActionContext`
+(workspace, admin, policy, clockify, now) with **no store-backed capabilities**,
+so no durable mutation workflow ever opens the async-local plan scope, and
+`RestCore.mutate` correctly refuses every external write with
+`mutation_scope_required` (some surface as `commit_outcome_unknown` after
+higher-layer classification). That is the fail-closed rule working — an external
+write without normalized operation data, an exact plan, and a step journal must
+not dispatch. Its READ coverage and the sweep remain meaningful; its write
+columns are no longer evidence. Fixing it means routing its writes through the
+durable path (or preferring `live:v2-full`), not relaxing the gate.
+
+### What remains OPEN (human gates)
+
+- **Owner reinstall** to create the fresh installation + attestation (above).
+- **Credentialed v2 model evidence** — the `eval:*` suites against the live
+  provider.
+- **A live-Clockify v2 WRITE proof.** No confirmed v2 write has been executed
+  against real Clockify: `live:v2-full` is the harness for it and refuses
+  without its four preconditions plus the separate per-step live-write
+  authorization, and `live-full.ts` cannot substitute (above). Confirmed writes
+  are proven against the fake host by `npm run test:e2e:real`.
+- **Soak declaration**, **independent security/recovery sign-off**, and
+  **Marketplace portal review/upload**.
 
 ### Operations
 
